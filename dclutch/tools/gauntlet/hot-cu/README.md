@@ -6,11 +6,29 @@ tools/gauntlet/hot-cu/run-hot-cu.sh --commit HEAD    # a CLEAN revision — see 
 tools/gauntlet/hot-cu/run-hot-cu.sh --seeds 40
 tools/gauntlet/hot-cu/run-hot-cu.sh --substrate slot-pinned        # decision 0012's arm
 tools/gauntlet/hot-cu/run-hot-cu.sh --elf-dir /somewhere/deploy   # skip the build
+tools/gauntlet/hot-cu/run-hot-cu.sh --elf-dir /somewhere/deploy \
+  --trading-elf /somewhere/final-dclutch_trading_sbf.so           # replace Direct only
 ```
 
 **If the number is going to be quoted at a revision, pass `--commit`.** This is
 a shared checkout, and under M-61 a changed artifact byte is not a rounding
 error — it redraws every seed.
+
+`--trading-elf` is the exact final-Direct handoff. It copies the supplied
+regular, non-symlink file into a work-local overlay under the canonical
+`dclutch_trading_sbf.so` name and leaves the seven support ELFs unchanged. The
+runner prints and records the override digest separately. This does not claim
+the file belongs to `--repo` or `--commit`; the digest is its provenance. Use
+the all-link checked-release/frame gate on that same ELF before treating its
+M-61 sweep as release evidence.
+
+Both SBF builds and the ProgramTest sweep run `--locked --offline`. A stale
+root or nested lock is a refusal, not an implicit dependency-graph update.
+The bounded option/refusal checks are:
+
+```sh
+bash tools/gauntlet/hot-cu/test-run-hot-cu-cli.sh
+```
 
 The first run of this script found fifteen files dirty from other lanes, two of
 them (`core-sbf/src/resolution.rs` and a `Cargo.lock` dependency addition)

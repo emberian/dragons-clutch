@@ -180,6 +180,16 @@ struct TerminalMarketEvidenceV1 {
 pub(crate) fn parse_campaign_terminal_evidence_v1(
     source: &[u8],
 ) -> Result<CampaignTerminalEvidenceV1> {
+    parse_campaign_terminal_evidence_with_expected_cluster_v1(
+        source,
+        crate::cluster::ExpectedClusterV1::Devnet,
+    )
+}
+
+pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
+    source: &[u8],
+    expected_cluster: crate::cluster::ExpectedClusterV1,
+) -> Result<CampaignTerminalEvidenceV1> {
     if source.is_empty() || source.len() > MAX_CAMPAIGN_REPORT_BYTES_V1 {
         return Err(Error::new(
             "campaign report is outside the 1..16777216 byte bound",
@@ -191,12 +201,21 @@ pub(crate) fn parse_campaign_terminal_evidence_v1(
             "terminal evidence is not dclutch-successor-campaign-report-v1",
         ));
     }
-    if report.get("cluster").and_then(Value::as_str) != Some("devnet")
+    let expected_label = match expected_cluster {
+        crate::cluster::ExpectedClusterV1::Devnet => "devnet",
+        crate::cluster::ExpectedClusterV1::OwnedLoopback => "loopback",
+    };
+    if report.get("cluster").and_then(Value::as_str) != Some(expected_label)
         || report.get("mode").and_then(Value::as_str) != Some("execute")
     {
-        return Err(Error::new(
-            "terminal evidence requires an executed external devnet campaign; loopback and preflight reports are non-consumable",
-        ));
+        return Err(Error::new(match expected_cluster {
+            crate::cluster::ExpectedClusterV1::Devnet => {
+                "terminal evidence requires an executed external devnet campaign; loopback and preflight reports are non-consumable"
+            }
+            crate::cluster::ExpectedClusterV1::OwnedLoopback => {
+                "terminal evidence requires an executed owned loopback campaign; external and preflight reports are non-consumable"
+            }
+        }));
     }
     let plan_sha256 = report
         .get("plan_sha256")

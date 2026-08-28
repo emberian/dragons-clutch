@@ -22,6 +22,15 @@ Every SBF invocation also passes Cargo's `--locked` admission through
 instead of silently resolving another dependency graph and modifying the
 source checkout.
 
+The runner also hashes every `Cargo.lock` in the archived source before the
+first build and after the complete candidate, including the source-pinned host
+release tool. It refuses any added, removed, or changed lock and preserves both
+manifests as `cargo-locks-before.tsv` and `cargo-locks-after.tsv`. The summary's
+`cargo_lock_count`, `cargo_lock_set_sha256`, and
+`cargo_lock_immutability=passed` bind that repository-wide check. The Upgrade
+gate's v1 JSON shape is unchanged; its source-tree digest already binds every
+committed lock byte. The host tool itself builds `--locked --offline`.
+
 After the ordinary artifact build is clean, the runner performs a separate
 fresh measurement build for each of the same thirteen links with
 `-Zemit-stack-sizes`. The measurement objects are never shipped. The runner
@@ -55,10 +64,11 @@ run on hbox if the outer wrapper is absent; do not silently fall back.
 
 The admitted summary must say `sbf_build_freshness=passed`,
 `sbf_build_freshness_links=13`, `sbf_build_diagnostics_total=0`, and
-`sbf_build_diagnostics_accepted=false`. Preserve `build-links.tsv`,
+`sbf_build_diagnostics_accepted=false`. It must also say
+`cargo_lock_immutability=passed`. Preserve `build-links.tsv`,
 `build-run.txt`, `source-tree.txt`, every `build-*.log`, every
-`frame-build-*.log`, the `frame/` reports, and `build-diagnostics.txt` with the
-candidate evidence.
+`frame-build-*.log`, the `frame/` reports, `build-diagnostics.txt`, and both
+Cargo lock manifests with the candidate evidence.
 
 ## Upgrade gate
 

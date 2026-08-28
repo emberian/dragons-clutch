@@ -34,6 +34,7 @@ use dclutch_operator::{
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, ProgramDataV3View, ProgramV3View,
     PythReleaseV1, ReceiverConfigV2View, VerifiedEncodedVaaV1, devnet_release_v1,
+    local_validator_release_v1,
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
@@ -80,7 +81,9 @@ use solana_system_interface::instruction::transfer;
 use crate::{
     Error, Result,
     campaign::read_keypair_file,
-    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
+    cluster::{
+        ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
+    },
     model::{CheckedDeploymentDispositionV1, SuccessorPlan},
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, RpcAccount, WritePolicyV1, account_evidence, bounded_instructions},
@@ -90,10 +93,16 @@ use crate::{
 };
 
 const INPUT_FORMAT: &str = "dclutch-flagship-resolution-input-v1";
+const LOCAL_INPUT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-input-v1";
 const CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-checkpoint-v1";
+const LOCAL_CHECKPOINT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-checkpoint-v1";
 const PRODUCER_FACTS_FORMAT: &str = "dclutch-flagship-pyth-update-facts-v1";
 const PRODUCER_CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-producer-v1";
+const LOCAL_PRODUCER_CHECKPOINT_FORMAT: &str =
+    "dclutch-owned-loopback-flagship-resolution-producer-v1";
 const TABLE_PROVISION_JOURNAL_FORMAT: &str = "dclutch-flagship-resolution-alt-journal-v1";
+const LOCAL_TABLE_PROVISION_JOURNAL_FORMAT: &str =
+    "dclutch-owned-loopback-flagship-resolution-alt-journal-v1";
 const CAMPAIGN_FORMAT: &str = "dclutch-successor-campaign-report-v1";
 const PLAN_FORMAT: &str = "dclutch-local-successor-infrastructure-plan-v2";
 /// Provisional operator delay after the terminal window. It is not a protocol
@@ -102,6 +111,46 @@ const FLAGSHIP_RECLAIM_DELAY_SECONDS_V1: i64 = 3_600;
 /// Chain-derived Pyth accumulator PriceFeedMessage V1 wire width.
 const PYTH_PRICE_FEED_MESSAGE_BYTES_V1: usize = 85;
 const GEOMETRY_BLOCKHASH: [u8; 32] = [0x6d; 32];
+
+const fn input_format(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => INPUT_FORMAT,
+        ExpectedClusterV1::OwnedLoopback => LOCAL_INPUT_FORMAT,
+    }
+}
+
+const fn checkpoint_format(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => CHECKPOINT_FORMAT,
+        ExpectedClusterV1::OwnedLoopback => LOCAL_CHECKPOINT_FORMAT,
+    }
+}
+
+const fn producer_checkpoint_format(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => PRODUCER_CHECKPOINT_FORMAT,
+        ExpectedClusterV1::OwnedLoopback => LOCAL_PRODUCER_CHECKPOINT_FORMAT,
+    }
+}
+
+const fn table_journal_format(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => TABLE_PROVISION_JOURNAL_FORMAT,
+        ExpectedClusterV1::OwnedLoopback => LOCAL_TABLE_PROVISION_JOURNAL_FORMAT,
+    }
+}
+
+fn expected_pyth_release(expected: ExpectedClusterV1) -> Result<PythReleaseV1> {
+    match expected {
+        ExpectedClusterV1::Devnet => devnet_release_v1()
+            .map_err(|error| Error::new(format!("compiled devnet Pyth release: {error:?}"))),
+        ExpectedClusterV1::OwnedLoopback => local_validator_release_v1()
+            .map(|local| *local.release())
+            .map_err(|error| {
+                Error::new(format!("compiled owned-loopback Pyth release: {error:?}"))
+            }),
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -216,6 +265,8 @@ struct CampaignExecutionEnvelopeV1 {
 #[derive(Clone, Debug, Deserialize)]
 struct CampaignEvidenceV1 {
     schema: String,
+    cluster: String,
+    mode: String,
     plan_sha256: String,
     execution: CampaignExecutionEnvelopeV1,
 }
@@ -436,9 +487,12 @@ struct SelectedInputV1 {
 }
 
 impl SelectedInputV1 {
-    fn parse(input: &PlanInputV1) -> Result<Self> {
-        if input.format != INPUT_FORMAT {
-            return Err(Error::new(format!("input format must be {INPUT_FORMAT}")));
+    fn parse(input: &PlanInputV1, expected_cluster: ExpectedClusterV1) -> Result<Self> {
+        let expected_format = input_format(expected_cluster);
+        if input.format != expected_format {
+            return Err(Error::new(format!(
+                "input format must be {expected_format}"
+            )));
         }
         if input.generation == 0 || input.terminal_sequence == 0 {
             return Err(Error::new(
@@ -1459,10 +1513,11 @@ fn authenticate_current_deployments(
     Ok(())
 }
 
-fn authenticate_devnet_pyth(
+fn authenticate_selected_pyth_release(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
     require_provider_observation: bool,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<PythReleaseV1> {
     let release = PythReleaseV1::decode(
         &snapshot
@@ -1470,12 +1525,12 @@ fn authenticate_devnet_pyth(
             .data,
     )
     .map_err(|error| Error::new(format!("Pyth release: {error:?}")))?;
-    let expected = devnet_release_v1()
-        .map_err(|error| Error::new(format!("compiled devnet Pyth release: {error:?}")))?;
+    let expected = expected_pyth_release(expected_cluster)?;
     if release.to_bytes() != expected.to_bytes() {
-        return Err(Error::new(
-            "Pyth release record is not the exact devnet production row",
-        ));
+        return Err(Error::new(format!(
+            "Pyth release record is not the exact {} row",
+            expected_cluster.evidence_label()
+        )));
     }
     for (program_label, programdata_label, expected_slot, expected_program, expected_data) in [
         (
@@ -2343,13 +2398,20 @@ fn admitted_campaign_resolver(
 fn completed_campaign<'a>(
     evidence: &'a CampaignEvidenceV1,
     plan_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<&'a CampaignMarketEvidenceV1> {
+    let expected_label = match expected_cluster {
+        ExpectedClusterV1::Devnet => "devnet",
+        ExpectedClusterV1::OwnedLoopback => "loopback",
+    };
     if evidence.schema != CAMPAIGN_FORMAT
+        || evidence.cluster != expected_label
+        || evidence.mode != "execute"
         || evidence.plan_sha256 != plan_sha256
         || !evidence.execution.completed
     {
         return Err(Error::new(
-            "campaign schema, exact plan digest, or completed execution proof refused",
+            "campaign schema, typed cluster, execute mode, exact plan digest, or completed execution proof refused",
         ));
     }
     let market = evidence
@@ -2373,6 +2435,7 @@ fn load_producer_checkpoint(
     plan_sha256: &str,
     campaign_sha256: &str,
     facts_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<Option<ProducerCheckpointV1>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -2385,7 +2448,7 @@ fn load_producer_checkpoint(
         }
     };
     let checkpoint: ProducerCheckpointV1 = serde_json::from_slice(&bytes)?;
-    if checkpoint.format != PRODUCER_CHECKPOINT_FORMAT
+    if checkpoint.format != producer_checkpoint_format(expected_cluster)
         || checkpoint.plan_sha256 != plan_sha256
         || checkpoint.campaign_evidence_sha256 != campaign_sha256
         || checkpoint.pyth_facts_sha256 != facts_sha256
@@ -2406,8 +2469,11 @@ fn load_producer_checkpoint(
     Ok(Some(checkpoint))
 }
 
-fn authenticate_producer_checkpoint(checkpoint: &ProducerCheckpointV1) -> Result<SelectedInputV1> {
-    if checkpoint.format != PRODUCER_CHECKPOINT_FORMAT
+fn authenticate_producer_checkpoint(
+    checkpoint: &ProducerCheckpointV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<SelectedInputV1> {
+    if checkpoint.format != producer_checkpoint_format(expected_cluster)
         || checkpoint.tables.len() != 3
         || checkpoint.tables.contains_key(&StageV1::Complete)
         || checkpoint.routes.len() != 3
@@ -2424,7 +2490,7 @@ fn authenticate_producer_checkpoint(checkpoint: &ProducerCheckpointV1) -> Result
     ] {
         hex32(digest)?;
     }
-    let selected = SelectedInputV1::parse(&checkpoint.planned_input)?;
+    let selected = SelectedInputV1::parse(&checkpoint.planned_input, expected_cluster)?;
     if checkpoint.market != selected.account("market")?.to_string()
         || checkpoint.generation != selected.generation
         || checkpoint.payer != selected.resolver.to_string()
@@ -2472,12 +2538,13 @@ fn producer_identity_sha256(checkpoint: &ProducerCheckpointV1) -> Result<String>
 fn load_table_journal(
     path: &Path,
     producer_identity_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<TableProvisionJournalV1> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(TableProvisionJournalV1 {
-                format: TABLE_PROVISION_JOURNAL_FORMAT.to_owned(),
+                format: table_journal_format(expected_cluster).to_owned(),
                 producer_identity_sha256: producer_identity_sha256.to_owned(),
                 phase: DurablePhaseV1::Finalized,
                 intent: None,
@@ -2497,7 +2564,7 @@ fn load_table_journal(
         }
     };
     let journal: TableProvisionJournalV1 = serde_json::from_slice(&bytes)?;
-    if journal.format != TABLE_PROVISION_JOURNAL_FORMAT
+    if journal.format != table_journal_format(expected_cluster)
         || journal.producer_identity_sha256 != producer_identity_sha256
     {
         return Err(Error::new(
@@ -2804,6 +2871,23 @@ fn authenticate_checked_upgrade_plan(plan: &SuccessorPlan) -> Result<()> {
     Ok(())
 }
 
+fn authenticate_checked_plan(
+    plan: &SuccessorPlan,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    match expected_cluster {
+        ExpectedClusterV1::Devnet => authenticate_checked_upgrade_plan(plan),
+        ExpectedClusterV1::OwnedLoopback => {
+            if plan.checked_upgrade_set.is_some() {
+                return Err(Error::new(
+                    "owned-loopback flagship production refuses permanent-devnet Upgrade evidence",
+                ));
+            }
+            crate::local_mutable::authenticate_checked_local_mutable_plan_v1(plan)
+        }
+    }
+}
+
 fn producer_selected_input(
     plan: &SuccessorPlan,
     campaign: &CampaignMarketEvidenceV1,
@@ -2811,11 +2895,12 @@ fn producer_selected_input(
     post_update_body: &[u8],
     coherent: &FinalizedSnapshotV1,
     slots: &BTreeMap<StageV1, u64>,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<PlanInputV1> {
     if plan.schema != PLAN_FORMAT {
         return Err(Error::new(format!("plan schema must be {PLAN_FORMAT}")));
     }
-    authenticate_checked_upgrade_plan(plan)?;
+    authenticate_checked_plan(plan, expected_cluster)?;
     let registry_program = nonzero_pubkey(&plan.registry.program_id, "Registry program")?;
     let core_program = nonzero_pubkey(&plan.core.program_id, "Core program")?;
     let trading_program = nonzero_pubkey(&plan.trading.program_id, "Trading program")?;
@@ -2878,8 +2963,7 @@ fn producer_selected_input(
             "provider authorities must be nonzero and the fresh Receiver update must be vacant",
         ));
     }
-    let pyth = devnet_release_v1()
-        .map_err(|error| Error::new(format!("compiled devnet Pyth release: {error:?}")))?;
+    let pyth = expected_pyth_release(expected_cluster)?;
     let router_program = Pubkey::new_from_array(pyth.router_program());
     let guardian_set = Pubkey::find_program_address(
         &[b"GuardianSet", &encoded.guardian_set_index().to_be_bytes()],
@@ -2928,7 +3012,7 @@ fn producer_selected_input(
         plan_record(plan, "registry_artifact_release")?;
     let (pyth_release, _) = plan_record(plan, "pyth_release")?;
     Ok(PlanInputV1 {
-        format: INPUT_FORMAT.to_owned(),
+        format: input_format(expected_cluster).to_owned(),
         generation,
         release_set: plan.release_set_id.clone(),
         submitter: submitter.to_string(),
@@ -2982,7 +3066,7 @@ fn producer_selected_input(
     })
 }
 
-fn run_producer(arguments: Vec<String>) -> Result<()> {
+fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> Result<()> {
     let arguments = ProducerCommandArgumentsV1::parse(arguments)?;
     let plan_path = absolute(arguments.plan, "--plan")?;
     let campaign_path = absolute(arguments.campaign_evidence, "--campaign-evidence")?;
@@ -2997,7 +3081,7 @@ fn run_producer(arguments: Vec<String>) -> Result<()> {
     let facts_sha256 = hex(&Sha256::digest(&facts_bytes));
     let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
     let campaign_envelope: CampaignEvidenceV1 = serde_json::from_slice(&campaign_bytes)?;
-    let campaign = completed_campaign(&campaign_envelope, &plan_sha256)?;
+    let campaign = completed_campaign(&campaign_envelope, &plan_sha256, expected_cluster)?;
     let (facts, encoded_vaa, update_account, post_update_body) =
         parse_producer_facts(&facts_bytes)?;
     let prior = load_producer_checkpoint(
@@ -3005,6 +3089,7 @@ fn run_producer(arguments: Vec<String>) -> Result<()> {
         &plan_sha256,
         &campaign_sha256,
         &facts_sha256,
+        expected_cluster,
     )?;
     let origin = ClusterOriginV1::parse(
         arguments
@@ -3013,11 +3098,7 @@ fn run_producer(arguments: Vec<String>) -> Result<()> {
             .ok_or_else(|| Error::new("--rpc-url is required"))?,
         arguments.acknowledgment.as_deref(),
     )?;
-    if origin.loopback_port().is_some() {
-        return Err(Error::new(
-            "flagship input production is devnet-only and refuses loopback origins",
-        ));
-    }
+    expected_cluster.authenticate(&origin)?;
     let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
     let market = campaign_account(campaign, "founding_market")?;
     let window = campaign_account(campaign, "window_spec_record")?;
@@ -3065,8 +3146,9 @@ fn run_producer(arguments: Vec<String>) -> Result<()> {
         &post_update_body,
         &coherent,
         &slots,
+        expected_cluster,
     )?;
-    let selected = SelectedInputV1::parse(&input)?;
+    let selected = SelectedInputV1::parse(&input, expected_cluster)?;
     let snapshot = observe(
         &mut rpc,
         &selected,
@@ -3079,7 +3161,7 @@ fn run_producer(arguments: Vec<String>) -> Result<()> {
         ));
     }
     authenticate_current_deployments(&selected, &snapshot)?;
-    authenticate_devnet_pyth(&selected, &snapshot, true)?;
+    authenticate_selected_pyth_release(&selected, &snapshot, true, expected_cluster)?;
     // The production builder is the final address/record join. Producing its
     // exact Submit instruction proves no locally-derived selector is merely a
     // plausible address.
@@ -3191,7 +3273,7 @@ fn run_producer(arguments: Vec<String>) -> Result<()> {
         )));
     }
     let checkpoint = ProducerCheckpointV1 {
-        format: PRODUCER_CHECKPOINT_FORMAT.to_owned(),
+        format: producer_checkpoint_format(expected_cluster).to_owned(),
         plan_sha256,
         campaign_evidence_sha256: campaign_sha256,
         pyth_facts_sha256: facts_sha256,
@@ -3874,7 +3956,10 @@ fn reconcile_table_attempt(
     }
 }
 
-fn run_table_provisioner(arguments: Vec<String>) -> Result<()> {
+fn run_table_provisioner(
+    arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
     let arguments = TableProvisionArgumentsV1::parse(arguments)?;
     let producer_path = absolute(arguments.producer_checkpoint, "--producer-checkpoint")?;
     let journal_path = absolute(arguments.table_journal, "--table-journal")?;
@@ -3885,9 +3970,9 @@ fn run_table_provisioner(arguments: Vec<String>) -> Result<()> {
         ))
     })?;
     let checkpoint: ProducerCheckpointV1 = serde_json::from_slice(&producer_bytes)?;
-    let selected = authenticate_producer_checkpoint(&checkpoint)?;
+    let selected = authenticate_producer_checkpoint(&checkpoint, expected_cluster)?;
     let identity = producer_identity_sha256(&checkpoint)?;
-    let mut journal = load_table_journal(&journal_path, &identity)?;
+    let mut journal = load_table_journal(&journal_path, &identity, expected_cluster)?;
     let origin = ClusterOriginV1::parse(
         arguments
             .rpc_url
@@ -3895,11 +3980,7 @@ fn run_table_provisioner(arguments: Vec<String>) -> Result<()> {
             .ok_or_else(|| Error::new("--rpc-url is required"))?,
         arguments.acknowledgment.as_deref(),
     )?;
-    if origin.loopback_port().is_some() {
-        return Err(Error::new(
-            "flagship table provisioner is devnet-only and refuses loopback origins",
-        ));
-    }
+    expected_cluster.authenticate(&origin)?;
     let policy = if arguments.execute {
         WritePolicyV1::Writes
     } else {
@@ -3956,7 +4037,7 @@ fn run_table_provisioner(arguments: Vec<String>) -> Result<()> {
             ));
         }
         authenticate_current_deployments(&selected, &snapshot)?;
-        authenticate_devnet_pyth(&selected, &snapshot, true)?;
+        authenticate_selected_pyth_release(&selected, &snapshot, true, expected_cluster)?;
         provider_submit_report(&selected, &snapshot)?;
         let Some((stage, action, instruction)) = next_table_provision(&checkpoint, &snapshot)?
         else {
@@ -4489,14 +4570,15 @@ fn prepare_stage(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
     stage: StageV1,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<PreparedStageV1> {
     authenticate_current_deployments(selected, snapshot)?;
     match stage {
         StageV1::Submit | StageV1::Execute => {
-            authenticate_devnet_pyth(selected, snapshot, true)?;
+            authenticate_selected_pyth_release(selected, snapshot, true, expected_cluster)?;
         }
         StageV1::Reclaim => {
-            authenticate_devnet_pyth(selected, snapshot, false)?;
+            authenticate_selected_pyth_release(selected, snapshot, false, expected_cluster)?;
         }
         StageV1::Complete => {}
     }
@@ -4852,6 +4934,7 @@ fn authenticate_provider_prestate(
     rpc: &mut Rpc,
     selected: &SelectedInputV1,
     plan: &StagePlanV1,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<()> {
     let snapshot = observe(rpc, selected, plan.stage, plan.observation_slot)?;
     if classify(chain_facts(selected, &snapshot)?)? != plan.stage {
@@ -4860,7 +4943,12 @@ fn authenticate_provider_prestate(
         ));
     }
     authenticate_current_deployments(selected, &snapshot)?;
-    authenticate_devnet_pyth(selected, &snapshot, plan.stage != StageV1::Reclaim)?;
+    authenticate_selected_pyth_release(
+        selected,
+        &snapshot,
+        plan.stage != StageV1::Reclaim,
+        expected_cluster,
+    )?;
     let table = snapshot.observed(selected.table(plan.stage)?, "provider lookup table")?;
     authenticate_frozen_lookup_table(selected, plan.stage, &table, &snapshot_rent(&snapshot)?)?;
     let current_table_state = DurableAccountStateV1 {
@@ -5091,6 +5179,7 @@ fn finish_provider_stage(
     selected: &SelectedInputV1,
     plan: &StagePlanV1,
     finalized: ProviderFinalizedTransactionV1,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<StageReceiptV1> {
     let post = observe(rpc, selected, plan.stage, finalized.slot)?;
     let return_bytes = BASE64
@@ -5118,7 +5207,12 @@ fn finish_provider_stage(
     }
     if matches!(plan.stage, StageV1::Execute | StageV1::Reclaim) {
         authenticate_current_deployments(selected, &post)?;
-        authenticate_devnet_pyth(selected, &post, plan.stage == StageV1::Execute)?;
+        authenticate_selected_pyth_release(
+            selected,
+            &post,
+            plan.stage == StageV1::Execute,
+            expected_cluster,
+        )?;
         verify_terminal(selected, &post)?;
     }
     let payer_pre = plan.pre_balances[0];
@@ -5221,17 +5315,28 @@ fn send_provider_packet_once(rpc: &mut Rpc, plan: &StagePlanV1) -> Result<()> {
 }
 
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
+    run_with_expected_cluster(arguments, ExpectedClusterV1::Devnet)
+}
+
+pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run_with_expected_cluster(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run_with_expected_cluster(
+    arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
     if arguments
         .iter()
         .any(|argument| argument == "--produce-input")
     {
-        return run_producer(arguments);
+        return run_producer(arguments, expected_cluster);
     }
     if arguments
         .iter()
         .any(|argument| argument == "--provision-tables")
     {
-        return run_table_provisioner(arguments);
+        return run_table_provisioner(arguments, expected_cluster);
     }
     let arguments = CommandArgumentsV1::parse(arguments)?;
     let input_path = absolute(arguments.input.clone(), "--input")?;
@@ -5243,7 +5348,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         ))
     })?;
     let input: PlanInputV1 = serde_json::from_slice(&input_bytes)?;
-    let selected = SelectedInputV1::parse(&input)?;
+    let selected = SelectedInputV1::parse(&input, expected_cluster)?;
     let input_sha256 = hex(&Sha256::digest(&input_bytes));
     let origin = ClusterOriginV1::parse(
         arguments
@@ -5252,18 +5357,14 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             .ok_or_else(|| Error::new("--rpc-url is required"))?,
         arguments.acknowledgment.as_deref(),
     )?;
-    if origin.loopback_port().is_some() {
-        return Err(Error::new(
-            "flagship-resolution-v1 is the devnet exterior and refuses loopback origins",
-        ));
-    }
+    expected_cluster.authenticate(&origin)?;
     let policy = if arguments.execute {
         WritePolicyV1::Writes
     } else {
         WritePolicyV1::ReadsOnly
     };
     let mut rpc = Rpc::connect_cluster(&origin, policy)?;
-    let mut checkpoint = load_checkpoint(&checkpoint_path, &input_sha256)?;
+    let mut checkpoint = load_checkpoint(&checkpoint_path, &input_sha256, expected_cluster)?;
     let through = arguments.through.unwrap_or(StageV1::Complete);
     loop {
         if let Some(plan) = checkpoint.stage_plan.as_mut() {
@@ -5272,7 +5373,13 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                 DurablePhaseV1::Finalized => {
                     let observed = provider_transaction_status(&mut rpc, &selected, plan)?
                         .ok_or_else(|| Error::new("persisted provider finalization disappeared"))?;
-                    let receipt = finish_provider_stage(&mut rpc, &selected, plan, observed)?;
+                    let receipt = finish_provider_stage(
+                        &mut rpc,
+                        &selected,
+                        plan,
+                        observed,
+                        expected_cluster,
+                    )?;
                     if plan.finalized.as_ref() != Some(&receipt) {
                         return Err(Error::new(
                             "persisted provider receipt differs from exact finalized history",
@@ -5291,7 +5398,13 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                 DurablePhaseV1::SignedNotSubmitted | DurablePhaseV1::Submitted => {
                     if let Some(finalized) = provider_transaction_status(&mut rpc, &selected, plan)?
                     {
-                        let receipt = finish_provider_stage(&mut rpc, &selected, plan, finalized)?;
+                        let receipt = finish_provider_stage(
+                            &mut rpc,
+                            &selected,
+                            plan,
+                            finalized,
+                            expected_cluster,
+                        )?;
                         plan.phase = DurablePhaseV1::Finalized;
                         plan.finalized = Some(receipt);
                         write_checkpoint(&checkpoint_path, &checkpoint)?;
@@ -5305,7 +5418,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                     return Ok(());
                 }
                 DurablePhaseV1::Planned => {
-                    authenticate_provider_prestate(&mut rpc, &selected, plan)?;
+                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
                     let stage = plan.stage;
                     let (payer, update) = load_stage_signers(&selected, stage, &arguments)?;
                     sign_provider_plan(plan, &payer, update.as_ref())?;
@@ -5315,7 +5428,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                         .stage_plan
                         .as_ref()
                         .ok_or_else(|| Error::new("signed provider plan disappeared"))?;
-                    authenticate_provider_prestate(&mut rpc, &selected, plan)?;
+                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
                     checkpoint
                         .stage_plan
                         .as_mut()
@@ -5333,7 +5446,13 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                         checkpoint.stage_plan.as_ref().expect("submitted plan"),
                     )? {
                         let plan = checkpoint.stage_plan.as_ref().expect("submitted plan");
-                        let receipt = finish_provider_stage(&mut rpc, &selected, plan, finalized)?;
+                        let receipt = finish_provider_stage(
+                            &mut rpc,
+                            &selected,
+                            plan,
+                            finalized,
+                            expected_cluster,
+                        )?;
                         let plan = checkpoint.stage_plan.as_mut().expect("submitted plan");
                         plan.phase = DurablePhaseV1::Finalized;
                         plan.finalized = Some(receipt);
@@ -5353,7 +5472,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         };
         if stage == StageV1::Complete {
             authenticate_current_deployments(&selected, &snapshot)?;
-            authenticate_devnet_pyth(&selected, &snapshot, false)?;
+            authenticate_selected_pyth_release(&selected, &snapshot, false, expected_cluster)?;
             verify_terminal(&selected, &snapshot)?;
             checkpoint.verified_terminal = true;
             write_checkpoint(&checkpoint_path, &checkpoint)?;
@@ -5364,7 +5483,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&checkpoint)?);
             return Ok(());
         }
-        let prepared = prepare_stage(&mut rpc, &selected, &snapshot, stage)?;
+        let prepared = prepare_stage(&mut rpc, &selected, &snapshot, stage, expected_cluster)?;
         checkpoint.stage_plan = Some(prepared.plan);
         // Complete real v0 message, exact fee, ALT resolution, and prebalances are durable first.
         write_checkpoint(&checkpoint_path, &checkpoint)?;
@@ -5375,12 +5494,16 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     }
 }
 
-fn load_checkpoint(path: &Path, input_sha256: &str) -> Result<CheckpointV1> {
+fn load_checkpoint(
+    path: &Path,
+    input_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<CheckpointV1> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(CheckpointV1 {
-                format: CHECKPOINT_FORMAT.to_owned(),
+                format: checkpoint_format(expected_cluster).to_owned(),
                 input_sha256: input_sha256.to_owned(),
                 stage_plan: None,
                 receipts: Vec::new(),
@@ -5395,7 +5518,9 @@ fn load_checkpoint(path: &Path, input_sha256: &str) -> Result<CheckpointV1> {
         }
     };
     let checkpoint: CheckpointV1 = serde_json::from_slice(&bytes)?;
-    if checkpoint.format != CHECKPOINT_FORMAT || checkpoint.input_sha256 != input_sha256 {
+    if checkpoint.format != checkpoint_format(expected_cluster)
+        || checkpoint.input_sha256 != input_sha256
+    {
         return Err(Error::new(
             "checkpoint format or input digest differs; cross-market resume refused",
         ));
@@ -5893,7 +6018,7 @@ mod tests {
     }
 
     fn sample_selected() -> SelectedInputV1 {
-        SelectedInputV1::parse(&sample_input()).expect("selected input")
+        SelectedInputV1::parse(&sample_input(), ExpectedClusterV1::Devnet).expect("selected input")
     }
 
     fn table_account(
@@ -6146,7 +6271,8 @@ mod tests {
     #[test]
     fn producer_and_table_cli_refuse_signer_aliases_and_preflight_keys() {
         let exact = sample_input();
-        let selected = SelectedInputV1::parse(&exact).expect("exact selected input");
+        let selected = SelectedInputV1::parse(&exact, ExpectedClusterV1::Devnet)
+            .expect("exact selected input");
         assert_eq!(
             selected.account("claims_program").expect("Claims program"),
             pubkey(&exact.accounts.claims_program).expect("Claims program key")
@@ -6165,13 +6291,13 @@ mod tests {
         );
         let mut aliased = sample_input();
         aliased.resolver.clone_from(&aliased.submitter);
-        assert!(SelectedInputV1::parse(&aliased).is_err());
+        assert!(SelectedInputV1::parse(&aliased, ExpectedClusterV1::Devnet).is_err());
         let mut aliased = sample_input();
         aliased.resolver = aliased.accounts.update_account.clone();
-        assert!(SelectedInputV1::parse(&aliased).is_err());
+        assert!(SelectedInputV1::parse(&aliased, ExpectedClusterV1::Devnet).is_err());
         let mut aliased = sample_input();
         aliased.refund_recipient.clone_from(&aliased.resolver);
-        assert!(SelectedInputV1::parse(&aliased).is_err());
+        assert!(SelectedInputV1::parse(&aliased, ExpectedClusterV1::Devnet).is_err());
         assert!(
             TableProvisionArgumentsV1::parse(vec![
                 "--provision-tables".into(),
@@ -6195,6 +6321,8 @@ mod tests {
     fn completed_campaign_digest_and_account_evidence_are_substitution_bound() {
         let exact_shape: CampaignEvidenceV1 = serde_json::from_value(json!({
             "schema": CAMPAIGN_FORMAT,
+            "cluster": "devnet",
+            "mode": "execute",
             "plan_sha256": "aa".repeat(32),
             "execution": {
                 "completed": true,
@@ -6211,6 +6339,8 @@ mod tests {
         assert!(
             serde_json::from_value::<CampaignEvidenceV1>(json!({
                 "schema": CAMPAIGN_FORMAT,
+                "cluster": "devnet",
+                "mode": "execute",
                 "plan_sha256": "aa".repeat(32),
                 "execution": {
                     "completed": true,
@@ -6250,6 +6380,8 @@ mod tests {
         };
         let envelope = CampaignEvidenceV1 {
             schema: CAMPAIGN_FORMAT.into(),
+            cluster: "devnet".into(),
+            mode: "execute".into(),
             plan_sha256: "aa".repeat(32),
             execution: CampaignExecutionEnvelopeV1 {
                 completed: true,
@@ -6257,8 +6389,11 @@ mod tests {
             },
         };
         let selected_market =
-            completed_campaign(&envelope, &"aa".repeat(32)).expect("campaign Market");
-        assert!(completed_campaign(&envelope, &"bb".repeat(32)).is_err());
+            completed_campaign(&envelope, &"aa".repeat(32), ExpectedClusterV1::Devnet)
+                .expect("campaign Market");
+        assert!(
+            completed_campaign(&envelope, &"bb".repeat(32), ExpectedClusterV1::Devnet).is_err()
+        );
         let snapshot = FinalizedSnapshotV1 {
             observation: Observation {
                 slot: 10,
@@ -6309,6 +6444,41 @@ mod tests {
         reordered.swap(0, 1);
         hostile_plan.stable_union = reordered;
         assert!(authenticate_lookup_table_plan(&selected, &hostile_plan).is_err());
+    }
+
+    #[test]
+    fn owned_loopback_formats_and_provider_release_are_disjoint_from_devnet() {
+        let devnet = sample_input();
+        SelectedInputV1::parse(&devnet, ExpectedClusterV1::Devnet).expect("public devnet input");
+        assert!(SelectedInputV1::parse(&devnet, ExpectedClusterV1::OwnedLoopback).is_err());
+
+        let mut local = devnet.clone();
+        local.format = LOCAL_INPUT_FORMAT.into();
+        SelectedInputV1::parse(&local, ExpectedClusterV1::OwnedLoopback)
+            .expect("private owned-loopback input");
+        assert!(SelectedInputV1::parse(&local, ExpectedClusterV1::Devnet).is_err());
+
+        let public_release =
+            expected_pyth_release(ExpectedClusterV1::Devnet).expect("compiled devnet release");
+        let local_release = expected_pyth_release(ExpectedClusterV1::OwnedLoopback)
+            .expect("compiled local release");
+        assert_ne!(public_release.to_bytes(), local_release.to_bytes());
+        assert_ne!(public_release.receiver_deployment_slot(), 0);
+        assert_ne!(public_release.router_deployment_slot(), 0);
+        assert_eq!(local_release.receiver_deployment_slot(), 0);
+        assert_eq!(local_release.router_deployment_slot(), 0);
+        assert_ne!(
+            producer_checkpoint_format(ExpectedClusterV1::Devnet),
+            producer_checkpoint_format(ExpectedClusterV1::OwnedLoopback)
+        );
+        assert_ne!(
+            table_journal_format(ExpectedClusterV1::Devnet),
+            table_journal_format(ExpectedClusterV1::OwnedLoopback)
+        );
+        assert_ne!(
+            checkpoint_format(ExpectedClusterV1::Devnet),
+            checkpoint_format(ExpectedClusterV1::OwnedLoopback)
+        );
     }
 
     #[test]

@@ -19,6 +19,11 @@ describe('Activity route', () => {
     expect(html).toContain('Market addresses · one per line');
   });
 
+  it('accepts static-host-safe links without calling them snapshots', () => {
+    expect(html).toContain('Owner address · wallet, pasted, or linked');
+    expect(html).not.toContain('activity snapshot');
+  });
+
   it('keeps the honest empty state instead of a placeholder feed', () => {
     expect(html).toContain('No signature history has been read.');
     expect(html).toContain('this surface stays empty rather than inventing an activity feed');
@@ -29,7 +34,7 @@ describe('Activity route', () => {
   });
 
   it('makes the browser wallet optional and identity-only', () => {
-    expect(html).toContain('Owner address · wallet or pasted');
+    expect(html).toContain('Owner address · wallet, pasted, or linked');
     expect(html).toContain('Connecting reads a public address only');
   });
 

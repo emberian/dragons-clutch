@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ACTIVITY_MAX_TRANSACTIONS,
+  activityHrefV1,
+  activityLinkQueryV1,
   inspectActivityV1,
   lamportDeltaV1,
 } from './activity';
@@ -64,6 +66,29 @@ function meta(signature: string, overrides: Partial<TransactionMetaObservation>)
 }
 
 describe('indexer-free activity', () => {
+  it('round-trips one static-host-safe owner and Market link', () => {
+    const href = activityHrefV1(OWNER, [MARKET, MARKET]);
+    expect(href).toBe(`/activity?owner=${OWNER}&market=${MARKET}`);
+    expect(activityLinkQueryV1(href.slice('/activity'.length))).toEqual({
+      kind: 'ready',
+      owner: OWNER,
+      marketAddresses: [MARKET],
+    });
+  });
+
+  it('keeps manual visits empty and refuses ambiguous activity links', () => {
+    expect(activityLinkQueryV1(null)).toEqual({ kind: 'resolving' });
+    expect(activityLinkQueryV1('')).toEqual({ kind: 'manual' });
+    expect(activityLinkQueryV1(`?market=${MARKET}`)).toEqual({
+      kind: 'refused',
+      reason: 'This activity link names Markets but no owner wallet.',
+    });
+    expect(activityLinkQueryV1(`?owner=${OWNER}&owner=${OTHER}`)).toEqual({
+      kind: 'refused',
+      reason: 'This activity link supplies more than one owner wallet.',
+    });
+  });
+
   it('signs the lamport delta exactly', () => {
     expect(lamportDeltaV1('100', '250')).toBe('+150');
     expect(lamportDeltaV1('250', '100')).toBe('-150');
