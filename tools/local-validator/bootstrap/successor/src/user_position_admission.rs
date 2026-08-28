@@ -200,6 +200,17 @@ struct FinalizedEvidenceV1 {
     poststate: BTreeMap<String, AccountStateV1>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AdmissionHistoryV1 {
+    signature: String,
+    slot: u64,
+    fee_lamports: u64,
+    compute_units_consumed: Option<u64>,
+    return_data_producer: String,
+    return_data_sha256: String,
+    poststate: BTreeMap<String, AccountStateV1>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CollateralIntentV1 {
@@ -284,6 +295,8 @@ struct CollateralReportV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     signed_packet_base64: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    signed_packet_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     expected_signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     finalized: Option<CollateralFinalizedEvidenceV1>,
@@ -302,6 +315,8 @@ struct ReportV1 {
     intent: IntentV1,
     #[serde(skip_serializing_if = "Option::is_none")]
     signed_packet_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signed_packet_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -456,7 +471,7 @@ fn resume_admission_and_collateral(
     report: &mut ReportV1,
     journal: &mut ReportJournalV1,
 ) -> Result<()> {
-    resume(rpc, arguments, report, journal)?;
+    resume(rpc, arguments, plan, evidence, report, journal)?;
     if report.phase == PhaseV1::Finalized && arguments.collateral.is_some() {
         resume_or_plan_collateral(rpc, arguments, plan, evidence, report, journal)?;
     }
@@ -844,11 +859,7 @@ fn build_collateral_report_v1(
     )?;
 
     let (recent_blockhash, last_valid_block_height) = latest_blockhash(rpc)?;
-    let observation = Observation {
-        finality: Finality::Finalized,
-        slot,
-        unix_timestamp: report.intent.observation_unix_timestamp,
-    };
+    let observation = collateral_observation_v1(slot, rpc.block_time(slot)?);
     let compiled = compile_v0_message_with_optional_tables(
         arguments.fee_payer,
         &instructions,
@@ -987,9 +998,18 @@ fn build_collateral_report_v1(
         envelope_sha256: String::new(),
         intent,
         signed_packet_base64: None,
+        signed_packet_sha256: None,
         expected_signature: None,
         finalized: None,
     })
+}
+
+fn collateral_observation_v1(slot: u64, block_time: i64) -> Observation {
+    Observation {
+        finality: Finality::Finalized,
+        slot,
+        unix_timestamp: block_time,
+    }
 }
 
 fn participant_collateral_seed_v1(
@@ -2081,15 +2101,16 @@ fn sign_and_submit_collateral(
             .as_mut()
             .ok_or_else(|| Error::new("collateral report disappeared"))?;
         collateral.signed_packet_base64 = Some(BASE64.encode(&wire));
+        collateral.signed_packet_sha256 = Some(sha256_hex(&wire));
         collateral.expected_signature = Some(signature.to_string());
-        collateral.phase = CollateralPhaseV1::SignedNotSubmitted;
+        collateral.phase = CollateralPhaseV1::Submitted;
     }
     journal.persist(report)?;
 
     authenticate_genesis_again(rpc, &arguments.origin)?;
     require_collateral_prestate_unchanged(rpc, report)?;
     let returned = rpc
-        .call(
+        .call_once(
             "sendTransaction",
             &json!([BASE64.encode(&wire), {
                 "encoding":"base64",
@@ -2107,12 +2128,6 @@ fn sign_and_submit_collateral(
             "RPC returned a signature different from the durable collateral packet",
         ));
     }
-    report
-        .collateral
-        .as_mut()
-        .ok_or_else(|| Error::new("collateral report disappeared"))?
-        .phase = CollateralPhaseV1::Submitted;
-    journal.persist(report)?;
     wait_finalized(rpc, &signature.to_string())?;
     finalize_collateral_signature(rpc, report, &signature.to_string())?;
     journal.persist(report)
@@ -2268,6 +2283,9 @@ fn authenticate_collateral_packet(report: &CollateralReportV1) -> Result<Version
     }
     let transaction: VersionedTransaction = bincode::deserialize(&wire)
         .map_err(|error| Error::new(format!("durable collateral packet: {error}")))?;
+    if report.signed_packet_sha256.as_deref() != Some(&sha256_hex(&wire)) {
+        return Err(Error::new("durable collateral packet digest changed"));
+    }
     transaction
         .verify_and_hash_message()
         .map_err(|error| Error::new(format!("durable collateral packet signatures: {error}")))?;
@@ -2301,6 +2319,12 @@ fn authenticate_admission_packet(report: &ReportV1) -> Result<VersionedTransacti
     }
     let transaction: VersionedTransaction = bincode::deserialize(&wire)
         .map_err(|error| Error::new(format!("durable admission packet: {error}")))?;
+    if report.signed_packet_sha256.as_deref() != Some(&sha256_hex(&wire)) {
+        return Err(Error::new("durable admission packet digest changed"));
+    }
+    transaction
+        .verify_and_hash_message()
+        .map_err(|error| Error::new(format!("durable admission packet signatures: {error}")))?;
     let message = transaction.message.serialize();
     if BASE64.encode(&message) != report.intent.message_base64
         || sha256_hex(&message) != report.intent.message_sha256
@@ -2437,30 +2461,46 @@ fn finalized_transaction_wire(rpc: &mut Rpc, signature: &str) -> Result<(u64, Ve
     )?;
     if transaction.is_null() {
         return Err(Error::new(
-            "finalized collateral signature omitted exact transaction bytes",
+            "finalized signature omitted exact transaction bytes",
         ));
     }
     let slot = transaction
         .get("slot")
         .and_then(Value::as_u64)
-        .ok_or_else(|| Error::new("exact collateral transaction omitted slot"))?;
-    let wire = transaction
-        .pointer("/transaction/0")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("exact collateral transaction omitted base64 packet"))?;
-    let wire = BASE64
-        .decode(wire)
-        .map_err(|error| Error::new(format!("exact collateral transaction packet: {error}")))?;
+        .ok_or_else(|| Error::new("exact finalized transaction omitted slot"))?;
+    let wire = decode_exact_base64_tuple_v1(
+        transaction
+            .get("transaction")
+            .ok_or_else(|| Error::new("exact finalized transaction omitted packet tuple"))?,
+        "exact finalized transaction packet",
+    )?;
     Ok((slot, wire))
+}
+
+fn decode_exact_base64_tuple_v1(value: &Value, label: &str) -> Result<Vec<u8>> {
+    let tuple = value
+        .as_array()
+        .ok_or_else(|| Error::new(format!("{label} was not an encoding tuple")))?;
+    if tuple.len() != 2 || tuple[1].as_str() != Some("base64") {
+        return Err(Error::new(format!(
+            "{label} did not select the exact base64 encoding"
+        )));
+    }
+    let encoded = tuple[0]
+        .as_str()
+        .ok_or_else(|| Error::new(format!("{label} body was not a string")))?;
+    BASE64
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("{label}: {error}")))
 }
 
 fn require_exact_history_wire_v1(expected_base64: &str, observed: &[u8]) -> Result<()> {
     let expected = BASE64
         .decode(expected_base64)
-        .map_err(|error| Error::new(format!("durable collateral packet base64: {error}")))?;
+        .map_err(|error| Error::new(format!("durable signed packet base64: {error}")))?;
     if expected != observed {
         return Err(Error::new(
-            "finalized collateral history was not the exact durable signed packet",
+            "finalized history was not the exact durable signed packet",
         ));
     }
     Ok(())
@@ -2476,6 +2516,207 @@ fn authenticate_collateral_return_data(
         ));
     }
     Ok(())
+}
+
+fn authenticate_admission_balance_vector(
+    meta: &Value,
+    message: &VersionedMessage,
+    intent: &IntentV1,
+) -> Result<BTreeMap<Pubkey, u64>> {
+    if message
+        .address_table_lookups()
+        .is_some_and(|lookups| !lookups.is_empty())
+    {
+        return Err(Error::new(
+            "admission balance accounting refuses loaded addresses",
+        ));
+    }
+    let pre = meta
+        .get("preBalances")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("finalized admission meta omitted preBalances"))?;
+    let post = meta
+        .get("postBalances")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("finalized admission meta omitted postBalances"))?;
+    let keys = message.static_account_keys();
+    if pre.len() != keys.len() || post.len() != keys.len() {
+        return Err(Error::new(
+            "admission balance vector did not match exact static message keys",
+        ));
+    }
+    let mut durable_lamports = BTreeMap::new();
+    for state in intent.prestate.values() {
+        let key = parse_state_address(state)?;
+        if durable_lamports
+            .insert(key, state.lamports)
+            .is_some_and(|prior| prior != state.lamports)
+        {
+            return Err(Error::new(
+                "durable admission aliases disagreed on pre-balance",
+            ));
+        }
+    }
+    let owner = pubkey(&intent.position_owner)?;
+    let payer = pubkey(&intent.fee_payer)?;
+    let position = pubkey(&intent.position)?;
+    let admission = pubkey(&intent.admission)?;
+    let mut pre_sum = 0_u128;
+    let mut post_sum = 0_u128;
+    let mut finalized_balances = BTreeMap::new();
+    for ((key, before), after) in keys.iter().zip(pre).zip(post) {
+        let before = before
+            .as_u64()
+            .ok_or_else(|| Error::new("admission preBalances contained a non-u64"))?;
+        let after = after
+            .as_u64()
+            .ok_or_else(|| Error::new("admission postBalances contained a non-u64"))?;
+        if durable_lamports.get(key).copied() != Some(before) {
+            return Err(Error::new(format!(
+                "admission pre-balance for {key} differed from the durable finalized snapshot"
+            )));
+        }
+        pre_sum += u128::from(before);
+        post_sum += u128::from(after);
+        finalized_balances.insert(*key, after);
+        let mut expected = before;
+        if *key == owner {
+            expected = expected
+                .checked_sub(
+                    intent
+                        .position_top_up_lamports
+                        .checked_add(intent.admission_top_up_lamports)
+                        .ok_or_else(|| Error::new("admission top-up sum overflow"))?,
+                )
+                .ok_or_else(|| Error::new("admission owner balance underflow"))?;
+        }
+        if *key == payer {
+            expected = expected
+                .checked_sub(intent.transaction_fee_lamports)
+                .ok_or_else(|| Error::new("admission payer fee underflow"))?;
+        }
+        if *key == position {
+            expected = expected
+                .checked_add(intent.position_top_up_lamports)
+                .ok_or_else(|| Error::new("admission Position balance overflow"))?;
+        }
+        if *key == admission {
+            expected = expected
+                .checked_add(intent.admission_top_up_lamports)
+                .ok_or_else(|| Error::new("admission receipt balance overflow"))?;
+        }
+        if after != expected {
+            return Err(Error::new(format!(
+                "lamport delta for {key} was not the exact admission fee/rent accounting"
+            )));
+        }
+    }
+    if pre_sum.checked_sub(post_sum) != Some(u128::from(intent.transaction_fee_lamports)) {
+        return Err(Error::new(
+            "whole admission balance vector did not conserve lamports except the exact fee",
+        ));
+    }
+    // A durable input absent from the exact signed message cannot have been
+    // mutated by this transaction and remains its prestate projection. Every
+    // account that the message did carry was checked above in canonical key
+    // order against both historical balance vectors.
+    Ok(finalized_balances)
+}
+
+fn project_admission_poststate_from_history_v1(
+    intent: &IntentV1,
+    finalized_balances: &BTreeMap<Pubkey, u64>,
+) -> Result<BTreeMap<String, AccountStateV1>> {
+    let position = pubkey(&intent.position)?;
+    let admission = pubkey(&intent.admission)?;
+    let owner = pubkey(&intent.position_owner)?;
+    let payer = pubkey(&intent.fee_payer)?;
+    let claims_program = pubkey(&intent.expected_receipt_producer)?;
+    let expected_position = decode_expected(&intent.expected_position_base64, "Position")?;
+    let expected_admission = decode_expected(&intent.expected_admission_base64, "admission")?;
+    let admission_receipt = decode_expected(&intent.expected_receipt_base64, "receipt")?;
+    let canonical_admission = ProtocolPositionAdmissionV2::decode_receipt(&admission_receipt)
+        .and_then(ProtocolPositionAdmissionV2::to_state_bytes)
+        .map_err(|error| Error::new(format!("canonical admission receipt: {error:?}")))?;
+    if expected_admission != canonical_admission {
+        return Err(Error::new(
+            "expected admission state was not the exact state projection of the finalized receipt",
+        ));
+    }
+    LiabilityBasisPositionViewV2::decode(&expected_position)
+        .map_err(|error| Error::new(format!("expected Claims Position: {error:?}")))?;
+
+    let mut projected = intent.prestate.clone();
+    for (label, key, data_owner, bytes) in [
+        (
+            "claims_position",
+            position,
+            claims_program,
+            expected_position.as_slice(),
+        ),
+        (
+            "claims_admission",
+            admission,
+            claims_program,
+            expected_admission.as_slice(),
+        ),
+    ] {
+        let before = intent
+            .prestate
+            .get(label)
+            .ok_or_else(|| Error::new(format!("admission prestate omitted {label}")))?;
+        let lamports = finalized_balances
+            .get(&key)
+            .copied()
+            .ok_or_else(|| Error::new(format!("finalized balances omitted {label}")))?;
+        projected.insert(
+            label.into(),
+            account_state(
+                key,
+                Some(&RpcAccount {
+                    lamports,
+                    owner: data_owner,
+                    executable: false,
+                    rent_epoch: before.rent_epoch,
+                    data: bytes.to_vec(),
+                }),
+            ),
+        );
+    }
+    for (label, key) in [("position_owner", owner), ("fee_payer", payer)] {
+        let before = intent
+            .prestate
+            .get(label)
+            .ok_or_else(|| Error::new(format!("admission prestate omitted {label}")))?;
+        if before.owner != system_program::ID.to_string()
+            || before.executable
+            || before.data_len != 0
+            || before.data_sha256 != sha256_hex(&[])
+        {
+            return Err(Error::new(format!(
+                "{label} was not the exact System-owned empty wallet profile"
+            )));
+        }
+        let lamports = finalized_balances
+            .get(&key)
+            .copied()
+            .ok_or_else(|| Error::new(format!("finalized balances omitted {label}")))?;
+        projected.insert(
+            label.into(),
+            account_state(
+                key,
+                Some(&RpcAccount {
+                    lamports,
+                    owner: system_program::ID,
+                    executable: false,
+                    rent_epoch: before.rent_epoch,
+                    data: Vec::new(),
+                }),
+            ),
+        );
+    }
+    authenticate_admission_poststate_map(intent, &projected)?;
+    Ok(projected)
 }
 
 fn authenticate_collateral_balance_vector(
@@ -2691,6 +2932,73 @@ fn verify_persisted_collateral(rpc: &mut Rpc, report: &ReportV1) -> Result<()> {
     authenticate_collateral_poststate_map(&collateral.intent, &persisted.poststate)
 }
 
+fn predict_admission_account_bytes_v1(
+    snapshot: &UserPositionAdmissionSnapshotV1,
+    unsigned: &UserPositionAdmissionPlanV1,
+    position_owner: Pubkey,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let claims_market = LiabilityBasisMarketViewV2::decode(&snapshot.claims_market.data)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
+    let position_width = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        claims_market.claim_count,
+    )
+    .map_err(|error| Error::new(format!("Claims Position width: {error:?}")))?;
+    let mut expected_position = vec![0; position_width];
+    let zero_balances = vec![
+        0;
+        usize::try_from(claims_market.claim_count).map_err(|_| Error::new(
+            "Claims outcome width does not fit host usize"
+        ))?
+    ];
+    encode_liability_basis_position_into_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 0,
+            market_account: unsigned.claims_request.market,
+            owner: position_owner.to_bytes(),
+            basis_id: claims_market.basis_id,
+        },
+        &zero_balances,
+        &mut expected_position,
+    )
+    .map_err(|error| Error::new(format!("predict Claims Position: {error:?}")))?;
+    let expected_admission =
+        ProtocolPositionAdmissionV2::decode_receipt(&unsigned.expected_receipt_body)
+            .and_then(ProtocolPositionAdmissionV2::to_state_bytes)
+            .map_err(|error| Error::new(format!("predict Claims admission state: {error:?}")))?;
+    Ok((expected_position, expected_admission.to_vec()))
+}
+
+fn complete_admission_message_prestate_v1(
+    rpc: &mut Rpc,
+    message: &VersionedMessage,
+    minimum_slot: u64,
+    states: &mut BTreeMap<String, AccountStateV1>,
+) -> Result<()> {
+    let existing = states
+        .values()
+        .map(parse_state_address)
+        .collect::<Result<BTreeSet<_>>>()?;
+    let missing = message
+        .static_account_keys()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, key)| (!existing.contains(key)).then_some((index, *key)))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let keys = missing.iter().map(|(_, key)| *key).collect::<Vec<_>>();
+    let (_, values) = rpc.finalized_accounts(&keys, minimum_slot)?;
+    for ((index, key), value) in missing.into_iter().zip(values) {
+        states.insert(
+            format!("message_account_{index:03}"),
+            account_state(key, value.as_ref()),
+        );
+    }
+    Ok(())
+}
+
 fn build_report(
     rpc: &mut Rpc,
     arguments: &ArgumentsV1,
@@ -2721,6 +3029,13 @@ fn build_report(
     .map_err(|error| Error::new(format!("admission message compilation: {error:?}")))?;
     let message_bytes = compiled.message.serialize();
     let message_base64 = BASE64.encode(&message_bytes);
+    let mut prestate = snapshot.states.clone();
+    complete_admission_message_prestate_v1(
+        rpc,
+        &compiled.message,
+        unsigned.observation.slot,
+        &mut prestate,
+    )?;
     let transaction_fee_lamports = fee_for_message(rpc, &message_base64)?;
     let top_ups = unsigned
         .position_top_up_lamports
@@ -2757,52 +3072,13 @@ fn build_report(
         )));
     }
 
-    let claims_market = LiabilityBasisMarketViewV2::decode(&snapshot.operator.claims_market.data)
-        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
-    let position_width = liability_basis_vector_width_v2(
-        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-        claims_market.claim_count,
-    )
-    .map_err(|error| Error::new(format!("Claims Position width: {error:?}")))?;
-    let mut expected_position = vec![0; position_width];
-    let zero_balances = vec![
-        0;
-        usize::try_from(claims_market.claim_count).map_err(|_| Error::new(
-            "Claims outcome width does not fit host usize"
-        ))?
-    ];
-    encode_liability_basis_position_into_v2(
-        LiabilityBasisPositionInputV2 {
-            revision: 0,
-            market_account: unsigned.claims_request.market,
-            owner: arguments.position_owner.to_bytes(),
-            basis_id: claims_market.basis_id,
-        },
-        &zero_balances,
-        &mut expected_position,
-    )
-    .map_err(|error| Error::new(format!("predict Claims Position: {error:?}")))?;
-    let expected_admission =
-        ProtocolPositionAdmissionV2::decode_receipt(&unsigned.expected_receipt_body)
-            .and_then(ProtocolPositionAdmissionV2::to_state_bytes)
-            .map_err(|error| Error::new(format!("predict Claims admission state: {error:?}")))?;
+    let (expected_position, expected_admission) =
+        predict_admission_account_bytes_v1(&snapshot.operator, unsigned, arguments.position_owner)?;
 
     let instructions = unsigned
         .instructions
         .iter()
-        .map(|instruction| InstructionEvidenceV1 {
-            program_id: instruction.program_id.to_string(),
-            accounts: instruction
-                .accounts
-                .iter()
-                .map(|account| InstructionAccountV1 {
-                    address: account.pubkey.to_string(),
-                    signer: account.is_signer,
-                    writable: account.is_writable,
-                })
-                .collect(),
-            data_base64: BASE64.encode(&instruction.data),
-        })
+        .map(instruction_evidence)
         .collect();
     let intent = IntentV1 {
         plan_sha256: plan_sha256.into(),
@@ -2834,7 +3110,7 @@ fn build_report(
         expected_position_base64: BASE64.encode(expected_position),
         expected_admission_base64: BASE64.encode(expected_admission),
         instructions,
-        prestate: snapshot.states.clone(),
+        prestate,
     };
     let intent_sha256 = sha256_hex(&serde_json::to_vec(&intent)?);
     Ok(ReportV1 {
@@ -2847,15 +3123,192 @@ fn build_report(
         envelope_sha256: String::new(),
         intent,
         signed_packet_base64: None,
+        signed_packet_sha256: None,
         expected_signature: None,
         finalized: None,
         collateral: None,
     })
 }
 
+fn rebind_admission_observation_v1(
+    snapshot: &mut UserPositionAdmissionSnapshotV1,
+    observation: Observation,
+) {
+    for account in [
+        &mut snapshot.claims_market,
+        &mut snapshot.position,
+        &mut snapshot.admission,
+        &mut snapshot.linked_basis_raw,
+        &mut snapshot.linked_basis_staging,
+        &mut snapshot.product_raw,
+        &mut snapshot.product_staging,
+        &mut snapshot.result_domain_raw,
+        &mut snapshot.result_domain_staging,
+        &mut snapshot.portfolio_raw,
+        &mut snapshot.portfolio_staging,
+        &mut snapshot.rent_sysvar,
+        &mut snapshot.system_program,
+        &mut snapshot.core_market,
+        &mut snapshot.activation_cache,
+        &mut snapshot.registry_program,
+        &mut snapshot.trading_program,
+        &mut snapshot.trading_programdata,
+        &mut snapshot.claims_program,
+        &mut snapshot.claims_programdata,
+        &mut snapshot.core_program,
+        &mut snapshot.core_programdata,
+        &mut snapshot.owner,
+        &mut snapshot.rent_credit,
+        &mut snapshot.rent_program,
+    ] {
+        account.observation = observation;
+    }
+}
+
+fn authenticate_fresh_admission_plan_v1(
+    rpc: &mut Rpc,
+    arguments: &ArgumentsV1,
+    plan: &SuccessorPlan,
+    evidence: &Value,
+    report: &ReportV1,
+) -> Result<()> {
+    let coordinates = evidence_coordinates(evidence)?;
+    let mut snapshot = acquire_snapshot(rpc, arguments, plan, coordinates, evidence)?;
+    let observation = Observation {
+        slot: report.intent.observation_slot,
+        unix_timestamp: report.intent.observation_unix_timestamp,
+        finality: Finality::Finalized,
+    };
+    rebind_admission_observation_v1(&mut snapshot.operator, observation);
+    let unsigned = plan_user_position_admission_v1(&snapshot.operator).map_err(|error| {
+        Error::new(format!(
+            "fresh User Position admission reconstruction refused: {error:?}"
+        ))
+    })?;
+    let instructions = unsigned
+        .instructions
+        .iter()
+        .map(instruction_evidence)
+        .collect::<Vec<_>>();
+    let recent_blockhash = report
+        .intent
+        .recent_blockhash
+        .parse::<Hash>()
+        .map_err(|error| Error::new(format!("durable admission blockhash: {error}")))?;
+    let compiled = compile_v0_message_with_optional_tables(
+        arguments.fee_payer,
+        &unsigned.instructions,
+        recent_blockhash,
+        observation,
+        &[],
+    )
+    .map_err(|error| Error::new(format!("recompile admission message: {error:?}")))?;
+    let message = compiled.message.serialize();
+    let message_base64 = BASE64.encode(&message);
+    complete_admission_message_prestate_v1(
+        rpc,
+        &compiled.message,
+        observation.slot,
+        &mut snapshot.states,
+    )?;
+    if snapshot.states != report.intent.prestate {
+        return Err(Error::new(
+            "REFUSED: current finalized admission snapshot differed from the durable complete-message prestate",
+        ));
+    }
+    let fresh_fee = fee_for_message(rpc, &message_base64)?;
+    let (expected_position, expected_admission) = predict_admission_account_bytes_v1(
+        &snapshot.operator,
+        &unsigned,
+        arguments.position_owner,
+    )?;
+    let top_ups = unsigned
+        .position_top_up_lamports
+        .checked_add(unsigned.admission_top_up_lamports)
+        .ok_or_else(|| Error::new("fresh admission rent top-up overflow"))?;
+    let (owner_debit, payer_debit) = if arguments.position_owner == arguments.fee_payer {
+        let combined = top_ups
+            .checked_add(fresh_fee)
+            .ok_or_else(|| Error::new("fresh combined admission debit overflow"))?;
+        (combined, combined)
+    } else {
+        (top_ups, fresh_fee)
+    };
+    if snapshot.fee_payer.owner != system_program::ID
+        || snapshot.fee_payer.executable
+        || !snapshot.fee_payer.data.is_empty()
+        || snapshot.operator.owner.lamports < owner_debit
+        || (arguments.position_owner != arguments.fee_payer
+            && snapshot.fee_payer.lamports < payer_debit)
+    {
+        return Err(Error::new(
+            "fresh admission owner/payer profile or exact balance refused",
+        ));
+    }
+    if compiled
+        .message
+        .address_table_lookups()
+        .is_some_and(|lookups| !lookups.is_empty())
+    {
+        return Err(Error::new(
+            "fresh canonical admission unexpectedly depended on a lookup table",
+        ));
+    }
+    let reconstructed = IntentV1 {
+        plan_sha256: report.intent.plan_sha256.clone(),
+        campaign_evidence_sha256: report.intent.campaign_evidence_sha256.clone(),
+        observation_slot: observation.slot,
+        observation_unix_timestamp: observation.unix_timestamp,
+        minimum_finalized_slot: arguments.minimum_finalized_slot,
+        position_owner: arguments.position_owner.to_string(),
+        fee_payer: arguments.fee_payer.to_string(),
+        claims_market: snapshot.operator.claims_market.key.to_string(),
+        position: unsigned.position.to_string(),
+        admission: unsigned.admission.to_string(),
+        founding_trading_custody_replay: snapshot.replay.key.to_string(),
+        position_rent_principal_lamports: unsigned.position_rent_principal,
+        admission_rent_principal_lamports: unsigned.admission_rent_principal,
+        position_top_up_lamports: unsigned.position_top_up_lamports,
+        admission_top_up_lamports: unsigned.admission_top_up_lamports,
+        transaction_fee_lamports: fresh_fee,
+        total_owner_debit_lamports: owner_debit,
+        total_fee_payer_debit_lamports: payer_debit,
+        recent_blockhash: recent_blockhash.to_string(),
+        // Solana exposes no reverse blockhash-to-height query. Fresh
+        // getFeeForMessage plus the current-height expiry check are the
+        // signing gate; retain the initially observed informational bound.
+        last_valid_block_height: report.intent.last_valid_block_height,
+        wire_bytes: compiled.wire_bytes,
+        message_base64,
+        message_sha256: sha256_hex(&message),
+        claims_request_sha256: hex(&unsigned.claims_request_digest),
+        expected_receipt_producer: unsigned.expected_receipt_producer.to_string(),
+        expected_receipt_base64: BASE64.encode(unsigned.expected_receipt_body),
+        expected_position_base64: BASE64.encode(expected_position),
+        expected_admission_base64: BASE64.encode(expected_admission),
+        instructions,
+        prestate: snapshot.states,
+    };
+    require_exact_reconstructed_admission_intent_v1(&report.intent, &reconstructed)
+}
+
+fn require_exact_reconstructed_admission_intent_v1(
+    durable: &IntentV1,
+    reconstructed: &IntentV1,
+) -> Result<()> {
+    if durable != reconstructed {
+        return Err(Error::new(
+            "durable admission intent differed from the fresh canonical semantic-owner reconstruction",
+        ));
+    }
+    Ok(())
+}
+
 fn resume(
     rpc: &mut Rpc,
     arguments: &ArgumentsV1,
+    plan: &SuccessorPlan,
+    evidence: &Value,
     report: &mut ReportV1,
     journal: &mut ReportJournalV1,
 ) -> Result<()> {
@@ -2863,31 +3316,27 @@ fn resume(
     authenticate_intent_digest(report)?;
     authenticate_genesis_again(rpc, &arguments.origin)?;
     if report.phase == PhaseV1::Finalized {
-        if report.collateral.is_some() {
-            verify_persisted_admission_history(rpc, report)?;
-        } else {
-            verify_persisted_finalized(rpc, report)?;
-        }
-        return Ok(());
-    }
-
-    let completion = probe_expected_poststate(rpc, report, 0)?;
-    if completion {
-        let signature = report.expected_signature.clone().ok_or_else(|| {
-            Error::new(
-                "REFUSED: exact admission state exists but this durable plan has no transaction signature; signing would replay and the receipt producer cannot be authenticated",
-            )
-        })?;
-        finalize_known_signature(rpc, report, &signature)?;
-        journal.persist(report)?;
-        return Ok(());
-    }
-    if !arguments.execute {
+        verify_persisted_admission_history(rpc, report)?;
         return Ok(());
     }
 
     match report.phase {
-        PhaseV1::Planned => sign_and_submit(rpc, arguments, report, journal),
+        PhaseV1::Planned => {
+            // This second finalized observation and semantic-owner pass occurs
+            // on every unsigned resume, including the immediate execution of a
+            // newly persisted plan, and always before the first key read.
+            authenticate_fresh_admission_plan_v1(rpc, arguments, plan, evidence, report)?;
+            if probe_expected_poststate(rpc, report, 0)? {
+                return Err(Error::new(
+                    "REFUSED: exact admission state exists but this durable plan has no transaction signature; signing would replay and the receipt producer cannot be authenticated",
+                ));
+            }
+            if arguments.execute {
+                sign_and_submit(rpc, arguments, report, journal)
+            } else {
+                Ok(())
+            }
+        }
         PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => {
             let signature = report.expected_signature.clone().ok_or_else(|| {
                 Error::new("signed/submitted evidence omitted its expected signature")
@@ -2897,10 +3346,17 @@ fn resume(
                     finalize_known_signature(rpc, report, &signature)?;
                     journal.persist(report)
                 }
-                None => Err(Error::new(format!(
-                    "REFUSED: transaction {signature} is not finalized and the expected poststate is absent. Its durable phase is {:?}; this is an ambiguous submitted state, so the executor will neither sign again nor replay the packet",
-                    report.phase
-                ))),
+                None => {
+                    let state = if probe_expected_poststate(rpc, report, 0)? {
+                        "the exact expected state exists but immutable finalized transaction history is absent"
+                    } else {
+                        "the expected state is absent"
+                    };
+                    Err(Error::new(format!(
+                        "REFUSED: transaction {signature} is not finalized and {state}. Its durable phase is {:?}; this is an ambiguous submitted state, so the executor will neither sign again nor replay the packet",
+                        report.phase
+                    )))
+                }
             }
         }
         PhaseV1::Finalized => Ok(()),
@@ -2924,6 +3380,12 @@ fn sign_and_submit(
         ));
     }
     authenticate_genesis_again(rpc, &arguments.origin)?;
+    enforce_shared_key_path(
+        arguments.position_owner,
+        &arguments.position_owner_keypair,
+        arguments.fee_payer,
+        &arguments.fee_payer_keypair,
+    )?;
 
     // This is deliberately the first key-file access in the command. The
     // complete message, fee, rent arithmetic, prestate, and output destination
@@ -2953,11 +3415,6 @@ fn sign_and_submit(
         }
         Some(payer)
     };
-    if arguments.position_owner == arguments.fee_payer && fee_payer.is_some() {
-        return Err(Error::new(
-            "one public key was supplied through two different keypair paths; use the same absolute path for both roles",
-        ));
-    }
     let message_bytes = BASE64
         .decode(&report.intent.message_base64)
         .map_err(|error| Error::new(format!("persisted message base64: {error}")))?;
@@ -2990,14 +3447,15 @@ fn sign_and_submit(
         )));
     }
     report.signed_packet_base64 = Some(BASE64.encode(&wire));
+    report.signed_packet_sha256 = Some(sha256_hex(&wire));
     report.expected_signature = Some(signature.to_string());
-    report.phase = PhaseV1::SignedNotSubmitted;
+    report.phase = PhaseV1::Submitted;
     journal.persist(report)?;
 
     authenticate_genesis_again(rpc, &arguments.origin)?;
     require_prestate_unchanged(rpc, report)?;
     let returned = rpc
-        .call(
+        .call_once(
             "sendTransaction",
             &json!([BASE64.encode(&wire), {
                 "encoding":"base64",
@@ -3015,32 +3473,81 @@ fn sign_and_submit(
             "RPC returned a signature different from the locally signed packet",
         ));
     }
-    report.phase = PhaseV1::Submitted;
-    journal.persist(report)?;
     wait_finalized(rpc, &signature.to_string())?;
     finalize_known_signature(rpc, report, &signature.to_string())?;
     journal.persist(report)
 }
 
 fn finalize_known_signature(rpc: &mut Rpc, report: &mut ReportV1, signature: &str) -> Result<()> {
+    let history = authenticate_admission_finalized_history(rpc, report, signature)?;
+    report.finalized = Some(FinalizedEvidenceV1 {
+        signature: history.signature,
+        slot: history.slot,
+        fee_lamports: history.fee_lamports,
+        compute_units_consumed: history.compute_units_consumed,
+        return_data_producer: history.return_data_producer,
+        return_data_sha256: history.return_data_sha256,
+        poststate: history.poststate,
+    });
+    report.phase = PhaseV1::Finalized;
+    Ok(())
+}
+
+fn authenticate_admission_finalized_history(
+    rpc: &mut Rpc,
+    report: &ReportV1,
+    signature: &str,
+) -> Result<AdmissionHistoryV1> {
+    authenticate_intent_digest(report)?;
+    let packet = authenticate_admission_packet(report)?;
+    if report.expected_signature.as_deref() != Some(signature) {
+        return Err(Error::new(
+            "finalized admission signature differs from the durable packet",
+        ));
+    }
     let transaction = finalized_transaction(rpc, signature)?.ok_or_else(|| {
         Error::new(format!(
             "signature {signature} has not reached finalized history; confirmed is never accepted"
         ))
     })?;
-    let meta = transaction
-        .get("meta")
-        .ok_or_else(|| Error::new("finalized admission transaction omitted meta"))?;
-    if meta.get("err").is_some_and(|value| !value.is_null()) {
-        return Err(Error::new(format!(
-            "finalized admission transaction failed: {}",
-            meta.get("err").unwrap_or(&Value::Null)
-        )));
+    if transaction
+        .pointer("/transaction/signatures/0")
+        .and_then(Value::as_str)
+        != Some(signature)
+    {
+        return Err(Error::new(
+            "finalized transaction history omitted the exact admission signature",
+        ));
     }
     let slot = transaction
         .get("slot")
         .and_then(Value::as_u64)
         .ok_or_else(|| Error::new("finalized admission transaction omitted slot"))?;
+    let (wire_slot, history_wire) = finalized_transaction_wire(rpc, signature)?;
+    let expected_wire = report
+        .signed_packet_base64
+        .as_deref()
+        .ok_or_else(|| Error::new("finalized admission journal omitted signed packet"))?;
+    require_exact_history_wire_v1(expected_wire, &history_wire)?;
+    if wire_slot != slot {
+        return Err(Error::new(
+            "finalized admission JSON and exact-wire observations disagreed on slot",
+        ));
+    }
+    if slot < report.intent.observation_slot || slot < report.intent.minimum_finalized_slot {
+        return Err(Error::new(
+            "finalized admission transaction preceded its durable finalized observation",
+        ));
+    }
+    let meta = transaction
+        .get("meta")
+        .ok_or_else(|| Error::new("finalized admission transaction omitted meta"))?;
+    if meta.get("err").is_none_or(|value| !value.is_null()) {
+        return Err(Error::new(format!(
+            "finalized admission transaction failed: {}",
+            meta.get("err").unwrap_or(&Value::Null)
+        )));
+    }
     let fee = meta
         .get("fee")
         .and_then(Value::as_u64)
@@ -3064,15 +3571,12 @@ fn finalize_known_signature(rpc: &mut Rpc, report: &mut ReportV1, signature: &st
             report.intent.expected_receipt_producer
         )));
     }
-    let encoded = return_data
-        .get("data")
-        .and_then(Value::as_array)
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("finalized returnData omitted base64 body"))?;
-    let receipt = BASE64
-        .decode(encoded)
-        .map_err(|error| Error::new(format!("finalized returnData base64: {error}")))?;
+    let receipt = decode_exact_base64_tuple_v1(
+        return_data
+            .get("data")
+            .ok_or_else(|| Error::new("finalized returnData omitted data tuple"))?,
+        "finalized returnData",
+    )?;
     let expected = BASE64
         .decode(&report.intent.expected_receipt_base64)
         .map_err(|error| Error::new(format!("persisted receipt base64: {error}")))?;
@@ -3081,8 +3585,11 @@ fn finalize_known_signature(rpc: &mut Rpc, report: &mut ReportV1, signature: &st
             "finalized Claims receipt differed from the semantic owner's prediction",
         ));
     }
-    let poststate = verify_poststate(rpc, report, slot)?;
-    report.finalized = Some(FinalizedEvidenceV1 {
+    let finalized_balances =
+        authenticate_admission_balance_vector(meta, &packet.message, &report.intent)?;
+    let poststate =
+        project_admission_poststate_from_history_v1(&report.intent, &finalized_balances)?;
+    Ok(AdmissionHistoryV1 {
         signature: signature.into(),
         slot,
         fee_lamports: fee,
@@ -3090,56 +3597,44 @@ fn finalize_known_signature(rpc: &mut Rpc, report: &mut ReportV1, signature: &st
         return_data_producer: producer.into(),
         return_data_sha256: sha256_hex(&receipt),
         poststate,
-    });
-    report.phase = PhaseV1::Finalized;
-    Ok(())
+    })
 }
 
-fn verify_poststate(
-    rpc: &mut Rpc,
-    report: &ReportV1,
-    minimum_slot: u64,
-) -> Result<BTreeMap<String, AccountStateV1>> {
-    let mut labels = report.intent.prestate.keys().cloned().collect::<Vec<_>>();
-    labels.sort();
-    let addresses = labels
-        .iter()
-        .map(|label| parse_state_address(&report.intent.prestate[label]))
-        .collect::<Result<Vec<_>>>()?;
-    let (slot, values) = rpc.finalized_accounts(&addresses, minimum_slot)?;
-    if slot < minimum_slot {
+fn authenticate_admission_poststate_map(
+    intent: &IntentV1,
+    post: &BTreeMap<String, AccountStateV1>,
+) -> Result<()> {
+    if post.len() != intent.prestate.len() || post.keys().ne(intent.prestate.keys()) {
         return Err(Error::new(
-            "poststate snapshot preceded finalized transaction",
+            "finalized admission poststate labels differed from the exact planned account set",
         ));
     }
-    let mut post = BTreeMap::new();
-    for ((label, address), value) in labels.iter().zip(addresses).zip(values) {
-        let state = account_state(address, value.as_ref());
-        post.insert(label.clone(), state);
-    }
-    let expected_position = decode_expected(&report.intent.expected_position_base64, "Position")?;
-    let expected_admission =
-        decode_expected(&report.intent.expected_admission_base64, "admission")?;
+    let expected_position = decode_expected(&intent.expected_position_base64, "Position")?;
+    let expected_admission = decode_expected(&intent.expected_admission_base64, "admission")?;
     let position = post
         .get("claims_position")
         .ok_or_else(|| Error::new("poststate omitted Claims Position"))?;
     let admission = post
         .get("claims_admission")
         .ok_or_else(|| Error::new("poststate omitted Claims admission"))?;
-    require_account_bytes(
+    require_exact_account_bytes_v1(
         position,
+        pubkey(&intent.position)?,
         &expected_position,
-        &report.intent.expected_receipt_producer,
-        report.intent.position_rent_principal_lamports,
+        pubkey(&intent.expected_receipt_producer)?,
+        intent.position_rent_principal_lamports,
+        None,
         "Claims Position",
     )?;
     LiabilityBasisPositionViewV2::decode(&expected_position)
         .map_err(|error| Error::new(format!("expected Claims Position: {error:?}")))?;
-    require_account_bytes(
+    require_exact_account_bytes_v1(
         admission,
+        pubkey(&intent.admission)?,
         &expected_admission,
-        &report.intent.expected_receipt_producer,
-        report.intent.admission_rent_principal_lamports,
+        pubkey(&intent.expected_receipt_producer)?,
+        intent.admission_rent_principal_lamports,
+        None,
         "Claims admission",
     )?;
     ProtocolPositionAdmissionV2::decode(&expected_admission)
@@ -3151,7 +3646,7 @@ fn verify_poststate(
         "lifecycle_rent_credit",
         "founding_trading_custody_replay",
     ] {
-        if post.get(label) != report.intent.prestate.get(label) {
+        if post.get(label) != intent.prestate.get(label) {
             return Err(Error::new(format!(
                 "{label} changed during User Position admission; this route owns no such mutation"
             )));
@@ -3160,7 +3655,7 @@ fn verify_poststate(
     // Every authenticated release/record/sysvar input is immutable across this
     // route. Owner and payer lamports plus the two newly allocated accounts are
     // the only permitted changes.
-    for (label, before) in &report.intent.prestate {
+    for (label, before) in &intent.prestate {
         if matches!(
             label.as_str(),
             "claims_position" | "claims_admission" | "position_owner" | "fee_payer"
@@ -3173,13 +3668,12 @@ fn verify_poststate(
             )));
         }
     }
-    verify_wallet_debits(report, &post)?;
-    Ok(post)
+    verify_wallet_debits(intent, post)
 }
 
-fn verify_wallet_debits(report: &ReportV1, post: &BTreeMap<String, AccountStateV1>) -> Result<()> {
-    let owner_before = &report.intent.prestate["position_owner"];
-    let payer_before = &report.intent.prestate["fee_payer"];
+fn verify_wallet_debits(intent: &IntentV1, post: &BTreeMap<String, AccountStateV1>) -> Result<()> {
+    let owner_before = &intent.prestate["position_owner"];
+    let payer_before = &intent.prestate["fee_payer"];
     let owner_after = &post["position_owner"];
     let payer_after = &post["fee_payer"];
     if !same_wallet_except_lamports(owner_before, owner_after)
@@ -3189,10 +3683,10 @@ fn verify_wallet_debits(report: &ReportV1, post: &BTreeMap<String, AccountStateV
             "Position owner or fee payer changed owner, privilege, rent epoch, width, or data during admission",
         ));
     }
-    if report.intent.position_owner == report.intent.fee_payer {
+    if intent.position_owner == intent.fee_payer {
         let expected = owner_before
             .lamports
-            .checked_sub(report.intent.total_owner_debit_lamports)
+            .checked_sub(intent.total_owner_debit_lamports)
             .ok_or_else(|| Error::new("owner post-balance underflow"))?;
         if owner_after.lamports != expected || payer_after != owner_after {
             return Err(Error::new(
@@ -3202,11 +3696,11 @@ fn verify_wallet_debits(report: &ReportV1, post: &BTreeMap<String, AccountStateV
     } else {
         let expected_owner = owner_before
             .lamports
-            .checked_sub(report.intent.total_owner_debit_lamports)
+            .checked_sub(intent.total_owner_debit_lamports)
             .ok_or_else(|| Error::new("owner post-balance underflow"))?;
         let expected_payer = payer_before
             .lamports
-            .checked_sub(report.intent.total_fee_payer_debit_lamports)
+            .checked_sub(intent.total_fee_payer_debit_lamports)
             .ok_or_else(|| Error::new("fee-payer post-balance underflow"))?;
         if owner_after.lamports != expected_owner || payer_after.lamports != expected_payer {
             return Err(Error::new(
@@ -3569,18 +4063,26 @@ fn validate_phase_fields(
     label: &str,
     phase: EnvelopePhaseV1,
     packet: Option<&str>,
+    packet_digest: Option<&str>,
     signature: Option<&str>,
     finalized_signature: Option<&str>,
 ) -> Result<()> {
     let valid = match phase {
         EnvelopePhaseV1::Planned => {
-            packet.is_none() && signature.is_none() && finalized_signature.is_none()
+            packet.is_none()
+                && packet_digest.is_none()
+                && signature.is_none()
+                && finalized_signature.is_none()
         }
         EnvelopePhaseV1::SignedNotSubmitted | EnvelopePhaseV1::Submitted => {
-            packet.is_some() && signature.is_some() && finalized_signature.is_none()
+            packet.is_some()
+                && packet_digest.is_some()
+                && signature.is_some()
+                && finalized_signature.is_none()
         }
         EnvelopePhaseV1::Finalized => {
             packet.is_some()
+                && packet_digest.is_some()
                 && signature.is_some()
                 && finalized_signature.is_some()
                 && signature == finalized_signature
@@ -3605,6 +4107,7 @@ fn validate_report_phase_shape(report: &ReportV1) -> Result<()> {
         "admission",
         phase,
         report.signed_packet_base64.as_deref(),
+        report.signed_packet_sha256.as_deref(),
         report.expected_signature.as_deref(),
         report
             .finalized
@@ -3630,6 +4133,7 @@ fn validate_report_phase_shape(report: &ReportV1) -> Result<()> {
             "collateral",
             phase,
             collateral.signed_packet_base64.as_deref(),
+            collateral.signed_packet_sha256.as_deref(),
             collateral.expected_signature.as_deref(),
             collateral
                 .finalized
@@ -3647,6 +4151,7 @@ fn admission_envelope_digest(report: &ReportV1) -> Result<String> {
     Ok(sha256_hex(&serde_json::to_vec(&(
         report.phase,
         &report.signed_packet_base64,
+        &report.signed_packet_sha256,
         &report.expected_signature,
         &report.finalized,
     ))?))
@@ -3656,6 +4161,7 @@ fn collateral_envelope_digest(report: &CollateralReportV1) -> Result<String> {
     Ok(sha256_hex(&serde_json::to_vec(&(
         report.phase,
         &report.signed_packet_base64,
+        &report.signed_packet_sha256,
         &report.expected_signature,
         &report.finalized,
     ))?))
@@ -3693,79 +4199,28 @@ fn authenticate_intent_digest(report: &ReportV1) -> Result<()> {
     Ok(())
 }
 
-fn verify_persisted_finalized(rpc: &mut Rpc, report: &ReportV1) -> Result<()> {
-    let evidence = report
-        .finalized
-        .as_ref()
-        .ok_or_else(|| Error::new("finalized phase omitted finalized evidence"))?;
-    let transaction = finalized_transaction(rpc, &evidence.signature)?
-        .ok_or_else(|| Error::new("persisted finalized signature disappeared from history"))?;
-    if transaction.get("slot").and_then(Value::as_u64) != Some(evidence.slot) {
-        return Err(Error::new("persisted finalized slot changed"));
-    }
-    let post = verify_poststate(rpc, report, evidence.slot)?;
-    if post != evidence.poststate {
-        return Err(Error::new(
-            "current poststate differs from finalized admission evidence",
-        ));
-    }
-    Ok(())
-}
-
 fn verify_persisted_admission_history(rpc: &mut Rpc, report: &ReportV1) -> Result<()> {
     let evidence = report
         .finalized
         .as_ref()
         .ok_or_else(|| Error::new("finalized admission omitted evidence"))?;
-    let transaction = finalized_transaction(rpc, &evidence.signature)?
-        .ok_or_else(|| Error::new("persisted admission signature disappeared from history"))?;
-    if transaction.get("slot").and_then(Value::as_u64) != Some(evidence.slot)
-        || transaction
-            .pointer("/transaction/signatures/0")
-            .and_then(Value::as_str)
-            != Some(&evidence.signature)
+    let history = authenticate_admission_finalized_history(rpc, report, &evidence.signature)?;
+    if history.signature != evidence.signature
+        || history.slot != evidence.slot
+        || history.fee_lamports != evidence.fee_lamports
+        || history.compute_units_consumed != evidence.compute_units_consumed
+        || history.return_data_producer != evidence.return_data_producer
+        || history.return_data_sha256 != evidence.return_data_sha256
+        || history.poststate != evidence.poststate
     {
         return Err(Error::new(
-            "persisted admission signature or finalized slot changed",
+            "persisted admission evidence differed from immutable finalized transaction history",
         ));
     }
-    let meta = transaction
-        .get("meta")
-        .ok_or_else(|| Error::new("persisted admission transaction omitted meta"))?;
-    if meta.get("err").is_none_or(|value| !value.is_null())
-        || meta.get("fee").and_then(Value::as_u64) != Some(evidence.fee_lamports)
-        || meta.get("fee").and_then(Value::as_u64) != Some(report.intent.transaction_fee_lamports)
-    {
-        return Err(Error::new(
-            "persisted admission status or exact fee changed",
-        ));
-    }
-    let return_data = meta
-        .get("returnData")
-        .ok_or_else(|| Error::new("persisted admission transaction omitted returnData"))?;
-    let producer = return_data
-        .get("programId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("persisted admission returnData omitted producer"))?;
-    let body = return_data
-        .get("data")
-        .and_then(Value::as_array)
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("persisted admission returnData omitted base64 body"))?;
-    let body = BASE64
-        .decode(body)
-        .map_err(|error| Error::new(format!("persisted admission returnData: {error}")))?;
-    if producer != evidence.return_data_producer
-        || producer != report.intent.expected_receipt_producer
-        || sha256_hex(&body) != evidence.return_data_sha256
-        || BASE64.encode(body) != report.intent.expected_receipt_base64
-    {
-        return Err(Error::new(
-            "persisted admission returnData producer or exact bytes changed",
-        ));
-    }
-    Ok(())
+    // Claims Positions are mutable after admission. The exact transaction-time
+    // projection is re-derived from immutable history above; a later live
+    // Position is deliberately never consulted.
+    authenticate_admission_poststate_map(&report.intent, &evidence.poststate)
 }
 
 fn finalized_transaction(rpc: &mut Rpc, signature: &str) -> Result<Option<Value>> {
@@ -4261,6 +4716,10 @@ pub(crate) fn usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_claims_svm::protocol_position_v2::{
+        ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2, ProtocolPositionOwnerKindV2,
+        ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
+    };
     use dclutch_core_contract::ContentId;
     use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
     use dclutch_realm_contract::RealmV1Input;
@@ -4660,6 +5119,421 @@ mod tests {
             data_sha256: sha256_hex(&[]),
             account_sha256: sha256_hex(address.as_ref()),
         }
+    }
+
+    fn exact_account_state_fixture(
+        address: Pubkey,
+        lamports: u64,
+        owner: Pubkey,
+        executable: bool,
+        data: Vec<u8>,
+    ) -> AccountStateV1 {
+        account_state(
+            address,
+            Some(&RpcAccount {
+                lamports,
+                owner,
+                executable,
+                rent_epoch: 0,
+                data,
+            }),
+        )
+    }
+
+    fn admission_exactness_fixture() -> (ReportV1, VersionedTransaction) {
+        let fee_payer = Keypair::new();
+        let position_owner = Keypair::new();
+        let position = Pubkey::new_unique();
+        let admission = Pubkey::new_unique();
+        let claims_program = Pubkey::new_unique();
+        let claims_market = Pubkey::new_unique();
+        let logical_market = Pubkey::new_unique();
+        let rent_credit = Pubkey::new_unique();
+        let rent_program = Pubkey::new_unique();
+        let trading_replay = Pubkey::new_unique();
+        let request = ProtocolPositionRequestV2::new(ProtocolPositionRequestV2 {
+            action: ProtocolPositionActionV2::Admit,
+            owner_kind: ProtocolPositionOwnerKindV2::User,
+            presence: ProtocolPositionPresenceV2::Vacant,
+            release_set: [0x11; 32],
+            market: logical_market.to_bytes(),
+            position_owner: position_owner.pubkey().to_bytes(),
+            parent_request_digest: [0x12; 32],
+            rent_credit: rent_credit.to_bytes(),
+            rent_program: rent_program.to_bytes(),
+            generation: 3,
+            expected_market_revision: 7,
+            expected_position_revision: 0,
+            observed_position_lamports: 100,
+            observed_admission_lamports: 200,
+            position_rent_principal: 100,
+            admission_rent_principal: 200,
+            capability_descriptor: [0; 32],
+            capability_outcome: 0,
+        })
+        .expect("admission request");
+        let request_bytes = request.to_bytes().expect("request bytes");
+        let request_digest = hash(&request_bytes).to_bytes();
+        let admitted = ProtocolPositionAdmissionV2::new(
+            request,
+            ProtocolPositionAdmissionEvidenceV2 {
+                product_record_digest: [0x21; 32],
+                semantic_basis_id: [0x22; 32],
+                linked_basis_record_digest: [0x23; 32],
+                request_digest,
+                claims_program: claims_program.to_bytes(),
+                trading_program: [0x24; 32],
+                capability_descriptor: [0; 32],
+                capability_outcome: 0,
+                outcome_count: 2,
+            },
+        )
+        .expect("admission state");
+        let expected_admission = admitted.to_state_bytes().expect("admission state bytes");
+        let expected_receipt = admitted
+            .to_receipt_bytes()
+            .expect("admission receipt bytes");
+        let mut expected_position =
+            vec![
+                0;
+                liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, 2,)
+                    .expect("Position width")
+            ];
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: 0,
+                market_account: claims_market.to_bytes(),
+                owner: position_owner.pubkey().to_bytes(),
+                basis_id: [0x22; 32],
+            },
+            &[0, 0],
+            &mut expected_position,
+        )
+        .expect("Position bytes");
+
+        let instructions = vec![
+            solana_system_interface::instruction::transfer(
+                &position_owner.pubkey(),
+                &position,
+                100,
+            ),
+            solana_system_interface::instruction::transfer(
+                &position_owner.pubkey(),
+                &admission,
+                200,
+            ),
+            Instruction {
+                program_id: claims_program,
+                accounts: vec![
+                    AccountMeta::new_readonly(claims_market, false),
+                    AccountMeta::new_readonly(logical_market, false),
+                    AccountMeta::new_readonly(rent_credit, false),
+                    AccountMeta::new_readonly(trading_replay, false),
+                ],
+                data: request_bytes.to_vec(),
+            },
+        ];
+        let recent_blockhash = Hash::new_unique();
+        let message = VersionedMessage::Legacy(solana_sdk::message::Message::new_with_blockhash(
+            &instructions,
+            Some(&fee_payer.pubkey()),
+            &recent_blockhash,
+        ));
+        let transaction = VersionedTransaction::try_new(
+            message,
+            &[&fee_payer as &dyn Signer, &position_owner as &dyn Signer],
+        )
+        .expect("signed admission fixture");
+        let message_bytes = transaction.message.serialize();
+        let wire = bincode::serialize(&transaction).expect("admission packet");
+        let mut prestate = BTreeMap::new();
+        for (label, key, lamports) in [
+            ("position_owner", position_owner.pubkey(), 5_000),
+            ("fee_payer", fee_payer.pubkey(), 3_000),
+            ("claims_position", position, 0),
+            ("claims_admission", admission, 0),
+        ] {
+            prestate.insert(label.into(), account_state_fixture(key, lamports));
+        }
+        for (label, key) in [
+            ("claims_market", claims_market),
+            ("core_market", logical_market),
+            ("lifecycle_rent_credit", rent_credit),
+            ("founding_trading_custody_replay", trading_replay),
+        ] {
+            prestate.insert(label.into(), account_state_fixture(key, 11));
+        }
+        for key in transaction.message.static_account_keys() {
+            if prestate
+                .values()
+                .any(|state| state.address == key.to_string())
+            {
+                continue;
+            }
+            prestate.insert(
+                format!("message_account_{key}"),
+                exact_account_state_fixture(*key, 1, Pubkey::new_unique(), true, Vec::new()),
+            );
+        }
+        let intent = IntentV1 {
+            plan_sha256: hex(&[0x31; 32]),
+            campaign_evidence_sha256: hex(&[0x32; 32]),
+            observation_slot: 91,
+            observation_unix_timestamp: 1_700_000_091,
+            minimum_finalized_slot: 90,
+            position_owner: position_owner.pubkey().to_string(),
+            fee_payer: fee_payer.pubkey().to_string(),
+            claims_market: claims_market.to_string(),
+            position: position.to_string(),
+            admission: admission.to_string(),
+            founding_trading_custody_replay: prestate["founding_trading_custody_replay"]
+                .address
+                .clone(),
+            position_rent_principal_lamports: 100,
+            admission_rent_principal_lamports: 200,
+            position_top_up_lamports: 100,
+            admission_top_up_lamports: 200,
+            transaction_fee_lamports: 5,
+            total_owner_debit_lamports: 300,
+            total_fee_payer_debit_lamports: 5,
+            recent_blockhash: recent_blockhash.to_string(),
+            last_valid_block_height: 1_000,
+            wire_bytes: wire.len(),
+            message_base64: BASE64.encode(&message_bytes),
+            message_sha256: sha256_hex(&message_bytes),
+            claims_request_sha256: hex(&request_digest),
+            expected_receipt_producer: claims_program.to_string(),
+            expected_receipt_base64: BASE64.encode(expected_receipt),
+            expected_position_base64: BASE64.encode(expected_position),
+            expected_admission_base64: BASE64.encode(expected_admission),
+            instructions: instructions.iter().map(instruction_evidence).collect(),
+            prestate,
+        };
+        let mut report = ReportV1 {
+            schema: REPORT_SCHEMA_V1.into(),
+            cluster: "devnet".into(),
+            rpc_url: "https://api.devnet.solana.com".into(),
+            authorized_mutation: true,
+            phase: PhaseV1::Submitted,
+            intent_sha256: sha256_hex(&serde_json::to_vec(&intent).expect("serialize intent")),
+            envelope_sha256: String::new(),
+            intent,
+            signed_packet_base64: Some(BASE64.encode(&wire)),
+            signed_packet_sha256: Some(sha256_hex(&wire)),
+            expected_signature: Some(transaction.signatures[0].to_string()),
+            finalized: None,
+            collateral: None,
+        };
+        report.envelope_sha256 = admission_envelope_digest(&report).expect("admission envelope");
+        (report, transaction)
+    }
+
+    fn admission_balance_meta(report: &ReportV1, transaction: &VersionedTransaction) -> Value {
+        let mut pre = Vec::new();
+        let mut post = Vec::new();
+        for key in transaction.message.static_account_keys() {
+            let before = report
+                .intent
+                .prestate
+                .values()
+                .find(|state| state.address == key.to_string())
+                .expect("message account prestate")
+                .lamports;
+            let mut after = before;
+            if key.to_string() == report.intent.position_owner {
+                after -= report.intent.position_top_up_lamports
+                    + report.intent.admission_top_up_lamports;
+            }
+            if key.to_string() == report.intent.fee_payer {
+                after -= report.intent.transaction_fee_lamports;
+            }
+            if key.to_string() == report.intent.position {
+                after += report.intent.position_top_up_lamports;
+            }
+            if key.to_string() == report.intent.admission {
+                after += report.intent.admission_top_up_lamports;
+            }
+            pre.push(before);
+            post.push(after);
+        }
+        json!({"preBalances": pre, "postBalances": post})
+    }
+
+    #[test]
+    fn fresh_semantic_reconstruction_refuses_a_self_rehashed_rewritten_intent() {
+        let (mut report, _) = admission_exactness_fixture();
+        let canonical = report.intent.clone();
+        require_exact_reconstructed_admission_intent_v1(&report.intent, &canonical)
+            .expect("exact fresh reconstruction");
+
+        report.intent.total_owner_debit_lamports += 1;
+        report.intent_sha256 =
+            sha256_hex(&serde_json::to_vec(&report.intent).expect("rewritten intent"));
+        authenticate_intent_digest(&report).expect("attacker supplied a matching self-hash");
+        assert!(
+            require_exact_reconstructed_admission_intent_v1(&report.intent, &canonical).is_err()
+        );
+    }
+
+    #[test]
+    fn admission_packet_rejects_bad_secondary_signature_and_nonexact_history_wire() {
+        let (mut report, mut transaction) = admission_exactness_fixture();
+        authenticate_admission_packet(&report).expect("canonical signed packet");
+        assert!(transaction.signatures.len() >= 2);
+        transaction.signatures[1] = Signature::from([0x71; 64]);
+        let hostile_wire = bincode::serialize(&transaction).expect("hostile packet");
+        report.signed_packet_base64 = Some(BASE64.encode(&hostile_wire));
+        report.signed_packet_sha256 = Some(sha256_hex(&hostile_wire));
+        assert!(authenticate_admission_packet(&report).is_err());
+
+        let (report, transaction) = admission_exactness_fixture();
+        let canonical_wire = bincode::serialize(&transaction).expect("canonical wire");
+        require_exact_history_wire_v1(
+            report
+                .signed_packet_base64
+                .as_deref()
+                .expect("durable packet"),
+            &canonical_wire,
+        )
+        .expect("exact history wire");
+        let mut substituted = canonical_wire.clone();
+        *substituted.last_mut().expect("packet byte") ^= 1;
+        assert!(
+            require_exact_history_wire_v1(
+                report
+                    .signed_packet_base64
+                    .as_deref()
+                    .expect("durable packet"),
+                &substituted,
+            )
+            .is_err()
+        );
+        decode_exact_base64_tuple_v1(
+            &json!([BASE64.encode(&canonical_wire), "base64"]),
+            "canonical tuple",
+        )
+        .expect("exact base64 tuple");
+        assert!(
+            decode_exact_base64_tuple_v1(
+                &json!([BASE64.encode(&canonical_wire), "base58"]),
+                "wrong encoding",
+            )
+            .is_err()
+        );
+        assert!(
+            decode_exact_base64_tuple_v1(
+                &json!([BASE64.encode(&canonical_wire), "base64", "surplus"]),
+                "surplus tuple",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn admission_finalized_balance_vector_binds_ordered_keys_fee_and_rent() {
+        let (report, transaction) = admission_exactness_fixture();
+        let meta = admission_balance_meta(&report, &transaction);
+        authenticate_admission_balance_vector(&meta, &transaction.message, &report.intent)
+            .expect("exact admission balance vector");
+
+        let mut wrong_pre = meta.clone();
+        wrong_pre["preBalances"][0] =
+            json!(wrong_pre["preBalances"][0].as_u64().expect("pre-balance") + 1);
+        assert!(
+            authenticate_admission_balance_vector(
+                &wrong_pre,
+                &transaction.message,
+                &report.intent,
+            )
+            .is_err()
+        );
+
+        let mut wrong_post = meta;
+        let unchanged = transaction
+            .message
+            .static_account_keys()
+            .iter()
+            .position(|key| {
+                ![
+                    &report.intent.position_owner,
+                    &report.intent.fee_payer,
+                    &report.intent.position,
+                    &report.intent.admission,
+                ]
+                .contains(&&key.to_string())
+            })
+            .expect("unchanged message key");
+        wrong_post["postBalances"][unchanged] = json!(
+            wrong_post["postBalances"][unchanged]
+                .as_u64()
+                .expect("post-balance")
+                + 1
+        );
+        assert!(
+            authenticate_admission_balance_vector(
+                &wrong_post,
+                &transaction.message,
+                &report.intent,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn persisted_admission_poststate_survives_later_legitimate_position_mutation() {
+        let (report, transaction) = admission_exactness_fixture();
+        let meta = admission_balance_meta(&report, &transaction);
+        let finalized_balances =
+            authenticate_admission_balance_vector(&meta, &transaction.message, &report.intent)
+                .expect("immutable transaction balance history");
+        let completed =
+            project_admission_poststate_from_history_v1(&report.intent, &finalized_balances)
+                .expect("history-derived transaction-time poststate");
+        authenticate_admission_poststate_map(&report.intent, &completed)
+            .expect("persisted transaction-time poststate");
+
+        let mut later_live = completed.clone();
+        let position_key = pubkey(&report.intent.position).expect("Position");
+        let position_state = &completed["claims_position"];
+        let mut mutated_position = BASE64
+            .decode(&report.intent.expected_position_base64)
+            .expect("Position state");
+        let last = mutated_position.last_mut().expect("Position balance byte");
+        *last = last.wrapping_add(1);
+        later_live.insert(
+            "claims_position".into(),
+            exact_account_state_fixture(
+                position_key,
+                position_state.lamports,
+                pubkey(&position_state.owner).expect("Claims"),
+                false,
+                mutated_position,
+            ),
+        );
+        assert!(authenticate_admission_poststate_map(&report.intent, &later_live).is_err());
+        authenticate_admission_poststate_map(&report.intent, &completed)
+            .expect("persisted evidence does not rot when the live Position changes");
+    }
+
+    #[test]
+    fn signer_alias_refusal_precedes_any_keypair_read() {
+        let shared = Pubkey::new_unique();
+        assert!(
+            enforce_shared_key_path(
+                shared,
+                Path::new("/private/tmp/first-key.json"),
+                shared,
+                Path::new("/private/tmp/second-key.json"),
+            )
+            .is_err()
+        );
+        enforce_shared_key_path(
+            shared,
+            Path::new("/private/tmp/shared-key.json"),
+            shared,
+            Path::new("/private/tmp/shared-key.json"),
+        )
+        .expect("one explicit shared key path");
     }
 
     struct CustodyActivationFixtureV1 {
@@ -5148,6 +6022,15 @@ mod tests {
     }
 
     #[test]
+    fn collateral_observation_uses_exact_block_time_for_its_own_slot() {
+        let observation = collateral_observation_v1(177, 1_700_000_177);
+        assert_eq!(observation.finality, Finality::Finalized);
+        assert_eq!(observation.slot, 177);
+        assert_eq!(observation.unix_timestamp, 1_700_000_177);
+        assert_ne!(observation.unix_timestamp, 1_700_000_091);
+    }
+
+    #[test]
     fn collateral_lamport_vector_is_exact_fee_and_rent_only() {
         let (intent, _) = collateral_intent_fixture();
         let fee_payer = pubkey(&intent.prestate["fee_payer"].address).expect("payer");
@@ -5394,6 +6277,7 @@ mod tests {
             envelope_sha256: String::new(),
             intent,
             signed_packet_base64: Some(BASE64.encode(&wire)),
+            signed_packet_sha256: Some(sha256_hex(&wire)),
             expected_signature: Some(pasted.to_string()),
             finalized: None,
         };
@@ -5577,6 +6461,7 @@ mod tests {
                 Some("packet"),
                 None,
                 None,
+                None,
             )
             .is_err()
         );
@@ -5587,6 +6472,7 @@ mod tests {
                 Some("packet"),
                 None,
                 None,
+                None,
             )
             .is_err()
         );
@@ -5595,6 +6481,7 @@ mod tests {
                 "collateral",
                 EnvelopePhaseV1::Finalized,
                 Some("packet"),
+                Some("digest"),
                 Some("first"),
                 Some("other"),
             )
@@ -5610,6 +6497,7 @@ mod tests {
             envelope_sha256: String::new(),
             intent,
             signed_packet_base64: Some("durable packet".into()),
+            signed_packet_sha256: Some("durable digest".into()),
             expected_signature: Some("durable signature".into()),
             finalized: None,
         };
@@ -5617,6 +6505,7 @@ mod tests {
             collateral_envelope_digest(&collateral).expect("signed envelope");
         collateral.phase = CollateralPhaseV1::Planned;
         collateral.signed_packet_base64 = None;
+        collateral.signed_packet_sha256 = None;
         collateral.expected_signature = None;
         assert_ne!(
             collateral.envelope_sha256,
@@ -5842,7 +6731,7 @@ mod tests {
     }
 
     #[test]
-    fn fake_rpc_phase_machine_never_accepts_confirmed_or_replays_ambiguity() {
+    fn submitted_admission_recovery_is_poll_only_before_or_after_an_ambiguous_send() {
         assert_eq!(
             fake_resume_decision(PhaseV1::Planned, None, false),
             ResumeDecision::Sign

@@ -434,6 +434,28 @@ impl Rpc {
     }
 
     pub(crate) fn call(&mut self, method: &str, params: &Value) -> Result<Value> {
+        self.call_with_transport_attempt_limit(method, params, 3)
+    }
+
+    /// Issue exactly one HTTP request, including across a transport-ambiguous
+    /// failure.
+    ///
+    /// A durable exterior uses this only after the exact signed packet and its
+    /// expected signature are fsynced in a Submitted journal. Retrying at this
+    /// layer would bypass that exterior's poll-only recovery state machine.
+    pub(crate) fn call_once(&mut self, method: &str, params: &Value) -> Result<Value> {
+        self.call_with_transport_attempt_limit(method, params, 1)
+    }
+
+    fn call_with_transport_attempt_limit(
+        &mut self,
+        method: &str,
+        params: &Value,
+        transport_attempt_limit: u32,
+    ) -> Result<Value> {
+        if transport_attempt_limit == 0 {
+            return Err(Error::new("RPC transport attempt limit must be positive"));
+        }
         if self.policy == WritePolicyV1::ReadsOnly && !READ_METHODS.contains(&method) {
             return Err(Error::new(format!(
                 "REFUSED: {method} is not a read method and this connection is read-only. A \
@@ -483,11 +505,11 @@ impl Rpc {
                 Ok(response) => break response,
                 Err(error) => {
                     attempt = attempt.saturating_add(1);
-                    if attempt >= 3 {
+                    if attempt >= transport_attempt_limit {
                         return Err(Error::new(format!("{method} transport: {error}")));
                     }
                     eprintln!(
-                        "rpc: {method} transport failure (attempt {attempt} of 3): {error}; \
+                        "rpc: {method} transport failure (attempt {attempt} of {transport_attempt_limit}): {error}; \
                          retrying"
                     );
                     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -1417,6 +1439,14 @@ fn u64_field(value: &Value, name: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::Read as _,
+        net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     fn account_value_v1() -> Value {
         json!({
@@ -1583,5 +1613,47 @@ mod tests {
         ] {
             assert!(validate_loopback_url(value).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn one_shot_transport_ambiguity_never_retries_the_http_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind hostile RPC");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking hostile RPC");
+        let address = listener.local_addr().expect("hostile RPC address");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&accepted);
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .expect("hostile stream timeout");
+                        let mut request = [0_u8; 4096];
+                        let _ = stream.read(&mut request);
+                        // Drop without an HTTP response. The request may have
+                        // reached a validator, so retrying would be ambiguous.
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("hostile RPC accept: {error}"),
+                }
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/")).expect("hostile RPC URL");
+        let mut rpc =
+            Rpc::build(url, LOOPBACK_PACING, WritePolicyV1::Writes).expect("hostile RPC client");
+        assert!(
+            rpc.call_once("sendTransaction", &json!(["packet"]))
+                .is_err(),
+            "connection close without a response unexpectedly succeeded"
+        );
+        server.join().expect("hostile RPC server");
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
     }
 }
