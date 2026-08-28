@@ -525,6 +525,7 @@ pub(crate) fn relayed_market_input(
     let mut input = MarketRunInput {
         generation: 1,
         collateral_display_decimals: 6,
+        local_participant_fixture_liquidity_atoms: 0,
         initial_collateral_atoms: 1_000_000_000,
         product_id: hex(&product_identity),
         coordinate_domain_id: hex(&coordinate_domain),

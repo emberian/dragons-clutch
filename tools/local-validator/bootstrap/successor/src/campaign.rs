@@ -141,6 +141,8 @@ struct TerminalExecutionV1 {
     recovered_finalized_founding: bool,
     transactions: Vec<TerminalTransactionEvidenceV1>,
     market: Option<TerminalMarketEvidenceV1>,
+    local_participant_fixture_liquidity:
+        Option<crate::market::LocalParticipantFixtureLiquidityEvidenceV1>,
 }
 
 #[derive(Deserialize)]
@@ -175,6 +177,77 @@ struct TerminalMarketEvidenceV1 {
     accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
     founding_custody_context: String,
     direct_selected_manifest_entry_index: u16,
+}
+
+fn authenticate_local_participant_fixture_evidence_v1(
+    expected_cluster: crate::cluster::ExpectedClusterV1,
+    receipt: Option<&crate::market::LocalParticipantFixtureLiquidityEvidenceV1>,
+    transactions: &[TerminalTransactionEvidenceV1],
+    market: &TerminalMarketEvidenceV1,
+) -> Result<()> {
+    match (expected_cluster, receipt) {
+        (crate::cluster::ExpectedClusterV1::Devnet, None) => return Ok(()),
+        (crate::cluster::ExpectedClusterV1::Devnet, Some(_)) => {
+            return Err(Error::new(
+                "public devnet campaign carried forbidden local participant fixture liquidity",
+            ));
+        }
+        (crate::cluster::ExpectedClusterV1::OwnedLoopback, None) => {
+            return Err(Error::new(
+                "owned-loopback founding omitted local participant fixture liquidity",
+            ));
+        }
+        (crate::cluster::ExpectedClusterV1::OwnedLoopback, Some(_)) => {}
+    }
+    let receipt = receipt.ok_or_else(|| Error::new("fixture receipt disappeared"))?;
+    let expected_total = receipt
+        .founding_collateral_atoms
+        .checked_add(receipt.quantity_atoms)
+        .ok_or_else(|| Error::new("fixture receipt supply overflow"))?;
+    if receipt.quantity_atoms != crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+        || receipt.founding_collateral_atoms != 1_000_000_000
+        || receipt.total_supply_atoms != expected_total
+        || !receipt.mint_authority_removed
+        || receipt.finalized_slot == 0
+        || receipt.compute_units_consumed == 0
+        || receipt.source_token_account.parse::<Pubkey>().is_err()
+        || receipt.source_owner.parse::<Pubkey>().is_err()
+        || receipt.mint.parse::<Pubkey>().is_err()
+        || receipt
+            .transaction_signature
+            .parse::<solana_sdk::signature::Signature>()
+            .is_err()
+    {
+        return Err(Error::new(
+            "local participant fixture receipt changed its exact supply or finalized identity",
+        ));
+    }
+    let source = market
+        .accounts
+        .get("local_participant_fixture_source")
+        .ok_or_else(|| Error::new("fixture receipt omitted its source account evidence"))?;
+    let mint = market
+        .accounts
+        .get("collateral_mint")
+        .ok_or_else(|| Error::new("fixture receipt omitted its mint account evidence"))?;
+    if source.address != receipt.source_token_account || mint.address != receipt.mint {
+        return Err(Error::new(
+            "fixture receipt address differs from the founding account projection",
+        ));
+    }
+    let transaction = transactions
+        .iter()
+        .find(|transaction| transaction.signature == receipt.transaction_signature)
+        .ok_or_else(|| Error::new("fixture receipt signature is absent from campaign history"))?;
+    if transaction.slot != receipt.finalized_slot
+        || transaction.compute_units_consumed.0 != Some(receipt.compute_units_consumed)
+        || transaction.error != Value::Null
+    {
+        return Err(Error::new(
+            "fixture receipt signature does not name its exact finalized transaction",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_campaign_terminal_evidence_v1(
@@ -275,6 +348,12 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
     let market = execution
         .market
         .ok_or_else(|| Error::new("campaign report omitted execution.market"))?;
+    authenticate_local_participant_fixture_evidence_v1(
+        expected_cluster,
+        execution.local_participant_fixture_liquidity.as_ref(),
+        &execution.transactions,
+        &market,
+    )?;
     let mut completed_names = BTreeSet::new();
     if market.completed.is_empty()
         || market.completed.len() > 512
@@ -349,6 +428,8 @@ pub(crate) const KEYPAIR_ROLES: &[&str] = &[
     role::FOUNDING_PROJECTION_WITNESS,
     role::FOUNDING_SOURCE_FUNDER,
     role::SUBSTITUTED_FOUNDER,
+    crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+    crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
 ];
 
 /// The stages a campaign passes through, in the only order a chain accepts.
@@ -775,6 +856,7 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
         crate::market::demo_id("mapping/scaled-integer-cut", &[&coordinate_domain]);
     if input.market.generation != 1
         || input.market.collateral_display_decimals != 6
+        || input.market.local_participant_fixture_liquidity_atoms != 0
         || input.market.initial_collateral_atoms != 1_000_000_000
         || input.market.product_id != hex(&expected_product)
         || input.market.coordinate_domain_id != hex(&coordinate_domain)
@@ -1271,6 +1353,38 @@ fn authenticate_keypair_paths(keypairs: &BTreeMap<String, PathBuf>) -> Result<()
             return Err(Error::new(
                 "campaign keypair paths must be distinct before any file is read",
             ));
+        }
+    }
+    Ok(())
+}
+
+fn authenticate_local_participant_fixture_policy_v1(
+    origin: &ClusterOriginV1,
+    market: Option<&crate::model::MarketRunInput>,
+    keypairs: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let Some(market) = market else {
+        return Ok(());
+    };
+    if market.local_participant_fixture_liquidity_atoms == 0 {
+        return Ok(());
+    }
+    crate::cluster::ExpectedClusterV1::OwnedLoopback.authenticate(origin)?;
+    if market.local_participant_fixture_liquidity_atoms
+        != crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+    {
+        return Err(Error::new(
+            "local participant fixture liquidity changed from its exact profile",
+        ));
+    }
+    for role in [
+        crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+        crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+    ] {
+        if !keypairs.contains_key(role) {
+            return Err(Error::new(format!(
+                "local participant fixture liquidity requires --keypair-{role}"
+            )));
         }
     }
     Ok(())
@@ -2228,6 +2342,11 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         .as_ref()
         .map(|bytes| load_market_input(bytes))
         .transpose()?;
+    authenticate_local_participant_fixture_policy_v1(
+        &args.origin,
+        market.as_ref(),
+        &args.keypairs,
+    )?;
     let prior = match &args.evidence_path {
         None => PriorCampaignEvidenceV1 {
             checkpoint: None,
@@ -2448,12 +2567,21 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             &mut checkpoint,
         )?
     };
+    let local_participant_fixture_liquidity = execution
+        .market
+        .as_ref()
+        .and_then(|market| market.local_participant_fixture_liquidity.as_ref())
+        .map(serde_json::to_value)
+        .transpose()?;
     report["execution"] = json!({
         "completed": true,
         "recoveredFinalizedFounding": execution.recovered_finalized_founding,
         "transactions": execution.transactions,
         "market": execution.market,
     });
+    if let Some(receipt) = local_participant_fixture_liquidity {
+        report["execution"]["localParticipantFixtureLiquidity"] = receipt;
+    }
     if let Some(path) = &args.evidence_path {
         write_evidence_atomically(path, &report)?;
     }
@@ -2867,6 +2995,136 @@ mod tests {
         let loaded = load_market_input(&serde_json::to_vec(&wrapped).expect("wrapper JSON"))
             .expect("authenticated graduation input");
         assert_eq!(loaded.product_id, wrapped["market"]["product_id"]);
+    }
+
+    #[test]
+    fn participant_fixture_liquidity_is_loopback_only_and_requires_exact_roles() {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = test_direct_compiler(registry);
+        let mut market =
+            crate::market::demo_market_input(registry, direct.compiler()).expect("local market");
+        assert_eq!(
+            market.local_participant_fixture_liquidity_atoms,
+            crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+        );
+        let loopback = ClusterOriginV1::Loopback {
+            url: "http://127.0.0.1:18899/".into(),
+            port: 18_899,
+        };
+        let devnet = ClusterOriginV1::AcknowledgedDevnet {
+            url: "https://api.devnet.solana.com".into(),
+        };
+        let paths = BTreeMap::from([
+            (
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1.into(),
+                PathBuf::from("/tmp/participant.json"),
+            ),
+            (
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1.into(),
+                PathBuf::from("/tmp/direct-buyer.json"),
+            ),
+        ]);
+        authenticate_local_participant_fixture_policy_v1(&loopback, Some(&market), &paths)
+            .expect("exact local fixture");
+        assert!(
+            authenticate_local_participant_fixture_policy_v1(&devnet, Some(&market), &paths)
+                .is_err(),
+            "public devnet must refuse local fixture supply"
+        );
+        let missing = BTreeMap::from([(
+            crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1.into(),
+            PathBuf::from("/tmp/participant.json"),
+        )]);
+        assert!(
+            authenticate_local_participant_fixture_policy_v1(&loopback, Some(&market), &missing)
+                .is_err(),
+            "both exact local-prepare roles are required"
+        );
+        market.local_participant_fixture_liquidity_atoms = 99_999_999;
+        assert!(crate::market::validate_market_input(&market).is_err());
+        assert!(
+            authenticate_local_participant_fixture_policy_v1(&loopback, Some(&market), &paths)
+                .is_err(),
+            "caller-chosen fixture quantities are not a hidden multiplier knob"
+        );
+    }
+
+    #[test]
+    fn participant_fixture_receipt_binds_supply_accounts_and_finalized_transaction() {
+        let source = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let signature = Keypair::new().sign_message(b"local fixture").to_string();
+        let receipt = crate::market::LocalParticipantFixtureLiquidityEvidenceV1 {
+            source_token_account: source.to_string(),
+            source_owner: owner.to_string(),
+            quantity_atoms: crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1,
+            founding_collateral_atoms: 1_000_000_000,
+            total_supply_atoms: 1_100_000_000,
+            mint: mint.to_string(),
+            mint_authority_removed: true,
+            transaction_signature: signature.clone(),
+            finalized_slot: 77,
+            compute_units_consumed: 88_000,
+        };
+        let transaction = TerminalTransactionEvidenceV1 {
+            label: "create local fixture".into(),
+            signature,
+            slot: 77,
+            transaction_metadata_available: true,
+            fee_lamports: NullableV1(Some(5_000)),
+            fee_only_balance_change: NullableV1(Some(false)),
+            compute_units_consumed: NullableV1(Some(88_000)),
+            error: Value::Null,
+            logs: Vec::new(),
+        };
+        let account = |address: Pubkey| CampaignAccountEvidenceV1 {
+            address: address.to_string(),
+            owner: Pubkey::new_unique().to_string(),
+            lamports: 1,
+            executable: false,
+            data_len: 1,
+            data_sha256: "11".repeat(32),
+            account_sha256: "22".repeat(32),
+        };
+        let market = TerminalMarketEvidenceV1 {
+            completed: vec!["founding".into()],
+            accounts: BTreeMap::from([
+                ("local_participant_fixture_source".into(), account(source)),
+                ("collateral_mint".into(), account(mint)),
+            ]),
+            founding_custody_context: "33".repeat(32),
+            direct_selected_manifest_entry_index: 1,
+        };
+        authenticate_local_participant_fixture_evidence_v1(
+            crate::cluster::ExpectedClusterV1::OwnedLoopback,
+            Some(&receipt),
+            &[transaction],
+            &market,
+        )
+        .expect("exact fixture receipt");
+        assert!(
+            authenticate_local_participant_fixture_evidence_v1(
+                crate::cluster::ExpectedClusterV1::Devnet,
+                Some(&receipt),
+                &[],
+                &market,
+            )
+            .is_err(),
+            "public devnet must reject even a structurally exact local receipt"
+        );
+        let mut retained = receipt;
+        retained.mint_authority_removed = false;
+        assert!(
+            authenticate_local_participant_fixture_evidence_v1(
+                crate::cluster::ExpectedClusterV1::OwnedLoopback,
+                Some(&retained),
+                &[],
+                &market,
+            )
+            .is_err(),
+            "a receipt cannot bless retained mint authority"
+        );
     }
 
     #[test]
