@@ -2,6 +2,16 @@
 
 **Date: 2026-08-27/28. Lane: DEPLOY-1, keyed by ember (keyDEPLOY-1).**
 
+**Current-state note (2026-08-28).** This is the historical record of the
+first durable deployment and its `DCLTGMF1`/`DCLTPCB1` founding attempts. Those
+attempts and addresses remain evidence, but decision 0013 supersedes that
+founding route for the next generation. The replacement source-tree routes are
+`DCLTPCB2` and `DCLTGMF2`; their compiled messages measure 62 and 59 complete
+keys respectively. They have not opened a market on devnet, and the seven
+permanent program addresses below still ran the generation recorded here at
+the pre-write reads in [DEVNET_ITERATION_2](DEVNET_ITERATION_2.md) §1. A later
+generation is not installed until a separately evidenced `Upgrade` completes.
+
 Charter: `WAVE.md`'s DEPLOY-1 queue over decision 0012's substrate — mutable,
 slot-pinned, iterated by `Upgrade`, nothing recycled. Every number below is
 measured, not predicted, unless it says otherwise.
@@ -303,7 +313,15 @@ attestation key pinned by the compiled input.
   digest `c7613080…` (2,326,622-byte ProgramData). 1,586,969 real
   `VirtualPool`s enumerated (766,251 pre-graduation).
 
-## 8. What SMOKE-1 still needs
+## 8. What SMOKE-1 still needed at this checkpoint
+
+**Superseded plan.** The list below records DEPLOY-1's conclusion on
+2026-08-28. The first item has since been answered in source by decision 0013
+and the compact `DCLTPCB2`/`DCLTGMF2` routes; see
+[the compact-founding record](FOUND_COMPACT_2026_08_28.md). Those replacement
+routes are offline evidence until a checked Upgrade and fresh devnet lifecycle
+are recorded. The other items remain historical inputs, not claims that a
+current bounty, market, or browser trade exists.
 
 The durable substrate is up, activated, permanent, and detector-confirmed
 (§2–§3). The founding seam is wired, proven end-to-end on the local harness

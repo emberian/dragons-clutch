@@ -1,4 +1,4 @@
-# The frontend meets the first live OPEN market — 2026-08-27
+# The frontend meets a local-validator OPEN market — 2026-08-27
 
 The first time `apps/dclutch-web` has been pointed at a dClutch chain that has a
 Market on it. Six defects, every one of them fatal to a real read, none of them
@@ -7,6 +7,12 @@ visible from a test suite that passed 208 cases.
 **Evidence level.** Local-validator execution. Not devnet, not mainnet, and not
 an official deployment or frontend. Nothing here signed, submitted, funded, or
 published anything, and no address named below is registered anywhere.
+
+**Current-state note (2026-08-28).** Every browser result below is bound to
+source commit `3b0c58839b78f556bb36ecb706334ed0712bcc09` and the disposable local
+ledger described here. It is not a claim about the currently deployed public
+site. No market is open on devnet today, and the public browser does not submit
+trades.
 
 ## The chain
 
