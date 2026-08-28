@@ -9,9 +9,10 @@
 # chain, and the program addresses are candidate-local values derived offline
 # from a fixed domain. Nothing here signs, submits, funds, or publishes.
 #
-# The run is idempotent: every derived directory is rebuilt from scratch, while
-# the cargo target directory is reused so a re-run after one program changes
-# costs a single incremental SBF build.
+# Release admission deliberately requires a fresh top-package compilation for
+# every program under programs/. Use a new --work root for each admitted run.
+# A warm target may still be useful while developing, but cargo's silence on a
+# fresh unit is not evidence that the SBF backend re-checked that unit's frames.
 set -euo pipefail
 
 usage() {
@@ -22,11 +23,14 @@ usage: checked-release-candidate.sh [options]
   --work PATH    scratch output root (default: /private/tmp/dclutch-release-candidate)
   --tool PATH    prebuilt dclutch-release-tool binary (default: build one under --work)
   --commit REV   source revision to archive (default: HEAD)
-  --keep-elf     reuse the ELFs already under --work instead of rebuilding
+  --keep-elf     legacy option; refused because reused ELFs have no fresh-build proof
   --allow-build-diagnostics
                  admit artifacts whose SBF build emitted a stack-frame
                  diagnostic, recording the exact counts in the summary
   -h, --help     show this message
+
+On hbox, wrap this whole command once; this script never calls swarm-build:
+  SWARM_MEM_MAX=32G swarm-build tools/release/checked-release-candidate.sh ...
 USAGE
 }
 
@@ -53,6 +57,15 @@ if [ -z "$REPO" ]; then
     REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
+if [ "$KEEP_ELF" = "true" ]; then
+    echo "refusing --keep-elf: a checked release requires a fresh top-package compile marker for every SBF link; use a new --work root" >&2
+    exit 2
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRESHNESS_CHECKER="$SCRIPT_DIR/check_sbf_build_freshness.py"
+[ -x "$FRESHNESS_CHECKER" ] \
+    || { echo "build-freshness checker not executable: $FRESHNESS_CHECKER" >&2; exit 1; }
 
 # role label : cargo package : built artifact stem
 ROLES="core:dclutch-core-sbf:dclutch_core_sbf
@@ -75,6 +88,8 @@ SET_DIR="$WORK/set"
 INFRA_DIR="$WORK/infrastructure"
 SUMMARY="$WORK/SUMMARY.txt"
 BUILD_LOG="$WORK/build.log"
+BUILD_LINKS="$WORK/build-links.tsv"
+BUILD_RUN="$WORK/build-run.txt"
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
@@ -153,71 +168,94 @@ if [ -z "$WORKSPACE_MEMBERS" ]; then
     exit 1
 fi
 
-if [ "$KEEP_ELF" != "true" ]; then
-    : > "$BUILD_LOG"
-    : > "$WORK/build-diagnostics.txt"
+# The directory is the one semantic owner of the frame-gated link set. ROLES
+# maps ten of those packages into release artifacts; it does not decide which
+# packages get compiled. The other packages remain frame-gate-only.
+: > "$BUILD_LINKS"
+for manifest in "$SOURCE"/programs/*/Cargo.toml; do
+    [ -f "$manifest" ] || { echo "program manifest enumeration is empty" >&2; exit 1; }
+    package="$(basename "$(dirname "$manifest")")"
+    label="$package"
     for entry in $ROLES; do
         role="${entry%%:*}"; rest="${entry#*:}"
-        package="${rest%%:*}"; stem="${rest#*:}"
-        echo "build: $role ($package)"
-        role_log="$WORK/build-$role.log"
-        role_target="$(target_dir_for "$package")"
-        (
-            cd "$SOURCE"
-            CARGO_TARGET_DIR="$role_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
-        ) >"$role_log" 2>&1
-        cat "$role_log" >> "$BUILD_LOG"
-        count="$(grep -c "$DIAGNOSTIC_PATTERN" "$role_log" || true)"
-        printf '%s=%s\n' "$role" "$count" >> "$WORK/build-diagnostics.txt"
-        if [ "$count" != "0" ]; then
-            echo "BUILD DIAGNOSTIC: $role emitted $count SBF stack-frame overwrite reports" >&2
-            grep "$DIAGNOSTIC_PATTERN" "$role_log" | sort -u >&2
+        role_package="${rest%%:*}"
+        if [ "$package" = "$role_package" ]; then
+            label="$role"
+            break
         fi
-        cp "$role_target/deploy/$stem.so" "$ELF_DIR/$role.so"
     done
+    printf '%s\t%s\n' "$label" "$package" >> "$BUILD_LINKS"
+done
 
-    # Every OTHER program in the tree, for the frame gate and nothing else.
-    #
-    # The role list above is the release SET: what gets an ELF, an address, a
-    # capitalization row and an evidence chain. It is not the list of links this
-    # repository builds. programs/ carries three more entrypoints that no role
-    # names -- dclutch-dealer-sbf, dclutch-direct-aot-sbf and
-    # dclutch-product-runtime-v2-sbf, refusal namespaces 0x7, 0xA and 0x9 in
-    # decision 0007 -- and a link nobody builds is a link nobody is told about,
-    # because cargo build-sbf exits ZERO on a frame-overwrite diagnostic.
-    #
-    # Enumerated from the DIRECTORY on purpose, not from a second hand-kept
-    # list. The 82-diagnostic regression of 2026-08-27 survived a whole wave
-    # inside a link that four separate gates each had a list which did not name;
-    # a list is the thing that goes stale. A program added under programs/ is
-    # frame-checked here whether or not anyone remembers this loop exists.
-    #
-    # Nothing here enters the release set: no ELF is copied, no address is
-    # derived, no capitalization is computed. Only the diagnostic count joins
-    # the total, under its own package name so the summary says which link.
-    for manifest in "$SOURCE"/programs/*/Cargo.toml; do
-        package="$(basename "$(dirname "$manifest")")"
-        if printf '%s\n' "$ROLES" | grep -q ":$package:"; then
-            continue
-        fi
-        echo "build: $package (frame gate only, not a release artifact)"
-        gate_log="$WORK/build-$package.log"
-        gate_target="$(target_dir_for "$package")"
-        (
-            cd "$SOURCE"
-            CARGO_TARGET_DIR="$gate_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
-        ) >"$gate_log" 2>&1
-        cat "$gate_log" >> "$BUILD_LOG"
-        count="$(grep -c "$DIAGNOSTIC_PATTERN" "$gate_log" || true)"
-        printf '%s=%s\n' "$package" "$count" >> "$WORK/build-diagnostics.txt"
-        if [ "$count" != "0" ]; then
-            echo "BUILD DIAGNOSTIC: $package emitted $count SBF stack-frame overwrite reports" >&2
-            grep "$DIAGNOSTIC_PATTERN" "$gate_log" | sort -u >&2
+if ! awk -F '\t' '
+    NF != 2 || $1 !~ /^[a-z0-9][a-z0-9_-]*$/ || $2 !~ /^[a-z0-9][a-z0-9_-]*$/ { exit 1 }
+    seen_label[$1]++ || seen_package[$2]++ { exit 1 }
+    END { if (NR == 0) exit 1 }
+' "$BUILD_LINKS"; then
+    echo "program manifest enumeration is malformed or duplicated" >&2
+    exit 1
+fi
+for entry in $ROLES; do
+    role="${entry%%:*}"; rest="${entry#*:}"
+    package="${rest%%:*}"
+    expected="$(printf '%s\t%s' "$role" "$package")"
+    grep -Fqx "$expected" "$BUILD_LINKS" \
+        || { echo "release role $role does not name an enumerated program package: $package" >&2; exit 1; }
+done
+
+BUILD_RUN_ID="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+)"
+printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$BUILD_RUN"
+: > "$BUILD_LOG"
+: > "$WORK/build-diagnostics.txt"
+
+while IFS=$'\t' read -r label package; do
+    stem=""
+    for entry in $ROLES; do
+        role="${entry%%:*}"; rest="${entry#*:}"
+        role_package="${rest%%:*}"; role_stem="${rest#*:}"
+        if [ "$package" = "$role_package" ]; then
+            stem="$role_stem"
+            break
         fi
     done
-fi
+    if [ -n "$stem" ]; then
+        echo "build: $label ($package)"
+    else
+        echo "build: $package (frame gate only, not a release artifact)"
+    fi
+    link_log="$WORK/build-$label.log"
+    link_target="$(target_dir_for "$package")"
+    printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$link_log"
+    (
+        cd "$SOURCE"
+        CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
+            cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
+    ) >>"$link_log" 2>&1
+    cat "$link_log" >> "$BUILD_LOG"
+    count="$(grep -c "$DIAGNOSTIC_PATTERN" "$link_log" || true)"
+    printf '%s=%s\n' "$label" "$count" >> "$WORK/build-diagnostics.txt"
+    if [ "$count" != "0" ]; then
+        echo "BUILD DIAGNOSTIC: $label emitted $count SBF stack-frame overwrite reports" >&2
+        grep "$DIAGNOSTIC_PATTERN" "$link_log" | sort -u >&2
+    fi
+    if [ -n "$stem" ]; then
+        cp "$link_target/deploy/$stem.so" "$ELF_DIR/$label.so"
+    fi
+done < "$BUILD_LINKS"
+
+FRESHNESS_RESULT="$("$FRESHNESS_CHECKER" \
+    --work "$WORK" \
+    --expected "$BUILD_LINKS" \
+    --diagnostics "$WORK/build-diagnostics.txt" \
+    --run-id "$BUILD_RUN_ID")" \
+    || { echo "refusing: SBF build freshness gate failed" >&2; exit 1; }
+printf '%s\n' "$FRESHNESS_RESULT"
+printf '%s\n' "$FRESHNESS_RESULT" >> "$BUILD_LOG"
+BUILD_LINK_COUNT="$(wc -l < "$BUILD_LINKS" | tr -d ' ')"
 
 DIAGNOSTIC_TOTAL=0
 if [ -f "$WORK/build-diagnostics.txt" ]; then
@@ -407,6 +445,8 @@ echo "checked: immutable Core/Registry/Rent infrastructure"
     printf 'cargo_build_sbf_version=%s\n' "$BUILD_SBF_VERSION"
     printf 'target_triple=%s\n' "$TARGET_TRIPLE"
     printf 'loader_program_id=%s\n' "$LOADER_HEX"
+    printf 'sbf_build_freshness=passed\n'
+    printf 'sbf_build_freshness_links=%s\n' "$BUILD_LINK_COUNT"
     printf 'sbf_build_diagnostics_total=%s\n' "$DIAGNOSTIC_TOTAL"
     printf 'sbf_build_diagnostics_accepted=%s\n' "$ALLOW_DIAGNOSTICS"
     if [ -f "$WORK/build-diagnostics.txt" ]; then
