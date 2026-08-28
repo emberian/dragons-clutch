@@ -16,9 +16,9 @@ use dclutch_capability_contract::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
-    Action, CapabilityChildObservation, CapabilityFundingHeaderV2, CoreEffectAckV1,
-    CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, MarketCoreStateSeedsV2, Request, Role,
-    STATE_BYTES, activate_capability_child, close_capability_child,
+    Action, CapabilityChildObservation, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1,
+    CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, MarketCoreStateSeedsV2,
+    Request, Role, STATE_BYTES, activate_capability_child, close_capability_child,
 };
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_release_set_contract::{
@@ -44,18 +44,13 @@ use crate::{
     release::{RoleDeploymentAccounts, authenticate_roles, identity},
 };
 
-const MARKET: usize = 0;
-const REALM_RAW: usize = 1;
-const REALM_STAGING: usize = 2;
-const MANIFEST_RAW: usize = 3;
-const MANIFEST_STAGING: usize = 4;
-const FUNDING_START: usize = 5;
-const ROUTE_FIXED_ACCOUNTS: usize = 11;
-
 struct Route<'accounts, 'info> {
     market: &'accounts AccountInfo<'info>,
+    realm_raw: &'accounts AccountInfo<'info>,
+    realm_staging: &'accounts AccountInfo<'info>,
     funding_ledgers: &'accounts [AccountInfo<'info>],
     manifest: &'accounts AccountInfo<'info>,
+    manifest_staging: &'accounts AccountInfo<'info>,
     root: &'accounts AccountInfo<'info>,
     cache: &'accounts AccountInfo<'info>,
     core_program: &'accounts AccountInfo<'info>,
@@ -89,7 +84,7 @@ pub(crate) fn process(
     }
     let route = Route::parse(accounts, funding_header.physical_count())?;
     route.validate(program_id)?;
-    let market = account(accounts, MARKET)?;
+    let market = route.market;
     let state_bytes = read_state_bytes(program_id, market)?;
     let state = CoreState::decode(&state_bytes).map_err(|_| CoreSbfError::Market)?;
     authenticate_market(program_id, market, state, request)?;
@@ -97,10 +92,10 @@ pub(crate) fn process(
     validate_selection(envelope, selection, state)?;
 
     let rent = Rent::from_account_info(route.rent).map_err(|_| CoreSbfError::Funding)?;
-    let realm_raw = account(accounts, REALM_RAW)?;
-    let realm_staging = account(accounts, REALM_STAGING)?;
-    let manifest_raw = account(accounts, MANIFEST_RAW)?;
-    let manifest_staging = account(accounts, MANIFEST_STAGING)?;
+    let realm_raw = route.realm_raw;
+    let realm_staging = route.realm_staging;
+    let manifest_raw = route.manifest;
+    let manifest_staging = route.manifest_staging;
     let realm_data = realm_raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
@@ -257,21 +252,9 @@ fn require_close_capability_aliases(
     accounts: &[AccountInfo<'_>],
     physical_count: u8,
 ) -> Result<(), CoreSbfError> {
-    let funding_end = FUNDING_START
-        .checked_add(usize::from(physical_count))
-        .ok_or(CoreSbfError::Arithmetic)?;
-    let child_start = funding_end
-        .checked_add(ROUTE_FIXED_ACCOUNTS)
-        .ok_or(CoreSbfError::Arithmetic)?;
-    let pairs = [
-        (funding_end + 1, child_start + 8),
-        (funding_end + 2, child_start + 9),
-        (funding_end + 3, child_start + 10),
-        (funding_end + 4, child_start + 11),
-        (funding_end + 5, child_start + 12),
-        (funding_end + 8, child_start + 13),
-        (funding_end + 9, child_start + 14),
-    ];
+    let layout = CapabilityRouteLayoutV1::new(physical_count, accounts.len())
+        .map_err(|_| CoreSbfError::Arithmetic)?;
+    let pairs = layout.close_alias_pairs();
     for (left, right) in pairs {
         if account(accounts, left)?.key != account(accounts, right)?.key {
             return Err(CoreSbfError::AccountFrame);
@@ -300,34 +283,36 @@ impl<'accounts, 'info> Route<'accounts, 'info> {
         if physical_count == 0 {
             return Err(CoreSbfError::AccountFrame);
         }
-        let funding_end = FUNDING_START
-            .checked_add(usize::from(physical_count))
-            .ok_or(CoreSbfError::Arithmetic)?;
-        let fixed_end = funding_end
-            .checked_add(ROUTE_FIXED_ACCOUNTS)
-            .ok_or(CoreSbfError::Arithmetic)?;
+        let prefix = CapabilityRouteLayoutV1::new(physical_count, 0)
+            .map_err(|_| CoreSbfError::Arithmetic)?;
+        let fixed_end = prefix.child_start();
         if accounts.len() < fixed_end {
             return Err(CoreSbfError::AccountFrame);
         }
+        let layout = CapabilityRouteLayoutV1::new(physical_count, accounts.len() - fixed_end)
+            .map_err(|_| CoreSbfError::Arithmetic)?;
         Ok(Self {
-            market: account(accounts, MARKET)?,
+            market: account(accounts, layout.market())?,
+            realm_raw: account(accounts, layout.realm_raw())?,
+            realm_staging: account(accounts, layout.realm_staging())?,
             funding_ledgers: accounts
-                .get(FUNDING_START..funding_end)
+                .get(layout.funding_start()..layout.funding_end())
                 .ok_or(CoreSbfError::AccountFrame)?,
-            manifest: account(accounts, MANIFEST_RAW)?,
-            root: account(accounts, funding_end)?,
-            cache: account(accounts, funding_end + 1)?,
-            core_program: account(accounts, funding_end + 2)?,
-            core_programdata: account(accounts, funding_end + 3)?,
-            child_program: account(accounts, funding_end + 4)?,
-            child_programdata: account(accounts, funding_end + 5)?,
-            resolution_program: account(accounts, funding_end + 6)?,
-            resolution_programdata: account(accounts, funding_end + 7)?,
-            registry: account(accounts, funding_end + 8)?,
-            rent: account(accounts, funding_end + 9)?,
-            caller_authority: account(accounts, funding_end + 10)?,
+            manifest: account(accounts, layout.manifest_raw())?,
+            manifest_staging: account(accounts, layout.manifest_staging())?,
+            root: account(accounts, layout.root())?,
+            cache: account(accounts, layout.activation_cache())?,
+            core_program: account(accounts, layout.core_program())?,
+            core_programdata: account(accounts, layout.core_programdata())?,
+            child_program: account(accounts, layout.trading_program())?,
+            child_programdata: account(accounts, layout.trading_programdata())?,
+            resolution_program: account(accounts, layout.resolution_program())?,
+            resolution_programdata: account(accounts, layout.resolution_programdata())?,
+            registry: account(accounts, layout.registry_program())?,
+            rent: account(accounts, layout.rent_sysvar())?,
+            caller_authority: account(accounts, layout.caller_authority())?,
             child_tail: accounts
-                .get(fixed_end..)
+                .get(layout.child_start()..layout.account_count())
                 .ok_or(CoreSbfError::AccountFrame)?,
         })
     }
@@ -1069,20 +1054,11 @@ mod tests {
 
     fn canonical_close_frame() -> Vec<AccountInfo<'static>> {
         let physical_count = 1_u8;
-        let funding_end = FUNDING_START + usize::from(physical_count);
-        let child_start = funding_end + ROUTE_FIXED_ACCOUNTS;
+        let layout = CapabilityRouteLayoutV1::new(physical_count, 20).expect("layout");
         let mut accounts = (0_u8..37)
             .map(|index| test_account(Pubkey::new_from_array([index.saturating_add(1); 32])))
             .collect::<Vec<_>>();
-        for (left, right) in [
-            (funding_end + 1, child_start + 8),
-            (funding_end + 2, child_start + 9),
-            (funding_end + 3, child_start + 10),
-            (funding_end + 4, child_start + 11),
-            (funding_end + 5, child_start + 12),
-            (funding_end + 8, child_start + 13),
-            (funding_end + 9, child_start + 14),
-        ] {
+        for (left, right) in layout.close_alias_pairs() {
             accounts[right] = accounts[left].clone();
         }
         accounts
@@ -1093,17 +1069,9 @@ mod tests {
         let exact = canonical_close_frame();
         assert_eq!(require_close_capability_aliases(&exact, 1), Ok(()));
 
-        let funding_end = FUNDING_START + 1;
-        let child_start = funding_end + ROUTE_FIXED_ACCOUNTS;
-        let pairs = [
-            (funding_end + 1, child_start + 8),
-            (funding_end + 2, child_start + 9),
-            (funding_end + 3, child_start + 10),
-            (funding_end + 4, child_start + 11),
-            (funding_end + 5, child_start + 12),
-            (funding_end + 8, child_start + 13),
-            (funding_end + 9, child_start + 14),
-        ];
+        let pairs = CapabilityRouteLayoutV1::new(1, 20)
+            .expect("layout")
+            .close_alias_pairs();
         for (_, right) in pairs {
             let mut missing = canonical_close_frame();
             missing[right] = test_account(Pubkey::new_unique());
