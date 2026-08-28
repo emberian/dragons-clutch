@@ -532,6 +532,7 @@ dependencies = [
  "bincode",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
