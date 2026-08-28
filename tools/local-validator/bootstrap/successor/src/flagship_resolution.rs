@@ -1822,38 +1822,21 @@ impl StagePlanV1 {
                 "durable provider message differs from the canonical transfer/action compilation",
             ));
         }
-        let lookup_addresses = self
-            .lookup_table_addresses
-            .iter()
-            .map(|key| pubkey(key))
-            .collect::<Result<Vec<_>>>()?;
+        let (lookup_addresses, writable, readonly, resolved) =
+            resolve_provider_v0_keys(&message, &table)?;
         let mut hasher = Sha256::new();
         for address in &lookup_addresses {
             hasher.update(address.as_ref());
         }
-        if hex(&hasher.finalize()) != self.lookup_table_addresses_sha256 {
+        if lookup_addresses
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            != self.lookup_table_addresses
+            || hex(&hasher.finalize()) != self.lookup_table_addresses_sha256
+        {
             return Err(Error::new("durable provider lookup address digest changed"));
         }
-        let lookup = &v0.address_table_lookups[0];
-        let resolve = |index: &u8| {
-            lookup_addresses
-                .get(usize::from(*index))
-                .copied()
-                .ok_or_else(|| Error::new("durable provider lookup index exceeded table"))
-        };
-        let writable = lookup
-            .writable_indexes
-            .iter()
-            .map(resolve)
-            .collect::<Result<Vec<_>>>()?;
-        let readonly = lookup
-            .readonly_indexes
-            .iter()
-            .map(resolve)
-            .collect::<Result<Vec<_>>>()?;
-        let mut resolved = v0.account_keys.clone();
-        resolved.extend(writable.iter().copied());
-        resolved.extend(readonly.iter().copied());
         if writable.iter().map(ToString::to_string).collect::<Vec<_>>() != self.loaded_writable
             || readonly.iter().map(ToString::to_string).collect::<Vec<_>>() != self.loaded_readonly
             || resolved.iter().map(ToString::to_string).collect::<Vec<_>>()
@@ -6072,6 +6055,40 @@ mod tests {
         hostile_message.message_base64 = BASE64.encode(&bytes);
         hostile_message.message_sha256 = hex(&Sha256::digest(&bytes));
         assert!(hostile_message.validate().is_err());
+
+        let mut hostile_lookup = plan.clone();
+        let original = hostile_lookup
+            .lookup_table_addresses
+            .first()
+            .cloned()
+            .expect("fixture lookup address");
+        let substituted = Pubkey::new_from_array([96; 32]).to_string();
+        *hostile_lookup
+            .lookup_table_addresses
+            .first_mut()
+            .expect("fixture lookup address") = substituted.clone();
+        for vector in [
+            &mut hostile_lookup.loaded_writable,
+            &mut hostile_lookup.loaded_readonly,
+            &mut hostile_lookup.resolved_account_keys,
+        ] {
+            for key in vector {
+                if key == &original {
+                    key.clone_from(&substituted);
+                }
+            }
+        }
+        if let Some(state) = hostile_lookup.pre_accounts.remove(&original) {
+            hostile_lookup
+                .pre_accounts
+                .insert(substituted.clone(), state);
+        }
+        let mut lookup_hasher = Sha256::new();
+        for key in &hostile_lookup.lookup_table_addresses {
+            lookup_hasher.update(pubkey(key).expect("hostile lookup key").as_ref());
+        }
+        hostile_lookup.lookup_table_addresses_sha256 = hex(&lookup_hasher.finalize());
+        assert!(hostile_lookup.validate().is_err());
 
         let mut hostile_transfer = plan.clone();
         hostile_transfer.transfers.push(TransferPlanV1 {
