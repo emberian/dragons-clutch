@@ -1,7 +1,7 @@
 'use client';
 
 import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
@@ -91,9 +91,9 @@ export default function CoreFoundWorkspace() {
 
   const ready = state.kind === 'ready' ? state : null;
   return <main className="product-shell direct-workspace found-workspace">
-    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor className="active" href="/found">Create</Anchor><Anchor href="/product-v2">Product</Anchor><Anchor href="/release">Release</Anchor><Anchor href="/workbench">Workbench</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><div className="preview-control"><span className="preview-dot" /> finalized RPC · unsigned only</div></header>
+    <ConsoleHeader path="/found" title="Founding" purpose="A market author with a compiled product derives the new market's accounts from the Registry and downloads the two unsigned transactions that found it." />
 
-    <section className="market-heading found-heading"><div><div className="market-kicker"><span>Core Found · Runtime V2</span><span>Real 31-account frame</span></div><h1>Found one common<br />Core Market.</h1></div><p>This is not a market mockup. The builder derives the Market and its lifecycle-scoped RentCredit from canonical Registry records, verifies runtime-width Product semantics and immutable infrastructure, then emits the two bounded unsigned packets required by the current ABI.</p></section>
+    <section className="market-heading found-heading"><div><h1>Found a<br />market.</h1></div><p>This is not a mockup. The builder derives the market and its rent account from records already on the Registry, verifies the product and the deployed infrastructure against the chain, then emits the two unsigned transactions founding requires — you sign them somewhere you trust.</p></section>
 
     <section className="found-boundaries" aria-label="Construction boundaries">
       <article><span>01</span><strong>Select execution</strong><p>The activation cache must select immutable Core, Registry, and Rent artifacts whose Loader observations still match.</p></article>

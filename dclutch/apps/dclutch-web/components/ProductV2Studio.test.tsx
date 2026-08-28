@@ -6,9 +6,9 @@ import ProductV2Studio from './ProductV2Studio';
 describe('Product V2 Studio presentation', () => {
   it('starts empty and exposes exact authoring, finalized authority, and an external signing boundary', () => {
     const html = renderToStaticMarkup(<ProductV2Studio />);
-    expect(html).toContain('Author the payoff as data.');
+    expect(html).toContain('Product studio.');
     expect(html).toContain('signed knot numerators');
-    expect(html).toContain('sole rounding boundary');
+    expect(html).toContain('the final floor into payout atoms');
     expect(html).toContain('No Product has been authored or compiled.');
     expect(html).toContain('No private keys · no signing · no submission');
     expect(html).not.toContain('illustrative');

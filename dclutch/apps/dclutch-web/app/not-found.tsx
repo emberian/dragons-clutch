@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from 'react';
 
 import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import Nav from '@/components/Nav';
 import MarketDetailWorkspace from '@/components/MarketDetailWorkspace';
 import { resolveExportedPathnameV1, type ExportedRouteV1 } from '@/lib/exportRouting';
 
@@ -109,27 +109,14 @@ function NotFoundSurface({ pathname }: Readonly<{ pathname: string }>) {
         <Anchor className="secondary-action" href="/">The front door →</Anchor>
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
         <Anchor className="secondary-action" href="/create">Create a market →</Anchor>
-        <Anchor className="secondary-action" href="/trade">Trade →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
         <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
-        <Anchor className="secondary-action" href="/workbench">Lifecycle workbench →</Anchor>
+        <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
       </div>
     </section>
   </main>;
 }
 
 function SiteNav() {
-  return <header className="product-nav">
-    <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-    <nav>
-      <Anchor href="/markets">Markets</Anchor>
-      <Anchor href="/portfolio">Portfolio</Anchor>
-      <Anchor href="/activity">Activity</Anchor>
-      <Anchor href="/create">Create</Anchor>
-      <Anchor href="/trade">Trade</Anchor>
-      <Anchor href="/explorer">Explorer</Anchor>
-      <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-    </nav>
-    <span className="preview-control"><i className="preview-dot" />not live yet</span>
-  </header>;
+  return <Nav />;
 }

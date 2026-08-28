@@ -6,7 +6,7 @@ import MarketWorkbench from './MarketWorkbench';
 describe('market lifecycle workbench', () => {
   it('renders creation as unavailable until exact chain authority is selected', () => {
     const html = renderToStaticMarkup(<MarketWorkbench />);
-    expect(html).toContain('From exact terms');
+    expect(html).toContain('Lifecycle workbench');
     expect(html).toContain('Author &amp; fund');
     expect(html).toContain('Compile runtime-width Product result domain');
     expect(html).toContain('Found common Core Market');

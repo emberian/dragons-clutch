@@ -1,8 +1,7 @@
 'use client';
 
 import { TransactionMessage, VersionedTransaction, type AddressLookupTableAccount, type TransactionInstruction } from '@solana/web3.js';
-import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import Nav from '@/components/Nav';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 
 import { PublicKey } from '@solana/web3.js';
@@ -405,11 +404,7 @@ export default function CreateMarketWizard() {
   }
 
   return <main className="product-shell wizard-shell">
-    <header className="product-nav">
-      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-      <nav><Anchor href="/markets">Markets</Anchor><Anchor className="active" href="/create">Create</Anchor><Anchor href="/portfolio">Portfolio</Anchor><Anchor href="/workbench">Workbench</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav>
-      <span className="preview-control"><i className="preview-dot" />founding wizard · local RPC</span>
-    </header>
+    <Nav current="/create" />
 
     <section className="market-heading">
       <div>
@@ -518,7 +513,7 @@ export default function CreateMarketWizard() {
         </span></label>
       </div>
 
-      <label><span>ManipulationFloorV1 record · {MANIPULATION_FLOOR_V1_BYTES} bytes of hexadecimal, optional</span>
+      <label><span>ManipulationFloorV1 record · {MANIPULATION_FLOOR_V1_BYTES} bytes of hexadecimal, optional — the venue&apos;s own floor derivation, from the operator&apos;s source tooling; without it the typed floor above is what counts</span>
         <textarea spellCheck={false} value={floorRecordHex} onChange={(event) => setFloorRecordHex(event.target.value)} />
       </label>
       {floorRecord.kind === 'decoded'

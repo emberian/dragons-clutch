@@ -1,7 +1,6 @@
 'use client';
 
-import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
 import { fromHex, hex } from '@/lib/bytes';
@@ -62,8 +61,8 @@ export default function ProductV2Studio() {
   }
 
   return <main className="product-shell direct-workspace product-v2-studio">
-    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor href="/direct">Direct</Anchor><Anchor href="/general">General</Anchor><Anchor className="active" href="/product-v2">Product V2</Anchor><Anchor href="/release">Release</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />exact rational</span></header>
-    <section className="market-heading"><div><div className="market-kicker"><span>signed rational line</span><span>runtime width 2..16</span><span>one floor</span></div><h1>Author the payoff as data. Read back exactly what it denotes.</h1><p>Knots are signed i128 numerators over one positive u64 denominator. Terms are canonical constants, ramps, or tents with clamped tails. Coordinates remain exact rationals; the sole rounding boundary is the final floor into scaled payout atoms after interpolation.</p></div></section>
+    <ConsoleHeader path="/product-v2" title="Product studio" purpose="A market author writes a payoff curve as exact fractions, compiles the canonical record, and reads back precisely what each outcome pays." />
+    <section className="market-heading"><div><h1>Product studio.</h1><p>You write the payoff as exact fractions — signed knot numerators over one shared denominator, with constant, ramp, and tent terms. Nothing is rounded until the one defined boundary: the final floor into payout atoms. The studio compiles the canonical record and shows you exactly what it denotes.</p></div></section>
     <form className="direct-card" onSubmit={compile}><div className="direct-card-heading"><span>01</span><div><h2>Compile one canonical Product V2 record</h2><p>No market or deployment is implied. This first stage owns only exact semantic data and its content identity.</p></div></div>
       <div className="direct-form-grid"><label><span>Product scalar ID · nonzero u64</span><input required inputMode="numeric" value={productId} onChange={(event) => setProductId(event.target.value.trim())} /></label><label><span>Domain scalar ID · nonzero u64</span><input required inputMode="numeric" value={domainId} onChange={(event) => setDomainId(event.target.value.trim())} /></label><label><span>Coordinate-unit scalar ID · nonzero u64</span><input required inputMode="numeric" value={unitId} onChange={(event) => setUnitId(event.target.value.trim())} /></label><label><span>Payout scale · atoms per unit</span><input required inputMode="numeric" value={payoutScale} onChange={(event) => setPayoutScale(event.target.value.trim())} /></label><label><span>Common knot denominator · nonzero u64</span><input required inputMode="numeric" value={knotDenominator} onChange={(event) => setKnotDenominator(event.target.value.trim())} /></label></div>
       <div className="product-author-grid"><label><span>Strictly increasing signed knot numerators · one i128 per line</span><textarea required value={knots} onChange={(event) => setKnots(event.target.value)} spellCheck={false} /></label><label><span>Payoff terms · one canonical expression per line</span><textarea required value={terms} onChange={(event) => setTerms(event.target.value)} spellCheck={false} /><small>constant amplitude<br />ramp-up left-index right-index amplitude<br />ramp-down left-index right-index amplitude<br />tent left-index peak-index right-index amplitude</small></label></div>

@@ -139,23 +139,26 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (third attempt, the first with both
-execution-found driver defects fixed — §7 tells that story; the first two
-attempts' derived addresses are superseded and their small strands are named
-there).**
+**Status: founding IN PROGRESS on devnet (eighth attempt: generation 4, detached from the operator session so an interrupted operator cannot reap it — attempt 7 was; the market records from earlier attempts are generation-independent and are reused verbatim). The addresses below
+are DERIVED TARGETS — the coordinates this input's founding will land at,
+computed off-chain and detector-confirmed absent before execution — NOT yet a
+live Open Market; the "Open Market" row becomes a live, verified account only
+when this section's transcript line says so. The earlier attempts' addresses
+are superseded and their small strands are named in §7 (three execution-found
+issues, all fixed); this lineage is updated if it moves again.**
 
 The story: protection against SOL/USD leaving the 120.00–180.00 band at a
 real terminal window, resolved by the real devnet Pyth receiver. Founded
 under kappa as a founder-side discipline (the on-chain cap is the
 RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
-| fact | value |
+| fact | derived target (pending founding completion) |
 |---|---|
-| **Open Market** | `i8cvbLNy2er3qyDrqKq4xs67ZoKrZFToX5KRFyPab5G` |
-| Found31 Market (generation 1) | `Apim2SxmTQh8ChiBEj8BWG9r7FwNPiMD4C8rFaAxpbgE` |
-| abort-lane Market (generation 3, staged and unwound) | `FFCfUgnDxsTK7bFvsBzre13dDXWEZGfFAuH8kPbWgLLN` |
-| collateral mint (Token-2022, 6 decimals) | `84cKfptadusKXVjuf9SCrC2saCuxjPTzH1ksDYP7D6rs` |
-| realm record | `J4n7pzwoPDjkV1qHDQmCeRfe9rPufQL4ymSRNL7wEidX` |
+| **Open Market** (not yet live) | `8ryiQkudYjoqHt5zY3UcVYbbbJoiLBvbYrsm3XCDipgd` |
+| Found31 Market (generation 4) | `Bbn2YUaxGz3bTLAmPES6zki9tuN3baprMaMqPE7Lo2Wd` |
+| abort-lane Market (generation 6, staged and unwound) | `7zow2MrvZrJJ1Q8srznUVEU7zW97EEX1prg9SR3Bt721` |
+| collateral mint (Token-2022, 6 decimals) | `58TCVHLaUwWhAuKU89RQ9pAiK4kM7YJnb2Ee4bK67zf1` |
+| realm record | `xSxNtCBFRPwbrCi1KL7fPpd4qGwUHs8jMpBstcEtzFc` |
 | band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
 | terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
 | `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
@@ -190,16 +193,44 @@ cross-check.
   campaign peeks once and threads one value through detector, report, and
   verify. Found by the first driven founding; invisible to every unit test
   that had ever passed.
-- **A load-balanced public endpoint broke read-your-writes.** The first
-  devnet founding attempt died at the Found31 rollback equality: the hostile
-  probe refused exactly as designed (136,444 CU consumed), but the payer
-  balance was read back through a replica still catching up, and the check
-  called a correct rollback wrong. Fixed structurally: the driver's `Rpc`
-  carries a per-connection read floor — every confirmed transaction raises it
-  to its finalized slot, and every single-account read passes it as
+- **`Pubkey::new_unique()` is a test counter, and its addresses exist on
+  devnet.** Three consecutive founding attempts died at the Found31 rollback
+  check. The first diagnosis — a load-balanced endpoint's replica lag
+  breaking read-your-writes — was WRONG for this bug (it produced the
+  read-floor hardening below, which stays as correct discipline), and the
+  compound `if a || b || c || d` refusal with one sentence hid the truth for
+  two paid cycles. The instrumented refusal finally named it:
+  `recipient_exists=true` — the "fresh" rollback recipient and substituted
+  market key come from `Pubkey::new_unique()`, a **deterministic global
+  counter meant for unit tests**, so every process draws the same
+  low-counter addresses, and on a public cluster with years of history those
+  addresses EXIST. A fresh local ledger — where every such address is empty
+  by construction — can never catch this. The chain's own arithmetic was
+  exact on every attempt (payer −5,000, nothing else moved). Fixed: all
+  seven live probe sites draw a random keypair address
+  (`seed::fresh_probe_address`), and the four rollback proofs now read the
+  refused transaction's **own** `preBalances`/`postBalances` — one atomic
+  record the chain wrote, covering every account the transaction touched —
+  with every refusal printing its component values so a compound condition
+  can never again cost a diagnosis cycle.
+- **Devnet drops transactions, and the founding met it at its last hostile
+  probe.** The fifth attempt reached the DCLTGMF1 stage — Found31 (224,735 CU)
+  and both DCLTPCB1 lanes (700,292 CU) landed and verified — and then died on
+  the substituted-Claims hostile probe: devnet dropped that transaction (its
+  blockhash expired before it landed), no status ever appeared, and `confirm`
+  hit its 300 s deadline and hard-errored. No principal moved — the Lock lives
+  inside the atomic DCLTGMF1, which never ran. This is the "devnet dies
+  mid-ladder" case reaching a transaction the driver did not resubmit, and it
+  is a genuine network property, not a defect. Fixed: `confirm` now resubmits
+  the same signed bytes every ~30 s (idempotent by signature — a duplicate
+  lands as the same signature and the chain deduplicates) until a status
+  appears or the deadline passes.
+- **Read-your-writes, made structural anyway.** The driver's `Rpc` now
+  carries a per-connection read floor — every confirmed transaction raises
+  it to its finalized slot, and every single-account read passes it as
   `minContextSlot`, retrying the node's `-32016` not-yet-reached answer
-  inside the confirmation deadline. On a single-node loopback the floor is
-  always met; the class is invisible there by construction.
+  inside the confirmation deadline. Reasoned hardening for a load-balanced
+  endpoint, kept on its own merits; explicitly **not** the bug above.
 - **The second attempt found the probe the first had not needed**: attempt 1
   had also created `collateral-wallet[0]` (initialized against the index-1
   mint), and attempt 2 — peek fixed, mint back at index 0 — collided on that
@@ -209,12 +240,13 @@ cross-check.
   named. Attempt 3 runs on a fresh collateral key set (`sol2-*`), which is
   what moved §6.1's addresses.
 - **Strands from the paid lessons**, on devnet, never recycled per the
-  charter: attempt 1's index-1 collateral mint + `wallet[0]`
-  (`8Lng2CshnKa8fGUBac1svdGzSvif1HSt9U4DE7uys5o5`, holding the index-1
-  atoms), its realm record, one Market-scoped RentV2 credit, one Found31
-  routing table (≈ well under 0.01 SOL total). The mint-independent records
-  — product graph, source specs, manifest, basis — are content-addressed and
-  are **reused verbatim** by every retry.
+  charter: attempts 1–4 each left a collateral lineage (a mint + wallet, its
+  realm record, a Market-scoped RentV2 credit, a Found31 routing table —
+  attempt 1's wallet is `8Lng2CshnKa8fGUBac1svdGzSvif1HSt9U4DE7uys5o5`,
+  holding that lineage's atoms), ≈ 0.02 SOL in total across the four. The
+  mint-independent records — product graph, source specs, manifest, basis —
+  are content-addressed and were **reused verbatim** by every retry, which
+  is why each successive attempt was cheaper and faster than the last.
 - The relayed-vertical build was red at HEAD: DRIVER's `cluster.rs` split made
   the successor's `rpc.rs`/`seed.rs` import `crate::cluster`, and the
   vertical's `#[path]` module list never gained it (the journey's did). One
@@ -227,4 +259,34 @@ cross-check.
 
 ## 8. What SMOKE-1 still needs
 
-**Status: collected during the run; closed at the lane's yield.**
+The durable substrate is up, activated, and permanent (§2–§3); the founding
+is wired, proven end-to-end on the local harness (DCLTGMF1 at 1,199,741 CU),
+and driven on devnet through DCLTPCB1 with the atomic founding gated only by
+devnet transport, now hardened (§7). What remains for the full three-market
+exchange:
+
+1. **The graduation market's `account_set_id` cross-check.** This lane and the
+   operated relayer daemon (INFRA-RELAY, on the Hetzner box) each derive the
+   watched-set identity independently; the daemon's `show-config` must print
+   the `63918468…` this lane derived before the market is founded against it.
+   Two authors, one number — deliberately gated, not blocked.
+2. **The relayer fee payer is funded** (`8Naox…`, 0.05 SOL) and its attestation
+   key (`7gAqs…`) is what the graduation input pins; when INFRA-RELAY arms the
+   box's `[submit]` block this lane hands it MARKET + GENERATION + the derived
+   vacancy.
+3. **The daemon's initial observation windows** run from this machine for the
+   mainnet-observer market once it founds (charter item 4), then the box owns
+   them standing.
+4. **The redemption ALTs** (PAYOUT's browser step-2 rider, DCLTSQ03) publish
+   per market once each is Open.
+5. **The N-trader life + conservation ledger** run against these markets;
+   `ledger-census` is the driver subcommand that runs the journey's seven-law
+   engine against the public chain, one census per boundary.
+6. **The web** un-dark-launches `/smoke` and `/bounty` with the real market
+   addresses (the one-record `lib/smokeMarkets.ts` flip) once they found; the
+   endpoint default already points at public devnet and names the cluster from
+   its genesis hash.
+
+**Status of this section: the substrate and the wiring are done and final; the
+markets and the life are the SMOKE-1 continuation, unblocked by everything
+above.**

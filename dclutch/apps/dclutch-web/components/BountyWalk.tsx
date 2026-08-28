@@ -1,5 +1,5 @@
 import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import Nav from '@/components/Nav';
 
 import { SMOKE_MARKETS_V1 } from '@/lib/smokeMarkets';
 
@@ -44,18 +44,7 @@ export default function BountyWalk() {
   const abandoned = SMOKE_MARKETS_V1.abandoned;
   const live = abandoned.address !== null;
   return <main className="product-shell trade-v3-shell">
-    <header className="product-nav">
-      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-      <nav>
-        <Anchor href="/markets">Markets</Anchor>
-        <Anchor href="/portfolio">Portfolio</Anchor>
-        <Anchor href="/activity">Activity</Anchor>
-        <Anchor href="/smoke">The smoke</Anchor>
-        <Anchor className="active" href="/bounty">Bounty</Anchor>
-        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-      </nav>
-      <span className="preview-control"><i className="preview-dot" />{live ? 'live on devnet' : 'not live yet'}</span>
-    </header>
+    <Nav current="/bounty" status={live ? 'live on devnet' : 'not live yet'} />
 
     <section className="trade-v3-hero">
       <div>

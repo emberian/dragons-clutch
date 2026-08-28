@@ -1,7 +1,6 @@
 'use client';
 
-import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
 import {
@@ -79,12 +78,12 @@ export default function GeneralWorkspace() {
   }
 
   return <main className="product-shell direct-workspace">
-    <header className="product-nav"><Anchor className="brand" href="/">dClutch</Anchor><nav><Anchor href="/direct">Direct</Anchor><Anchor className="active" href="/general">General</Anchor><Anchor href="/explorer">Explorer</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />offline until asked</span></header>
-    <section className="market-heading"><div><div className="market-kicker"><span>seven successor actions</span><span>runtime-width</span><span>unsigned v0</span></div><h1>General clearing, from candidate selection through terminal close.</h1><p>Consume the canonical Rust operator’s finalized V5 plan for Consider, Freeze, Initialize, Collect, Materialize, Distribute, or Close. The browser independently checks the packet and request, can reacquire its exact chain dependencies, and never signs or submits.</p></div></section>
+    <ConsoleHeader path="/general" title="General clearing" purpose="An operator running settlement pastes a plan produced by the operator program, lets the browser re-check it, and downloads the unsigned packet." />
+    <section className="market-heading"><div><h1>General clearing.</h1><p>You paste a clearing plan for one of the seven settlement actions — Consider, Freeze, Initialize, Collect, Materialize, Distribute, or Close. The browser re-checks every field and dependency itself, can reacquire the plan&apos;s exact chain dependencies, and hands you the unsigned packet. It never signs or submits.</p></div></section>
 
     <form className="direct-card" onSubmit={inspect} aria-labelledby="general-plan">
       <div className="direct-card-heading"><span>01</span><div><h2 id="general-plan">Inspect one chain-derived operator plan</h2><p>The plan is an untrusted projection. The browser requires exact V5 fields, one unsigned packet-bounded v0 instruction, Hot38, CapabilityProgramV4/LifecycleV5 provenance, canonical lifecycle bumps, and action-specific DCE5 child-receipt order. After acceptance, download the unsigned v0 packet; no signing or submission occurs.</p></div></div>
-      <label><span>GeneralSuccessorTransactionPlanV0 · bounded JSON handoff</span><textarea required rows={16} value={planText} onChange={(event) => setPlanText(event.target.value)} placeholder={generalPlanTemplateV5()} /></label>
+      <label><span>Clearing plan · JSON — produced by the operator program (<code>crates/dclutch-operator</code>); paste the plan it emits</span><textarea required rows={16} value={planText} onChange={(event) => setPlanText(event.target.value)} placeholder={generalPlanTemplateV5()} /></label>
       <button>Inspect exact unsigned plan</button><p className="direct-status" aria-live="polite">{planStatus}</p>
       {inspection && <div className="direct-output"><dl><div><dt>Action / revision</dt><dd>{inspection.request.action} / {inspection.request.expectedRevision.toString()}</dd></div><div><dt>Best-valid-submitted candidate</dt><dd>{inspection.request.candidateId === null ? 'selection Freeze · candidate comes from frozen state' : compact(inspection.request.candidateId)}</dd></div><div><dt>Manifest / source coordinates</dt><dd>manifest {inspection.request.manifestOrderIndex} · page {inspection.request.pageIndex} · execution {inspection.request.executionIndex}</dd></div><div><dt>Runtime width / scratch</dt><dd>N={inspection.plan.outcomeCount} · {inspection.plan.scratchPageCount} authenticated bank page(s)</dd></div><div><dt>Packet / ALT / signers</dt><dd>{inspection.transaction.wireBytes}/1232 bytes · {compact(inspection.plan.lookupTable)} · {inspection.plan.requiredSigners.map(compact).join(', ')}</dd></div><div><dt>Checked releases</dt><dd>Trading {compact(inspection.plan.tradingArtifactRelease)} · accelerator {compact(inspection.plan.generalArtifactRelease)} · manifest {compact(inspection.plan.checkedManifestDigest)}</dd></div><div><dt>Lifecycle</dt><dd>primary {compact(inspection.plan.lifecycle.primaryState)} · bump {inspection.plan.lifecycle.primaryStateBump}{inspection.plan.lifecycle.terminalState ? ` · terminal ${compact(inspection.plan.lifecycle.terminalState)} @ ${inspection.plan.lifecycle.terminalCoordinate}` : ''}</dd></div></dl>
         <div className="registered-state-grid">{inspection.plan.childRoutes.length === 0 ? <article className="registered-state-card"><span className="eyebrow">effect routes</span><h3>No child CPI</h3><p>Selection is persisted through the generic state-last Effect path.</p></article> : inspection.plan.childRoutes.map((route) => <article className="registered-state-card" key={route.route}><span className="eyebrow">route {route.route} · {route.role}</span><h3>logical accounts {route.accountStart}…{route.accountStart + route.accountCount - 1}</h3><p>{route.receiptDependencies.length === 0 ? 'No prior receipt dependency.' : route.receiptDependencies.map((entry) => `${entry.producerRole} route ${entry.producerRoute} · ${entry.expectedReceiptBytes} bytes`).join(' · ')}</p></article>)}</div>
@@ -99,7 +98,7 @@ export default function GeneralWorkspace() {
 
     <form className="direct-card" onSubmit={inspectReceipt} aria-labelledby="general-receipt">
       <div className="direct-card-heading"><span>03</span><div><h2 id="general-receipt">Verify the commit-last execution receipt</h2><p>Paste the exact 280-byte HotExecutionAckV3 returned by execution. The browser joins it to the request digest, selected CapabilityProgram, Market generation, root prestate, and release set before showing success.</p></div></div>
-      <label><span>HotExecutionAckV3 · canonical base64</span><textarea required value={receiptText} onChange={(event) => setReceiptText(event.target.value.trim())} /></label><button disabled={inspection === null}>Verify exact receipt</button><p className="direct-status" aria-live="polite">{receiptStatus}</p>{receipt && <Receipt value={receipt} />}
+      <label><span>Execution receipt · base64 — the 280-byte HotExecutionAckV3 the chain returns when the packet executes</span><textarea required value={receiptText} onChange={(event) => setReceiptText(event.target.value.trim())} /></label><button disabled={inspection === null}>Verify exact receipt</button><p className="direct-status" aria-live="polite">{receiptStatus}</p>{receipt && <Receipt value={receipt} />}
     </form>
   </main>;
 }

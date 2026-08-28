@@ -6,8 +6,8 @@ import RationalRepresentationWorkspace from './RationalRepresentationWorkspace';
 describe('Rational representation successor workbench', () => {
   it('separates executable transfer, chain-derived open/retirement, and Rust-emitter-gated terminal execution', () => {
     const html = renderToStaticMarkup(<RationalRepresentationWorkspace />);
-    expect(html).toContain('Decimals are a label.');
-    expect(html).toContain('raw-u64 economics');
+    expect(html).toContain('Claims &amp;');
+    expect(html).toContain('Operator tool');
     expect(html).toContain('Bearer transfer');
     expect(html).toContain('transaction-complete');
     expect(html).toContain('Build exact unsigned v0 + ALT packet');

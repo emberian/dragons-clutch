@@ -14,7 +14,8 @@ import {
   evaluateCapabilityV1,
   type CapabilityStage,
 } from '@/lib/capabilityModel';
-import { docsIndexHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
+import ConsoleHeader from '@/components/ConsoleHeader';
+import { smokeStoryEnabledV1 } from '@/lib/flags';
 import { SolanaRpcClient } from '@/lib/rpc';
 import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
@@ -57,8 +58,8 @@ export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ 
 
   const snapshot = state.kind === 'ready' ? state.snapshot : null;
   return <main className="product-shell workbench-shell">
-    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor href="/markets">Markets</Anchor><Anchor className={stageId === 'author' ? 'active' : ''} href="/create">Create</Anchor><Anchor className={stageId === 'trade' ? 'active' : ''} href="/liquidity">Trade</Anchor><Anchor className={stageId === 'resolve' ? 'active' : ''} href="/resolution">Resolve</Anchor><Anchor className={stageId === 'claim' ? 'active' : ''} href="/redeem">Redeem</Anchor><Anchor href="/operate">Operate</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />chain workbench</span></header>
-    <section className="workbench-heading"><div><p className="eyebrow">Market lifecycle workbench</p><h1>From exact terms<br />to terminal claims.</h1></div><p>No sample market, price, pool, provider, balance, or wallet authority appears here. Observe six program roles plus an optional Realm and Market; each concrete workspace must still prove its exact Registry, artifact, and Loader joins.</p></section>
+    <ConsoleHeader path="/workbench" title="Lifecycle workbench" purpose="An operator walks one market's whole life — author, fund, trade, resolve, claim — against the chain they point it at." />
+    <section className="workbench-heading"><div><h1>The market<br />lifecycle.</h1></div><p>Each stage below is a real workspace: it reads the chain you point it at and must prove what it finds before it will build anything. No sample market, price, pool, balance, or wallet authority appears here.</p></section>
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
       <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
       <div className="direct-actions">

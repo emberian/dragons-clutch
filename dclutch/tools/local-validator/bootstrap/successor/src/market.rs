@@ -524,9 +524,8 @@ pub(crate) fn execute_found_market(
     // immutable identity, so substituting it under an attacker-chosen table
     // must refuse and must roll the whole multi-instruction transaction back
     // to a fee-only debit.
-    let rollback_recipient = Pubkey::new_unique();
-    let substituted_market_key = Pubkey::new_unique();
-    let payer_before = rpc.required_account(payer.pubkey(), "Found31 rollback prestate")?;
+    let rollback_recipient = crate::seed::fresh_probe_address();
+    let substituted_market_key = crate::seed::fresh_probe_address();
     let mut substituted_market = found.instruction.clone();
     substituted_market
         .accounts
@@ -543,18 +542,21 @@ pub(crate) fn execute_found_market(
         routing,
         &tables,
     )?;
-    let rollback_fee = rolled_back
-        .fee_lamports
-        .ok_or_else(|| Error::new("refused Found31 omitted its fee"))?;
-    let payer_after = rpc.required_account(payer.pubkey(), "Found31 rollback poststate")?;
-    if rpc.account(rollback_recipient)?.is_some()
-        || rpc.account(substituted_market_key)?.is_some()
-        || rpc.account(market)?.is_some()
-        || payer_after.lamports.checked_add(rollback_fee) != Some(payer_before.lamports)
-    {
-        return Err(Error::new(
-            "refused Found31 did not roll its whole transaction back to a fee-only debit",
-        ));
+    // The rollback property is read from the refused transaction's OWN
+    // balance record — one atomic statement the chain wrote — rather than
+    // separate before/after account reads that race a load-balanced
+    // endpoint's replicas. It also covers every account the transaction
+    // touched, the probe recipient included, not just three of them.
+    let recipient_exists = rpc.account(rollback_recipient)?.is_some();
+    let market_exists = rpc.account(market)?.is_some();
+    let fee_only = rolled_back.fee_only_balance_change;
+    if recipient_exists || market_exists || fee_only != Some(true) {
+        return Err(Error::new(format!(
+            "refused Found31 did not roll its whole transaction back to a fee-only debit: \
+             recipient_exists={recipient_exists} market_exists={market_exists} \
+             fee_only_balance_change={fee_only:?} (rolled-back signature {})",
+            rolled_back.signature
+        )));
     }
 
     transactions.push(rolled_back);
@@ -816,7 +818,7 @@ fn publish_market_records(
         domain_digest,
     } = compile_market_bodies(registry, input, collateral_mint)?;
 
-    let hostile_wallet = Some(Pubkey::new_unique());
+    let hostile_wallet = Some(crate::seed::fresh_probe_address());
     let realm = publish_record(
         rpc,
         registry,
@@ -2487,8 +2489,7 @@ fn execute_projected_custody_bootstrap(
                 .checked_add(1)
                 .ok_or_else(|| Error::new("funding tail index overflow"))?;
             reordered.accounts.swap(first, second);
-            let rollback_recipient = Pubkey::new_unique();
-            let before = rpc.required_account(payer.pubkey(), "bootstrap rollback prestate")?;
+            let rollback_recipient = crate::seed::fresh_probe_address();
             let rolled_back = rpc.send_v0_on_founding_heap_expected_failure_with_signers(
                 "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
                 &[transfer(&payer.pubkey(), &rollback_recipient, 1), reordered],
@@ -2497,16 +2498,12 @@ fn execute_projected_custody_bootstrap(
                 routing,
                 &tables,
             )?;
-            let fee = rolled_back
-                .fee_lamports
-                .ok_or_else(|| Error::new("refused bootstrap omitted its fee"))?;
-            let after = rpc.required_account(payer.pubkey(), "bootstrap rollback poststate")?;
-            if rpc.account(rollback_recipient)?.is_some()
-                || after.lamports.checked_add(fee) != Some(before.lamports)
-            {
-                return Err(Error::new(
-                    "refused bootstrap did not roll its whole transaction back to a fee-only debit",
-                ));
+            let fee_only = rolled_back.fee_only_balance_change;
+            if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
+                return Err(Error::new(format!(
+                    "refused bootstrap did not roll its whole transaction back to a fee-only \
+                     debit: fee_only_balance_change={fee_only:?}",
+                )));
             }
             transactions.push(rolled_back);
             refuse_left_nothing(rpc, "the refused reordered bootstrap")?;
@@ -2673,8 +2670,8 @@ fn execute_source_abort_v1(
             "the prestate expired at {expiry_slot} before its pre-expiry refusal could be observed at {staged_at}"
         )));
     }
-    let before = rpc.required_account(payer.pubkey(), "source abort rollback prestate")?;
-    let rollback_recipient = Pubkey::new_unique();
+
+    let rollback_recipient = crate::seed::fresh_probe_address();
     let refused = rpc.send_v0_expected_failure_with_signers(
         "DCLTPCA1 refuses to abort a funded source before expiry",
         &[
@@ -2686,16 +2683,12 @@ fn execute_source_abort_v1(
         routing,
         &tables,
     )?;
-    let fee = refused
-        .fee_lamports
-        .ok_or_else(|| Error::new("refused source abort omitted its fee"))?;
-    let after = rpc.required_account(payer.pubkey(), "source abort rollback poststate")?;
-    if rpc.account(rollback_recipient)?.is_some()
-        || after.lamports.checked_add(fee) != Some(before.lamports)
-    {
-        return Err(Error::new(
-            "the refused pre-expiry abort did not roll its whole transaction back to a fee-only debit",
-        ));
+    let fee_only = refused.fee_only_balance_change;
+    if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
+        return Err(Error::new(format!(
+            "the refused pre-expiry abort did not roll its whole transaction back to a fee-only \
+             debit: fee_only_balance_change={fee_only:?}",
+        )));
     }
     transactions.push(refused);
     authenticate_bootstrap_poststate(
@@ -3790,8 +3783,8 @@ fn execute_generic_market_founding(
         .get_mut(3)
         .ok_or_else(|| Error::new("the founding frame omitted its Claims request"))?
         .pubkey = substituted_claims_record.raw;
-    let rollback_recipient = Pubkey::new_unique();
-    let before = rpc.required_account(payer.pubkey(), "founding rollback prestate")?;
+    let rollback_recipient = crate::seed::fresh_probe_address();
+
     let rolled_back = rpc.send_v0_on_founding_heap_expected_failure_with_signers(
         "DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back",
         &[
@@ -3803,16 +3796,12 @@ fn execute_generic_market_founding(
         routing,
         &tables,
     )?;
-    let fee = rolled_back
-        .fee_lamports
-        .ok_or_else(|| Error::new("refused founding omitted its fee"))?;
-    let after = rpc.required_account(payer.pubkey(), "founding rollback poststate")?;
-    if rpc.account(rollback_recipient)?.is_some()
-        || after.lamports.checked_add(fee) != Some(before.lamports)
-    {
-        return Err(Error::new(
-            "refused founding did not roll its whole transaction back to a fee-only debit",
-        ));
+    let fee_only = rolled_back.fee_only_balance_change;
+    if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
+        return Err(Error::new(format!(
+            "refused founding did not roll its whole transaction back to a fee-only debit: \
+             fee_only_balance_change={fee_only:?}",
+        )));
     }
     transactions.push(rolled_back);
     untouched(rpc, "the refused substituted-Claims founding")?;

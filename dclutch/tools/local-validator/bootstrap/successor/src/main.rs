@@ -880,6 +880,29 @@ fn usage() {
             .join(", "),
         roles = campaign::KEYPAIR_ROLES.join(", "),
     );
+    println!(
+        "\n  dclutch-local-successor-bootstrap devnet-market --registry-program-id PUBKEY \
+         --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
+         [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
+         [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
+         dclutch-local-successor-bootstrap graduation-market --registry-program-id PUBKEY \
+         --relayer-attestation PUBKEY --pool PUBKEY --venue-deployment-slot U64 \
+         --venue-upgrade-authority PUBKEY --venue-elf-sha256 HEX64 --window-start I64 \
+         --window-end I64 --max-age-seconds U32 [--venue-program PUBKEY] \
+         [--venue-programdata PUBKEY]\n  dclutch-local-successor-bootstrap ledger-census \
+         --rpc-url URL [{ack} GENESIS_HASH] --mint PUBKEY --payer PUBKEY --hoard PUBKEY \
+         --aggregate PUBKEY --claim-unit-atoms U64 --stage NAME --output ABSOLUTE_JSON \
+         [--token LABEL=PUBKEY]... [--position LABEL=PUBKEY]... [--watch LABEL=PUBKEY]... \
+         [--prior ABSOLUTE_JSON] [--declared-collateral-delta I128] [--declared-hoard-delta I128]\n\
+         \nThe market producers print a MarketRunInput document for the campaign's --market flag: \
+         devnet-market the Pyth range-protection flagship (live PriceUpdateV2 body, window width \
+         refused below the measured 1,252 s cadence floor), graduation-market the relayed \
+         graduation market over venue facts read off real mainnet. ledger-census takes one \
+         conservation-ledger census against a live cluster (reads only, enforced) and exits \
+         nonzero on any violated law; --prior reloads a previous census so the delta laws \
+         evaluate across invocations.",
+        ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
+    );
 }
 
 fn usage_supervisor() {

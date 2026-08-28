@@ -6,12 +6,24 @@ import ReleaseWorkspace from './ReleaseWorkspace';
 describe('Registry release presentation', () => {
   it('exposes checked activation and reauthentication with an explicit external boundary', () => {
     const html = renderToStaticMarkup(<ReleaseWorkspace />);
-    expect(html).toContain('Make executable authority inspectable.');
-    expect(html).toContain('Activate a checked five-role release');
+    expect(html).toContain('Release activation.');
+    expect(html).toContain('Load the checked build and derive the activation walk');
     expect(html).toContain('Reauthenticate one active role');
     expect(html).toContain('Inspect immutable protocol infrastructure');
-    expect(html).toContain('1,592-byte checked multiprogram');
-    expect(html).toContain('2,280-byte checked infrastructure manifest');
+    // Every artifact input names its producer and the file, offers a file
+    // drop, and keeps paste as the labeled offline fallback (charter: no
+    // paste box without provenance).
+    expect(html).toContain('multiprogram.checked');
+    expect(html).toContain('exactly 1,592 bytes');
+    expect(html).toContain('evidence/core/checked.bin');
+    expect(html).toContain('infrastructure.checked');
+    expect(html).toContain('exactly 2,280 bytes');
+    expect(html).toContain('Drop the file here, or click to choose it');
+    expect(html).toContain('Offline fallback · paste the same file as base64');
+    // Steps feed forward and say so: the wallet fills the payer, the plan
+    // fills the cache, and the signing step names the plan it uses.
+    expect(html).toContain('Connect a wallet in step 03 to fill this');
+    expect(html).toContain('build a plan in step 02 to fill this');
     expect(html).toContain('Sign the walk with a browser wallet');
     // The un-gate is shut on a cold render and says so in the contract's terms.
     expect(html).toContain('closed');
@@ -31,7 +43,7 @@ describe('Registry release presentation', () => {
     // Activation admits one role per transaction; five separately signed
     // packets, never one 26-account instruction the chain refuses outright.
     expect(html).toContain('one exact ten-account action per role');
-    expect(html).toContain('five separately signed packets, not one');
+    expect(html).toContain('five separate packets, not one');
     expect(html).not.toContain('26-account');
     expect(html).not.toContain('illustrative');
     expect(html).not.toContain('sample state');

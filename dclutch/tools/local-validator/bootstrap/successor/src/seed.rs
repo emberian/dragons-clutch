@@ -144,6 +144,22 @@ enum KeyOriginV1 {
     Persisted(BTreeMap<String, [u8; 32]>),
 }
 
+/// A fresh address that exists nowhere, for hostile probes and rollback
+/// recipients.
+///
+/// NOT `Pubkey::new_unique()`: that helper is a deterministic global counter
+/// meant for unit tests, so every process draws the same low-counter
+/// addresses — and on a public cluster with years of history those addresses
+/// EXIST. Measured 2026-08-28: three consecutive devnet founding attempts
+/// died at the Found31 rollback check because `recipient_exists=true` for a
+/// "unique" recipient, while a fresh local ledger — where every such address
+/// is empty by construction — could never catch it. A random keypair's
+/// address is fresh with cryptographic certainty on every cluster, which is
+/// what a probe that asserts absence actually requires.
+pub(crate) fn fresh_probe_address() -> Pubkey {
+    Keypair::new().pubkey()
+}
+
 /// The campaign's sole source of signing keys.
 ///
 /// Interior mutability rather than `&mut`: the forge is threaded through call
