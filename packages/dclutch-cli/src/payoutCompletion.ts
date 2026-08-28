@@ -33,6 +33,9 @@ const JOURNAL_PLAN_FORMAT = 'dclutch-wallet-terminal-payout-journal-plan-v1' as 
 const INPUT_FORMAT = 'dclutch-wallet-terminal-payout-plan-input-v1' as const;
 const EVIDENCE_FORMAT = 'dclutch-local-successor-run-evidence-v2' as const;
 const MAX_JOURNAL_BYTES = 786_432;
+const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
+const MAX_PROJECTED_INPUT_BYTES = 32_768;
+const MAX_JSON_DEPTH = 64;
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
 export type WalletTerminalPayoutPlanInputV1 = Readonly<{
@@ -115,6 +118,136 @@ function exactKeys(value: Record<string, unknown>, fields: ReadonlyArray<string>
   }
 }
 
+/**
+ * Parse one bounded JSON value without allowing JSON.parse to erase duplicate
+ * object keys first. The scanner consumes the original UTF-8/string boundary,
+ * compares decoded key strings at every nesting level, and proves there is no
+ * second value or non-whitespace tail before the ordinary value decoder runs.
+ */
+function exactJson(source: string | Uint8Array, field: string, maximumBytes: number): unknown {
+  let text: string;
+  let byteLength: number;
+  if (typeof source === 'string') {
+    text = source;
+    byteLength = new TextEncoder().encode(source).byteLength;
+  } else {
+    byteLength = source.byteLength;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(source); } catch {
+      throw new Error(`${field} is not canonical UTF-8 JSON`);
+    }
+  }
+  if (byteLength === 0 || byteLength > maximumBytes) {
+    throw new Error(`${field} is outside its 1..${maximumBytes} byte bound`);
+  }
+
+  let cursor = 0;
+  const whitespace = () => {
+    while (cursor < text.length && (text[cursor] === ' ' || text[cursor] === '\n'
+      || text[cursor] === '\r' || text[cursor] === '\t')) cursor += 1;
+  };
+  const fail = (reason: string): never => { throw new Error(`${field} is not exact JSON: ${reason}`); };
+  const string = (): string => {
+    if (text[cursor] !== '"') return fail('expected one string');
+    const start = cursor++;
+    for (;;) {
+      if (cursor >= text.length) return fail('unterminated string');
+      const character = text[cursor]!;
+      if (character === '"') {
+        cursor += 1;
+        try { return JSON.parse(text.slice(start, cursor)) as string; } catch { return fail('invalid string'); }
+      }
+      if (character.charCodeAt(0) < 0x20) return fail('unescaped control character');
+      if (character === '\\') {
+        cursor += 1;
+        if (cursor >= text.length) return fail('unterminated escape');
+        const escape = text[cursor]!;
+        if (escape === 'u') {
+          const digits = text.slice(cursor + 1, cursor + 5);
+          if (!/^[0-9a-fA-F]{4}$/.test(digits)) return fail('invalid Unicode escape');
+          cursor += 5;
+          continue;
+        }
+        if (!'"\\/bfnrt'.includes(escape)) return fail('invalid escape');
+      }
+      cursor += 1;
+    }
+  };
+  const number = () => {
+    if (text[cursor] === '-') cursor += 1;
+    if (text[cursor] === '0') cursor += 1;
+    else {
+      if (!/[1-9]/.test(text[cursor] ?? '')) return fail('invalid number');
+      while (/[0-9]/.test(text[cursor] ?? '')) cursor += 1;
+    }
+    if (text[cursor] === '.') {
+      cursor += 1;
+      if (!/[0-9]/.test(text[cursor] ?? '')) return fail('invalid fraction');
+      while (/[0-9]/.test(text[cursor] ?? '')) cursor += 1;
+    }
+    if (text[cursor] === 'e' || text[cursor] === 'E') {
+      cursor += 1;
+      if (text[cursor] === '+' || text[cursor] === '-') cursor += 1;
+      if (!/[0-9]/.test(text[cursor] ?? '')) return fail('invalid exponent');
+      while (/[0-9]/.test(text[cursor] ?? '')) cursor += 1;
+    }
+  };
+  const value = (depth: number): void => {
+    if (depth > MAX_JSON_DEPTH) return fail(`nesting exceeds ${MAX_JSON_DEPTH}`);
+    whitespace();
+    const character = text[cursor];
+    if (character === '{') {
+      cursor += 1;
+      whitespace();
+      const keys = new Set<string>();
+      if (text[cursor] === '}') { cursor += 1; return; }
+      for (;;) {
+        const key = string();
+        if (keys.has(key)) return fail(`duplicate JSON object key ${JSON.stringify(key)}`);
+        keys.add(key);
+        whitespace();
+        if (text[cursor] !== ':') return fail('object key has no colon');
+        cursor += 1;
+        value(depth + 1);
+        whitespace();
+        if (text[cursor] === '}') { cursor += 1; return; }
+        if (text[cursor] !== ',') return fail('object has no comma or closing brace');
+        cursor += 1;
+        whitespace();
+      }
+    }
+    if (character === '[') {
+      cursor += 1;
+      whitespace();
+      if (text[cursor] === ']') { cursor += 1; return; }
+      for (;;) {
+        value(depth + 1);
+        whitespace();
+        if (text[cursor] === ']') { cursor += 1; return; }
+        if (text[cursor] !== ',') return fail('array has no comma or closing bracket');
+        cursor += 1;
+      }
+    }
+    if (character === '"') { string(); return; }
+    for (const literal of ['true', 'false', 'null']) {
+      if (text.startsWith(literal, cursor)) { cursor += literal.length; return; }
+    }
+    if (character === '-' || /[0-9]/.test(character ?? '')) { number(); return; }
+    return fail('invalid value');
+  };
+  value(0);
+  whitespace();
+  if (cursor !== text.length) fail('trailing data');
+  try { return JSON.parse(text); } catch { return fail('value decoder refused'); }
+}
+
+function boundedText(value: unknown, field: string, maximumBytes: number): string {
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value
+      || new TextEncoder().encode(value).byteLength > maximumBytes) {
+    throw new Error(`${field} is not nonempty canonical text within ${maximumBytes} bytes`);
+  }
+  return value;
+}
+
 function address(value: unknown, field: string): string {
   if (typeof value !== 'string') throw new Error(`${field} is not one canonical Solana address`);
   let parsed: PublicKey;
@@ -172,34 +305,39 @@ function sha256(value: string | Uint8Array): string {
 
 /** Hostile-check one exact completed campaign dossier before Rust consumes it. */
 export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, evidenceBytes: Uint8Array): void {
-  let decoded: unknown;
-  try { decoded = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(evidenceBytes)); } catch {
-    throw new Error('campaign evidence is not canonical UTF-8 JSON');
-  }
-  const evidence = object(decoded, 'campaign evidence');
+  const evidence = object(exactJson(evidenceBytes, 'campaign evidence', MAX_EVIDENCE_BYTES), 'campaign evidence');
   exactKeys(evidence, [
     'schema', 'rpc_url', 'ledger', 'validator_log', 'plan_sha256', 'core_upgrade_authority_pubkey',
     'private_key_persisted', 'keypair_derivation', 'keypair_seed_sha256', 'foundingCustodyContext',
     'directSelectedManifestEntryIndex', 'completed', 'transactions', 'accounts', 'remaining_execution_seam',
   ], 'campaign evidence');
-  if (evidence.schema !== EVIDENCE_FORMAT || evidence.private_key_persisted !== false
-      || typeof evidence.rpc_url !== 'string' || typeof evidence.ledger !== 'string'
-      || typeof evidence.validator_log !== 'string' || typeof evidence.keypair_derivation !== 'string'
-      || typeof evidence.remaining_execution_seam !== 'string') {
+  if (evidence.schema !== EVIDENCE_FORMAT || evidence.private_key_persisted !== false) {
     throw new Error('campaign evidence has another schema, key policy, or bounded text shape');
   }
+  boundedText(evidence.rpc_url, 'campaign RPC URL', 2_048);
+  boundedText(evidence.ledger, 'campaign ledger path', 4_096);
+  boundedText(evidence.validator_log, 'campaign validator-log path', 4_096);
+  const derivation = boundedText(evidence.keypair_derivation, 'campaign keypair derivation', 64);
+  if (derivation !== 'random-per-run' && derivation !== 'seeded-deterministic') {
+    throw new Error('campaign keypair derivation is not one known policy');
+  }
+  boundedText(evidence.remaining_execution_seam, 'campaign remaining execution seam', 4_096);
   const expectedPlan = identity(evidence.plan_sha256, 'campaign plan digest');
   if (sha256(planBytes) !== expectedPlan) throw new Error('campaign evidence does not authenticate the exact plan bytes');
   address(evidence.core_upgrade_authority_pubkey, 'campaign Core authority');
   identity(evidence.foundingCustodyContext, 'founding Custody context');
   index(evidence.directSelectedManifestEntryIndex, 'Direct selected manifest entry', 65_535);
   if (evidence.keypair_seed_sha256 !== null) identity(evidence.keypair_seed_sha256, 'campaign keypair seed digest');
-  if (!Array.isArray(evidence.completed) || evidence.completed.length === 0
-      || evidence.completed.some((entry) => typeof entry !== 'string' || entry.length === 0 || entry.length > 512)
+  if (!Array.isArray(evidence.completed) || evidence.completed.length === 0 || evidence.completed.length > 512
+      || evidence.completed.some((entry) => {
+        try { boundedText(entry, 'campaign completed stage', 512); return false; } catch { return true; }
+      })
       || new Set(evidence.completed).size !== evidence.completed.length) {
     throw new Error('campaign evidence does not carry one nonempty ordered completed-stage list');
   }
-  if (!Array.isArray(evidence.transactions)) throw new Error('campaign evidence transactions are not an array');
+  if (!Array.isArray(evidence.transactions) || evidence.transactions.length > 4_096) {
+    throw new Error('campaign evidence transactions are not an array within the 4096-row bound');
+  }
   const transactionLabels = new Set<string>();
   for (const [offset, raw] of evidence.transactions.entries()) {
     const row = object(raw, `campaign transaction ${offset}`);
@@ -207,9 +345,12 @@ export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, e
       'label', 'signature', 'slot', 'transaction_metadata_available', 'fee_lamports',
       'fee_only_balance_change', 'compute_units_consumed', 'error', 'logs',
     ], `campaign transaction ${offset}`);
-    if (typeof row.label !== 'string' || row.label.length === 0 || row.label.length > 512
-        || transactionLabels.has(row.label)) throw new Error(`campaign transaction ${offset} has another label shape`);
-    transactionLabels.add(row.label);
+    let label: string;
+    try { label = boundedText(row.label, `campaign transaction ${offset} label`, 512); } catch {
+      throw new Error(`campaign transaction ${offset} has another label shape`);
+    }
+    if (transactionLabels.has(label)) throw new Error(`campaign transaction ${offset} has another label shape`);
+    transactionLabels.add(label);
     exactSignature(row.signature);
     if (typeof row.slot !== 'number' || !Number.isSafeInteger(row.slot) || row.slot < 0
         || typeof row.transaction_metadata_available !== 'boolean'
@@ -218,15 +359,20 @@ export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, e
         || (row.compute_units_consumed !== null && (typeof row.compute_units_consumed !== 'number'
           || !Number.isSafeInteger(row.compute_units_consumed) || row.compute_units_consumed < 0))
         || (row.fee_only_balance_change !== null && typeof row.fee_only_balance_change !== 'boolean')
-        || !Array.isArray(row.logs)
-        || row.logs.some((entry) => typeof entry !== 'string' || entry.length > 512)) {
+        || !Array.isArray(row.logs) || row.logs.length > 512
+        || row.logs.some((entry) => typeof entry !== 'string'
+          || new TextEncoder().encode(entry).byteLength > 4_096)) {
       throw new Error(`campaign transaction ${offset} has inexact finalized evidence`);
     }
   }
   const accounts = object(evidence.accounts, 'campaign evidence accounts');
-  if (Object.keys(accounts).length === 0) throw new Error('campaign evidence has no persisted accounts');
+  if (Object.keys(accounts).length === 0 || Object.keys(accounts).length > 4_096) {
+    throw new Error('campaign evidence persisted accounts are outside the 1..4096 row bound');
+  }
   for (const [label, raw] of Object.entries(accounts)) {
-    if (label.length === 0 || label.length > 128) throw new Error('campaign evidence account label is not bounded');
+    if (label.length === 0 || new TextEncoder().encode(label).byteLength > 128) {
+      throw new Error('campaign evidence account label is not bounded');
+    }
     const row = object(raw, `campaign account ${label}`);
     exactKeys(row, ['address', 'owner', 'lamports', 'executable', 'data_len', 'data_sha256', 'account_sha256'], `campaign account ${label}`);
     address(row.address, `campaign account ${label} address`);
@@ -241,9 +387,7 @@ export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, e
 
 /** Hostile-decode the exact flat input emitted by `wallet-terminal-payout-input`. */
 export function parseWalletTerminalPayoutPlanInputV1(source: string): WalletTerminalPayoutPlanInputV1 {
-  let raw: unknown;
-  try { raw = JSON.parse(source); } catch { throw new Error('wallet payout projected input is not JSON'); }
-  const value = object(raw, 'wallet payout projected input');
+  const value = object(exactJson(source, 'wallet payout projected input', MAX_PROJECTED_INPUT_BYTES), 'wallet payout projected input');
   exactKeys(value, [
     'format', 'market', 'owner', 'recipientOwner', 'recipient', 'collateralMint', 'tokenProgram',
     'quantity', 'claimIndex', 'transferIndex', 'parentContext', 'custodyContext', 'releaseSet',
@@ -303,10 +447,7 @@ function canonicalPlan(plan: PreparedWalletTerminalPayoutV3): PayoutJournalPlanV
 }
 
 function exactJournal(source: string): PayoutOperationJournalV1 {
-  if (source.length === 0 || source.length > MAX_JOURNAL_BYTES) throw new Error('payout journal is outside its exact byte bound');
-  let raw: unknown;
-  try { raw = JSON.parse(source); } catch { throw new Error('payout journal is not JSON'); }
-  const value = object(raw, 'payout journal');
+  const value = object(exactJson(source, 'payout journal', MAX_JOURNAL_BYTES), 'payout journal');
   exactKeys(value, [
     'format', 'operation', 'clusterGenesis', 'market', 'owner', 'operationDigest', 'intentDigest',
     'planDigest', 'intent', 'plan', 'phase', 'signature',
@@ -332,6 +473,8 @@ function exactJournal(source: string): PayoutOperationJournalV1 {
     phase: value.phase,
     signature: signature === null ? null : exactSignature(signature),
   });
+  exactJson(journal.intent, 'payout journal intent', MAX_JOURNAL_BYTES);
+  exactJson(journal.plan, 'saved payout verifier plan', MAX_JOURNAL_BYTES);
   if (sha256(journal.intent) !== journal.intentDigest || sha256(journal.plan) !== journal.planDigest) {
     throw new Error('payout journal intent or plan bytes differ from their stored digest');
   }
@@ -420,9 +563,7 @@ export function archivePayoutOperationJournalV1(path: string, journal: PayoutOpe
 }
 
 function parseJournalPlan(source: string): PayoutJournalPlanV1 {
-  let raw: unknown;
-  try { raw = JSON.parse(source); } catch { throw new Error('saved payout verifier plan is not JSON'); }
-  const value = object(raw, 'saved payout verifier plan');
+  const value = object(exactJson(source, 'saved payout verifier plan', MAX_JOURNAL_BYTES), 'saved payout verifier plan');
   exactKeys(value, [
     'format', 'observedSlot', 'lookupTable', 'requiredSigners', 'unsignedWireBase64',
     'aggregateBase64', 'positionBase64', 'custodyReplayBase64', 'hoardTokenBase64', 'recipientTokenBase64',

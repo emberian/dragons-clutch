@@ -444,7 +444,7 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
     throw new Error('choose completed --spec/--payout-evidence input or --payout-input, not both');
   }
   if (typeof campaignPlan !== 'string' && typeof legacyInput !== 'string') {
-    throw new Error('pass --spec <campaign plan> with --session <completed evidence>, or pass --payout-input <projected input>');
+    throw new Error('pass --spec <campaign plan> with --payout-evidence <completed evidence>, or pass --payout-input <projected input>');
   }
   if (typeof campaignPlan === 'string' && typeof campaignEvidence !== 'string') {
     throw new Error('campaign payout projection requires --payout-evidence <completed evidence>');

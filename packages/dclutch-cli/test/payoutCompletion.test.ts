@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,11 +22,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   archivePayoutOperationJournalV1,
+  authenticateCompletedCampaignEvidenceV1,
   finalizePayoutOperationV1,
   loadPayoutOperationJournalV1,
   markPayoutOperationSubmittedV1,
   parseWalletTerminalPayoutPlanInputV1,
+  restorePayoutOperationJournalV1,
   signPayoutPlanV1,
+  transactionSignatureV1,
   writeUnsignedPayoutOperationJournalV1,
   type PayoutOperationJournalV1,
 } from '../src/payoutCompletion';
@@ -49,7 +53,26 @@ function inputValue() {
   };
 }
 
-function route(owner: string): WalletTerminalPayoutRouteV3 {
+function evidenceValue(planBytes: Uint8Array) {
+  return {
+    schema: 'dclutch-local-successor-run-evidence-v2', rpc_url: 'https://api.devnet.solana.com/',
+    ledger: '/tmp/ledger', validator_log: '/tmp/validator.log',
+    plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
+    core_upgrade_authority_pubkey: key(40), private_key_persisted: false,
+    keypair_derivation: 'random-per-run', keypair_seed_sha256: null,
+    foundingCustodyContext: digest(7), directSelectedManifestEntryIndex: 0,
+    completed: ['founding', 'open'], transactions: [],
+    accounts: {
+      market: {
+        address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
+        data_sha256: digest(41), account_sha256: digest(42),
+      },
+    },
+    remaining_execution_seam: 'none',
+  };
+}
+
+function route(): WalletTerminalPayoutRouteV3 {
   const names = [
     'aggregate', 'linkedBasisRaw', 'linkedBasisStaging', 'productRaw', 'productStaging',
     'resultDomainRaw', 'resultDomainStaging', 'portfolioRaw', 'portfolioStaging', 'market',
@@ -59,13 +82,12 @@ function route(owner: string): WalletTerminalPayoutRouteV3 {
     'custodyReplay', 'collateralMint', 'hoard', 'recipient', 'custodyAuthority', 'tokenProgram',
   ] as const;
   const value = Object.fromEntries(names.map((name, offset) => [name, key(30 + offset)]));
-  value.position = owner;
   return value as WalletTerminalPayoutRouteV3;
 }
 
 function preparedFixture() {
   const signer = Keypair.fromSeed(new Uint8Array(32).fill(23));
-  const payoutRoute = route(signer.publicKey.toBase58());
+  const payoutRoute = route();
   const instruction = new TransactionInstruction({
     programId: SystemProgram.programId,
     keys: [],
@@ -76,9 +98,20 @@ function preparedFixture() {
     recentBlockhash: key(90),
     instructions: [instruction],
   }).compileToV0Message());
+  const request = {
+    releaseSet: digest(1), market: payoutRoute.market, realm: digest(2), parentContext: digest(3),
+    productRecordDigest: digest(4), exposureId: digest(5), exposureDigest: digest(6),
+    terminalRecordDigest: digest(7), owner: signer.publicKey.toBase58(), position: payoutRoute.position,
+    recipientOwner: signer.publicKey.toBase58(), recipient: payoutRoute.recipient,
+    claimsProgram: payoutRoute.claimsProgram, custodyProgram: payoutRoute.custodyProgram,
+    collateralMint: payoutRoute.collateralMint, tokenProgram: payoutRoute.tokenProgram,
+    semanticBasisId: digest(8), linkedBasisRecordDigest: digest(9), generation: '1',
+    expectedMarketRevision: '2', expectedPositionRevision: '3', expectedCustodyRevision: '4',
+    quantity: '7', claimIndex: 1, transferIndex: 0,
+  };
   const report = {
     observedSlot: '40', route: payoutRoute, payout: '7', instruction,
-    request: { market: payoutRoute.market, owner: signer.publicKey.toBase58() },
+    request,
     requestBytes: new Uint8Array([1]), requestDigest: new Uint8Array(32).fill(1),
     signedPacket: new Uint8Array([2]), signedPacketDigest: new Uint8Array(32).fill(2),
     signedTableDigest: new Uint8Array(32).fill(3), custodyCaller: payoutRoute.claimsProgram,
@@ -97,7 +130,7 @@ function preparedFixture() {
   const manifest = {
     format: 'dclutch-wallet-terminal-payout-v3',
     route: payoutRoute,
-    request: { market: payoutRoute.market, owner: signer.publicKey.toBase58() },
+    request,
     custodyContext: digest(5), signedPacketBase64: 'AA==', payout: '7', lookupTable: key(91),
   } as unknown as WalletTerminalPayoutManifestV3;
   return { signer, plan, manifest };
@@ -110,7 +143,17 @@ function material(owner: string, byte: number): RpcAccount {
 describe('CLI payout completion boundary', () => {
   it('hostile-decodes only the exact flat Rust projection and refuses coordinate aliases', () => {
     const value = inputValue();
-    expect(parseWalletTerminalPayoutPlanInputV1(JSON.stringify(value))).toEqual(value);
+    const source = JSON.stringify(value);
+    expect(parseWalletTerminalPayoutPlanInputV1(source)).toEqual(value);
+    expect(() => parseWalletTerminalPayoutPlanInputV1(source.replace(
+      `"market":"${value.market}"`,
+      `"market":"${value.market}","market":"${value.market}"`,
+    ))).toThrow(/duplicate JSON object key/);
+    expect(() => parseWalletTerminalPayoutPlanInputV1(source.replace(
+      `"claims":"${value.programs.claims}"`,
+      `"claims":"${value.programs.claims}","cl\\u0061ims":"${value.programs.claims}"`,
+    ))).toThrow(/duplicate JSON object key/);
+    expect(() => parseWalletTerminalPayoutPlanInputV1(`${source}{}`)).toThrow(/trailing data/);
     expect(() => parseWalletTerminalPayoutPlanInputV1(JSON.stringify({ ...value, ignored: true })))
       .toThrow(/missing or unknown fields/);
     expect(() => parseWalletTerminalPayoutPlanInputV1(JSON.stringify({ ...value, recipientOwner: key(99) })))
@@ -122,7 +165,38 @@ describe('CLI payout completion boundary', () => {
     }))).toThrow(/missing or unknown fields/);
   });
 
-  it('persists exact intent and plan digests before signing, then preserves submitted ambiguity', () => {
+  it('refuses duplicate and trailing campaign evidence before normalization and enforces real text and array bounds', () => {
+    const plan = Buffer.from('{"plan":"exact"}\n');
+    const valid = evidenceValue(plan);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify(valid)))).not.toThrow();
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(
+      '{"schema":"first","schema":"second"}',
+    ))).toThrow(/duplicate JSON object key/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(
+      '{"accounts":{"market":{"owner":"first","\\u006fwner":"second"}}}',
+    ))).toThrow(/duplicate JSON object key/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(`${JSON.stringify(valid)} null`)))
+      .toThrow(/trailing data/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
+      ...valid, ledger: `/${'x'.repeat(4_096)}`,
+    })))).toThrow(/4096 bytes/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
+      ...valid, completed: Array.from({ length: 513 }, (_, index) => `stage-${index}`),
+    })))).toThrow(/completed-stage list/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
+      ...valid, transactions: Array.from({ length: 4_097 }, () => null),
+    })))).toThrow(/4096-row bound/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
+      ...valid,
+      transactions: [{
+        label: 'one', signature: transactionSignatureV1(new Uint8Array(64).fill(1)), slot: 1,
+        transaction_metadata_available: true, fee_lamports: 1, fee_only_balance_change: true,
+        compute_units_consumed: 1, error: null, logs: Array.from({ length: 513 }, () => 'log'),
+      }],
+    })))).toThrow(/inexact finalized evidence/);
+  });
+
+  it('persists exact intent and plan digests before signing, then preserves submitted ambiguity', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'dclutch-payout-journal-test-'));
     const path = join(directory, 'payout.json');
     try {
@@ -131,11 +205,35 @@ describe('CLI payout completion boundary', () => {
       expect(loadPayoutOperationJournalV1(path)).toEqual(unsigned);
       expect(unsigned).toMatchObject({ phase: 'unsigned', signature: null, market: manifest.request.market });
       const source = readFileSync(path, 'utf8');
+      writeFileSync(path, source.replace(
+        '"operation":"wallet-terminal-payout-v3"',
+        '"operation":"wallet-terminal-payout-v3","operation":"wallet-terminal-payout-v3"',
+      ));
+      expect(() => loadPayoutOperationJournalV1(path)).toThrow(/duplicate JSON object key/);
+      writeFileSync(path, `${source}{}`);
+      expect(() => loadPayoutOperationJournalV1(path)).toThrow(/trailing data/);
+      writeFileSync(path, source);
+      const duplicateIntent = JSON.parse(source) as Record<string, unknown>;
+      duplicateIntent.intent = '{"request":"first","request":"second"}';
+      duplicateIntent.intentDigest = createHash('sha256').update(String(duplicateIntent.intent)).digest('hex');
+      writeFileSync(path, JSON.stringify(duplicateIntent));
+      expect(() => loadPayoutOperationJournalV1(path)).toThrow(/duplicate JSON object key/);
+      writeFileSync(path, source);
       const changed = JSON.parse(source) as Record<string, unknown>;
       changed.intent = `${String(changed.intent)} `;
       writeFileSync(path, JSON.stringify(changed));
       expect(() => loadPayoutOperationJournalV1(path)).toThrow(/intent or plan bytes/);
       writeFileSync(path, source);
+
+      const savedPlan = unsigned.plan;
+      const duplicateSavedPlan = savedPlan.replace(
+        '"format":"dclutch-wallet-terminal-payout-journal-plan-v1"',
+        '"format":"dclutch-wallet-terminal-payout-journal-plan-v1","format":"dclutch-wallet-terminal-payout-journal-plan-v1"',
+      );
+      await expect(restorePayoutOperationJournalV1({ ...unsigned, plan: duplicateSavedPlan }))
+        .rejects.toThrow(/duplicate JSON object key/);
+      await expect(restorePayoutOperationJournalV1({ ...unsigned, plan: `${savedPlan}[]` }))
+        .rejects.toThrow(/trailing data/);
 
       const signed = signPayoutPlanV1(plan, signer);
       const submitted = markPayoutOperationSubmittedV1(path, unsigned, signed.signature);
