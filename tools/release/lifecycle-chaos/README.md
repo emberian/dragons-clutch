@@ -38,6 +38,12 @@ has every stage through payout finalized and no retirement projection at all.
 The shell rejects a merely ordered-looking result that advances past one of
 those boundaries.
 
+Expiry uses the same armed-boundary discipline as a refused child: after Hot
+is durably `submitted` but before its sole send, the driver writes
+`FAULT_ARMED.json` and waits for `FAULT_GO.json`. The snapshot therefore owns
+the valid finalized prefix, and post-refusal equality does not pretend that
+founding through seal should be rolled back.
+
 ## Driver projection
 
 `lifecycle_chaos.py` consumes a strict `dclutch-lifecycle-chaos-spec-v1` JSON

@@ -1157,7 +1157,12 @@ def prestart_fault(spec: Spec, case: str, case_work: Path) -> str | None:
             case_work / spec.evidence_relative,
             case_work / spec.replacement_relative,
         )
-    if case in {"wallet-underfund", "wallet-surplus", "late-child-refusal"}:
+    if case in {
+        "wallet-underfund",
+        "wallet-surplus",
+        "blockhash-expiry",
+        "late-child-refusal",
+    }:
         # The opaque driver owns the local-only mutation.  The harness states the
         # fault in the fsynced control file and later proves that a refusal moved
         # no tracked account.  No private key or packet crosses this seam.
@@ -1200,7 +1205,7 @@ def run_with_handshake(
             wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
             before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
             atomic_json(control / "GO.json", go)
-        elif case == "late-child-refusal":
+        elif case in {"blockhash-expiry", "late-child-refusal"}:
             atomic_json(control / "GO.json", go)
             wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
             before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
