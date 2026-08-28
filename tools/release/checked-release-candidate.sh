@@ -21,7 +21,8 @@ usage: checked-release-candidate.sh [options]
 
   --repo PATH    source repository (default: this script's repository)
   --work PATH    scratch output root (default: /private/tmp/dclutch-release-candidate)
-  --tool PATH    prebuilt dclutch-release-tool binary (default: build one under --work)
+  --tool PATH    prebuilt dclutch-release-tool binary (never emits an Upgrade gate;
+                 default source-pinned build under --work is required for that gate)
   --commit REV   source revision to archive (default: HEAD)
   --keep-elf     legacy option; refused because reused ELFs have no fresh-build proof
   --allow-build-diagnostics
@@ -37,6 +38,7 @@ USAGE
 REPO=""
 WORK="/private/tmp/dclutch-release-candidate"
 TOOL=""
+PREBUILT_TOOL="false"
 COMMIT="HEAD"
 KEEP_ELF="false"
 ALLOW_DIAGNOSTICS="false"
@@ -44,7 +46,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
-        --tool) TOOL="${2:?--tool needs a value}"; shift 2 ;;
+        --tool) TOOL="${2:?--tool needs a value}"; PREBUILT_TOOL="true"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --keep-elf) KEEP_ELF="true"; shift ;;
         --allow-build-diagnostics) ALLOW_DIAGNOSTICS="true"; shift ;;
@@ -83,6 +85,7 @@ SOURCE="$WORK/source"
 BUILD_TARGET="$WORK/build-target"
 HOST_TARGET="$WORK/host-target"
 ELF_DIR="$WORK/elf"
+FRAME_DIR="$WORK/frame"
 EVIDENCE="$WORK/evidence"
 SET_DIR="$WORK/set"
 INFRA_DIR="$WORK/infrastructure"
@@ -90,6 +93,8 @@ SUMMARY="$WORK/SUMMARY.txt"
 BUILD_LOG="$WORK/build.log"
 BUILD_LINKS="$WORK/build-links.tsv"
 BUILD_RUN="$WORK/build-run.txt"
+SOURCE_TREE="$WORK/source-tree.txt"
+UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
@@ -111,20 +116,49 @@ echo "repo:   $REPO"
 echo "work:   $WORK"
 
 mkdir -p "$WORK"
-rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR"
-mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR"
+WORK="$(cd "$WORK" && pwd -P)"
+SOURCE="$WORK/source"
+BUILD_TARGET="$WORK/build-target"
+HOST_TARGET="$WORK/host-target"
+ELF_DIR="$WORK/elf"
+FRAME_DIR="$WORK/frame"
+EVIDENCE="$WORK/evidence"
+SET_DIR="$WORK/set"
+INFRA_DIR="$WORK/infrastructure"
+SUMMARY="$WORK/SUMMARY.txt"
+BUILD_LOG="$WORK/build.log"
+BUILD_LINKS="$WORK/build-links.tsv"
+BUILD_RUN="$WORK/build-run.txt"
+SOURCE_TREE="$WORK/source-tree.txt"
+UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
+rm -f "$UPGRADE_GATE" "$SUMMARY"
+rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR"
+mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR"
 
 # ---------------------------------------------------------------- source pin
 SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
 # Every tracked path, mode, and blob identity at the pinned commit. This covers
 # the complete first-party build input set without depending on archive
 # framing, file mtimes, or checkout state.
-SOURCE_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" | sha256_stdin)"
+git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" > "$SOURCE_TREE"
+SOURCE_DIGEST="$(sha256 "$SOURCE_TREE")"
 echo "commit: $SOURCE_REVISION"
 
 rm -rf "$SOURCE"
 mkdir -p "$SOURCE"
 git -C "$REPO" archive "$SOURCE_REVISION" | tar -x -C "$SOURCE"
+
+# The orchestrator and its two measurement parsers are part of the admitted
+# source, not ambient host helpers. Refuse an invocation whose script bytes do
+# not equal the pinned revision; otherwise `--commit OLD` could truthfully bind
+# OLD source while CURRENT admission code decided what counted as checked.
+cmp -s "$SCRIPT_DIR/checked-release-candidate.sh" \
+    "$SOURCE/tools/release/checked-release-candidate.sh" \
+    || { echo "refusing: invoke the checked-release runner from the exact --commit source revision" >&2; exit 1; }
+cmp -s "$SCRIPT_DIR/check_sbf_build_freshness.py" \
+    "$SOURCE/tools/release/check_sbf_build_freshness.py" \
+    || { echo "refusing: build-freshness checker differs from the exact --commit source revision" >&2; exit 1; }
+FRESHNESS_CHECKER="$SOURCE/tools/release/check_sbf_build_freshness.py"
 
 ROOT_LOCK_DIGEST="$(sha256 "$SOURCE/Cargo.lock")"
 
@@ -256,6 +290,10 @@ FRESHNESS_RESULT="$("$FRESHNESS_CHECKER" \
 printf '%s\n' "$FRESHNESS_RESULT"
 printf '%s\n' "$FRESHNESS_RESULT" >> "$BUILD_LOG"
 BUILD_LINK_COUNT="$(wc -l < "$BUILD_LINKS" | tr -d ' ')"
+if [ "$BUILD_LINK_COUNT" != "13" ]; then
+    echo "refusing: checked Upgrade admission requires the exact 13-link shipped set; enumerated $BUILD_LINK_COUNT" >&2
+    exit 1
+fi
 
 DIAGNOSTIC_TOTAL=0
 if [ -f "$WORK/build-diagnostics.txt" ]; then
@@ -275,10 +313,67 @@ if [ -z "$TARGET_TRIPLE" ]; then
     exit 1
 fi
 
+# --------------------------------------------------------- exact frame gate
+# This is a separate measurement build. `-Zemit-stack-sizes` adds measurement
+# sections, so its linked artifact is never copied into the shipped ELF set.
+# Each link gets a new target root so the top-package compile marker is
+# load-bearing here too: a warm object cannot masquerade as a fresh report.
+if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
+    while IFS=$'\t' read -r label package; do
+        frame_target="$WORK/frame-target-$label"
+        frame_build_log="$WORK/frame-build-$label.log"
+        frame_raw="$FRAME_DIR/$label.raw.txt"
+        frame_report="$FRAME_DIR/$label.txt"
+        rm -rf "$frame_target"
+        printf 'dclutch-sbf-frame-run-v1=%s\n' "$BUILD_RUN_ID" > "$frame_build_log"
+        (
+            cd "$SOURCE"
+            RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
+                CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
+                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+        ) >> "$frame_build_log" 2>&1
+        frame_compile_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$frame_build_log" | tail -n 1 || true)"
+        if [ -z "$frame_compile_marker" ]; then
+            echo "refusing: frame build for $label has no fresh top-package compile marker for $package" >&2
+            exit 1
+        fi
+        frame_diagnostics="$(grep -c "$DIAGNOSTIC_PATTERN" "$frame_build_log" || true)"
+        if [ "$frame_diagnostics" != "0" ]; then
+            echo "refusing: frame measurement build for $label emitted $frame_diagnostics stack-frame overwrite diagnostics" >&2
+            exit 1
+        fi
+        object_stem="$(printf '%s' "$package" | tr '-' '_')"
+        frame_object="$frame_target/$TARGET_TRIPLE/release/deps/$object_stem.o"
+        [ -f "$frame_object" ] \
+            || { echo "refusing: frame measurement object is missing for $label: $frame_object" >&2; exit 1; }
+        python3 "$SOURCE/tools/sbf-frame-sizes.py" --top 8 "$frame_object" > "$frame_raw"
+        frame_count="$(sed -n 's/^  \([0-9][0-9]*\) measured frames.*/\1/p' "$frame_raw")"
+        deepest_frame="$(sed -n '2s/^ *\([0-9][0-9]*\) .*/\1/p' "$frame_raw")"
+        if [ -z "$frame_count" ] || [ -z "$deepest_frame" ]; then
+            echo "refusing: frame report for $label did not expose canonical count/deepest fields" >&2
+            exit 1
+        fi
+        {
+            printf 'dclutch-sbf-frame-report-v1\n'
+            printf 'label=%s\n' "$label"
+            printf 'package=%s\n' "$package"
+            printf 'frame_count=%s\n' "$frame_count"
+            printf 'frame_bound_bytes=4096\n'
+            printf 'frames_at_or_over_bound=0\n'
+            printf 'deepest_frame_bytes=%s\n' "$deepest_frame"
+            printf 'object_sha256=%s\n' "$(sha256 "$frame_object")"
+            printf 'measurement_output:\n'
+            cat "$frame_raw"
+        } > "$frame_report"
+    done < "$BUILD_LINKS"
+else
+    echo "checked Upgrade gate: not emitted because zero diagnostics in strict mode were not established" >&2
+fi
+
 # --------------------------------------------------------------- release tool
 if [ -z "$TOOL" ]; then
     TOOL="$HOST_TARGET/release/dclutch-release-tool"
-    ( cd "$REPO" && CARGO_TARGET_DIR="$HOST_TARGET" \
+    ( cd "$SOURCE" && CARGO_TARGET_DIR="$HOST_TARGET" \
         cargo build --release -p dclutch-release-tool ) >>"$BUILD_LOG" 2>&1
 fi
 [ -x "$TOOL" ] || { echo "release tool not executable: $TOOL" >&2; exit 1; }
@@ -469,5 +564,112 @@ echo "checked: immutable Core/Registry/Rent infrastructure"
     sed -n 's/^/infrastructure./p' "$INFRA_DIR/infrastructure.txt"
 } > "$SUMMARY"
 
+# ---------------------------------------------------- checked Upgrade gate
+# The Upgrade command accepts this generated receipt, never an operator-written
+# boolean. Paths are canonical root-relative names so the complete evidence
+# directory may be transferred as a unit; the verifier resolves them, refuses
+# symlinks/escapes, and rehashes every named file.
+if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ] \
+    && [ "$PREBUILT_TOOL" = "false" ]; then
+    GATE_ROOT="$WORK" GATE_ROLES="$ROLES" GATE_SOURCE_REVISION="$SOURCE_REVISION" \
+    GATE_SOURCE_TREE_SHA256="$SOURCE_DIGEST" GATE_SOLANA_VERSION="$SOLANA_VERSION" \
+    GATE_BUILD_RUN_ID="$BUILD_RUN_ID" python3 - <<'PY'
+import hashlib
+import json
+import os
+import re
+from pathlib import Path
+
+root = Path(os.environ["GATE_ROOT"]).resolve(strict=True)
+roles = {}
+for entry in os.environ["GATE_ROLES"].split():
+    role, package, _stem = entry.split(":", 2)
+    roles[package] = role
+
+def evidence(relative: str) -> dict:
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"gate evidence is not one regular file: {path}")
+    resolved = path.resolve(strict=True)
+    if resolved.parent != root and root not in resolved.parents:
+        raise SystemExit(f"gate evidence escapes root: {path}")
+    data = path.read_bytes()
+    return {
+        "canonical_path": relative,
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+links = []
+diagnostics = {}
+for line in (root / "build-diagnostics.txt").read_text().splitlines():
+    label, count = line.split("=", 1)
+    diagnostics[label] = int(count)
+
+for row in (root / "build-links.tsv").read_text().splitlines():
+    label, package = row.split("\t")
+    build_log_path = root / f"build-{label}.log"
+    compile_lines = [
+        line for line in build_log_path.read_text().splitlines()
+        if re.match(rf"^\s*Compiling\s+{re.escape(package)}\s+v\S+(?:\s|$)", line)
+    ]
+    if not compile_lines:
+        raise SystemExit(f"missing canonical compile marker for {label}")
+    frame_build_log_path = root / f"frame-build-{label}.log"
+    frame_compile_lines = [
+        line for line in frame_build_log_path.read_text().splitlines()
+        if re.match(rf"^\s*Compiling\s+{re.escape(package)}\s+v\S+(?:\s|$)", line)
+    ]
+    if not frame_compile_lines:
+        raise SystemExit(f"missing canonical frame compile marker for {label}")
+    frame_fields = {}
+    for line in (root / "frame" / f"{label}.txt").read_text().splitlines()[1:8]:
+        key, value = line.split("=", 1)
+        frame_fields[key] = value
+    role = roles.get(package)
+    links.append({
+        "label": label,
+        "package": package,
+        "build_log": evidence(f"build-{label}.log"),
+        "compile_marker": compile_lines[-1],
+        "sbf_diagnostics_count": diagnostics[label],
+        "frame_build_log": evidence(f"frame-build-{label}.log"),
+        "frame_compile_marker": frame_compile_lines[-1],
+        "frame_report": evidence(f"frame/{label}.txt"),
+        "frame_count": int(frame_fields["frame_count"]),
+        "frame_bound_bytes": int(frame_fields["frame_bound_bytes"]),
+        "frames_at_or_over_bound": int(frame_fields["frames_at_or_over_bound"]),
+        "deepest_frame_bytes": int(frame_fields["deepest_frame_bytes"]),
+        "elf": evidence(f"elf/{role}.so") if role else None,
+        "checked_manifest": evidence(f"evidence/{role}/checked.bin") if role else None,
+    })
+
+gate = {
+    "schema": "dclutch-checked-upgrade-gate-v1",
+    "source_revision": os.environ["GATE_SOURCE_REVISION"],
+    "source_tree_sha256": os.environ["GATE_SOURCE_TREE_SHA256"],
+    "solana_cli_version": os.environ["GATE_SOLANA_VERSION"],
+    "build_run_id": os.environ["GATE_BUILD_RUN_ID"],
+    "link_count": len(links),
+    "source_tree_manifest": evidence("source-tree.txt"),
+    "build_links_manifest": evidence("build-links.tsv"),
+    "build_run_manifest": evidence("build-run.txt"),
+    "diagnostics_manifest": evidence("build-diagnostics.txt"),
+    "links": links,
+}
+target = root / "CHECKED_UPGRADE_GATE.json"
+temporary = root / ".CHECKED_UPGRADE_GATE.json.tmp"
+temporary.write_text(json.dumps(gate, indent=2, sort_keys=True) + "\n")
+os.replace(temporary, target)
+print(f"checked Upgrade gate sha256={hashlib.sha256(target.read_bytes()).hexdigest()}")
+PY
+    printf 'checked_upgrade_gate_sha256=%s\n' "$(sha256 "$UPGRADE_GATE")" >> "$SUMMARY"
+elif [ "$PREBUILT_TOOL" = "true" ]; then
+    echo "checked Upgrade gate: not emitted because --tool is not a source-pinned host-tool build" >&2
+fi
+
 echo
 echo "summary: $SUMMARY"
+if [ -f "$UPGRADE_GATE" ]; then
+    echo "checked Upgrade gate: $UPGRADE_GATE"
+fi

@@ -13,6 +13,7 @@
 //! checked evidence, the deployed-byte dump, and its resumable receipt.
 
 use std::{
+    collections::BTreeSet,
     fs::{self, OpenOptions},
     io::Write as _,
     path::{Path, PathBuf},
@@ -36,8 +37,8 @@ use crate::{
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
 
-const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v1";
-const ARTIFACT_SCHEMA: &str = "dclutch-checked-devnet-upgrade-artifact-v1";
+const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v2";
+const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
 const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v1";
 const TARGET_ACK_FLAG: &str = "--i-accept-upgrade";
@@ -55,6 +56,29 @@ const ROLES: &[&str] = &[
     "trading",
     "core",
 ];
+const SHIPPED_LINKS: &[(&str, &str, bool)] = &[
+    ("claims", "dclutch-claims-sbf", true),
+    ("core", "dclutch-core-sbf", true),
+    ("custody", "dclutch-custody-sbf", true),
+    ("dealer-accelerator", "dclutch-dealer-accelerator-sbf", true),
+    ("dclutch-dealer-sbf", "dclutch-dealer-sbf", false),
+    ("dclutch-direct-aot-sbf", "dclutch-direct-aot-sbf", false),
+    (
+        "general-accelerator",
+        "dclutch-general-accelerator-sbf",
+        true,
+    ),
+    (
+        "dclutch-product-runtime-v2-sbf",
+        "dclutch-product-runtime-v2-sbf",
+        false,
+    ),
+    ("registry", "dclutch-registry-sbf", true),
+    ("rent", "dclutch-rent-sbf", true),
+    ("resolution", "dclutch-resolution-proof-sbf", true),
+    ("series-shadow", "dclutch-series-shadow-sbf", true),
+    ("trading", "dclutch-trading-sbf", true),
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct UpgradeArgsV1 {
@@ -67,7 +91,10 @@ struct UpgradeArgsV1 {
     fee_payer: Pubkey,
     fee_payer_keypair: PathBuf,
     elf_path: PathBuf,
-    artifact_evidence_path: PathBuf,
+    checked_release_gate_path: PathBuf,
+    expected_checked_release_gate_sha256: String,
+    expected_source_revision: String,
+    expected_source_tree_sha256: String,
     baseline_path: PathBuf,
     receipt_path: PathBuf,
     dump_path: PathBuf,
@@ -108,21 +135,55 @@ struct ExtensionArgsV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CheckedUpgradeArtifactV1 {
+struct GateFileV1 {
+    canonical_path: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CheckedGateLinkV1 {
+    label: String,
+    package: String,
+    build_log: GateFileV1,
+    compile_marker: String,
+    sbf_diagnostics_count: u64,
+    frame_build_log: GateFileV1,
+    frame_compile_marker: String,
+    frame_report: GateFileV1,
+    frame_count: u64,
+    frame_bound_bytes: u64,
+    frames_at_or_over_bound: u64,
+    deepest_frame_bytes: u64,
+    elf: Option<GateFileV1>,
+    checked_manifest: Option<GateFileV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CheckedUpgradeGateV1 {
     schema: String,
-    role: String,
-    program_id: String,
-    programdata_id: String,
-    retained_upgrade_authority: String,
     source_revision: String,
+    source_tree_sha256: String,
     solana_cli_version: String,
-    checked_release_accepted: bool,
-    sbf_build_diagnostics_total: u64,
-    frame_diagnostics_total: u64,
-    raw_elf_bytes: u64,
+    build_run_id: String,
+    link_count: u64,
+    source_tree_manifest: GateFileV1,
+    build_links_manifest: GateFileV1,
+    build_run_manifest: GateFileV1,
+    diagnostics_manifest: GateFileV1,
+    links: Vec<CheckedGateLinkV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValidatedUpgradeGateV1 {
+    gate_sha256: String,
+    source_revision: String,
+    source_tree_sha256: String,
+    solana_cli_version: String,
+    raw_elf: Vec<u8>,
     raw_elf_sha256: String,
-    live_elf_sha256: String,
-    live_elf_padding_bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -243,7 +304,8 @@ struct UpgradeReceiptV1 {
     rpc_origin_redacted: String,
     genesis_hash: String,
     source_revision: String,
-    artifact_evidence_sha256: String,
+    source_tree_sha256: String,
+    checked_release_gate_sha256: String,
     baseline_sha256: String,
     baseline_context_slot: u64,
     raw_elf_sha256: String,
@@ -399,8 +461,8 @@ pub(crate) fn run_baseline(arguments: Vec<String>) -> Result<()> {
         &programdata,
     )?;
     let current_space = observation.programdata_data_bytes;
-    let candidate_space = args
-        .target_live_elf_bytes
+    let target_live_elf_bytes = args.target_live_elf_bytes.max(observation.live_elf_bytes);
+    let candidate_space = target_live_elf_bytes
         .checked_add(45)
         .ok_or_else(|| Error::new("target ProgramData width overflow"))?;
     let target_space = current_space.max(candidate_space);
@@ -429,7 +491,7 @@ pub(crate) fn run_baseline(arguments: Vec<String>) -> Result<()> {
         genesis_hash: DEVNET_GENESIS_HASH.into(),
         context_slot,
         observation,
-        target_live_elf_bytes: args.target_live_elf_bytes,
+        target_live_elf_bytes,
         extension_additional_bytes,
         current_rent_exempt_minimum_lamports,
         target_rent_exempt_minimum_lamports,
@@ -488,7 +550,10 @@ pub(crate) fn usage() -> &'static str {
      --role ROLE --program-id PUBKEY --programdata-id PUBKEY \\
      --expected-upgrade-authority PUBKEY --authority-keypair ABSOLUTE_JSON \\
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_JSON --elf ABSOLUTE_SO \\
-     --artifact-evidence ABSOLUTE_JSON --baseline ABSOLUTE_JSON \\
+     --checked-release-gate ABSOLUTE_JSON \\
+     --expected-checked-release-gate-sha256 SHA256 \\
+     --expected-source-revision GIT_COMMIT --expected-source-tree-sha256 SHA256 \\
+     --baseline ABSOLUTE_JSON \\
      --receipt ABSOLUTE_JSON --dump ABSOLUTE_SO \\
      --solana-cli ABSOLUTE_EXECUTABLE --i-accept-upgrade ROLE:PUBKEY --execute\n\n\
      You update exactly one existing decision-0012 devnet program. Both acknowledgements are \
@@ -496,9 +561,12 @@ pub(crate) fn usage() -> &'static str {
      permanent program you accept updating. The command checks the Loader-v3 Program link, the \
      non-executable ProgramData account, every fact in the canonical baseline, the retained \
      authority and both keypair addresses immediately before \
-     it invokes `solana program deploy`. The checked artifact evidence must report zero SBF and \
-     frame diagnostics. The candidate raw ELF plus its declared zero padding must exactly fill \
-     the existing allocation and hash to the live digest. After the CLI returns, the command \
+     it invokes `solana program deploy`. The generated checked-release gate binds the exact source \
+     commit/tree, all thirteen fresh compile logs, all thirteen zero frame reports, and every \
+     release ELF. The selected ELF must be the gate's canonical regular file. The command refuses \
+     handwritten acceptance, path escape, symlinks, missing links, and changed evidence. It pads \
+     the checked raw ELF with zeros only to the separately captured baseline width. After the CLI \
+     returns, the command \
      re-checks devnet, requires the deployment slot to advance, dumps the deployed bytes, verifies \
      them, records wallet and ProgramData lamport arithmetic, and completes an atomic resumable \
      receipt. There is no force, recycle, close, set-upgrade-authority, mainnet, testnet, unknown \
@@ -532,7 +600,10 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
                 | "--fee-payer"
                 | "--fee-payer-keypair"
                 | "--elf"
-                | "--artifact-evidence"
+                | "--checked-release-gate"
+                | "--expected-checked-release-gate-sha256"
+                | "--expected-source-revision"
+                | "--expected-source-tree-sha256"
                 | "--baseline"
                 | "--receipt"
                 | "--dump"
@@ -549,7 +620,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
     }
     if !execute {
         return Err(Error::new(
-            "devnet-upgrade-v1 requires --execute; use the checked artifact and receipt paths as \
+            "devnet-upgrade-v1 requires --execute; use the checked gate and receipt paths as \
              a reviewable dry-run boundary rather than an implicit write mode",
         ));
     }
@@ -582,7 +653,13 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         fee_payer: parse_pubkey(&take("--fee-payer")?, "--fee-payer")?,
         fee_payer_keypair: absolute(&take("--fee-payer-keypair")?, "--fee-payer-keypair")?,
         elf_path: absolute(&take("--elf")?, "--elf")?,
-        artifact_evidence_path: absolute(&take("--artifact-evidence")?, "--artifact-evidence")?,
+        checked_release_gate_path: absolute(
+            &take("--checked-release-gate")?,
+            "--checked-release-gate",
+        )?,
+        expected_checked_release_gate_sha256: take("--expected-checked-release-gate-sha256")?,
+        expected_source_revision: take("--expected-source-revision")?,
+        expected_source_tree_sha256: take("--expected-source-tree-sha256")?,
         baseline_path: absolute(&take("--baseline")?, "--baseline")?,
         receipt_path: absolute(&take("--receipt")?, "--receipt")?,
         dump_path: absolute(&take("--dump")?, "--dump")?,
@@ -756,7 +833,10 @@ fn extension_shadow_args(args: &ExtensionArgsV1) -> UpgradeArgsV1 {
         fee_payer: args.fee_payer,
         fee_payer_keypair: args.fee_payer_keypair.clone(),
         elf_path: PathBuf::from("/extension-has-no-elf"),
-        artifact_evidence_path: PathBuf::from("/extension-has-no-artifact-evidence"),
+        checked_release_gate_path: PathBuf::from("/extension-has-no-checked-release-gate"),
+        expected_checked_release_gate_sha256: "0".repeat(64),
+        expected_source_revision: "0".repeat(40),
+        expected_source_tree_sha256: "0".repeat(64),
         baseline_path: args.baseline_path.clone(),
         receipt_path: args.receipt_path.clone(),
         dump_path: PathBuf::from("/extension-has-no-dump"),
@@ -782,15 +862,14 @@ fn execute_with_runner(
         )));
     }
 
-    let evidence_bytes = fs::read(&args.artifact_evidence_path)?;
-    let evidence_sha256 = digest(&evidence_bytes);
-    let evidence: CheckedUpgradeArtifactV1 = serde_json::from_slice(&evidence_bytes)?;
-    validate_evidence(args, &evidence)?;
+    let gate = validate_checked_release_gate(args)?;
     let baseline_bytes = fs::read(&args.baseline_path)?;
     let baseline: UpgradeBaselineV1 = serde_json::from_slice(&baseline_bytes)?;
     validate_baseline(args, &baseline)?;
-    let raw_elf = fs::read(&args.elf_path)?;
-    let candidate_live = validate_candidate(&evidence, &raw_elf)?;
+    let candidate_live = candidate_live_image(&gate.raw_elf, baseline.target_live_elf_bytes)?;
+    let live_elf_sha256 = digest(&candidate_live);
+    let live_elf_padding_bytes = u64::try_from(candidate_live.len() - gate.raw_elf.len())
+        .map_err(|_| Error::new("live ELF padding does not fit u64"))?;
     if u64::try_from(candidate_live.len()).ok() != Some(baseline.target_live_elf_bytes) {
         return Err(Error::new(format!(
             "checked candidate live width is {}, baseline planned {}",
@@ -801,7 +880,14 @@ fn execute_with_runner(
 
     let existing = load_receipt(&args.receipt_path)?;
     if let Some(receipt) = &existing {
-        validate_receipt_binding(args, &evidence, &evidence_sha256, &baseline, receipt)?;
+        validate_receipt_binding(
+            args,
+            &gate,
+            &baseline,
+            &live_elf_sha256,
+            live_elf_padding_bytes,
+            receipt,
+        )?;
         if receipt.phase == ReceiptPhaseV1::Complete {
             return Ok(receipt.clone());
         }
@@ -815,10 +901,10 @@ fn execute_with_runner(
 
     let cli_version = invoke(runner, args, &["--version".into()])?;
     let observed_cli_version = cli_version.stdout.trim();
-    if observed_cli_version != evidence.solana_cli_version {
+    if observed_cli_version != gate.solana_cli_version {
         return Err(Error::new(format!(
             "Solana CLI version is {observed_cli_version:?} but artifact evidence pins {:?}",
-            evidence.solana_cli_version
+            gate.solana_cli_version
         )));
     }
     authenticate_devnet(runner, args)?;
@@ -842,13 +928,13 @@ fn execute_with_runner(
             let before = read_snapshot(runner, args)?;
             require_baseline_prestate(&baseline, &before.loader)?;
             require_candidate_fits(&before, &candidate_live)?;
-            if before.loader.live_elf_sha256 == evidence.live_elf_sha256 {
+            if before.loader.live_elf_sha256 == live_elf_sha256 {
                 return Err(Error::new(
                     "the current live payload already equals the candidate but no receipt binds \
                      an Upgrade; refusing replay ambiguity",
                 ));
             }
-            let operation_id = operation_id(args, &evidence_sha256, &before);
+            let operation_id = operation_id(args, &gate.gate_sha256, &before);
             let mut receipt = UpgradeReceiptV1 {
                 schema: SCHEMA.into(),
                 phase: ReceiptPhaseV1::Prepared,
@@ -860,14 +946,15 @@ fn execute_with_runner(
                 fee_payer: args.fee_payer.to_string(),
                 rpc_origin_redacted: args.origin.redacted_url(),
                 genesis_hash: DEVNET_GENESIS_HASH.into(),
-                source_revision: evidence.source_revision.clone(),
-                artifact_evidence_sha256: evidence_sha256,
+                source_revision: gate.source_revision.clone(),
+                source_tree_sha256: gate.source_tree_sha256.clone(),
+                checked_release_gate_sha256: gate.gate_sha256.clone(),
                 baseline_sha256: baseline.baseline_sha256.clone(),
                 baseline_context_slot: baseline.context_slot,
-                raw_elf_sha256: evidence.raw_elf_sha256.clone(),
-                live_elf_sha256: evidence.live_elf_sha256.clone(),
-                live_elf_padding_bytes: evidence.live_elf_padding_bytes,
-                solana_cli_version: evidence.solana_cli_version.clone(),
+                raw_elf_sha256: gate.raw_elf_sha256.clone(),
+                live_elf_sha256: live_elf_sha256.clone(),
+                live_elf_padding_bytes,
+                solana_cli_version: gate.solana_cli_version.clone(),
                 before: before.loader.clone(),
                 wallet_before_lamports: before.wallet_lamports,
                 transaction_signature: None,
@@ -878,14 +965,7 @@ fn execute_with_runner(
                 dump_shape: None,
             };
             write_receipt(&args.receipt_path, &receipt)?;
-            submit_and_finish(
-                runner,
-                args,
-                &evidence,
-                &raw_elf,
-                &candidate_live,
-                &mut receipt,
-            )
+            submit_and_finish(runner, args, &gate, &candidate_live, &mut receipt)
         }
         Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Prepared => {
             let current = read_snapshot(runner, args)?;
@@ -900,23 +980,11 @@ fn execute_with_runner(
             }
             require_baseline_prestate(&baseline, &current.loader)?;
             require_candidate_fits(&current, &candidate_live)?;
-            submit_and_finish(
-                runner,
-                args,
-                &evidence,
-                &raw_elf,
-                &candidate_live,
-                &mut receipt,
-            )
+            submit_and_finish(runner, args, &gate, &candidate_live, &mut receipt)
         }
-        Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Submitted => finish_submitted(
-            runner,
-            args,
-            &evidence,
-            &raw_elf,
-            &candidate_live,
-            &mut receipt,
-        ),
+        Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Submitted => {
+            finish_submitted(runner, args, &gate, &candidate_live, &mut receipt)
+        }
         Some(_) => Err(Error::new("unknown Upgrade receipt phase")),
     }
 }
@@ -1223,8 +1291,7 @@ fn finish_submitted_extension(
 fn submit_and_finish(
     runner: &mut impl CliRunner,
     args: &UpgradeArgsV1,
-    evidence: &CheckedUpgradeArtifactV1,
-    raw_elf: &[u8],
+    gate: &ValidatedUpgradeGateV1,
     candidate_live: &[u8],
     receipt: &mut UpgradeReceiptV1,
 ) -> Result<UpgradeReceiptV1> {
@@ -1272,14 +1339,13 @@ fn submit_and_finish(
     receipt.transaction_signature = Some(signature.into());
     receipt.solana_cli_output = Some(parsed);
     write_receipt(&args.receipt_path, receipt)?;
-    finish_submitted(runner, args, evidence, raw_elf, candidate_live, receipt)
+    finish_submitted(runner, args, gate, candidate_live, receipt)
 }
 
 fn finish_submitted(
     runner: &mut impl CliRunner,
     args: &UpgradeArgsV1,
-    evidence: &CheckedUpgradeArtifactV1,
-    raw_elf: &[u8],
+    gate: &ValidatedUpgradeGateV1,
     candidate_live: &[u8],
     receipt: &mut UpgradeReceiptV1,
 ) -> Result<UpgradeReceiptV1> {
@@ -1292,8 +1358,7 @@ fn finish_submitted(
             receipt.before.deployment_slot, after.loader.deployment_slot
         )));
     }
-    if after.live_elf != candidate_live || after.loader.live_elf_sha256 != evidence.live_elf_sha256
-    {
+    if after.live_elf != candidate_live || after.loader.live_elf_sha256 != receipt.live_elf_sha256 {
         return Err(Error::new(
             "post-Upgrade ProgramData payload is not the checked raw ELF plus its exact allowed \
              zero padding",
@@ -1327,7 +1392,7 @@ fn finish_submitted(
         .checked_sub(i128::from(receipt.before.programdata_lamports))
         .ok_or_else(|| Error::new("ProgramData lamport delta overflow"))?;
 
-    let (dump_sha256, dump_shape) = verify_dump(runner, args, raw_elf, candidate_live)?;
+    let (dump_sha256, dump_shape) = verify_dump(runner, args, &gate.raw_elf, candidate_live)?;
     receipt.phase = ReceiptPhaseV1::Complete;
     receipt.after = Some(after.loader.clone());
     receipt.arithmetic = Some(UpgradeArithmeticV1 {
@@ -1344,39 +1409,375 @@ fn finish_submitted(
     Ok(receipt.clone())
 }
 
-fn validate_evidence(args: &UpgradeArgsV1, evidence: &CheckedUpgradeArtifactV1) -> Result<()> {
-    if evidence.schema != ARTIFACT_SCHEMA {
-        return Err(Error::new(format!(
-            "artifact evidence schema is {:?}; expected {ARTIFACT_SCHEMA}",
-            evidence.schema
-        )));
-    }
-    if evidence.role != args.role
-        || evidence.program_id != args.program_id.to_string()
-        || evidence.programdata_id != args.programdata_id.to_string()
-        || evidence.retained_upgrade_authority != args.expected_upgrade_authority.to_string()
-    {
+fn validate_checked_release_gate(args: &UpgradeArgsV1) -> Result<ValidatedUpgradeGateV1> {
+    require_digest(
+        &args.expected_checked_release_gate_sha256,
+        "expected checked-release gate SHA-256",
+    )?;
+    require_lower_hex(
+        &args.expected_source_revision,
+        "expected source revision",
+        40,
+        40,
+    )?;
+    require_digest(
+        &args.expected_source_tree_sha256,
+        "expected source tree SHA-256",
+    )?;
+    let gate_metadata = fs::symlink_metadata(&args.checked_release_gate_path).map_err(|error| {
+        Error::new(format!(
+            "checked-release gate {} cannot be inspected: {error}",
+            args.checked_release_gate_path.display()
+        ))
+    })?;
+    if gate_metadata.file_type().is_symlink() || !gate_metadata.file_type().is_file() {
         return Err(Error::new(
-            "artifact evidence substituted the role, Program, ProgramData, or retained authority",
+            "checked-release gate must itself be one regular non-symlink file",
         ));
     }
-    if !evidence.checked_release_accepted
-        || evidence.sbf_build_diagnostics_total != 0
-        || evidence.frame_diagnostics_total != 0
+    if args
+        .checked_release_gate_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("CHECKED_UPGRADE_GATE.json")
     {
+        return Err(Error::new(
+            "checked-release gate must retain its canonical CHECKED_UPGRADE_GATE.json name",
+        ));
+    }
+    let gate_bytes = fs::read(&args.checked_release_gate_path)?;
+    let gate_sha256 = digest(&gate_bytes);
+    if gate_sha256 != args.expected_checked_release_gate_sha256 {
         return Err(Error::new(format!(
-            "artifact evidence is not an accepted zero-diagnostic release: accepted={} SBF={} \
-             frame={}",
-            evidence.checked_release_accepted,
-            evidence.sbf_build_diagnostics_total,
-            evidence.frame_diagnostics_total
+            "checked-release gate SHA-256 is {gate_sha256}, expected {}",
+            args.expected_checked_release_gate_sha256
         )));
     }
-    require_lower_hex(&evidence.source_revision, "source_revision", 7, 64)?;
-    require_digest(&evidence.raw_elf_sha256, "raw_elf_sha256")?;
-    require_digest(&evidence.live_elf_sha256, "live_elf_sha256")?;
-    if evidence.solana_cli_version.trim().is_empty() {
-        return Err(Error::new("artifact evidence omitted solana_cli_version"));
+    let gate: CheckedUpgradeGateV1 = serde_json::from_slice(&gate_bytes).map_err(|error| {
+        Error::new(format!(
+            "checked-release gate is not canonical v1 JSON; handwritten acceptance has no \
+             authority: {error}"
+        ))
+    })?;
+    if gate.schema != CHECKED_GATE_SCHEMA {
+        return Err(Error::new(format!(
+            "checked-release gate schema is {:?}; expected {CHECKED_GATE_SCHEMA}; handwritten \
+             acceptance has no authority",
+            gate.schema
+        )));
+    }
+    if gate.source_revision != args.expected_source_revision
+        || gate.source_tree_sha256 != args.expected_source_tree_sha256
+    {
+        return Err(Error::new(
+            "checked-release gate source commit/tree differs from the explicitly expected source",
+        ));
+    }
+    require_lower_hex(&gate.source_revision, "gate source revision", 40, 40)?;
+    require_digest(&gate.source_tree_sha256, "gate source tree SHA-256")?;
+    require_lower_hex(&gate.build_run_id, "gate build run id", 64, 64)?;
+    if gate.solana_cli_version.trim().is_empty() {
+        return Err(Error::new(
+            "checked-release gate omitted solana_cli_version",
+        ));
+    }
+    if gate.link_count != u64::try_from(SHIPPED_LINKS.len()).expect("thirteen links fit u64")
+        || gate.links.len() != SHIPPED_LINKS.len()
+    {
+        return Err(Error::new(format!(
+            "checked-release gate must carry all {} shipped links exactly once; declared {}, \
+             carried {}",
+            SHIPPED_LINKS.len(),
+            gate.link_count,
+            gate.links.len()
+        )));
+    }
+
+    let mut seen = BTreeSet::new();
+    for link in &gate.links {
+        if !seen.insert(link.label.as_str()) {
+            return Err(Error::new(format!(
+                "checked-release gate duplicated link role {}",
+                link.label
+            )));
+        }
+        if !SHIPPED_LINKS
+            .iter()
+            .any(|(label, _, _)| *label == link.label)
+        {
+            return Err(Error::new(format!(
+                "checked-release gate carried unknown link role {}",
+                link.label
+            )));
+        }
+    }
+    for (label, _, _) in SHIPPED_LINKS {
+        if !seen.contains(label) {
+            return Err(Error::new(format!(
+                "checked-release gate omitted shipped link role {label}"
+            )));
+        }
+    }
+    for (link, (expected_label, expected_package, produces_artifact)) in
+        gate.links.iter().zip(SHIPPED_LINKS)
+    {
+        if link.label != *expected_label || link.package != *expected_package {
+            return Err(Error::new(format!(
+                "checked-release gate link order/identity is not canonical at {}; expected \
+                 {expected_label}<TAB>{expected_package}",
+                link.label
+            )));
+        }
+        if link.elf.is_some() != *produces_artifact
+            || link.checked_manifest.is_some() != *produces_artifact
+        {
+            return Err(Error::new(format!(
+                "checked-release gate link {} has the wrong release-artifact shape",
+                link.label
+            )));
+        }
+    }
+
+    let gate_path = fs::canonicalize(&args.checked_release_gate_path)?;
+    let root = gate_path
+        .parent()
+        .ok_or_else(|| Error::new("checked-release gate has no evidence root"))?
+        .to_path_buf();
+    let source_tree =
+        verify_gate_file(&root, &gate.source_tree_manifest, "source tree manifest")?.1;
+    if gate.source_tree_manifest.sha256 != gate.source_tree_sha256 || source_tree.is_empty() {
+        return Err(Error::new(
+            "checked-release gate source tree manifest does not bind the declared source tree",
+        ));
+    }
+    let build_links = verify_gate_file(&root, &gate.build_links_manifest, "build-link manifest")?.1;
+    let expected_build_links = SHIPPED_LINKS
+        .iter()
+        .map(|(label, package, _)| format!("{label}\t{package}\n"))
+        .collect::<String>();
+    if build_links != expected_build_links.as_bytes() {
+        return Err(Error::new(
+            "checked-release gate build-link manifest is missing, reordered, or names an unknown \
+             shipped link",
+        ));
+    }
+    let build_run = verify_gate_file(&root, &gate.build_run_manifest, "build-run manifest")?.1;
+    let expected_build_run = format!("dclutch-sbf-build-run-v1={}\n", gate.build_run_id);
+    if build_run != expected_build_run.as_bytes() {
+        return Err(Error::new(
+            "checked-release gate build-run manifest does not bind its run id",
+        ));
+    }
+    let diagnostics =
+        verify_gate_file(&root, &gate.diagnostics_manifest, "diagnostics manifest")?.1;
+    let expected_diagnostics = SHIPPED_LINKS
+        .iter()
+        .map(|(label, _, _)| format!("{label}=0\n"))
+        .collect::<String>();
+    if diagnostics != expected_diagnostics.as_bytes() {
+        return Err(Error::new(
+            "checked-release gate diagnostics manifest is not the exact zero row for every \
+             shipped link",
+        ));
+    }
+
+    let mut selected = None;
+    for link in &gate.links {
+        if link.sbf_diagnostics_count != 0
+            || link.frame_count == 0
+            || link.frame_bound_bytes != 4096
+            || link.frames_at_or_over_bound != 0
+            || link.deepest_frame_bytes >= link.frame_bound_bytes
+        {
+            return Err(Error::new(format!(
+                "checked-release gate link {} is not a fresh zero-diagnostic, below-bound frame \
+                 report",
+                link.label
+            )));
+        }
+        let build_log =
+            verify_gate_file(&root, &link.build_log, &format!("{} build log", link.label))?.1;
+        validate_compile_log(
+            &build_log,
+            &format!("dclutch-sbf-build-run-v1={}", gate.build_run_id),
+            &link.package,
+            &link.compile_marker,
+            &format!("{} build log", link.label),
+        )?;
+        let frame_build_log = verify_gate_file(
+            &root,
+            &link.frame_build_log,
+            &format!("{} frame build log", link.label),
+        )?
+        .1;
+        validate_compile_log(
+            &frame_build_log,
+            &format!("dclutch-sbf-frame-run-v1={}", gate.build_run_id),
+            &link.package,
+            &link.frame_compile_marker,
+            &format!("{} frame build log", link.label),
+        )?;
+        let frame_report = verify_gate_file(
+            &root,
+            &link.frame_report,
+            &format!("{} frame report", link.label),
+        )?
+        .1;
+        validate_frame_report(link, &frame_report)?;
+        if let Some(manifest) = &link.checked_manifest {
+            verify_gate_file(&root, manifest, &format!("{} checked manifest", link.label))?;
+        }
+        if let Some(elf) = &link.elf {
+            let (canonical, raw_elf) =
+                verify_gate_file(&root, elf, &format!("{} ELF", link.label))?;
+            if raw_elf.get(..4) != Some(b"\x7fELF") {
+                return Err(Error::new(format!(
+                    "checked-release gate {} ELF does not begin with ELF magic",
+                    link.label
+                )));
+            }
+            if link.label == args.role {
+                let argument_metadata = fs::symlink_metadata(&args.elf_path)?;
+                if argument_metadata.file_type().is_symlink()
+                    || !argument_metadata.file_type().is_file()
+                {
+                    return Err(Error::new(
+                        "selected candidate ELF must be one regular non-symlink file",
+                    ));
+                }
+                if fs::canonicalize(&args.elf_path)? != canonical {
+                    return Err(Error::new(format!(
+                        "selected {} ELF path is not the gate's exact canonical role ELF",
+                        args.role
+                    )));
+                }
+                selected = Some((raw_elf, elf.sha256.clone()));
+            }
+        }
+    }
+    let (raw_elf, raw_elf_sha256) = selected.ok_or_else(|| {
+        Error::new(format!(
+            "checked-release gate carries no deployable ELF for selected role {}",
+            args.role
+        ))
+    })?;
+    Ok(ValidatedUpgradeGateV1 {
+        gate_sha256,
+        source_revision: gate.source_revision,
+        source_tree_sha256: gate.source_tree_sha256,
+        solana_cli_version: gate.solana_cli_version,
+        raw_elf,
+        raw_elf_sha256,
+    })
+}
+
+fn verify_gate_file(root: &Path, evidence: &GateFileV1, label: &str) -> Result<(PathBuf, Vec<u8>)> {
+    require_digest(&evidence.sha256, &format!("{label} SHA-256"))?;
+    let relative = Path::new(&evidence.canonical_path);
+    if evidence.canonical_path.is_empty()
+        || evidence.canonical_path.contains('\\')
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(Error::new(format!(
+            "{label} canonical path is absolute, empty, or contains an escape"
+        )));
+    }
+    let joined = root.join(relative);
+    let metadata = fs::symlink_metadata(&joined).map_err(|error| {
+        Error::new(format!(
+            "{label} {} cannot be inspected: {error}",
+            joined.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(Error::new(format!(
+            "{label} must be one regular non-symlink file"
+        )));
+    }
+    let canonical = fs::canonicalize(&joined)?;
+    if !canonical.starts_with(root) || canonical != joined {
+        return Err(Error::new(format!(
+            "{label} canonical path escapes the gate root or traverses a symlink"
+        )));
+    }
+    let bytes = fs::read(&canonical)?;
+    if u64::try_from(bytes.len()).ok() != Some(evidence.bytes) || digest(&bytes) != evidence.sha256
+    {
+        return Err(Error::new(format!(
+            "{label} bytes or SHA-256 changed after checked-release admission"
+        )));
+    }
+    Ok((canonical, bytes))
+}
+
+fn validate_compile_log(
+    bytes: &[u8],
+    expected_header: &str,
+    package: &str,
+    marker: &str,
+    label: &str,
+) -> Result<()> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| Error::new(format!("{label} is not UTF-8")))?;
+    if !text.ends_with('\n') || text.lines().next() != Some(expected_header) {
+        return Err(Error::new(format!(
+            "{label} is missing the exact current-run freshness marker"
+        )));
+    }
+    let trimmed = marker.trim_start();
+    let expected_prefix = format!("Compiling {package} v");
+    if marker.bytes().any(|byte| matches!(byte, b'\n' | b'\r'))
+        || !trimmed.starts_with(&expected_prefix)
+        || !text.lines().any(|line| line == marker)
+    {
+        return Err(Error::new(format!(
+            "{label} is missing the exact fresh top-package compile marker for {package}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_frame_report(link: &CheckedGateLinkV1, bytes: &[u8]) -> Result<()> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| Error::new(format!("{} frame report is not UTF-8", link.label)))?;
+    let expected = format!(
+        "dclutch-sbf-frame-report-v1\nlabel={}\npackage={}\nframe_count={}\n\
+         frame_bound_bytes={}\nframes_at_or_over_bound={}\ndeepest_frame_bytes={}\n",
+        link.label,
+        link.package,
+        link.frame_count,
+        link.frame_bound_bytes,
+        link.frames_at_or_over_bound,
+        link.deepest_frame_bytes
+    );
+    if !text.starts_with(&expected) {
+        return Err(Error::new(format!(
+            "{} frame report fields differ from the checked gate",
+            link.label
+        )));
+    }
+    let object_digest = text
+        .lines()
+        .nth(7)
+        .and_then(|line| line.strip_prefix("object_sha256="))
+        .ok_or_else(|| {
+            Error::new(format!(
+                "{} frame report omitted object SHA-256",
+                link.label
+            ))
+        })?;
+    require_digest(
+        object_digest,
+        &format!("{} frame object SHA-256", link.label),
+    )?;
+    if text.lines().nth(8) != Some("measurement_output:") {
+        return Err(Error::new(format!(
+            "{} frame report omitted measurement output",
+            link.label
+        )));
     }
     Ok(())
 }
@@ -1523,42 +1924,24 @@ fn hash_text(hasher: &mut Sha256, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_candidate(evidence: &CheckedUpgradeArtifactV1, raw_elf: &[u8]) -> Result<Vec<u8>> {
+fn candidate_live_image(raw_elf: &[u8], target_live_bytes: u64) -> Result<Vec<u8>> {
     if raw_elf.get(..4) != Some(b"\x7fELF") {
         return Err(Error::new(
             "checked candidate does not begin with ELF magic",
         ));
     }
-    if u64::try_from(raw_elf.len()).ok() != Some(evidence.raw_elf_bytes) {
+    let capacity = usize::try_from(target_live_bytes)
+        .map_err(|_| Error::new("baseline live ELF width does not fit this host"))?;
+    if raw_elf.len() > capacity {
         return Err(Error::new(format!(
-            "candidate ELF is {} bytes but evidence binds {}",
-            raw_elf.len(),
-            evidence.raw_elf_bytes
+            "checked raw ELF is {} bytes but the baseline live width is only {capacity}; capture \
+             an extension baseline first",
+            raw_elf.len()
         )));
     }
-    let observed_raw = digest(raw_elf);
-    if observed_raw != evidence.raw_elf_sha256 {
-        return Err(Error::new(format!(
-            "candidate raw ELF SHA-256 is {observed_raw}, evidence binds {}",
-            evidence.raw_elf_sha256
-        )));
-    }
-    let padding = usize::try_from(evidence.live_elf_padding_bytes)
-        .map_err(|_| Error::new("live ELF padding does not fit this host"))?;
-    let capacity = raw_elf
-        .len()
-        .checked_add(padding)
-        .ok_or_else(|| Error::new("live ELF width overflow"))?;
     let mut live = Vec::with_capacity(capacity);
     live.extend_from_slice(raw_elf);
     live.resize(capacity, 0);
-    let observed_live = digest(&live);
-    if observed_live != evidence.live_elf_sha256 {
-        return Err(Error::new(format!(
-            "raw ELF plus {} zero padding bytes hashes to {observed_live}, evidence binds {}",
-            evidence.live_elf_padding_bytes, evidence.live_elf_sha256
-        )));
-    }
     Ok(live)
 }
 
@@ -2056,9 +2439,10 @@ fn redact(text: &str, args: &UpgradeArgsV1) -> String {
 
 fn validate_receipt_binding(
     args: &UpgradeArgsV1,
-    evidence: &CheckedUpgradeArtifactV1,
-    evidence_sha256: &str,
+    gate: &ValidatedUpgradeGateV1,
     baseline: &UpgradeBaselineV1,
+    live_elf_sha256: &str,
+    live_elf_padding_bytes: u64,
     receipt: &UpgradeReceiptV1,
 ) -> Result<()> {
     if receipt.schema != SCHEMA
@@ -2068,14 +2452,15 @@ fn validate_receipt_binding(
         || receipt.retained_upgrade_authority != args.expected_upgrade_authority.to_string()
         || receipt.fee_payer != args.fee_payer.to_string()
         || receipt.genesis_hash != DEVNET_GENESIS_HASH
-        || receipt.source_revision != evidence.source_revision
-        || receipt.artifact_evidence_sha256 != evidence_sha256
+        || receipt.source_revision != gate.source_revision
+        || receipt.source_tree_sha256 != gate.source_tree_sha256
+        || receipt.checked_release_gate_sha256 != gate.gate_sha256
         || receipt.baseline_sha256 != baseline.baseline_sha256
         || receipt.baseline_context_slot != baseline.context_slot
-        || receipt.raw_elf_sha256 != evidence.raw_elf_sha256
-        || receipt.live_elf_sha256 != evidence.live_elf_sha256
-        || receipt.live_elf_padding_bytes != evidence.live_elf_padding_bytes
-        || receipt.solana_cli_version != evidence.solana_cli_version
+        || receipt.raw_elf_sha256 != gate.raw_elf_sha256
+        || receipt.live_elf_sha256 != live_elf_sha256
+        || receipt.live_elf_padding_bytes != live_elf_padding_bytes
+        || receipt.solana_cli_version != gate.solana_cli_version
     {
         return Err(Error::new(
             "existing Upgrade receipt does not bind this exact role, deployment, authority, \
@@ -2123,16 +2508,16 @@ fn validate_receipt_binding(
     Ok(())
 }
 
-fn operation_id(args: &UpgradeArgsV1, evidence_sha256: &str, before: &SnapshotV1) -> String {
+fn operation_id(args: &UpgradeArgsV1, gate_sha256: &str, before: &SnapshotV1) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v1\0");
+    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v2\0");
     hasher.update(args.role.as_bytes());
     hasher.update([0]);
     hasher.update(args.program_id.as_ref());
     hasher.update(args.programdata_id.as_ref());
     hasher.update(args.expected_upgrade_authority.as_ref());
     hasher.update(args.fee_payer.as_ref());
-    hasher.update(evidence_sha256.as_bytes());
+    hasher.update(gate_sha256.as_bytes());
     hasher.update(before.loader.deployment_slot.to_le_bytes());
     hasher.update(before.loader.programdata_account_sha256.as_bytes());
     hasher.update(before.wallet_lamports.to_le_bytes());
@@ -2148,14 +2533,14 @@ fn operation_id_from_receipt(receipt: &UpgradeReceiptV1) -> String {
         Pubkey::from_str(&receipt.retained_upgrade_authority).expect("validated receipt authority");
     let payer = Pubkey::from_str(&receipt.fee_payer).expect("validated receipt payer");
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v1\0");
+    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v2\0");
     hasher.update(role);
     hasher.update([0]);
     hasher.update(program.as_ref());
     hasher.update(programdata.as_ref());
     hasher.update(authority.as_ref());
     hasher.update(payer.as_ref());
-    hasher.update(receipt.artifact_evidence_sha256.as_bytes());
+    hasher.update(receipt.checked_release_gate_sha256.as_bytes());
     hasher.update(receipt.before.deployment_slot.to_le_bytes());
     hasher.update(receipt.before.programdata_account_sha256.as_bytes());
     hasher.update(receipt.wallet_before_lamports.to_le_bytes());
@@ -2489,7 +2874,7 @@ mod tests {
                 linked_programdata: fixture.programdata,
                 authority: fixture.authority,
                 payer: fixture.payer,
-                version: fixture.evidence.solana_cli_version.clone(),
+                version: fixture.solana_cli_version.clone(),
                 genesis: DEVNET_GENESIS_HASH.into(),
                 before_live: fixture.before_live.clone(),
                 after_live: fixture.candidate_live.clone(),
@@ -2700,7 +3085,8 @@ mod tests {
     struct Fixture {
         _directory: TestDirectory,
         args: UpgradeArgsV1,
-        evidence: CheckedUpgradeArtifactV1,
+        gate: CheckedUpgradeGateV1,
+        solana_cli_version: String,
         program: Pubkey,
         programdata: Pubkey,
         authority: Pubkey,
@@ -2708,6 +3094,128 @@ mod tests {
         raw_elf: Vec<u8>,
         candidate_live: Vec<u8>,
         before_live: Vec<u8>,
+    }
+
+    fn gate_file(root: &Path, relative: &str) -> GateFileV1 {
+        let bytes = fs::read(root.join(relative)).expect("gate evidence file");
+        GateFileV1 {
+            canonical_path: relative.into(),
+            bytes: u64::try_from(bytes.len()).expect("gate evidence width"),
+            sha256: digest(&bytes),
+        }
+    }
+
+    fn write_gate_evidence(root: &Path, relative: &str, bytes: &[u8]) -> GateFileV1 {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("gate evidence parent"))
+            .expect("create gate evidence parent");
+        fs::write(&path, bytes).expect("write gate evidence");
+        gate_file(root, relative)
+    }
+
+    fn checked_gate(root: &Path, raw_elf: &[u8], solana_cli_version: &str) -> CheckedUpgradeGateV1 {
+        let run_id = "ab".repeat(32);
+        let source_tree =
+            write_gate_evidence(root, "source-tree.txt", b"100644 blob fake\tCargo.toml\n");
+        let build_links_text = SHIPPED_LINKS
+            .iter()
+            .map(|(label, package, _)| format!("{label}\t{package}\n"))
+            .collect::<String>();
+        let build_links = write_gate_evidence(root, "build-links.tsv", build_links_text.as_bytes());
+        let build_run_text = format!("dclutch-sbf-build-run-v1={run_id}\n");
+        let build_run = write_gate_evidence(root, "build-run.txt", build_run_text.as_bytes());
+        let diagnostics_text = SHIPPED_LINKS
+            .iter()
+            .map(|(label, _, _)| format!("{label}=0\n"))
+            .collect::<String>();
+        let diagnostics =
+            write_gate_evidence(root, "build-diagnostics.txt", diagnostics_text.as_bytes());
+        let links = SHIPPED_LINKS
+            .iter()
+            .map(|(label, package, produces_artifact)| {
+                let compile_marker =
+                    format!("   Compiling {package} v0.1.0 (/checked/programs/{package})");
+                let build_log_text = format!(
+                    "dclutch-sbf-build-run-v1={run_id}\n{compile_marker}\n    Finished release\n"
+                );
+                let build_log = write_gate_evidence(
+                    root,
+                    &format!("build-{label}.log"),
+                    build_log_text.as_bytes(),
+                );
+                let frame_compile_marker = compile_marker.clone();
+                let frame_build_log_text = format!(
+                    "dclutch-sbf-frame-run-v1={run_id}\n{frame_compile_marker}\n    Finished release\n"
+                );
+                let frame_build_log = write_gate_evidence(
+                    root,
+                    &format!("frame-build-{label}.log"),
+                    frame_build_log_text.as_bytes(),
+                );
+                let frame_report_text = format!(
+                    "dclutch-sbf-frame-report-v1\nlabel={label}\npackage={package}\n\
+                     frame_count=3\nframe_bound_bytes=4096\nframes_at_or_over_bound=0\n\
+                     deepest_frame_bytes=2048\nobject_sha256={}\nmeasurement_output:\n  3 \
+                     measured frames, bound 4096; deepest:\n      2048    2048 spare  fake\n",
+                    "cd".repeat(32)
+                );
+                let frame_report = write_gate_evidence(
+                    root,
+                    &format!("frame/{label}.txt"),
+                    frame_report_text.as_bytes(),
+                );
+                let (elf, checked_manifest) = if *produces_artifact {
+                    let bytes = if *label == "trading" {
+                        raw_elf.to_vec()
+                    } else {
+                        format!("\x7fELF{label}").into_bytes()
+                    };
+                    (
+                        Some(write_gate_evidence(
+                            root,
+                            &format!("elf/{label}.so"),
+                            &bytes,
+                        )),
+                        Some(write_gate_evidence(
+                            root,
+                            &format!("evidence/{label}/checked.bin"),
+                            format!("checked-{label}").as_bytes(),
+                        )),
+                    )
+                } else {
+                    (None, None)
+                };
+                CheckedGateLinkV1 {
+                    label: (*label).into(),
+                    package: (*package).into(),
+                    build_log,
+                    compile_marker,
+                    sbf_diagnostics_count: 0,
+                    frame_build_log,
+                    frame_compile_marker,
+                    frame_report,
+                    frame_count: 3,
+                    frame_bound_bytes: 4096,
+                    frames_at_or_over_bound: 0,
+                    deepest_frame_bytes: 2048,
+                    elf,
+                    checked_manifest,
+                }
+            })
+            .collect::<Vec<_>>();
+        CheckedUpgradeGateV1 {
+            schema: CHECKED_GATE_SCHEMA.into(),
+            source_revision: "0123456789abcdef0123456789abcdef01234567".into(),
+            source_tree_sha256: source_tree.sha256.clone(),
+            solana_cli_version: solana_cli_version.into(),
+            build_run_id: run_id,
+            link_count: u64::try_from(SHIPPED_LINKS.len()).expect("link count"),
+            source_tree_manifest: source_tree,
+            build_links_manifest: build_links,
+            build_run_manifest: build_run,
+            diagnostics_manifest: diagnostics,
+            links,
+        }
     }
 
     impl Fixture {
@@ -2721,30 +3229,16 @@ mod tests {
             let mut candidate_live = raw_elf.clone();
             candidate_live.extend_from_slice(&[0; 4]);
             let before_live = b"\x7fELFold!\0\0\0\0".to_vec();
-            let evidence = CheckedUpgradeArtifactV1 {
-                schema: ARTIFACT_SCHEMA.into(),
-                role: "trading".into(),
-                program_id: program.to_string(),
-                programdata_id: programdata.to_string(),
-                retained_upgrade_authority: authority.to_string(),
-                source_revision: "0123456789abcdef0123456789abcdef01234567".into(),
-                solana_cli_version: "solana-cli 4.0.2 (test fixture)".into(),
-                checked_release_accepted: true,
-                sbf_build_diagnostics_total: 0,
-                frame_diagnostics_total: 0,
-                raw_elf_bytes: u64::try_from(raw_elf.len()).expect("ELF width"),
-                raw_elf_sha256: digest(&raw_elf),
-                live_elf_sha256: digest(&candidate_live),
-                live_elf_padding_bytes: 4,
-            };
-            let elf_path = directory.0.join("trading.so");
-            let evidence_path = directory.0.join("artifact.json");
-            fs::write(&elf_path, &raw_elf).expect("write candidate");
+            let solana_cli_version = "solana-cli 4.0.2 (test fixture)".to_owned();
+            let gate = checked_gate(&directory.0, &raw_elf, &solana_cli_version);
+            let elf_path = directory.0.join("elf/trading.so");
+            let gate_path = directory.0.join("CHECKED_UPGRADE_GATE.json");
             fs::write(
-                &evidence_path,
-                serde_json::to_vec_pretty(&evidence).expect("evidence JSON"),
+                &gate_path,
+                serde_json::to_vec_pretty(&gate).expect("gate JSON"),
             )
-            .expect("write evidence");
+            .expect("write gate");
+            let gate_sha256 = digest(&fs::read(&gate_path).expect("gate bytes"));
             let mut program_bytes = vec![0_u8; 36];
             program_bytes[..4].copy_from_slice(&2_u32.to_le_bytes());
             program_bytes[4..36].copy_from_slice(programdata.as_ref());
@@ -2814,7 +3308,10 @@ mod tests {
                 fee_payer: payer,
                 fee_payer_keypair: directory.0.join("missing-payer-keypair.json"),
                 elf_path,
-                artifact_evidence_path: evidence_path,
+                checked_release_gate_path: gate_path,
+                expected_checked_release_gate_sha256: gate_sha256,
+                expected_source_revision: gate.source_revision.clone(),
+                expected_source_tree_sha256: gate.source_tree_sha256.clone(),
                 baseline_path,
                 receipt_path: directory.0.join("receipt.json"),
                 dump_path: directory.0.join("dump.so"),
@@ -2825,7 +3322,8 @@ mod tests {
             Self {
                 _directory: directory,
                 args,
-                evidence,
+                gate,
+                solana_cli_version,
                 program,
                 programdata,
                 authority,
@@ -2836,12 +3334,15 @@ mod tests {
             }
         }
 
-        fn rewrite_evidence(&self) {
+        fn rewrite_gate(&mut self) {
             fs::write(
-                &self.args.artifact_evidence_path,
-                serde_json::to_vec_pretty(&self.evidence).expect("evidence JSON"),
+                &self.args.checked_release_gate_path,
+                serde_json::to_vec_pretty(&self.gate).expect("gate JSON"),
             )
-            .expect("rewrite evidence");
+            .expect("rewrite gate");
+            self.args.expected_checked_release_gate_sha256 = digest(
+                &fs::read(&self.args.checked_release_gate_path).expect("rewritten gate bytes"),
+            );
         }
 
         fn extension_args(&self, additional_bytes: u64) -> ExtensionArgsV1 {
@@ -2883,7 +3384,7 @@ mod tests {
                 baseline_path: self.args.baseline_path.clone(),
                 receipt_path: self._directory.0.join("extension-receipt.json"),
                 solana_cli: self.args.solana_cli.clone(),
-                expected_solana_cli_version: self.evidence.solana_cli_version.clone(),
+                expected_solana_cli_version: self.solana_cli_version.clone(),
                 target_acknowledgment: format!("trading:{}:+{additional_bytes}", self.program),
                 execute: true,
             }
@@ -2899,6 +3400,14 @@ mod tests {
         assert_eq!(receipt.phase, ReceiptPhaseV1::Complete);
         assert_eq!(receipt.role, "trading");
         assert_eq!(receipt.program_id, fixture.program.to_string());
+        assert_eq!(
+            receipt.checked_release_gate_sha256,
+            fixture.args.expected_checked_release_gate_sha256
+        );
+        assert_eq!(
+            receipt.source_tree_sha256,
+            fixture.args.expected_source_tree_sha256
+        );
         assert_eq!(
             receipt.transaction_signature,
             Some(Signature::from([7_u8; 64]).to_string())
@@ -3003,6 +3512,175 @@ mod tests {
     }
 
     #[test]
+    fn canonical_generated_gate_validates_all_thirteen_links() {
+        let fixture = Fixture::new();
+        let gate = validate_checked_release_gate(&fixture.args).expect("canonical gate");
+        assert_eq!(gate.raw_elf, fixture.raw_elf);
+        assert_eq!(
+            gate.gate_sha256,
+            fixture.args.expected_checked_release_gate_sha256
+        );
+        assert_eq!(fixture.gate.links.len(), 13);
+    }
+
+    #[test]
+    fn baseline_capacity_derives_only_zero_padding_and_never_truncates() {
+        let raw = b"\x7fELFgate";
+        let live = candidate_live_image(raw, 16).expect("candidate fits");
+        assert_eq!(&live[..raw.len()], raw);
+        assert!(live[raw.len()..].iter().all(|byte| *byte == 0));
+        let error = candidate_live_image(raw, 4).expect_err("candidate cannot truncate");
+        assert!(error.to_string().contains("extension baseline first"));
+    }
+
+    #[test]
+    fn handwritten_true_zero_json_confers_no_authority() {
+        let mut fixture = Fixture::new();
+        let handwritten = json!({
+            "schema": "dclutch-checked-devnet-upgrade-artifact-v1",
+            "checked_release_accepted": true,
+            "sbf_build_diagnostics_total": 0,
+            "frame_diagnostics_total": 0
+        });
+        fs::write(
+            &fixture.args.checked_release_gate_path,
+            serde_json::to_vec_pretty(&handwritten).expect("handwritten JSON"),
+        )
+        .expect("write handwritten JSON");
+        fixture.args.expected_checked_release_gate_sha256 =
+            digest(&fs::read(&fixture.args.checked_release_gate_path).expect("handwritten bytes"));
+        let error = validate_checked_release_gate(&fixture.args)
+            .expect_err("handwritten acceptance must refuse");
+        assert!(error.to_string().contains("handwritten acceptance"));
+    }
+
+    #[test]
+    fn missing_duplicate_and_unknown_link_roles_refuse() {
+        let mut missing = Fixture::new();
+        missing.gate.links.pop();
+        missing.gate.link_count -= 1;
+        missing.rewrite_gate();
+        assert!(
+            validate_checked_release_gate(&missing.args)
+                .expect_err("missing link")
+                .to_string()
+                .contains("all 13 shipped links")
+        );
+
+        let mut duplicate = Fixture::new();
+        duplicate.gate.links[1].label = duplicate.gate.links[0].label.clone();
+        duplicate.rewrite_gate();
+        assert!(
+            validate_checked_release_gate(&duplicate.args)
+                .expect_err("duplicate link")
+                .to_string()
+                .contains("duplicated link role")
+        );
+
+        let mut unknown = Fixture::new();
+        unknown.gate.links[0].label = "unknown-role".into();
+        unknown.rewrite_gate();
+        assert!(
+            validate_checked_release_gate(&unknown.args)
+                .expect_err("unknown link")
+                .to_string()
+                .contains("unknown link role")
+        );
+    }
+
+    #[test]
+    fn swapped_role_elf_refuses_even_when_gate_digest_is_reacknowledged() {
+        let mut fixture = Fixture::new();
+        let core = fixture
+            .gate
+            .links
+            .iter()
+            .find(|link| link.label == "core")
+            .and_then(|link| link.elf.clone())
+            .expect("core ELF");
+        fixture
+            .gate
+            .links
+            .iter_mut()
+            .find(|link| link.label == "trading")
+            .expect("trading link")
+            .elf = Some(core);
+        fixture.rewrite_gate();
+        let error = validate_checked_release_gate(&fixture.args).expect_err("swapped role ELF");
+        assert!(error.to_string().contains("exact canonical role ELF"));
+    }
+
+    #[test]
+    fn changed_compile_log_and_frame_report_refuse_by_hash() {
+        let compile = Fixture::new();
+        fs::write(
+            compile._directory.0.join("build-claims.log"),
+            b"changed after admission\n",
+        )
+        .expect("change compile log");
+        assert!(
+            validate_checked_release_gate(&compile.args)
+                .expect_err("changed compile log")
+                .to_string()
+                .contains("bytes or SHA-256 changed")
+        );
+
+        let frame = Fixture::new();
+        fs::write(
+            frame._directory.0.join("frame/claims.txt"),
+            b"changed after admission\n",
+        )
+        .expect("change frame report");
+        assert!(
+            validate_checked_release_gate(&frame.args)
+                .expect_err("changed frame report")
+                .to_string()
+                .contains("bytes or SHA-256 changed")
+        );
+    }
+
+    #[test]
+    fn wrong_expected_source_refuses_before_cli() {
+        let mut fixture = Fixture::new();
+        fixture.args.expected_source_revision = "f".repeat(40);
+        let mut runner = FakeRunner::new(&fixture);
+        let error = execute_with_runner(&fixture.args, &mut runner).expect_err("wrong source");
+        assert!(error.to_string().contains("source commit/tree differs"));
+        assert!(runner.calls.is_empty());
+    }
+
+    #[test]
+    fn gate_path_escape_and_symlink_refuse() {
+        let mut escape = Fixture::new();
+        escape
+            .gate
+            .links
+            .iter_mut()
+            .find(|link| link.label == "trading")
+            .and_then(|link| link.elf.as_mut())
+            .expect("trading ELF")
+            .canonical_path = "../outside.so".into();
+        escape.rewrite_gate();
+        assert!(
+            validate_checked_release_gate(&escape.args)
+                .expect_err("path escape")
+                .to_string()
+                .contains("contains an escape")
+        );
+
+        let symlink = Fixture::new();
+        let outside = symlink._directory.0.join("outside.so");
+        fs::rename(&symlink.args.elf_path, &outside).expect("move admitted ELF");
+        std::os::unix::fs::symlink(&outside, &symlink.args.elf_path).expect("symlink ELF");
+        assert!(
+            validate_checked_release_gate(&symlink.args)
+                .expect_err("symlink ELF")
+                .to_string()
+                .contains("regular non-symlink")
+        );
+    }
+
+    #[test]
     fn non_devnet_genesis_refuses_before_any_account_or_deploy() {
         let fixture = Fixture::new();
         let mut runner = FakeRunner::new(&fixture);
@@ -3037,20 +3715,45 @@ mod tests {
         let mut runner = FakeRunner::new(&fixture);
         let error =
             execute_with_runner(&fixture.args, &mut runner).expect_err("tampered ELF must refuse");
-        assert!(error.to_string().contains("candidate ELF is"));
+        assert!(error.to_string().contains("bytes or SHA-256 changed"));
         assert!(runner.calls.is_empty());
     }
 
     #[test]
-    fn live_digest_must_be_raw_plus_exact_zero_padding() {
-        let mut fixture = Fixture::new();
-        fixture.evidence.live_elf_sha256 = digest(b"not the padded candidate");
-        fixture.rewrite_evidence();
+    fn current_candidate_without_receipt_is_stale_and_refused() {
+        let fixture = Fixture::new();
+        let mut baseline: UpgradeBaselineV1 =
+            serde_json::from_slice(&fs::read(&fixture.args.baseline_path).expect("baseline bytes"))
+                .expect("baseline");
+        let mut account = vec![0_u8; 45];
+        account[..4].copy_from_slice(&3_u32.to_le_bytes());
+        account[4..12].copy_from_slice(&91_u64.to_le_bytes());
+        account[12] = 1;
+        account[13..45].copy_from_slice(fixture.authority.as_ref());
+        account.extend_from_slice(&fixture.candidate_live);
+        baseline.observation.programdata_data_bytes =
+            u64::try_from(account.len()).expect("ProgramData width");
+        baseline.observation.live_elf_bytes =
+            u64::try_from(fixture.candidate_live.len()).expect("live width");
+        baseline.observation.live_elf_sha256 = digest(&fixture.candidate_live);
+        baseline.observation.programdata_account_sha256 = digest(&account);
+        baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
+        fs::write(
+            &fixture.args.baseline_path,
+            serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
+        )
+        .expect("rewrite baseline");
         let mut runner = FakeRunner::new(&fixture);
+        runner.before_live = fixture.candidate_live.clone();
         let error = execute_with_runner(&fixture.args, &mut runner)
-            .expect_err("bad live digest must refuse");
-        assert!(error.to_string().contains("zero padding bytes hashes"));
-        assert!(runner.calls.is_empty());
+            .expect_err("already-current candidate without receipt must refuse");
+        assert!(error.to_string().contains("already equals the candidate"));
+        assert!(
+            runner
+                .calls
+                .iter()
+                .all(|call| call.get(1).map(String::as_str) != Some("deploy"))
+        );
     }
 
     #[test]
