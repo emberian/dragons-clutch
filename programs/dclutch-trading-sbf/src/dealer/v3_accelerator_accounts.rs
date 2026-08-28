@@ -1369,7 +1369,7 @@ mod tests {
     }
 
     /// Regression: selector 9 decoded the Core Market as the 232-byte
-    /// `MarketRoot` preimage while the chain stores the 352-byte `CoreState`
+    /// `MarketRoot` preimage while the chain stores the 360-byte `CoreState`
     /// header, so it refused on length before reading one join. The accelerator
     /// could never authenticate a real Market and the family campaign was
     /// representation-broken before it started.
@@ -1379,7 +1379,7 @@ mod tests {
 
         let (core_program, key, body, expectation) = live_core_market();
         assert_eq!(body.len(), STATE_BYTES);
-        assert_eq!(STATE_BYTES, 352);
+        assert_eq!(STATE_BYTES, 360);
         assert_eq!(
             authenticate_core_market_v4(&body, &key, &core_program, expectation),
             Ok(())
