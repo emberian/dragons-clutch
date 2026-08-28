@@ -532,8 +532,11 @@ def validate_manifest_for(
     seen_kinds: set[str] = set()
     previous: str | None = None
     prior_slot = -1
+    optional_event_fields = {"direct", "position", "certificate", "payout", "retirement"}
+    if cluster_kind == "owned-loopback":
+        optional_event_fields.add("positions")
     for index, event in enumerate(events):
-        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "lamportDeltas", "tokenDeltas", "sourcePath", "sourceSha256"}, {"direct", "position", "certificate", "payout", "retirement"}, f"events[{index}]")
+        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "lamportDeltas", "tokenDeltas", "sourcePath", "sourceSha256"}, optional_event_fields, f"events[{index}]")
         event_id = text(event["id"], "event id")
         text(event["operation"], f"event {event_id} operation")
         signature = text(event["signature"], f"event {event_id} signature")
@@ -575,6 +578,13 @@ def validate_manifest_for(
         owners = [event for event in events if field in event]
         if len(owners) < minimum or (maximum is not None and len(owners) > maximum) or any(event["kind"] != owner_kind for event in owners):
             refuse(f"activity has an invalid number or owner of {field} facts")
+    if cluster_kind == "owned-loopback":
+        hot = [event for event in events if "direct" in event]
+        position_sets = [event for event in events if "positions" in event]
+        if len(hot) != 1 or position_sets != hot or "position" in hot[0]:
+            refuse("owned-loopback Direct must have one Hot owner of its exact two-Position facts")
+        if any("position" in event and event["kind"] != "payout" for event in events):
+            refuse("owned-loopback singular Position facts belong only to payout")
     for event in events:
         if event["kind"] in ("direct", "payout") and event["tokenDeltas"] and event["kind"] not in event:
             refuse(f"token-moving {event['kind']} event {event['id']} omitted its exact economic facts")
@@ -802,6 +812,41 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         if before["claimCount"] != after["claimCount"] or before["aggregateHex"] != after["aggregateHex"] or before["ownerHex"] != after["ownerHex"] or before["basisHex"] != after["basisHex"] or int(after["revision"]) != int(before["revision"]) + 1:
             refuse("Position transition substitutes identity, geometry, or exact next revision")
         projection["position"] = {"account": ref, "pre": before, "post": after}
+    if "positions" in event:
+        rows = event["positions"]
+        if not isinstance(rows, list) or len(rows) != 2:
+            refuse("owned-loopback Direct positions must be exact ordered seller and buyer rows")
+        projected_positions = []
+        seen_position_refs: set[str] = set()
+        for index, raw in enumerate(rows):
+            role = ("seller", "buyer")[index]
+            position = exact_keys(raw, {"account", "owner", "preDataBase64", "postDataBase64"}, set(), f"Direct {role} Position facts")
+            ref = position["account"]
+            owner = pubkey(position["owner"], f"Direct {role} Position owner")
+            if ref in seen_position_refs or ref not in accounts or accounts[ref]["kind"] != "position":
+                refuse("Direct seller and buyer Position facts alias or reference a non-Position account")
+            seen_position_refs.add(ref)
+            before = decode_position(b64(position["preDataBase64"], f"Direct {role} Position prestate"))
+            after = decode_position(b64(position["postDataBase64"], f"Direct {role} Position poststate"))
+            if (
+                before["claimCount"] != after["claimCount"]
+                or before["aggregateHex"] != after["aggregateHex"]
+                or before["ownerHex"] != after["ownerHex"]
+                or before["basisHex"] != after["basisHex"]
+                or before["ownerHex"] != b58decode(owner, f"Direct {role} Position owner").hex()
+                or int(after["revision"]) != int(before["revision"]) + 1
+            ):
+                refuse("Direct Position transition substitutes owner, identity, geometry, or exact next revision")
+            projected_positions.append({"role": role, "account": ref, "owner": owner, "pre": before, "post": after})
+        fill = decimal(event["direct"]["fillAtoms"], "Direct Position fillAtoms")
+        seller = projected_positions[0]
+        buyer = projected_positions[1]
+        seller_deltas = [int(after) - int(before) for before, after in zip(seller["pre"]["balancesAtoms"], seller["post"]["balancesAtoms"], strict=True)]
+        buyer_deltas = [int(after) - int(before) for before, after in zip(buyer["pre"]["balancesAtoms"], buyer["post"]["balancesAtoms"], strict=True)]
+        changed = [index for index, (seller_delta, buyer_delta) in enumerate(zip(seller_deltas, buyer_deltas, strict=True)) if seller_delta or buyer_delta]
+        if len(changed) != 1 or seller_deltas[changed[0]] != -fill or buyer_deltas[changed[0]] != fill:
+            refuse("Direct Position transitions do not conserve the exact single-outcome fill")
+        projection["positions"] = projected_positions
     if "certificate" in event:
         certificate = exact_keys(event.get("certificate"), {"account", "owner", "dataBase64", "market"}, set(), "certificate facts")
         ref = certificate["account"]
@@ -940,6 +985,11 @@ def reconcile_for(
             if ref in last_positions and last_positions[ref] != event["position"]["pre"]:
                 refuse(f"activity Position history for {ref} is discontinuous")
             last_positions[ref] = event["position"]["post"]
+        for position in event.get("positions", []):
+            ref = position["account"]
+            if ref in last_positions and last_positions[ref] != position["pre"]:
+                refuse(f"activity Position history for {ref} is discontinuous")
+            last_positions[ref] = position["post"]
     final = reconcile_final_accounts(manifest, accounts, rpc, max(int(event["slot"]) for event in events))
     for observed in final:
         ref = observed["account"]

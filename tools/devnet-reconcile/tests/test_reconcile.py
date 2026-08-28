@@ -251,6 +251,65 @@ def owned_loopback_fixture(root: pathlib.Path):
     genesis, _ = key(80)
     manifest["schema"] = reconcile.OWNED_LOOPBACK_MANIFEST_SCHEMA
     manifest["cluster"] = {"kind": "owned-loopback", "genesisHash": genesis}
+    by_ref = {row["ref"]: row for row in manifest["accounts"]}
+    seller_position_address, _ = key(87)
+    seller_owner, seller_owner_raw = key(88)
+    buyer_owner, buyer_owner_raw = key(89)
+    protocol_owner = by_ref["protocol_owner"]["address"]
+    seller_pre = position_data(seller_owner_raw, 1, [3000, 0])
+    seller_post = position_data(seller_owner_raw, 2, [1000, 0])
+    buyer_pre = position_data(buyer_owner_raw, 1, [0, 0])
+    buyer_hot_post = position_data(buyer_owner_raw, 2, [2000, 0])
+    buyer_payout_post = position_data(buyer_owner_raw, 3, [1950, 0])
+    manifest["accounts"].append(
+        {"ref": "seller_position", "address": seller_position_address, "kind": "position", "role": "seller-claims-position"}
+    )
+    direct_event = next(event for event in manifest["events"] if event["kind"] == "direct")
+    direct_event["positions"] = [
+        {
+            "account": "seller_position",
+            "owner": seller_owner,
+            "preDataBase64": base64.b64encode(seller_pre).decode(),
+            "postDataBase64": base64.b64encode(seller_post).decode(),
+        },
+        {
+            "account": "position",
+            "owner": buyer_owner,
+            "preDataBase64": base64.b64encode(buyer_pre).decode(),
+            "postDataBase64": base64.b64encode(buyer_hot_post).decode(),
+        },
+    ]
+    payout_event = next(event for event in manifest["events"] if event["kind"] == "payout")
+    payout_event["position"] = {
+        "account": "position",
+        "preDataBase64": base64.b64encode(buyer_hot_post).decode(),
+        "postDataBase64": base64.b64encode(buyer_payout_post).decode(),
+    }
+    buyer_position_final = next(row for row in manifest["finalAccounts"] if row["account"] == "position")
+    buyer_position_final["dataSha256"] = hashlib.sha256(buyer_payout_post).hexdigest()
+    capture["accounts"][by_ref["position"]["address"]]["value"]["data"] = [
+        base64.b64encode(buyer_payout_post).decode(),
+        "base64",
+    ]
+    manifest["finalAccounts"].append(
+        {
+            "account": "seller_position",
+            "closed": False,
+            "owner": protocol_owner,
+            "lamports": "3000000",
+            "dataSha256": hashlib.sha256(seller_post).hexdigest(),
+        }
+    )
+    capture["accounts"][seller_position_address] = {
+        "contextSlot": "200",
+        "value": rpc_account(protocol_owner, 3_000_000, seller_post),
+    }
+    direct_transaction = capture["transactions"][direct_event["signature"]]
+    direct_transaction["transaction"]["message"]["accountKeys"].extend(
+        [seller_position_address, by_ref["position"]["address"]]
+    )
+    direct_transaction["meta"]["preBalances"].extend([3_000_000, 3_000_000])
+    direct_transaction["meta"]["postBalances"].extend([3_000_000, 3_000_000])
     source = {"schema": "fixture-semantic-owner-journal-v1", "phase": "finalized"}
     source_raw = reconcile.canonical_bytes(source)
     source_sha = hashlib.sha256(source_raw).hexdigest()
@@ -989,6 +1048,62 @@ class ReconcileTest(unittest.TestCase):
         rpc = reconcile.OwnedLoopbackCapturedRpc(capture)
         with self.assertRaisesRegex(reconcile.Refusal, "public cluster genesis|not admitted"):
             reconcile.reconcile_owned_loopback(manifest, rpc, {})
+
+    def test_public_devnet_manifest_refuses_private_two_position_extension(self):
+        manifest, capture = fixture()
+        manifest["events"][2]["positions"] = []
+        with self.assertRaisesRegex(reconcile.Refusal, "unknown fields"):
+            reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
+
+    def test_owned_loopback_hot_projects_exact_seller_and_buyer_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            dossier = reconcile.reconcile_owned_loopback(
+                manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+            )
+            direct = next(event for event in dossier["events"] if "direct" in event)
+            self.assertEqual(
+                [position["role"] for position in direct["positions"]],
+                ["seller", "buyer"],
+            )
+            self.assertEqual(
+                [position["post"]["revision"] for position in direct["positions"]],
+                ["2", "2"],
+            )
+
+    def test_owned_loopback_hot_two_position_omission_alias_order_and_fill_refuse(self):
+        mutations = [
+            (lambda event: event.pop("positions"), "one Hot owner"),
+            (lambda event: event["positions"].pop(), "exact ordered"),
+            (lambda event: event["positions"].__setitem__(1, copy.deepcopy(event["positions"][0])), "alias"),
+            (lambda event: event["positions"].reverse(), "single-outcome fill"),
+            (lambda event: event["positions"][0].__setitem__("owner", event["positions"][1]["owner"]), "substitutes owner"),
+        ]
+        for mutate, message in mutations:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+                hot = next(event for event in manifest["events"] if "direct" in event)
+                mutate(hot)
+                with self.assertRaisesRegex(reconcile.Refusal, message):
+                    reconcile.reconcile_owned_loopback(
+                        manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+                    )
+
+    def test_owned_loopback_hot_to_payout_position_history_must_be_continuous(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            payout = next(event for event in manifest["events"] if "payout" in event)
+            owner = base64.b64decode(payout["position"]["preDataBase64"])[56:88]
+            payout["position"]["preDataBase64"] = base64.b64encode(
+                position_data(owner, 2, [1999, 1])
+            ).decode()
+            payout["position"]["postDataBase64"] = base64.b64encode(
+                position_data(owner, 3, [1949, 1])
+            ).decode()
+            with self.assertRaisesRegex(reconcile.Refusal, "Position history.*discontinuous"):
+                reconcile.reconcile_owned_loopback(
+                    manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+                )
 
     def test_owned_loopback_receipt_program_substitution_refuses(self):
         with tempfile.TemporaryDirectory() as directory:
