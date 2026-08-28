@@ -35,8 +35,8 @@ extern crate alloc;
 use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_capability_contract::{
-    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId, FundingLedgerV2,
-    funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId, FundingLedgerStatusV2,
+    FundingLedgerV2, funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
 };
 use dclutch_custody_contract::{
     FoundingPrestateStageV1, INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
@@ -696,10 +696,15 @@ struct PlannedFundingLedgerV2 {
     address: Pubkey,
     bump: u8,
     bytes: Vec<u8>,
-    exact_rent: u64,
-    exact_native_principal: u64,
     exact_lamports: u64,
     derivation: CapabilityFundingLedgerDerivationV2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedResolutionLedgerPoststateV2 {
+    poststate_digest: [u8; 32],
+    exact_rent_lamports: u64,
+    exact_native_principal: u64,
 }
 
 fn plan_funding_ledger_v2(
@@ -753,10 +758,124 @@ fn plan_funding_ledger_v2(
         address,
         bump,
         bytes,
-        exact_rent,
-        exact_native_principal,
         exact_lamports,
         derivation,
+    })
+}
+
+/// Authenticate the exact initial Resolution ledger the child CPI committed.
+///
+/// Resolution is the semantic owner of ledger construction and its typed
+/// receipt. Reconstructing the full canonical ledger in Trading before that
+/// CPI duplicated the child's dominant work and left the 1.4M-CU founding
+/// outer without a usable margin. This verifier instead decodes the live
+/// poststate once, binds every row to the immutable manifest, requires the
+/// exact initial Pending state, re-derives the PDA, and checks physical Rent
+/// plus native principal. The caller separately joins these facts to the exact
+/// Resolution return-data receipt. Any mismatch returns an error from the
+/// outer instruction and rolls the child mutation back atomically.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_resolution_ledger_poststate_v2(
+    resolution_program: &Pubkey,
+    target: &AccountInfo<'_>,
+    manifest: CapabilityManifestV1<'_>,
+    manifest_id: ContentId,
+    facts: &FoundingFundingFactsV1,
+    selected_mask: u16,
+    rent: &Rent,
+) -> Result<AuthenticatedResolutionLedgerPoststateV2, ProgramError> {
+    if target.owner != resolution_program
+        || target.is_signer
+        || !target.is_writable
+        || target.executable
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let data = target
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    authenticate_resolution_ledger_poststate_bytes_v2(
+        resolution_program,
+        target.key,
+        target.owner,
+        target.lamports(),
+        &data,
+        manifest,
+        manifest_id,
+        facts,
+        selected_mask,
+        rent,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_resolution_ledger_poststate_bytes_v2(
+    resolution_program: &Pubkey,
+    target_key: &Pubkey,
+    target_owner: &Pubkey,
+    target_lamports: u64,
+    data: &[u8],
+    manifest: CapabilityManifestV1<'_>,
+    manifest_id: ContentId,
+    facts: &FoundingFundingFactsV1,
+    selected_mask: u16,
+    rent: &Rent,
+) -> Result<AuthenticatedResolutionLedgerPoststateV2, ProgramError> {
+    if target_owner != resolution_program {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let ledger = FundingLedgerV2::decode(&data).map_err(|_| TradingSbfError::Transition)?;
+    if ledger.selected_mask() != selected_mask {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let authenticated = ledger
+        .authenticate(manifest_id, manifest)
+        .map_err(|_| TradingSbfError::Transition)?;
+    for entry_index in 0_u16..manifest.entry_count() {
+        if selected_mask & (1_u16 << entry_index) == 0 {
+            continue;
+        }
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(|_| TradingSbfError::Transition)?;
+        if entry.funding_quote().realm_collateral().is_some() {
+            return Err(TradingSbfError::Transition.into());
+        }
+        let slot = authenticated
+            .slot(entry_index)
+            .map_err(|_| TradingSbfError::Transition)?;
+        if slot.status() != FundingLedgerStatusV2::Pending || slot.activation_slot() != 0 {
+            return Err(TradingSbfError::Transition.into());
+        }
+    }
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        resolution_program.to_bytes(),
+        facts.market,
+        facts.generation,
+        manifest_id,
+        ledger,
+    )
+    .map_err(|_| TradingSbfError::Transition)?;
+    if Pubkey::find_program_address(&derivation.seed_components(), resolution_program).0
+        != *target_key
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let exact_rent_lamports = rent.minimum_balance(data.len());
+    let exact_native_principal = authenticated
+        .remaining_native_lamports_total()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let exact_lamports = exact_rent_lamports
+        .checked_add(exact_native_principal)
+        .ok_or(TradingSbfError::Transition)?;
+    if target_lamports != exact_lamports {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(AuthenticatedResolutionLedgerPoststateV2 {
+        poststate_digest: hash(&data).to_bytes(),
+        exact_rent_lamports,
+        exact_native_principal,
     })
 }
 
@@ -888,17 +1007,6 @@ fn initialize_resolution_ledger_v2<'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let planned = plan_funding_ledger_v2(
-        resolution_program.key,
-        manifest,
-        manifest_id,
-        facts,
-        selected_mask,
-        rent,
-    )?;
-    if planned.address != *target.key || funding_source.lamports() < planned.exact_lamports {
-        return Err(TradingSbfError::Content.into());
-    }
     let prestate_digest = pre_market_funding_prestate_digest_v1(
         target.key.to_bytes(),
         target.owner.to_bytes(),
@@ -984,6 +1092,15 @@ fn initialize_resolution_ledger_v2<'info>(
     }
     let receipt = PreMarketFundingReceiptV1::decode(&receipt_bytes)
         .map_err(|_| TradingSbfError::Transition)?;
+    let poststate = authenticate_resolution_ledger_poststate_v2(
+        resolution_program.key,
+        target,
+        manifest,
+        manifest_id,
+        facts,
+        selected_mask,
+        rent,
+    )?;
     let found_request = project_found
         .found
         .encode()
@@ -995,25 +1112,14 @@ fn initialize_resolution_ledger_v2<'info>(
         selected_mask,
         ledger: target.key.to_bytes(),
         prestate_digest,
-        poststate_digest: hash(&planned.bytes).to_bytes(),
-        exact_rent_lamports: planned.exact_rent,
-        exact_native_principal: planned.exact_native_principal,
+        poststate_digest: poststate.poststate_digest,
+        exact_rent_lamports: poststate.exact_rent_lamports,
+        exact_native_principal: poststate.exact_native_principal,
         found_request_digest: hash(&found_request).to_bytes(),
         funding_source: funding_source.key.to_bytes(),
         rent_credit: account(found, 2)?.key.to_bytes(),
     };
-    if receipt != expected_receipt
-        || target.owner != resolution_program.key
-        || target.data_len() != planned.bytes.len()
-        || target.lamports() != planned.exact_lamports
-        || hash(
-            &target
-                .try_borrow_data()
-                .map_err(|_| TradingSbfError::Transition)?,
-        )
-        .to_bytes()
-            != expected_receipt.poststate_digest
-    {
+    if receipt != expected_receipt {
         return Err(TradingSbfError::Transition.into());
     }
     Ok(())
@@ -1733,6 +1839,126 @@ mod tests {
             &trading.address,
         )
         .expect("list")
+    }
+
+    /// Trading accepts Resolution's construction only by re-authenticating the
+    /// live ledger after the CPI. The poststate must still be the exact initial
+    /// Pending ledger, at the one PDA and with the exact Rent plus native
+    /// principal; owner, address, lamports, mask, or lifecycle substitutions
+    /// all refuse inside the outer rollback domain.
+    #[test]
+    fn resolution_poststate_authenticates_one_exact_initial_ledger() {
+        let manifest_bytes = demo_manifest_with_trading(4, Some(0));
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+        let manifest_id = ContentId::new(hash(&manifest_bytes).to_bytes()).expect("manifest id");
+        let facts = FoundingFundingFactsV1 {
+            release_set: [0xaa; 32],
+            market: [0x11; 32],
+            generation: 7,
+            funding_list_id: Identity::new([1; 32]).expect("placeholder"),
+            capability_entry_index: 0,
+        };
+        let resolution_program = Pubkey::new_from_array([0x52; 32]);
+        let rent = Rent::default();
+        let selected_mask = 0b1110;
+        let planned = plan_funding_ledger_v2(
+            &resolution_program,
+            manifest,
+            manifest_id,
+            &facts,
+            selected_mask,
+            &rent,
+        )
+        .expect("canonical Resolution ledger");
+        let observed = authenticate_resolution_ledger_poststate_bytes_v2(
+            &resolution_program,
+            &planned.address,
+            &resolution_program,
+            planned.exact_lamports,
+            &planned.bytes,
+            manifest,
+            manifest_id,
+            &facts,
+            selected_mask,
+            &rent,
+        )
+        .expect("authenticated live poststate");
+        assert_eq!(observed.poststate_digest, hash(&planned.bytes).to_bytes());
+        let exact_rent = rent.minimum_balance(planned.bytes.len());
+        assert_eq!(observed.exact_rent_lamports, exact_rent);
+        assert_eq!(
+            observed.exact_native_principal,
+            planned.exact_lamports - exact_rent
+        );
+        let foreign_owner = Pubkey::new_from_array([0x53; 32]);
+        let foreign_address = Pubkey::new_from_array([0x54; 32]);
+        for (address, owner, lamports, mask) in [
+            (
+                planned.address,
+                foreign_owner,
+                planned.exact_lamports,
+                selected_mask,
+            ),
+            (
+                foreign_address,
+                resolution_program,
+                planned.exact_lamports,
+                selected_mask,
+            ),
+            (
+                planned.address,
+                resolution_program,
+                planned.exact_lamports - 1,
+                selected_mask,
+            ),
+            (
+                planned.address,
+                resolution_program,
+                planned.exact_lamports + 1,
+                selected_mask,
+            ),
+            (
+                planned.address,
+                resolution_program,
+                planned.exact_lamports,
+                0b1101,
+            ),
+        ] {
+            assert!(
+                authenticate_resolution_ledger_poststate_bytes_v2(
+                    &resolution_program,
+                    &address,
+                    &owner,
+                    lamports,
+                    &planned.bytes,
+                    manifest,
+                    manifest_id,
+                    &facts,
+                    mask,
+                    &rent,
+                )
+                .is_err()
+            );
+        }
+
+        let mut advanced = planned.bytes.clone();
+        FundingLedgerV2::activate_in_place(&mut advanced, manifest_id, manifest, 1, 9)
+            .expect("semantically valid advanced ledger");
+        assert!(
+            authenticate_resolution_ledger_poststate_bytes_v2(
+                &resolution_program,
+                &planned.address,
+                &resolution_program,
+                planned.exact_lamports,
+                &advanced,
+                manifest,
+                manifest_id,
+                &facts,
+                selected_mask,
+                &rent,
+            )
+            .is_err()
+        );
     }
 
     /// The capability-funding tail this route creates is pinned to exactly one
