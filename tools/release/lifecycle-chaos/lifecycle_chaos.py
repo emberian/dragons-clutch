@@ -106,6 +106,14 @@ class ProcessResult:
 
 
 @dataclasses.dataclass(frozen=True)
+class KillBoundary:
+    intent_sha256: str
+    signed_packet_sha256: str
+    signature: str
+    dispatching_state_sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
 class RpcRule:
     kind: str
     method: str
@@ -166,7 +174,11 @@ def short_vec(body: bytes, offset: int, label: str) -> tuple[int, int]:
 
 def frozen_transaction(call: Mapping[str, Any]) -> tuple[str, str, str]:
     params = call.get("params")
-    if not isinstance(params, list) or not 1 <= len(params) <= 2 or not isinstance(params[0], str):
+    if (
+        not isinstance(params, list)
+        or not 1 <= len(params) <= 2
+        or not isinstance(params[0], str)
+    ):
         raise Refusal("sendTransaction params are malformed")
     config = params[1] if len(params) == 2 else {}
     if not isinstance(config, dict):
@@ -199,7 +211,9 @@ def frozen_transaction(call: Mapping[str, Any]) -> tuple[str, str, str]:
     key_count_offset = header_offset + 3
     if key_count_offset >= len(message):
         raise Refusal("sendTransaction message omitted its header")
-    key_count, keys_offset = short_vec(message, key_count_offset, "message account keys")
+    key_count, keys_offset = short_vec(
+        message, key_count_offset, "message account keys"
+    )
     blockhash_offset = keys_offset + key_count * 32
     blockhash_end = blockhash_offset + 32
     if blockhash_end > len(message):
@@ -323,11 +337,18 @@ def command_template(value: Any, label: str) -> CommandTemplate:
         or not argv
         or not all(isinstance(item, str) and item for item in argv)
         or not isinstance(environment, dict)
-        or not all(isinstance(key, str) and isinstance(item, str) for key, item in environment.items())
+        or not all(
+            isinstance(key, str) and isinstance(item, str)
+            for key, item in environment.items()
+        )
     ):
         raise Refusal(f"{label} argv/environment is malformed")
     executable = Path(argv[0])
-    if not executable.is_absolute() or executable.is_symlink() or not executable.is_file():
+    if (
+        not executable.is_absolute()
+        or executable.is_symlink()
+        or not executable.is_file()
+    ):
         raise Refusal(f"{label} executable must be one absolute non-symlink file")
     return CommandTemplate(
         tuple(argv),
@@ -371,8 +392,10 @@ def parse_spec(path: Path) -> Spec:
     if document["schema"] != SPEC_SCHEMA or document["cluster"] != "owned-loopback":
         raise Refusal("chaos spec is not the exact owned-loopback schema")
     revision = document["sourceRevision"]
-    if not isinstance(revision, str) or len(revision) != 40 or any(
-        char not in "0123456789abcdef" for char in revision
+    if (
+        not isinstance(revision, str)
+        or len(revision) != 40
+        or any(char not in "0123456789abcdef" for char in revision)
     ):
         raise Refusal("chaos spec source revision is not one lowercase commit digest")
     if document["boundaries"] != list(BOUNDARIES):
@@ -428,7 +451,10 @@ def expanded_command(
     rpc_url: str,
     control: Path,
 ) -> tuple[list[str], Path, dict[str, str]]:
-    argv = [expand(item, case=case, case_work=case_work, rpc_url=rpc_url) for item in template.argv]
+    argv = [
+        expand(item, case=case, case_work=case_work, rpc_url=rpc_url)
+        for item in template.argv
+    ]
     environment = os.environ.copy()
     environment.update(
         {
@@ -466,7 +492,11 @@ def stable_journal(path: Path, expected_stage: str) -> dict[str, Any] | None:
         return None
     except OSError as exc:
         raise Refusal(f"read {expected_stage} journal: {exc}") from exc
-    if first != second or first_stat.st_ino != second_stat.st_ino or first_stat.st_size != second_stat.st_size:
+    if (
+        first != second
+        or first_stat.st_ino != second_stat.st_ino
+        or first_stat.st_size != second_stat.st_size
+    ):
         return None
     value = unique_json_bytes(first, f"{expected_stage} journal")
     if (
@@ -474,29 +504,107 @@ def stable_journal(path: Path, expected_stage: str) -> dict[str, Any] | None:
         or set(value) != {"schema", "stage", "phase", "intentSha256"}
         or value["schema"] != STAGE_JOURNAL_SCHEMA
         or value["stage"] != expected_stage
-        or value["phase"] not in {"planned", "signed-not-submitted", "submitted", "finalized"}
+        or value["phase"]
+        not in {"planned", "prepared", "dispatching", "submitted", "finalized"}
         or not isinstance(value["intentSha256"], str)
         or len(value["intentSha256"]) != 64
+        or any(
+            character not in "0123456789abcdef" for character in value["intentSha256"]
+        )
     ):
         raise Refusal(f"{expected_stage} journal projection is malformed")
     return value
 
 
-def wait_for_submitted(
+def wait_for_dispatching(
     child: subprocess.Popen[bytes], journal: Path, stage: str, timeout: float
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if child.poll() is not None:
-            raise Refusal(f"session exited before durable Submitted at {stage}")
+            raise Refusal(f"session exited before durable Dispatching at {stage}")
         value = stable_journal(journal, stage)
         if value is not None:
-            if value["phase"] == "submitted":
+            if value["phase"] == "dispatching":
                 return value
-            if value["phase"] == "finalized":
-                raise Refusal(f"{stage} finalized before the kill could observe durable Submitted")
+            if value["phase"] in {"submitted", "finalized"}:
+                raise Refusal(
+                    f"{stage} advanced past Dispatching before the native kill hook armed"
+                )
         time.sleep(POLL_SECONDS)
-    raise Refusal(f"session did not expose durable Submitted at {stage} within the bound")
+    raise Refusal(
+        f"session did not expose durable Dispatching at {stage} within the bound"
+    )
+
+
+def wait_kill_armed(
+    control: Path,
+    child: subprocess.Popen[bytes],
+    case: str,
+    stage: str,
+    intent_sha256: str,
+    timeout: float,
+) -> KillBoundary:
+    deadline = time.monotonic() + timeout
+    armed = control / "FAULT_ARMED.json"
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            raise Refusal(f"session exited before the native {stage} kill hook armed")
+        if armed.exists():
+            value = read_unique_json(armed, "chaos kill-boundary handshake")
+            return authenticate_kill_boundary(value, case, stage, intent_sha256)
+        time.sleep(POLL_SECONDS)
+    raise Refusal(f"session did not arm the native {stage} kill hook within the bound")
+
+
+def authenticate_kill_boundary(
+    value: Any, case: str, stage: str, intent_sha256: str
+) -> KillBoundary:
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "state",
+        "fault",
+        "stage",
+        "phase",
+        "intentSha256",
+        "signedPacketSha256",
+        "signature",
+        "dispatchingStateSha256",
+    }:
+        raise Refusal("chaos kill-boundary handshake is malformed")
+    if (
+        value["schema"] != CONTROL_SCHEMA
+        or value["state"] != "fault-armed"
+        or value["fault"] != case
+        or value["stage"] != stage
+        or value["phase"] != "dispatching"
+        or value["intentSha256"] != intent_sha256
+    ):
+        raise Refusal("chaos kill-boundary handshake changed its owner identity")
+    for field in (
+        "intentSha256",
+        "signedPacketSha256",
+        "dispatchingStateSha256",
+    ):
+        digest = value[field]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise Refusal(f"chaos kill-boundary {field} is not SHA-256")
+    signature = value["signature"]
+    if (
+        not isinstance(signature, str)
+        or len(base58_decode(signature, "chaos kill-boundary signature")) != 64
+    ):
+        raise Refusal("chaos kill-boundary signature is not one Solana signature")
+    return KillBoundary(
+        intent_sha256=value["intentSha256"],
+        signed_packet_sha256=value["signedPacketSha256"],
+        signature=signature,
+        dispatching_state_sha256=value["dispatchingStateSha256"],
+    )
 
 
 def run_process(
@@ -518,7 +626,9 @@ def run_process(
         terminate_group(child, force=True)
         stdout, stderr = child.communicate()
         raise Refusal(f"command exceeded its {timeout:g} second bound")
-    return ProcessResult(child.returncode, stdout, stderr, time.monotonic_ns() - started)
+    return ProcessResult(
+        child.returncode, stdout, stderr, time.monotonic_ns() - started
+    )
 
 
 def record_attempt(path: Path, argv: Sequence[str], result: ProcessResult) -> None:
@@ -546,7 +656,7 @@ def kill_then_resume(
     control: Path,
     boundary: str,
     proxy: "RpcFaultProxy",
-) -> tuple[ProcessResult, str]:
+) -> tuple[ProcessResult, KillBoundary]:
     argv, cwd, environment = expanded_command(
         spec.command,
         case=case,
@@ -567,28 +677,53 @@ def kill_then_resume(
     try:
         wait_prepared(control, child, spec.journal_timeout_seconds)
         atomic_json(control / "GO.json", {"schema": CONTROL_SCHEMA, "state": "go"})
-        submitted = wait_for_submitted(
+        dispatching = wait_for_dispatching(
             child,
             case_work / spec.journal_relative / f"{boundary}.json",
             boundary,
             spec.journal_timeout_seconds,
         )
-        if not proxy.state.delivery_done.wait(spec.journal_timeout_seconds):
-            raise Refusal(f"session did not deliver the frozen {boundary} packet after Submitted")
+        killed_boundary = wait_kill_armed(
+            control,
+            child,
+            case,
+            boundary,
+            dispatching["intentSha256"],
+            spec.journal_timeout_seconds,
+        )
+        if any(
+            row.get("source") == "client"
+            and row.get("method") == "sendTransaction"
+            and row.get("stage") == boundary
+            for row in proxy.state.trace
+        ):
+            raise Refusal(f"{boundary} sent before its native Dispatching kill hook")
     except Exception:
         terminate_group(child, force=True)
-        proxy.state.release_delivery.set()
         raise
     terminate_group(child, force=True)
-    proxy.state.release_delivery.set()
-    if not proxy.state.injection_done.wait(spec.journal_timeout_seconds):
-        raise Refusal(f"{boundary} delivery handler did not stop after process death")
     stdout, stderr = child.communicate()
-    killed = ProcessResult(child.returncode, stdout, stderr, time.monotonic_ns() - started)
+    killed = ProcessResult(
+        child.returncode, stdout, stderr, time.monotonic_ns() - started
+    )
     record_attempt(case_work / "attempt-1-killed", argv, killed)
+    atomic_json(
+        control / "FAULT_GO.json",
+        {
+            "schema": CONTROL_SCHEMA,
+            "state": "fault-go",
+            "fault": case,
+            "stage": boundary,
+            "phase": "dispatching",
+            "intentSha256": killed_boundary.intent_sha256,
+            "signedPacketSha256": killed_boundary.signed_packet_sha256,
+            "signature": killed_boundary.signature,
+            "dispatchingStateSha256": killed_boundary.dispatching_state_sha256,
+        },
+    )
     resumed = run_process(argv, cwd, environment, spec.case_timeout_seconds)
     record_attempt(case_work / "attempt-2-resumed", argv, resumed)
-    return resumed, submitted["intentSha256"]
+    return resumed, killed_boundary
 
 
 def validate_snapshot(data: bytes, label: str) -> dict[str, Any]:
@@ -691,14 +826,20 @@ def validate_session(spec: Spec, case_work: Path) -> dict[str, Any]:
         or any(set(row) != {"stage", "status", "intentSha256"} for row in stages)
         or any(row["status"] != "finalized" for row in stages)
     ):
-        raise Refusal("lifecycle session is not the exact finalized eight-stage sequence")
+        raise Refusal(
+            "lifecycle session is not the exact finalized eight-stage sequence"
+        )
     return value
 
 
 def validate_refusal_journals(spec: Spec, case: str, case_work: Path) -> None:
     root = case_work / spec.journal_relative
     actual = tuple(
-        (value["phase"] if (value := stable_journal(root / f"{stage}.json", stage)) else None)
+        (
+            value["phase"]
+            if (value := stable_journal(root / f"{stage}.json", stage))
+            else None
+        )
         for stage in BOUNDARIES
     )
     if case in {
@@ -714,7 +855,7 @@ def validate_refusal_journals(spec: Spec, case: str, case_work: Path) -> None:
             "finalized",
             "finalized",
             "finalized",
-            "submitted",
+            "dispatching",
             None,
             None,
             None,
@@ -745,7 +886,9 @@ def corrupt_evidence(path: Path) -> str:
 
 def replace_evidence(path: Path, replacement: Path) -> str:
     if any(item.is_symlink() or not item.is_file() for item in (path, replacement)):
-        raise Refusal("replacement evidence target/source must be regular non-symlink files")
+        raise Refusal(
+            "replacement evidence target/source must be regular non-symlink files"
+        )
     before = sha256_file(path)
     body = replacement.read_bytes()
     if sha256_bytes(body) == before:
@@ -757,7 +900,9 @@ def replace_evidence(path: Path, replacement: Path) -> str:
 
 
 class _ProxyState:
-    def __init__(self, upstream: str, rule: RpcRule, journal_root: Path, expiry_timeout: float):
+    def __init__(
+        self, upstream: str, rule: RpcRule, journal_root: Path, expiry_timeout: float
+    ):
         self.upstream = upstream
         self.rule = rule
         self.journal_root = journal_root
@@ -792,7 +937,11 @@ class _ProxyState:
             raise Refusal("getLatestBlockhash response omitted result.value")
         blockhash = facts.get("blockhash")
         last_valid = facts.get("lastValidBlockHeight")
-        if not isinstance(blockhash, str) or not isinstance(last_valid, int) or last_valid < 0:
+        if (
+            not isinstance(blockhash, str)
+            or not isinstance(last_valid, int)
+            or last_valid < 0
+        ):
             raise Refusal("getLatestBlockhash response carried malformed expiry facts")
         with self.lock:
             self.blockhash_heights[blockhash] = last_valid
@@ -802,7 +951,9 @@ class _ProxyState:
             try:
                 return self.blockhash_heights[blockhash]
             except KeyError as exc:
-                raise Refusal("frozen send used a blockhash not observed through this proxy") from exc
+                raise Refusal(
+                    "frozen send used a blockhash not observed through this proxy"
+                ) from exc
 
 
 class _RpcHandler(http.server.BaseHTTPRequestHandler):
@@ -823,13 +974,17 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
                 raise Refusal("proxied RPC request omitted method")
             stage, phase, intent = self.server.state.stage()
             packet = sha256_bytes(body)
-            if method == "sendTransaction" and stage == self.server.state.rule.stage and phase != "submitted":
-                raise Refusal("sendTransaction reached RPC before durable Submitted")
+            if (
+                method == "sendTransaction"
+                and stage == self.server.state.rule.stage
+                and phase != "dispatching"
+            ):
+                raise Refusal("sendTransaction reached RPC outside durable Dispatching")
             matching = (
                 not self.server.state.fired
                 and method == self.server.state.rule.method
                 and stage == self.server.state.rule.stage
-                and phase == "submitted"
+                and phase == "dispatching"
             )
             row = {
                 "source": "client",
@@ -865,7 +1020,9 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
             headers={"content-type": "application/json"},
         )
         try:
-            with urlrequest.urlopen(request, timeout=5) as response:  # noqa: S310 loopback checked
+            with urlrequest.urlopen(
+                request, timeout=5
+            ) as response:  # noqa: S310 loopback checked
                 return response.status, response.read()
         except urlerror.HTTPError as exc:
             return exc.code, exc.read()
@@ -880,7 +1037,7 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
     ) -> None:
         kind = self.server.state.rule.kind
         wire_sha256, signature, blockhash = frozen_transaction(call)
-        if kind == "kill-delivery":
+        if kind == "kill-recovery":
             status, response = self._forward(body)
             require_accepted_send(status, response, signature)
             self.server.state.append(
@@ -898,8 +1055,6 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
                 }
             )
             self.server.state.delivery_done.set()
-            if not self.server.state.release_delivery.wait(self.server.state.expiry_timeout):
-                raise Refusal("supervisor did not release the delivered kill packet")
             with contextlib.suppress(BrokenPipeError, ConnectionResetError):
                 self._reply(status, response)
             return
@@ -921,8 +1076,12 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
                 }
             )
             self.server.state.delivery_done.set()
-            if not self.server.state.release_delivery.wait(self.server.state.expiry_timeout):
-                raise Refusal("client RPC did not time out within the bounded case timeout")
+            if not self.server.state.release_delivery.wait(
+                self.server.state.expiry_timeout
+            ):
+                raise Refusal(
+                    "client RPC did not time out within the bounded case timeout"
+                )
             with contextlib.suppress(BrokenPipeError, ConnectionResetError):
                 self._reply(status, response)
             return
@@ -931,7 +1090,10 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
             second_status, second = self._forward(body)
             require_accepted_send(first_status, first, signature)
             require_accepted_send(second_status, second, signature)
-            for ordinal, status, response in ((1, first_status, first), (2, second_status, second)):
+            for ordinal, status, response in (
+                (1, first_status, first),
+                (2, second_status, second),
+            ):
                 self.server.state.append(
                     {
                         "source": "injected-forward",
@@ -963,7 +1125,9 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
                 or not isinstance(error_data, dict)
                 or error_data.get("err") != "BlockhashNotFound"
             ):
-                raise Refusal("upstream accepted the transaction after its blockhash expired")
+                raise Refusal(
+                    "upstream accepted the transaction after its blockhash expired"
+                )
             self.server.state.append(
                 {
                     "source": "injected-expired-forward",
@@ -1037,7 +1201,9 @@ class _RpcServer(http.server.ThreadingHTTPServer):
 
 
 class RpcFaultProxy:
-    def __init__(self, upstream: str, rule: RpcRule, journal_root: Path, expiry_timeout: float):
+    def __init__(
+        self, upstream: str, rule: RpcRule, journal_root: Path, expiry_timeout: float
+    ):
         self.state = _ProxyState(upstream, rule, journal_root, expiry_timeout)
         self.server = _RpcServer(self.state)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -1060,7 +1226,7 @@ class RpcFaultProxy:
 
 def rpc_rule(case: str) -> RpcRule:
     if case.startswith("kill-") and case.removeprefix("kill-") in BOUNDARIES:
-        return RpcRule("kill-delivery", "sendTransaction", case.removeprefix("kill-"))
+        return RpcRule("kill-recovery", "sendTransaction", case.removeprefix("kill-"))
     if case not in RPC_CASES:
         raise Refusal(f"{case} is not an RPC chaos case")
     return RpcRule(case, "sendTransaction", "hot")
@@ -1074,14 +1240,13 @@ def validate_poll_only(trace: Sequence[dict[str, Any]], injected_case: str) -> N
             client_sends[key] = client_sends.get(key, 0) + 1
     repeated = {key: count for key, count in client_sends.items() if count > 1}
     if repeated:
-        raise Refusal(f"{injected_case} recovery resent a frozen intent instead of polling: {repeated}")
+        raise Refusal(
+            f"{injected_case} recovery sent one frozen intent more than once: {repeated}"
+        )
     client_rows = [row for row in trace if row.get("source") == "client"]
-    methods = [row.get("method") for row in client_rows]
-    if injected_case in {"rpc-timeout", "blockhash-expiry"} or injected_case.startswith("kill-"):
-        try:
-            send_index = methods.index("sendTransaction")
-        except ValueError as exc:
-            raise Refusal(f"{injected_case} did not reach its frozen send") from exc
+    if injected_case in {"rpc-timeout", "blockhash-expiry"} or injected_case.startswith(
+        "kill-"
+    ):
         injected = next(
             (
                 row
@@ -1091,14 +1256,47 @@ def validate_poll_only(trace: Sequence[dict[str, Any]], injected_case: str) -> N
             ),
             None,
         )
-        if injected is None or not isinstance(injected.get("transactionSignature"), str):
+        if injected is None or not isinstance(
+            injected.get("transactionSignature"), str
+        ):
             raise Refusal(f"{injected_case} omitted its frozen transaction signature")
+        selected_stage = injected.get("stage")
+        selected_intent = injected.get("intentSha256")
+        try:
+            send_index = next(
+                index
+                for index, row in enumerate(client_rows)
+                if row.get("method") == "sendTransaction"
+                and row.get("stage") == selected_stage
+                and row.get("intentSha256") == selected_intent
+            )
+        except StopIteration as exc:
+            raise Refusal(
+                f"{injected_case} did not reach its selected frozen send"
+            ) from exc
         signature = injected["transactionSignature"]
-        polls = [
-            row
-            for row in client_rows[send_index + 1 :]
-            if row.get("method") == "getSignatureStatuses"
-        ]
+        if injected_case.startswith("kill-"):
+            # The first process is killed while the semantic owner is blocked at
+            # its native, fsynced Dispatching hook. Recovery must poll the frozen
+            # signature before it is allowed to resend the identical packet.
+            polls = [
+                row
+                for row in client_rows[:send_index]
+                if row.get("method") == "getSignatureStatuses"
+            ]
+            if not polls:
+                raise Refusal(
+                    f"{injected_case} recovery sent before polling its frozen signature"
+                )
+        else:
+            # These cases injected an ambiguous or rejected first send. Their
+            # recovery is poll-only after that send and may not create a second
+            # packet or signature.
+            polls = [
+                row
+                for row in client_rows[send_index + 1 :]
+                if row.get("method") == "getSignatureStatuses"
+            ]
         if not polls:
             raise Refusal(f"{injected_case} recovery did not poll the frozen signature")
         if not any(signature in row.get("signatureStatusValues", []) for row in polls):
@@ -1114,7 +1312,9 @@ def copy_fixture(spec: Spec, case_work: Path) -> None:
     shutil.copytree(fixture, case_work, symlinks=False)
 
 
-def wait_prepared(control: Path, child: subprocess.Popen[bytes], timeout: float) -> None:
+def wait_prepared(
+    control: Path, child: subprocess.Popen[bytes], timeout: float
+) -> None:
     deadline = time.monotonic() + timeout
     prepared = control / "PREPARED.json"
     while time.monotonic() < deadline:
@@ -1225,7 +1425,9 @@ def run_with_handshake(
         terminate_group(child, force=True)
         child.communicate()
         raise
-    result = ProcessResult(child.returncode, stdout, stderr, time.monotonic_ns() - started)
+    result = ProcessResult(
+        child.returncode, stdout, stderr, time.monotonic_ns() - started
+    )
     record_attempt(case_work / "attempt-1", argv, result)
     return result, before, before_snapshot
 
@@ -1241,7 +1443,7 @@ def case_result(
     control.mkdir(exist_ok=False)
     rpc_url = spec.rpc_upstream or "http://127.0.0.1:1"
     proxy: RpcFaultProxy | None = None
-    killed_intent: str | None = None
+    killed_boundary: KillBoundary | None = None
     evidence_before: str | None = None
     before_snapshot: dict[str, Any] | None = None
     cleanup_attempted = False
@@ -1259,10 +1461,10 @@ def case_result(
             rpc_url = proxy.url
 
         if case.startswith("kill-"):
-            # Kill cases do not use the prestate handshake: the exact session
-            # advances until the selected semantic owner has fsynced Submitted.
+            # Kill cases use the session prestate handshake, then stop only at
+            # the selected semantic owner's native, fsynced Dispatching hook.
             boundary = case.removeprefix("kill-")
-            result, killed_intent = kill_then_resume(
+            result, killed_boundary = kill_then_resume(
                 spec, case, case_work, rpc_url, control, boundary, proxy
             )
         else:
@@ -1287,6 +1489,26 @@ def case_result(
             if not proxy.state.fired:
                 raise Refusal(f"{case} never reached its selected RPC injection")
             validate_poll_only(proxy.state.trace, case)
+            if killed_boundary is not None:
+                injected = next(
+                    (
+                        row
+                        for row in proxy.state.trace
+                        if row.get("source") == "injected-forward"
+                        and row.get("method") == "sendTransaction"
+                        and row.get("stage") == case.removeprefix("kill-")
+                    ),
+                    None,
+                )
+                if injected is None or (
+                    injected.get("intentSha256") != killed_boundary.intent_sha256
+                    or injected.get("wireSha256")
+                    != killed_boundary.signed_packet_sha256
+                    or injected.get("transactionSignature") != killed_boundary.signature
+                ):
+                    raise Refusal(
+                        f"{case} recovery packet/signature differs from the fsynced Dispatching owner"
+                    )
             write_json_new(
                 case_work / "RPC_TRACE.json",
                 {"schema": RPC_TRACE_SCHEMA, "case": case, "rows": proxy.state.trace},
@@ -1296,7 +1518,9 @@ def case_result(
         expected_snapshot = before_snapshot if expected_refusal else baseline
         if expected_snapshot is not None and snapshot != expected_snapshot:
             comparison = "fault prestate" if expected_refusal else "clean baseline"
-            raise Refusal(f"{case} changed canonical account bytes or lamports from {comparison}")
+            raise Refusal(
+                f"{case} changed canonical account bytes or lamports from {comparison}"
+            )
         if expected_refusal and (case_work / spec.session_relative).exists():
             raise Refusal(f"{case} wrote a terminal finalized session on refusal")
         if expected_refusal:
@@ -1315,6 +1539,15 @@ def case_result(
             spec.rpc_upstream or rpc_url,
             control,
         )
+        recovery_policy = (
+            "dispatching-poll-then-identical-send"
+            if case.startswith("kill-")
+            else (
+                "post-send-poll-only"
+                if case in {"rpc-timeout", "blockhash-expiry"}
+                else "not-applicable"
+            )
+        )
         output = {
             "case": case,
             "status": "passed",
@@ -1324,9 +1557,24 @@ def case_result(
                 (json.dumps(snapshot, separators=(",", ":"), sort_keys=True)).encode()
             ),
             "sessionSha256": session_digest,
-            "killedIntentSha256": killed_intent,
+            "killedIntentSha256": (
+                None if killed_boundary is None else killed_boundary.intent_sha256
+            ),
+            "killedSignedPacketSha256": (
+                None
+                if killed_boundary is None
+                else killed_boundary.signed_packet_sha256
+            ),
+            "killedSignature": (
+                None if killed_boundary is None else killed_boundary.signature
+            ),
+            "killedDispatchingStateSha256": (
+                None
+                if killed_boundary is None
+                else killed_boundary.dispatching_state_sha256
+            ),
             "evidencePreFaultSha256": evidence_before,
-            "pollOnlyRecovery": True,
+            "recoveryPolicy": recovery_policy,
         }
         write_json_new(case_work / "RESULT.json", output)
         return output, snapshot
@@ -1348,7 +1596,11 @@ def case_result(
 def run(spec: Spec, work: Path, selected: Sequence[str]) -> dict[str, Any]:
     if not work.is_absolute() or work.exists() or work.is_symlink():
         raise Refusal("chaos work must be one fresh absolute path")
-    if not selected or len(set(selected)) != len(selected) or any(case not in ALL_CASES for case in selected):
+    if (
+        not selected
+        or len(set(selected)) != len(selected)
+        or any(case not in ALL_CASES for case in selected)
+    ):
         raise Refusal("selected chaos cases are empty, duplicated, or unknown")
     if selected[0] != "baseline":
         raise Refusal("baseline must run first and own the comparison snapshot")
@@ -1393,7 +1645,9 @@ def parse(argv: Sequence[str]) -> tuple[Spec, Path, tuple[str, ...]]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
-        spec, work, selected = parse(list(argv) if argv is not None else os.sys.argv[1:])
+        spec, work, selected = parse(
+            list(argv) if argv is not None else os.sys.argv[1:]
+        )
         summary = run(spec, work, selected)
         print(json.dumps(summary, sort_keys=True))
         return 0
