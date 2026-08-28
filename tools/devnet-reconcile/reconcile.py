@@ -32,6 +32,9 @@ OWNED_LOOPBACK_CAPTURE_SCHEMA = "dclutch-owned-loopback-captured-finalized-rpc-v
 OWNED_LOOPBACK_RECEIPT_SCHEMA = "dclutch-owned-loopback-reconcile-session-receipt-v1"
 OWNED_LOOPBACK_DOSSIER_SCHEMA = "dclutch-owned-loopback-activity-dossier-v1"
 EVENT_KINDS = ("founding", "participant", "direct", "resolution", "payout", "retirement")
+OWNED_LOOPBACK_COMPLETED_STAGES = (
+    "founding", "participant", "alt", "seal", "direct", "resolution", "payout", "retirement",
+)
 OWNED_LOOPBACK_PROGRAM_ROLES = (
     "registry", "rent", "custody", "resolution", "claims", "trading", "core",
     "pyth-receiver", "pyth-router",
@@ -977,6 +980,28 @@ def canonical_relative_evidence(
     return path, value
 
 
+def json_pointer(value: Any, pointer: Any, label: str) -> Any:
+    path = text(pointer, f"{label} completionPointer")
+    if not path.startswith("/"):
+        refuse(f"{label} completionPointer is not canonical RFC6901")
+    current = value
+    for raw in path[1:].split("/"):
+        if "~" in raw:
+            index = 0
+            while index < len(raw):
+                if raw[index] == "~" and (index + 1 >= len(raw) or raw[index + 1] not in "01"):
+                    refuse(f"{label} completionPointer has an invalid RFC6901 escape")
+                index += 2 if raw[index] == "~" else 1
+        part = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit() and (part == "0" or not part.startswith("0")) and int(part) < len(current):
+            current = current[int(part)]
+        else:
+            refuse(f"{label} completionPointer {path} is absent")
+    return current
+
+
 def authenticate_loader_v3_program(
     rpc_capture: OwnedLoopbackCapturedRpc,
     role: str,
@@ -1157,7 +1182,7 @@ def authenticate_owned_loopback_session(
     for index, raw_journal in enumerate(journals):
         journal = exact_keys(
             raw_journal,
-            {"path", "sha256", "schema", "completionField"},
+            {"path", "sha256", "schema", "completionPointer", "completionValue"},
             set(),
             f"owned-loopback journal {index}",
         )
@@ -1167,13 +1192,14 @@ def authenticate_owned_loopback_session(
         journal_paths.add(relative)
         source_raw, source = read_evidence_file(path)
         source_schema = text(journal["schema"], f"journal {relative} schema")
-        completion_field = text(journal["completionField"], f"journal {relative} completionField")
-        if completion_field not in ("phase", "status"):
-            refuse(f"journal {relative} names another completion field")
+        completion_pointer = text(
+            journal["completionPointer"], f"journal {relative} completionPointer"
+        )
         if (
             digest(journal["sha256"], f"journal {relative} sha256") != sha256_bytes(source_raw)
             or source.get("schema") != source_schema
-            or source.get(completion_field) != "finalized"
+            or journal["completionValue"] != "finalized"
+            or json_pointer(source, completion_pointer, f"journal {relative}") != "finalized"
         ):
             refuse(f"journal {relative} is missing, substituted, provisional, or partial")
         projected_journals.append(
@@ -1181,7 +1207,8 @@ def authenticate_owned_loopback_session(
                 "path": relative,
                 "sha256": journal["sha256"],
                 "schema": source_schema,
-                "completionField": completion_field,
+                "completionPointer": completion_pointer,
+                "completionValue": "finalized",
             }
         )
     if [row["path"] for row in projected_journals] != sorted(journal_paths):
@@ -1211,7 +1238,7 @@ def authenticate_owned_loopback_session(
         or session.get("schema") != private_session["schema"]
         or private_session["status"] != "finalized"
         or session.get("status", session.get("phase")) != "finalized"
-        or completed != list(EVENT_KINDS)
+        or completed != list(OWNED_LOOPBACK_COMPLETED_STAGES)
     ):
         refuse("owned-loopback private session is missing, substituted, provisional, or partial")
 
