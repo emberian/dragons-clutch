@@ -3,37 +3,42 @@ import { describe, expect, it } from 'vitest';
 
 import PortfolioWorkspace from './PortfolioWorkspace';
 
+/**
+ * The product inversion this surface carries: the ONE input is an owner
+ * identity. The endpoint, the programs, and the Market list all come from the
+ * baked deployment; connecting a wallet auto-loads. These tests pin that no
+ * infrastructure form creeps back in.
+ */
 describe('Portfolio route', () => {
   const html = renderToStaticMarkup(<PortfolioWorkspace />);
 
   it('derives Position addresses instead of claiming an index it does not have', () => {
     expect(html).toContain('dClutch runs no indexer and this browser will not pretend to be one');
     expect(html).toContain('program-derived address of the Position seed domain plus the exact Market and owner keys');
-    expect(html).toContain('Derive and read Positions');
     expect(html).toContain('Derived Positions');
   });
 
-  it('states the discovery gap a derivation cannot close', () => {
-    expect(html).toContain('Positions are derived, but Markets are not');
-    expect(html).toContain('needs an index dClutch does not publish');
-    expect(html).toContain('Enumerate Markets from the Core program');
-    expect(html).toContain('Add this Market');
-    expect(html).toContain('Known Market addresses');
-    expect(html).toContain('Markets to derive against');
+  it('asks only for an owner identity — every other input comes from the deployment', () => {
+    expect(html).toContain('Whose Positions?');
+    expect(html).toContain('the active Devnet deployment');
+    expect(html).toContain('Or paste any owner address');
+    expect(html).not.toContain('Finalized RPC endpoint');
+    expect(html).not.toContain('Core program</span>');
+    expect(html).not.toContain('Claims program</span>');
+    expect(html).not.toContain('Known Market addresses');
+    expect(html).not.toContain('<textarea');
   });
 
-  it('makes the browser wallet optional and identity-only', () => {
-    expect(html).toContain('A browser wallet is optional here');
-    expect(html).toContain('Owner address · wallet or pasted');
-    expect(html).toContain('Connecting reads a public address only');
+  it('makes the browser wallet identity-only and the paste path equal', () => {
+    expect(html).toContain('no signature, no approval');
+    expect(html).toContain('reading a derived address requires no authority at all');
     // The server render asserts nothing about installed extensions.
     expect(html).toContain('No Wallet Standard registry exists in this runtime');
   });
 
   it('keeps the honest empty state instead of showing placeholder holdings', () => {
-    expect(html).toContain('No finalized Position state has been read.');
+    expect(html).toContain('No finalized Position state has been read yet.');
     expect(html).toContain('this surface stays empty rather than showing placeholder holdings');
-    expect(html).toContain('No Core program enumeration has been attempted.');
   });
 
   it('presents raw atoms and never a market-data metric', () => {

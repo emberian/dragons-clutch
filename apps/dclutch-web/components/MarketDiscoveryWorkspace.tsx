@@ -2,24 +2,25 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
-import { FormEvent, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import { type DeploymentV1 } from '@/lib/deployments';
+import { useDeploymentV1 } from '@/lib/deploymentStore';
+import { docsHrefV1 } from '@/lib/flags';
 import {
   enumerateCoreMarketAddressesV1,
   inspectMarketDiscoveryV1,
-  parseMarketAddressListV1,
   provenanceChipV1,
   shortAddressV1,
   type MarketCapabilityManifestV1,
   type MarketDiscoveryCardV1,
   type MarketDiscoveryV1,
-  type MarketEnumerationV1,
 } from '@/lib/marketDiscovery';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
-import { DEFAULT_RPC_ENDPOINT_V1, clusterNameV1 } from '@/lib/rpcDefault';
+import { clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
-  | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
+  | Readonly<{ kind: 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; discovery: MarketDiscoveryV1; facts: ConnectionFacts }>;
 
 function errorMessage(error: unknown): string {
@@ -93,60 +94,66 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
   </article>;
 }
 
+/** The cluster-true empty state: a fact and a link, never a form. */
+function EmptyMarkets({ deployment }: Readonly<{ deployment: DeploymentV1 }>) {
+  if (deployment.cluster === 'devnet') {
+    return <p className="market-empty">
+      No markets on devnet yet — the first, a SOL/USD range-protection market, is being founded against this
+      deployment right now. The moment its founding lands on chain, it appears here.{' '}
+      <Anchor href={docsHrefV1('evidence/DEPLOY_1.html', 'docs/evidence/DEPLOY_1.md')}>Read the deployment evidence →</Anchor>
+    </p>;
+  }
+  return <p className="market-empty">
+    No markets on this {deployment.label.toLowerCase()} deployment at the finalized floor.{' '}
+    <Anchor href="/create">Found the first →</Anchor>
+  </p>;
+}
+
 export default function MarketDiscoveryWorkspace() {
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
-  const [coreProgram, setCoreProgram] = useState('');
-  const [registryProgram, setRegistryProgram] = useState('');
-  const [claimsProgram, setClaimsProgram] = useState('');
-  const [custodyProgram, setCustodyProgram] = useState('');
-  const [addressList, setAddressList] = useState('');
-  const [enumeration, setEnumeration] = useState<MarketEnumerationV1 | null>(null);
-  const [enumerationStatus, setEnumerationStatus] = useState('No Core program enumeration has been attempted.');
-  const [state, setState] = useState<State>({ kind: 'idle', message: 'No finalized Market discovery has been read.' });
+  const deployment = useDeploymentV1();
+  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading the finalized market list…' });
   const discovery = state.kind === 'ready' ? state.discovery : null;
 
-  async function enumerate() {
-    setEnumeration(null);
-    setEnumerationStatus('Attempting one bounded finalized getProgramAccounts scan of the selected Core program…');
+  const load = useCallback(async () => {
+    setState({ kind: 'loading', message: `Reading every ${deployment.label} market: one bounded finalized scan of the Core program, then every Market root, its Realm record, its Claims liability aggregate, and its capability manifest behind one finalized floor…` });
     try {
-      const next = await enumerateCoreMarketAddressesV1(new SolanaRpcClient(endpoint), coreProgram);
-      setEnumeration(next);
-      setEnumerationStatus(next.note);
-      if (next.addresses.length > 0) setAddressList(next.addresses.join('\n'));
-    } catch (error) {
-      setEnumerationStatus(`Refused: ${errorMessage(error)}`);
-    }
-  }
-
-  async function read(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setState({ kind: 'loading', message: 'Probing the endpoint, then reading every Market, its finalized Realm record, its Claims liability aggregate, and its capability manifest behind one finalized floor…' });
-    try {
-      const client = new SolanaRpcClient(endpoint);
+      const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
-      const addresses = parseMarketAddressListV1(addressList);
+      const enumeration = await enumerateCoreMarketAddressesV1(client, deployment.programs.core);
       const next = await inspectMarketDiscoveryV1(client, {
-        coreProgramId: coreProgram,
-        registryProgramId: registryProgram === '' ? null : registryProgram,
-        claimsProgramId: claimsProgram === '' ? null : claimsProgram,
-        custodyProgramId: custodyProgram === '' ? null : custodyProgram,
-        addresses,
-        enumeration: enumeration !== null && enumeration.mode === 'program-scan' && enumeration.addresses.join('\n') === addresses.join('\n') ? enumeration : undefined,
+        coreProgramId: deployment.programs.core,
+        registryProgramId: deployment.programs.registry,
+        claimsProgramId: deployment.programs.claims,
+        custodyProgramId: deployment.programs.custody,
+        addresses: enumeration.addresses,
+        enumeration: enumeration.mode === 'program-scan' ? enumeration : undefined,
       });
       setState({ kind: 'ready', discovery: next, facts, message: next.reason });
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
-  }
+  }, [deployment]);
+
+  // Content on load: the market list is the page, not a reward for filling in
+  // a form. Re-reads when the cluster picker changes the deployment.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
 
   return <main className="product-shell trade-v3-shell">
-    <Nav current="/markets" />
+    <Nav current="/markets" status={`${deployment.label} · finalized reads`} />
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Market discovery · finalized reads only</p>
+        <p className="eyebrow">Markets on {deployment.label} · finalized reads only</p>
         <h1>Every card is a read.<br /><em>Or it says REFUSED.</em></h1>
-        <p>Discovery lists exactly what finalized state justifies: the Core Market&apos;s phase, generation and immutable identities; the per-claim supply vector from the Claims aggregate that actually holds it; the finalized Realm record behind the collateral mint; and the capability manifest a Market authenticated. There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.</p>
+        <p>This is the whole market list of the {deployment.label} deployment, enumerated from the Core program itself — no index, no curation. Each card lists exactly what finalized state justifies: phase, generation and immutable identities from the Market root; the per-claim supply vector from the Claims aggregate that actually holds it; the finalized Realm record behind the collateral mint; and the capability manifest the Market authenticated. There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.</p>
       </div>
       <aside>
         <span>Provenance</span>
@@ -156,47 +163,25 @@ export default function MarketDiscoveryWorkspace() {
     </section>
 
     <section className="trade-v3-card">
-      <header><span>00</span><div><h2>What a discovery card is allowed to claim</h2><p>The browser is an untrusted projection. It decodes Core accounts hostilely, requires the account to derive the address it was found at, reacquires the Realm and capability manifest records the Market commits to and re-hashes them, and reads liabilities only from the Claims program that owns them.</p></div></header>
-      <div className="trade-v3-evidence">
-        <article><span>Economics</span><strong>raw u64 atoms</strong><small>supplies come from the Claims aggregate, never from the root</small></article>
-        <article><span>Discovery</span><strong>bounded</strong><small>known addresses or one finalized program scan</small></article>
-        <article><span>Capabilities</span><strong>manifest-only</strong><small>no capability is asserted from the root alone</small></article>
-        <article><span>Refusal</span><strong>explicit</strong><small>every undecoded surface names its reason</small></article>
-      </div>
-    </section>
-
-    <form className="trade-v3-card route-card" onSubmit={(event) => void read(event)}>
-      <header><span>01</span><div><h2>Select one finalized endpoint and Core authority</h2><p>dClutch publishes no index. Markets are enumerated from addresses you already know, or from one bounded finalized getProgramAccounts scan when the endpoint serves it. A Registry program is optional and is required only to authenticate capability manifests.</p></div></header>
-      <div className="direct-form-grid">
-        <label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
-        <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
-        <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
-        <label><span>Claims program · optional</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
-        <label><span>Custody program · optional</span><input value={custodyProgram} onChange={(event) => setCustodyProgram(event.target.value.trim())} /></label>
-      </div>
-      <label><span>Known Market addresses · one canonical base58 address per line</span><textarea rows={6} value={addressList} onChange={(event) => setAddressList(event.target.value)} /></label>
-      <div className="direct-actions">
-        <button type="button" onClick={() => void enumerate()}>Enumerate Markets from the Core program</button>
-        <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized Market state…' : 'Read finalized Market discovery'}</button>
-      </div>
-      <p className="direct-status">{enumerationStatus}</p>
-      <p className="direct-status" aria-live="polite">{state.message}</p>
-    </form>
-
-    <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Discovered Markets</h2><p>One card per requested address. A card is decoded or refused; it is never partially invented.</p></div></header>
-      {discovery === null && <p className="market-empty">No finalized listing has been read. Public devnet is the seeded endpoint (edit it for a local validator or your own); until a chain answers, this surface stays empty rather than showing placeholder Markets.</p>}
+      <header>
+        <span>01</span>
+        <div><h2>The markets</h2><p>One card per Market the Core program owns at one finalized floor. A card is decoded or refused; it is never partially invented. Supplies come from the Claims aggregate, never from the root, in raw u64 atoms.</p></div>
+        <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read the chain'}</button></div>
+      </header>
+      {state.kind === 'refused'
+        ? <p className="market-refusal" aria-live="polite">{state.message}</p>
+        : <p className="direct-status" aria-live="polite">{state.message}</p>}
       {discovery !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
           <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>one observation epoch for every card</small></article>
           <article><span>Enumeration</span><strong>{discovery.enumeration.mode}</strong><small>{discovery.enumeration.addresses.length} address{discovery.enumeration.addresses.length === 1 ? '' : 'es'}</small></article>
-          <article><span>Capability source</span><strong>{discovery.registryProgramId === null ? 'not selected' : shortAddressV1(discovery.registryProgramId, 6)}</strong><small>{discovery.registryProgramId === null ? 'manifests unread' : 'manifests authenticated by content'}</small></article>
-          <article><span>Liability source</span><strong>{discovery.claimsProgramId === null ? 'not selected' : shortAddressV1(discovery.claimsProgramId, 6)}</strong><small>{discovery.claimsProgramId === null ? 'supplies unread' : 'supplies read from the Claims aggregate'}</small></article>
+          <article><span>Core program</span><strong>{shortAddressV1(deployment.programs.core, 6)}</strong><small>{deployment.cluster === 'devnet' ? 'DEPLOY-1 permanent address' : 'the active deployment'}</small></article>
         </div>
         <p className="direct-status">{discovery.enumeration.note}</p>
+        {discovery.enumeration.mode === 'refused' && <p className="market-refusal">{discovery.enumeration.reason}</p>}
         {discovery.cards.length === 0
-          ? <p className="market-empty">This finalized floor holds no requested Market. Nothing is displayed in place of one.</p>
+          ? discovery.enumeration.mode === 'refused' ? null : <EmptyMarkets deployment={deployment} />
           : <div className="market-card-grid">{discovery.cards.map((card) => <MarketCard key={card.address} card={card} />)}</div>}
       </>}
     </section>

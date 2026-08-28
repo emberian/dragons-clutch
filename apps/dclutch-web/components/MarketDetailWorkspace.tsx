@@ -2,7 +2,9 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
-import { FormEvent, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+
+import { useDeploymentV1 } from '@/lib/deploymentStore';
 
 import { type CapabilityFundingQuoteV1 } from '@/lib/capabilityManifest';
 import {
@@ -18,9 +20,10 @@ import {
   type MarketCollateralV1,
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
+import CellStrip from '@/components/charts/CellStrip';
 import MarketTradePanel from '@/components/MarketTradePanel';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
-import { DEFAULT_RPC_ENDPOINT_V1, clusterNameV1 } from '@/lib/rpcDefault';
+import { clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -148,35 +151,41 @@ function Realm({ collateral }: Readonly<{ collateral: MarketCollateralV1 }>) {
 }
 
 export default function MarketDetailWorkspace({ address }: Readonly<{ address: string }>) {
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
-  const [coreProgram, setCoreProgram] = useState('');
-  const [registryProgram, setRegistryProgram] = useState('');
-  const [claimsProgram, setClaimsProgram] = useState('');
-  const [custodyProgram, setCustodyProgram] = useState('');
-  const [tradingProgram, setTradingProgram] = useState('');
-  const [state, setState] = useState<State>({ kind: 'idle', message: 'No finalized state has been read for this Market address.' });
+  const deployment = useDeploymentV1();
+  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this Market at the finalized floor…' });
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
 
-  async function read(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const read = useCallback(async () => {
     setState({ kind: 'loading', message: 'Reading this Market, the Realm record and capability manifest it commits to, and the Claims aggregate holding its liabilities, behind one finalized floor…' });
     try {
-      const client = new SolanaRpcClient(endpoint);
+      const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
       const next = await inspectMarketDetailV1(client, {
-        coreProgramId: coreProgram,
-        registryProgramId: registryProgram === '' ? null : registryProgram,
-        claimsProgramId: claimsProgram === '' ? null : claimsProgram,
-        custodyProgramId: custodyProgram === '' ? null : custodyProgram,
+        coreProgramId: deployment.programs.core,
+        registryProgramId: deployment.programs.registry,
+        claimsProgramId: deployment.programs.claims,
+        custodyProgramId: deployment.programs.custody,
         address,
       });
       setState({ kind: 'ready', detail: next, facts, message: next.reason });
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
-  }
+  }, [address, deployment]);
+
+  // Content on load: the address is in the URL and the deployment is baked,
+  // so there is nothing left to ask for before reading the chain.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void read();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [read]);
 
   const marketProvenance: MarketProvenanceV1 = card?.provenance
     ?? Object.freeze({ kind: 'refused', reason: 'This Market has not been read at any finalized floor yet.' });
@@ -188,40 +197,30 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     ?? Object.freeze({ kind: 'refused' as const, reason: 'No capability manifest has been authenticated, because no Market has been read.' });
 
   return <main className="product-shell trade-v3-shell">
-    <Nav current="/markets" />
+    <Nav current="/markets" status={`${deployment.label} · finalized reads`} />
 
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow"><Anchor href="/markets">← all Markets</Anchor> · one Market, decoded field by field</p>
-        <h1>{shortAddressV1(address, 8)}<br /><em>{decoded === null ? 'unread' : decoded.phase}</em></h1>
+        <h1>{shortAddressV1(address, 8)}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : 'unread') : decoded.phase}</em></h1>
         <p>Every field below is decoded from a finalized account this browser read, or the section carries REFUSED and its exact reason. Nothing here is aggregated, estimated, or carried over from a previous observation, and no sub-state renders as empty-but-fine.</p>
       </div>
       <aside>
         <span>Market address</span>
         <strong>{shortAddressV1(address, 10)}</strong>
         <p><code>{address}</code></p>
-        {/* The five program ids live in this component's state and nowhere
-            else, so the link carries them: the explorer is URL-addressable
-            exactly so a reader does not have to retype them. */}
-        <p><Anchor href={`/explorer?view=market&q=${encodeURIComponent(address)}&rpc=${encodeURIComponent(endpoint)}${coreProgram === '' ? '' : `&core=${encodeURIComponent(coreProgram)}`}${registryProgram === '' ? '' : `&registry=${encodeURIComponent(registryProgram)}`}${claimsProgram === '' ? '' : `&claims=${encodeURIComponent(claimsProgram)}`}${custodyProgram === '' ? '' : `&custody=${encodeURIComponent(custodyProgram)}`}`}>
+        <p><Anchor href={`/explorer?view=market&q=${encodeURIComponent(address)}`}>
           Open the record graph in the explorer →
         </Anchor></p>
       </aside>
     </section>
 
-    <form className="trade-v3-card route-card" onSubmit={(event) => void read(event)}>
-      <header><span>00</span><div><h2>Select the finalized endpoint and Core authority</h2><p>A Market address alone says nothing: the Core program that owns it decides what the bytes mean. The Registry program is optional and is required only to authenticate this Market&apos;s capability manifest against its content identity.</p></div></header>
-      <div className="direct-form-grid">
-        <label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
-        <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
-        <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
-        <label><span>Claims program · optional</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
-        <label><span>Custody program · optional</span><input value={custodyProgram} onChange={(event) => setCustodyProgram(event.target.value.trim())} /></label>
-        <label><span>Trading program · optional, enables the trade panel</span><input value={tradingProgram} onChange={(event) => setTradingProgram(event.target.value.trim())} /></label>
-      </div>
-      <div className="direct-actions">
-        <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized Market state…' : 'Read this Market'}</button>
-      </div>
+    <section className="trade-v3-card route-card">
+      <header>
+        <span>00</span>
+        <div><h2>The read</h2><p>The Core program that owns this account decides what its bytes mean; it and every other program here come from the active {deployment.label} deployment. The capability manifest is authenticated against the Registry program of the same deployment.</p></div>
+        <div className="direct-actions"><button type="button" onClick={() => void read()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read this Market'}</button></div>
+      </header>
       <p className="direct-status" aria-live="polite">{state.message}</p>
       {state.kind === 'ready' && <div className="trade-v3-evidence">
         <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
@@ -229,7 +228,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <article><span>Core program</span><strong>{shortAddressV1(state.detail.coreProgramId, 6)}</strong><small>owner of these bytes</small></article>
         <article><span>Capability source</span><strong>{state.detail.registryProgramId === null ? 'not selected' : shortAddressV1(state.detail.registryProgramId, 6)}</strong><small>{state.detail.registryProgramId === null ? 'manifest unread' : 'manifest authenticated by content'}</small></article>
       </div>}
-    </form>
+    </section>
 
     <section className="trade-v3-card">
       <header><span>01</span><div><h2>Overview</h2><p>What this account is, and the immutable identities it committed to when it was founded.</p></div><SectionProvenance provenance={marketProvenance} /></header>
@@ -290,6 +289,22 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               <ContentId label="Liability basis" value={decoded.liability.liabilityBasisId} />
             </dl>
             <h3 className="detail-subhead">Per-claim supply · ordered, raw u64</h3>
+            {/* FE-CHART mount: the cell strip draws the same aggregate the
+                list below itemizes; the list stays as the exact-value twin. */}
+            <CellStrip
+              supplies={decoded.liability.supplyAtoms}
+              winner={decoded.settlement.status === 'terminal' ? decoded.settlement.winner : null}
+              requiredBackingAtoms={decoded.liability.requiredBackingAtoms}
+              requiredBackingNote={requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}
+              caption="Each cell is one claim across this Market&rsquo;s outcome domain; heights are issued claim atoms from the Claims aggregate, against the exact required-backing line."
+              notes={decoded.liability.supplyAtoms.map((_, index) => (
+                decoded.settlement.status === 'terminal'
+                  ? (decoded.settlement.winner === index
+                    ? 'winning · pays out under the Market’s own basis (one atom per claim atom when categorical)'
+                    : 'losing · pays zero')
+                  : 'unsettled · the terminal receipt decides what this claim pays'
+              ))}
+            />
             <ol className="outcome-vector">
               {decoded.liability.supplyAtoms.map((amount, index) => (
                 <li key={index} className={decoded.settlement.status === 'terminal' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
@@ -336,12 +351,12 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     </section>
 
     {decoded !== null && <MarketTradePanel
-      endpoint={endpoint}
+      endpoint={deployment.endpoint}
       marketAddress={address}
-      coreProgramId={coreProgram}
-      registryProgramId={registryProgram === '' ? null : registryProgram}
-      claimsProgramId={claimsProgram === '' ? null : claimsProgram}
-      tradingProgramId={tradingProgram === '' ? null : tradingProgram}
+      coreProgramId={deployment.programs.core}
+      registryProgramId={deployment.programs.registry}
+      claimsProgramId={deployment.programs.claims}
+      tradingProgramId={deployment.programs.trading}
       liability={decoded.liability}
     />}
 
