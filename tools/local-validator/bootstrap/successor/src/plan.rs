@@ -159,6 +159,30 @@ struct RoleDeployment {
     source: DeploymentSourceV1,
 }
 
+/// Validate the relationship Loader V3 may create between a checked build
+/// candidate and the live ProgramData ELF tail: the candidate is an exact
+/// prefix and every remaining allocated byte is zero.
+///
+/// This deliberately does not claim the two byte strings have one digest. A
+/// release authenticates the complete live tail, while a checked-release
+/// manifest normally authenticates the raw build output. Callers that want to
+/// bridge those identities must record both digests rather than silently
+/// replacing either one.
+pub(crate) fn checked_candidate_padding_v1(candidate: &[u8], deployed: &[u8]) -> Result<usize> {
+    if candidate.get(..4) != Some(b"\x7fELF") {
+        return Err(Error::new("checked candidate is not an ELF"));
+    }
+    let suffix = deployed
+        .strip_prefix(candidate)
+        .ok_or_else(|| Error::new("deployed ProgramData ELF does not begin with the candidate"))?;
+    if suffix.iter().any(|byte| *byte != 0) {
+        return Err(Error::new(
+            "deployed ProgramData ELF has nonzero bytes after the candidate",
+        ));
+    }
+    Ok(suffix.len())
+}
+
 /// Read one role's `ProgramData` image and hostile-decode its deployment facts.
 ///
 /// The ELF and the upgrade authority are checked against what this plan is
@@ -227,6 +251,15 @@ fn role_deployment(
         ))
     })?;
     if view.elf() != elf {
+        if let Ok(padding_bytes) = checked_candidate_padding_v1(elf, view.elf()) {
+            return Err(Error::new(format!(
+                "{label} ProgramData carries the exact checked candidate plus {padding_bytes} \
+                 zero allocation bytes. The relationship is valid, but this plan format has one \
+                 ELF digest and must not conflate the raw-candidate digest with the complete \
+                 deployed-tail digest. Add a dual-digest prepare field before admitting this \
+                 observation; do not publish a release from it"
+            )));
+        }
         return Err(Error::new(format!(
             "{label} ProgramData account carries a different ELF than the pinned artifact"
         )));
@@ -1128,6 +1161,33 @@ mod tests {
         assert_eq!(bytes[12], 0);
         assert!(bytes[13..45].iter().all(|byte| *byte == 0));
         assert_eq!(&bytes[45..], b"\x7fELFbody");
+    }
+
+    #[test]
+    fn checked_candidate_padding_accepts_only_an_exact_prefix_and_zero_suffix() {
+        let candidate = b"\x7fELFchecked";
+        assert_eq!(
+            checked_candidate_padding_v1(candidate, candidate).expect("exact live tail"),
+            0
+        );
+        let mut padded = candidate.to_vec();
+        padded.extend_from_slice(&[0; 19]);
+        assert_eq!(
+            checked_candidate_padding_v1(candidate, &padded).expect("zero-padded live tail"),
+            19
+        );
+
+        let mut nonzero_suffix = padded.clone();
+        *nonzero_suffix.last_mut().expect("suffix") = 1;
+        assert!(checked_candidate_padding_v1(candidate, &nonzero_suffix).is_err());
+
+        let mut substituted_prefix = padded;
+        substituted_prefix[4] ^= 1;
+        assert!(checked_candidate_padding_v1(candidate, &substituted_prefix).is_err());
+        assert!(
+            checked_candidate_padding_v1(candidate, &candidate[..candidate.len() - 1]).is_err()
+        );
+        assert!(checked_candidate_padding_v1(&[], &[]).is_err());
     }
 
     #[test]
