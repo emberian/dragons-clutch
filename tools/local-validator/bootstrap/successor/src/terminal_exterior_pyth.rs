@@ -1115,10 +1115,15 @@ fn authenticate_finalized_history_v1(rpc: &mut Rpc, journal: &JournalV1) -> Resu
         .ok_or_else(|| Error::new("finalized local Pyth journal omitted evidence"))?;
     let transaction = finalized_transaction_v1(rpc, &expected.signature)?
         .ok_or_else(|| Error::new("persisted local Pyth finalization disappeared"))?;
-    let observed = finalized_evidence_v1(rpc, journal, &transaction)?;
+    let mut observed = finalized_evidence_v1(rpc, journal, &transaction)?;
+    // Account bytes are a point-in-time receipt. Later canonical steps
+    // legitimately mutate the same EncodedVaa, so archived journals recheck
+    // only immutable transaction history and retain (rather than reread) the
+    // exact poststate captured when that step finalized.
+    observed.poststate = expected.poststate.clone();
     if &observed != expected {
         return Err(Error::new(
-            "persisted local Pyth finalized packet, fee, balances, return data, or poststate changed",
+            "persisted local Pyth finalized packet, fee, balances, or return data changed",
         ));
     }
     Ok(())
