@@ -716,14 +716,32 @@ QUEUED with owners:
   referenced by nothing — find what rebuilds a deleted program's ELF and stop
   it (63 SOL if a deploy glob ever eats it).
 
-- Journey trading stages (trigger: DECOMP's 20/20 + geometry-parametric
-  artifacts): three independent walls named by JRNY-2 — prestate (Claims
-  admission is behind the Hot gate; CUSTROLE's replay-creation is the pattern
-  for the wallet-side), SHAPE (the shipped Direct profile is emitted for the
-  3-claim/3-cut canonical geometry; a 4-claim/2-cut market needs
-  geometry-parametric artifact emission — BUNDLE's derivation + the emitters
-  converge here), and PACKET (1,228 + SetComputeUnitLimit = 1,268 > 1,232:
-  the journey's trades ride v0/ALT from day one).
+- Journey trading stages: three independent walls named by JRNY-2 — prestate
+  (Claims admission is behind the Hot gate; CUSTROLE's replay-creation is the
+  pattern for the wallet-side), SHAPE, and PACKET (1,228 +
+  SetComputeUnitLimit = 1,268 > 1,232: the journey's trades ride v0/ALT from
+  day one). **SHAPE IS DOWN, and was never a wall (GEO-ART, 2026-08-27,
+  4b67d29e + 1b0fe8be).** Its premise — "the shipped Direct profile is emitted
+  for the 3-claim/3-cut canonical geometry; a 4-claim/2-cut market needs
+  geometry-parametric artifact emission" — was wrong in both halves. There is
+  no 3-claim/3-cut geometry: Product Runtime V2 pins `region_count =
+  cut_count + 1` and `outcome_count = region_count + 1`, so a geometry is ONE
+  number, `outcome_count = cut_count + 2`, and the canonical demo is 3
+  outcomes at ONE cut. And no geometry needs its own emission: every
+  runtime-width account is stated as an affine `(base, stride)` rule against
+  the transaction's own Product tail, `item_account_stride` is 0 family-wide,
+  and the artifact bundle, ProgramSet and all pinned identities are
+  byte-identical across fifteen geometries. Measured on real ELFs through the
+  Registry continuation: EVERY geometry from 2 to 30 outcomes trades on the
+  one artifact set (31 exhausts the 1.4M ceiling, and the sweep asserts a
+  too-wide market runs out of COMPUTE rather than being refused its shape).
+  `DirectOrdinaryGeometryV3` (`crates/dclutch-direct-codec/src/
+  ordinary_geometry_v3.rs`) owns the arithmetic and derives the four record
+  widths a market of a given width must present. DEPLOY-1's flagship — cuts
+  12,000/18,000, coefficients 1,0,1,0 — IS the 4-outcome market, and it needs
+  no artifacts of its own; the activation recipe is on the board. What SHAPE
+  did NOT touch: prestate, and the fact that no Direct entry has been
+  activated on a public cluster.
 - CU-BUDGET rows owed: CreateFund (86% of ceiling) and VerifyFundReady (84%)
   are unbudgeted; CreateFund's frame is 2,016 B on ALTs. Add at next tier run.
 
@@ -937,3 +955,13 @@ chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
   live in waist::FixtureSubstrateV1 (DCLUTCH_FIXTURE_SUBSTRATE).
 - SN7: registry-sbf lib.rs:378-380 doc prose is pre-0012 ("keeps the full
   current-ELF hash" — no longer true of the function it documents).
+
+- DLR-ACCEPT (codex-ready, sized by DLR-HOT): the Dealer Accepted transcript
+  + pool campaign. The lever: crates/dclutch-operator/src/
+  dealer_scenario_hot_v4.rs already computes the exact fixed(39)+extras(8)+
+  authorities+suffix layout AND all nine span counts — wire it into
+  dealer_chain.rs (210 lines, zero pub fn today); BUNDLE's builder lacks the
+  admitted frame (general.rs:82-92 names its own gap). Frontier stops at
+  authenticate_product_runtime_v3; the seeds-exclude-own-address probe trick
+  is landed. Also: dealer/README.md's 35-account packet exemption is stale
+  under an admitted bundle — re-answer, don't inherit.
