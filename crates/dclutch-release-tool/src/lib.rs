@@ -395,6 +395,37 @@ pub struct ReleaseEvidenceV1<'a> {
     pub metadata: &'a BuildMetadataV1,
 }
 
+/// Exact evidence for rebinding one checked build to another Loader V3 pair.
+///
+/// `build_basis` remains the authority for the artifact and reproducibility
+/// metadata. The remaining fields are the complete semantic and Loader
+/// observation for the new deployment. This is intentionally not a metadata
+/// editor: callers cannot replace source, lock, toolchain, or build-command
+/// facts while retaining the checked build's artifact identity.
+#[derive(Clone, Copy, Debug)]
+pub struct RedeployedReleaseEvidenceV1<'a> {
+    /// Exact checked manifest that authenticated the built ELF.
+    pub build_basis: &'a CheckedReleaseV1,
+    /// Exact built SBF ELF, required to match `build_basis` byte-for-byte by
+    /// digest before any new checked identity is constructed.
+    pub elf: &'a [u8],
+    /// Exact semantic preimage selected by the new deployment.
+    pub semantic_preimage: &'a [u8],
+    /// New deployed Program identity. Loader Program account data does not
+    /// contain its own address, so this coordinate remains explicit evidence.
+    pub program_id: [u8; 32],
+    /// New deployed ProgramData identity. The Loader Program body must link to
+    /// this exact separately observed account coordinate.
+    pub programdata_id: [u8; 32],
+    /// Exact Loader V3 Program account data for the new deployment.
+    pub program_account_data: &'a [u8],
+    /// Exact Loader V3 ProgramData account data for the new deployment.
+    pub programdata_account_data: &'a [u8],
+    /// Canonical, sorted assumptions describing how the new Loader snapshots
+    /// were obtained. Build facts are inherited from `build_basis` instead.
+    pub deployment_assumptions: &'a [String],
+}
+
 /// Canonical checked binding between semantic, artifact, loader, and build facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CheckedReleaseV1 {
@@ -874,6 +905,47 @@ pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedR
     };
     result.validate()?;
     Ok(result)
+}
+
+/// Rebind one authenticated checked build to an exact new Loader V3 pair.
+///
+/// The function refuses an ELF that differs from the checked build basis,
+/// hostile-decodes the new Program/ProgramData linkage through the ordinary
+/// checked-release constructor, and carries forward only the build metadata
+/// that the basis already committed. The returned content identity therefore
+/// names the new deployment rather than reusing or inventing an identifier.
+pub fn build_redeployed_checked_release(
+    evidence: RedeployedReleaseEvidenceV1<'_>,
+) -> Result<CheckedReleaseV1> {
+    if sha256(evidence.elf) != evidence.build_basis.artifact_digest {
+        return Err(Error::DeployedElfMismatch);
+    }
+    let metadata = BuildMetadataV1 {
+        semantic_kind: evidence.build_basis.semantic_kind,
+        program_id: evidence.program_id,
+        programdata_id: evidence.programdata_id,
+        loader_program_id: evidence.build_basis.loader_program_id,
+        program_owner: evidence.build_basis.loader_program_id,
+        program_executable: true,
+        programdata_owner: evidence.build_basis.loader_program_id,
+        programdata_executable: false,
+        source_digest: evidence.build_basis.source_digest,
+        cargo_lock_digest: evidence.build_basis.cargo_lock_digest,
+        source_revision: evidence.build_basis.source_revision.clone(),
+        rustc_version: evidence.build_basis.rustc_version.clone(),
+        solana_version: evidence.build_basis.solana_version.clone(),
+        cargo_build_sbf_version: evidence.build_basis.cargo_build_sbf_version.clone(),
+        target_triple: evidence.build_basis.target_triple.clone(),
+        build_command: evidence.build_basis.build_command.clone(),
+        assumptions: evidence.deployment_assumptions.to_vec(),
+    };
+    build_checked_release(ReleaseEvidenceV1 {
+        elf: evidence.elf,
+        semantic_preimage: evidence.semantic_preimage,
+        program_account_data: evidence.program_account_data,
+        programdata_account_data: evidence.programdata_account_data,
+        metadata: &metadata,
+    })
 }
 
 /// Decode a checked manifest and require exact equality with rebuilt evidence.
