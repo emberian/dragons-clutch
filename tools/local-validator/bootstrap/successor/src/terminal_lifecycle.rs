@@ -8,14 +8,20 @@
 //! `terminal_sequence`; this module neither reads keys nor signs or submits a
 //! transaction.
 
-use std::{collections::BTreeMap, io::Write, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Write,
+    path::PathBuf,
+};
 
 use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_market_core_codec::CoreState;
 use dclutch_operator::ObservedAccount;
+use dclutch_product_payoff_v2_codec::runtime_v3::{BasisKindV3, ProductBasisV3};
 use serde::Deserialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
@@ -24,7 +30,7 @@ use crate::{
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
     model::SuccessorPlan,
     plan::{hex, hex32, pubkey},
-    rpc::{Rpc, WritePolicyV1},
+    rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
     wallet_terminal::{
         FinalizedSnapshotV1, INPUT_FORMAT, LookupTableRequirementV1, PlanInputV1,
         ProgramSelectorsV1, RecordPairV1, RecordSelectorsV1, SelectedInputV1, build_report,
@@ -33,6 +39,8 @@ use crate::{
 };
 
 const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context/v1";
+const CAMPAIGN_REPORT_SCHEMA_V1: &str = "dclutch-successor-campaign-report-v1";
+const MAX_CAMPAIGN_REPORT_BYTES_V1: usize = 16 * 1024 * 1024;
 
 const TERMINAL_COMPOSITION_LABELS_V1: [&str; 4] = [
     "terminal_composition_descriptor_record",
@@ -53,21 +61,142 @@ pub(crate) const DIRECT_NATIVE_CLOSE_LABELS_V1: [&str; 3] = [
     "direct_native_close_descriptor_record",
 ];
 
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct PayoutEvidenceV1 {
+/// The sole terminal projection of the permanent-devnet campaign report.
+///
+/// This type is deliberately not `Deserialize`: no flat payout DTO is an
+/// accepted external schema. `parse_campaign_terminal_evidence_v1` is the
+/// only constructor and projects the exact nested report emitted by
+/// `campaign` after it has authenticated that report's schema and completed
+/// execution shape.
+#[derive(Clone, Debug)]
+pub(crate) struct CampaignTerminalEvidenceV1 {
     pub(crate) plan_sha256: String,
-    #[serde(rename = "foundingCustodyContext")]
     pub(crate) founding_custody_context: String,
-    #[serde(rename = "directSelectedManifestEntryIndex")]
     pub(crate) direct_selected_manifest_entry_index: u16,
-    pub(crate) accounts: BTreeMap<String, PayoutAccountEvidenceV1>,
+    pub(crate) accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct PayoutAccountEvidenceV1 {
+#[serde(deny_unknown_fields)]
+pub(crate) struct CampaignAccountEvidenceV1 {
     pub(crate) address: String,
     pub(crate) owner: String,
+    pub(crate) lamports: u64,
+    pub(crate) executable: bool,
+    pub(crate) data_len: usize,
     pub(crate) data_sha256: String,
+    pub(crate) account_sha256: String,
+}
+
+pub(crate) fn parse_campaign_terminal_evidence_v1(
+    source: &[u8],
+) -> Result<CampaignTerminalEvidenceV1> {
+    if source.is_empty() || source.len() > MAX_CAMPAIGN_REPORT_BYTES_V1 {
+        return Err(Error::new(
+            "campaign report is outside the 1..16777216 byte bound",
+        ));
+    }
+    let report: Value = parse_json_without_duplicate_keys_v1(source)?;
+    if report.get("schema").and_then(Value::as_str) != Some(CAMPAIGN_REPORT_SCHEMA_V1) {
+        return Err(Error::new(
+            "terminal evidence is not dclutch-successor-campaign-report-v1",
+        ));
+    }
+    let plan_sha256 = report
+        .get("plan_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("campaign report omitted plan_sha256"))?
+        .to_owned();
+    hex32(&plan_sha256)?;
+    if report
+        .pointer("/execution/completed")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(Error::new(
+            "campaign report does not carry completed execution",
+        ));
+    }
+    let market = report
+        .pointer("/execution/market")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new("campaign report omitted execution.market"))?;
+    let completed = market
+        .get("completed")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("campaign report omitted execution.market.completed"))?;
+    let mut completed_names = BTreeSet::new();
+    if completed.is_empty()
+        || completed.len() > 512
+        || completed.iter().any(|stage| {
+            stage.as_str().is_none_or(|value| {
+                value.is_empty() || value.len() > 512 || !completed_names.insert(value)
+            })
+        })
+    {
+        return Err(Error::new(
+            "campaign report market completion list is noncanonical",
+        ));
+    }
+    let founding_custody_context = market
+        .get("founding_custody_context")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Error::new("campaign report omitted execution.market.founding_custody_context")
+        })?
+        .to_owned();
+    hex32(&founding_custody_context)?;
+    let direct_selected_manifest_entry_index = market
+        .get("direct_selected_manifest_entry_index")
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or_else(|| {
+            Error::new(
+                "campaign report omitted canonical execution.market.direct_selected_manifest_entry_index",
+            )
+        })?;
+    let accounts_value = market
+        .get("accounts")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new("campaign report omitted execution.market.accounts"))?;
+    if accounts_value.is_empty() || accounts_value.len() > 4_096 {
+        return Err(Error::new(
+            "campaign report account projection is outside the 1..4096 row bound",
+        ));
+    }
+    if accounts_value.contains_key("terminal_record") {
+        return Err(Error::new(
+            "campaign report carries a stale terminal_record row; live Core terminal_receipt is the sole terminal identity",
+        ));
+    }
+    let mut accounts = BTreeMap::new();
+    for (label, value) in accounts_value {
+        if label.is_empty() || label.len() > 128 {
+            return Err(Error::new("campaign report account label is not bounded"));
+        }
+        let row: CampaignAccountEvidenceV1 = serde_json::from_value(value.clone())
+            .map_err(|error| Error::new(format!("campaign account {label}: {error}")))?;
+        pubkey(&row.address)?;
+        pubkey(&row.owner)?;
+        hex32(&row.data_sha256)?;
+        hex32(&row.account_sha256)?;
+        // These physical facts are intentionally retained in the exact
+        // campaign row even though terminal routing never treats either as
+        // authority. Deserialization above proves their integer/bool shapes.
+        let _routing_only_physical_facts = (row.lamports, row.executable);
+        if row.data_len > MAX_CAMPAIGN_REPORT_BYTES_V1 {
+            return Err(Error::new(format!(
+                "campaign account {label} data length is outside the bound"
+            )));
+        }
+        accounts.insert(label.clone(), row);
+    }
+    Ok(CampaignTerminalEvidenceV1 {
+        plan_sha256,
+        founding_custody_context,
+        direct_selected_manifest_entry_index,
+        accounts,
+    })
 }
 
 struct ArgumentsV1 {
@@ -81,23 +210,48 @@ struct ArgumentsV1 {
     quantity: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CoreTerminalReceiptMeaningV1 {
+    /// Core accepted a Resolution certificate account for a categorical
+    /// result. No terminal-coordinate record exists or is consulted.
+    CategoricalResolutionCertificate(Pubkey),
+    /// Core carries the content identity used to derive the rational terminal
+    /// coordinate record pair. That pair is authenticated by the payout
+    /// semantic owner before use.
+    RationalTerminalCoordinate([u8; 32]),
+}
+
 pub(crate) fn run_wallet_terminal_input(arguments: Vec<String>) -> Result<()> {
     let arguments = parse_arguments(arguments)?;
     let plan_source = std::fs::read(&arguments.plan)?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
-    let evidence: PayoutEvidenceV1 = serde_json::from_slice(&std::fs::read(&arguments.evidence)?)?;
+    let evidence_source = std::fs::read(&arguments.evidence)?;
+    let evidence = parse_campaign_terminal_evidence_v1(&evidence_source)?;
     authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
     require_terminal_composition_evidence(&evidence)?;
 
-    let mut input = routed_input(&plan, &evidence, &arguments)?;
+    authenticate_campaign_market_v1(&evidence, arguments.market)?;
+    let mut rpc = Rpc::connect_cluster(&arguments.origin, WritePolicyV1::ReadsOnly)?;
+    let receipt_snapshot = finalized_snapshot(&mut rpc, &[arguments.market])?;
+    let live_market = decode_routed_market(
+        receipt_snapshot.required(arguments.market, "Core Market")?,
+        pubkey(&plan.core.program_id)?,
+        &plan,
+    )?;
+    let terminal_receipt = live_market
+        .terminal_receipt
+        .ok_or_else(|| Error::new("Core Market has no accepted terminal receipt"))?
+        .to_bytes();
+
+    let mut input = routed_input(&plan, &evidence, &arguments, terminal_receipt)?;
     let routed = SelectedInputV1::parse(&input, LookupTableRequirementV1::Absent)?;
     authenticate_routing_hints(&routed, &evidence)?;
 
     let addresses = routed.addresses();
-    let mut rpc = Rpc::connect_cluster(&arguments.origin, WritePolicyV1::ReadsOnly)?;
-    let floor = rpc.finalized_slot()?;
+    let floor = receipt_snapshot.observation.slot;
     let (slot, values) = rpc.finalized_accounts(&addresses, floor)?;
     let snapshot = FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &addresses, values)?;
+    let receipt_meaning = authenticate_core_terminal_receipt_meaning_v1(&routed, &snapshot)?;
 
     let position_account = snapshot.required(routed.position, "Claims Position")?;
     let position = LiabilityBasisPositionViewV2::decode(&position_account.data)
@@ -127,11 +281,59 @@ pub(crate) fn run_wallet_terminal_input(arguments: Vec<String>) -> Result<()> {
         ));
     }
     let _authenticated = build_report(&selected, &snapshot)?;
+    let receipt_label = match receipt_meaning {
+        CoreTerminalReceiptMeaningV1::CategoricalResolutionCertificate(_) => {
+            "categorical Resolution certificate"
+        }
+        CoreTerminalReceiptMeaningV1::RationalTerminalCoordinate(_) => {
+            "rational terminal coordinate"
+        }
+    };
     eprintln!(
-        "wallet-terminal-payout-input: authenticated one finalized snapshot at slot {}",
-        snapshot.observation.slot
+        "wallet-terminal-payout-input: authenticated one finalized snapshot at slot {} with live Core {}",
+        snapshot.observation.slot, receipt_label,
     );
     stdout_json(&input)
+}
+
+fn authenticate_core_terminal_receipt_meaning_v1(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+) -> Result<CoreTerminalReceiptMeaningV1> {
+    let market = CoreState::decode(&snapshot.required(selected.market, "Core Market")?.data)
+        .map_err(|error| Error::new(format!("Core Market: {error:?}")))?;
+    let receipt = market
+        .terminal_receipt
+        .ok_or_else(|| Error::new("Core Market has no accepted terminal receipt"))?
+        .to_bytes();
+    if receipt != selected.terminal_record_digest {
+        return Err(Error::new(
+            "live Core terminal receipt differs from the projected payout identity",
+        ));
+    }
+    let basis = ProductBasisV3::decode(
+        &snapshot
+            .required(selected.product_basis.raw, "ProductBasis")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("ProductBasis: {error:?}")))?;
+    Ok(core_terminal_receipt_meaning_v1(basis.kind(), receipt))
+}
+
+fn core_terminal_receipt_meaning_v1(
+    kind: BasisKindV3,
+    receipt: [u8; 32],
+) -> CoreTerminalReceiptMeaningV1 {
+    match kind {
+        BasisKindV3::CategoricalQ1 => {
+            CoreTerminalReceiptMeaningV1::CategoricalResolutionCertificate(Pubkey::new_from_array(
+                receipt,
+            ))
+        }
+        BasisKindV3::GradedExactComplement => {
+            CoreTerminalReceiptMeaningV1::RationalTerminalCoordinate(receipt)
+        }
+    }
 }
 
 pub(crate) fn decode_routed_market(
@@ -193,7 +395,7 @@ pub(crate) fn authenticate_zero_claims(
 }
 
 pub(crate) fn routed_record(
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     label: &str,
     registry: Pubkey,
     schema: [u8; 32],
@@ -221,8 +423,9 @@ pub(crate) fn finalized_snapshot(rpc: &mut Rpc, keys: &[Pubkey]) -> Result<Final
 
 fn routed_input(
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     arguments: &ArgumentsV1,
+    terminal_receipt: [u8; 32],
 ) -> Result<PlanInputV1> {
     let record_digest = |label: &str| -> Result<String> {
         Ok(required_account(evidence, label)?.data_sha256.clone())
@@ -261,14 +464,19 @@ fn routed_input(
             composition_graph: record_digest(TERMINAL_COMPOSITION_LABELS_V1[1])?,
             composition_translation: record_digest(TERMINAL_COMPOSITION_LABELS_V1[2])?,
             composition_exposure: record_digest(TERMINAL_COMPOSITION_LABELS_V1[3])?,
-            terminal_record: record_digest("terminal_record")?,
+            // This legacy wire field carries Core's accepted terminal receipt
+            // identity. For categorical Markets it is the Resolution
+            // certificate account; for rational Markets it is the terminal
+            // coordinate digest. Its meaning comes from live Core state, not
+            // from an untrusted campaign row.
+            terminal_record: hex(&terminal_receipt),
         },
     })
 }
 
 fn authenticate_routing_hints(
     selected: &SelectedInputV1,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
 ) -> Result<()> {
     let expected = [
         ("realm_record", selected.realm.raw),
@@ -292,7 +500,6 @@ fn authenticate_routing_hints(
             TERMINAL_COMPOSITION_LABELS_V1[3],
             selected.composition_exposure.raw,
         ),
-        ("terminal_record", selected.terminal_coordinate.raw),
     ];
     for (label, derived) in expected {
         let persisted = pubkey(&required_account(evidence, label)?.address)?;
@@ -364,7 +571,7 @@ pub(crate) fn authenticate_plan_source(source: &[u8], expected: &str) -> Result<
     Ok(())
 }
 
-fn require_terminal_composition_evidence(evidence: &PayoutEvidenceV1) -> Result<()> {
+fn require_terminal_composition_evidence(evidence: &CampaignTerminalEvidenceV1) -> Result<()> {
     let missing = TERMINAL_COMPOSITION_LABELS_V1
         .iter()
         .copied()
@@ -379,7 +586,9 @@ fn require_terminal_composition_evidence(evidence: &PayoutEvidenceV1) -> Result<
     Ok(())
 }
 
-pub(crate) fn require_direct_retirement_evidence(evidence: &PayoutEvidenceV1) -> Result<()> {
+pub(crate) fn require_direct_retirement_evidence(
+    evidence: &CampaignTerminalEvidenceV1,
+) -> Result<()> {
     for label in DIRECT_BEGIN_RETIRING_LABELS_V1
         .into_iter()
         .chain(DIRECT_NATIVE_CLOSE_LABELS_V1)
@@ -399,10 +608,23 @@ pub(crate) fn require_direct_retirement_evidence(evidence: &PayoutEvidenceV1) ->
     Ok(())
 }
 
+pub(crate) fn authenticate_campaign_market_v1(
+    evidence: &CampaignTerminalEvidenceV1,
+    expected: Pubkey,
+) -> Result<()> {
+    let persisted = pubkey(&required_account(evidence, "founding_market")?.address)?;
+    if persisted != expected {
+        return Err(Error::new(
+            "terminal Market differed from exact founding campaign evidence",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn required_account<'a>(
-    evidence: &'a PayoutEvidenceV1,
+    evidence: &'a CampaignTerminalEvidenceV1,
     label: &str,
-) -> Result<&'a PayoutAccountEvidenceV1> {
+) -> Result<&'a CampaignAccountEvidenceV1> {
     evidence
         .accounts
         .get(label)
@@ -512,11 +734,13 @@ pub(crate) fn usage() -> &'static str {
      [--i-mean-devnet DEVNET_GENESIS_HASH] --plan ABSOLUTE_JSON \\
      --evidence ABSOLUTE_JSON --market PUBKEY --owner PUBKEY --recipient PUBKEY \\
      --claim-index U32 [--quantity U64]\n\nThis command is read-only. It uses persisted \
-     campaign and terminal-publication evidence only to route one finalized account snapshot, \
+     one exact completed dclutch-successor-campaign-report-v1 only to route finalized account observations, \
      reauthenticates the complete payout graph, derives a crash-stable parent context from the \
      immutable request and authenticated prestate (never the observation slot), and emits the \
      exact dclutch-wallet-terminal-payout-plan-input-v1 accepted by the existing ALT planner. \
-     Missing canonical native-composition publication evidence is a hard lifecycle blocker. \
+     Core's fresh terminal_receipt is the sole terminal identity: categorical Markets bind the \
+     accepted Resolution certificate, while rational Markets derive and authenticate their terminal \
+     coordinate. Missing canonical native-composition publication evidence is a hard lifecycle blocker. \
      Mainnet-beta is refused unconditionally."
 }
 
@@ -721,7 +945,7 @@ mod tests {
 
     #[test]
     fn missing_native_composition_is_an_explicit_lifecycle_blocker() {
-        let evidence = PayoutEvidenceV1 {
+        let evidence = CampaignTerminalEvidenceV1 {
             plan_sha256: hex(&[1; 32]),
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
@@ -736,33 +960,105 @@ mod tests {
     }
 
     #[test]
-    fn evidence_uses_the_persisted_campaign_field_names() {
-        let decoded: PayoutEvidenceV1 = serde_json::from_value(serde_json::json!({
+    fn exact_emitted_campaign_report_is_the_only_accepted_terminal_evidence_schema() {
+        let market = Pubkey::new_unique();
+        let address = market.to_string();
+        let owner = Pubkey::new_unique().to_string();
+        let exact = serde_json::to_vec(&serde_json::json!({
+            "schema": "dclutch-successor-campaign-report-v1",
+            "cluster": "acknowledged-devnet",
+            "rpc_url": "https://api.devnet.solana.com/",
+            "mode": "execute",
             "plan_sha256": hex(&[1; 32]),
-            "foundingCustodyContext": hex(&[2; 32]),
-            "directSelectedManifestEntryIndex": 0,
-            "accounts": {
-                "terminal_composition_descriptor_record": {
-                    "address": Pubkey::new_unique().to_string(),
-                    "owner": Pubkey::new_unique().to_string(),
-                    "data_sha256": hex(&[3; 32]),
-                    "ignoredExistingEvidenceField": true
+            "execution": {
+                "completed": true,
+                "recoveredFinalizedFounding": false,
+                "transactions": [],
+                "market": {
+                    "completed": ["founding", "open"],
+                    "founding_custody_context": hex(&[2; 32]),
+                    "direct_selected_manifest_entry_index": 0,
+                    "accounts": {
+                        "founding_market": {
+                            "address": address,
+                            "owner": owner,
+                            "lamports": 1,
+                            "executable": false,
+                            "data_len": 1,
+                            "data_sha256": hex(&[3; 32]),
+                            "account_sha256": hex(&[4; 32])
+                        }
+                    }
                 }
-            },
-            "completed": []
+            }
         }))
-        .expect("campaign evidence projection");
+        .expect("exact campaign report bytes");
+        let decoded =
+            parse_campaign_terminal_evidence_v1(&exact).expect("campaign evidence projection");
         assert_eq!(decoded.plan_sha256, hex(&[1; 32]));
         assert_eq!(decoded.founding_custody_context, hex(&[2; 32]));
         assert_eq!(decoded.direct_selected_manifest_entry_index, 0);
+        assert!(decoded.accounts.contains_key("founding_market"));
+        authenticate_campaign_market_v1(&decoded, market).expect("same Market");
+        assert!(
+            authenticate_campaign_market_v1(&decoded, Pubkey::new_unique())
+                .expect_err("cross-Market evidence must refuse")
+                .to_string()
+                .contains("exact founding campaign evidence")
+        );
+
+        let mut pasted_terminal: Value =
+            serde_json::from_slice(&exact).expect("exact campaign report value");
+        let pasted_row = pasted_terminal
+            .pointer("/execution/market/accounts/founding_market")
+            .expect("founding Market row")
+            .clone();
+        pasted_terminal
+            .pointer_mut("/execution/market/accounts")
+            .and_then(Value::as_object_mut)
+            .expect("campaign account map")
+            .insert("terminal_record".into(), pasted_row);
+        assert!(
+            parse_campaign_terminal_evidence_v1(
+                &serde_json::to_vec(&pasted_terminal).expect("pasted terminal evidence bytes")
+            )
+            .expect_err("static terminal row must never override live Core")
+            .to_string()
+            .contains("live Core terminal_receipt")
+        );
+
+        for stale in [
+            serde_json::json!({
+                "schema": "dclutch-local-successor-run-evidence-v2",
+                "plan_sha256": hex(&[1; 32]),
+                "accounts": {}
+            }),
+            serde_json::json!({
+                "plan_sha256": hex(&[1; 32]),
+                "foundingCustodyContext": hex(&[2; 32]),
+                "directSelectedManifestEntryIndex": 0,
+                "accounts": {}
+            }),
+        ] {
+            assert!(
+                parse_campaign_terminal_evidence_v1(
+                    &serde_json::to_vec(&stale).expect("stale evidence bytes")
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
     fn direct_retirement_requires_exact_three_selector_evidence_labels() {
-        let row = || PayoutAccountEvidenceV1 {
+        let row = || CampaignAccountEvidenceV1 {
             address: Pubkey::new_unique().to_string(),
             owner: Pubkey::new_unique().to_string(),
+            lamports: 1,
+            executable: false,
+            data_len: 1,
             data_sha256: hex(&[3; 32]),
+            account_sha256: hex(&[4; 32]),
         };
         let mut accounts = BTreeMap::new();
         for label in DIRECT_BEGIN_RETIRING_LABELS_V1
@@ -777,7 +1073,7 @@ mod tests {
         {
             accounts.insert(label.into(), row());
         }
-        let exact = PayoutEvidenceV1 {
+        let exact = CampaignTerminalEvidenceV1 {
             plan_sha256: hex(&[1; 32]),
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
@@ -800,6 +1096,21 @@ mod tests {
         assert_eq!(canonical_u64("1", "quantity").unwrap(), 1);
         assert!(canonical_u64("0", "quantity").is_err());
         assert!(canonical_u64("01", "quantity").is_err());
+    }
+
+    #[test]
+    fn live_core_receipt_has_one_explicit_meaning_per_market_family() {
+        let receipt = [23; 32];
+        assert_eq!(
+            core_terminal_receipt_meaning_v1(BasisKindV3::CategoricalQ1, receipt),
+            CoreTerminalReceiptMeaningV1::CategoricalResolutionCertificate(Pubkey::new_from_array(
+                receipt
+            ))
+        );
+        assert_eq!(
+            core_terminal_receipt_meaning_v1(BasisKindV3::GradedExactComplement, receipt),
+            CoreTerminalReceiptMeaningV1::RationalTerminalCoordinate(receipt)
+        );
     }
 
     #[test]

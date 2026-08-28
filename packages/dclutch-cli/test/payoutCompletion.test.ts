@@ -116,20 +116,22 @@ function inputValue() {
 
 function evidenceValue(planBytes: Uint8Array) {
   return {
-    schema: 'dclutch-local-successor-run-evidence-v2', rpc_url: 'https://api.devnet.solana.com/',
-    ledger: '/tmp/ledger', validator_log: '/tmp/validator.log',
+    schema: 'dclutch-successor-campaign-report-v1', cluster: 'acknowledged-devnet',
+    rpc_url: 'https://api.devnet.solana.com/', mode: 'execute',
     plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
-    core_upgrade_authority_pubkey: key(40), private_key_persisted: false,
-    keypair_derivation: 'random-per-run', keypair_seed_sha256: null,
-    foundingCustodyContext: digest(7), directSelectedManifestEntryIndex: 0,
-    completed: ['founding', 'open'], transactions: [],
-    accounts: {
+    execution: {
+      completed: true, recoveredFinalizedFounding: false, transactions: [],
       market: {
-        address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
-        data_sha256: digest(41), account_sha256: digest(42),
+        completed: ['founding', 'open'], founding_custody_context: digest(7),
+        direct_selected_manifest_entry_index: 0,
+        accounts: {
+          founding_market: {
+            address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
+            data_sha256: digest(41), account_sha256: digest(42),
+          },
+        },
       },
     },
-    remaining_execution_seam: 'none',
   };
 }
 
@@ -389,7 +391,7 @@ describe('CLI payout completion boundary', () => {
     }))).toThrow(/missing or unknown fields/);
   });
 
-  it('refuses duplicate and trailing campaign evidence before normalization and enforces real text and array bounds', () => {
+  it('accepts emitted devnet campaign evidence and refuses duplicate, stale, flat, and unbounded substitutions', () => {
     const plan = Buffer.from('{"plan":"exact"}\n');
     const valid = evidenceValue(plan);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify(valid)))).not.toThrow();
@@ -402,21 +404,49 @@ describe('CLI payout completion boundary', () => {
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(`${JSON.stringify(valid)} null`)))
       .toThrow(/trailing data/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid, ledger: `/${'x'.repeat(4_096)}`,
-    })))).toThrow(/4096 bytes/);
+      ...valid, schema: 'dclutch-local-successor-run-evidence-v2',
+    })))).toThrow(/not dclutch-successor-campaign-report-v1/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid, completed: Array.from({ length: 513 }, (_, index) => `stage-${index}`),
+      plan_sha256: valid.plan_sha256, foundingCustodyContext: digest(7),
+      directSelectedManifestEntryIndex: 0, accounts: valid.execution.market.accounts,
+    })))).toThrow(/not dclutch-successor-campaign-report-v1/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
+      ...valid,
+      execution: {
+        ...valid.execution,
+        market: {
+          ...valid.execution.market,
+          accounts: {
+            ...valid.execution.market.accounts,
+            terminal_record: valid.execution.market.accounts.founding_market,
+          },
+        },
+      },
+    })))).toThrow(/live Core terminal_receipt/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
+      ...valid,
+      execution: {
+        ...valid.execution,
+        market: {
+          ...valid.execution.market,
+          completed: Array.from({ length: 513 }, (_, index) => `stage-${index}`),
+        },
+      },
     })))).toThrow(/completed-stage list/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid, transactions: Array.from({ length: 4_097 }, () => null),
+      ...valid,
+      execution: { ...valid.execution, transactions: Array.from({ length: 4_097 }, () => null) },
     })))).toThrow(/4096-row bound/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
       ...valid,
-      transactions: [{
-        label: 'one', signature: transactionSignatureV1(new Uint8Array(64).fill(1)), slot: 1,
-        transaction_metadata_available: true, fee_lamports: 1, fee_only_balance_change: true,
-        compute_units_consumed: 1, error: null, logs: Array.from({ length: 513 }, () => 'log'),
-      }],
+      execution: {
+        ...valid.execution,
+        transactions: [{
+          label: 'one', signature: transactionSignatureV1(new Uint8Array(64).fill(1)), slot: 1,
+          transaction_metadata_available: true, fee_lamports: 1, fee_only_balance_change: true,
+          compute_units_consumed: 1, error: null, logs: Array.from({ length: 513 }, () => 'log'),
+        }],
+      },
     })))).toThrow(/inexact finalized evidence/);
   });
 

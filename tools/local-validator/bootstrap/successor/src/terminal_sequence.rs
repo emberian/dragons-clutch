@@ -110,8 +110,10 @@ use crate::{
     rpc::{Rpc, RpcAccount, WritePolicyV1},
     runtime::decode_hex,
     terminal_lifecycle::{
-        PayoutEvidenceV1, authenticate_plan_source, authenticate_zero_claims, decode_routed_market,
-        finalized_snapshot, require_direct_retirement_evidence, required_account, routed_record,
+        CampaignTerminalEvidenceV1, authenticate_campaign_market_v1, authenticate_plan_source,
+        authenticate_zero_claims, decode_routed_market, finalized_snapshot,
+        parse_campaign_terminal_evidence_v1, require_direct_retirement_evidence, required_account,
+        routed_record,
     },
     wallet_terminal::authenticate_role,
 };
@@ -3060,7 +3062,7 @@ fn authenticate_chain_derived_planned_journal_v1(
 pub(crate) fn plan_core_begin_retiring_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market_key: Pubkey,
     additional_keys: &[Pubkey],
 ) -> Result<ChainDerivedTerminalMutationV1> {
@@ -3243,7 +3245,7 @@ pub(crate) fn plan_direct_begin_retiring_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market: Pubkey,
     additional_keys: &[Pubkey],
 ) -> Result<ChainDirectBeginRetiringV1> {
@@ -3392,11 +3394,11 @@ fn decoded_exact_array_v1<const N: usize>(value: &str, label: &str) -> Result<[u
     })
 }
 
-fn evidence_pubkey(evidence: &PayoutEvidenceV1, label: &str) -> Result<Pubkey> {
+fn evidence_pubkey(evidence: &CampaignTerminalEvidenceV1, label: &str) -> Result<Pubkey> {
     pubkey(&required_account(evidence, label)?.address)
 }
 
-fn evidence_digest(evidence: &PayoutEvidenceV1, label: &str) -> Result<[u8; 32]> {
+fn evidence_digest(evidence: &CampaignTerminalEvidenceV1, label: &str) -> Result<[u8; 32]> {
     hex32(&required_account(evidence, label)?.data_sha256)
 }
 
@@ -3421,7 +3423,7 @@ pub(crate) enum ChainResolutionCloseV1 {
 pub(crate) fn plan_resolution_close_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market_key: Pubkey,
     payer: Pubkey,
     additional_keys: &[Pubkey],
@@ -4067,7 +4069,7 @@ pub(crate) fn plan_direct_native_close_two_pass_from_chain_v1(
 pub(crate) fn direct_native_close_discovery_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market: Pubkey,
 ) -> Result<DirectNativeCloseSnapshotV1> {
     let registry = pubkey(&plan.registry.program_id)?;
@@ -4407,7 +4409,7 @@ pub(crate) fn plan_retirement_replay_handoff_two_pass_from_chain_v1(
 pub(crate) fn retirement_replay_handoff_discovery_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market: Pubkey,
     payer: Pubkey,
 ) -> Result<RetirementReplayHandoffSnapshotV1> {
@@ -4625,7 +4627,7 @@ pub(crate) fn plan_aggregate_retirement_caller_v1(
 pub(crate) fn aggregate_retirement_snapshot_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market: Pubkey,
     source_receipt: Pubkey,
     additional_keys: &[Pubkey],
@@ -4767,7 +4769,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market: Pubkey,
     payer: Pubkey,
     pinned_source_receipt: Option<Pubkey>,
@@ -5131,7 +5133,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
 
 fn direct_native_close_closure_from_discovery_v1(
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     snapshot: &DirectNativeCloseSnapshotV1,
     request_digest: [u8; 32],
 ) -> Result<TerminalMetaClosureV1> {
@@ -5194,7 +5196,7 @@ fn direct_native_close_closure_from_discovery_v1(
 
 fn retirement_handoff_closure_from_discovery_v1(
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     snapshot: &RetirementReplayHandoffSnapshotV1,
     request_digest: [u8; 32],
 ) -> Result<TerminalMetaClosureV1> {
@@ -5241,7 +5243,7 @@ fn fresh_protocol_stage_from_chain_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     market: Pubkey,
     payer: Pubkey,
     table: Pubkey,
@@ -6551,14 +6553,10 @@ pub(crate) fn run_terminal_sequence(arguments: Vec<String>) -> Result<()> {
     let evidence_source = fs::read(&arguments.evidence)?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
     let market_input: MarketRunInput = serde_json::from_slice(&market_source)?;
-    let evidence: PayoutEvidenceV1 = serde_json::from_slice(&evidence_source)?;
+    let evidence = parse_campaign_terminal_evidence_v1(&evidence_source)?;
     authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
     require_direct_retirement_evidence(&evidence)?;
-    if evidence_pubkey(&evidence, "founding_market")? != arguments.market {
-        return Err(refusal(
-            "terminal --market differed from exact founding campaign evidence",
-        ));
-    }
+    authenticate_campaign_market_v1(&evidence, arguments.market)?;
     let mut rpc = Rpc::connect_cluster(
         &arguments.origin,
         if arguments.execute {
@@ -6634,7 +6632,7 @@ fn load_or_create_terminal_session_v1(
     arguments: &TerminalSequenceArgumentsV1,
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     input_digests: &(String, String, String),
 ) -> Result<TerminalSequenceSessionV1> {
     if arguments.session.exists() {
@@ -6958,7 +6956,7 @@ fn authenticate_terminal_session_semantics_v1(
     session: &TerminalSequenceSessionV1,
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
 ) -> Result<Vec<Pubkey>> {
     let stage_three_path = arguments
         .journal_dir
@@ -7405,7 +7403,7 @@ fn operate_terminal_protocol_journals_v1(
     session: &TerminalSequenceSessionV1,
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     lookup_table: Pubkey,
     lookup_addresses: &[Pubkey],
     rent: &Rent,
@@ -7598,7 +7596,7 @@ fn operate_resolution_prepay_journal_v1(
     rpc: &mut Rpc,
     arguments: &TerminalSequenceArgumentsV1,
     plan: &SuccessorPlan,
-    evidence: &PayoutEvidenceV1,
+    evidence: &CampaignTerminalEvidenceV1,
     lookup_table: Pubkey,
     lookup_addresses: &[Pubkey],
     rent: &Rent,

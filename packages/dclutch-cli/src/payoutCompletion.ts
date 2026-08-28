@@ -118,7 +118,7 @@ const REPLAY_JOURNAL_OPERATION = 'claims-custody-replay-create-v1' as const;
 const REPLAY_JOURNAL_PLAN_FORMAT = 'dclutch-claims-custody-replay-journal-plan-v1' as const;
 const REPLAY_JOURNAL_INTENT_FORMAT = 'dclutch-claims-custody-replay-journal-intent-v1' as const;
 const INPUT_FORMAT = 'dclutch-wallet-terminal-payout-plan-input-v1' as const;
-const EVIDENCE_FORMAT = 'dclutch-local-successor-run-evidence-v2' as const;
+const EVIDENCE_FORMAT = 'dclutch-successor-campaign-report-v1' as const;
 const MAX_JOURNAL_BYTES = 786_432;
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_PROJECTED_INPUT_BYTES = 32_768;
@@ -470,40 +470,34 @@ function sha256(value: string | Uint8Array): string {
 /** Hostile-check one exact completed campaign dossier before Rust consumes it. */
 export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, evidenceBytes: Uint8Array): void {
   const evidence = object(exactJson(evidenceBytes, 'campaign evidence', MAX_EVIDENCE_BYTES), 'campaign evidence');
-  exactKeys(evidence, [
-    'schema', 'rpc_url', 'ledger', 'validator_log', 'plan_sha256', 'core_upgrade_authority_pubkey',
-    'private_key_persisted', 'keypair_derivation', 'keypair_seed_sha256', 'foundingCustodyContext',
-    'directSelectedManifestEntryIndex', 'completed', 'transactions', 'accounts', 'remaining_execution_seam',
-  ], 'campaign evidence');
-  if (evidence.schema !== EVIDENCE_FORMAT || evidence.private_key_persisted !== false) {
-    throw new Error('campaign evidence has another schema, key policy, or bounded text shape');
+  if (evidence.schema !== EVIDENCE_FORMAT) {
+    throw new Error('terminal evidence is not dclutch-successor-campaign-report-v1');
   }
-  boundedText(evidence.rpc_url, 'campaign RPC URL', 2_048);
-  boundedText(evidence.ledger, 'campaign ledger path', 4_096);
-  boundedText(evidence.validator_log, 'campaign validator-log path', 4_096);
-  const derivation = boundedText(evidence.keypair_derivation, 'campaign keypair derivation', 64);
-  if (derivation !== 'random-per-run' && derivation !== 'seeded-deterministic') {
-    throw new Error('campaign keypair derivation is not one known policy');
-  }
-  boundedText(evidence.remaining_execution_seam, 'campaign remaining execution seam', 4_096);
   const expectedPlan = identity(evidence.plan_sha256, 'campaign plan digest');
   if (sha256(planBytes) !== expectedPlan) throw new Error('campaign evidence does not authenticate the exact plan bytes');
-  address(evidence.core_upgrade_authority_pubkey, 'campaign Core authority');
-  identity(evidence.foundingCustodyContext, 'founding Custody context');
-  index(evidence.directSelectedManifestEntryIndex, 'Direct selected manifest entry', 65_535);
-  if (evidence.keypair_seed_sha256 !== null) identity(evidence.keypair_seed_sha256, 'campaign keypair seed digest');
-  if (!Array.isArray(evidence.completed) || evidence.completed.length === 0 || evidence.completed.length > 512
-      || evidence.completed.some((entry) => {
+  const execution = object(evidence.execution, 'campaign execution');
+  exactKeys(execution, ['completed', 'recoveredFinalizedFounding', 'transactions', 'market'], 'campaign execution');
+  if (execution.completed !== true || typeof execution.recoveredFinalizedFounding !== 'boolean') {
+    throw new Error('campaign evidence does not carry completed execution');
+  }
+  const market = object(execution.market, 'campaign execution Market');
+  exactKeys(market, [
+    'completed', 'accounts', 'founding_custody_context', 'direct_selected_manifest_entry_index',
+  ], 'campaign execution Market');
+  identity(market.founding_custody_context, 'founding Custody context');
+  index(market.direct_selected_manifest_entry_index, 'Direct selected manifest entry', 65_535);
+  if (!Array.isArray(market.completed) || market.completed.length === 0 || market.completed.length > 512
+      || market.completed.some((entry) => {
         try { boundedText(entry, 'campaign completed stage', 512); return false; } catch { return true; }
       })
-      || new Set(evidence.completed).size !== evidence.completed.length) {
+      || new Set(market.completed).size !== market.completed.length) {
     throw new Error('campaign evidence does not carry one nonempty ordered completed-stage list');
   }
-  if (!Array.isArray(evidence.transactions) || evidence.transactions.length > 4_096) {
+  if (!Array.isArray(execution.transactions) || execution.transactions.length > 4_096) {
     throw new Error('campaign evidence transactions are not an array within the 4096-row bound');
   }
   const transactionLabels = new Set<string>();
-  for (const [offset, raw] of evidence.transactions.entries()) {
+  for (const [offset, raw] of execution.transactions.entries()) {
     const row = object(raw, `campaign transaction ${offset}`);
     exactKeys(row, [
       'label', 'signature', 'slot', 'transaction_metadata_available', 'fee_lamports',
@@ -529,11 +523,14 @@ export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, e
       throw new Error(`campaign transaction ${offset} has inexact finalized evidence`);
     }
   }
-  const accounts = object(evidence.accounts, 'campaign evidence accounts');
+  const accounts = object(market.accounts, 'campaign evidence accounts');
   if (Object.keys(accounts).length === 0 || Object.keys(accounts).length > 4_096) {
     throw new Error('campaign evidence persisted accounts are outside the 1..4096 row bound');
   }
   for (const [label, raw] of Object.entries(accounts)) {
+    if (label === 'terminal_record') {
+      throw new Error('campaign report carries a stale terminal_record row; live Core terminal_receipt is the sole terminal identity');
+    }
     if (label.length === 0 || new TextEncoder().encode(label).byteLength > 128) {
       throw new Error('campaign evidence account label is not bounded');
     }

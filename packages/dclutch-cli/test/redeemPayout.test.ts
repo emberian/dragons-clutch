@@ -115,20 +115,22 @@ describe('wallet terminal payout producer consumer', () => {
       };
       writeFileSync(plan, planBytes);
       writeFileSync(evidence, JSON.stringify({
-        schema: 'dclutch-local-successor-run-evidence-v2', rpc_url: 'https://api.devnet.solana.com/',
-        ledger: '/tmp/ledger', validator_log: '/tmp/validator.log',
+        schema: 'dclutch-successor-campaign-report-v1', cluster: 'acknowledged-devnet',
+        rpc_url: 'https://api.devnet.solana.com/', mode: 'execute',
         plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
-        core_upgrade_authority_pubkey: key(40), private_key_persisted: false,
-        keypair_derivation: 'random-per-run', keypair_seed_sha256: null,
-        foundingCustodyContext: identity(7), directSelectedManifestEntryIndex: 0,
-        completed: ['founding', 'open'], transactions: [],
-        accounts: {
+        execution: {
+          completed: true, recoveredFinalizedFounding: false, transactions: [],
           market: {
-            address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
-            data_sha256: identity(41), account_sha256: identity(42),
+            completed: ['founding', 'open'], founding_custody_context: identity(7),
+            direct_selected_manifest_entry_index: 0,
+            accounts: {
+              founding_market: {
+                address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
+                data_sha256: identity(41), account_sha256: identity(42),
+              },
+            },
           },
         },
-        remaining_execution_seam: 'none',
       }));
       const calls: Array<Readonly<{ binary: string; args: ReadonlyArray<string> }>> = [];
       const result = produceWalletTerminalPayoutInputV1(context(), {}, {
