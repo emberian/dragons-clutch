@@ -5,23 +5,7 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
 import {
   acquireUnsignedTransactionDependenciesV1,
   inspectUnsignedTransactionV1,
-  requestWalletMessageSignatureV1,
-  requestWalletTransactionSignatureV1,
-  submitSignedTransactionV1,
 } from './walletHandoff';
-
-const DEVNET_ADMISSION = Object.freeze({
-  endpoint: 'https://devnet.example/',
-  genesisHash: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
-  kind: 'devnet' as const,
-});
-
-function admittedClient(sendRawTransaction: (bytes: Uint8Array) => Promise<string> = async () => 'signature') {
-  return {
-    assertMutationCluster: async () => DEVNET_ADMISSION,
-    sendRawTransaction,
-  };
-}
 
 function key(byte: number): PublicKey { return new PublicKey(new Uint8Array(32).fill(byte)); }
 function base64(bytes: Uint8Array): string { return Buffer.from(bytes).toString('base64'); }
@@ -68,97 +52,4 @@ describe('unsigned wallet handoff', () => {
     await expect(inspectUnsignedTransactionV1(base64(transaction.serialize()))).rejects.toThrow(/already contains/);
   });
 
-  it('requests exact maker and transaction signatures only after the explicit call', async () => {
-    const signer = key(72).toBase58();
-    let messageCalls = 0;
-    let transactionCalls = 0;
-    const wallet = {
-      publicKey: { toBase58: () => signer },
-      connect: async () => undefined,
-      signMessage: async (message: Uint8Array) => {
-        messageCalls += 1;
-        expect(message).toEqual(Uint8Array.from([9, 8, 7]));
-        return new Uint8Array(64).fill(6);
-      },
-      signTransaction: async (transaction: VersionedTransaction) => {
-        transactionCalls += 1;
-        transaction.signatures[0] = new Uint8Array(64).fill(7);
-        return transaction;
-      },
-    };
-    expect(messageCalls).toBe(0);
-    expect(transactionCalls).toBe(0);
-    const client = admittedClient();
-    await expect(requestWalletMessageSignatureV1(client, wallet, signer, Uint8Array.from([9, 8, 7]))).resolves.toEqual(new Uint8Array(64).fill(6));
-    const signed = await requestWalletTransactionSignatureV1(client, wallet, unsignedFixture(), signer);
-    expect(signed.complete).toBe(true);
-    expect(signed.signer).toBe(signer);
-    expect(messageCalls).toBe(1);
-    expect(transactionCalls).toBe(1);
-  });
-
-  it('refuses a wallet message rewrite and submits only complete signatures', async () => {
-    const transaction = unsignedFixture();
-    const signer = key(72).toBase58();
-    const client = admittedClient();
-    await expect(requestWalletTransactionSignatureV1(client, {
-      publicKey: { toBase58: () => signer },
-      connect: async () => undefined,
-      signTransaction: async (candidate: VersionedTransaction) => {
-        candidate.message.recentBlockhash = key(99).toBase58();
-        candidate.signatures[0] = new Uint8Array(64).fill(7);
-        return candidate;
-      },
-    }, transaction, signer)).rejects.toThrow(/rewrote/);
-    await expect(submitSignedTransactionV1(admittedClient(async () => 'unexpected'), transaction)).rejects.toThrow(/fully signed/);
-    transaction.signatures[0] = new Uint8Array(64).fill(8);
-    let submitted = 0;
-    await expect(submitSignedTransactionV1(admittedClient(async (bytes) => { submitted = bytes.length; return 'signature'; }), transaction)).resolves.toBe('signature');
-    expect(submitted).toBe(transaction.serialize().length);
-  });
-
-  it('refuses a hostile wallet input only after the cluster refuses mainnet', async () => {
-    let walletTouched = false;
-    const hostileWallet = {};
-    Object.defineProperty(hostileWallet, 'connect', {
-      get() {
-        walletTouched = true;
-        throw new Error('wallet getter must not run');
-      },
-    });
-    const mainnetClient = {
-      assertMutationCluster: async () => { throw new Error('mutation refused: the endpoint reports Solana mainnet-beta genesis'); },
-    };
-    await expect(requestWalletMessageSignatureV1(mainnetClient, hostileWallet, key(72).toBase58(), Uint8Array.from([1]))).rejects.toThrow(/mainnet-beta/);
-    await expect(requestWalletTransactionSignatureV1(mainnetClient, hostileWallet, unsignedFixture(), key(72).toBase58())).rejects.toThrow(/mainnet-beta/);
-    expect(walletTouched).toBe(false);
-  });
-
-  it('rechecks admission between wallet signing and submission', async () => {
-    const signer = key(72).toBase58();
-    let admissions = 0;
-    let submitted = false;
-    const client = {
-      assertMutationCluster: async () => {
-        admissions += 1;
-        if (admissions > 1) throw new Error('mutation refused: genesis changed before submit');
-        return DEVNET_ADMISSION;
-      },
-      sendRawTransaction: async () => {
-        submitted = true;
-        return 'unexpected';
-      },
-    };
-    const signed = await requestWalletTransactionSignatureV1(client, {
-      publicKey: { toBase58: () => signer },
-      connect: async () => undefined,
-      signTransaction: async (transaction: VersionedTransaction) => {
-        transaction.signatures[0] = new Uint8Array(64).fill(9);
-        return transaction;
-      },
-    }, unsignedFixture(), signer);
-    await expect(submitSignedTransactionV1(client, signed.transaction)).rejects.toThrow(/genesis changed/);
-    expect(admissions).toBe(2);
-    expect(submitted).toBe(false);
-  });
 });

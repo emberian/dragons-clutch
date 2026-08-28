@@ -80,7 +80,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x3005, name: "CoreSbfError::Market", meaning: "Core Market PDA, owner, width, phase, or generation refused.", band: "core" },
   { code: 0x3006, name: "CoreSbfError::RentCredit", meaning: "RentCredit owner, bytes, PDA, or persisted beneficiary refused.", band: "core" },
   { code: 0x3007, name: "CoreSbfError::Creation", meaning: "System, Rent, Clock, vacant account, or exact creation plan refused.", band: "core" },
-  { code: 0x3008, name: "CoreSbfError::Funding", meaning: "Capability manifest entry, FundingState, custody, deadline, or PDA refused.", band: "core" },
+  { code: 0x3008, name: "CoreSbfError::Funding", meaning: "Capability manifest entry, funding ledger, custody, deadline, or PDA refused.", band: "core" },
   { code: 0x3009, name: "CoreSbfError::CallerAuthority", meaning: "Canonical release-pinned Core caller authority refused.", band: "core" },
   { code: 0x300A, name: "CoreSbfError::ChildCpi", meaning: "Selected child invocation or immediate return-data producer refused.", band: "core" },
   { code: 0x300B, name: "CoreSbfError::ChildAck", meaning: "Child acknowledgement or post-funding physical delta refused.", band: "core" },

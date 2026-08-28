@@ -146,7 +146,7 @@ export function directPacketWallV1(wireBytes: number): DirectTradeWallV1 | null 
 
 export const DIRECT_PRESTATE_WALL_V1: DirectTradeWallV1 = Object.freeze({
   name: 'prestate',
-  detail: 'Your wallet does not have a position on this market yet, and the instruction that would open one from a wallet does not exist yet — opening a position is itself a protected change, and today only the protocol’s own programs can make it. The pattern for the wallet version is already landed (ADR-0008 §7); shipping it is protocol work, not yours.',
+  detail: 'Your wallet does not have a Claims Position on this Market yet. A devnet admission command now exists, but this public client does not create or sign one and has no authenticated admission dossier for your distinct Token-2022 collateral account.',
 });
 
 /** Inspect everything the chain can say about Direct trading this Market. */

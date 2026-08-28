@@ -102,28 +102,6 @@ describe('bounded finalized RPC client', () => {
     });
   });
 
-  it('submits only one bounded caller-signed packet with preflight enabled', async () => {
-    const signature = '2'.repeat(88);
-    const expectedRetries = [3, 0] as const;
-    let submission = 0;
-    const fetcher: typeof fetch = async (_input, init) => {
-      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
-      if (request.method === 'getGenesisHash') return response(SOLANA_DEVNET_GENESIS_HASH_V1);
-      expect(request.method).toBe('sendTransaction');
-      expect(request.params).toEqual([btoa(String.fromCharCode(1, 2, 3)), {
-        encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed',
-        maxRetries: expectedRetries[submission],
-      }]);
-      submission += 1;
-      return response(signature);
-    };
-    const client = new SolanaRpcClient('http://127.0.0.1:8899', fetcher);
-    await expect(client.sendRawTransaction(Uint8Array.from([1, 2, 3]))).resolves.toBe(signature);
-    await expect(client.sendRawTransaction(Uint8Array.from([1, 2, 3]), { maxRetries: 0 })).resolves.toBe(signature);
-    expect(submission).toBe(2);
-    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(new Uint8Array(1_233))).rejects.toThrow(/1..1232/);
-  });
-
   it('admits exact devnet and strict loopback local-validator identities only', async () => {
     const withGenesis = (genesis: string): typeof fetch => async () => response(genesis);
     await expect(new SolanaRpcClient('https://custom.proxy.example/solana', withGenesis(SOLANA_DEVNET_GENESIS_HASH_V1)).assertMutationCluster()).resolves.toEqual({
@@ -142,30 +120,6 @@ describe('bounded finalized RPC client', () => {
     for (const genesis of [MAINNET_GENESIS, TESTNET_GENESIS]) {
       await expect(new SolanaRpcClient('http://127.0.0.1:8899/', withGenesis(genesis)).assertMutationCluster()).rejects.toThrow(/mainnet-beta|testnet/);
     }
-  });
-
-  it('rechecks genesis at submit and closes a preparation-to-send cluster swap', async () => {
-    const blockhash = '11111111111111111111111111111111';
-    let genesisChecks = 0;
-    let sent = false;
-    const fetcher: typeof fetch = async (_input, init) => {
-      const request = JSON.parse(String(init?.body)) as { method: string };
-      if (request.method === 'getGenesisHash') {
-        genesisChecks += 1;
-        return response(genesisChecks === 1 ? SOLANA_DEVNET_GENESIS_HASH_V1 : MAINNET_GENESIS);
-      }
-      if (request.method === 'getLatestBlockhash') return response({ context: { slot: 45 }, value: { blockhash, lastValidBlockHeight: 72 } });
-      if (request.method === 'sendTransaction') {
-        sent = true;
-        return response('2'.repeat(88));
-      }
-      throw new Error(`unexpected method ${request.method}`);
-    };
-    const client = new SolanaRpcClient('https://custom.proxy.example/', fetcher);
-    await expect(client.latestMutationBlockhash()).resolves.toMatchObject({ blockhash });
-    await expect(client.sendRawTransaction(Uint8Array.from([1, 2, 3]))).rejects.toThrow(/mainnet-beta/);
-    expect(genesisChecks).toBe(2);
-    expect(sent).toBe(false);
   });
 
   it('preserves genesis RPC refusal, transport error, and timeout before mutation', async () => {

@@ -10,8 +10,9 @@ Two packages in this repository are yours:
 
 - **`@dclutch/sdk`** (`packages/dclutch-sdk`) — the client library. Typed
   decoders for every on-chain record, transaction builders for the core
-  flows, and a small RPC client. It never opens a connection or touches a
-  key by itself: you hand it an endpoint, you sign what it builds.
+  flows, and a small read-only RPC client. It never opens a connection,
+  touches a key, or submits a transaction by itself: you hand it an endpoint,
+  and a caller-specific durable workflow owns signing and submission.
 - **`@dclutch/cli`** (`packages/dclutch-cli`) — the `dclutch` terminal
   client, built entirely on the SDK. When you wonder how to wire a flow up,
   read the command that already does it (`src/commands/` is ~200 lines per
@@ -117,32 +118,29 @@ payment record if it does not exist, publish and freeze the payout lookup
 table, then sign the payout itself. Do not combine those steps into one
 optimistic submit loop.
 
-```ts
-import { inspectClaimsCustodyReplayV1 } from '@dclutch/sdk/claimsCustodyReplay';
+The current CLI accepts an already-finalized payout lookup table. When a table
+still needs creation or extension, it saves the checked plan and stops before
+loading your key. Those mutations remain closed until each exact packet has its
+own durable Submitted journal and finalized readback.
 
-const state = await inspectClaimsCustodyReplayV1(client, {
-  marketAddress, claimsProgramId, custodyProgramId, registryProgramId,
-  payer: myKeypair.publicKey.toBase58(),
-});
-if (state.status === 'creatable') {
-  state.plan.transaction.sign([myKeypair]);
-  await client.sendRawTransaction(state.plan.transaction.serialize(), { maxRetries: 0 });
-}
-```
+`inspectClaimsCustodyReplayV1` (`@dclutch/sdk/claimsCustodyReplay`) can inspect
+that first record and compile the exact unsigned plan when it is absent. The
+public SDK deliberately stops there: it does not expose a transaction-submit
+transport. Give the plan to the same kind of caller-specific journal described
+below, persist its unsigned bytes before opening a wallet, and reacquire the
+finalized record before preparing the payout. Do not sign or submit directly
+from an inspection branch.
 
 After that payment record and the lookup table are finalized, prepare the
 payout from the current accounts. Save the unsigned plan before opening a
 wallet. After the wallet signs, save both the complete signed bytes and the
 transaction id before the only submission. If the RPC response is lost,
-poll that saved id; never rebuild, resign, or resend the payout.
+poll that saved id; never rebuild, resign, or resend the payout. The public SDK
+does not expose a generic sign-and-send helper: such a helper cannot prove that
+the workflow durably crossed those phases. Use the CLI's payout journal or
+build a caller-specific journal with the same phase boundary.
 
 ```ts
-import {
-  requestWalletTransactionSignatureV1,
-  requireSubmittedSignatureMatchV1,
-  submitSignedTransactionV1,
-  transactionSignatureV1,
-} from '@dclutch/sdk/walletHandoff';
 import {
   finalizeWalletTerminalPayoutV3,
   prepareWalletTerminalPayoutV3,
@@ -151,23 +149,15 @@ import {
 const plan = await prepareWalletTerminalPayoutV3(client, manifest, owner);
 await saveUnsignedPlan(plan); // durable before the wallet opens
 
-const signed = await requestWalletTransactionSignatureV1(
-  client,
-  connectedWallet,
-  plan.transaction,
-  owner,
-);
-if (!signed.complete) throw new Error('the payout is not completely signed');
-const transactionId = transactionSignatureV1(signed.transaction.signatures[0]!);
-await saveSignedPacket(transactionId, signed.wireBytes); // durable before send
-
-const returned = await submitSignedTransactionV1(client, signed.wireBytes);
-requireSubmittedSignatureMatchV1(transactionId, returned);
+// Your caller-specific journal now owns wallet signing, Signed persistence,
+// Submitted persistence, and the sole maxRetries=0 send. It returns the exact
+// saved id and bytes; it never rebuilds or resends a Submitted packet.
+const { transactionId, signedWireBytes } = await payoutJournal.submitOnce(plan);
 const completed = await finalizeWalletTerminalPayoutV3(
   client,
   transactionId,
   plan,
-  signed.wireBytes,
+  signedWireBytes,
 );
 ```
 
