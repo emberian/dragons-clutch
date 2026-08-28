@@ -189,6 +189,7 @@ reasoning as a stale binding.
 | Claims/Custody | `claims-custody/` | `solana-program-test` | the protocol Position lifecycle, the composed Admit -> SparseNativeTransfer -> Close chain, and ordinary plus delegated Custody against real SPL Token and Token-2022 |
 | Dealer | `dealer/` | `solana-program-test` | the Dealer equity pool's rounding boundary |
 | Direct | `direct/` | `solana-program-test` | the stateless Direct V2 AOT accelerator |
+| Hot CU | `hot-cu/` | `solana-program-test` | not a campaign: the Hot tail's compute against the 1,400,000 ceiling, swept over N fixture seeds. It admits no evidence and observes no route, so it warns where a campaign tier refuses. Read its README before quoting a number from it — the per-seed figure is a bump-search draw (M-61) and only the pass count and the mean mean anything |
 | Journey | `journey/` | localhost validator | JRNY-1: one Market's whole life, tier 1's founding continued in-process into post-Open collateral distribution to N holders, a holder ring, and rent recovery — under one conservation ledger |
 | Relayed vertical | `relayed-vertical/` | two localhost validators | DEMO-VERT: the relayed graduation market end to end — found with no recovery policy, the real relayer daemon observes a mainnet twin, seal, consume, terminalize — plus the silent-relayer sibling where the funded deadline walk pays a walker on a bare legacy packet; journey-shaped (tier 1 compiled in by `#[path]`, the journey's conservation ledger threaded, tier-1 bindings merged at fold time) |
 

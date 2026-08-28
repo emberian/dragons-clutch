@@ -104,6 +104,14 @@ pub enum ResolutionError {
     /// §12.3's third operator question. Unlike the first two this one is not
     /// "come back later": nothing about waiting changes it.
     ProviderConfiguration = 0x8013,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Decision 0012. Not a corrupted account and not an attack: the exact
+    /// upgrade authority the release names shipped new bytes, so the cached
+    /// authentication no longer describes what is deployed. Every open market
+    /// on the superseded release generation refuses until a re-release
+    /// re-authenticates the new deployment and re-pins its slot.
+    ReleaseSuperseded = 0x8014,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -114,7 +122,7 @@ const _: () = assert!(
     "ResolutionError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (ResolutionError::ProviderConfiguration as u32)
+    (ResolutionError::ReleaseSuperseded as u32)
         < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "ResolutionError must not run past its registered refusal band"
 );
@@ -667,6 +675,23 @@ fn authenticate_resolution_release(
     let observation = deployment_observation(program, programdata, release.programdata())?;
     role.authenticate_current_deployment(observation)
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
+}
+
+/// Name a pinned-deployment refusal, keeping the superseded case operator-legible.
+///
+/// Decision 0012: a moved deployment slot is the expected consequence of
+/// upgrading the substrate, not a corrupted account, and its remedy is a
+/// re-release rather than an investigation. Every other reason folds into
+/// `ResolutionDeployment` exactly as before.
+pub(crate) const fn pinned_deployment_refusal(
+    error: dclutch_registry_contract::Error,
+) -> ResolutionError {
+    match error {
+        dclutch_registry_contract::Error::ReleaseSupersededByUpgrade => {
+            ResolutionError::ReleaseSuperseded
+        }
+        _ => ResolutionError::ResolutionDeployment,
+    }
 }
 
 pub(crate) fn deployment_observation(

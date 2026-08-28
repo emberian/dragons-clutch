@@ -109,8 +109,13 @@ pub fn process_instruction(
         accounts: metas,
         data: request.to_vec(),
     };
+    // Total mapping, not an admission: the affine wire's `decode_role` refuses
+    // the `Claims` byte (decision 0008 §8), so this arm is unreachable through
+    // the plan this wrapper forwards. It exists so that widening the shared role
+    // enum can never silently pick a different role here.
     let role = match plan.caller_role() {
         CallerRole::Core => ExecutionRoleV1::Core,
+        CallerRole::Claims => ExecutionRoleV1::Claims,
         CallerRole::Trading => ExecutionRoleV1::Trading,
     };
     let seeds = CallerAuthoritySeedsV1::new(

@@ -653,14 +653,39 @@ fn current_loader_slot_elf_owner_link_and_immutability_are_mandatory() {
         .expect("ProgramData link byte");
     assert_eq!(link.authenticate(), Err(TradingSbfError::Content));
 
-    let upgradeable = Fixture::with_upgrade_authority(
-        StrategyDispositionV2::ShadowAot,
-        Some(Pubkey::new_from_array([206; 32])),
+    // Decision 0012 moved this arm and did not delete it. An exact-authority
+    // deployment is now ADMITTED for AOT while its slot pin holds -- that is
+    // what makes the market life fit on a substrate the project can iterate --
+    // and it is refused BY NAME the instant an `Upgrade` moves the slot.
+    let authority = Pubkey::new_from_array([206; 32]);
+    let pinned =
+        Fixture::with_upgrade_authority(StrategyDispositionV2::ShadowAot, Some(authority));
+    assert!(
+        pinned.authenticate().is_ok(),
+        "a slot-pinned exact-authority deployment is admissible AOT",
     );
+
+    let superseded =
+        Fixture::with_upgrade_authority(StrategyDispositionV2::ShadowAot, Some(authority));
+    {
+        let programdata = fixture_account(&superseded, SHADOW_ACCELERATOR_PROGRAMDATA);
+        let mut bytes = programdata.try_borrow_mut_data().expect("ProgramData");
+        let slot = u64::from_le_bytes(
+            bytes
+                .get(4..12)
+                .expect("slot span")
+                .try_into()
+                .expect("slot width"),
+        );
+        bytes
+            .get_mut(4..12)
+            .expect("slot span")
+            .copy_from_slice(&slot.wrapping_add(1).to_le_bytes());
+    }
     assert_eq!(
-        upgradeable.authenticate(),
-        Err(TradingSbfError::Content),
-        "a current exact-authority deployment is valid Loader state but is not immutable AOT"
+        superseded.authenticate(),
+        Err(TradingSbfError::ReleaseSuperseded),
+        "an upgrade moved the pinned slot, so the hot path refuses by name"
     );
 }
 

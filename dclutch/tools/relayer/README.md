@@ -44,9 +44,31 @@ These are the point of the design, not precautions bolted on:
   assertion that a current authorization names devnet or mainnet submission.
   Nothing in this service can grant that.
 - **It refuses to run on the wrong cluster.** `expected_genesis_hash` is checked
-  against `getGenesisHash` at startup on every configured endpoint. A mismatch
-  is fatal, because nothing else distinguishes a mainnet account from a
-  byte-identical twin elsewhere (§4.6).
+  against `getGenesisHash` at startup on every configured endpoint — on the
+  observed side and, separately and required, on the submit side. A mismatch is
+  fatal, because nothing else distinguishes a mainnet account from a
+  byte-identical twin elsewhere (§4.6). A URL is a routing detail an operator
+  can mistype into pointing anywhere; naming each cluster as a *value* is what
+  makes the daemon unable to read from, or sign toward, a cluster nobody named.
+- **It refuses a submit endpoint on an observed host.** The observed cluster is
+  read-only here, and the likeliest way that stops being true is a config
+  duplicating the observation endpoint into `submit.endpoint`. Hosts are
+  compared, not URLs, because a provider URL carries an API key and two
+  spellings can name one cluster. Two loopback endpoints are the one exemption:
+  that is a single local validator standing in for both, which is the rehearsal
+  shape.
+- **It opens no proxy.** Both RPC clients are built `.no_proxy()`. reqwest's
+  default builder honours `HTTP_PROXY`/`ALL_PROXY`, which would defeat the
+  submission gate outright — the gate admits an endpoint by its URL's host, so
+  a loopback URL passes the rule as written while the environment silently
+  sends the bytes somewhere else. The URL the daemon was authorized against and
+  the socket it opens must be the same thing.
+- **It refuses a signing key anyone else can read.** `keygen` writes `0600`, but
+  a key that arrives by `scp`, restore, or a permissive umask carries whatever
+  mode it was given. The mode is therefore checked at load, on the deployed box:
+  any group or world bit is fatal for both the attestation key and the fee
+  payer. Whoever can read the attestation key can sign observations of mainnet
+  indistinguishable from this daemon's.
 - **Its dependency closure contains no venue IDL, SDK, or layout crate.** See
   `DEPENDENCY_CLOSURE.md`; §6.3 item 8 makes this release evidence.
 - **It holds no market policy.** No thresholds, no windows, no staleness bounds,
@@ -106,7 +128,8 @@ default is exactly the quiet wrong this family exists to prevent.
 | `observed_cluster.rehearsal_twin.attested_cluster_id` | REHEARSAL ONLY: attest as if the loopback twin were this cluster; labels every output, forces loopback everywhere, refuses public submission |
 | `keys.attestation_keypair_path` | the release identity |
 | `keys.fee_payer_keypair_path` | optional, hot and replaceable, must be a different file |
-| `submit.endpoint` | optional; loopback unless explicitly authorized |
+| `submit.endpoint` | optional; loopback unless explicitly authorized, and never a host that also appears in `observed_cluster.rpc_endpoints` |
+| `submit.expected_genesis_hash` | **required** with `[submit]`; verified against `getGenesisHash` on the submit endpoint before any transaction is built |
 | `submit.allow_public_submission` | default **false** |
 | `submit.relay_program_id`, `.market`, `.generation` | addressing for the append/seal routes |
 | `submit.relayer_key_set`, `.relayer_key_set_staging_vacancy` | the raw immutable key-set record and its finalized staging vacancy |

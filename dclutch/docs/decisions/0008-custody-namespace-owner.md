@@ -382,3 +382,168 @@ hostile cases:
   campaign drives it (§5).
 - **No live-validator evidence.** ProgramTest is a fast lane; see
   `tools/gauntlet/TIERS.md`.
+
+## 8. Addendum (2026-08-27): the redemption's step two, and who authorizes it
+
+Status: implemented. §7.3 recorded an obligation on "any redemption builder,
+including the browser's". This section is what that obligation ran into, and the
+ruling that closes it.
+
+### 8.1 The gap, stated from the code
+
+Step one of a redemption — creating the Market's Claims-role Custody replay — has
+been reachable from a wallet since §7, and a browser has executed it against a
+live chain (`docs/evidence/FIRST_BROWSER_EXECUTION_2026_08_27.md`). Step two had
+no route.
+
+`claims/terminal_settlement_v3::process` is the family-neutral Product terminal
+settlement. It already computes the exact thing a wallet redemption needs: the
+winning coordinate's translated basis weight at the certificate's resolved value,
+times the quantity debited, with global solvency proved before and after
+(`product_basis_terminal_v3::encode_product_claims_terminal_signed_delta_v3`). It
+already debits the Position and the aggregate through one SignedDeltaV3 packet,
+and pays out through the Claims-role Custody replay §7 made creatable.
+
+Its request's `caller_role` byte decoded `0 => Core` and `2 => Trading` and
+nothing else, and the SignedDeltaV3 frame pins coordinate 0 to a SIGNER whose
+address is `CallerAuthoritySeedsV1` under the caller PROGRAM
+(`frame_spec_v1::signed_delta`, index 0 = `SIGNER`). Only the Registry-activated
+program of that role can sign such a PDA. So the route was structurally
+CPI-only, and the one party who could never reach it was the party that owns the
+claims.
+
+The Positions this bites are real and already on chain. The only production
+producer of a `User`-owner-kind LBV2 Position is `claims/founding_v5`, which
+mints the FOUNDER's Position when a Market is founded. Every founded Market has
+a wallet holding claims that nothing could pay.
+
+### 8.2 The ruling: widen the admission, do not add a route
+
+The alternative was a second Claims route. It was rejected on inspection, not on
+taste: such a route would need the same 35-account frame, the same evaluator, the
+same Custody transfer and the same receipt. It would be
+`terminal_settlement_v3.rs` re-typed, which is the restated-array defect §7.4
+exists to name, at 780 lines instead of six.
+
+**`CallerRole` gains `Claims = 1`** — `ExecutionRoleV1::Claims`'s own
+discriminant, so a byte on a Claims wire and a byte in a caller-authority seed
+list keep meaning the same thing. It names the case that was never spellable: the
+Claims program executing a top-level route, with no external caller program in
+the chain at all.
+
+**Which wires admit it is each wire's own decision, and three of the four still
+refuse it.** Every Claims wire already owned a private `decode_role`; that was
+not an accident and it is what keeps the blast radius at one route.
+`signed_delta_v3::decode_role` admits `1`; `affine_batch_v2`,
+`sparse_native_transfer_v1` and `ClaimsPlanV1` do not, because their authority is
+a caller-program PDA and nothing else, so the role that means "no caller program"
+has no proof to offer there. `signed_delta_v3::process` — the top-level submitted
+plan — refuses role `Claims` explicitly rather than leaving it unsatisfiable by
+accident.
+
+### 8.3 What stands at coordinate 0, and why it is enough
+
+The coordinate's meaning has always been *the party entitled to move these claims
+proved it, and the proof is a signature*. There are exactly two kinds of entitled
+party in this protocol and only one of them had a spelling:
+
+| role | coordinate 0 | entitled party |
+|---|---|---|
+| `Core` | `CallerAuthoritySeedsV1` PDA under the Core program | a lifecycle orchestration |
+| `Trading` | the same PDA under the activated Trading program | a venue transition |
+| `Claims` | the Position owner's own signature | the wallet that holds the claims |
+
+**A signature at coordinate 0 equal to `request.owner` is by itself the proof
+that the Position is wallet-held.** A program-derived address has no private key,
+so neither a Trading record owner nor a Claims capability owner can produce it.
+The route therefore needs no owner-kind tag, no admission-record read and no
+thirty-sixth account to tell the families apart — the discriminator is the
+signature it already demands.
+
+The rest of the chain closes with no new guard:
+
+- `product_basis_terminal_v3::validate_joins` refuses unless the Position
+  header's `owner` equals `request.owner`;
+- `signed_delta_v3::build_candidates` refuses unless the Position ACCOUNT is the
+  canonical `ProtocolPositionSeedsV2` PDA under `(aggregate, owner)`;
+- `authenticate_releases` requests Core and Claims always and Trading only when
+  the caller actually is Trading, and under role `Claims` it pins coordinates
+  14/15 to this program and its ProgramData — so nothing in the frame is left
+  unauthenticated where the caller-program coordinates used to carry a venue.
+
+**No lien is bypassed, because LBV2 has none.** A Position is a header plus a
+balance vector with a zero-checked reserved word: no escrow field, no lock, no
+delegate. Owner authorization at terminal cannot skip an encumbrance that the
+state cannot express. Direct's inline trade moves claims by
+`SparseNativeTransferV1` between Positions that must already be live; it never
+pledges one.
+
+### 8.4 The one privilege that had to move
+
+The frame spec pins coordinate 0 to a READONLY signer. That is exactly right for
+a caller-authority PDA — never a fee payer, never written — and it is
+**unsatisfiable for an owner signature**: an account that is both a transaction's
+fee payer and a readonly signer compiles to one WRITABLE signer entry, so there
+is no message in which a single wallet can present itself readonly. A browser has
+one wallet, and it pays.
+
+Writability at that coordinate carries no authority. The program never borrows
+the account beyond `key` and `is_signer`; it cannot be the aggregate or a
+Position (both are Claims-owned PDAs that cannot sign); and the runtime refuses a
+write to an account this program does not own. So the pin is relaxed for
+`CallerRole::Claims` ONLY and only along that one axis — signer stays required,
+executable stays refused. `the_position_owner_pays_its_own_fee_and_still_authorizes_the_payout`
+is the campaign transaction that keeps the relaxation from being dead code.
+
+### 8.5 Evidence
+
+`programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs`,
+real ELFs, real Custody CPI, real Token-2022.
+
+The fixture needed no new prestate. It has ALWAYS carried `actor_position` — a
+canonical LBV2 Position at `(aggregate, actor.pubkey())` owned by an ordinary
+keypair — and nothing in the tree could pay it. The gap was sitting inside the
+campaign that proves the rest of the family works. One constant moved:
+`ACTOR_CLAIMS` gained a claim at a LOSING coordinate, because that is the only
+way to reach the zero-payout branch from a wallet.
+
+Executed:
+
+- the wallet payout itself — Hoard and recipient move by exactly
+  `quantity × payout`, the winning coordinate is burned out of the Position, the
+  aggregate's supply falls by the same atoms, no other coordinate moves, both
+  revisions advance by one, and the Claims-role cursor advances from the value
+  `InitializeReplay` wrote;
+- the same payout with the OWNER as fee payer (§8.4);
+- a losing coordinate: pays zero, burns the claim, Custody is never invoked, the
+  Hoard and recipient are byte-identical and the cursor does not move. This is
+  `terminal_settlement_v3`'s zero-payout branch, which nothing had ever executed;
+- a stale Custody cursor after a partial redemption — the double-spend shape,
+  refused by the replay;
+- seven hostiles, each byte-identical afterwards: the owner named but not
+  signing; a signer who is not the owner; a stranger claiming to own the
+  Position; another party's Position at this same Market; a substituted terminal
+  certificate; role `Claims` with a foreign caller program; role `Trading`
+  offering an owner signature where its release-pinned PDA belongs;
+- an unresolved Market, walked back to `Phase::Open` through the bank.
+
+**§5's blocked row is closed.** `claims/terminal_settlement_v3::process` has a
+campaign.
+
+### 8.6 What this does NOT establish
+
+- **The wallet Position is still not CLOSABLE.** `protocol_position_v2`'s Close
+  admits an exact-zero balance vector, and a terminal redemption debits ONE
+  coordinate — so a wallet holding losing claims alongside the winner must burn
+  each of them before the vector is zero, and even then the close join at
+  `composition_v3::require_sparse_close_join` is `TradingRecord`-only. Reclaiming
+  a wallet Position's prefunded rent has no route. Named, not fixed.
+- **Nothing here creates a wallet Position.** The `User` branch of the
+  ProtocolPosition Admit route is reachable in principle and has no shipped
+  caller; `founding_v5` is the only producer, and it allocates the accounts
+  itself. FE-TRADER's "wallet-side Position admission route" is still open.
+- **`parent_context` stays caller-owned** under role `Claims`. It is not read by
+  any derivation in this mode — the authority is the owner, not a PDA under it —
+  so it is entropy in the request digest and nothing more.
+- **No live-validator evidence.** ProgramTest is a fast lane; see
+  `tools/gauntlet/TIERS.md`.

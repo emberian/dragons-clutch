@@ -120,6 +120,18 @@ pub(crate) struct RoleDeploymentInputV1 {
     /// refused together with `observed_programdata`: an observation is not
     /// something a caller gets to overwrite.
     pub(crate) genesis_deployment_slot: u64,
+    /// The upgrade authority the caller DECLARES this role's observed
+    /// `ProgramData` carries, for the mutable substrate decision 0012 chose.
+    ///
+    /// It does not supply the authority the release binds — that is decoded
+    /// out of the observation like the slot is. It is the declaration the
+    /// observation is checked against, so a role that quietly became mutable,
+    /// or mutable under a key nobody named, still refuses at plan time instead
+    /// of minting a release that hands upgrade rights to a stranger.
+    ///
+    /// Absent means the caller declares `None`, which is what every invocation
+    /// before 0012 meant and is why they all still behave identically.
+    pub(crate) expected_upgrade_authority: Option<Pubkey>,
 }
 
 /// The seven roles' deployment sources.
@@ -139,6 +151,11 @@ pub(crate) struct RoleDeploymentsV1 {
 struct RoleDeployment {
     image: Vec<u8>,
     deployment_slot: u64,
+    /// The upgrade authority the image actually carries, hostile-decoded by
+    /// the same reader the on-chain authenticator runs. Never a caller's
+    /// number — a declaration only gets to be checked against this, and the
+    /// release's policy is minted from it.
+    upgrade_authority: Option<[u8; 32]>,
     source: DeploymentSourceV1,
 }
 
@@ -148,12 +165,32 @@ struct RoleDeployment {
 /// going to authenticate with, so an observation that does not describe the
 /// pinned artifact is refused here rather than by a `DeploymentSlotMismatch`
 /// or `ElfDigestMismatch` on chain after the money is spent.
+///
+/// `protocol_upgrade_authority` is the authority the PROTOCOL fixes for this
+/// role. It is `Some` only for Core, whose bootstrap authority the caller names
+/// on the command line and whose campaign revokes it before activation. Every
+/// other role has none fixed, so a caller observing a mutable deployment must
+/// DECLARE its authority per role for the observation to be admitted at all.
+/// The two are required to agree where both are present: a plan does not get to
+/// authenticate against one key while claiming another.
 fn role_deployment(
     label: &str,
     elf: &[u8],
-    upgrade_authority: Option<Pubkey>,
+    protocol_upgrade_authority: Option<Pubkey>,
     input: &RoleDeploymentInputV1,
 ) -> Result<RoleDeployment> {
+    let expected_upgrade_authority = match (
+        input.expected_upgrade_authority,
+        protocol_upgrade_authority,
+    ) {
+        (Some(declared), Some(fixed)) if declared != fixed => {
+            return Err(Error::new(format!(
+                "{label} declares upgrade authority {declared}, but this plan authenticates against {fixed}"
+            )));
+        }
+        (Some(declared), _) => Some(declared),
+        (None, fixed) => fixed,
+    };
     let (image, source) = match input.observed_programdata.as_deref() {
         Some(path) => {
             if input.genesis_deployment_slot != 0 {
@@ -163,10 +200,26 @@ fn role_deployment(
             }
             (fs::read(path)?, DeploymentSourceV1::ObservedAccount)
         }
-        None => (
-            loader_programdata_bytes(elf, input.genesis_deployment_slot, upgrade_authority),
-            DeploymentSourceV1::GenesisInstall,
-        ),
+        None => {
+            // A declaration describes something already on a cluster. The
+            // genesis install fabricates its own account image, so a
+            // declaration here would be describing bytes this plan is about to
+            // write — and a mutable genesis role is a substrate this campaign
+            // has no revocation stage for. Refused rather than half-honored.
+            if input.expected_upgrade_authority.is_some() {
+                return Err(Error::new(format!(
+                    "{label} declares an expected upgrade authority, which describes an observed account; the genesis install this plan materializes fabricates its own"
+                )));
+            }
+            (
+                loader_programdata_bytes(
+                    elf,
+                    input.genesis_deployment_slot,
+                    expected_upgrade_authority,
+                ),
+                DeploymentSourceV1::GenesisInstall,
+            )
+        }
     };
     let view = ProgramDataV3View::parse(&image).map_err(|error| {
         Error::new(format!(
@@ -178,15 +231,17 @@ fn role_deployment(
             "{label} ProgramData account carries a different ELF than the pinned artifact"
         )));
     }
-    if view.upgrade_authority() != upgrade_authority.map(|value| value.to_bytes()) {
+    if view.upgrade_authority() != expected_upgrade_authority.map(|value| value.to_bytes()) {
         return Err(Error::new(format!(
             "{label} ProgramData account upgrade authority is not the one this plan authenticates against"
         )));
     }
     let deployment_slot = view.deployment_slot();
+    let upgrade_authority = view.upgrade_authority();
     Ok(RoleDeployment {
         image,
         deployment_slot,
+        upgrade_authority,
         source,
     })
 }
@@ -441,20 +496,15 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     // PDA and the infrastructure profile are all downstream of that slot.
     // §3.0 of the deploy runbook states the same ordering as a protocol fact:
     // deploy -> revoke -> observe -> mint bodies -> publish.
-    let registry_deployment = role_deployment(
-        "Registry",
-        &registry_elf,
-        None,
-        &args.deployments.registry,
-    )?;
+    let registry_deployment =
+        role_deployment("Registry", &registry_elf, None, &args.deployments.registry)?;
     let core_deployment = role_deployment(
         "Core",
         &core_elf,
         Some(args.core_bootstrap_upgrade_authority),
         &args.deployments.core,
     )?;
-    let claims_deployment =
-        role_deployment("Claims", &claims_elf, None, &args.deployments.claims)?;
+    let claims_deployment = role_deployment("Claims", &claims_elf, None, &args.deployments.claims)?;
     let trading_deployment =
         role_deployment("Trading", &trading_elf, None, &args.deployments.trading)?;
     let resolution_deployment = role_deployment(
@@ -465,36 +515,66 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     )?;
     let custody_deployment =
         role_deployment("Custody", &custody_elf, None, &args.deployments.custody)?;
-    let rent_deployment = role_deployment(
-        "RentCredit",
-        &rent_elf,
-        None,
-        &args.deployments.rent_credit,
-    )?;
+    let rent_deployment =
+        role_deployment("RentCredit", &rent_elf, None, &args.deployments.rent_credit)?;
+
+    // What a release BINDS is the authority its ProgramData carries AT
+    // ACTIVATION, which is not always the authority observed now. Nothing in
+    // this campaign touches the six non-Core loaders, so for them the
+    // observation already is the activation state and the policy follows it.
+    //
+    // Core is the one role whose answer depends on WHICH campaign will run
+    // this plan, because only one of the two revokes it. The deployment source
+    // is that discriminator, and it is not a proxy for it — it IS it:
+    //
+    // * `GenesisInstall` is the supervised `run` path and nothing else. That
+    //   supervisor materializes Core's ProgramData itself under an authority it
+    //   generated in memory this second, and revokes it before it activates
+    //   anything. Core's release therefore binds None, exactly as it always
+    //   has. A real cluster's Core could not carry that key even in principle:
+    //   it is fresh per run and never leaves the process.
+    // * `ObservedAccount` is a cluster this tool did not create, which is the
+    //   external driver's substrate. That campaign has NO revoke stage —
+    //   decision 0012 retired it, and the slot pin carries the soundness the
+    //   revocation used to — so the release must bind what the account
+    //   actually carries, like every other role.
+    //
+    // The plan then says which of the two it is out loud, below, in
+    // `release_recognition_requires_revoke`, and the `run` spec validator
+    // refuses a plan whose answer is `false`. A 0012 mutable-substrate plan is
+    // not something the local supervisor may run, and it fails closed saying so.
+    let core_activation_upgrade_authority = match core_deployment.source {
+        DeploymentSourceV1::GenesisInstall => None,
+        DeploymentSourceV1::ObservedAccount => core_deployment.upgrade_authority,
+    };
 
     let registry = release_facts(
         args.registry_program,
         hex32(&args.registry_semantic_release_id)?,
         hex32(&args.registry_sha256)?,
         registry_deployment.deployment_slot,
+        registry_deployment.upgrade_authority,
     )?;
     let core = release_facts(
         args.core_program,
         hex32(&args.core_semantic_release_id)?,
         hex32(&args.core_sha256)?,
         core_deployment.deployment_slot,
+        core_activation_upgrade_authority,
     )?;
     let claims = release_facts(
         args.claims_program,
         hex32(&args.claims_semantic_release_id)?,
         hex32(&args.claims_sha256)?,
         claims_deployment.deployment_slot,
+        claims_deployment.upgrade_authority,
     )?;
     let trading = release_facts(
         args.trading_program,
         hex32(&args.trading_semantic_release_id)?,
         hex32(&args.trading_sha256)?,
         trading_deployment.deployment_slot,
+        trading_deployment.upgrade_authority,
     )?;
     let resolution_semantic = hex32(&args.resolution_semantic_release_id)?;
     if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
@@ -507,18 +587,21 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         resolution_semantic,
         hex32(&args.resolution_sha256)?,
         resolution_deployment.deployment_slot,
+        resolution_deployment.upgrade_authority,
     )?;
     let custody = release_facts(
         args.custody_program,
         hex32(&args.custody_semantic_release_id)?,
         hex32(&args.custody_sha256)?,
         custody_deployment.deployment_slot,
+        custody_deployment.upgrade_authority,
     )?;
     let rent = release_facts(
         args.rent_credit_program,
         hex32(&args.rent_credit_semantic_release_id)?,
         hex32(&args.rent_credit_sha256)?,
         rent_deployment.deployment_slot,
+        rent_deployment.upgrade_authority,
     )?;
 
     let release_set = ExecutionReleaseSetV1::new(
@@ -556,7 +639,11 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         ("registry", args.registry_program, &registry_deployment),
         ("claims", args.claims_program, &claims_deployment),
         ("trading", args.trading_program, &trading_deployment),
-        ("resolution", args.resolution_program, &resolution_deployment),
+        (
+            "resolution",
+            args.resolution_program,
+            &resolution_deployment,
+        ),
         ("custody", args.custody_program, &custody_deployment),
         ("rent-credit", args.rent_credit_program, &rent_deployment),
         ("core", args.core_program, &core_deployment),
@@ -648,7 +735,15 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             post_revoke_programdata_sha256: hex(&sha256_bytes(&programdata_bytes_after_revoke(
                 &core_deployment.image,
             )?)),
-            release_recognition_requires_revoke: true,
+            // True exactly when Core's release binds None while its ProgramData
+            // still carries an authority — that is, when a revocation stands
+            // between the substrate and the release being recognizable. The
+            // supervised `run` path is that case and always has been. The 0012
+            // observed substrate is not: nothing revokes it, and the slot pin
+            // carries the soundness instead. `run` refuses a plan that says
+            // false, which is how the local supervisor declines to drive a
+            // mutable substrate it has no revoke stage for.
+            release_recognition_requires_revoke: core_activation_upgrade_authority.is_none(),
         },
         infrastructure_profile: InfrastructureProfilePin {
             address: infrastructure_address.to_string(),
@@ -742,19 +837,40 @@ fn pin(
         elf_sha256: elf_sha.clone(),
         semantic_release_id: semantic.clone(),
         artifact_release_id: hex(facts.id.as_bytes()),
-        upgrade_authority: None,
+        // The authority the RELEASE binds, which for a revoked or genesis role
+        // is None exactly as it has always been, and for decision 0012's
+        // mutable substrate is the key an Upgrade must be signed by.
+        upgrade_authority: facts
+            .release
+            .upgrade_authority()
+            .map(|bytes| Pubkey::new_from_array(bytes).to_string()),
         deployment_slot: deployment.deployment_slot,
         deployment_source: deployment.source.as_str().into(),
         programdata_sha256: hex(&sha256_bytes(&deployment.image)),
     }
 }
 
+/// Mint one role's `ArtifactReleaseV1` from facts decoded off its deployment.
+///
+/// The upgrade policy is DERIVED from the authority that role's `ProgramData`
+/// will carry at activation, never asserted: an authority present means
+/// `ExactAuthority` naming exactly it, absent means `Immutable`. Decision 0012
+/// is what makes the distinction load-bearing — a devnet substrate iterated by
+/// `Upgrade` must publish releases that say so, and the slot pin (not the
+/// revocation) is what keeps them sound. A revoked loader still mints
+/// `Immutable` with no authority, byte-for-byte as before.
 fn release_facts(
     program: Pubkey,
     semantic_release: [u8; 32],
     elf_sha256: [u8; 32],
     deployment_slot: u64,
+    upgrade_authority: Option<[u8; 32]>,
 ) -> Result<ReleaseFacts> {
+    let upgrade_policy = if upgrade_authority.is_some() {
+        ArtifactUpgradePolicyV1::ExactAuthority
+    } else {
+        ArtifactUpgradePolicyV1::Immutable
+    };
     let release = ArtifactReleaseV1::new(
         program_identity(program)?,
         program_identity(bpf_loader_upgradeable::ID)?,
@@ -762,8 +878,8 @@ fn release_facts(
         content_id(semantic_release)?,
         elf_sha256,
         deployment_slot,
-        ArtifactUpgradePolicyV1::Immutable,
-        None,
+        upgrade_policy,
+        upgrade_authority,
     )
     .map_err(debug_error("artifact release"))?;
     let id = ArtifactReleaseIdV1::new(sha256_bytes(&release.to_bytes()))
@@ -1051,9 +1167,10 @@ mod tests {
 
     #[test]
     fn infrastructure_profile_binds_distinct_registry_and_rent_artifacts() {
-        let registry =
-            release_facts(Pubkey::new_unique(), [1; 32], [2; 32], 0).expect("Registry release");
-        let rent = release_facts(Pubkey::new_unique(), [3; 32], [4; 32], 0).expect("Rent release");
+        let registry = release_facts(Pubkey::new_unique(), [1; 32], [2; 32], 0, None)
+            .expect("Registry release");
+        let rent =
+            release_facts(Pubkey::new_unique(), [3; 32], [4; 32], 0, None).expect("Rent release");
         let profile = ProtocolInfrastructureProfileV1::new(registry.binding(), rent.binding())
             .expect("infrastructure profile");
         assert_eq!(profile.registry(), registry.binding());
@@ -1134,12 +1251,8 @@ mod tests {
     /// after `set-upgrade-authority --final`: authority tag zero with the
     /// former authority still sitting in bytes 13..45, and a nonzero slot.
     fn revoked_account_image(elf: &[u8], slot: u64, former_authority: Pubkey) -> Vec<u8> {
-        programdata_bytes_after_revoke(&loader_programdata_bytes(
-            elf,
-            slot,
-            Some(former_authority),
-        ))
-        .expect("revoked account image")
+        programdata_bytes_after_revoke(&loader_programdata_bytes(elf, slot, Some(former_authority)))
+            .expect("revoked account image")
     }
 
     fn write_observed(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
@@ -1296,6 +1409,178 @@ mod tests {
             "observing and fabricating a slot at once must refuse"
         );
         let _ = fs::remove_dir_all(&root);
+
+        fs::remove_dir_all(&observations).expect("remove observation root");
+    }
+
+    /// Decision 0012, minting arm one: a role observed MUTABLE and DECLARED
+    /// mutable mints `ExactAuthority` naming exactly the key the account
+    /// carries, while a revoked sibling in the same plan keeps minting
+    /// `Immutable`. The policy follows the account, not a flag: the declaration
+    /// only buys the right to be checked against it.
+    #[test]
+    fn an_observed_mutable_programdata_mints_its_exact_upgrade_authority() {
+        let observations =
+            std::env::temp_dir().join(format!("dclutch-successor-obs-{}", Pubkey::new_unique()));
+        let authority = Pubkey::new_unique();
+        let former = Pubkey::new_unique();
+        let mut deployments = RoleDeploymentsV1::default();
+        deployments.registry.observed_programdata = Some(write_observed(
+            &observations,
+            "registry-mutable.bin",
+            &loader_programdata_bytes(&test_elf(1), 488_712_345, Some(authority)),
+        ));
+        deployments.registry.expected_upgrade_authority = Some(authority);
+        deployments.claims.observed_programdata = Some(write_observed(
+            &observations,
+            "claims-revoked.bin",
+            &revoked_account_image(&test_elf(3), 488_712_401, former),
+        ));
+        let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, deployments);
+        let plan = plan.expect("a declared mutable observation prepares");
+
+        assert_eq!(
+            plan.registry.upgrade_authority,
+            Some(authority.to_string()),
+            "a mutable observation binds the authority it carries"
+        );
+        assert_eq!(plan.registry.deployment_slot, 488_712_345);
+        assert_eq!(
+            plan.claims.upgrade_authority, None,
+            "a revoked observation still mints Immutable"
+        );
+        assert_eq!(
+            plan.core.upgrade_authority, None,
+            "Core binds its post-revocation state, whatever it carries now"
+        );
+        let _ = fs::remove_dir_all(&root);
+        fs::remove_dir_all(&observations).expect("remove observation root");
+    }
+
+    /// Decision 0012, minting arm two: the declaration is a crosscheck, never a
+    /// source. An undeclared mutable account refuses with the same text SMOKE-0
+    /// got off real devnet bytes, a declaration that misses refuses the same
+    /// way, a declaration against a fabricated genesis install refuses as a
+    /// category error, and Core may not be declared away from the bootstrap
+    /// authority the rest of the plan authenticates against.
+    #[test]
+    fn a_declaration_only_crosschecks_and_never_supplies_an_authority() {
+        let observations =
+            std::env::temp_dir().join(format!("dclutch-successor-obs-{}", Pubkey::new_unique()));
+        let authority = Pubkey::new_unique();
+        let other = Pubkey::new_unique();
+
+        // Undeclared and mutable: exactly SMOKE-0's live devnet refusal.
+        let mut undeclared = RoleDeploymentsV1::default();
+        undeclared.trading.observed_programdata = Some(write_observed(
+            &observations,
+            "trading-undeclared.bin",
+            &loader_programdata_bytes(&test_elf(4), 400, Some(authority)),
+        ));
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, undeclared);
+        let message = result
+            .expect_err("an undeclared authority refuses")
+            .to_string();
+        assert!(
+            message.contains("upgrade authority is not the one this plan authenticates against"),
+            "refusal must still name the mismatch: {message}"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        // Declared, but not the key the account actually carries.
+        let mut mismatched = RoleDeploymentsV1::default();
+        mismatched.trading.observed_programdata = Some(write_observed(
+            &observations,
+            "trading-mismatched.bin",
+            &loader_programdata_bytes(&test_elf(4), 400, Some(authority)),
+        ));
+        mismatched.trading.expected_upgrade_authority = Some(other);
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, mismatched);
+        let message = result.expect_err("a wrong declaration refuses").to_string();
+        assert!(
+            message.contains("upgrade authority is not the one this plan authenticates against"),
+            "refusal must still name the mismatch: {message}"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        // A declaration describes an observation, not a genesis fabrication.
+        let mut fabricated = RoleDeploymentsV1::default();
+        fabricated.trading.expected_upgrade_authority = Some(authority);
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, fabricated);
+        let message = result
+            .expect_err("declaring against a genesis install refuses")
+            .to_string();
+        assert!(
+            message.contains("describes an observed account"),
+            "refusal must name the category error: {message}"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        // Core's authority is fixed by the rest of the plan.
+        let mut core_contradiction = RoleDeploymentsV1::default();
+        core_contradiction.core.observed_programdata = Some(write_observed(
+            &observations,
+            "core-contradiction.bin",
+            &loader_programdata_bytes(&test_elf(2), 400, Some(other)),
+        ));
+        core_contradiction.core.expected_upgrade_authority = Some(other);
+        let (result, root) =
+            prepared_plan_with(RecordPublicationV1::Transaction, core_contradiction);
+        let message = result
+            .expect_err("Core may not be declared away from its bootstrap authority")
+            .to_string();
+        assert!(
+            message.contains("but this plan authenticates against"),
+            "refusal must name the contradiction: {message}"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        fs::remove_dir_all(&observations).expect("remove observation root");
+    }
+
+    /// Decision 0012 and Core, whose answer depends on WHICH campaign runs the
+    /// plan because only one of the two revokes. A genesis-installed Core binds
+    /// None and says a revocation stands between substrate and release, exactly
+    /// as it always has. An OBSERVED Core binds the authority it carries and
+    /// says it does not -- and `run` refuses a plan whose answer is `false`,
+    /// which is the local supervisor declining a substrate it cannot revoke.
+    #[test]
+    fn core_binds_a_revocation_only_when_the_campaign_performs_one() {
+        let observations =
+            std::env::temp_dir().join(format!("dclutch-successor-obs-{}", Pubkey::new_unique()));
+        // Must be the bootstrap authority `prepared_plan_with` declares, or the
+        // crosscheck refuses before any of this is reached.
+        let bootstrap = Pubkey::new_from_array([8; 32]);
+
+        let mut observed = RoleDeploymentsV1::default();
+        observed.core.observed_programdata = Some(write_observed(
+            &observations,
+            "core-mutable.bin",
+            &loader_programdata_bytes(&test_elf(2), 900, Some(bootstrap)),
+        ));
+        let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, observed);
+        let plan = plan.expect("an observed Core prepares");
+        assert_eq!(
+            plan.core.upgrade_authority,
+            Some(bootstrap.to_string()),
+            "an observed Core binds what it carries: nothing revokes it"
+        );
+        assert!(
+            !plan.core_bootstrap.release_recognition_requires_revoke,
+            "no revocation stands between this substrate and its release"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        let (genesis, genesis_root) = prepared_plan(RecordPublicationV1::Transaction);
+        assert_eq!(
+            genesis.core.upgrade_authority, None,
+            "a genesis Core still binds its post-revocation state"
+        );
+        assert!(
+            genesis.core_bootstrap.release_recognition_requires_revoke,
+            "the supervised path still revokes, and still says so"
+        );
+        let _ = fs::remove_dir_all(&genesis_root);
 
         fs::remove_dir_all(&observations).expect("remove observation root");
     }

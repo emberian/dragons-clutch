@@ -647,6 +647,39 @@
       "budget": 266184,
       "enforced": true,
       "provenance": "The consequence of the row above rather than a second finding: the issue committed nothing, so no representation replay exists to carry revision one and the unwrap is refused on Accounts (0x5001). BurnReceipt is never the thing that fails, because there is never anything to unwrap. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [251184, 251184], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "claims-wallet-position-payout",
+      "campaign": "claims-rational-representation-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: a wallet-held Position is paid",
+      "measured": 354370,
+      "tolerance": 15000,
+      "budget": 369370,
+      "enforced": true,
+      "provenance": "The redemption's step two: a plain wallet-held LBV2 Position paid out of a resolved Market's Hoard through claims/terminal_settlement_v3 under the widened execution role Claims (decision 0008 s8). The heaviest of the three wallet-payout shapes, because it is the only one that both evaluates the Product basis AND crosses the Custody boundary. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [354370, 354370], band 0, so the tolerance is the 15,000 floor. 25.3% of the 1,400,000 ceiling -- this route has room, and the reason to watch it is that it is now the FIRST route a wallet reaches on its own."
+    },
+    {
+      "id": "claims-wallet-position-payout-owner-paid",
+      "campaign": "claims-rational-representation-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: the Position owner pays its own fee",
+      "measured": 354369,
+      "tolerance": 15000,
+      "budget": 369369,
+      "enforced": true,
+      "provenance": "The same payout in the browser's shape: one wallet as both fee payer and authority, so coordinate 0 arrives writable (decision 0008 s8.4). Draws [354369, 354369], band 0, tolerance at the floor. Pinned separately from the row above and ONE unit below it, which is the entire measured cost of the single-signer message -- a divergence here would mean the relaxed privilege had started doing work, and it does not."
+    },
+    {
+      "id": "claims-wallet-position-zero-payout",
+      "campaign": "claims-rational-representation-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: a losing wallet coordinate pays zero",
+      "measured": 223244,
+      "tolerance": 15000,
+      "budget": 238244,
+      "enforced": true,
+      "provenance": "terminal_settlement_v3's zero-payout branch, reached from a wallet holding a claim at a LOSING coordinate. Draws [223244, 223244], band 0, tolerance at the floor. 131,126 CU cheaper than the paying shape, and that gap IS the Custody leg: authenticate_zero_custody_accounts re-derives the whole Custody frame from the persisted namespace without spending it, so the difference is one CPI and its token reads rather than a shortcut."
     }
   ]
 }

@@ -106,9 +106,15 @@ pub fn process_instruction(
     if claims_program.key.to_bytes() != input.claims_program {
         return Err(TerminalSettlementCallerError::AccountFrame.into());
     }
+    // This wrapper exists to be an EXTERNAL caller: it signs a release-pinned
+    // caller-authority PDA under its own program id. Execution role `Claims`
+    // (decision 0008 §8) is the case with no external caller at all -- its
+    // authority is the Position owner's signature, which this program cannot
+    // produce and must not pretend to. Refused rather than mapped.
     let role = match input.caller_role {
         CallerRole::Core => ExecutionRoleV1::Core,
         CallerRole::Trading => ExecutionRoleV1::Trading,
+        CallerRole::Claims => return Err(TerminalSettlementCallerError::Authority.into()),
     };
     let request_digest = hash(request_bytes).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::new(

@@ -373,7 +373,11 @@ pub fn synthetic_release_bytes(provider: ProviderAddresses) -> [u8; 440] {
         ),
         (
             234,
-            hex_32("c507955864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af604"),
+            // sha256 of the receiver ELF — corrected 2026-08-27: the prior
+            // literal carried a dropped nibble inherited from the old
+            // synthetic-fixture array (DRIVER's finding; the line at :184
+            // always had the correct spelling).
+            hex_32("c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"),
         ),
         (
             266,
@@ -400,7 +404,7 @@ pub fn synthetic_release_bytes(provider: ProviderAddresses) -> [u8; 440] {
     ));
     assert_eq!(
         hash(&bytes).to_bytes(),
-        hex_32("2c1eb776d5e4664de1e4019c9f115aabc3c926868d9fbfd78490f07e50719641")
+        hex_32("69115c2aabc5a51cab85edd3e5afeafdf9c82e331b800a885acb7d63af053adc")
     );
     bytes
 }

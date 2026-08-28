@@ -16,7 +16,7 @@ use crate::{
 use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
         HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
@@ -1340,9 +1340,12 @@ mod tests {
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_capability_program_contract::set_v2::{
-        CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
-        encode_program_set_v2, encoded_program_set_bytes_v2,
+    use dclutch_capability_program_contract::{
+        SelectedRecordBumpsV1,
+        set_v2::{
+            CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
+            encode_program_set_v2, encoded_program_set_bytes_v2,
+        },
     };
     use dclutch_custody_contract::CustodyReplayLayoutV1;
     use dclutch_direct_codec::{

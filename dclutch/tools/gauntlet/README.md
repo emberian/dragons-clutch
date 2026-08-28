@@ -1,12 +1,19 @@
 # tools/gauntlet — the standing outside-in functional suite
 
 ```sh
-tools/gauntlet/run.sh --mode census   # seconds: static route census + report
-tools/gauntlet/run.sh --mode full     # the tier-1 campaign on a real validator
+tools/gauntlet/run.sh --mode census      # seconds: static route census + report
+tools/gauntlet/run.sh --mode full        # the tier-1 campaign on a real validator
+tools/gauntlet/hot-cu/run-hot-cu.sh      # the Hot tail's compute, swept over 20 seeds
 ```
 
 **Start with `DESIGN.md`.** It states why this exists and what makes an
 assertion admissible here. `TIERS.md` is the mechanics of adding a tier.
+
+`hot-cu/` is the one entry above that is a MEASUREMENT rather than a campaign:
+it admits no evidence and observes no route, it answers "does the Hot tail fit
+under 1,400,000 CU", and its answer is a pass count plus a mean, never a margin.
+Read `hot-cu/README.md` before quoting a number out of it; ledger item M-61 is
+the reason, and it is not optional advice.
 
 ## What it is
 

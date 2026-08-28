@@ -89,6 +89,17 @@ def main : IO Unit := do
   for case in admissionCases do
     emitAdmission case
   IO.println "];"
+  IO.println s!"pub const MARKET_PRINCIPAL_CAP_BYTES_V1: usize = 16;"
+  IO.println s!"pub const MARKET_PRINCIPAL_CAP_UNBOUNDED_V1: u128 = {u128Bound - 1};"
+  -- The carried cap for each admission case, in the same order, so the Rust
+  -- kernel's stored-cap form is graded against `cap` rather than against a
+  -- second reading of the same arithmetic. An unstated κ has no rational and
+  -- therefore no cap; Lean's `n / 0 = 0` renders it as the zero cap, which is
+  -- exactly the fail-closed value the wire gives an absent cap.
+  IO.println s!"pub const PRINCIPAL_CARRIED_CAPS_V1: [u128; {admissionCases.length}] = ["
+  for case in admissionCases do
+    IO.println s!"    {cap { numerator := case.1, denominator := case.2.1 } case.2.2.1},"
+  IO.println "];"
   IO.println "#[cfg(test)]"
   IO.println "#[rustfmt::skip]"
   IO.println

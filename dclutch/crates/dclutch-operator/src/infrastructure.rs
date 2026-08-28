@@ -10,7 +10,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, require_slot_pinned_release_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
@@ -182,14 +182,61 @@ pub enum InfrastructureInspectionErrorV1 {
     CheckedManifestMismatch,
 }
 
+/// Which substrate class an infrastructure inspection admits.
+///
+/// Decision 0012 added a mode; it retired nothing. The public-demo ceremony
+/// still deploys immutable and is still inspected under
+/// [`SubstrateClassV1::Immutable`], which is what
+/// [`inspect_protocol_infrastructure_v1`] means and what every existing caller
+/// keeps getting. The iteration substrate is deployed mutable on purpose, and
+/// a caller that wants to inspect one has to say so by name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubstrateClassV1 {
+    /// Only genuinely immutable infrastructure releases are admitted.
+    Immutable,
+    /// Slot-pinned upgradeable releases are admitted as well.
+    ///
+    /// The deployment is still held to the exact slot and exact upgrade
+    /// authority its release bound, so the report describes the bytes that
+    /// were authenticated -- until an `Upgrade` moves the slot, at which point
+    /// this refuses exactly as the chain does.
+    SlotPinned,
+}
+
 /// Inspect one exact finalized chain snapshot without signing or mutation.
 ///
 /// Passing `None` for `checked_manifest` can establish internal consistency,
 /// but deliberately cannot recognize the chain. Passing bytes requires an
 /// exact join to the current profile, cache, artifact records, and Loader state.
+///
+/// This is the strict entry: it admits only immutable infrastructure. For the
+/// mutable iteration substrate of decision 0012, call
+/// [`inspect_slot_pinned_protocol_infrastructure_v1`] -- the relaxation is a
+/// different function name rather than a flag, so a reader of a call site can
+/// see which substrate class was accepted without following an argument.
 pub fn inspect_protocol_infrastructure_v1(
     state: &ProtocolInfrastructureStateV1,
     checked_manifest: Option<&[u8]>,
+) -> Result<ProtocolInfrastructureReportV1, InfrastructureInspectionErrorV1> {
+    inspect_infrastructure_under_class(state, checked_manifest, SubstrateClassV1::Immutable)
+}
+
+/// Inspect a snapshot of the mutable, slot-pinned iteration substrate.
+///
+/// Identical to [`inspect_protocol_infrastructure_v1`] in every check except
+/// which release shapes are admissible. Every deployment is still authenticated
+/// against the exact slot and authority its release bound.
+pub fn inspect_slot_pinned_protocol_infrastructure_v1(
+    state: &ProtocolInfrastructureStateV1,
+    checked_manifest: Option<&[u8]>,
+) -> Result<ProtocolInfrastructureReportV1, InfrastructureInspectionErrorV1> {
+    inspect_infrastructure_under_class(state, checked_manifest, SubstrateClassV1::SlotPinned)
+}
+
+fn inspect_infrastructure_under_class(
+    state: &ProtocolInfrastructureStateV1,
+    checked_manifest: Option<&[u8]>,
+    class: SubstrateClassV1,
 ) -> Result<ProtocolInfrastructureReportV1, InfrastructureInspectionErrorV1> {
     let observation = same_finalized_observation(state)?;
     require_distinct_keys(state)?;
@@ -209,6 +256,7 @@ pub fn inspect_protocol_infrastructure_v1(
         &state.registry_program,
         &state.registry_programdata,
         &rent,
+        class,
     )?;
     let (rent_release, rent_evidence) = authenticate_artifact_component(
         profile.rent(),
@@ -217,6 +265,7 @@ pub fn inspect_protocol_infrastructure_v1(
         &state.rent_program,
         &state.rent_programdata,
         &rent,
+        class,
     )?;
 
     let activated =
@@ -225,7 +274,7 @@ pub fn inspect_protocol_infrastructure_v1(
         .role(ExecutionRoleV1::Core)
         .map_err(|_| InfrastructureInspectionErrorV1::InvalidActivationCache)?;
     let core_release = core_role.release();
-    require_immutable(core_release)?;
+    require_admissible_release(core_release, class)?;
     let core = authenticate_deployment(
         core_role.artifact_release_id(),
         core_release,
@@ -327,6 +376,7 @@ fn authenticate_artifact_component(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
     rent: &Rent,
+    class: SubstrateClassV1,
 ) -> Result<(ArtifactReleaseV1, InfrastructureComponentEvidenceV1), InfrastructureInspectionErrorV1>
 {
     let release = ArtifactReleaseV1::decode(&record.record.data)
@@ -337,7 +387,7 @@ fn authenticate_artifact_component(
     if expected != ExecutionRoleBindingV1::new(release.program(), artifact_release_id) {
         return Err(InfrastructureInspectionErrorV1::BindingMismatch);
     }
-    require_immutable(release)?;
+    require_admissible_release(release, class)?;
     let deployment = authenticate_deployment(artifact_release_id, release, program, programdata)?;
 
     let expected_raw = Pubkey::find_program_address(
@@ -424,13 +474,27 @@ fn authenticate_deployment(
     })
 }
 
-fn require_immutable(release: ArtifactReleaseV1) -> Result<(), InfrastructureInspectionErrorV1> {
-    if release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
-        || release.upgrade_authority().is_some()
-    {
-        return Err(InfrastructureInspectionErrorV1::InfrastructureMustBeImmutable);
+/// Admit one infrastructure release under the caller's chosen substrate class.
+///
+/// The strict class is unchanged and is still what every unqualified caller
+/// gets. The slot-pinned class defers to the protocol's own admission predicate
+/// so the host and the chain can never disagree about which releases exist.
+fn require_admissible_release(
+    release: ArtifactReleaseV1,
+    class: SubstrateClassV1,
+) -> Result<(), InfrastructureInspectionErrorV1> {
+    match class {
+        SubstrateClassV1::Immutable => {
+            if release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
+                || release.upgrade_authority().is_some()
+            {
+                return Err(InfrastructureInspectionErrorV1::InfrastructureMustBeImmutable);
+            }
+            Ok(())
+        }
+        SubstrateClassV1::SlotPinned => require_slot_pinned_release_v1(release)
+            .map_err(|_| InfrastructureInspectionErrorV1::InfrastructureMustBeImmutable),
     }
-    Ok(())
 }
 
 fn recognize_checked_manifest(
@@ -619,6 +683,48 @@ fn push_line(output: &mut String, key: &str, value: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// Decision 0012: the relaxation is opt-in, by name, and never silent.
+    ///
+    /// The same upgradeable release is refused under the strict class every
+    /// existing caller gets, and admitted under the class a caller has to
+    /// spell out. That asymmetry is the whole disclosure requirement: a host
+    /// cannot end up trusting a mutable substrate without a call site saying so.
+    #[test]
+    fn the_mutable_substrate_is_admitted_only_under_the_named_class() {
+        use dclutch_registry_contract::ArtifactReleaseV1;
+        use dclutch_release_set_contract::ProgramIdentityV1;
+
+        let identity = |fill: u8| ProgramIdentityV1::decode(&[fill; 32]).expect("identity");
+        let build = |policy, authority| {
+            ArtifactReleaseV1::new(
+                identity(1),
+                identity(2),
+                [3; 32],
+                ContentId::new([4; 32]).expect("semantic release"),
+                [5; 32],
+                6,
+                policy,
+                authority,
+            )
+            .expect("artifact release")
+        };
+
+        let immutable = build(ArtifactUpgradePolicyV1::Immutable, None);
+        let upgradeable = build(ArtifactUpgradePolicyV1::ExactAuthority, Some([7; 32]));
+
+        for class in [SubstrateClassV1::Immutable, SubstrateClassV1::SlotPinned] {
+            assert_eq!(require_admissible_release(immutable, class), Ok(()));
+        }
+        assert_eq!(
+            require_admissible_release(upgradeable, SubstrateClassV1::Immutable),
+            Err(InfrastructureInspectionErrorV1::InfrastructureMustBeImmutable)
+        );
+        assert_eq!(
+            require_admissible_release(upgradeable, SubstrateClassV1::SlotPinned),
+            Ok(())
+        );
+    }
+
     use dclutch_registry_contract::{
         ArtifactActivationInputV1, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,

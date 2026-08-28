@@ -21,6 +21,7 @@ import {
   CAPABILITY_FUNDING_STATE_STATUS_OFFSET_V1,
   FUNDING_COMPARTMENTS_V1,
 } from './generated/capabilityManifestV1';
+import { releaseSupersededMeaningV1 } from './refusals';
 import { SolanaRpcClient, type ConnectionFacts, type RpcAccount } from './rpc';
 
 /** Offset of one remaining compartment's amount inside a `DCLTCFS1` account. */
@@ -38,7 +39,17 @@ const SHA256 = /^[0-9a-f]{64}$/;
 export type SuccessorOrigin = 'genesis-prepared' | 'genesis-prepared-refusal-sentinel' | 'genesis-prepared-then-transaction-mutated' | 'transaction-created';
 type ExpectedAccount = Readonly<{ address: string; owner: string; lamports: number; executable: boolean; data_len: number; data_sha256: string; account_sha256: string; origin: SuccessorOrigin }>;
 type ExpectedTransaction = Readonly<{ label: string; signature: string; slot: number; transaction_metadata_available: boolean; fee_lamports: number | null; compute_units_consumed: number | null; error: unknown }>;
-type ProgramEvidence = Readonly<{ program_id: string; programdata_id: string; deployment_slot: number; upgrade_authority: null; upgrade_authority_effectively_disabled: boolean; elf_sha256: string }>;
+/**
+ * One role program's Loader identity as the runner captured it.
+ *
+ * `upgrade_authority` was typed `null` and checked `=== null`, alongside a
+ * `deployment_slot !== 0` refusal: the checkpoint could only ever describe a
+ * genesis-prepared, slot-zero, irrevocable substrate. Decision 0012 made that
+ * a refusal of the substrate the project actually iterates on, so both fields
+ * are now READ rather than asserted, and what they say becomes the pin every
+ * observation below is compared against.
+ */
+type ProgramEvidence = Readonly<{ program_id: string; programdata_id: string; deployment_slot: number; upgrade_authority: string | null; upgrade_authority_effectively_disabled: boolean; elf_sha256: string }>;
 type Scenario = Readonly<{ market: string; state: string; certificates: Readonly<Record<string, string>>; funding: Readonly<Record<string, string>>; hostile_certificate_preoccupied: boolean }>;
 
 export type LocalSuccessorCheckpoint = Readonly<{
@@ -99,7 +110,14 @@ export function decodeLocalSuccessorCheckpoint(value: unknown): LocalSuccessorCh
   // captured from any of them.
   const url = new URL(text(value.network.rpc_url, 'checkpoint RPC')); if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !/^[0-9]+$/.test(url.port)) throw new Error('local successor checkpoint is not a loopback explicit-port profile');
   const expectedAccounts = Object.freeze(Object.fromEntries(Object.entries(value.expected_accounts).map(([name, account]) => [name, decodeExpectedAccount(account, `expected account ${name}`)])));
-  const programs = value.programs as Record<string, unknown>; const parseProgram = (name: string): ProgramEvidence => { const program = programs[name]; if (!plain(program)) throw new Error(`${name} program evidence is absent`); const deploymentSlot = uint(program.deployment_slot, `${name} deployment slot`); if (deploymentSlot !== 0 || program.upgrade_authority !== null || program.upgrade_authority_effectively_disabled !== true) throw new Error(`${name} is not the immutable slot-zero Loader profile`); return Object.freeze({ program_id: key(program.program_id, `${name} program`), programdata_id: key(program.programdata_id, `${name} ProgramData`), deployment_slot: deploymentSlot, upgrade_authority: null, upgrade_authority_effectively_disabled: true, elf_sha256: digest(program.elf_sha256, `${name} ELF`) }); };
+  // The pinned admission, decision 0012, in the browser's own words: a
+  // checkpoint may describe EITHER canonical pinned shape, and the shape it
+  // describes becomes the pin. What it may never do is describe a NON-canonical
+  // pairing — a program that claims its authority is effectively disabled while
+  // naming one, or that claims a live authority while carrying none — because
+  // that combination is the one thing `require_slot_pinned_release_v1` refuses
+  // on chain, and a checkpoint the chain would refuse is not evidence.
+  const programs = value.programs as Record<string, unknown>; const parseProgram = (name: string): ProgramEvidence => { const program = programs[name]; if (!plain(program)) throw new Error(`${name} program evidence is absent`); const deploymentSlot = uint(program.deployment_slot, `${name} deployment slot`); const upgradeAuthority = program.upgrade_authority === null ? null : key(program.upgrade_authority, `${name} upgrade authority`); const disabled = flag(program.upgrade_authority_effectively_disabled, `${name} upgrade-authority-disabled flag`); if (disabled !== (upgradeAuthority === null)) throw new Error(`${name} is not a canonical pinned Loader profile: it ${disabled ? 'calls its upgrade authority effectively disabled while naming one' : 'claims a live upgrade authority while carrying none'}`); return Object.freeze({ program_id: key(program.program_id, `${name} program`), programdata_id: key(program.programdata_id, `${name} ProgramData`), deployment_slot: deploymentSlot, upgrade_authority: upgradeAuthority, upgrade_authority_effectively_disabled: disabled, elf_sha256: digest(program.elf_sha256, `${name} ELF`) }); };
   const parseScenario = (name: string): Scenario => { const scenario = (value.scenarios as Record<string, unknown>)[name]; if (!plain(scenario) || !plain(scenario.certificates) || !plain(scenario.funding)) throw new Error(`${name} scenario is malformed`); return Object.freeze({ market: key(scenario.market, `${name} market`), state: key(scenario.state, `${name} state`), certificates: Object.freeze(Object.fromEntries(Object.entries(scenario.certificates).map(([role, address]) => [role, key(address, `${name} ${role} certificate`)]))), funding: Object.freeze(Object.fromEntries(Object.entries(scenario.funding).map(([role, address]) => [role, key(address, `${name} ${role} funding`)]))), hostile_certificate_preoccupied: flag(scenario.hostile_certificate_preoccupied, `${name} occupied flag`) }); };
   const expectedTransactions = Object.freeze(value.expected_transactions.map((entry, index): ExpectedTransaction => {
     if (!plain(entry)) throw new Error(`transaction ${index} is malformed`);
@@ -115,11 +133,45 @@ export function decodeLocalSuccessorCheckpoint(value: unknown): LocalSuccessorCh
 
 export const LOCAL_SUCCESSOR_CHECKPOINT = decodeLocalSuccessorCheckpoint(checkpointJson as unknown);
 
+/** How a checkpoint's recorded pin reads to a person: the two admitted shapes. */
+function substrateClass(program: ProgramEvidence): string {
+  return program.upgrade_authority === null ? 'immutable' : 'slot-pinned';
+}
+
+/**
+ * Decode a Loader account against the pin the checkpoint recorded.
+ *
+ * Two refusals lived here and both were wrong under decision 0012.
+ *
+ * The first hard-required `deployment_slot == 0` and a `None` authority tag,
+ * so the browser refused every iterated substrate outright — the ProgramData of
+ * a program deployed at slot 167 and upgraded at slot 531 reads as a malformed
+ * header rather than as what it is. The slot is now compared against the pin
+ * the checkpoint carries, and a strictly later one is named the way the chain
+ * names it: `ReleaseSupersededByUpgrade`.
+ *
+ * The second was `requireZero(bytes, 13, 32)`. Loader V3 serializes
+ * `ProgramData { slot, upgrade_authority: None }` as THIRTEEN bytes over a
+ * forty-five byte header, so a program whose authority was REVOKED keeps the
+ * old key sitting inert at 13..45 with the tag at 0. `releaseRegistry.ts`
+ * removed exactly this check on 2026-08-27 after measuring it against a live
+ * validator — it called the Loader's own `SetAuthority(None)` output malformed
+ * and refused every revoked program on every cluster — and this copy was
+ * missed. It only ever passed because the local genesis writes that tail
+ * zeroed. The tag is the authority; the trailing bytes are retained litter.
+ */
 function decodeLoader(name: string, bytes: Uint8Array, expected: ExpectedAccount, checkpoint: LocalSuccessorCheckpoint): ParsedSuccessorAccount | null {
   if (!name.startsWith('loader.')) return null;
   const programName = name.includes('registry') ? 'registry' : 'resolution'; const program = checkpoint.programs[programName];
-  if (name.endsWith('.program')) { if (bytes.length !== 36 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 2 || pubkey(bytes, 4) !== program.programdata_id) throw new Error('Loader Program linkage is not exact'); return Object.freeze({ kind: 'immutable Loader Program', headline: programName, facts: Object.freeze([fact('ProgramData', program.programdata_id), fact('executable', expected.executable)]) }); }
-  if (bytes.length <= 45 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 3 || u64(bytes, 4) !== 0n || bytes[12] !== 0) throw new Error('Loader ProgramData header is not immutable slot-zero V3'); requireZero(bytes, 13, 32, 'immutable ProgramData header'); return Object.freeze({ kind: 'immutable Loader ProgramData', headline: programName, facts: Object.freeze([fact('deployment slot', 0), fact('upgrade authority', 'none'), fact('ELF bytes', bytes.length - 45), fact('ELF SHA-256', program.elf_sha256)]) });
+  if (name.endsWith('.program')) { if (bytes.length !== 36 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 2 || pubkey(bytes, 4) !== program.programdata_id) throw new Error('Loader Program linkage is not exact'); return Object.freeze({ kind: `${substrateClass(program)} Loader Program`, headline: programName, facts: Object.freeze([fact('ProgramData', program.programdata_id), fact('executable', expected.executable)]) }); }
+  if (bytes.length <= 45 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 3) throw new Error('Loader ProgramData is not a V3 ProgramData account');
+  const tag = bytes[12]; if (tag > 1) throw new Error('Loader ProgramData upgrade-authority tag is undefined');
+  const authority = tag === 0 ? null : pubkey(bytes, 13); const slot = u64(bytes, 4); const pinned = BigInt(program.deployment_slot);
+  if (slot !== pinned) throw new Error(slot > pinned && program.upgrade_authority !== null
+    ? `ReleaseSupersededByUpgrade: ${program.program_id} has been upgraded since this checkpoint was captured — the checkpoint pins deployment slot ${pinned}, and the chain reports slot ${slot}. ${releaseSupersededMeaningV1()}`
+    : `DeploymentSlotMismatch: ${program.program_id} reports deployment slot ${slot} and this checkpoint pins slot ${pinned}. ${program.upgrade_authority === null ? 'This substrate is immutable, so its slot is not something an upgrade could have moved: this is a different deployment, or a checkpoint captured from a different validator.' : 'A slot below the pin is not an upgrade — the Loader only ever moves a deployment slot forward — so this is a stale or wrong-generation observation.'}`);
+  if (authority !== program.upgrade_authority) throw new Error(`UpgradeAuthorityMismatch: ${program.program_id} now carries ${authority === null ? 'no upgrade authority' : `the upgrade authority ${authority}`}, and this checkpoint pins ${program.upgrade_authority ?? 'none'}.`);
+  return Object.freeze({ kind: `${substrateClass(program)} Loader ProgramData`, headline: programName, facts: Object.freeze([fact('deployment slot', slot), fact('upgrade authority', authority ?? 'none'), fact('ELF bytes', bytes.length - 45), fact('ELF SHA-256', program.elf_sha256)]) });
 }
 
 export function parseSuccessorAccount(name: string, account: RpcAccount, checkpoint = LOCAL_SUCCESSOR_CHECKPOINT): ParsedSuccessorAccount {

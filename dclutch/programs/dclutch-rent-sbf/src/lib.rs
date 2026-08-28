@@ -79,6 +79,14 @@ pub enum RentSbfError {
     Caller = 0x2009,
     /// Complete retirement evidence or the final close plan refused.
     Closure = 0x200A,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Decision 0012. Not a corrupted account and not an attack: the exact
+    /// upgrade authority the release names shipped new bytes, so the cached
+    /// authentication no longer describes what is deployed. Every open market
+    /// on the superseded release generation refuses until a re-release
+    /// re-authenticates the new deployment and re-pins its slot.
+    ReleaseSuperseded = 0x200B,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -89,7 +97,7 @@ const _: () = assert!(
     "RentSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (RentSbfError::Closure as u32)
+    (RentSbfError::ReleaseSuperseded as u32)
         < dclutch_refusal_registry::RENT_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "RentSbfError must not run past its registered refusal band"
 );
@@ -97,6 +105,22 @@ const _: () = assert!(
 impl From<RentSbfError> for ProgramError {
     fn from(value: RentSbfError) -> Self {
         Self::Custom(value as u32)
+    }
+}
+
+/// Name an activation-cache refusal, keeping the superseded case actionable.
+///
+/// Decision 0012: a moved deployment slot means the substrate was upgraded and
+/// this release generation is finished. The remedy is a re-release, not an
+/// investigation, so it does not fold into the generic Release refusal.
+impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for RentSbfError {
+    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+        match value {
+            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+                Self::ReleaseSuperseded
+            }
+            _ => Self::Release,
+        }
     }
 }
 
@@ -658,7 +682,7 @@ fn authenticate_current_core_v2(
         accounts.core_program,
         accounts.core_programdata,
     )
-    .map_err(|_| RentSbfError::Release)?;
+    .map_err(RentSbfError::from)?;
     if receipt.program().as_bytes() != &accounts.core_program.key.to_bytes() {
         return Err(RentSbfError::Release.into());
     }
@@ -873,9 +897,15 @@ mod tests {
     fn only_the_lifecycle_v2_magic_reaches_a_route() {
         let program_id = Pubkey::new_unique();
         let mut retired = vec![0_u8; 56];
-        retired[..8].copy_from_slice(b"DCLTRCI1");
-        retired[8..10].copy_from_slice(&1_u16.to_le_bytes());
-        retired[10] = 1;
+        retired
+            .get_mut(0..8)
+            .expect("retired offset in bounds")
+            .copy_from_slice(b"DCLTRCI1");
+        retired
+            .get_mut(8..10)
+            .expect("retired offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        *retired.get_mut(10).expect("retired offset in bounds") = 1;
         assert_eq!(
             process_instruction(&program_id, &[], &retired),
             Err(RentSbfError::Instruction.into())

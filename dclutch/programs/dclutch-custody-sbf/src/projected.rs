@@ -316,7 +316,7 @@ fn authenticate_release<'info>(
         caller_program,
         caller_programdata,
     )
-    .map_err(|_| CustodySbfError::Release)?;
+    .map_err(CustodySbfError::from)?;
     if receipt.program().as_bytes() != &request.caller_program {
         return Err(CustodySbfError::Release.into());
     }

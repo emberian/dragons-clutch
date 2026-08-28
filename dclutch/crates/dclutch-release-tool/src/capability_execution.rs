@@ -2,10 +2,12 @@
 //!
 //! The five-role execution set is not the whole executable release when a
 //! capability selects Shadow-AOT or admitted-AOT. This module joins the exact
-//! finalized descriptor/strategy/certificate/admission records to one checked,
-//! immutable accelerator deployment. It performs no RPC, publication, signing,
-//! deployment, or runtime admission; Registry-owned records remain onchain
-//! authority.
+//! finalized descriptor/strategy/certificate/admission records to one checked
+//! accelerator deployment in either canonical pinned shape — immutable, or
+//! upgradeable by the exact authority its release binds (decision 0012). Which
+//! one it is, is stated: see [`CheckedCapabilityExecutionV1::evidence_class`].
+//! It performs no RPC, publication, signing, deployment, or runtime admission;
+//! Registry-owned records remain onchain authority.
 
 use dclutch_capability_program_contract::v4::{CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4};
 use dclutch_core_contract::ContentId;
@@ -22,6 +24,12 @@ use dclutch_registry_contract::{
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 
 use crate::{CheckedReleaseV1, Error, Result, artifact_release_from_checked, encode_hex, sha256};
+
+/// The accelerator can never be redeployed at its program id.
+pub const CAPABILITY_EVIDENCE_CLASS_IMMUTABLE_V1: &str = "immutable-accelerator-deployment";
+/// The accelerator is upgradeable by the exact authority its release binds.
+pub const CAPABILITY_EVIDENCE_CLASS_SLOT_PINNED_V1: &str =
+    "slot-pinned-accelerator-with-a-retained-upgrade-authority";
 
 /// Canonical checked capability-execution evidence magic.
 pub const CHECKED_CAPABILITY_EXECUTION_MAGIC_V1: [u8; 8] = *b"DCLTCEV1";
@@ -269,19 +277,52 @@ impl CheckedCapabilityExecutionV1 {
             "accelerator_checked_release_id",
             &encode_hex(self.checked_release_id.as_bytes()),
         );
-        push_line(&mut output, "upgrade_policy", "immutable");
+        push_line(&mut output, "upgrade_policy", self.upgrade_policy_label());
         push_line(
             &mut output,
             "recognition_class",
             "offline-checked-capability-evidence",
         );
+        // APPENDED, never inserted: the release scripts scrape these
+        // projections line by line.
+        push_line(&mut output, "evidence_class", self.evidence_class());
         Ok(output)
     }
 
-    fn validate(self) -> Result<()> {
-        if self.artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable {
-            return Err(Error::CapabilityAcceleratorMustBeImmutable);
+    /// The accelerator deployment's own upgrade policy, read rather than assumed.
+    ///
+    /// This line was the literal `"immutable"`, correct only because `validate`
+    /// refused everything else. Under decision 0012 it can be either, so it is
+    /// derived — a projection that states a policy the artifact does not carry
+    /// is worse than one that states none.
+    pub const fn upgrade_policy_label(self) -> &'static str {
+        match self.artifact.upgrade_policy() {
+            ArtifactUpgradePolicyV1::Immutable => "immutable",
+            ArtifactUpgradePolicyV1::ExactAuthority => "exact-authority",
         }
+    }
+
+    /// Name the substrate class this accelerator evidence is evidence for.
+    ///
+    /// Same reasoning as `CheckedInfrastructureV1::evidence_class`: an
+    /// immutable accelerator can never execute different bytes; a slot-pinned
+    /// one can, once, visibly, by the named authority's signature, and every
+    /// dependent market refuses the instant it does. Both are admissible
+    /// substrates and they are not the same evidence, so the manifest says
+    /// which it is instead of leaving a reader to infer it.
+    pub const fn evidence_class(self) -> &'static str {
+        match self.artifact.upgrade_policy() {
+            ArtifactUpgradePolicyV1::Immutable => CAPABILITY_EVIDENCE_CLASS_IMMUTABLE_V1,
+            ArtifactUpgradePolicyV1::ExactAuthority => CAPABILITY_EVIDENCE_CLASS_SLOT_PINNED_V1,
+        }
+    }
+
+    fn validate(self) -> Result<()> {
+        // Decision 0012: the admissible shapes, not the irrevocable one. The
+        // strictness this check used to carry now lives in `evidence_class`,
+        // where a reader can act on it — see that method.
+        dclutch_registry_contract::require_slot_pinned_release_v1(self.artifact)
+            .map_err(|_| Error::CapabilityAcceleratorMustBeImmutable)?;
         let descriptor_strategy = self.descriptor.strategy();
         if descriptor_strategy.schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
             || descriptor_strategy.program() != self.strategy_program_id()?
@@ -505,7 +546,27 @@ mod tests {
         Option<ExecutionStrategyAdmissionV2>,
         CheckedReleaseV1,
     ) {
-        let checked = checked(31, true);
+        fixture_over(disposition, checked(31, true))
+    }
+
+    /// The same descriptor chain built around a caller-chosen accelerator.
+    ///
+    /// The accelerator's artifact id is bound INSIDE the certificate, which is
+    /// bound inside the strategy, which is named by the descriptor. So a test
+    /// cannot swap the accelerator for a mutable one after the fact: the whole
+    /// chain has to be built over it, or every downstream binding refuses for
+    /// the wrong reason. That is why the old upgradeable-accelerator test could
+    /// only ever have passed on the mutability check it asserted.
+    fn fixture_over(
+        disposition: StrategyDispositionV2,
+        checked: CheckedReleaseV1,
+    ) -> (
+        CapabilityProgramV4,
+        ExecutionStrategyProgramV2,
+        ExecutionStrategyCertificateV2,
+        Option<ExecutionStrategyAdmissionV2>,
+        CheckedReleaseV1,
+    ) {
         let artifact = artifact_release_from_checked(&checked).expect("artifact");
         let artifact_release = artifact_id(artifact).expect("artifact id");
         let account_profile = id(10);
@@ -665,19 +726,51 @@ mod tests {
         );
     }
 
+    /// Decision 0012.
+    ///
+    /// This was `upgradeable_accelerator_never_becomes_checked_capability_evidence`
+    /// and it asserted `Err(CapabilityAcceleratorMustBeImmutable)`. An
+    /// upgradeable accelerator IS admissible evidence now — of a weaker claim,
+    /// which the manifest states rather than leaves to be inferred.
     #[test]
-    fn upgradeable_accelerator_never_becomes_checked_capability_evidence() {
-        let (descriptor, strategy, certificate, admission, _) =
-            fixture(StrategyDispositionV2::AdmittedAot);
+    fn an_upgradeable_accelerator_is_evidence_of_the_weaker_claim_and_says_so() {
+        let (descriptor, strategy, certificate, admission, accelerator) =
+            fixture_over(StrategyDispositionV2::AdmittedAot, checked(31, false));
+        let pinned = build_checked_capability_execution_v1(
+            descriptor,
+            strategy,
+            certificate,
+            admission,
+            &accelerator,
+        )
+        .expect("a slot-pinned accelerator is admissible capability evidence");
         assert_eq!(
-            build_checked_capability_execution_v1(
-                descriptor,
-                strategy,
-                certificate,
-                admission,
-                &checked(31, false),
-            ),
-            Err(Error::CapabilityAcceleratorMustBeImmutable)
+            pinned.evidence_class(),
+            CAPABILITY_EVIDENCE_CLASS_SLOT_PINNED_V1
         );
+        assert_eq!(pinned.upgrade_policy_label(), "exact-authority");
+        let text = pinned.render_text().expect("render");
+        assert!(text.contains(CAPABILITY_EVIDENCE_CLASS_SLOT_PINNED_V1));
+        assert!(text.contains("upgrade_policy=exact-authority"));
+
+        let (descriptor, strategy, certificate, admission, accelerator) =
+            fixture(StrategyDispositionV2::AdmittedAot);
+        let immutable = build_checked_capability_execution_v1(
+            descriptor,
+            strategy,
+            certificate,
+            admission,
+            &accelerator,
+        )
+        .expect("immutable capability evidence");
+        assert_eq!(
+            immutable.evidence_class(),
+            CAPABILITY_EVIDENCE_CLASS_IMMUTABLE_V1
+        );
+        assert_eq!(immutable.upgrade_policy_label(), "immutable");
+        // The two are different evidence and therefore different manifests:
+        // the policy and the authority are inside the artifact bytes the
+        // identity hashes, so one can never be presented as the other.
+        assert_ne!(pinned, immutable);
     }
 }

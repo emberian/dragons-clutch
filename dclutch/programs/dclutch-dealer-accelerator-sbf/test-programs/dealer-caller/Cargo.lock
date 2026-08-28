@@ -275,6 +275,7 @@ dependencies = [
 name = "dclutch-account-profile-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-seal-contract",
  "dclutch-effect-kernel",
  "dclutch-transition-vm",
 ]
@@ -298,6 +299,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-seal-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
@@ -307,12 +312,20 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
+ "dclutch-refusal-registry",
  "dclutch-release-set-contract",
  "solana-program",
 ]
 
 [[package]]
 name = "dclutch-effect-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
+
+[[package]]
+name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]
@@ -325,6 +338,9 @@ dependencies = [
 [[package]]
 name = "dclutch-transition-vm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "der"

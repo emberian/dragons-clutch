@@ -195,6 +195,141 @@ theorem admits_monotone_in_floor
     Admits k deeper principal :=
   Nat.le_trans admitted (Nat.mul_le_mul_left k.numerator le)
 
+/-! ## The carried cap, and why a Market has to carry one
+
+§6.5's predicate needs the whole Source graph in scope: κ, the venue floor, and
+the three identities the floor is bound to.  A founding route can have all of
+that.  A route that *grows* principal afterwards — a complete-set split — cannot,
+and re-deriving the predicate there would be worse than not checking it.
+`ManipulationFloorV1` binds the Source, the venue configuration and the
+collateral unit, but nothing pins *which* floor record carries those bindings, so
+two floors that agree on all three and disagree on `floorAtoms` both validate.
+Re-deriving at split therefore lets the caller choose its own bound.
+
+So the number is computed once, where the graph is authenticated, and **carried**.
+`cap` is that number.  `cap_is_the_predicate` is the statement that carrying it
+is not a second semantics: for a stated κ, comparing a principal against the
+carried cap decides exactly what re-running §6.5 would have decided.  This is the
+whole reason a carried `u128` is allowed to stand in for a record graph.
+-/
+
+/-- The largest principal κ admits against a floor: the number a founded Market
+carries forward, in the Market's collateral atoms. -/
+def cap (k : Kappa) (floorAtoms : Nat) : Nat := k.numerator * floorAtoms / k.denominator
+
+/-- Comparing against the carried cap **is** §6.5, not an approximation of it.
+
+Over ℕ, `principal ≤ ⌊n·f / d⌋` and `principal · d ≤ n · f` are the same
+proposition whenever `d` is positive, so the floored division loses nothing. -/
+theorem cap_is_the_predicate
+    (k : Kappa) (floorAtoms principal : Nat) (statedKappa : 0 < k.denominator) :
+    principal ≤ cap k floorAtoms ↔ Admits k floorAtoms principal :=
+  Nat.le_div_iff_mul_le statedKappa
+
+/-- The decision a route with only the carried cap in scope makes.
+
+A cap of zero refuses everything, which is exactly what an *absent* cap must
+read as: a Market root that was never given a cap is indistinguishable on the
+wire from one whose κ or floor was zero, and both mean "grow no principal here."
+So the fail-closed reading costs no extra field. -/
+def admitAgainstCap (capAtoms principal : Nat) : Bool :=
+  if principal = 0 then false
+  else if capAtoms = 0 then false
+  else decide (principal ≤ capAtoms)
+
+/-- `admit` is exactly "a positive principal that §6.5 admits", inside the wire
+envelope.  Every one of its physical refusals — unstated κ, zero principal, zero
+bound, `u128` overflow — is either a hypothesis here or is subsumed. -/
+theorem admit_iff_positive_and_admits
+    (k : Kappa) (floorAtoms principal : Nat)
+    (kappaFits : k.Fits) (floorFits : floorAtoms < u64Bound)
+    (statedKappa : k.denominator ≠ 0) :
+    admit k floorAtoms principal = true ↔ (principal ≠ 0 ∧ Admits k floorAtoms principal) := by
+  constructor
+  · intro accepted
+    refine ⟨?_, admit_sound k floorAtoms principal accepted⟩
+    intro zeroPrincipal
+    rw [zeroPrincipal] at accepted
+    unfold admit at accepted
+    simp [statedKappa] at accepted
+  · rintro ⟨positivePrincipal, admitted⟩
+    by_cases zeroBound : k.numerator * floorAtoms = 0
+    · exfalso
+      rw [Admits, zeroBound, Nat.le_zero, Nat.mul_eq_zero] at admitted
+      exact admitted.elim positivePrincipal statedKappa
+    · exact admit_complete k floorAtoms principal kappaFits floorFits statedKappa
+        positivePrincipal zeroBound admitted
+
+/-- The carried-cap decision is exactly "a positive principal that §6.5 admits"
+too — with no envelope hypotheses at all, because comparing two numbers cannot
+overflow. -/
+theorem admit_against_cap_iff_positive_and_admits
+    (k : Kappa) (floorAtoms principal : Nat) (statedKappa : 0 < k.denominator) :
+    admitAgainstCap (cap k floorAtoms) principal = true ↔
+      (principal ≠ 0 ∧ Admits k floorAtoms principal) := by
+  unfold admitAgainstCap
+  by_cases zeroPrincipal : principal = 0
+  · simp [zeroPrincipal]
+  · rw [if_neg zeroPrincipal]
+    by_cases zeroCap : cap k floorAtoms = 0
+    · rw [if_pos zeroCap]
+      constructor
+      · intro impossible
+        exact absurd impossible (by simp)
+      · rintro ⟨_, admitted⟩
+        exfalso
+        have le := (cap_is_the_predicate k floorAtoms principal statedKappa).mpr admitted
+        rw [zeroCap, Nat.le_zero] at le
+        exact zeroPrincipal le
+    · rw [if_neg zeroCap, decide_eq_true_iff]
+      exact ⟨fun le => ⟨zeroPrincipal,
+          (cap_is_the_predicate k floorAtoms principal statedKappa).mp le⟩,
+        fun pair => (cap_is_the_predicate k floorAtoms principal statedKappa).mpr pair.2⟩
+
+/-- **The lane's load-bearing theorem.**  A route holding only the carried cap
+refuses exactly what a route holding the whole Source graph would refuse.  This
+is what licenses computing the bound once at founding and checking it at every
+later complete-set split, where the graph is not in scope. -/
+theorem carried_cap_decides_exactly_what_the_graph_decides
+    (k : Kappa) (floorAtoms principal : Nat)
+    (kappaFits : k.Fits) (floorFits : floorAtoms < u64Bound)
+    (statedKappa : 0 < k.denominator) :
+    admitAgainstCap (cap k floorAtoms) principal = admit k floorAtoms principal := by
+  have nonzero : k.denominator ≠ 0 := Nat.ne_of_gt statedKappa
+  have ext : ∀ (carried graph : Bool), (carried = true ↔ graph = true) → carried = graph := by
+    intro carried graph agree
+    cases carried <;> cases graph <;> simp_all
+  exact ext _ _
+    ((admit_against_cap_iff_positive_and_admits k floorAtoms principal statedKappa).trans
+      (admit_iff_positive_and_admits k floorAtoms principal kappaFits floorFits nonzero).symm)
+
+/-- The carried cap is downward closed in the principal, inheriting the property
+that makes §6.5 a cap rather than a target. -/
+theorem carried_cap_monotone_in_principal
+    (capAtoms principal smaller : Nat) (positive : smaller ≠ 0)
+    (admitted : admitAgainstCap capAtoms principal = true) (le : smaller ≤ principal) :
+    admitAgainstCap capAtoms smaller = true := by
+  unfold admitAgainstCap at admitted ⊢
+  by_cases zeroPrincipal : principal = 0
+  · simp [zeroPrincipal] at admitted
+  · by_cases zeroCap : capAtoms = 0
+    · simp [zeroPrincipal, zeroCap] at admitted
+    · simp only [if_neg zeroPrincipal, if_neg zeroCap, decide_eq_true_iff] at admitted
+      simp only [if_neg positive, if_neg zeroCap, decide_eq_true_iff]
+      exact Nat.le_trans le admitted
+
+/-- A carried cap at the top of its `u128` wire field admits every principal the
+wire can express.  This is why "explicitly unbounded" needs no escape hatch in
+the decision: it is an ordinary cap whose value happens to bound everything, so
+one comparison still decides the whole question. -/
+theorem saturated_cap_admits_every_representable_principal
+    (principal : Nat) (positive : principal ≠ 0) (representable : principal < u128Bound) :
+    admitAgainstCap (u128Bound - 1) principal = true := by
+  unfold admitAgainstCap
+  have capNonzero : u128Bound - 1 ≠ 0 := by native_decide
+  simp only [if_neg positive, if_neg capNonzero, decide_eq_true_iff]
+  exact Nat.le_sub_one_of_lt representable
+
 /-! ## The conservative default and the graduation instance
 
 §5.4 derives the pump.fun graduation floor exactly: **18.618074 SOL** of
@@ -226,6 +361,16 @@ theorem default_graduation_cap :
     admit defaultKappa graduationFloorLamports 4654518500 = true ∧
       admit defaultKappa graduationFloorLamports 4654518501 = false := by
   constructor <;> native_decide
+
+/-- The same number, as the value a founded graduation Market **carries**.  The
+boundary pair is the same pair whether it is decided from the Source graph or
+from the carried cap, which is `carried_cap_decides_exactly_what_the_graph_decides`
+made concrete at the one instance that ships. -/
+theorem default_graduation_cap_is_carried :
+    cap defaultKappa graduationFloorLamports = 4654518500 ∧
+      admitAgainstCap (cap defaultKappa graduationFloorLamports) 4654518500 = true ∧
+        admitAgainstCap (cap defaultKappa graduationFloorLamports) 4654518501 = false := by
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- The 85 SOL nominal figure is *not* the attack cost (§5.4's first correction);
 sizing a graduation Market against it over-states safety.  Stated as an

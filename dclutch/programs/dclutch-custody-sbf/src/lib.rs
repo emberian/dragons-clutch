@@ -115,6 +115,14 @@ pub enum CustodySbfError {
     /// terminal whose entire safety property is that it refuses while the
     /// founding is still satisfiable, the refusal has to be able to say so.
     Expiry = 0x600B,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Decision 0012. Not a corrupted account and not an attack: the exact
+    /// upgrade authority the release names shipped new bytes, so the cached
+    /// authentication no longer describes what is deployed. Every open market
+    /// on the superseded release generation refuses until a re-release
+    /// re-authenticates the new deployment and re-pins its slot.
+    ReleaseSuperseded = 0x600C,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -125,7 +133,7 @@ const _: () = assert!(
     "CustodySbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (CustodySbfError::Expiry as u32)
+    (CustodySbfError::ReleaseSuperseded as u32)
         < dclutch_refusal_registry::CUSTODY_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "CustodySbfError must not run past its registered refusal band"
 );
@@ -133,6 +141,22 @@ const _: () = assert!(
 impl From<CustodySbfError> for ProgramError {
     fn from(value: CustodySbfError) -> Self {
         Self::Custom(value as u32)
+    }
+}
+
+/// Name an activation-cache refusal, keeping the superseded case actionable.
+///
+/// Decision 0012: a moved deployment slot means the substrate was upgraded and
+/// this release generation is finished. The remedy is a re-release, not an
+/// investigation, so it does not fold into the generic Release refusal.
+impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for CustodySbfError {
+    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+        match value {
+            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+                Self::ReleaseSuperseded
+            }
+            _ => Self::Release,
+        }
     }
 }
 
@@ -330,7 +354,7 @@ fn authenticate_calling_release(
         caller_program,
         caller_programdata,
     )
-    .map_err(|_| CustodySbfError::Release)?;
+    .map_err(CustodySbfError::from)?;
     if receipt.program().as_bytes() != &request.caller_program {
         return Err(CustodySbfError::Release.into());
     }

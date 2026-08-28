@@ -94,6 +94,14 @@ pub enum RegistryError {
     Continuation = 0x100B,
     /// Immutable-record publication wire, frame, transition, or account refused.
     Record = 0x100C,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Decision 0012. Not a corrupted account and not an attack: the exact
+    /// upgrade authority the release names shipped new bytes, so the cached
+    /// authentication no longer describes what is deployed. Every open market
+    /// on the superseded release generation refuses until a re-release
+    /// re-authenticates the new deployment and re-pins its slot.
+    ReleaseSuperseded = 0x100D,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -104,7 +112,7 @@ const _: () = assert!(
     "RegistryError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (RegistryError::Record as u32)
+    (RegistryError::ReleaseSuperseded as u32)
         < dclutch_refusal_registry::REGISTRY_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "RegistryError must not run past its registered refusal band"
 );
@@ -112,6 +120,22 @@ const _: () = assert!(
 impl From<RegistryError> for ProgramError {
     fn from(value: RegistryError) -> Self {
         Self::Custom(value as u32)
+    }
+}
+
+/// Name an activation-cache refusal, keeping the superseded case actionable.
+///
+/// Decision 0012: a moved deployment slot means the substrate was upgraded and
+/// this release generation is finished. The remedy is a re-release, not an
+/// investigation, so it does not fold into the generic Deployment refusal.
+impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for RegistryError {
+    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+        match value {
+            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+                Self::ReleaseSuperseded
+            }
+            _ => Self::Deployment,
+        }
     }
 }
 
@@ -271,7 +295,7 @@ fn process_reauthenticate(
     // already on the stack -- so the two readers must be the same code, not
     // two implementations of the same rule.
     let receipt = authenticate_activated_role_in_cache_v1(activated, role, program, programdata)
-        .map_err(|_| RegistryError::Deployment)?;
+        .map_err(RegistryError::from)?;
     set_return_data(&receipt.to_bytes());
     Ok(())
 }
@@ -365,7 +389,7 @@ fn cached_role_deployment_observation(
     release: ArtifactReleaseV1,
 ) -> Result<DeploymentObservationV1, ProgramError> {
     cached_role_deployment_observation_v1(program, programdata, release)
-        .map_err(|_| RegistryError::Deployment.into())
+        .map_err(|error| RegistryError::from(error).into())
 }
 
 /// Observe one deployment by hashing its complete current ELF tail.

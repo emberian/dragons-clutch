@@ -178,6 +178,14 @@ pub enum ClaimsSbfError {
     Representation = 0x5008,
     /// Token-2022 mint/account profile or CPI refused.
     Token = 0x5009,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Decision 0012. Not a corrupted account and not an attack: the exact
+    /// upgrade authority the release names shipped new bytes, so the cached
+    /// authentication no longer describes what is deployed. Every open market
+    /// on the superseded release generation refuses until a re-release
+    /// re-authenticates the new deployment and re-pins its slot.
+    ReleaseSuperseded = 0x500A,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -188,7 +196,7 @@ const _: () = assert!(
     "ClaimsSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (ClaimsSbfError::Token as u32)
+    (ClaimsSbfError::ReleaseSuperseded as u32)
         < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "ClaimsSbfError must not run past its registered refusal band"
 );
@@ -196,6 +204,22 @@ const _: () = assert!(
 impl From<ClaimsSbfError> for ProgramError {
     fn from(value: ClaimsSbfError) -> Self {
         Self::Custom(value as u32)
+    }
+}
+
+/// Name an activation-cache refusal, keeping the superseded case actionable.
+///
+/// Decision 0012: a moved deployment slot means the substrate was upgraded and
+/// this release generation is finished. The remedy is a re-release, not an
+/// investigation, so it does not fold into the generic Release refusal.
+impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for ClaimsSbfError {
+    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+        match value {
+            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+                Self::ReleaseSuperseded
+            }
+            _ => Self::Release,
+        }
     }
 }
 
@@ -892,8 +916,12 @@ fn authenticate_authority(
     role_request_digest: [u8; 32],
 ) -> ProgramResult {
     let caller_program = accounts.caller_program.key;
+    // `ClaimsPlanV1::decode` admits Core and Trading only -- this wire is
+    // reached by CPI and its authority is a caller-program PDA -- so the
+    // `Claims` arm is a total mapping over the enum, not an admission.
     let caller_role = match plan.caller_role() {
         CallerRole::Core => ExecutionRoleV1::Core,
+        CallerRole::Claims => ExecutionRoleV1::Claims,
         CallerRole::Trading => ExecutionRoleV1::Trading,
     };
     let seeds = CallerAuthoritySeedsV1::new(
@@ -915,8 +943,12 @@ fn authenticate_releases(
     accounts: &GenericAccounts<'_, '_>,
     plan: ClaimsPlanV1<'_>,
 ) -> ProgramResult {
+    // `ClaimsPlanV1::decode` admits Core and Trading only -- this wire is
+    // reached by CPI and its authority is a caller-program PDA -- so the
+    // `Claims` arm is a total mapping over the enum, not an admission.
     let caller_role = match plan.caller_role() {
         CallerRole::Core => ExecutionRoleV1::Core,
+        CallerRole::Claims => ExecutionRoleV1::Claims,
         CallerRole::Trading => ExecutionRoleV1::Trading,
     };
     let release_set_id = plan.release_set_id();
@@ -977,7 +1009,7 @@ pub(crate) fn authenticate_activated_role(
     release_set_id: &[u8; 32],
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
     authenticate_activated_role_v1(registry, cache, release_set_id, role, program, programdata)
-        .map_err(|_| ClaimsSbfError::Release.into())
+        .map_err(|error| ClaimsSbfError::from(error).into())
 }
 
 fn authenticate_economic_accounts(

@@ -175,6 +175,27 @@ pub const PRINCIPAL_ADMISSION_CASES_V1: [PrincipalAdmissionCaseV1; 17] = [
         admitted: false,
     },
 ];
+pub const MARKET_PRINCIPAL_CAP_BYTES_V1: usize = 16;
+pub const MARKET_PRINCIPAL_CAP_UNBOUNDED_V1: u128 = 340282366920938463463374607431768211455;
+pub const PRINCIPAL_CARRIED_CAPS_V1: [u128; 17] = [
+    4654518500,
+    4654518500,
+    1000,
+    1000,
+    1500,
+    1500,
+    0,
+    0,
+    0,
+    4654518500,
+    0,
+    0,
+    3,
+    3,
+    79228162495817593515539431425,
+    79228162495817593515539431425,
+    4294967297,
+];
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) const MANIPULATION_FLOOR_V1_REFUSAL_CORPUS: [(&[u8], u8); 14] = [

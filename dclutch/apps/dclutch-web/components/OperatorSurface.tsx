@@ -23,6 +23,7 @@ import {
 } from '@/lib/walletHandoff';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
+import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
 type Discovery = Readonly<{ kind: 'idle' | 'loading' | 'error'; message: string }> | Readonly<{ kind: 'ready'; snapshot: OperatorSurfaceSnapshotV1 }>;
 type Packet = Readonly<{ inspection: UnsignedTransactionInspectionV1; report: UnsignedTransactionChainReportV1 }>;
@@ -35,7 +36,7 @@ function familyGroups(): ReadonlyArray<Readonly<{ family: CapabilityFamily; acti
 }
 
 export default function OperatorSurface() {
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [coordinates, setCoordinates] = useState<Record<string, string>>(() => Object.fromEntries([...OPERATOR_ROLES, 'realm', 'market'].map((role) => [role, ''])));
   const [discovery, setDiscovery] = useState<Discovery>({ kind: 'idle', message: 'No chain state has been read.' });
   const [unsignedText, setUnsignedText] = useState('');

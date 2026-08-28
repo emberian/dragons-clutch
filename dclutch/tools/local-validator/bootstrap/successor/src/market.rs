@@ -48,13 +48,14 @@ use dclutch_product_runtime_v2::{
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
-    AccountObservationV2, FinalizedRecordObservationV2, ProductCompilationInputV2,
-    compile_product_records_v2,
+    AccountObservationV2, CompiledProductRecordsV2, FinalizedRecordObservationV2,
+    ProductCompilationInputV2, compile_product_records_v2,
     found::{
         FinalizedReferenceObservationV2, FoundProjectionStateV2, FoundStateV2,
         build_found_instruction_v2, project_found_v2,
     },
     lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
+    publication::{RecordPublicationContentV1, derive_record_addresses_v1},
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -647,14 +648,35 @@ pub(crate) fn execute_found_market(
     })
 }
 
-fn publish_market_records(
-    rpc: &mut Rpc,
+/// Every record body one market input compiles to, before anything touches a
+/// chain.
+///
+/// One author for two consumers: `publish_market_records` publishes exactly
+/// these bytes, and `derive_founding_targets` digests exactly these bytes to
+/// know where the founding will land — so the detector and the executor cannot
+/// disagree about what the input means without one of them failing loudly.
+struct CompiledMarketBodiesV1 {
+    compiled: CompiledProductRecordsV2,
+    semantic_product_id: ProductContentId,
+    realm: Vec<u8>,
+    product: [u8; PRODUCT_RECORD_BYTES_V2],
+    domain: Vec<u8>,
+    portfolio: Vec<u8>,
+    source: Vec<u8>,
+    /// Empty means the material carries no recovery policy (the deliberate
+    /// §12.8 demo shape) and no recovery record is published.
+    recovery: Vec<u8>,
+    manifest: Vec<u8>,
+    product_digest: [u8; 32],
+    domain_digest: [u8; 32],
+}
+
+/// Compile one market input's record bodies, with no RPC and no side effects.
+fn compile_market_bodies(
     registry: Pubkey,
     input: &MarketRunInput,
     collateral_mint: Pubkey,
-    payer: &Keypair,
-    transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(MarketRecords, ProductContentId)> {
+) -> Result<CompiledMarketBodiesV1> {
     let cuts = input
         .cuts
         .iter()
@@ -752,6 +774,47 @@ fn publish_market_records(
     })
     .map_err(|error| Error::new(format!("canonical collateral Realm: {error:?}")))?
     .to_bytes();
+    Ok(CompiledMarketBodiesV1 {
+        compiled,
+        semantic_product_id,
+        realm: realm.to_vec(),
+        product,
+        domain,
+        portfolio,
+        source: source.to_vec(),
+        recovery: recovery_bytes,
+        manifest,
+        product_digest,
+        domain_digest,
+    })
+}
+
+fn publish_market_records(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(MarketRecords, ProductContentId)> {
+    let outcome_count = input
+        .cuts
+        .len()
+        .checked_add(2)
+        .ok_or_else(|| Error::new("Product outcome width overflow"))?;
+    let CompiledMarketBodiesV1 {
+        compiled,
+        semantic_product_id,
+        realm,
+        product,
+        domain,
+        portfolio,
+        source,
+        recovery: recovery_bytes,
+        manifest,
+        product_digest: _,
+        domain_digest,
+    } = compile_market_bodies(registry, input, collateral_mint)?;
 
     let hostile_wallet = Some(Pubkey::new_unique());
     let realm = publish_record(
@@ -937,6 +1000,160 @@ fn publish_market_records(
         },
         semantic_product_id,
     ))
+}
+
+/// Where one market input's founding lands on a chain, derived offline.
+///
+/// Everything here is a function of the plan, the input, and the collateral
+/// mint's public key — no RPC, no side effects. It exists so the campaign
+/// driver's founding stage can READ the chain before writing it: the bodies
+/// come from the same `compile_market_bodies` the publisher uses, and the
+/// identity completion is the same move `derive_founding_coordinates` makes,
+/// so the detector and the executor answer from one derivation.
+pub(crate) struct FoundingTargetsV1 {
+    pub(crate) collateral_mint: Pubkey,
+    /// The realm record's raw address — the first account the founding ever
+    /// publishes, so its existence separates "untouched" from "started".
+    pub(crate) realm_record: Pubkey,
+    /// The canonical Found31 Market at the input's own generation.
+    pub(crate) found31_market: Pubkey,
+    /// The DCLTGMF1 Market at generation + 1 — the one that ends Open, which
+    /// is the product of the whole founding.
+    pub(crate) open_market: Pubkey,
+    /// The abort-lane Market at generation + 2 (staged and unwound; its
+    /// existence mid-run still marks a founding in progress).
+    pub(crate) abort_market: Pubkey,
+    /// The Open Market's completed identity, for the poststate comparison.
+    pub(crate) open_market_identity: MarketIdentity,
+}
+
+pub(crate) fn derive_founding_targets(
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+) -> Result<FoundingTargetsV1> {
+    derive_founding_targets_inner(
+        pubkey(&plan.registry.program_id)?,
+        pubkey(&plan.core.program_id)?,
+        hex32(&plan.release_set_id)?,
+        input,
+        collateral_mint,
+    )
+}
+
+fn derive_founding_targets_inner(
+    registry: Pubkey,
+    core: Pubkey,
+    release_set: [u8; 32],
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+) -> Result<FoundingTargetsV1> {
+    validate_market_input(input)?;
+    let bodies = compile_market_bodies(registry, input, collateral_mint)?;
+    let (realm_record, _, _) = derive_record_addresses_v1(
+        registry,
+        RecordPublicationContentV1 {
+            schema_release_id: REALM_SCHEMA_RELEASE_ID_V1,
+            content: &bodies.realm,
+        },
+    )
+    .map_err(|error| Error::new(format!("derive realm record address: {error:?}")))?;
+    let template = MarketIdentity {
+        market_id: identity([0xff; 32])?,
+        realm_id: identity(record_identity(&bodies.realm))?,
+        product_record: identity(bodies.product_digest)?,
+        product_id: identity(bodies.semantic_product_id.to_bytes())?,
+        resolution_policy: identity(record_identity(&bodies.source))?,
+        capability_manifest: identity(record_identity(&bodies.manifest))?,
+        selected_release_set: identity(release_set)?,
+        registry_program: identity(registry.to_bytes())?,
+        generation: input.generation,
+    };
+    let market_at = |generation: u64| -> Result<(Pubkey, MarketIdentity)> {
+        let seeded = MarketIdentity {
+            generation,
+            ..template
+        };
+        let market =
+            Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(seeded).as_slices(), &core).0;
+        // `market_id` is not one of the nine seeds, so the address is derived
+        // with a placeholder there and completed afterwards — required not to
+        // have moved, exactly as `derive_founding_coordinates` requires.
+        let completed = MarketIdentity {
+            market_id: identity_of(market.to_bytes())?,
+            ..seeded
+        };
+        if Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(completed).as_slices(), &core)
+            .0
+            != market
+        {
+            return Err(Error::new(
+                "the Market address moved when its own identity was completed",
+            ));
+        }
+        Ok((market, completed))
+    };
+    let (found31_market, _) = market_at(input.generation)?;
+    let (open_market, open_market_identity) =
+        market_at(PrestateLaneV1::Founding.generation(input)?)?;
+    let (abort_market, _) = market_at(PrestateLaneV1::SourceAbort.generation(input)?)?;
+    Ok(FoundingTargetsV1 {
+        collateral_mint,
+        realm_record,
+        found31_market,
+        open_market,
+        abort_market,
+        open_market_identity,
+    })
+}
+
+/// What the chain holds at one derived Open-Market coordinate.
+pub(crate) enum OpenMarketObservationV1 {
+    /// No account.
+    Absent,
+    /// The account is exactly the Open Market this input founds: Core-owned,
+    /// `STATE_BYTES` wide, `Phase::Open`, readiness consumed, identity equal —
+    /// the market-account core of `authenticate_open_market_poststate_v1`.
+    Open,
+    /// An account exists that is not that, described.
+    Other(String),
+}
+
+pub(crate) fn observe_open_market(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    targets: &FoundingTargetsV1,
+) -> Result<OpenMarketObservationV1> {
+    let core = pubkey(&plan.core.program_id)?;
+    let Some(account) = rpc.account(targets.open_market)? else {
+        return Ok(OpenMarketObservationV1::Absent);
+    };
+    if account.owner != core || account.executable || account.data.len() != STATE_BYTES {
+        return Ok(OpenMarketObservationV1::Other(format!(
+            "an account exists at the derived Market address {} that is not a Core Market: \
+             owner {}, {} bytes, executable {}",
+            targets.open_market,
+            account.owner,
+            account.data.len(),
+            account.executable
+        )));
+    }
+    let state = CoreState::decode(&account.data)
+        .map_err(|error| Error::new(format!("derived Market account state: {error:?}")))?;
+    if state.identity != targets.open_market_identity {
+        return Ok(OpenMarketObservationV1::Other(format!(
+            "a Core Market exists at {} whose identity is not the one this input derives",
+            targets.open_market
+        )));
+    }
+    if state.phase != Phase::Open || state.readiness != Readiness::Consumed {
+        return Ok(OpenMarketObservationV1::Other(format!(
+            "the Market at {} carries this input's identity but is not Open-with-consumed-\
+             readiness: phase {:?}, readiness {:?}",
+            targets.open_market, state.phase, state.readiness
+        )));
+    }
+    Ok(OpenMarketObservationV1::Open)
 }
 
 /// Publish one finalized address lookup table covering an oversized frame.
@@ -3828,6 +4045,37 @@ pub(crate) fn demo_id(role: &str, parts: &[&[u8]]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// Everything that distinguishes one Pyth-resolved range-protection Market
+/// from another: which release row it binds, which feed account body it
+/// derives from, where its terminal window lies, and what its band is.
+///
+/// One core (`pyth_market_input`) serves both the local demo (the captured
+/// synthetic release, a window ending at the frozen fixture publication) and
+/// the devnet flagship (the committed devnet row, a live window), so the two
+/// cannot drift in graph shape — only in the facts this struct names.
+pub(crate) struct PythMarketParamsV1<'a> {
+    pub(crate) registry: Pubkey,
+    pub(crate) release: &'a dclutch_pyth_svm::release::PythReleaseV1,
+    /// Domain-separation label folded into every demo-id: the synthetic
+    /// fixture's local label for the lab, the cluster identity for devnet.
+    pub(crate) label: [u8; 32],
+    pub(crate) product_name: &'a str,
+    pub(crate) coordinate_domain_name: &'a str,
+    pub(crate) feed_label: &'a [u8],
+    /// A `PriceUpdateV2` account body for the feed: the captured fixture
+    /// locally, a live read of the push-oracle account for devnet. Supplies
+    /// the feed id and exponent the adapter config binds.
+    pub(crate) price_update: &'a [u8],
+    pub(crate) window_start: i64,
+    pub(crate) window_end: i64,
+    pub(crate) max_age_seconds: u32,
+    pub(crate) max_confidence_bps: u16,
+    pub(crate) cut_denominator: u64,
+    pub(crate) cuts: Vec<i128>,
+    pub(crate) coefficients: Vec<u64>,
+    pub(crate) generation: u64,
+}
+
 /// Construct the canonical local demo Market: SOL/USD range protection.
 ///
 /// The Product is a small categorical partition of USD-cents-per-SOL with cuts
@@ -3845,19 +4093,7 @@ pub(crate) fn demo_id(role: &str, parts: &[&[u8]]) -> [u8; 32] {
 /// not a production provider release, and this Market is not a mainnet or
 /// devnet product.
 pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
-    use dclutch_capability_contract::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
-        ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
-        MAX_DEPENDENCIES_PER_CAPABILITY,
-    };
     use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
-    use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
-    use dclutch_source_contract::{
-        CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
-        RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-        SourceAccessProfile, SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1,
-        WindowKind, WindowSpecV1,
-    };
 
     // The release this Market resolves against is the LOCAL-VALIDATOR
     // projection, not the captured one. They differ in exactly two facts --
@@ -3869,12 +4105,130 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     // where those deployments happened, which is not this one.
     let fixture = local_validator_release_v1()
         .map_err(|error| Error::new(format!("local-validator Pyth release: {error:?}")))?;
-    let local_label = fixture.local_label();
-    let adapter = fixture.release().adapter_id();
-    let feed = b"sol-usd".as_slice();
+    let update = FullPriceUpdateV2::parse(FIXTURE_PRICE_UPDATE)
+        .map_err(|error| Error::new(format!("captured Pyth price update: {error:?}")))?;
+    // The window is a real 300-second terminal period ENDING at the captured
+    // publication (TWIN's finding: a window forced to one instant is a market
+    // nobody can resolve), and `max_age_seconds` is the fixture's declared
+    // shelf life, not a market parameter — see the shared core for both.
+    pyth_market_input(PythMarketParamsV1 {
+        registry,
+        release: fixture.release(),
+        label: fixture.local_label(),
+        product_name: "product/sol-usd-range-protection",
+        coordinate_domain_name: "coordinate-domain/usd-cents-per-sol",
+        feed_label: b"sol-usd",
+        price_update: FIXTURE_PRICE_UPDATE,
+        window_start: update
+            .publish_time()
+            .checked_sub(TERMINAL_WINDOW_WIDTH_SECONDS)
+            .ok_or_else(|| Error::new("terminal window start underflowed"))?,
+        window_end: update.publish_time(),
+        max_age_seconds: FIXTURE_SHELF_LIFE_SECONDS,
+        // The adapter's ceiling — the widest the type admits. A LAB setting:
+        // this Market resolves against a single captured publication whose
+        // confidence is whatever it was on the day it was captured, and
+        // refusing it on confidence would be refusing the fixture rather than
+        // testing the adapter. The devnet flagship states a real bound.
+        max_confidence_bps: 10_000,
+        cut_denominator: 100,
+        cuts: vec![12_000, 18_000],
+        coefficients: vec![1, 0, 1, 0],
+        generation: 1,
+    })
+}
 
-    let product_identity = demo_id("product/sol-usd-range-protection", &[&local_label]);
-    let coordinate_domain = demo_id("coordinate-domain/usd-cents-per-sol", &[]);
+/// The devnet flagship's input: SOL/USD (or any Pyth feed) range protection,
+/// bound to the committed devnet release row and a LIVE terminal window.
+///
+/// The window-width floor is the measured devnet SOL/USD cadence
+/// (SMOKE-0 §1.2: p50 313 s over an 86-hour page, three live-confirmed gaps at
+/// 313–314 s): four cadences ≈ 1,252 s gives ~98% coverage that at least one
+/// publication lands inside the window, and a narrower window is a market that
+/// fails for provider reasons, so it is refused here rather than founded.
+pub(crate) struct DevnetPythMarketSpecV1<'a> {
+    pub(crate) registry: Pubkey,
+    /// A live `PriceUpdateV2` account body read off devnet for the feed this
+    /// market is about (SOL/USD: `7AviUf9nL62mcxNbQGKm4nKDQnPjswo6c5MX4D57HmyE`).
+    pub(crate) price_update: &'a [u8],
+    pub(crate) product_name: &'a str,
+    pub(crate) coordinate_domain_name: &'a str,
+    pub(crate) feed_label: &'a [u8],
+    pub(crate) window_start: i64,
+    pub(crate) window_width_seconds: u32,
+    pub(crate) max_age_seconds: u32,
+    pub(crate) cut_denominator: u64,
+    pub(crate) cuts: Vec<i128>,
+    pub(crate) coefficients: Vec<u64>,
+    pub(crate) generation: u64,
+}
+
+/// Four measured 313-second cadences, the §12.3 guidance floor.
+pub(crate) const DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS: u32 = 1_252;
+
+pub(crate) fn devnet_market_input(spec: DevnetPythMarketSpecV1<'_>) -> Result<MarketRunInput> {
+    if spec.window_width_seconds < DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS {
+        return Err(Error::new(format!(
+            "devnet terminal window width {} s is below the measured floor \
+             {DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS} s (four cadences of the measured 313 s SOL/USD \
+             p50, ~98% coverage). A narrower window is a market that fails for provider reasons; \
+             it is refused here rather than founded.",
+            spec.window_width_seconds
+        )));
+    }
+    let release = dclutch_pyth_svm::devnet_release_v1()
+        .map_err(|error| Error::new(format!("devnet Pyth release row: {error:?}")))?;
+    let window_end = spec
+        .window_start
+        .checked_add(i64::from(spec.window_width_seconds))
+        .ok_or_else(|| Error::new("terminal window end overflowed"))?;
+    pyth_market_input(PythMarketParamsV1 {
+        registry: spec.registry,
+        release: &release,
+        // The cluster identity is the devnet label: a devnet market's ids can
+        // never collide with the lab's, whose label is the synthetic fixture's.
+        label: release.cluster_id(),
+        product_name: spec.product_name,
+        coordinate_domain_name: spec.coordinate_domain_name,
+        feed_label: spec.feed_label,
+        price_update: spec.price_update,
+        window_start: spec.window_start,
+        window_end,
+        max_age_seconds: spec.max_age_seconds,
+        // A real bound for a live feed: 5% of price. Pyth's stated SOL/USD
+        // confidence runs well under 0.1%, so this refuses only a genuinely
+        // degenerate publication, not an ordinary one.
+        max_confidence_bps: 500,
+        cut_denominator: spec.cut_denominator,
+        cuts: spec.cuts,
+        coefficients: spec.coefficients,
+        generation: spec.generation,
+    })
+}
+
+/// The shared Pyth range-protection graph compiler. See the two callers for
+/// what each fact means in its context.
+fn pyth_market_input(params: PythMarketParamsV1<'_>) -> Result<MarketRunInput> {
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+    use dclutch_pyth_svm::FullPriceUpdateV2;
+    use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
+    use dclutch_source_contract::{
+        CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
+        RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        SourceAccessProfile, SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1,
+        WindowKind, WindowSpecV1,
+    };
+
+    let local_label = params.label;
+    let adapter = params.release.adapter_id();
+    let feed = params.feed_label;
+
+    let product_identity = demo_id(params.product_name, &[&local_label]);
+    let coordinate_domain = demo_id(params.coordinate_domain_name, &[]);
     let result_unit = demo_id("result-unit/usd-cents", &[]);
     let claim_basis = demo_id("claim-basis/unit-complete-set", &[]);
     let representation = demo_id("representation/categorical-fixed-width", &[]);
@@ -3896,8 +4250,8 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     // So the graph is compiled here, its identities ARE its bodies' digests,
     // and the run spec carries the bodies for the same reason it already
     // carries `linked_basis_hex` rather than an opaque digest.
-    let update = FullPriceUpdateV2::parse(FIXTURE_PRICE_UPDATE)
-        .map_err(|error| Error::new(format!("captured Pyth price update: {error:?}")))?;
+    let update = FullPriceUpdateV2::parse(params.price_update)
+        .map_err(|error| Error::new(format!("Pyth price update body: {error:?}")))?;
     let capacity = SourceCapacityProfileV1::new(
         CapacityEnvelope::Measured,
         1,
@@ -3910,7 +4264,7 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     .map_err(|error| Error::new(format!("demo source capacity: {error:?}")))?;
     let capacity_id = source_content(record_identity(&capacity.to_bytes()))?;
 
-    let pyth_release_bytes = fixture.release().to_bytes();
+    let pyth_release_bytes = params.release.to_bytes();
     // `adapter_release_id` is the PUBLISHED PYTH RELEASE's own `adapter_id`,
     // and getting here took two chain refusals and a contradiction worth
     // recording, because TWO LIVE READERS OF THIS ONE FIELD DISAGREE ABOUT WHAT
@@ -3942,21 +4296,23 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
         source_content(demo_id("provider-family/pyth", &[]))?,
         source_content(adapter)?,
         source_content(record_identity(&pyth_release_bytes))?,
-        source_content(fixture.release().price_update_codec_id())?,
-        source_content(fixture.release().router_abi_id())?,
+        source_content(params.release.price_update_codec_id())?,
+        source_content(params.release.router_abi_id())?,
     );
     let provider_release_bytes = provider_release.to_bytes();
     let provider_release_id = record_identity(&provider_release_bytes);
 
     // `max_confidence_bps` is the adapter's tolerance for the provider's own
-    // stated confidence interval, and 10_000 bps is its ceiling -- the widest
-    // the type admits. That is a LAB setting and reads as one: this Market
-    // resolves against a single captured publication whose confidence is
-    // whatever it was on the day it was captured, and refusing it on
-    // confidence would be refusing the fixture rather than testing the
-    // adapter. A Market on a live feed states a real bound here.
-    let adapter_config = PythAdapterConfigV1::new(update.feed_id(), update.exponent(), 10_000)
-        .map_err(|error| Error::new(format!("demo Pyth adapter configuration: {error:?}")))?;
+    // stated confidence interval. Each caller states its own bound and why:
+    // the lab passes the type's 10,000-bps ceiling (refusing the frozen
+    // fixture on confidence would be refusing the fixture rather than testing
+    // the adapter); the devnet flagship states a real live-feed bound.
+    let adapter_config = PythAdapterConfigV1::new(
+        update.feed_id(),
+        update.exponent(),
+        params.max_confidence_bps,
+    )
+    .map_err(|error| Error::new(format!("Pyth adapter configuration: {error:?}")))?;
     let adapter_config_bytes = adapter_config.to_bytes();
     let adapter_config_id = record_identity(&adapter_config_bytes);
 
@@ -3978,35 +4334,28 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     //   observation_unix_seconds in [window.start, window.end]      -- what it is ABOUT
     //   publication_unix_seconds in [now - max_age, now + max_skew] -- how FRESH it is
     //
-    // The first is a market parameter, and this Market states a real
-    // 300-second terminal period ending at the captured publication. That
-    // width is TWIN's finding: a window forced to one instant is answered only
-    // when a publication happens to land on that exact second, and Pyth's
-    // SOL/USD cadence is nearer five minutes, so a degenerate window is a
-    // market nobody can resolve. It is legal and it is a choice, not the
-    // type's demand.
+    // The first is a market parameter and each caller states its own window:
+    // the lab a 300-second terminal period ending at the captured publication
+    // (TWIN's finding: a window forced to one instant is answered only when a
+    // publication happens to land on that exact second, and Pyth's SOL/USD
+    // cadence is nearer five minutes); the devnet flagship a live window whose
+    // width the cadence floor in `devnet_market_input` enforces.
     //
-    // The second is NOT a market parameter here and must never be read as one.
-    // The fixture's publication instant is FROZEN at the capture date and a
-    // local validator's clock is wall-clock, so `now - publication` is THE AGE
-    // OF THE FIXTURE and it grows by 86,400 every day. `max_age_seconds` is
-    // therefore stated as the fixture's declared shelf life, and the journey
-    // campaign REFUSES the moment the fixture outlives it rather than anyone
-    // quietly widening the number again. A Market resolving against a live
-    // feed states seconds here.
+    // The second is NOT the same clock and must never be read as one. For the
+    // frozen fixture `now - publication` is THE AGE OF THE FIXTURE, so the lab
+    // states its declared shelf life (the journey campaign refuses the moment
+    // the fixture outlives it); a live market states a real submission-latency
+    // budget in seconds.
     let window = WindowSpecV1::new(
         source_content(primary_source)?,
         WindowKind::Terminal,
-        update
-            .publish_time()
-            .checked_sub(TERMINAL_WINDOW_WIDTH_SECONDS)
-            .ok_or_else(|| Error::new("terminal window start underflowed"))?,
-        update.publish_time(),
-        FIXTURE_SHELF_LIFE_SECONDS,
+        params.window_start,
+        params.window_end,
+        params.max_age_seconds,
         1,
         source_content(demo_id("window-schedule/terminal-single-sample", &[]))?,
     )
-    .map_err(|error| Error::new(format!("demo terminal window: {error:?}")))?;
+    .map_err(|error| Error::new(format!("terminal window: {error:?}")))?;
     let window_bytes = window.to_bytes();
     let window = record_identity(&window_bytes);
 
@@ -4034,9 +4383,9 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     let recovery_authority = demo_id("recovery/attempt-authority", &[&local_label]);
     let recovery_root = demo_id("recovery/policy-root", &[&local_label]);
 
-    let cut_denominator = 100_u64;
-    let cuts: Vec<i128> = vec![12_000, 18_000];
-    let coefficients: Vec<u64> = vec![1, 0, 1, 0];
+    let cut_denominator = params.cut_denominator;
+    let cuts: Vec<i128> = params.cuts.clone();
+    let coefficients: Vec<u64> = params.coefficients.clone();
     let outcome_count = coefficients.len();
 
     // The liability basis is a real record, not a name. Its semantic identity
@@ -4087,7 +4436,7 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
         ))?
     ];
     compile_product_records_v2(
-        registry,
+        params.registry,
         product,
         &mut product_bytes,
         &mut domain,
@@ -4207,7 +4556,7 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
         .map_err(|error| Error::new(format!("demo capability manifest: {error:?}")))?;
 
     let input = MarketRunInput {
-        generation: 1,
+        generation: params.generation,
         collateral_display_decimals: 6,
         initial_collateral_atoms: 1_000_000_000,
         product_id: hex(&product_identity),
@@ -4241,6 +4590,40 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn founding_targets_derive_three_distinct_stable_markets_offline() {
+        let registry = Pubkey::new_unique();
+        let core = Pubkey::new_unique();
+        let release_set = [7_u8; 32];
+        let mint = Pubkey::new_unique();
+        let input = demo_market_input(registry).expect("demo market input");
+        let first = derive_founding_targets_inner(registry, core, release_set, &input, mint)
+            .expect("founding targets");
+        let second = derive_founding_targets_inner(registry, core, release_set, &input, mint)
+            .expect("founding targets again");
+        // Deterministic: the detector must read the same coordinates on every
+        // resumed run.
+        assert_eq!(first.open_market, second.open_market);
+        assert_eq!(first.realm_record, second.realm_record);
+        // Three generations, three distinct still-vacant PDAs.
+        assert_ne!(first.found31_market, first.open_market);
+        assert_ne!(first.open_market, first.abort_market);
+        assert_ne!(first.found31_market, first.abort_market);
+        // The completed identity round-trips to the same address, and its
+        // market_id is the address itself.
+        assert_eq!(
+            first.open_market_identity.market_id.to_bytes(),
+            first.open_market.to_bytes()
+        );
+        // The mint is inside the Realm body, so a different collateral mint is
+        // a different Realm record and a different Market.
+        let other_mint =
+            derive_founding_targets_inner(registry, core, release_set, &input, Pubkey::new_unique())
+                .expect("founding targets, other mint");
+        assert_ne!(other_mint.realm_record, first.realm_record);
+        assert_ne!(other_mint.open_market, first.open_market);
+    }
 
     #[test]
     fn cut_parser_refuses_noncanonical_integer_spellings() {

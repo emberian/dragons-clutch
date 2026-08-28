@@ -56,7 +56,22 @@ fee_payer_keypair_path = "./keys/fee-payer.json"
 # daemon can only run --dry-run.
 [submit]
 # A non-loopback host is REFUSED unless allow_public_submission is true.
+#
+# It is ALSO refused, unconditionally, if its host matches any
+# observed_cluster.rpc_endpoints host.  The observed cluster is read-only for
+# this daemon; an endpoint duplicated from the observation side would aim
+# transactions at the very cluster whose bytes are being attested.  Two loopback
+# endpoints are the one exemption: that is a single local validator standing in
+# for both, which is the rehearsal shape.
 endpoint = "http://127.0.0.1:8899"
+
+# REQUIRED, and never defaulted to the observed cluster's.  Verified against
+# `getGenesisHash` on the SUBMIT endpoint before any transaction is built, the
+# same way the observed cluster is checked.  A URL is a routing detail that can
+# be mistyped into pointing anywhere; naming the cluster as a VALUE is what
+# makes the daemon unable to sign toward a cluster nobody named.  This is
+# Solana devnet.
+expected_genesis_hash = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 
 # Defaults to false.  Setting it true asserts that a current authorization
 # names devnet or mainnet submission.  Nothing in this service can grant that.

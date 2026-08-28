@@ -28,7 +28,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1,
+    require_slot_pinned_release_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
@@ -68,6 +68,7 @@ use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
     ResolutionError, authenticate_clock, authenticate_rent, deployment_observation,
+    pinned_deployment_refusal,
     provider_v3::{
         AuthenticatedProviderObservationV3, AuthenticatedSourceRecordsV3, ProviderJoinErrorV3,
         plan_provider_resolution_v3,
@@ -551,11 +552,10 @@ fn authenticate_market_and_infrastructure(
     )?;
     let artifact = ArtifactReleaseV1::decode(&artifact_data)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
-    if artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
-        || artifact.program().to_bytes() != frame.registry_program().key.to_bytes()
-    {
+    if artifact.program().to_bytes() != frame.registry_program().key.to_bytes() {
         return Err(ResolutionError::ResolutionRelease.into());
     }
+    require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::ResolutionRelease)?;
     let observation = deployment_observation(
         frame.registry_program(),
         frame.account(8),
@@ -563,7 +563,7 @@ fn authenticate_market_and_infrastructure(
     )?;
     artifact
         .authenticate_deployment(observation)
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+        .map_err(pinned_deployment_refusal)?;
     if frame.account(15).key != program_id {
         return Err(ResolutionError::ResolutionRelease.into());
     }

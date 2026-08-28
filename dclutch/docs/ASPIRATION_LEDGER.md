@@ -2863,6 +2863,138 @@ boundary, so none executes on the canonical Interpreted Direct bundle and the
 strictly worse heap than what it replaced. Not a fail-closed, not polish: debt
 with a number.
 
+### DIAG-82, 2026-08-27: two rows the 82-diagnostic regression opened
+
+**M-61 -- the 20-seed sweep's per-seed CU is a bump-search lottery, re-rolled by
+any change at all to the Trading ELF; M-46's bisect method has to know that.**
+Measured across all twenty seeds, before and after a pure out-of-line refactor
+(`9dc2a6bb`) whose real cost is one extra call: every per-seed delta decomposes
+as `n x 1,500 + ~50`. The `~50` is the call (residual 46..56 on nineteen of the
+twenty seeds). The `n x 1,500` is `find_program_address` -- up to 31 iterations,
+a swing of +/-46,000 CU -- re-rolling because the trading ELF digest feeds the
+identities the fixture derives, so **changing one byte of that ELF redraws every
+seed's bump search**. Consequences, all of them practical: (a) "worst margin
+8,238" was never a property of the code; the same tip with a 440-byte-larger ELF
+measures 3,689, on a seed that was not the worst before, at 20/20 either way.
+(b) M-46 tells the next CU lane to bisect `211079f6..a4be9a83` *against the
+sweep*; done per-seed that will chase +/-46,000 CU of noise and attribute it to
+whichever commit it lands on. The bisect statistic has to be the **pass count
+and the twenty-seed mean**, not one seed's number. (c) A lane reporting a margin
+should report the ELF digest beside it or the number does not mean anything.
+Cheap fix available to whoever takes the next CU lane: have the sweep print the
+trading ELF sha256 and the twenty-seed mean, so the lottery is visible in the
+output rather than in this row.
+
+**M-62 -- a feature-flag variant of a linked program is a DIFFERENT program, and
+no gate in the tree treated it as one.** The rule M-45 is the sibling of. Five
+stages count SBF frame diagnostics (`run.sh`, `run-journey.sh`, `run-dealer.sh`,
+`run-general.sh`, `checked-release-candidate.sh`) and every one of them built
+`dclutch-trading-sbf` at default features or did not build it at all. The
+accelerators link it with `default-features = false` and their own feature set;
+that is a different monomorphization with different inlining and therefore
+different frames, and it carried 82 frame-overwrite diagnostics on
+`hot_v3::execute_child_routes_v3` -- 5,184 bytes against a 4,096-byte bound --
+from `3071fbe8` until the checked-release candidate went red on 2026-08-27 with
+a devnet deploy in flight. The gate that caught it is the one that runs last.
+Wired shut in `d1378427` for the frame class specifically (the Trading seam
+runner and the Dealer tier now build the accelerator links; the release
+candidate frame-checks every program under `programs/`, enumerated from the
+directory so a list cannot go stale again). **What is NOT closed is the general
+form**: no gate in this tree measures anything else -- heap, CU, ELF size,
+account extents -- on a non-default feature set of a program another program
+links, and a lane that reports "Trading is unchanged" today means Trading at
+`default = ["families"]`. Owner: whoever next measures a Trading number that a
+family accelerator also has to live with.
+
+### POST-0012, 2026-08-27: two rows the slot-pin closing sweep opened
+
+**M-63 -- a measurement can be structurally incapable of testing the thing it
+is quoted for, and green tells you nothing about that.** Decision 0012's whole
+claim is that the market life fits on a MUTABLE substrate, because the slot pin
+replaces a ~700,000-CU whole-ELF hash with one `u64` comparison. PIN-0012
+landed the admission and honestly named the claim as argued and unit-tested,
+never measured end to end -- so the debt was recorded as *"run the sweep"*. The
+sweep was then run, at HEAD, and came back **20/20, mean 1,345,302 of
+1,400,000**. That number is real and it is not evidence for the claim, because
+`waist::release` builds every release `Immutable` and `waist::immutable_programdata`
+writes the ProgramData authority option as `None`, so
+`slot_pinned_release_elf_digest_v1` always took its `Immutable` arm -- the arm
+its own doc calls delegated *unchanged*, and which never hashed anything. **The
+Hot tail never paid the hash, so it had nothing to save, and the `ExactAuthority`
+arm that 0012 exists to add was not constructible by the fixture at all.**
+Checkable rather than asserted: the pre-`0e34c036` sweep meaned 1,366,177 and
+this one means 1,345,302; the 20,875 gap is about fourteen bump iterations,
+inside M-61's +/-46,000 draw, and a 700k effect could not have hidden in it.
+The general form, which is the row: **before quoting a measurement as evidence
+for a change, name the branch the change added and check the fixture can reach
+it.** A suite that cannot construct the case is not a suite that tested the case
+and passed. This one had a second tell nobody read -- the numbers did not move
+when the admission landed, which is what "the fast path was already free here"
+looks like from the outside. Structural fix LANDED at `d20837fd`: a
+`FixtureSubstrateV1` with an `ExactAuthority` arm AND an `ImmutablePinned`
+control that isolates the M-61 redraw from the real cost, because the policy
+byte, bound authority and bound slot all live inside the bytes the artifact id
+hashes and therefore move every PDA seeded by it. Swept at `57138ba8` against
+one ELF: 20/20 on all three arms, means 1,345,302 / 1,353,477 / 1,355,575, and
+the answer is **73 CU** — see M-65 for how it was extracted, because the means
+alone said something else.
+
+**M-64 -- `lake build` was not a gate over the Lean library; it was a gate over
+whatever the root module happened to import.** `ProtocolInfrastructure.lean`
+carried two theorems -- `mutable_artifact_refuses`,
+`mutable_core_registry_or_rent_refuses` -- that stated the OPPOSITE of the
+shipped protocol after decision 0012 inverted them. They survived because
+**nothing imported the file**: `lake build`'s 93 jobs never elaborated it, and
+no gate in the repo ever had. Measured properly, 26 of 118 modules were
+unreachable from the root; 22 were reachable from some `Emit*` exe (so CI did
+elaborate them, invisibly to the default target) and **four had no builder
+anywhere in the repo** -- `SeriesEscrowV3`, `SeriesReplayV3`,
+`SeriesReplayPlanV3`, `RationalRepresentationV2Examples`, 40 theorems between
+them, all four describing LIVE Rust in `dclutch-series-v3-kernel`, none of them
+compost. Closed at `a7de18e5` with the import list AND, more importantly,
+`globs = ["DClutchSemantics.+"]` on the `lean_lib`: membership is a pattern
+now, so a new orphan is structurally impossible rather than dependent on
+somebody remembering. 93 jobs -> 120, zero red, zero `sorry`, and every
+emitter's `check-generated.sh` still `cmp`-clean. **The residual, stated
+because the fix does not reach it**: elaborating green proves a proof is
+internally sound, not that its STATEMENT matches the Rust.
+`ProtocolInfrastructure` would have elaborated green for the whole period its
+two theorems were backwards. Those 40 newly-covered theorems are now auditable;
+they are not yet audited.
+
+**M-65 -- when two measurements share their randomness, PAIR them; averaging
+throws the answer away.** M-61 established that a per-seed CU figure is a
+bump-search lottery and that the reportable statistic is `PASS n/20` and the
+MEAN. Applied to the substrate arms, that rule alone produced a FALSE NULL.
+`slot-pinned` meaned 1,355,575 against `immutable`'s 1,345,302: +10,273. The
+`immutable-pinned` control -- same digest arm, same code, different release
+identity -- meaned 1,353,477, so +8,175 of that gap was redraw and the
+difference-of-differences was +2,098, smaller than the redraw it sat on. On the
+"report PASS and MEAN" rule the honest write-up is "no signal above the
+lottery", and decision 0012's headline number would have stayed argued.
+
+But the three arms ran **the same twenty seeds against the same ELF**, so seed
+*k* used the same fixture keys in every arm and the arms differ only by
+bump-search depth plus a constant. M-61's own decomposition -- `delta = n x 1500
++ c` -- can then be solved PER SEED rather than averaged over:
+
+    immutable-pinned - immutable   c = 0    (exactly 0 on 18/20, never past 6)
+    slot-pinned      - immutable   c = +73  (67..77 on all twenty seeds)
+
+The control's zero is the method certifying itself: identical code path,
+identical constant, an 8,175 CU mean gap fully explained as `n x 1500`. The
+answer to decision 0012 is **73 CU**, and it was recoverable exactly, on twenty
+independent seeds, from data whose means said `2,098 +/- a lot`.
+
+The general form, which is the row: **a lottery you cannot remove you can often
+CANCEL.** Before reporting "the effect is inside the noise", ask whether the two
+sides drew the SAME noise -- same seeds, same ELF, same fixture -- because if
+they did, the noise subtracts and the residual is the measurement. And state the
+scope with it: this pairing is valid only within one ELF and one seed set. Across
+revisions the ELFs differ, the lotteries are independent, the pairing is
+meaningless, and `PASS`/`MEAN` remains all there is. M-61 is not weakened; it is
+the rule for the case where the randomness is NOT shared.
+
 ---
 
 *Gen-1 did not fail to write things down. It wrote them down — in reviews, in a

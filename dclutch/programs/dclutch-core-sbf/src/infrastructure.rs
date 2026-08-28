@@ -4,7 +4,7 @@ use core::convert::TryFrom;
 
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, immutable_release_elf_digest_v1,
+    DeploymentObservationV1, require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
@@ -196,7 +196,7 @@ pub(crate) fn authenticate_immutable_core_release(
     // `release` comes from the Registry activation cache, which hashed this
     // artifact's complete ELF once before persisting it — the same admission
     // argument `dclutch-registry-sbf`'s role batch relies on.
-    require_pinned_immutable_deployment(frame.core_program, frame.core_programdata, release)
+    require_pinned_deployment(frame.core_program, frame.core_programdata, release)
 }
 
 fn authenticate_current_core_upgrade_authority(
@@ -237,16 +237,23 @@ enum ArtifactAdmissionV1 {
     /// Core's own Loader upgrade authority, and it is what makes the immutable
     /// profile's pinned record a truthful description of the deployed code.
     FirstAdmission,
-    /// The immutable profile already pinned this exact record.
+    /// The profile already pinned this exact record.
     ///
-    /// The profile is immutable and content-pins the artifact record; the
-    /// record is content-addressed and finalized, so its bytes cannot change;
-    /// the record admits `Immutable` with no upgrade authority and the observed
-    /// ProgramData must currently carry none, so the deployed ELF cannot change
-    /// either. The digest checked at first admission is therefore still exact,
-    /// and re-hashing a multi-hundred-kilobyte ELF on every Found recomputes an
-    /// already authenticated fact. The deployment slot, identity, link,
-    /// ownership, and authority are all still rechecked.
+    /// The profile content-pins the artifact record; the record is
+    /// content-addressed and finalized, so its bytes cannot change; and the
+    /// slot pin says the deployed ELF has not changed either. Decision 0012
+    /// widened that last step and this doc had not caught up — it read "the
+    /// record admits `Immutable` with no upgrade authority and the observed
+    /// ProgramData must currently carry none", which is one of the two admitted
+    /// shapes, not the rule. The rule is `slot_pinned_release_elf_digest_v1`:
+    /// an `Immutable` release cannot move at all, and an `ExactAuthority`
+    /// release cannot have moved while the observed deployment slot still
+    /// equals the slot it bound, because Loader V3 writes the current slot on
+    /// every `Upgrade` and refuses one in the deployment's own slot. Either
+    /// way the digest checked at first admission is still exact, and re-hashing
+    /// a multi-hundred-kilobyte ELF on every Found recomputes an already
+    /// authenticated fact. The deployment slot, identity, link, ownership, and
+    /// authority are all still rechecked.
     AlreadyPinned,
 }
 
@@ -277,45 +284,50 @@ fn authenticate_artifact(
         &bytes,
     )?;
     let release = ArtifactReleaseV1::decode(&bytes).map_err(|_| CoreSbfError::Infrastructure)?;
-    if release.program().to_bytes() != program.key.to_bytes()
-        || release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
-    {
+    if release.program().to_bytes() != program.key.to_bytes() {
         return Err(CoreSbfError::Infrastructure);
     }
+    require_slot_pinned_release_v1(release).map_err(|_| CoreSbfError::Infrastructure)?;
     match admission {
         ArtifactAdmissionV1::FirstAdmission => {
             require_current_deployment(program, programdata, release)?;
         }
         ArtifactAdmissionV1::AlreadyPinned => {
-            require_pinned_immutable_deployment(program, programdata, release)?;
+            require_pinned_deployment(program, programdata, release)?;
         }
     }
     let artifact = ArtifactReleaseIdV1::new(digest).map_err(|_| CoreSbfError::Infrastructure)?;
     Ok(ExecutionRoleBindingV1::new(release.program(), artifact))
 }
 
-/// Observe an immutable deployment whose ELF digest was already authenticated.
+/// Observe a pinned deployment whose ELF digest was already authenticated.
 ///
 /// This is strictly stronger than the hashing path, never weaker.
-/// `immutable_release_elf_digest_v1` refuses unless the release admits
-/// `Immutable`, carries no upgrade authority, and the observed ProgramData
-/// currently carries none — three requirements the hashing path did not all
-/// make on its own. Everything else `authenticate_deployment` checks is
-/// unchanged: program and ProgramData identity, the Loader link, both owners,
-/// executability, the exact deployment slot, and the upgrade authority. Only
-/// the recomputation of a digest that provably cannot have changed is dropped.
+/// `slot_pinned_release_elf_digest_v1` refuses unless the release is one of the
+/// two canonical pinned shapes AND its pin still holds against this exact
+/// observation — for `Immutable`, that no authority was ever retained; for
+/// `ExactAuthority` (decision 0012), that the observed ProgramData still
+/// carries the exact bound authority and the exact bound deployment slot.
+/// Everything else `authenticate_deployment` checks is unchanged: program and
+/// ProgramData identity, the Loader link, both owners, executability, the exact
+/// deployment slot, and the upgrade authority. Only the recomputation of a
+/// digest that provably cannot have changed is dropped.
 ///
 /// Callers must have an admission argument for the digest. Today those are the
-/// Registry activation cache and the immutable Core infrastructure profile.
-/// First admission belongs to [`require_current_deployment`].
-fn require_pinned_immutable_deployment(
+/// Registry activation cache and the Core infrastructure profile. First
+/// admission belongs to [`require_current_deployment`].
+fn require_pinned_deployment(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     release: ArtifactReleaseV1,
 ) -> Result<(), CoreSbfError> {
     let linkage = require_loader_linkage(program, programdata, release)?;
-    let elf_digest = immutable_release_elf_digest_v1(release, linkage.upgrade_authority)
-        .map_err(|_| CoreSbfError::Infrastructure)?;
+    let elf_digest = slot_pinned_release_elf_digest_v1(
+        release,
+        linkage.upgrade_authority,
+        linkage.deployment_slot,
+    )
+    .map_err(pinned_deployment_refusal)?;
     let observation = DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -327,12 +339,27 @@ fn require_pinned_immutable_deployment(
         bpf_loader_upgradeable::ID.to_bytes(),
         linkage.deployment_slot,
         elf_digest,
-        None,
+        linkage.upgrade_authority,
     )
     .map_err(|_| CoreSbfError::Infrastructure)?;
     release
         .authenticate_deployment(observation)
-        .map_err(|_| CoreSbfError::Infrastructure)
+        .map_err(pinned_deployment_refusal)
+}
+
+/// Name a pinned-deployment refusal, keeping the superseded case operator-legible.
+///
+/// Every other reason folds into `Infrastructure`, which is what an operator
+/// wants for "the profile and the chain disagree". A moved slot is different:
+/// it is the expected consequence of upgrading the substrate, and its remedy is
+/// a re-release rather than an investigation (decision 0012).
+const fn pinned_deployment_refusal(error: dclutch_registry_contract::Error) -> CoreSbfError {
+    match error {
+        dclutch_registry_contract::Error::ReleaseSupersededByUpgrade => {
+            CoreSbfError::ReleaseSuperseded
+        }
+        _ => CoreSbfError::Infrastructure,
+    }
 }
 
 /// Loader V3 facts observed without hashing the ELF.
@@ -441,7 +468,7 @@ fn require_current_deployment(
     .map_err(|_| CoreSbfError::Infrastructure)?;
     release
         .authenticate_deployment(observation)
-        .map_err(|_| CoreSbfError::Infrastructure)
+        .map_err(pinned_deployment_refusal)
 }
 
 fn create_profile(
@@ -525,6 +552,7 @@ mod tests {
     use dclutch_core_contract::ContentId;
 
     use super::*;
+    use dclutch_registry_contract::ArtifactUpgradePolicyV1;
 
     #[test]
     fn profile_pda_is_per_core_program_and_has_no_caller_seed() {
@@ -644,11 +672,11 @@ mod tests {
 
     /// The pinned fast path is strictly stronger than hashing, never weaker.
     ///
-    /// Both paths accept exactly the canonical immutable deployment. Only first
-    /// admission checks the record's *claimed* digest against the deployed
-    /// bytes, and it must keep doing so. The pinned path additionally requires
-    /// the immutable policy, an absent recorded authority, and an absent live
-    /// authority — none of which the hashing path demanded on its own.
+    /// Both paths accept exactly the canonical deployment. Only first admission
+    /// checks the record's *claimed* digest against the deployed bytes, and it
+    /// must keep doing so. The pinned path additionally requires a canonical
+    /// pinned release shape and that the pin still holds against this exact
+    /// observation — neither of which the hashing path demanded on its own.
     #[test]
     fn pinned_immutable_observation_is_stronger_than_hashing_and_agrees_on_the_canonical_case() {
         let elf = [0xa5_u8; 96];
@@ -660,44 +688,114 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            require_pinned_immutable_deployment(&program, &canonical, release),
+            require_pinned_deployment(&program, &canonical, release),
             Ok(())
         );
 
-        // A live upgrade authority means the bytes can still change. The pinned
-        // path has no admission argument left and must refuse.
+        // An `Immutable` release over ProgramData that retained an authority is
+        // still refused: that release's pin claims irrevocability it does not
+        // have. Decision 0012 relaxed which releases are admissible, not which
+        // observations satisfy a given release.
         let live_authority = programdata_account(release, 7, Some([0x42; 32]), &elf);
         assert_eq!(
-            require_pinned_immutable_deployment(&program, &live_authority, release),
+            require_pinned_deployment(&program, &live_authority, release),
             Err(CoreSbfError::Infrastructure)
         );
 
-        // An upgradeable release never earns the pinned path.
-        let (upgradeable_program, upgradeable) = deployment(
-            &elf,
-            ArtifactUpgradePolicyV1::ExactAuthority,
-            Some([0x42; 32]),
-        );
-        let upgradeable_data = programdata_account(upgradeable, 7, Some([0x42; 32]), &elf);
-        assert_eq!(
-            require_pinned_immutable_deployment(
-                &upgradeable_program,
-                &upgradeable_data,
-                upgradeable
-            ),
-            Err(CoreSbfError::Infrastructure)
-        );
-
-        // The deployment slot is still rechecked on the pinned path: an upgrade
-        // that somehow moved the bytes would also move the slot.
+        // The deployment slot is still rechecked on the pinned path. For an
+        // `Immutable` release a moved slot is a substituted observation, not an
+        // upgrade, so it keeps the generic name.
         let stale = programdata_account(release, 8, None, &elf);
         assert_eq!(
-            require_pinned_immutable_deployment(&program, &stale, release),
+            require_pinned_deployment(&program, &stale, release),
             Err(CoreSbfError::Infrastructure)
         );
         assert_eq!(
             require_current_deployment(&program, &stale, release),
             Err(CoreSbfError::Infrastructure)
+        );
+    }
+
+    /// Decision 0012: a mutable deployment is admitted while its slot pin holds.
+    ///
+    /// This is the whole iteration substrate in one test. The same
+    /// `ExactAuthority` release is accepted against the ProgramData its
+    /// activation observed, and refused by name the moment an `Upgrade` moves
+    /// the slot out from under it. Both directions matter: without the first,
+    /// the market life cannot fit under the compute ceiling on a mutable
+    /// substrate; without the second, a mutable substrate would be unsound.
+    #[test]
+    fn slot_pinned_mutable_deployment_is_admitted_and_a_moved_slot_is_superseded() {
+        let elf = [0xa5_u8; 96];
+        let authority = [0x42_u8; 32];
+        let (program, release) = deployment(
+            &elf,
+            ArtifactUpgradePolicyV1::ExactAuthority,
+            Some(authority),
+        );
+
+        // Positive: the exact observed authority at the exact pinned slot.
+        let pinned = programdata_account(release, 7, Some(authority), &elf);
+        assert_eq!(
+            require_pinned_deployment(&program, &pinned, release),
+            Ok(())
+        );
+
+        // The upgrade lands. The Loader wrote a strictly later slot, and every
+        // reader of this release generation now refuses BY NAME, with a remedy
+        // in the name: re-release. The bytes here are deliberately UNCHANGED --
+        // the refusal is the slot, not a digest comparison, which is exactly
+        // what makes it cost one `u64` compare instead of a megabyte hash.
+        let upgraded = programdata_account(release, 9, Some(authority), &elf);
+        assert_eq!(
+            require_pinned_deployment(&program, &upgraded, release),
+            Err(CoreSbfError::ReleaseSuperseded)
+        );
+
+        // And with genuinely different bytes at the later slot, the same
+        // refusal arrives at the same cost: the pin is checked before anything
+        // would have hashed.
+        let replaced = programdata_account(release, 9, Some(authority), &[0x5a_u8; 96]);
+        assert_eq!(
+            require_pinned_deployment(&program, &replaced, release),
+            Err(CoreSbfError::ReleaseSuperseded)
+        );
+
+        // HOSTILE: pin substitution. A different authority at the pinned slot
+        // is a substituted ProgramData, not an upgrade, and keeps the generic
+        // refusal rather than borrowing the operator-actionable one.
+        let substituted = programdata_account(release, 7, Some([0x43; 32]), &elf);
+        assert_eq!(
+            require_pinned_deployment(&program, &substituted, release),
+            Err(CoreSbfError::Infrastructure)
+        );
+
+        // HOSTILE: a revoked authority at the pinned slot. `SetAuthority` moves
+        // no slot, so the pin still "holds" -- and the release's own identity
+        // contract refuses anyway.
+        let revoked = programdata_account(release, 7, None, &elf);
+        assert_eq!(
+            require_pinned_deployment(&program, &revoked, release),
+            Err(CoreSbfError::Infrastructure)
+        );
+
+        // HOSTILE: the same-slot redeploy edge. A slot BELOW the pin cannot be
+        // an upgrade (the Loader only ever writes the current slot), so it is a
+        // substituted observation and must not be named a supersession.
+        let earlier = programdata_account(release, 6, Some(authority), &elf);
+        assert_eq!(
+            require_pinned_deployment(&program, &earlier, release),
+            Err(CoreSbfError::Infrastructure)
+        );
+
+        // First admission still hashes, and still agrees on the canonical case.
+        assert_eq!(
+            require_current_deployment(&program, &pinned, release),
+            Ok(())
+        );
+        assert_eq!(
+            require_current_deployment(&program, &replaced, release),
+            Err(CoreSbfError::ReleaseSuperseded)
         );
     }
 

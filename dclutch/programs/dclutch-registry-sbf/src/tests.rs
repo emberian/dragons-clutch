@@ -908,7 +908,7 @@ fn role_activation_refuses_a_hostile_account_frame() {
 
     let mut readonly_cache = canonical.clone();
     let cache = fixture.empty_cache_account();
-    readonly_cache[1] = account(
+    *readonly_cache.get_mut(1).expect("activation cache account") = account(
         *cache.key,
         false,
         false,
@@ -923,7 +923,7 @@ fn role_activation_refuses_a_hostile_account_frame() {
     );
 
     let mut signer_programdata = canonical.clone();
-    signer_programdata[7] = account(
+    *signer_programdata.get_mut(7).expect("programdata account") = account(
         *fixture.programdata.key,
         true,
         false,
@@ -949,7 +949,7 @@ fn role_activation_refuses_a_substituted_deployment() {
     // Same well-shaped Loader state, different deployed bytes: first admission
     // is the sole site that checks the artifact record's claimed ELF digest
     // against what is actually deployed, and it must still hash to do it.
-    accounts[7] = account(
+    *accounts.get_mut(7).expect("programdata account") = account(
         *fixture.programdata.key,
         false,
         false,

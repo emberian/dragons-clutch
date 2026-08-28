@@ -1,4 +1,8 @@
-use std::{net::IpAddr, thread, time::Duration};
+use std::{
+    net::IpAddr,
+    thread,
+    time::{Duration, Instant},
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
@@ -15,6 +19,7 @@ use solana_sdk::{
 
 use crate::{
     Error, Result,
+    cluster::{ClusterOriginV1, LOOPBACK_PACING, PacingV1},
     model::{AccountEvidence, TransactionEvidence},
     plan::{hex, pubkey},
 };
@@ -62,26 +67,60 @@ pub(crate) struct RpcAccount {
     pub(crate) data: Vec<u8>,
 }
 
+/// Whether this connection is allowed to change anything on the cluster.
+///
+/// `ReadsOnly` is not a promise in a doc comment; it is enforced at
+/// [`Rpc::call`], the single point every request in this tool passes through,
+/// by an allowlist of read methods. That is the same shape
+/// `tools/release/devnet-observe.sh` uses for the same reason: a preflight that
+/// *cannot* write is worth more than one that intends not to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WritePolicyV1 {
+    /// The default for every campaign that means to change the chain.
+    Writes,
+    /// Reads only. Any other method is a refusal, not a request.
+    ReadsOnly,
+}
+
+/// Every JSON-RPC method this tool may issue under [`WritePolicyV1::ReadsOnly`].
+///
+/// Deliberately a literal list rather than a "does the name start with get"
+/// rule: `getFeeForMessage` is a read and `requestAirdrop` is not, and neither
+/// is decidable from the prefix.
+const READ_METHODS: &[&str] = &[
+    "getAccountInfo",
+    "getBalance",
+    "getBlockHeight",
+    "getBlockTime",
+    "getEpochInfo",
+    "getFeeForMessage",
+    "getGenesisHash",
+    "getHealth",
+    "getLatestBlockhash",
+    "getMinimumBalanceForRentExemption",
+    "getMultipleAccounts",
+    "getRecentPrioritizationFees",
+    "getSignatureStatuses",
+    "getSignaturesForAddress",
+    "getSlot",
+    "getTransaction",
+    "getVersion",
+];
+
 pub(crate) struct Rpc {
     url: Url,
     client: Client,
     request_id: u64,
+    pacing: PacingV1,
+    policy: WritePolicyV1,
+    /// When the last request went out, so the next one can wait its turn.
+    last_call: Option<Instant>,
 }
 
 impl Rpc {
     pub(crate) fn connect(value: &str) -> Result<Self> {
         let url = validate_loopback_url(value)?;
-        let client = Client::builder()
-            .no_proxy()
-            .redirect(Policy::none())
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|error| Error::new(format!("build RPC client: {error}")))?;
-        let mut rpc = Self {
-            url,
-            client,
-            request_id: 0,
-        };
+        let mut rpc = Self::build(url, LOOPBACK_PACING, WritePolicyV1::Writes)?;
         let health = rpc.call("getHealth", &json!([]))?;
         if health != Value::String("ok".into()) {
             return Err(Error::new(format!("local RPC health refused: {health}")));
@@ -89,11 +128,74 @@ impl Rpc {
         Ok(rpc)
     }
 
+    /// Connect to an already-admitted cluster origin and prove which chain it is.
+    ///
+    /// The genesis check is not decoration. `ClusterOriginV1::parse` can only
+    /// judge the spelling of a URL; this asks the cluster what it is and hands
+    /// the answer back to the origin to accept or refuse. It runs here, at
+    /// connect, so that no caller can reach a `send` on a chain nobody
+    /// authenticated.
+    pub(crate) fn connect_cluster(origin: &ClusterOriginV1, policy: WritePolicyV1) -> Result<Self> {
+        let url = Url::parse(origin.url())
+            .map_err(|error| Error::new(format!("cluster RPC URL: {error}")))?;
+        let mut rpc = Self::build(url, origin.pacing(), policy)?;
+        let health = rpc.call("getHealth", &json!([]))?;
+        if health != Value::String("ok".into()) {
+            return Err(Error::new(format!(
+                "{} RPC health refused: {health}",
+                origin.redacted_url()
+            )));
+        }
+        let genesis = rpc
+            .call("getGenesisHash", &json!([]))?
+            .as_str()
+            .ok_or_else(|| Error::new("getGenesisHash result was not a string"))?
+            .to_owned();
+        origin.authenticate_genesis(&genesis)?;
+        Ok(rpc)
+    }
+
+    fn build(url: Url, pacing: PacingV1, policy: WritePolicyV1) -> Result<Self> {
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(Policy::none())
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|error| Error::new(format!("build RPC client: {error}")))?;
+        Ok(Self {
+            url,
+            client,
+            request_id: 0,
+            pacing,
+            policy,
+            last_call: None,
+        })
+    }
+
     pub(crate) fn url(&self) -> &str {
         self.url.as_str()
     }
 
     pub(crate) fn call(&mut self, method: &str, params: &Value) -> Result<Value> {
+        if self.policy == WritePolicyV1::ReadsOnly && !READ_METHODS.contains(&method) {
+            return Err(Error::new(format!(
+                "REFUSED: {method} is not a read method and this connection is read-only. A \
+                 preflight that could write is not a preflight."
+            )));
+        }
+        // SMOKE-0 friction 1: one busy process saturates a public endpoint's
+        // whole per-IP budget, so this waits its turn rather than discovering
+        // the budget as a 429 mid-ladder. Zero on loopback, where there is no
+        // shared budget and the wait would only slow a local campaign down.
+        if !self.pacing.minimum_call_interval.is_zero()
+            && let Some(previous) = self.last_call
+        {
+            let elapsed = previous.elapsed();
+            if elapsed < self.pacing.minimum_call_interval {
+                thread::sleep(self.pacing.minimum_call_interval - elapsed);
+            }
+        }
+        self.last_call = Some(Instant::now());
         self.request_id = self
             .request_id
             .checked_add(1)
@@ -619,8 +721,15 @@ impl Rpc {
         signature: Signature,
         expect_failure: bool,
     ) -> Result<TransactionEvidence> {
+        // A DEADLINE, not an iteration count. The count was equivalent while
+        // every connection polled an unpaced loopback validator at 100 ms; on a
+        // paced connection each iteration also waits out the call interval, so
+        // a fixed count silently becomes a different — and unstated — amount of
+        // patience. Loopback keeps its 60 seconds exactly; devnet gets the five
+        // minutes its profile names.
+        let deadline = Instant::now() + self.pacing.confirm_timeout;
         let mut status = None;
-        for _ in 0..600 {
+        while Instant::now() < deadline {
             let result = self.call(
                 "getSignatureStatuses",
                 &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
@@ -652,8 +761,9 @@ impl Rpc {
                 status.get("err").unwrap_or(&Value::Null)
             )));
         }
+        let deadline = Instant::now() + self.pacing.confirm_timeout;
         let mut transaction = None;
-        for _ in 0..600 {
+        while Instant::now() < deadline {
             let candidate = self.call(
                 "getTransaction",
                 &json!([signature.to_string(), {

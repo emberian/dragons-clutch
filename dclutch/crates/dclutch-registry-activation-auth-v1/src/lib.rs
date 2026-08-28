@@ -59,14 +59,13 @@
 
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
-    DeploymentObservationV1, immutable_release_elf_digest_v1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+    Error as RegistryContractError, require_slot_pinned_release_v1,
+    slot_pinned_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ExecutionRoleV1;
-use solana_program::{
-    account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey,
-};
+use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 use solana_sdk_ids::bpf_loader_upgradeable;
 
 /// Stable refusal from the CPI-free activation-cache authentication.
@@ -82,15 +81,24 @@ pub enum ActivationAuthErrorV1 {
     ActivationCache,
     /// The observed deployment is not the one this activation admitted.
     Deployment,
+    /// The activated release's pinned deployment slot moved: it was upgraded.
+    ///
+    /// This is the operator-actionable half of [`Self::Deployment`], and it is
+    /// the one refusal decision 0012 made reachable in normal operation: the
+    /// substrate's upgrade authority shipped new bytes, so every open market on
+    /// the previous generation refuses until a re-release re-authenticates and
+    /// re-pins. Callers surface it under their own banded name rather than
+    /// folding it back into the generic deployment refusal.
+    ReleaseSuperseded,
 }
 
 impl From<ActivationAuthErrorV1> for ProgramError {
     fn from(value: ActivationAuthErrorV1) -> Self {
         match value {
             ActivationAuthErrorV1::AccountFrame => Self::InvalidArgument,
-            ActivationAuthErrorV1::ActivationCache | ActivationAuthErrorV1::Deployment => {
-                Self::InvalidAccountData
-            }
+            ActivationAuthErrorV1::ActivationCache
+            | ActivationAuthErrorV1::Deployment
+            | ActivationAuthErrorV1::ReleaseSuperseded => Self::InvalidAccountData,
         }
     }
 }
@@ -226,24 +234,34 @@ fn authenticate_role_in_view(
     ))
 }
 
-/// Observe one activated role's current deployment under its upgrade policy.
+/// Observe one activated role's current deployment under its slot pin.
+///
+/// This is the CU wall decision 0012 was ruled to get past, and the whole of
+/// the change lives in one arm.
 ///
 /// An `Immutable` release whose observed ProgramData carries no upgrade
 /// authority can never be redeployed, so its activation-bound ELF digest is
 /// reused rather than re-hashing a megabyte-scale ELF on every action. An
-/// `ExactAuthority` release keeps the full current-ELF hash, because its bytes
-/// can still move.
+/// `ExactAuthority` release now reuses that digest too — but only while the
+/// ProgramData it is looking at still carries the exact deployment slot and the
+/// exact upgrade authority the activation bound. The Loader writes the current
+/// slot on every `Upgrade` and refuses an `Upgrade` in the deployment's own
+/// slot, so slot equality proves the bytes have not moved. That equality is one
+/// `u64` compare over an account this frame already carries: no sysvar, no
+/// extra account, no hash.
+///
+/// The instant the substrate is upgraded the slot moves, this returns
+/// [`ActivationAuthErrorV1::ReleaseSuperseded`], and every open market on the
+/// superseded generation refuses until a re-release re-authenticates and
+/// re-pins. `dclutch_registry_contract::slot_pinned_release_elf_digest_v1` owns
+/// that argument; this function only supplies it with chain-observed facts.
 pub fn cached_role_deployment_observation_v1(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     release: ArtifactReleaseV1,
 ) -> Result<DeploymentObservationV1> {
-    let immutable = match release.upgrade_policy() {
-        ArtifactUpgradePolicyV1::Immutable => true,
-        ArtifactUpgradePolicyV1::ExactAuthority => false,
-    };
+    require_slot_pinned_release_v1(release).map_err(|_| ActivationAuthErrorV1::Deployment)?;
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || (immutable && release.upgrade_authority().is_some())
         || program.key.to_bytes() != release.program().to_bytes()
         || programdata.key.to_bytes() != release.programdata()
         || program.owner != &bpf_loader_upgradeable::ID
@@ -271,15 +289,14 @@ pub fn cached_role_deployment_observation_v1(
     let programdata_view = ProgramDataV3View::parse(&programdata_bytes)
         .map_err(|_| ActivationAuthErrorV1::Deployment)?;
     let observed_authority = programdata_view.upgrade_authority();
-    let (elf_digest, reported_authority) = if immutable {
-        (
-            immutable_release_elf_digest_v1(release, observed_authority)
-                .map_err(|_| ActivationAuthErrorV1::Deployment)?,
-            None,
-        )
-    } else {
-        (hash(programdata_view.elf()).to_bytes(), observed_authority)
-    };
+    let observed_slot = programdata_view.deployment_slot();
+    let elf_digest = slot_pinned_release_elf_digest_v1(release, observed_authority, observed_slot)
+        .map_err(|error| match error {
+            RegistryContractError::ReleaseSupersededByUpgrade => {
+                ActivationAuthErrorV1::ReleaseSuperseded
+            }
+            _ => ActivationAuthErrorV1::Deployment,
+        })?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -289,9 +306,9 @@ pub fn cached_role_deployment_observation_v1(
         programdata.executable,
         carried_programdata,
         bpf_loader_upgradeable::ID.to_bytes(),
-        programdata_view.deployment_slot(),
+        observed_slot,
         elf_digest,
-        reported_authority,
+        observed_authority,
     )
     .map_err(|_| ActivationAuthErrorV1::Deployment)
 }

@@ -12,6 +12,8 @@
 /// Test-only decoder evidence against the cluster-observed upgraded generation.
 #[cfg(test)]
 mod cluster_observation;
+/// The devnet production Pyth release row, minted from measured cluster facts.
+pub mod devnet;
 /// Exact Upgradeable Loader V3 byte views.
 pub mod loader;
 /// Exact borrowed Pyth Receiver `PostUpdateParams` body view.
@@ -28,6 +30,10 @@ pub mod router_accounts;
 #[cfg(feature = "synthetic-local-fixture")]
 pub mod synthetic_fixture;
 
+pub use devnet::{
+    DEVNET_CLUSTER_ID_V1, DEVNET_GUARDIAN_SET_COUNT_V1, DEVNET_RECEIVER_CONFIG_DIGEST_V1,
+    DEVNET_REQUIRED_GUARDIAN_COUNT_V1, devnet_release_v1,
+};
 pub use loader::{LoaderV3Error, ProgramDataV3View, ProgramV3View};
 pub use post_update::{POST_UPDATE_PROOF_ELEMENT_LEN, PostUpdateParamsError, PostUpdateParamsView};
 pub use price_update::{FULL_PRICE_UPDATE_V2_LEN, FullPriceUpdateV2, PriceUpdateV2Error};

@@ -17,6 +17,8 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
 };
 
+use solana_program::hash::hash;
+
 use super::*;
 
 const ALL_ROLES: [ExecutionRoleV1; 5] = [
@@ -60,6 +62,11 @@ fn loader_program_bytes(programdata: Pubkey) -> Vec<u8> {
 }
 
 fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
+    programdata_bytes(slot, None, elf)
+}
+
+/// The exact 45-byte Loader V3 ProgramData metadata span, then the ELF.
+fn programdata_bytes(slot: u64, authority: Option<[u8; 32]>, elf: &[u8]) -> Vec<u8> {
     let mut output = vec![0_u8; 45 + elf.len()];
     output
         .get_mut(..4)
@@ -69,6 +76,16 @@ fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
         .get_mut(4..12)
         .expect("slot")
         .copy_from_slice(&slot.to_le_bytes());
+    if let Some(authority) = authority {
+        output
+            .get_mut(12..13)
+            .expect("option tag")
+            .copy_from_slice(&[1]);
+        output
+            .get_mut(13..45)
+            .expect("authority")
+            .copy_from_slice(&authority);
+    }
     output.get_mut(45..).expect("elf").copy_from_slice(elf);
     output
 }
@@ -88,12 +105,40 @@ struct Fixture {
 
 impl Fixture {
     fn new(seed: u8) -> Self {
+        Self::with_authority(seed, None)
+    }
+
+    /// The same whole activated release set over a MUTABLE deployment.
+    ///
+    /// Decision 0012: the release binds the exact authority and the exact
+    /// deployment slot its activation observed, and every reader admits the
+    /// cached digest only while both still hold.
+    fn mutable(seed: u8, authority: [u8; 32]) -> Self {
+        Self::with_authority(seed, Some(authority))
+    }
+
+    /// The next release generation over the SAME program id, re-pinned.
+    ///
+    /// This is what an operator publishes after upgrading the substrate: the
+    /// same seven program ids, minted from the NEW chain observation.
+    fn re_release(previous: &Self, authority: [u8; 32], elf: &[u8]) -> Self {
+        Self::build(
+            previous.program.key.to_bytes()[0],
+            Some(authority),
+            previous.slot + 1,
+            elf.to_vec(),
+        )
+    }
+
+    fn with_authority(seed: u8, authority: Option<[u8; 32]>) -> Self {
+        Self::build(seed, authority, 77, vec![seed; 96])
+    }
+
+    fn build(seed: u8, authority: Option<[u8; 32]>, slot: u64, elf: Vec<u8>) -> Self {
         let registry = Pubkey::new_from_array([7; 32]);
         let role_program = Pubkey::new_from_array([seed; 32]);
         let programdata_key =
             Pubkey::find_program_address(&[role_program.as_ref()], &bpf_loader_upgradeable::ID).0;
-        let elf = vec![seed; 96];
-        let slot = 77;
         let release = ArtifactReleaseV1::new(
             ProgramIdentityV1::new(role_program.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
@@ -101,8 +146,11 @@ impl Fixture {
             ContentId::new([seed ^ 0x5a; 32]).expect("semantic release"),
             hash(&elf).to_bytes(),
             slot,
-            ArtifactUpgradePolicyV1::Immutable,
-            None,
+            match authority {
+                None => ArtifactUpgradePolicyV1::Immutable,
+                Some(_) => ArtifactUpgradePolicyV1::ExactAuthority,
+            },
+            authority,
         )
         .expect("artifact release");
         let artifact_id =
@@ -123,7 +171,7 @@ impl Fixture {
             bpf_loader_upgradeable::ID.to_bytes(),
             slot,
             hash(&elf).to_bytes(),
-            None,
+            authority,
         )
         .expect("observation");
         let input = ArtifactActivationInputV1::new(artifact_id, release, observation);
@@ -157,7 +205,7 @@ impl Fixture {
                 programdata_key,
                 false,
                 false,
-                immutable_programdata_bytes(slot, &elf),
+                programdata_bytes(slot, authority, &elf),
                 bpf_loader_upgradeable::ID,
                 false,
             ),
@@ -487,6 +535,237 @@ fn a_program_the_activation_did_not_name_refuses() {
             &theirs.program,
             &theirs.programdata,
         ),
+        Err(ActivationAuthErrorV1::Deployment),
+    );
+}
+
+/// Decision 0012 at the reader that every child role goes through.
+///
+/// This is the load-bearing case: the SAME code path Claims, Custody, Core,
+/// Dealer and Rent all reach, and the Registry's own `Reauthenticate` handler,
+/// admitting a MUTABLE deployment on its slot pin and refusing by name the
+/// instant an `Upgrade` moves that slot. Nothing here hashes an ELF -- that is
+/// the point of the pin, and it is what keeps the market life under the
+/// 1,400,000 CU ceiling on a substrate the project can iterate.
+#[test]
+fn a_slot_pinned_mutable_deployment_authenticates_and_an_upgrade_supersedes_it() {
+    let authority = [0x42_u8; 32];
+    let fixture = Fixture::mutable(9, authority);
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+
+    for role in ALL_ROLES {
+        let receipt = authenticate_activated_role_v1(
+            &registry,
+            &cache,
+            &fixture.release_set_id.to_bytes(),
+            role,
+            &fixture.program,
+            &fixture.programdata,
+        )
+        .expect("a mutable deployment authenticates while its pin holds");
+        assert_eq!(receipt.role(), role);
+    }
+
+    // The upgrade lands. The Loader wrote a strictly later slot; the ELF bytes
+    // here are deliberately UNCHANGED, so nothing but the slot can be doing the
+    // refusing.
+    let upgraded = account(
+        *fixture.programdata.key,
+        false,
+        false,
+        programdata_bytes(fixture.slot + 1, Some(authority), &fixture.elf),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    for role in ALL_ROLES {
+        assert_eq!(
+            authenticate_activated_role_v1(
+                &registry,
+                &cache,
+                &fixture.release_set_id.to_bytes(),
+                role,
+                &fixture.program,
+                &upgraded,
+            )
+            .map(|_| ()),
+            Err(ActivationAuthErrorV1::ReleaseSuperseded),
+            "every dependent role refuses the moment the substrate is upgraded",
+        );
+    }
+
+    // And with genuinely new bytes at the new slot -- the real upgrade shape.
+    let replaced = account(
+        *fixture.programdata.key,
+        false,
+        false,
+        programdata_bytes(fixture.slot + 1, Some(authority), &[0x11_u8; 96]),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        authenticate_activated_role_v1(
+            &registry,
+            &cache,
+            &fixture.release_set_id.to_bytes(),
+            ExecutionRoleV1::Trading,
+            &fixture.program,
+            &replaced,
+        )
+        .map(|_| ()),
+        Err(ActivationAuthErrorV1::ReleaseSuperseded),
+    );
+}
+
+/// Every way OFF the pin that is not an upgrade keeps the generic refusal.
+///
+/// The operator-actionable name is reserved for the one event it describes.
+/// A substituted authority, a revoked authority, and a slot BELOW the pin are
+/// all "this is not the deployment I authenticated", not "you upgraded me".
+#[test]
+fn pin_substitution_is_refused_and_is_not_named_a_supersession() {
+    let authority = [0x42_u8; 32];
+    let fixture = Fixture::mutable(11, authority);
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+
+    let hostiles: [(&str, Vec<u8>); 4] = [
+        (
+            "a different upgrade authority at the pinned slot",
+            programdata_bytes(fixture.slot, Some([0x43; 32]), &fixture.elf),
+        ),
+        (
+            "an authority revoked out from under the release",
+            programdata_bytes(fixture.slot, None, &fixture.elf),
+        ),
+        (
+            "a slot below the pin, which no Loader write can produce",
+            programdata_bytes(fixture.slot - 1, Some(authority), &fixture.elf),
+        ),
+        (
+            "different bytes at a slot below the pin",
+            programdata_bytes(fixture.slot - 1, Some(authority), &[0x11_u8; 96]),
+        ),
+    ];
+    for (why, bytes) in hostiles {
+        let hostile = account(
+            *fixture.programdata.key,
+            false,
+            false,
+            bytes,
+            bpf_loader_upgradeable::ID,
+            false,
+        );
+        assert_eq!(
+            authenticate_activated_role_v1(
+                &registry,
+                &cache,
+                &fixture.release_set_id.to_bytes(),
+                ExecutionRoleV1::Core,
+                &fixture.program,
+                &hostile,
+            )
+            .map(|_| ()),
+            Err(ActivationAuthErrorV1::Deployment),
+            "{why}",
+        );
+    }
+}
+
+/// The same-slot redeploy edge: ProgramData identity participates in the pin.
+///
+/// Slot equality is only sound because it is checked against the ONE
+/// ProgramData the Program account links to and the Loader derives. A hostile
+/// account carrying a perfectly pinned slot, the exact bound authority and the
+/// admitted ELF still refuses, because it is not that account.
+#[test]
+fn a_substituted_programdata_carrying_the_pinned_slot_still_refuses() {
+    let authority = [0x42_u8; 32];
+    let fixture = Fixture::mutable(13, authority);
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+
+    let impostor = account(
+        Pubkey::new_from_array([0xee; 32]),
+        false,
+        false,
+        programdata_bytes(fixture.slot, Some(authority), &fixture.elf),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        authenticate_activated_role_v1(
+            &registry,
+            &cache,
+            &fixture.release_set_id.to_bytes(),
+            ExecutionRoleV1::Core,
+            &fixture.program,
+            &impostor,
+        )
+        .map(|_| ()),
+        Err(ActivationAuthErrorV1::Deployment),
+    );
+}
+
+/// The re-release closes the loop: upgrade, refuse, re-pin, green.
+///
+/// A new release generation minted from the NEW observation authenticates
+/// against the upgraded deployment, and the superseded generation stays
+/// refused against it. That is the whole operator story of decision 0012, and
+/// it holds without a single byte of the protocol changing between them.
+#[test]
+fn a_re_release_on_the_new_slot_authenticates_and_the_old_one_stays_refused() {
+    let authority = [0x42_u8; 32];
+    let superseded = Fixture::mutable(15, authority);
+    let registry = superseded.registry_account();
+
+    let upgraded_elf = vec![0x11_u8; 96];
+    let upgraded = account(
+        *superseded.programdata.key,
+        false,
+        false,
+        programdata_bytes(superseded.slot + 1, Some(authority), &upgraded_elf),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        authenticate_activated_role_v1(
+            &registry,
+            &superseded.cache(),
+            &superseded.release_set_id.to_bytes(),
+            ExecutionRoleV1::Core,
+            &superseded.program,
+            &upgraded,
+        )
+        .map(|_| ()),
+        Err(ActivationAuthErrorV1::ReleaseSuperseded),
+    );
+
+    let re_released = Fixture::re_release(&superseded, authority, &upgraded_elf);
+    assert!(
+        authenticate_activated_role_v1(
+            &registry,
+            &re_released.cache(),
+            &re_released.release_set_id.to_bytes(),
+            ExecutionRoleV1::Core,
+            &re_released.program,
+            &upgraded,
+        )
+        .is_ok(),
+        "a release re-authenticated at the new slot admits the new deployment",
+    );
+
+    // And the re-released generation does not retroactively admit the old one.
+    assert_eq!(
+        authenticate_activated_role_v1(
+            &registry,
+            &re_released.cache(),
+            &re_released.release_set_id.to_bytes(),
+            ExecutionRoleV1::Core,
+            &re_released.program,
+            &superseded.programdata,
+        )
+        .map(|_| ()),
         Err(ActivationAuthErrorV1::Deployment),
     );
 }

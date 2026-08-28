@@ -691,6 +691,33 @@ QUEUED with owners:
   one-shot hashv only, never the incremental Hasher). GIT-SCAN item 8 row
   CLOSED (69ea61fe, verified by SHASEAM).
 
+## DEVNET-SMOKE charter — AMENDED by SMOKE-0 + decision 0012 (2026-08-27 evening)
+
+SMOKE-0 ran (docs/evidence/DEVNET_SMOKE_0.md): preflight + mutable
+deploy/recycle rehearsal on devnet, 0.0096 SOL total cost, wallet 65 →
+64.99. Four walls found pre-spend; ember ruled W1 LIVE: **the devnet
+substrate is mutable and iterated** (decision 0012 — the slot pin replaces
+revocation in the fast path's soundness; iteration by Upgrade at fee-cost;
+~31.7 SOL parked, never burned; the immutable ceremony is reserved for the
+final public demo substrate). The devnet PythReleaseV1 row is MINTED
+(11f249ff + the 9b08090d nibble fix). ALL LANDED by 18:50: the 0012
+admission tree-wide (PIN-0012, 0e34c036 — eight ReleaseSuperseded bands,
+census 209), the producer minting policy from observation (DEVNET-DRIVER,
+636230ef), the external campaign driver (DRIVER, d94dc438..1040e918 — W3
+closed; publication+init proven locally, Pyth row re-authenticated 8/8 on
+devnet read-only, W1 measured as a live 0x1004 refusal pre-admission), the
+82-diagnostic frame regression (DIAG-82, 9dc2a6bb + the d1378427 gate;
+root-caused to 3071fbe8 by ACCEL-FRAME's independent bisection), the
+checked-release candidate green again (7c12af9c), and the kappa carried-cap
+kernel with its equivalence theorem (KAPPA-ENFORCE, c953b640..74275738;
+storage ruled onto CoreState with profile floor_content_id, RECORDS-MIGRATE
+rows). **DEPLOY-1's two triggers are both met.** Its named debts: the 0012
+CU claim needs the 20-seed re-measure; founding-stage spec-vs-plan wiring;
+journey externalization + the persistent-founder decision; the explicitly-
+unbounded V5 founding declaration before a fail-closed kappa check can land.
+The charter below otherwise stands, with "recycled at the end" now meaning:
+closeable because never revoked.
+
 ## DEVNET-SMOKE charter (expanded scope, awaiting ember's go)
 
 The smoke is a small public exchange, not a market. Deploy the seven roles
@@ -769,3 +796,56 @@ ember's explicit go.
   wave's convergence. Every rung is laid: GeneralTransitionV3.lean (first-run
   byte-identical), the four state envelopes, the OpenBatch root-write answer
   at common_rule's coordinate-0 arm. Evidence: GENERAL_TRIPLES_2026_08_27.md.
+
+## DEPLOY-1 queue (triggers: PIN-0012 + DIAG-82 green)
+
+The durable devnet deploy and the first market living there. Charter =
+decision 0012's substrate (mutable + slot-pin, ~31.7 SOL parked) deployed
+via the runbook's TPU path, then DRIVER's two honestly-open wirings: the
+founding stage (spec-vs-plan — execute_found_market is origin-agnostic
+already; wire the market input into the driver's plan without half-wiring
+principal) and the journey runner externalized onto the driver's persisted
+per-role forge. Then: the three-market exchange per the DEVNET-SMOKE
+charter (SMOKE-1), web pointed at devnet, the ledger against the public
+chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
+
+- RECORDS-MIGRATE rows (KAPPA-ENFORCE's mapped finding, ruled 18:55): (a)
+  CoreState gains the principal cap (zero reserved bytes today — the cap is
+  part of the wire break); (b) SourceCapacityProfileV1 gains floor_content_id
+  (32 bytes; profile has 16 free) — closing the REAL hole that two floors
+  with identical bindings both validate, letting a caller pick the biggest.
+  The Found-frame +6 accounts rides the same migration.
+
+- M-61 (DIAG-82), a reporting rule: the sweep's per-seed CU is a BUMP-SEARCH
+  LOTTERY re-rolled by the trading ELF digest itself (deltas = n×1,500 ± ~50;
+  ±46,000 across seeds). "Worst margin" is not a property of the code — CU
+  claims report the PASS COUNT and 20-seed MEAN; M-46's bisect uses those.
+  Watchlist the new frame gate prints: four functions within 512 B of the
+  4,096 wall (3,904/3,840/3,776/3,776/3,584).
+
+- DEPLOY-1 addendum (PAYOUT's FE handoff): browser redemption step 2 rides
+  the deployed markets' published ALTs (DCLTSQ03, role byte 1, wallet at
+  coordinate 0 possibly writable; 1,869 B legacy vs 1,006 on an ALT) and the
+  builder evaluates the Product off-chain (coordinate 23's PDA digests the
+  payout). The FE wiring lands when the smoke's markets publish their tables.
+- SN7 batch: a workspace-enumerating check gate — root cargo check CANNOT
+  see the nested test-caller workspaces (PAYOUT's enum change left root
+  green + three crates red; only the campaign build caught it). The SBOM's
+  39-workspace discovery is the enumeration to reuse.
+- LINGER item: genref regen once the tree quiets (two lanes deferred it
+  rather than publish unlanded line numbers as generated truth — correct).
+
+- Decision 0012's CU debt: CLOSED BY MEASUREMENT + REFRAME (d20837fd): the
+  ExactAuthority arm runs 20/20, and the cost is **+73 CU exactly** — the
+  +2,098 first reported is the difference-of-means UPPER BOUND, and pairing
+  the seeds (same seeds, same ELF, so `delta = n*1500 + c` solves per seed)
+  gives c = +73 on all twenty, with the immutable-pinned control returning
+  c = 0 as the method's self-check. Ledger M-65 is the general form: a
+  lottery you cannot remove you can often CANCEL. On the Direct Hot route
+  NEITHER arm ever hashed — the decision's purchase is "mutable: refused →
+  admitted at parity", now with the parity measured to the compute unit. The
+  700k figure belongs to the Shadow path's hashing site only; its
+  counterfactual is not owed (a hashing variant nobody ships). Substrate arms
+  live in waist::FixtureSubstrateV1 (DCLUTCH_FIXTURE_SUBSTRATE).
+- SN7: registry-sbf lib.rs:378-380 doc prose is pre-0012 ("keeps the full
+  current-ELF hash" — no longer true of the function it documents).

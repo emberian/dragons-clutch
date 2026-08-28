@@ -22,15 +22,29 @@ use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 
 // ------------------------------------------------------------- tier-1, verbatim
 //
-// These five modules ARE `tools/local-validator/bootstrap/successor/src/`.
+// These modules ARE `tools/local-validator/bootstrap/successor/src/`.
 // They are not copies. A change to the founding reaches this campaign by
 // recompilation, and a change that breaks this campaign breaks this build.
 //
-// `dead_code` is allowed on exactly these five and nowhere else: the journey
+// `dead_code` is allowed on exactly these and nowhere else: the journey
 // calls `found_through_open`, not `execute`, and never renders a demo-market
 // spec, so a handful of the producer's own entry points are unreachable HERE
 // while being live in the producer. Silencing it per-item would mean editing
 // the producer to describe a consumer, which is backwards.
+//
+// `campaign` and `cluster` joined the list when the devnet driver landed. The
+// journey does not drive an external cluster and never will -- it is
+// loopback-only by construction, and its founder key is ephemeral. They are
+// compiled here anyway, and deliberately: `cluster` is now the one owner of
+// the origin rail that keeps this runner on 127.0.0.1, so a change that
+// weakened that rail must break THIS build too, not only the producer's. That
+// is the whole point of the `#[path]` arrangement.
+#[path = "../../../local-validator/bootstrap/successor/src/campaign.rs"]
+#[allow(dead_code)]
+mod campaign;
+#[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
+#[allow(dead_code)]
+mod cluster;
 #[path = "../../../local-validator/bootstrap/successor/src/market.rs"]
 #[allow(dead_code)]
 mod market;

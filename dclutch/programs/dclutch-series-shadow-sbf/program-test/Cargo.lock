@@ -1593,7 +1593,6 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-release-set-contract",
  "dclutch-sha256-adapter",
- "sha2 0.10.9",
 ]
 
 [[package]]

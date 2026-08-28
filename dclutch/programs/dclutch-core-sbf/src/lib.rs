@@ -115,6 +115,14 @@ pub enum CoreSbfError {
     Arithmetic = 0x300E,
     /// Core bootstrap profile, artifact, Loader, or immutability authority refused.
     Infrastructure = 0x300F,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Decision 0012. Not a corrupted account and not an attack: the exact
+    /// upgrade authority the release names shipped new bytes, so the cached
+    /// authentication no longer describes what is deployed. Every open market
+    /// on the superseded release generation refuses until a re-release
+    /// re-authenticates the new deployment and re-pins its slot.
+    ReleaseSuperseded = 0x3010,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -125,7 +133,7 @@ const _: () = assert!(
     "CoreSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (CoreSbfError::Infrastructure as u32)
+    (CoreSbfError::ReleaseSuperseded as u32)
         < dclutch_refusal_registry::CORE_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "CoreSbfError must not run past its registered refusal band"
 );
@@ -133,6 +141,22 @@ const _: () = assert!(
 impl From<CoreSbfError> for ProgramError {
     fn from(value: CoreSbfError) -> Self {
         Self::Custom(value as u32)
+    }
+}
+
+/// Name an activation-cache refusal, keeping the superseded case actionable.
+///
+/// Decision 0012: a moved deployment slot means the substrate was upgraded and
+/// this release generation is finished. The remedy is a re-release, not an
+/// investigation, so it does not fold into the generic Release refusal.
+impl From<dclutch_registry_activation_auth_v1::ActivationAuthErrorV1> for CoreSbfError {
+    fn from(value: dclutch_registry_activation_auth_v1::ActivationAuthErrorV1) -> Self {
+        match value {
+            dclutch_registry_activation_auth_v1::ActivationAuthErrorV1::ReleaseSuperseded => {
+                Self::ReleaseSuperseded
+            }
+            _ => Self::Release,
+        }
     }
 }
 

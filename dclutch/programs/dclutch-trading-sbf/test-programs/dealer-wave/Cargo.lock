@@ -274,6 +274,13 @@ dependencies = [
 [[package]]
 name = "dclutch-dealer-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-dealer-scenario-kernel",
+]
+
+[[package]]
+name = "dclutch-dealer-scenario-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-trading-dealer-wave-fixture"

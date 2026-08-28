@@ -44,12 +44,13 @@ use solana_system_interface::instruction::transfer;
 
 use crate::{
     Error, Result,
+    cluster::ClusterOriginV1,
     model::{ProgramPin, RunProgramInput, SuccessorPlan, SuccessorRunEvidence, SuccessorRunSpec},
     plan::{
         PrepareArgs, RoleDeploymentInputV1, RoleDeploymentsV1, hex, hex32,
         loader_programdata_bytes, programdata_bytes_after_revoke, pubkey, validate_program_ids,
     },
-    rpc::{Rpc, account_evidence, validate_loopback_url},
+    rpc::{Rpc, account_evidence},
     seed::{KeyForge, role},
 };
 
@@ -80,11 +81,6 @@ const RUN_EVIDENCE_SCHEMA_V2: &str = "dclutch-local-successor-run-evidence-v2";
 /// compared back against the spec — instead of two sides independently
 /// believing in the same magic number.
 const DEFAULT_RPC_PORT: u16 = 20890;
-/// The launcher derives a 42-port block from its base (`BASE + 41` is the top
-/// of its dynamic range), so a base above this cannot be served at all.
-const MAX_RPC_PORT: u16 = 65_494;
-/// Below 1024 needs privileges the launcher deliberately never has.
-const MIN_RPC_PORT: u16 = 1024;
 const AUTHORITY_LAMPORTS: u64 = 5_000_000_000;
 const VALIDATOR_READY_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -513,7 +509,7 @@ pub(crate) fn found_through_open(
 }
 
 /// The seven role pins in the canonical launcher order.
-fn role_pins(plan: &SuccessorPlan) -> [(&'static str, &ProgramPin); 7] {
+pub(crate) fn role_pins(plan: &SuccessorPlan) -> [(&'static str, &ProgramPin); 7] {
     [
         ("registry", &plan.registry),
         ("core", &plan.core),
@@ -644,10 +640,16 @@ fn role_deployment_input(input: &RunProgramInput) -> RoleDeploymentInputV1 {
     RoleDeploymentInputV1 {
         observed_programdata: input.observed_programdata.as_deref().map(PathBuf::from),
         genesis_deployment_slot: input.genesis_deployment_slot.unwrap_or(0),
+        // The supervised `run` substrate is the genesis install this campaign
+        // materializes and then revokes, so there is no mutable deployment for
+        // a caller to declare here. Decision 0012's mutable roles arrive
+        // through `prepare` for the external driver, and a plan built from them
+        // is one this supervisor deliberately refuses.
+        expected_upgrade_authority: None,
     }
 }
 
-fn initialize_instruction(
+pub(crate) fn initialize_instruction(
     plan: &SuccessorPlan,
     payer: Pubkey,
     authority: Pubkey,
@@ -732,7 +734,7 @@ fn role_activation_instruction(
 }
 
 /// Ordered per-role activation instructions with a human label for each.
-fn activation_instructions(
+pub(crate) fn activation_instructions(
     plan: &SuccessorPlan,
     payer: Pubkey,
 ) -> Result<Vec<(&'static str, Instruction)>> {
@@ -806,7 +808,7 @@ pub(crate) fn record(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubke
 /// Order matters: Core's infrastructure initialization reads the Registry and
 /// Rent artifact records, and role activation reads the five role records plus
 /// the release set, so all nine must be finalized before either runs.
-fn publish_infrastructure_records(
+pub(crate) fn publish_infrastructure_records(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     sponsor: &Keypair,
@@ -1076,7 +1078,7 @@ fn verify_published_record(
     Ok(())
 }
 
-fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+pub(crate) fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
     let address = pubkey(&plan.infrastructure_profile.address)?;
     let account = rpc.required_account(address, "infrastructure profile")?;
     let expected = decode_hex(&plan.infrastructure_profile.body_hex)?;
@@ -1112,7 +1114,7 @@ fn verify_core_programdata(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
     Ok(())
 }
 
-fn verify_activation(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+pub(crate) fn verify_activation(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
     let address = pubkey(&plan.activation)?;
     let account = rpc.required_account(address, "release activation")?;
     let view = ActivatedExecutionReleaseSetViewV1::decode(&account.data)
@@ -1190,35 +1192,31 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
 
 /// The campaign's own RPC origin, normalized, with the port it names.
 ///
-/// One owner for "which origin is this run allowed to use". The host rule is
-/// unchanged and is `validate_loopback_url`'s: an explicit-port, credential-free
-/// loopback HTTP origin. On top of that this requires the host to be literal
-/// `127.0.0.1`, because that is the only interface the launcher binds — a spec
-/// naming `localhost` or `[::1]` would pass the loopback rule and then fail to
-/// reach a validator listening only on the dotted-quad.
+/// The rule itself now lives in [`crate::cluster`], which owns "which origin is
+/// this run allowed to use" for the whole tool. This function is the
+/// *supervisor's* narrower question on top of it: the supervisor starts a
+/// validator, so its origin must be the loopback one, and it needs that
+/// origin's port to tell the launcher which block to derive.
 ///
-/// The port is free to move; it is the thing that used to be pinned and is not
-/// authenticated anywhere. It is bounded by what the launcher's 42-port block
-/// can actually be derived from.
+/// Passing `None` for the acknowledgment is what makes this narrow. A run spec
+/// has no field that could carry the devnet acknowledgment, and adding one
+/// would make the supervisor — the thing that launches a validator and airdrops
+/// to it — reachable from a file rather than from a command line somebody typed.
 fn rpc_origin(rpc_url: &str) -> Result<(String, u16)> {
-    let url = validate_loopback_url(rpc_url)?;
-    let host = url.host_str().unwrap_or_default();
-    if host != "127.0.0.1" {
+    let origin = ClusterOriginV1::parse(rpc_url, None)?;
+    if !origin.may_launch_validator() {
         return Err(Error::new(format!(
-            "successor RPC origin must be on 127.0.0.1, which is the only interface the \
-             launcher binds; the spec names {host}"
+            "the successor supervisor launches and owns a validator, so its origin must be \
+             loopback; {} is {}. The `campaign` subcommand is the entry that may leave this \
+             machine, because it launches nothing.",
+            origin.redacted_url(),
+            origin.label()
         )));
     }
-    let port = url
-        .port()
-        .ok_or_else(|| Error::new("successor RPC origin must name an explicit port"))?;
-    if !(MIN_RPC_PORT..=MAX_RPC_PORT).contains(&port) {
-        return Err(Error::new(format!(
-            "successor RPC port {port} is outside {MIN_RPC_PORT}-{MAX_RPC_PORT}; the launcher \
-             derives a 42-port block from it and the block must fit under 65535"
-        )));
-    }
-    Ok((url.as_str().to_owned(), port))
+    let port = origin
+        .loopback_port()
+        .ok_or_else(|| Error::new("a validator-launching origin must name an explicit port"))?;
+    Ok((origin.url().to_owned(), port))
 }
 
 fn ensure_rpc_port_free(port: u16) -> Result<()> {
@@ -1403,7 +1401,11 @@ fn validate_program_pin(
             "{label} genesis ProgramData is not the image its deployment facts were decoded from"
         )));
     }
-    if genesis.data_len != elf.len().saturating_add(LOADER_V3_PROGRAMDATA_METADATA_BYTES) {
+    if genesis.data_len
+        != elf
+            .len()
+            .saturating_add(LOADER_V3_PROGRAMDATA_METADATA_BYTES)
+    {
         return Err(Error::new(format!(
             "{label} ProgramData width is not the Loader-v3 45-byte metadata plus its exact ELF"
         )));
@@ -1599,6 +1601,10 @@ mod tests {
 
     #[test]
     fn the_rpc_origin_is_any_loopback_port_and_nothing_else() {
+        use crate::{
+            cluster::{DEVNET_GENESIS_HASH, MAX_RPC_PORT, MIN_RPC_PORT},
+            rpc::validate_loopback_url,
+        };
         // The DEFAULT still resolves, byte for byte, so nothing that never
         // asked for a port notices this became a parameter.
         assert_eq!(
@@ -1642,6 +1648,27 @@ mod tests {
         // here rather than by a launcher that has already spent a minute.
         assert!(rpc_origin(&format!("http://127.0.0.1:{}/", MAX_RPC_PORT + 1)).is_err());
         assert!(rpc_origin(&format!("http://127.0.0.1:{}/", MIN_RPC_PORT - 1)).is_err());
+
+        // And the new one: an origin the DRIVER may target is still refused
+        // HERE. `campaign` may leave the machine because it launches nothing;
+        // this supervisor starts a validator, airdrops to it, and holds an
+        // ephemeral authority in memory, so its origin is loopback or nothing.
+        // A run spec carries no acknowledgment field, which is what keeps this
+        // narrow: the devnet rail is reachable from a typed command line only.
+        assert!(
+            ClusterOriginV1::parse("https://api.devnet.solana.com/", Some(DEVNET_GENESIS_HASH))
+                .is_ok(),
+            "the driver's rail admits acknowledged devnet"
+        );
+        let refusal = rpc_origin("https://api.devnet.solana.com/")
+            .err()
+            .expect("the supervisor must refuse devnet");
+        assert!(
+            refusal.0.contains("launches and owns a validator")
+                || refusal.0.contains("not loopback"),
+            "the refusal must say why the SUPERVISOR cannot, got: {}",
+            refusal.0
+        );
     }
 
     #[test]

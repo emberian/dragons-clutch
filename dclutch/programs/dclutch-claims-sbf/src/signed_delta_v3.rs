@@ -49,11 +49,34 @@ use crate::liability_basis_v2::{
 pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: usize =
     SEMANTIC_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 as usize;
 
+/// What stands at the frame's `CallerAuthority` coordinate, and what it proves.
+///
+/// The coordinate's meaning has always been "the party entitled to move these
+/// claims proved it, and the proof is a signature". There are exactly two kinds
+/// of entitled party in this protocol, and until now only one of them had a
+/// spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ParentAuthorityV3 {
+    /// A release-pinned `CallerAuthoritySeedsV1` PDA under the parent's caller
+    /// program, which only the activated program of the parent's execution role
+    /// can sign. The entitled party is a venue or lifecycle program.
+    CallerProgramPda,
+    /// The Position owner's own signature.
+    ///
+    /// A program-derived address has no private key, so producing this proof is
+    /// itself the evidence that the Position is held by an ordinary identity and
+    /// not by a Trading record or a Claims capability. Admissible only under
+    /// [`CallerRole::Claims`], where there is no caller program to derive a PDA
+    /// under in the first place.
+    PositionOwner([u8; 32]),
+}
+
 /// Exact already-authenticated parent request joined to one generated
 /// SignedDeltaV3 plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSignedDeltaParentV3 {
     pub(crate) caller_role: CallerRole,
+    pub(crate) authority: ParentAuthorityV3,
     pub(crate) release_set: [u8; 32],
     pub(crate) market: [u8; 32],
     pub(crate) parent_context: [u8; 32],
@@ -205,7 +228,7 @@ pub(super) fn process(
     let plan = SignedDeltaPlanV3::decode(instruction_data)
         .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
     let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
-    authenticate_privileges(program_id, &accounts)?;
+    authenticate_privileges(program_id, &accounts, plan.caller_role())?;
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(&accounts, plan, packet_digest)?;
     let receipt = execute_authenticated(program_id, &accounts, plan, packet_digest, false)?;
@@ -224,7 +247,7 @@ pub(crate) fn execute_parent_authenticated(
     let plan = SignedDeltaPlanV3::decode(instruction_data)
         .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
     let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
-    authenticate_privileges(program_id, &accounts)?;
+    authenticate_privileges(program_id, &accounts, plan.caller_role())?;
     authenticate_parent_authority(&accounts, plan, parent)?;
     execute_authenticated(
         program_id,
@@ -249,7 +272,7 @@ pub(crate) fn authenticate_parent_releases(
     let plan = SignedDeltaPlanV3::decode(instruction_data)
         .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
     let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
-    authenticate_privileges(program_id, &accounts)?;
+    authenticate_privileges(program_id, &accounts, plan.caller_role())?;
     authenticate_releases(&accounts, plan)
 }
 
@@ -319,14 +342,36 @@ fn execute_authenticated(
     Ok(receipt)
 }
 
+/// The CallerAuthority coordinate's writability under an owner-signed plan.
+///
+/// The frame spec pins coordinate 0 to a READONLY signer, which is exactly right
+/// for a `CallerAuthoritySeedsV1` PDA: a program-derived authority is never the
+/// fee payer and is never written. An owner signature is the other case. A
+/// wallet that authorizes its own redemption pays the transaction's fee, so it
+/// is a WRITABLE signer, and an account appearing as both the fee payer and a
+/// readonly signer compiles to one writable-signer entry -- there is no message
+/// in which a single-wallet submitter can satisfy the readonly pin.
+///
+/// Writability at this coordinate carries no authority. This program never
+/// borrows the account beyond `key` and `is_signer`, it is not the market and
+/// cannot be a Position (both are Claims-owned PDAs that cannot sign), and the
+/// SVM would refuse a write to an account this program does not own. So the pin
+/// is relaxed for `CallerRole::Claims` ONLY, and only along that one axis:
+/// signer stays required and executable stays refused.
+const fn authority_writability_is_free(role: CallerRole) -> bool {
+    matches!(role, CallerRole::Claims)
+}
+
 fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &SignedDeltaAccountsV3<'_, '_>,
+    role: CallerRole,
 ) -> Result<(), ProgramError> {
     let position_count =
         u32::try_from(accounts.positions.len()).map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
     let spec =
         SignedDeltaFrameSpecV3::new(position_count).map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+    let authority_writable_free = authority_writability_is_free(role);
     for index in 0..spec
         .account_count()
         .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?
@@ -336,8 +381,13 @@ fn authenticate_privileges(
             .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?
             .privileges();
         let observed = account(accounts.all, usize::from(index))?;
+        let writable_admitted = if index == 0 && authority_writable_free {
+            !observed.executable
+        } else {
+            observed.is_writable == expected.writable()
+        };
         if observed.is_signer != expected.signer()
-            || observed.is_writable != expected.writable()
+            || !writable_admitted
             || observed.executable != expected.executable()
         {
             return Err(SignedDeltaSbfErrorV3::Accounts.into());
@@ -393,6 +443,15 @@ fn authenticate_authority(
     plan: SignedDeltaPlanV3<'_>,
     packet_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
+    // A submitted plan is authorized by a caller program's PDA, full stop. Role
+    // `Claims` names the case with no caller program, so it has nothing to
+    // derive here -- its authority is the Position owner's signature, which only
+    // an enclosing Claims route knows the owner for. Refused rather than left to
+    // be unsatisfiable by accident: a PDA under this program is exactly what no
+    // external submitter can sign, and an accidental refusal reads as a bug.
+    if plan.caller_role() == CallerRole::Claims {
+        return Err(SignedDeltaSbfErrorV3::Release.into());
+    }
     let seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(plan.release_set()).map_err(|_| SignedDeltaSbfErrorV3::Release)?,
         plan.market(),
@@ -421,18 +480,35 @@ fn authenticate_parent_authority(
     {
         return Err(SignedDeltaSbfErrorV3::Release.into());
     }
-    let seeds = CallerAuthoritySeedsV1::new(
-        ContentId::new(parent.release_set).map_err(|_| SignedDeltaSbfErrorV3::Release)?,
-        parent.market,
-        execution_role(parent.caller_role),
-        parent.parent_context,
-        parent.parent_request_digest,
-    )
-    .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
-    if accounts.authority.key
-        != &Pubkey::find_program_address(&seeds.as_slices(), accounts.caller_program.key).0
-    {
-        return Err(SignedDeltaSbfErrorV3::Release.into());
+    // The coordinate is a SIGNER either way -- `authenticate_privileges` has
+    // already enforced the frame spec, so what remains is WHICH key had to sign.
+    match (parent.caller_role, parent.authority) {
+        (CallerRole::Claims, ParentAuthorityV3::PositionOwner(owner)) => {
+            if !accounts.authority.is_signer || accounts.authority.key.to_bytes() != owner {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+        }
+        // Role `Claims` has no caller program, and no other role may substitute
+        // an owner signature for its program's authority. Both crossings refuse.
+        (CallerRole::Claims, ParentAuthorityV3::CallerProgramPda)
+        | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::PositionOwner(_)) => {
+            return Err(SignedDeltaSbfErrorV3::Release.into());
+        }
+        (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::CallerProgramPda) => {
+            let seeds = CallerAuthoritySeedsV1::new(
+                ContentId::new(parent.release_set).map_err(|_| SignedDeltaSbfErrorV3::Release)?,
+                parent.market,
+                execution_role(parent.caller_role),
+                parent.parent_context,
+                parent.parent_request_digest,
+            )
+            .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+            if accounts.authority.key
+                != &Pubkey::find_program_address(&seeds.as_slices(), accounts.caller_program.key).0
+            {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+        }
     }
     Ok(())
 }
@@ -457,7 +533,19 @@ fn authenticate_releases(
     plan: SignedDeltaPlanV3<'_>,
 ) -> Result<(), ProgramError> {
     let release_set = plan.release_set();
-    let caller_is_core = plan.caller_role() == CallerRole::Core;
+    // Core and Claims are authenticated for every role, at their own
+    // coordinates. The CALLER coordinates are only a third role when the caller
+    // actually is Trading: a Core caller passes its own program there and is
+    // already covered by the first entry, and a Claims caller has no external
+    // program at all -- so for `Claims` those two coordinates are pinned to this
+    // program instead, leaving nothing in the frame unauthenticated.
+    let caller_is_trading = plan.caller_role() == CallerRole::Trading;
+    if plan.caller_role() == CallerRole::Claims
+        && (accounts.caller_program.key != accounts.claims_program.key
+            || accounts.caller_programdata.key != accounts.claims_programdata.key)
+    {
+        return Err(SignedDeltaSbfErrorV3::Release.into());
+    }
     let requested: [Option<RequestedRoleV3<'_, '_>>; 3] = [
         Some((
             ExecutionRoleV1::Core,
@@ -469,7 +557,7 @@ fn authenticate_releases(
             accounts.claims_program,
             accounts.claims_programdata,
         )),
-        (!caller_is_core).then_some((
+        caller_is_trading.then_some((
             ExecutionRoleV1::Trading,
             accounts.caller_program,
             accounts.caller_programdata,
@@ -719,6 +807,7 @@ fn commit_candidates(
 const fn execution_role(role: CallerRole) -> ExecutionRoleV1 {
     match role {
         CallerRole::Core => ExecutionRoleV1::Core,
+        CallerRole::Claims => ExecutionRoleV1::Claims,
         CallerRole::Trading => ExecutionRoleV1::Trading,
     }
 }

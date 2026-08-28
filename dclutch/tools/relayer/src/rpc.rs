@@ -74,8 +74,24 @@ impl RpcClient {
         let parsed = reqwest::Url::parse(url)
             .map_err(|error| RelayerError::config(format!("{url:?} is not a URL: {error}")))?;
         let host = parsed.host_str().unwrap_or("unknown-host").to_owned();
+        // NO PROXY, EVER — and this is a safety property, not a performance one.
+        //
+        // reqwest's default builder enables `auto_sys_proxy`, which reads
+        // `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` out of the environment.
+        // That silently defeats the submission gate: the gate admits an
+        // endpoint by inspecting the URL's HOST, so a `http://127.0.0.1:8899`
+        // endpoint passes the loopback rule as written while `ALL_PROXY` sends
+        // the bytes to whatever host the environment names.  The URL the daemon
+        // was authorized against and the socket it actually opens must be the
+        // same thing.
+        //
+        // Applied to BOTH clients, because the read side has the mirror-image
+        // problem: an observation is only evidence about a cluster if it was
+        // read from that cluster, and a proxy is an unnamed third party between
+        // the daemon and the genesis hash it verified.
         let http = reqwest::Client::builder()
             .timeout(timeout)
+            .no_proxy()
             .build()
             .map_err(|source| RelayerError::Transport {
                 endpoint: host.clone(),

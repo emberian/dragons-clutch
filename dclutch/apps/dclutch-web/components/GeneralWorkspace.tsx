@@ -18,6 +18,7 @@ import {
   type GeneralSettlementStatusV2,
 } from '@/lib/generalPlanV5';
 import { SolanaRpcClient } from '@/lib/rpc';
+import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : 'General workflow failed without a usable refusal reason.'; }
 function compact(value: string): string { return `${value.slice(0, 8)}…${value.slice(-8)}`; }
@@ -46,7 +47,7 @@ function Receipt({ value }: Readonly<{ value: GeneralHotReceiptV3 }>) {
 }
 
 export default function GeneralWorkspace() {
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [planText, setPlanText] = useState(''); const [inspection, setInspection] = useState<GeneralPlanInspectionV5 | null>(null); const [planStatus, setPlanStatus] = useState('No operator plan has been inspected.');
   const [chain, setChain] = useState<GeneralChainStatusV5 | null>(null); const [chainStatus, setChainStatus] = useState('No RPC request has been made.');
   const [receiptText, setReceiptText] = useState(''); const [receipt, setReceipt] = useState<GeneralHotReceiptV3 | null>(null); const [receiptStatus, setReceiptStatus] = useState('No commit-last receipt has been supplied.');

@@ -1314,15 +1314,6 @@ const fn complete_child_effect() -> ChildEffectObservation {
     }
 }
 
-const fn child_account_count(action: ResolutionCoreActionV1) -> usize {
-    match action {
-        ResolutionCoreActionV1::CreateFund => RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1,
-        ResolutionCoreActionV1::VerifyFundReady => RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1,
-        ResolutionCoreActionV1::AdmitTerminal => RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1,
-        ResolutionCoreActionV1::CloseFund => RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1,
-    }
-}
-
 const fn outer_account_count(action: ResolutionCoreActionV1) -> usize {
     match action {
         ResolutionCoreActionV1::CreateFund => RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1,

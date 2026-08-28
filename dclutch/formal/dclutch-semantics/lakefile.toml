@@ -4,6 +4,7 @@ defaultTargets = ["DClutchSemantics"]
 
 [[lean_lib]]
 name = "DClutchSemantics"
+globs = ["DClutchSemantics.+"]
 
 [[lean_exe]]
 name = "emit-account-profile-abi-rust"

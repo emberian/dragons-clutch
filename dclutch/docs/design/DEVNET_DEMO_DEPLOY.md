@@ -154,16 +154,33 @@ solana program deploy --url "$URL" --buffer "$BUFFER" \
 solana program show "$PROGRAM_ID" --url "$URL"
 ```
 
-**Operational, not measured.** ~4,670 `Write` transactions will not all land
-first time on a public endpoint. `write-buffer` resumes into the *same* buffer,
-so a failed run is retried with `--buffer <SAME_KEYPAIR>` rather than restarted
-— which is the whole reason to pass an explicit buffer keypair instead of
-letting the CLI pick a random address, because a random buffer that fails
-halfway is an orphan you must find again to reclaim. `--use-rpc` avoids TPU
-submission drops at the cost of throughput, and `--max-sign-attempts` (default
-5, ~5 minutes of resigning) is the knob when blockhashes expire under load.
-Verify the buffer contents (step 2) after *any* retried write, not just a clean
-one.
+**Operational — MEASURED 2026-08-27** by SMOKE-0's mutable dress rehearsal
+(`docs/evidence/DEVNET_SMOKE_0.md` §3, §5), which inverts this section's
+original transport advice:
+
+- **TPU by default, `--use-rpc` as the fallback.** Through the public RPC,
+  a 137 KB buffer wrote at ~350 effective B/s and failed partway with
+  `Max retries exceeded`; over TPU, the 1.32 MB Trading artifact landed in
+  **23 seconds, one pass, zero retries**. The seven-role ladder is ~2 minutes
+  of writes over TPU — or hours through the RPC straw.
+- **One `--use-rpc` writer starves its whole IP**: every other request from
+  the machine gets `429 Connection rate limits exceeded` for the duration —
+  monitoring, balance checks, a frontend, all of it. Reads and campaign
+  traffic want an endpoint that is not the writer's.
+- `write-buffer` resumes into the *same* buffer, so a failed run is retried
+  with `--buffer <SAME_KEYPAIR>` rather than restarted — the whole reason to
+  pass an explicit buffer keypair instead of letting the CLI pick a random
+  address (a random buffer that fails halfway is an orphan you must find
+  again to reclaim). A writer killed mid-run strands nothing: the partial
+  buffer reads back consistently and resumes exactly (measured).
+- `--max-sign-attempts` (default 5) is what exhausts under RPC throttling;
+  raise it when forced through `--use-rpc`. No priority fee was needed
+  anywhere (recent-fee page read all zeros; nothing stalled on TPU).
+- `solana program show`/`dump` demand a resolvable default signer even as
+  reads — pass `--keypair` explicitly in scripts.
+
+Verify the buffer contents (step 2) after *any* retried write, not just a
+clean one.
 
 ### 2.3 Verification between deploy and revocation
 
@@ -544,7 +561,12 @@ exactly.
 **Practical consequence for a rehearsal on devnet.** If you want a devnet dress
 rehearsal that you can *undo*, run it with the programs left mutable, accept
 that infrastructure init and activation will refuse, and recycle the ~33 SOL.
-The moment you revoke, that is the deploy. There is no third option.
+The moment you revoke, that is the deploy. At HEAD there is no third option —
+but **decision 0012** (`docs/decisions/0012-devnet-iteration-substrate.md`,
+ruled by ember 2026-08-27) charters one: a mutable iteration substrate whose
+fast-path soundness comes from the loader's slot-write invariant instead of
+revocation, iterated by `Upgrade` at fee-cost with the rent parked, never
+burned. Until that lands, this paragraph is the operative truth.
 
 ---
 
@@ -652,9 +674,11 @@ A `PythReleaseV1Input` for devnet is:
 | `receiver_deployment_slot` / `router_deployment_slot` | 460,336,311 / 460,336,290 |
 | `guardian_set_count` / `required_guardian_count` | **5 / 3** |
 
-Minting that row is a **protocol fact owned by the Pyth adapter lane**, not
-something a deploy runbook or host tooling should author. It is
-[§8](#8-the-authorization-checklist) item 6's precondition.
+That row is now minted: `devnet_release_v1()` in
+`crates/dclutch-pyth-svm/src/devnet.rs` (2026-08-27, `11f249ff`, under
+ember's SMOKE-0 deputization), every cluster-specific value carrying both its
+PROVENANCE pin and a same-day live re-read. [§8](#8-the-authorization-checklist)
+item 6's precondition is met.
 
 ### 5.3 Staleness is a measurement with a date
 
@@ -807,13 +831,17 @@ present in both, and the per-stage CU differ only by bump-seed noise
 
 ## 7. What is still blocking deploy day
 
-Three, all found by writing this document rather than by running anything,
-because each is invisible to a local run by construction.
+Four. The first three were found by writing this document rather than by
+running anything, because each is invisible to a local run by construction. The
+fourth arrived later, from the same blind spot in a different tree: decision
+0012 changed what the protocol admits, and the browser's copy of the old rule
+was not on anyone's site map.
 
-**All three are now closed.** A and B were killed on 2026-08-27 (`993a9ec`,
+**All four are now closed.** A and B were killed on 2026-08-27 (`993a9ec`,
 `c5d791e`, `09d7884`); C was killed the same day (`3645eed`, exercised against
-a real chain at `5129362`). The sections below keep the diagnosis, which is
-still the reason the code has the shape it has, and say what closed it.
+a real chain at `5129362`); D on the same evening (`abe1e70d`). The sections
+below keep the diagnosis, which is still the reason the code has the shape it
+has, and say what closed it.
 
 ### Blocker A: the bootstrap hardcodes `deployment_slot = 0` — CLOSED
 
@@ -960,6 +988,44 @@ tool's all-zero offline construction, which is a release-tool question, not a
 frontend one. `lib/releaseRegistry.ts` carries no Core/Registry conflation
 today.
 
+### Blocker D: the browser refused the iteration substrate outright — CLOSED
+
+Decision 0012 admits a mutable devnet substrate, and PIN-0012 (`0e34c036`)
+carried the admission through every Rust reader. It did not carry it through
+the TypeScript, and said so: the TS host mirrors were never on the ADR's site
+map. Two sites, both fatal on deploy day and both silent until then:
+
+- `apps/dclutch-web/lib/localSuccessor.ts:102` required
+  `deployment_slot === 0 && upgrade_authority === null`, so a checkpoint could
+  only ever describe a genesis-prepared irrevocable validator. `:121` refused
+  any ProgramData that did not read as slot-zero with a `None` tag.
+- `apps/dclutch-web/lib/infrastructure.ts:141` was
+  `if (artifact.upgradeAuthority !== null) throw ... is not immutable`, which
+  refused every role of an iterated substrate before a single account was read.
+
+The same code stands in `packages/dclutch-sdk`, so the CLI inherited it.
+
+**Closed by `abe1e70d`.** Both mirrors now call `requireSlotPinnedReleaseV1`,
+the exact TS mirror of the contract's `require_slot_pinned_release_v1`, and the
+slot comparison names its own refusal: a strictly later observed slot on an
+`ExactAuthority` release is `ReleaseSupersededByUpgrade` and everything else is
+`DeploymentSlotMismatch`, matching `ArtifactReleaseV1::slot_pin_refusal`. The
+supersession sentence is not written in the browser — it is read out of the
+generated refusal registry, whose eight `ReleaseSuperseded` rows carry one
+meaning, so the page tells a deploy-day operator exactly what the chain would
+have told them.
+
+**A second defect this uncovered, which was not about 0012 at all.**
+`localSuccessor.ts` still carried `requireZero(bytes, 13, 32)` on the
+ProgramData header — the check `releaseRegistry.ts` removed on 2026-08-27 after
+measuring it against a live validator, for the reason §2.5 of this document
+records: Loader V3 writes `ProgramData { slot, upgrade_authority: None }` as
+thirteen bytes over a forty-five byte header, so a **revoked** program keeps its
+former key inert at `[13..45]`. This copy was missed. It passed only because the
+local genesis writes that tail zeroed — which means it would have failed on the
+first revoked role read from a real cluster, and the immutable ceremony this
+document prescribes ends in exactly that revocation. Regression-tested.
+
 ---
 
 ## 8. The authorization checklist
@@ -999,7 +1065,10 @@ a formality:
 - [x] Blocker A is fixed and the record bodies carry observed deployment slots.
       (`993a9ec` + `c5d791e`; exercised end to end by
       `tools/gauntlet/run.sh --record-publication transaction`.)
-- [ ] The devnet `PythReleaseV1` row exists, minted by the adapter lane.
+- [x] The devnet `PythReleaseV1` row exists. (`devnet_release_v1()`,
+      `crates/dclutch-pyth-svm/src/devnet.rs`, minted 2026-08-27 under
+      ember's SMOKE-0 deputization at `11f249ff`; the synthetic fixture now
+      derives from it, so the shared provider facts have one author.)
 - [ ] The dry-run gate (§6) is green at that commit.
 - [ ] The Core ephemeral authority's lifetime and destruction are decided in
       advance.

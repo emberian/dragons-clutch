@@ -54,6 +54,10 @@ pub enum ShadowAcceleratorAuthErrorV4 {
     Release = 0x4001,
     /// Manifest, selected entry, descriptor, or config content refused.
     Content = 0x4003,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Mirrors `TradingSbfError::ReleaseSuperseded` (decision 0012).
+    ReleaseSuperseded = 0x4007,
 }
 
 impl From<ShadowAcceleratorAuthErrorV4> for ProgramError {
@@ -160,8 +164,8 @@ impl<'request, 'accounts, 'info>
         {
             return Err(ShadowAcceleratorAuthErrorV4::Content.into());
         }
-        let digest =
-            runtime_observations_digest_v3(observations).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+        let digest = runtime_observations_digest_v3(observations)
+            .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
         if digest != self.request.digests.runtime_observations {
             Err(ShadowAcceleratorAuthErrorV4::Content.into())
         } else {
@@ -179,9 +183,10 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
     request_bytes: &'request [u8],
 ) -> Result<Box<AuthenticatedShadowAcceleratorInvocationV4<'request, 'accounts, 'info>>, ProgramError>
 {
-    let request = ShadowRequestV3::decode(request_bytes).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
-    let account_count =
-        usize::try_from(request.shape.account_count).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+    let request = ShadowRequestV3::decode(request_bytes)
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+    let account_count = usize::try_from(request.shape.account_count)
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     let expected_accounts = SHADOW_RUNTIME_ACCOUNTS_START_V3
         .checked_add(account_count)
         .ok_or(ShadowAcceleratorAuthErrorV4::Content)?;
@@ -256,8 +261,8 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
     authenticate_current_deployment(trading_release, trading_program, trading_programdata)
         .map_err(ProgramError::from)?;
 
-    let request_digest =
-        ContentId::new(hash(request_bytes).to_bytes()).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+    let request_digest = ContentId::new(hash(request_bytes).to_bytes())
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         request.release_set,
         request.market.to_bytes(),
@@ -272,7 +277,8 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
         return Err(ShadowAcceleratorAuthErrorV4::Release.into());
     }
 
-    if family_request_digest_v3(request.family_request).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?
+    if family_request_digest_v3(request.family_request)
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?
         != request.digests.family_request
     {
         return Err(ShadowAcceleratorAuthErrorV4::Content.into());

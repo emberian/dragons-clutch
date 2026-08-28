@@ -1444,3 +1444,167 @@ copies of the median scan — one for borrowed observations, one for normalized
 provider evidence — which could have drifted at any time and would have made the
 tolerance addable to one path and forgettable on the other. Both are gone;
 `ScheduledMedianScheduleV1` and `exact_median_by` are the single owners.
+
+## 12. The on-chain closure, costed (KAPPA-ENFORCE lane, 2026-08-27)
+
+§11.2 closed with "the predicate is a kernel function and **no on-chain route
+calls it yet**", and named the shape: carry a principal cap on the Market root at
+`Found`, check it at `FoundingV5` *and at every later complete-set split*. This
+section is what that costs, measured against the tree rather than estimated, plus
+the half of it that landed.
+
+### 12.1 What landed: the carried cap is a proved substitution, not a shortcut
+
+`admit_founding_principal` needs the whole Source graph — κ, the floor, and the
+three identities the floor is bound to. A split route has none of it. The reason
+that matters is sharper than "inconvenient": **re-deriving the predicate at split
+would let the caller choose its own bound.** `ManipulationFloorV1::validate_binding`
+compares `source_spec_id`, `adapter_config_id` and `collateral_unit_id`, and
+nothing anywhere pins *which* floor record carries those bindings — two floors
+that agree on all three and disagree on `floor_atoms` both validate. So the bound
+has to be frozen where the graph is authenticated, and carried.
+
+`MarketPrincipalCapV1` is that carried value, with `derive_market_principal_cap`
+computing it and `admit_principal_growth(cap, outstanding, added)` the single
+accessor both the founding site and every split site call. Its licence is
+`carried_cap_decides_exactly_what_the_graph_decides` in
+`SourcePrincipalCapacityV1.lean`: for a stated κ, comparing against the carried
+cap decides **exactly** what re-running §6.5 would have decided. The floored
+division loses nothing, because over ℕ `p ≤ ⌊n·f / d⌋` and `p · d ≤ n · f` are
+the same proposition (`Nat.le_div_iff_mul_le`), and the `u128` overflow refusal
+stays exact on the other side of the equivalence. `PRINCIPAL_CARRIED_CAPS_V1` is
+emitted from the same Lean model as the admission corpus, so the kernel's
+stored-cap form is graded against `cap` rather than against a second reading of
+the same arithmetic. The demo graduation Market's carried cap is
+**4,654,518,500**, and 4,654,518,501 refuses — the same boundary pair as §11.2,
+now decided from one number instead of four records.
+
+**Three wire readings, and zero is not one of the good ones.** The cap is one
+`u128` little-endian field. Zero reads `Absent` and refuses every
+principal-growing operation — the fail-closed reading a root that was never given
+a cap must have. A *stated* bound of zero (κ = 0, or a zero floor, both meaning
+"found nothing against this Source") is the same bytes and the same decision, so
+collapsing them costs nothing. An explicitly unbounded founding is sixteen
+deliberate `0xFF` bytes that no zeroed record produces by accident — and it is
+not an escape hatch in the decision either, because it is an ordinary cap whose
+value exceeds every principal the wire can express
+(`saturated_cap_admits_every_representable_principal`).
+
+### 12.2 The reserved-space census, and why the ruled shape needs a migration
+
+§11.1 and §11.3 both landed by claiming a record's existing reserved tail without
+moving a width. That move is **not available** for the Market-root cap. Every
+candidate, checked byte by byte:
+
+| Record | Width | Reserved | Verdict |
+|---|---:|---|---|
+| `CoreState` (`DCLTCOR2`) | 352 | **none** | fully packed; `terminal_receipt` ends at 352 exactly |
+| LBV2 aggregate (`DCLLBM02`) | 256 + 8·N | 2 B at 10 | the right account, two bytes short of any cap |
+| LBV2 Position (`DCLLBP02`) | 128 + 8·N | 8 B at 120 | right width, wrong scope — the cap is a Market fact |
+| `SourceCapacityProfileV1` | 112 | 16 B at 96 | 16 short of the 32 a floor `ContentId` would need |
+| `GenericFoundingRequestV1` | 400 | 4 B at 12, 6 B at 394 | a wire, not a root: does not persist to split |
+| `ClaimsFoundingRequestV5` | 832 | 4 B at 668, **16 B at 816** | a wire — but see §12.4 |
+| `FoundingIntentV5` / `SeriesFoundingPermitV1` | 544 / 608 | header only | tails full; both Lean-emitted |
+
+`CoreState` is the expensive one and the one §11.2 named. Its schema is
+`native_decide`-proved packed in `MarketCoreAbi.lean` (`state_schema_width :
+stateBytes = 352`), its decoder issues **zero** `require_zero` calls because
+there is nothing to zero-check, and `STATE_BYTES` is compared exactly at **152
+sites** tree-wide. Widening it is a Lean edit plus a regeneration plus 152
+consumers — a wire-breaking batch, which belongs to RECORDS-MIGRATE and was not
+taken solo.
+
+### 12.3 Core cannot compute the cap where it writes the root
+
+Even with space, `Found` could not fill it. `found.rs` decodes `SourceMaterialV2`
+out of `frame.resolution_raw`, content-addresses it, checks it names the Market's
+Product record, and **drops the value**. Everything below the root is an id, not
+an account: reaching κ is two hops (`primary_source_spec` → `SourceSpecV1` →
+`capacity_profile_id` → the profile), and the floor is a third record. `FoundAccounts`
+is exactly 31 accounts and carries none of them, so Core-side derivation costs
+**+3 `(raw, staging)` pairs → 37**, and `DCLTGMF1`'s outer goes 137 → 143
+references on a transaction already at **87.9% of 1,400,000 CU**.
+
+### 12.4 The ruling, and the measurement that vindicates it
+
+Ruled 2026-08-27 (`9c9a9e9b`, on the §12.2/§12.3 census), as two RECORDS-MIGRATE
+rows riding one wire break:
+
+- **`CoreState` gains the principal cap.** It has zero reserved bytes today, so
+  the cap is simply part of the break rather than a reason to avoid one.
+- **`SourceCapacityProfileV1` gains `floor_content_id`** — 32 bytes against the
+  16 free at offset 96, so the profile widens in the same batch. This closes
+  §12.1's hole at its source: with the Source's own profile naming *which* floor
+  record it was derived against, a floor is no longer selectable by whoever
+  presents it.
+- The Found-frame `+6` accounts of §12.3 rides the same migration.
+
+**This lane recommended the LBV2 aggregate instead, and was wrong on the
+load-bearing point.** The argument was that a cap on `CoreState` would not be
+visible where principal actually grows. It is: **both live split routes already
+carry the Core Market account in their fixed frames.** `signed_delta_v3`
+authenticates it by role (`ClaimsFrameRoleV1::CoreMarket`), and `affine_batch_v2`
+already borrows its data and checks owner, key against
+`market.logical_market`, and `data_len() == STATE_BYTES`. So the cap arrives at
+both split sites with **no new account, no new authentication, and no meaningful
+CU** — it is bytes of a buffer those routes have already opened and already
+proved is the right Market. Storing it anywhere else would have been strictly
+worse, and the recommendation only looked cheaper because this lane had costed
+the *founding* frame and not the *split* frames.
+
+The `SplitClaims` core-effect arm is not one of those routes and should not be
+budgeted for: nothing in Core or Trading constructs a `CoreEffectActionV1::SplitClaims`
+envelope, and `split_complete_set` has no SBF caller at all. The live growth
+sites are `signed_delta_v3`'s and `affine_batch_v2`'s `Credit` arms.
+
+### 12.5 The one thing the storage decision does not settle: units
+
+**Store the cap in complete-set units, not collateral atoms.** This survives the
+ruling unchanged and the batch has to decide it either way.
+
+A cap in atoms is unusable at the two sites that need it. `total_principal =
+sets · basis_scale`, and `basis_scale` is **not** in the LBV2 aggregate header,
+**not** in the split packets, and reachable only from the Core-owned permit —
+which neither split route reads. A split route holding an atoms cap would have
+to be given the scale from somewhere, which is a second plumbing problem on top
+of the migration.
+
+In sets it is free. `FoundingV5` writes `supplies = vec![quantity; claim_count]`
+and locks `quantity · basis_scale`, so the supply vector *is* the complete-set
+count, and the two split routes are already writing exactly that vector. Divide
+once at founding — `cap_sets = cap_atoms / basis_scale`, saturating to the
+unbounded sentinel — and the check is a `u64` compare per coordinate against
+numbers already in a register. The division is safe to do at founding for the
+same reason §12.1's is: floored division of a bound is still exactly the bound.
+
+### 12.6 Compatibility has to be a written choice, and there is room for it
+
+Independent of where the cap lives: today the demo market's profile calls no
+`bounding_principal` and its graph publishes no floor record, so it reads
+`PrincipalCapacityV1::Unstated`. Only `tools/gauntlet/relayed-vertical` founds
+under κ. A fail-closed check therefore refuses the DEVNET founding outright
+unless a founding can be *explicitly* unbounded — and per §12.1 that must be a
+value someone wrote, never a zero someone left.
+
+`ClaimsFoundingRequestV5` already has **16 unused reserved tail bytes at
+816..832**, so `declared_principal_cap_sets: u64` plus 8 reserved needs no width
+change on that wire and no new account. The founder writes `u64::MAX` to found
+unbounded; the founding route refuses any declared value that disagrees with
+what it derives from the Source graph; zero is never admitted. Nothing that was
+merely left zeroed can found.
+
+When the demo is to be genuinely bounded, `market.rs`'s
+`SourceCapacityProfileV1::new` gains
+`.bounding_principal(CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1)?` and the graph gains a
+`ManipulationFloorV1` beside it — both calls are already executed by
+`tools/gauntlet/relayed-vertical/src/input.rs`, which is the copy source.
+
+### 12.7 What is still owed
+
+One RECORDS-MIGRATE batch: the `CoreState` cap field, the
+`SourceCapacityProfileV1` `floor_content_id` widening, the Found-frame growth,
+the two split checks, and the request-tail declaration — with `admit_principal_growth`
+as the single accessor at every site so the founding half and the split half
+cannot drift. Until it lands, κ is enforced host-side by the campaign that founds
+the market, and `docs/evidence/DEVNET_SMOKE_0.md` §6 item 8 stands as written.

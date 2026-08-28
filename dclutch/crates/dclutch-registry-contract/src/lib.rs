@@ -80,6 +80,17 @@ pub enum Error {
     DeploymentIdentityMismatch,
     /// The observed ProgramData deployment slot was stale or substituted.
     DeploymentSlotMismatch,
+    /// A slot-pinned upgradeable release was superseded by a later `Upgrade`.
+    ///
+    /// This is the operator-actionable half of a slot mismatch. The release
+    /// bound an exact upgrade authority and an exact deployment slot; the
+    /// observed ProgramData carries a strictly later slot, which under Loader
+    /// V3 can only be written by an `Upgrade` (or a redeploy after a `Close`,
+    /// which the Loader also refuses within the recorded slot). The cached
+    /// authentication is therefore not stale by accident — the substrate moved
+    /// forward under it, and the remedy is a new release generation: publish,
+    /// activate, and found on the new observation.
+    ReleaseSupersededByUpgrade,
     /// The complete observed ELF digest differed from the release.
     ElfDigestMismatch,
     /// Current upgrade authority differed from the immutable release policy.

@@ -26,6 +26,7 @@ import {
 } from '@/lib/walletHandoff';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
+import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const FIXED_ROLES = Object.freeze([
@@ -182,7 +183,7 @@ function signedIntent(
 }
 
 export default function DirectTradeWorkspace() {
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [routeText, setRouteText] = useState(manifestScaffold);
   const [infrastructureText, setInfrastructureText] = useState('');
   const [routeState, setRouteState] = useState<RouteState>({ kind: 'idle', message: 'No chain state has been read.' });

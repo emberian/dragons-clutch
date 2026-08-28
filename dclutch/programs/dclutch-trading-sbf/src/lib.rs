@@ -157,6 +157,14 @@ pub enum TradingSbfError {
     Commit = 0x4005,
     /// Instructions-sysvar or native-signature evidence was not exact.
     NativeSignature = 0x4006,
+    /// The release's pinned deployment slot moved: the substrate was upgraded.
+    ///
+    /// Decision 0012. Not a corrupted account and not an attack: the exact
+    /// upgrade authority the release names shipped new bytes, so the cached
+    /// authentication no longer describes what is deployed. Every open market
+    /// on the superseded release generation refuses until a re-release
+    /// re-authenticates the new deployment and re-pins its slot.
+    ReleaseSuperseded = 0x4007,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -167,7 +175,7 @@ const _: () = assert!(
     "TradingSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (TradingSbfError::NativeSignature as u32)
+    (TradingSbfError::ReleaseSuperseded as u32)
         < dclutch_refusal_registry::TRADING_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "TradingSbfError must not run past its registered refusal band"
 );
