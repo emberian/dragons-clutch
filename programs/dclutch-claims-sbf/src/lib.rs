@@ -49,6 +49,7 @@ pub mod rational_representation_v2;
 mod rational_terminal_v3;
 pub mod signed_delta_v3;
 pub mod sparse_native_transfer_v1;
+mod terminal_certificate_v3;
 mod terminal_settlement_v3;
 
 #[cfg(not(feature = "no-entrypoint"))]

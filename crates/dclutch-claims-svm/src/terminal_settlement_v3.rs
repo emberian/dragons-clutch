@@ -19,7 +19,7 @@ pub const TERMINAL_SETTLEMENT_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLTSA03";
 /// Implemented wire version.
 pub const TERMINAL_SETTLEMENT_VERSION_V3: u16 = 3;
 /// Exact account count of the family-neutral Claims terminal child.
-pub const TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3: usize = 35;
+pub const TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3: usize = 36;
 /// Exact canonical SignedDeltaV3 prefix for one Position.
 pub const TERMINAL_SETTLEMENT_SIGNED_DELTA_ACCOUNTS_V3: usize = 21;
 /// Finalized exposure raw-record account index.
@@ -30,26 +30,28 @@ pub const TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3: usize = 22;
 pub const TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3: usize = 23;
 /// Registry-selected Custody program account index.
 pub const TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3: usize = 24;
-/// Optional finalized rational terminal-coordinate raw account index.
-pub const TERMINAL_SETTLEMENT_COORDINATE_ACCOUNT_V3: usize = 25;
-/// Optional terminal-coordinate staging account index.
-pub const TERMINAL_SETTLEMENT_COORDINATE_STAGING_ACCOUNT_V3: usize = 26;
+/// Exact Resolution certificate named by the authenticated Core Market.
+pub const TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3: usize = 25;
+/// Registry-selected Resolution program account index.
+pub const TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3: usize = 26;
+/// Current Resolution ProgramData account index.
+pub const TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3: usize = 27;
 /// Finalized Realm raw-record account index.
-pub const TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3: usize = 27;
+pub const TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3: usize = 28;
 /// Vacant Realm staging account index.
-pub const TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3: usize = 28;
+pub const TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3: usize = 29;
 /// Canonical Custody replay account index.
-pub const TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3: usize = 29;
+pub const TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3: usize = 30;
 /// Realm collateral Mint account index.
-pub const TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3: usize = 30;
+pub const TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3: usize = 31;
 /// Canonical Custody Hoard account index.
-pub const TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3: usize = 31;
+pub const TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3: usize = 32;
 /// External recipient token account index.
-pub const TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3: usize = 32;
+pub const TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3: usize = 33;
 /// Canonical Custody transfer authority account index.
-pub const TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3: usize = 33;
+pub const TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3: usize = 34;
 /// Realm-selected Token program account index.
-pub const TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3: usize = 34;
+pub const TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3: usize = 35;
 /// Domain separating a terminal Custody candidate from all caller candidates.
 pub const TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3: &[u8] =
     b"dclutch/claims-terminal-custody-candidate/v3";
@@ -150,7 +152,10 @@ pub struct TerminalSettlementRequestInputV3 {
     pub exposure_id: [u8; 32],
     /// SHA-256 of exact finalized exposure bytes.
     pub exposure_digest: [u8; 32],
-    /// Exact Core terminal receipt/coordinate digest.
+    /// Exact Resolution certificate account named by Core's terminal receipt.
+    ///
+    /// The field name is retained in the V3 wire for byte compatibility. Its
+    /// value is an account identity, never a content digest.
     pub terminal_record_digest: [u8; 32],
     /// Sole Claims Position owner debited.
     pub owner: [u8; 32],

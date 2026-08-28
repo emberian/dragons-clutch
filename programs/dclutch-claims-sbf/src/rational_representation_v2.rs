@@ -109,16 +109,17 @@ const ASSET_STRUCTURED_TOKEN: usize = 3;
 const TERMINAL_CALLER_AUTHORITY: usize = 0;
 const TERMINAL_CUSTODY_PROGRAM: usize = 1;
 const TERMINAL_CUSTODY_PROGRAMDATA: usize = 2;
-const TERMINAL_COORDINATE: usize = 3;
-const TERMINAL_COORDINATE_STAGING: usize = 4;
-const TERMINAL_REALM: usize = 5;
-const TERMINAL_REALM_STAGING: usize = 6;
-const TERMINAL_CUSTODY_REPLAY: usize = 7;
-const TERMINAL_COLLATERAL_MINT: usize = 8;
-const TERMINAL_HOARD: usize = 9;
-const TERMINAL_RECIPIENT: usize = 10;
-const TERMINAL_CUSTODY_AUTHORITY: usize = 11;
-const TERMINAL_TOKEN_PROGRAM: usize = 12;
+const TERMINAL_CERTIFICATE: usize = 3;
+const TERMINAL_RESOLUTION_PROGRAM: usize = 4;
+const TERMINAL_RESOLUTION_PROGRAMDATA: usize = 5;
+const TERMINAL_REALM: usize = 6;
+const TERMINAL_REALM_STAGING: usize = 7;
+const TERMINAL_CUSTODY_REPLAY: usize = 8;
+const TERMINAL_COLLATERAL_MINT: usize = 9;
+const TERMINAL_HOARD: usize = 10;
+const TERMINAL_RECIPIENT: usize = 11;
+const TERMINAL_CUSTODY_AUTHORITY: usize = 12;
+const TERMINAL_TOKEN_PROGRAM: usize = 13;
 
 #[derive(Clone, Copy)]
 struct BaseAccounts<'accounts, 'info> {
@@ -236,8 +237,9 @@ struct TerminalAccounts<'accounts, 'info> {
     caller_authority: &'accounts AccountInfo<'info>,
     custody_program: &'accounts AccountInfo<'info>,
     custody_programdata: &'accounts AccountInfo<'info>,
-    coordinate: &'accounts AccountInfo<'info>,
-    coordinate_staging: &'accounts AccountInfo<'info>,
+    certificate: &'accounts AccountInfo<'info>,
+    resolution_program: &'accounts AccountInfo<'info>,
+    resolution_programdata: &'accounts AccountInfo<'info>,
     realm: &'accounts AccountInfo<'info>,
     realm_staging: &'accounts AccountInfo<'info>,
     replay: &'accounts AccountInfo<'info>,
@@ -1562,8 +1564,9 @@ fn execute_terminal_claims<'accounts, 'info>(
             position,
             custody_caller_authority: terminal.caller_authority,
             custody_program: terminal.custody_program,
-            coordinate: terminal.coordinate,
-            coordinate_staging: terminal.coordinate_staging,
+            terminal_certificate: terminal.certificate,
+            resolution_program: terminal.resolution_program,
+            resolution_programdata: terminal.resolution_programdata,
             realm: terminal.realm,
             realm_staging: terminal.realm_staging,
             custody_replay: terminal.replay,
@@ -1612,8 +1615,9 @@ fn terminal_accounts<'accounts, 'info>(
         caller_authority: account(account_infos, offset + TERMINAL_CALLER_AUTHORITY)?,
         custody_program: account(account_infos, offset + TERMINAL_CUSTODY_PROGRAM)?,
         custody_programdata: account(account_infos, offset + TERMINAL_CUSTODY_PROGRAMDATA)?,
-        coordinate: account(account_infos, offset + TERMINAL_COORDINATE)?,
-        coordinate_staging: account(account_infos, offset + TERMINAL_COORDINATE_STAGING)?,
+        certificate: account(account_infos, offset + TERMINAL_CERTIFICATE)?,
+        resolution_program: account(account_infos, offset + TERMINAL_RESOLUTION_PROGRAM)?,
+        resolution_programdata: account(account_infos, offset + TERMINAL_RESOLUTION_PROGRAMDATA)?,
         realm: account(account_infos, offset + TERMINAL_REALM)?,
         realm_staging: account(account_infos, offset + TERMINAL_REALM_STAGING)?,
         replay: account(account_infos, offset + TERMINAL_CUSTODY_REPLAY)?,
@@ -1637,12 +1641,15 @@ fn authenticate_terminal_privileges(
         || terminal.custody_programdata.executable
         || terminal.custody_programdata.is_signer
         || terminal.custody_programdata.is_writable
-        || terminal.coordinate.executable
-        || terminal.coordinate.is_signer
-        || terminal.coordinate.is_writable
-        || terminal.coordinate_staging.executable
-        || terminal.coordinate_staging.is_signer
-        || terminal.coordinate_staging.is_writable
+        || terminal.certificate.executable
+        || terminal.certificate.is_signer
+        || terminal.certificate.is_writable
+        || !terminal.resolution_program.executable
+        || terminal.resolution_program.is_signer
+        || terminal.resolution_program.is_writable
+        || terminal.resolution_programdata.executable
+        || terminal.resolution_programdata.is_signer
+        || terminal.resolution_programdata.is_writable
         || terminal.realm.executable
         || terminal.realm.is_signer
         || terminal.realm.is_writable

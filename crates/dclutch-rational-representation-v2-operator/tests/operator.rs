@@ -68,6 +68,7 @@ use dclutch_representation_composition_v3_kernel::{
     CompositionExposureTermV3, composition_exposure_bytes_v3,
     encode_composition_exposure_v3_atomic,
 };
+use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 use solana_program::{
     hash::{hash, hashv},
@@ -86,6 +87,7 @@ const CUSTODY: Pubkey = Pubkey::new_from_array([0xe2; 32]);
 const REGISTRY: Pubkey = Pubkey::new_from_array([0xe3; 32]);
 const CORE: Pubkey = Pubkey::new_from_array([0xe4; 32]);
 const TRADING: Pubkey = Pubkey::new_from_array([0xe5; 32]);
+const RESOLUTION: Pubkey = Pubkey::new_from_array([0xe6; 32]);
 const TOKEN: Pubkey = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 const ACTOR: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const GENERATION: u64 = 29;
@@ -170,11 +172,12 @@ fn activation_cache() -> ([u8; 32], Vec<u8>) {
     let claims = release(CLAIMS, 0x42);
     let custody = release(CUSTODY, 0x43);
     let trading = release(TRADING, 0x44);
+    let resolution = release(RESOLUTION, 0x45);
     let release_set = ExecutionReleaseSetV1::new(
         ExecutionRoleBindingV1::new(core.program(), artifact_id(core)),
         ExecutionRoleBindingV1::new(claims.program(), artifact_id(claims)),
         ExecutionRoleBindingV1::new(trading.program(), artifact_id(trading)),
-        ExecutionRoleBindingV1::new(claims.program(), artifact_id(claims)),
+        ExecutionRoleBindingV1::new(resolution.program(), artifact_id(resolution)),
         ExecutionRoleBindingV1::new(custody.program(), artifact_id(custody)),
     )
     .expect("release set");
@@ -186,7 +189,7 @@ fn activation_cache() -> ([u8; 32], Vec<u8>) {
         (ExecutionRoleV1::Core, core),
         (ExecutionRoleV1::Claims, claims),
         (ExecutionRoleV1::Trading, trading),
-        (ExecutionRoleV1::Resolution, claims),
+        (ExecutionRoleV1::Resolution, resolution),
         (ExecutionRoleV1::Custody, custody),
     ] {
         activate_execution_role_into_v1(
@@ -618,7 +621,8 @@ impl OwnedAsset {
 
 #[derive(Clone)]
 struct OwnedTerminal {
-    terminal_coordinate: OwnedRecord,
+    terminal_certificate_key: Pubkey,
+    terminal_certificate: Vec<u8>,
     realm: OwnedRecord,
     collateral_mint_key: Pubkey,
     collateral_mint: Vec<u8>,
@@ -1021,13 +1025,33 @@ impl Fixture {
         };
         let replay_bytes = replay.to_bytes().expect("Custody replay").to_vec();
         assert_eq!(replay_bytes.len(), CUSTODY_REPLAY_BYTES_V1);
+        let terminal_certificate_key = Pubkey::new_from_array([0x66; 32]);
+        let core = CoreState::decode(&self.core).expect("terminal Core");
+        let terminal_certificate = ResolutionCertificateV2 {
+            kind: ResolutionCertificateKindV2::ResolutionFailure,
+            market: self.market.to_bytes(),
+            route: [0; 32],
+            source_material: core.identity.resolution_policy.to_bytes(),
+            product_record_digest: core.identity.product_record.to_bytes(),
+            provider_evidence: [0; 32],
+            funding_allocation: [0x67; 32],
+            receipt_account: terminal_certificate_key.to_bytes(),
+            generation: GENERATION,
+            attempt_index: 0,
+            schedule_index: 0,
+            selector: WINNER,
+            work_paid: 1,
+            funding_remaining: 0,
+            result_numerator: 0,
+            result_denominator: 0,
+            observed_at: 0,
+        }
+        .to_bytes()
+        .expect("terminal certificate")
+        .to_vec();
         OwnedTerminal {
-            terminal_coordinate: OwnedRecord {
-                schema: [0; 32],
-                raw: CORE,
-                staging: CORE,
-                bytes: Vec::new(),
-            },
+            terminal_certificate_key,
+            terminal_certificate,
             realm,
             collateral_mint_key,
             collateral_mint: mint_data(COption::None, 6, 6),
@@ -1047,7 +1071,15 @@ impl Fixture {
             outcome: WINNER,
             quantity: 1,
             realm: terminal.realm.observe(&self.rent),
-            terminal_coordinate: terminal.terminal_coordinate.observe(&self.rent),
+            terminal_certificate: ObservedAccountV2 {
+                key: terminal.terminal_certificate_key,
+                owner: RESOLUTION,
+                lamports: self
+                    .rent
+                    .minimum_balance(terminal.terminal_certificate.len()),
+                executable: false,
+                data: &terminal.terminal_certificate,
+            },
             custody_replay: observed(
                 terminal.custody_replay_key,
                 CUSTODY,
@@ -1129,7 +1161,7 @@ fn all_five_requests_roundtrip_with_exact_sparse_or_full_frames() {
         (&reconstitute, RepresentationActionV2::Reconstitute, 1, 36),
         (&issue, RepresentationActionV2::IssueStructured, 2, 40),
         (&unwrap, RepresentationActionV2::UnwrapStructured, 2, 40),
-        (&redeem, RepresentationActionV2::RedeemTerminal, 1, 49),
+        (&redeem, RepresentationActionV2::RedeemTerminal, 1, 50),
     ] {
         let request = RepresentationRequestV2::decode(&built.instruction.data)
             .expect("operator request roundtrip");
@@ -1396,16 +1428,17 @@ fn account_order_signers_writability_and_sentinels_are_exact() {
         (36, derived.custody_caller_authority, false),
         (37, CUSTODY, false),
         (38, programdata(CUSTODY), false),
-        (39, terminal.terminal_coordinate.raw, false),
-        (40, terminal.terminal_coordinate.staging, false),
-        (41, terminal.realm.raw, false),
-        (42, terminal.realm.staging, false),
-        (43, terminal.custody_replay_key, true),
-        (44, terminal.collateral_mint_key, false),
-        (45, terminal.hoard_key, true),
-        (46, terminal.recipient_key, true),
-        (47, terminal.custody_authority, false),
-        (48, TOKEN, false),
+        (39, terminal.terminal_certificate_key, false),
+        (40, RESOLUTION, false),
+        (41, programdata(RESOLUTION), false),
+        (42, terminal.realm.raw, false),
+        (43, terminal.realm.staging, false),
+        (44, terminal.custody_replay_key, true),
+        (45, terminal.collateral_mint_key, false),
+        (46, terminal.hoard_key, true),
+        (47, terminal.recipient_key, true),
+        (48, terminal.custody_authority, false),
+        (49, TOKEN, false),
     ] {
         assert_meta(
             terminal_metas.get(offset).expect("terminal meta"),

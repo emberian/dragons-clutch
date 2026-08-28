@@ -7,7 +7,7 @@
 //! existing family-neutral [`SignedDeltaPlanV3`] packet.
 //!
 //! SHA-256, Registry raw/staging authentication, Product graph authentication,
-//! finalized terminal-coordinate authentication, account ownership, PDA
+//! Resolution-certificate authentication, account ownership, PDA
 //! derivation, and custody execution remain SVM-adapter boundaries. In
 //! particular, `product_basis_bytes` must be the exact raw slice returned by
 //! the authenticated ProductRuntimeV3 reader that produced `representation`.
@@ -29,16 +29,6 @@ use crate::{
     },
 };
 
-/// Exact rational terminal-coordinate record width shared by ProductV3
-/// adapters and chain-derived operators.
-pub const TERMINAL_COORDINATE_BYTES_V2: usize = 32;
-/// Canonical rational terminal-coordinate magic.
-pub const TERMINAL_COORDINATE_MAGIC_V2: [u8; 8] = *b"DCLTRC02";
-/// Canonical Core-owned rational terminal-coordinate Registry schema.
-pub const TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0xa8, 0x66, 0x06, 0x2a, 0xe7, 0x6d, 0x3d, 0xc3, 0xa7, 0xc7, 0xce, 0xe5, 0x34, 0x0a, 0xc9, 0xe4,
-    0x1f, 0x20, 0x22, 0x69, 0xcb, 0x23, 0xe9, 0xb7, 0x04, 0x61, 0xb0, 0x16, 0xf1, 0x8d, 0x5f, 0x61,
-];
 /// Domain separating the terminal Custody candidate from every other digest.
 pub const TERMINAL_CANDIDATE_DOMAIN_V3: &[u8] = b"dclutch/rational-terminal-candidate/v3";
 

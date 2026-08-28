@@ -36,8 +36,8 @@ pub const ABSENT_REVISION: u64 = u64::MAX;
 pub const RATIONAL_BASE_ACCOUNT_COUNT_V2: usize = 32;
 /// Accounts in one active request asset row.
 pub const RATIONAL_ASSET_ACCOUNT_COUNT_V2: usize = 4;
-/// Positive terminal Claims-coordinate plus Custody account suffix width.
-pub const RATIONAL_TERMINAL_ACCOUNT_COUNT_V2: usize = 13;
+/// Positive terminal Resolution-certificate plus Custody account suffix width.
+pub const RATIONAL_TERMINAL_ACCOUNT_COUNT_V2: usize = 14;
 
 /// Canonical Claims adapter frame geometry for one representation request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

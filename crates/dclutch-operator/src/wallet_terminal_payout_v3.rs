@@ -89,6 +89,10 @@ pub struct WalletTerminalPayoutRouteV3 {
     pub core_program: Pubkey,
     /// Current Core ProgramData.
     pub core_programdata: Pubkey,
+    /// Selected Resolution program.
+    pub resolution_program: Pubkey,
+    /// Current Resolution ProgramData.
+    pub resolution_programdata: Pubkey,
     /// Canonical wallet-owned Claims Position.
     pub position: Pubkey,
     /// Finalized Product-to-Claims exposure record.
@@ -97,10 +101,8 @@ pub struct WalletTerminalPayoutRouteV3 {
     pub exposure_staging: Pubkey,
     /// Selected Custody program.
     pub custody_program: Pubkey,
-    /// Rational terminal coordinate, or Rent placeholder for categorical/failure.
-    pub terminal_coordinate_raw: Pubkey,
-    /// Rational terminal-coordinate staging, or Rent placeholder.
-    pub terminal_coordinate_staging: Pubkey,
+    /// Exact Resolution certificate named by the Core terminal receipt.
+    pub terminal_certificate: Pubkey,
     /// Finalized Realm record.
     pub realm_raw: Pubkey,
     /// Vacant Realm staging cursor.
@@ -174,7 +176,7 @@ pub struct WalletTerminalPayoutInputV3<'a> {
 /// Exact unsigned payout instruction plus independently derived commitments.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WalletTerminalPayoutReportV3 {
-    /// Exact 35-account Claims instruction.
+    /// Exact 36-account Claims instruction.
     pub instruction: Instruction,
     /// Finalized observation selecting its public prestate.
     pub observation: Observation,
@@ -670,6 +672,8 @@ fn validate_claims_route(
         route.claims_programdata,
         route.core_program,
         route.core_programdata,
+        route.resolution_program,
+        route.resolution_programdata,
         route.position,
         route.exposure_raw,
         route.exposure_staging,
@@ -706,9 +710,12 @@ fn validate_claims_route(
         || route.claims_programdata == Pubkey::default()
         || route.core_program == Pubkey::default()
         || route.core_programdata == Pubkey::default()
+        || route.resolution_program == Pubkey::default()
+        || route.resolution_programdata == Pubkey::default()
         || route.activation_cache == Pubkey::default()
         || input.product_record_digest == [0; 32]
         || input.terminal_record_digest == [0; 32]
+        || route.terminal_certificate.to_bytes() != input.terminal_record_digest
     {
         return Err(WalletTerminalPayoutErrorV3::Route);
     }
@@ -774,13 +781,7 @@ fn validate_custody_route(
         || route.custody_program == Pubkey::default()
         || route.token_program == Pubkey::default()
         || route.recipient == Pubkey::default()
-        || route.terminal_coordinate_raw == Pubkey::default()
-        || route.terminal_coordinate_staging == Pubkey::default()
-        || (matches!(
-            input.terminal,
-            TerminalScenarioV3::Categorical(_) | TerminalScenarioV3::Failure
-        ) && (route.terminal_coordinate_raw != sysvar::rent::ID
-            || route.terminal_coordinate_staging != sysvar::rent::ID))
+        || route.terminal_certificate == Pubkey::default()
     {
         return Err(WalletTerminalPayoutErrorV3::Custody);
     }
@@ -896,8 +897,9 @@ fn payout_accounts(
         AccountMeta::new_readonly(route.exposure_staging, false),
         AccountMeta::new_readonly(custody_caller, false),
         AccountMeta::new_readonly(route.custody_program, false),
-        AccountMeta::new_readonly(route.terminal_coordinate_raw, false),
-        AccountMeta::new_readonly(route.terminal_coordinate_staging, false),
+        AccountMeta::new_readonly(route.terminal_certificate, false),
+        AccountMeta::new_readonly(route.resolution_program, false),
+        AccountMeta::new_readonly(route.resolution_programdata, false),
         AccountMeta::new_readonly(route.realm_raw, false),
         AccountMeta::new_readonly(route.realm_staging, false),
         AccountMeta::new(route.custody_replay, false),
@@ -1121,12 +1123,13 @@ mod tests {
             claims_programdata: key(59),
             core_program: key(60),
             core_programdata: key(61),
+            resolution_program: key(67),
+            resolution_programdata: key(68),
             position,
             exposure_raw: key(62),
             exposure_staging: key(63),
             custody_program,
-            terminal_coordinate_raw: sysvar::rent::ID,
-            terminal_coordinate_staging: sysvar::rent::ID,
+            terminal_certificate: key(29),
             realm_raw: key(64),
             realm_staging: key(65),
             custody_replay,

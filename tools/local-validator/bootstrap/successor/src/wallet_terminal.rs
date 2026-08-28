@@ -518,12 +518,13 @@ struct ManifestRouteV3 {
     claims_program_data: String,
     core_program: String,
     core_program_data: String,
+    resolution_program: String,
+    resolution_program_data: String,
     position: String,
     exposure_raw: String,
     exposure_staging: String,
     custody_program: String,
-    terminal_coordinate_raw: String,
-    terminal_coordinate_staging: String,
+    terminal_certificate: String,
     realm_raw: String,
     realm_staging: String,
     custody_replay: String,
@@ -862,13 +863,6 @@ pub(crate) fn build_report(
         basis.payout_scale(),
     )
     .map_err(|error| Error::new(format!("terminal admission: {error:?}")))?;
-    if matches!(terminal, TerminalScenarioV3::Rational { .. }) {
-        return Err(Error::new(
-            "rational-success payout is certificate-authenticated but the current Claims terminal ABI still requires a nonexistent Core coordinate record; an upgraded Claims caller is required before this payout can be emitted",
-        ));
-    }
-    let (terminal_coordinate_raw, terminal_coordinate_staging) =
-        (sysvar::rent::ID, sysvar::rent::ID);
     let route = WalletTerminalPayoutRouteV3 {
         aggregate: selected.aggregate,
         linked_basis_raw: selected.product_basis.raw,
@@ -886,12 +880,13 @@ pub(crate) fn build_report(
         claims_programdata: selected.claims_programdata,
         core_program: selected.core,
         core_programdata: selected.core_programdata,
+        resolution_program: selected.resolution,
+        resolution_programdata: selected.resolution_programdata,
         position: selected.position,
         exposure_raw: selected.composition_exposure.raw,
         exposure_staging: selected.composition_exposure.staging,
         custody_program: selected.custody,
-        terminal_coordinate_raw,
-        terminal_coordinate_staging,
+        terminal_certificate: selected.terminal_certificate,
         realm_raw: selected.realm.raw,
         realm_staging: selected.realm.staging,
         custody_replay: selected.custody_replay,
@@ -1203,12 +1198,13 @@ fn manifest(
             claims_program_data: route.claims_programdata.to_string(),
             core_program: route.core_program.to_string(),
             core_program_data: route.core_programdata.to_string(),
+            resolution_program: route.resolution_program.to_string(),
+            resolution_program_data: route.resolution_programdata.to_string(),
             position: route.position.to_string(),
             exposure_raw: route.exposure_raw.to_string(),
             exposure_staging: route.exposure_staging.to_string(),
             custody_program: route.custody_program.to_string(),
-            terminal_coordinate_raw: route.terminal_coordinate_raw.to_string(),
-            terminal_coordinate_staging: route.terminal_coordinate_staging.to_string(),
+            terminal_certificate: route.terminal_certificate.to_string(),
             realm_raw: route.realm_raw.to_string(),
             realm_staging: route.realm_staging.to_string(),
             custody_replay: route.custody_replay.to_string(),
@@ -1432,17 +1428,6 @@ pub(crate) mod tests {
                 .addresses()
                 .contains(&selected.terminal_certificate)
         );
-        let nonexistent_coordinate = record_pair(
-            selected.core,
-            dclutch_claims_svm::product_basis_terminal_v3::TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-            selected.terminal_certificate.to_bytes(),
-        );
-        assert!(!selected.addresses().contains(&nonexistent_coordinate.raw));
-        assert!(
-            !selected
-                .addresses()
-                .contains(&nonexistent_coordinate.staging)
-        );
     }
 
     #[test]
@@ -1573,12 +1558,13 @@ pub(crate) mod tests {
             claims_programdata: Pubkey::new_from_array([14; 32]),
             core_program: Pubkey::new_from_array([15; 32]),
             core_programdata: Pubkey::new_from_array([16; 32]),
+            resolution_program: Pubkey::new_from_array([29; 32]),
+            resolution_programdata: Pubkey::new_from_array([30; 32]),
             position: Pubkey::new_from_array([17; 32]),
             exposure_raw: Pubkey::new_from_array([18; 32]),
             exposure_staging: Pubkey::new_from_array([19; 32]),
             custody_program: Pubkey::new_from_array([20; 32]),
-            terminal_coordinate_raw: sysvar::rent::ID,
-            terminal_coordinate_staging: sysvar::rent::ID,
+            terminal_certificate: Pubkey::new_from_array([37; 32]),
             realm_raw: Pubkey::new_from_array([21; 32]),
             realm_staging: Pubkey::new_from_array([22; 32]),
             custody_replay: Pubkey::new_from_array([23; 32]),

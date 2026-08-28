@@ -38,9 +38,9 @@
 //! encumbrance — there is none to bypass.
 
 // Every private phase is reachable only after `process` proves the one exact
-// 35-account frame. Fixed indexing below therefore cannot observe a short
+// 36-account frame. Fixed indexing below therefore cannot observe a short
 // untrusted slice and keeps the SBF frame materially smaller than a duplicated
-// 35-reference view.
+// 36-reference view.
 #![allow(clippy::indexing_slicing)]
 
 extern crate alloc;
@@ -52,16 +52,14 @@ use dclutch_claims_svm::{
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     product_basis_terminal_v3::{
         ProductClaimsTerminalAdmissionV3, ProductClaimsTerminalInputV3,
-        TERMINAL_COORDINATE_BYTES_V2, TERMINAL_COORDINATE_MAGIC_V2,
-        TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_product_claims_terminal_signed_delta_v3,
+        encode_product_claims_terminal_signed_delta_v3,
     },
     signed_delta_v3::{SignedDeltaV3, plan_bytes},
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 as ACCOUNT_COUNT,
         TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
+        TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3 as CERTIFICATE,
         TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3 as COLLATERAL_MINT,
-        TERMINAL_SETTLEMENT_COORDINATE_ACCOUNT_V3 as COORDINATE,
-        TERMINAL_SETTLEMENT_COORDINATE_STAGING_ACCOUNT_V3 as COORDINATE_STAGING,
         TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3 as CUSTODY_AUTHORITY,
         TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3 as CUSTODY_CALLER,
         TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3 as CUSTODY_PROGRAM,
@@ -72,6 +70,8 @@ use dclutch_claims_svm::{
         TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3 as REALM,
         TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3 as REALM_STAGING,
         TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3 as RECIPIENT,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3 as RESOLUTION_PROGRAM,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3 as RESOLUTION_PROGRAMDATA,
         TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
         TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3 as TOKEN_PROGRAM,
         TerminalSettlementReceiptInputV3, TerminalSettlementReceiptV3, TerminalSettlementRequestV3,
@@ -84,7 +84,6 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
-use dclutch_product_payoff_v2_codec::runtime_v3::BasisKindV3;
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
@@ -115,6 +114,9 @@ use super::{
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
         authenticate_parent_releases, execute_parent_authenticated,
+    },
+    terminal_certificate_v3::{
+        TerminalCertificateFrameV3, authenticate_terminal_certificate_scenario_v3,
     },
 };
 
@@ -214,14 +216,19 @@ fn authenticate_and_prepare(
         COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         input.exposure_digest,
     )?;
-    let scenario = terminal_scenario(
+    let scenario = authenticate_terminal_certificate_scenario_v3(
+        TerminalCertificateFrameV3 {
+            registry: &accounts[13],
+            cache: &accounts[12],
+            resolution_program: &accounts[RESOLUTION_PROGRAM],
+            resolution_programdata: &accounts[RESOLUTION_PROGRAMDATA],
+            certificate: &accounts[CERTIFICATE],
+            rent: &accounts[10],
+        },
+        input.release_set,
+        core,
         runtime.basis_kind,
         runtime.runtime.outcome_count,
-        core,
-        &accounts[18],
-        &accounts[10],
-        &accounts[COORDINATE],
-        &accounts[COORDINATE_STAGING],
     )?;
     let exposure_bytes = accounts[EXPOSURE_RAW]
         .try_borrow_data()
@@ -454,8 +461,7 @@ fn authenticate_extra_privileges(
     for index in [
         EXPOSURE_RAW,
         EXPOSURE_STAGING,
-        COORDINATE,
-        COORDINATE_STAGING,
+        CERTIFICATE,
         REALM,
         REALM_STAGING,
         COLLATERAL_MINT,
@@ -470,6 +476,12 @@ fn authenticate_extra_privileges(
         || accounts[CUSTODY_CALLER].is_writable
         || !accounts[CUSTODY_PROGRAM].executable
         || accounts[CUSTODY_PROGRAM].is_writable
+        || !accounts[RESOLUTION_PROGRAM].executable
+        || accounts[RESOLUTION_PROGRAM].is_signer
+        || accounts[RESOLUTION_PROGRAM].is_writable
+        || accounts[RESOLUTION_PROGRAMDATA].executable
+        || accounts[RESOLUTION_PROGRAMDATA].is_signer
+        || accounts[RESOLUTION_PROGRAMDATA].is_writable
         || !accounts[CUSTODY_REPLAY].is_writable
         || !accounts[HOARD].is_writable
         || !accounts[RECIPIENT].is_writable
@@ -538,67 +550,6 @@ fn authenticate_core(
         return Err(ClaimsSbfError::Identity.into());
     }
     Ok(core)
-}
-
-fn terminal_scenario(
-    kind: BasisKindV3,
-    outcome_count: u32,
-    core: CoreState,
-    core_program: &AccountInfo<'_>,
-    rent: &AccountInfo<'_>,
-    coordinate: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-) -> Result<dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3, ProgramError>
-{
-    use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-    match kind {
-        BasisKindV3::CategoricalQ1 => {
-            placeholders(rent, coordinate, staging)?;
-            Ok(TerminalScenarioV3::Categorical(core.terminal_winner))
-        }
-        BasisKindV3::GradedExactComplement => {
-            let failure = outcome_count
-                .checked_sub(1)
-                .ok_or(ClaimsSbfError::Identity)?;
-            if core.terminal_winner == failure {
-                placeholders(rent, coordinate, staging)?;
-                return Ok(TerminalScenarioV3::Failure);
-            }
-            let digest = core
-                .terminal_receipt
-                .ok_or(ClaimsSbfError::Identity)?
-                .to_bytes();
-            let rent_value = Rent::from_account_info(rent).map_err(|_| ClaimsSbfError::Accounts)?;
-            authenticate_finalized_record(
-                coordinate,
-                staging,
-                core_program.key,
-                &rent_value,
-                TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-                digest,
-            )?;
-            let bytes = coordinate
-                .try_borrow_data()
-                .map_err(|_| ClaimsSbfError::Accounts)?;
-            if bytes.len() != TERMINAL_COORDINATE_BYTES_V2
-                || array::<8>(&bytes, 0)? != TERMINAL_COORDINATE_MAGIC_V2
-                || u16::from_le_bytes(array(&bytes, 8)?) != 2
-                || bytes[10..16].iter().any(|byte| *byte != 0)
-                || bytes[28..32].iter().any(|byte| *byte != 0)
-            {
-                return Err(ClaimsSbfError::Identity.into());
-            }
-            let numerator = i64::from_le_bytes(array(&bytes, 16)?);
-            let denominator = u32::from_le_bytes(array(&bytes, 24)?);
-            if denominator == 0 {
-                return Err(ClaimsSbfError::Identity.into());
-            }
-            Ok(TerminalScenarioV3::Rational {
-                numerator: i128::from(numerator),
-                denominator: u64::from(denominator),
-            })
-        }
-    }
 }
 
 fn authenticate_finalized_record(
@@ -809,8 +760,9 @@ fn shared_frame<'accounts, 'info>(
         position: &accounts[20],
         custody_caller_authority: &accounts[CUSTODY_CALLER],
         custody_program: &accounts[CUSTODY_PROGRAM],
-        coordinate: &accounts[COORDINATE],
-        coordinate_staging: &accounts[COORDINATE_STAGING],
+        terminal_certificate: &accounts[CERTIFICATE],
+        resolution_program: &accounts[RESOLUTION_PROGRAM],
+        resolution_programdata: &accounts[RESOLUTION_PROGRAMDATA],
         realm: &accounts[REALM],
         realm_staging: &accounts[REALM_STAGING],
         custody_replay: &accounts[CUSTODY_REPLAY],
@@ -827,20 +779,4 @@ const fn record<'accounts, 'info>(
     staging: &'accounts AccountInfo<'info>,
 ) -> FinalizedRecordFrameV2<'accounts, 'info> {
     FinalizedRecordFrameV2 { raw, staging }
-}
-fn placeholders(
-    rent: &AccountInfo<'_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-) -> Result<(), ProgramError> {
-    if raw.key != rent.key || staging.key != rent.key {
-        return Err(ClaimsSbfError::Identity.into());
-    }
-    Ok(())
-}
-fn array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], ProgramError> {
-    bytes
-        .get(offset..offset.checked_add(N).ok_or(ClaimsSbfError::Identity)?)
-        .and_then(|value| value.try_into().ok())
-        .ok_or_else(|| ClaimsSbfError::Identity.into())
 }

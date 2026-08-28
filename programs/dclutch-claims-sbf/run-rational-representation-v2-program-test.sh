@@ -32,6 +32,7 @@ for manifest in \
   programs/dclutch-custody-sbf/Cargo.toml \
   programs/dclutch-registry-sbf/Cargo.toml \
   programs/dclutch-core-sbf/Cargo.toml \
+  programs/dclutch-resolution-proof-sbf/Cargo.toml \
   programs/dclutch-claims-sbf/test-programs/rational-v2-caller/Cargo.toml
 do
   "${builder[@]}" --manifest-path "$manifest" --sbf-out-dir "$sbf_out"
