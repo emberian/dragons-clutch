@@ -205,7 +205,7 @@ pub(crate) fn window_choice(now_unix_seconds: i64, success: bool) -> WindowChoic
     }
 }
 
-const MAX_CLUSTER_SKEW_SECONDS: u64 = 120;
+pub(crate) const MAX_CLUSTER_SKEW_SECONDS: u64 = 120;
 
 /// Compile the whole relayed market input from the run-time facts.
 pub(crate) fn relayed_market_input(

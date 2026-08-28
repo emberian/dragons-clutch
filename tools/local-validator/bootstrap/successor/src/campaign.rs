@@ -322,6 +322,289 @@ pub(crate) struct CampaignArgsV1 {
     pub(crate) through: StageV1,
 }
 
+const GRADUATION_MARKET_INPUT_SCHEMA_V1: &str = "dclutch-graduation-market-input-v1";
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraduationMarketWindowV1 {
+    start_unix_seconds: i64,
+    end_unix_seconds: i64,
+    max_age_seconds: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraduationMarketInputV1 {
+    schema: String,
+    market: crate::model::MarketRunInput,
+    account_set_id: String,
+    relayer_attestation: String,
+    relayer_key_set_hex: String,
+    relayer_key_set_digest: String,
+    venue_release_digest: String,
+    relayed_adapter_config_digest: String,
+    source_spec_digest: String,
+    window: GraduationMarketWindowV1,
+    walk_bounty_lamports: u64,
+    admitted_principal_atoms: String,
+    admitted_principal_cap_atoms: String,
+    disclosed_failure_conflation: String,
+}
+
+/// Decode the campaign's existing bare `MarketRunInput` or the exact envelope
+/// emitted by the already-shipped `graduation-market` command.
+///
+/// Presence of `schema` selects the envelope parser. There is deliberately no
+/// untagged/try-one-then-the-other fallback: an envelope with a damaged schema
+/// must not be reinterpreted as a different input family. Both structs deny
+/// unknown fields, and the graduation envelope is authenticated all the way
+/// back into the inner source graph before its market is returned.
+fn load_market_input(bytes: &[u8]) -> Result<crate::model::MarketRunInput> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    let input = if value.get("schema").is_some() {
+        let wrapped: GraduationMarketInputV1 = serde_json::from_value(value)?;
+        authenticate_graduation_market_input_v1(&wrapped)?;
+        wrapped.market
+    } else {
+        serde_json::from_value(value)?
+    };
+    crate::market::validate_market_input(&input)?;
+    Ok(input)
+}
+
+fn canonical_hex_32(value: &str, label: &str) -> Result<[u8; 32]> {
+    let decoded = runtime::decode_hex(value)?;
+    let output: [u8; 32] = decoded.try_into().map_err(|bytes: Vec<u8>| {
+        Error::new(format!(
+            "graduation {label} must be exactly 32 bytes, not {}",
+            bytes.len()
+        ))
+    })?;
+    if hex(&output) != value {
+        return Err(Error::new(format!(
+            "graduation {label} must use canonical lowercase hex"
+        )));
+    }
+    Ok(output)
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    hex(&<sha2::Sha256 as sha2::Digest>::digest(bytes))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
+    <sha2::Sha256 as sha2::Digest>::digest(bytes).into()
+}
+
+fn canonical_u128(value: &str, label: &str) -> Result<u128> {
+    let parsed = value
+        .parse::<u128>()
+        .map_err(|_| Error::new(format!("graduation {label} must be an unsigned decimal")))?;
+    if parsed.to_string() != value {
+        return Err(Error::new(format!(
+            "graduation {label} must use canonical decimal spelling"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> Result<()> {
+    if input.schema != GRADUATION_MARKET_INPUT_SCHEMA_V1 {
+        return Err(Error::new(format!(
+            "unsupported graduation market input schema {:?}",
+            input.schema
+        )));
+    }
+    crate::market::validate_market_input(&input.market)?;
+
+    // Profile-v1 is not an arbitrary market hidden under a trusted-looking
+    // wrapper. These are the fixed graduation Product coordinates compiled by
+    // `relayed_market_input`; venue, relayer, window and Direct closure remain
+    // explicit inputs and are joined below.
+    let account_set_id = canonical_hex_32(&input.account_set_id, "account_set_id")?;
+    let coordinate_domain =
+        crate::market::demo_id("relayed/coordinate-domain/dbc-migration-progress", &[]);
+    let result_unit =
+        crate::market::demo_id("relayed/result-unit/migration-progress-discriminant", &[]);
+    let expected_product =
+        crate::market::demo_id("relayed/product/dbc-graduation", &[&account_set_id]);
+    let expected_claim_basis = crate::market::demo_id("claim-basis/unit-complete-set", &[]);
+    let expected_representation =
+        crate::market::demo_id("representation/categorical-fixed-width", &[]);
+    let expected_mapping =
+        crate::market::demo_id("mapping/scaled-integer-cut", &[&coordinate_domain]);
+    if input.market.generation != 1
+        || input.market.collateral_display_decimals != 6
+        || input.market.initial_collateral_atoms != 1_000_000_000
+        || input.market.product_id != hex(&expected_product)
+        || input.market.coordinate_domain_id != hex(&coordinate_domain)
+        || input.market.result_unit_id != hex(&result_unit)
+        || input.market.claim_basis_id != hex(&expected_claim_basis)
+        || input.market.representation_release_id != hex(&expected_representation)
+        || input.market.mapping_release_id != hex(&expected_mapping)
+        || input.market.cut_denominator != 1
+        || !input.market.cuts.is_empty()
+        || input.market.portfolio_denominator != 1
+        || input.market.coefficients != [1, 0]
+        || !input.market.recovery_policy_hex.is_empty()
+        || input.market.failure_policy_release_id
+            != hex(&dclutch_source_contract::SOURCE_FAILURE_POLICY_RELEASE_ID_V2)
+    {
+        return Err(Error::new(
+            "graduation wrapper substituted the fixed profile-v1 market geometry",
+        ));
+    }
+
+    let source_bytes = runtime::decode_hex(&input.market.source_spec_hex)?;
+    if digest_hex(&source_bytes) != input.source_spec_digest
+        || input.source_spec_digest != input.market.primary_source_spec_id
+    {
+        return Err(Error::new(
+            "graduation source_spec_digest does not name the inner source body",
+        ));
+    }
+    let source = dclutch_source_contract::SourceSpecV1::decode(&source_bytes)
+        .map_err(|error| Error::new(format!("graduation SourceSpecV1: {error:?}")))?;
+    if source.domain_id().to_bytes() != coordinate_domain
+        || source.unit_id().to_bytes() != result_unit
+        || source.access_profile()
+            != dclutch_source_contract::SourceAccessProfile::RelayedObservationRecord
+    {
+        return Err(Error::new(
+            "graduation source body is not the relayed profile-v1 Product source",
+        ));
+    }
+
+    let window_bytes = runtime::decode_hex(&input.market.window_spec_hex)?;
+    let window = dclutch_source_contract::WindowSpecV1::decode(&window_bytes)
+        .map_err(|error| Error::new(format!("graduation WindowSpecV1: {error:?}")))?;
+    if digest_hex(&window_bytes) != input.market.window_spec_id
+        || window.kind() != dclutch_source_contract::WindowKind::Terminal
+        || window.source_spec_id().to_bytes()
+            != canonical_hex_32(&input.source_spec_digest, "source_spec_digest")?
+        || window.start_unix_seconds() != input.window.start_unix_seconds
+        || window.end_unix_seconds() != input.window.end_unix_seconds
+        || window.max_age_seconds() != input.window.max_age_seconds
+        || window.max_future_skew_seconds() != 1
+        || window.cadence_tolerance_seconds() != 0
+    {
+        return Err(Error::new(
+            "graduation wrapper window does not equal its canonical inner terminal window",
+        ));
+    }
+
+    let relayer: Pubkey = input
+        .relayer_attestation
+        .parse()
+        .map_err(|_| Error::new("graduation relayer_attestation is not a public key"))?;
+    if relayer.to_string() != input.relayer_attestation {
+        return Err(Error::new(
+            "graduation relayer_attestation must use canonical base58",
+        ));
+    }
+    let key_set_bytes = runtime::decode_hex(&input.relayer_key_set_hex)?;
+    let key_set = dclutch_relay_contract::release::RelayerKeySetV1::decode(&key_set_bytes)
+        .map_err(|error| Error::new(format!("graduation RelayerKeySetV1: {error:?}")))?;
+    let canonical_key_set = key_set
+        .to_bytes()
+        .map_err(|error| Error::new(format!("graduation RelayerKeySetV1 bytes: {error:?}")))?;
+    if canonical_key_set.as_slice() != key_set_bytes
+        || key_set.key_count() != 1
+        || key_set.seal_threshold() != 1
+        || key_set.keys() != [relayer.to_bytes()]
+        || digest_hex(&key_set_bytes) != input.relayer_key_set_digest
+    {
+        return Err(Error::new(
+            "graduation relayer key set, attestation key, or digest was substituted",
+        ));
+    }
+
+    // The adapter configuration is not duplicated as a second body in the
+    // wrapper. Recompile it from the wrapper's authenticated set and window,
+    // then bind its digest through ProviderReleaseV1. This closes the otherwise
+    // invisible account-set/config substitution seam.
+    let adapter = dclutch_relay_contract::release::RelayedAdapterConfigV1::new(
+        account_set_id,
+        0,
+        0,
+        u64::from(input.window.max_age_seconds),
+        crate::relayed::MAX_CLUSTER_SKEW_SECONDS,
+    )
+    .map_err(|error| Error::new(format!("graduation adapter config: {error:?}")))?;
+    let adapter_bytes = adapter
+        .to_bytes()
+        .map_err(|error| Error::new(format!("graduation adapter config bytes: {error:?}")))?;
+    if digest_hex(&adapter_bytes) != input.relayed_adapter_config_digest {
+        return Err(Error::new(
+            "graduation relayed_adapter_config_digest does not match its set and window",
+        ));
+    }
+
+    let provider_bytes = runtime::decode_hex(&input.market.provider_release_hex)?;
+    let provider = dclutch_source_contract::ProviderReleaseV1::decode(&provider_bytes)
+        .map_err(|error| Error::new(format!("graduation ProviderReleaseV1: {error:?}")))?;
+    if provider.to_bytes().as_slice() != provider_bytes
+        || provider.provider_family_id().to_bytes()
+            != dclutch_relay_contract::RELAYED_FAMILY_RELEASE_ID_V1
+        || provider.adapter_release_id().to_bytes()
+            != dclutch_source_contract::RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
+        || provider.provider_deployment_release_id().to_bytes()
+            != canonical_hex_32(&input.relayer_key_set_digest, "relayer_key_set_digest")?
+        || provider.decoding_rules_id().to_bytes()
+            != canonical_hex_32(
+                &input.relayed_adapter_config_digest,
+                "relayed_adapter_config_digest",
+            )?
+        || provider.transport_profile_id().to_bytes()
+            != dclutch_relay_contract::RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1
+        || source.provider_release_id().to_bytes() != sha256_bytes(&provider_bytes)
+    {
+        return Err(Error::new(
+            "graduation provider release does not bind the relayer and adapter digests",
+        ));
+    }
+
+    let venue_bytes = runtime::decode_hex(&input.market.pyth_adapter_config_hex)?;
+    let venue = dclutch_registry_contract::ArtifactReleaseV1::decode(&venue_bytes)
+        .map_err(|error| Error::new(format!("graduation venue ArtifactReleaseV1: {error:?}")))?;
+    if venue.to_bytes().as_slice() != venue_bytes
+        || venue.loader_program().to_bytes()
+            != dclutch_relay_contract::identity::LOADER_V3_PROGRAM_ID
+        || venue.semantic_release_id().to_bytes()
+            != crate::market::demo_id("relayed/venue-semantic-release/meteora-dbc", &[])
+        || venue.upgrade_policy()
+            != dclutch_registry_contract::ArtifactUpgradePolicyV1::ExactAuthority
+        || venue.upgrade_authority().is_none()
+        || digest_hex(&venue_bytes) != input.venue_release_digest
+        || source.adapter_config_id().to_bytes()
+            != canonical_hex_32(&input.venue_release_digest, "venue_release_digest")?
+    {
+        return Err(Error::new(
+            "graduation venue release digest or inner source binding was substituted",
+        ));
+    }
+
+    let admitted = canonical_u128(&input.admitted_principal_atoms, "admitted_principal_atoms")?;
+    let cap = canonical_u128(
+        &input.admitted_principal_cap_atoms,
+        "admitted_principal_cap_atoms",
+    )?;
+    let expected_admitted = u128::from(input.market.initial_collateral_atoms / 2);
+    let expected_cap = u128::from(dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1)
+        * u128::from(dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1)
+        / u128::from(dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1);
+    if input.walk_bounty_lamports != crate::relayed::WALK_BOUNTY_LAMPORTS
+        || admitted != expected_admitted
+        || cap != expected_cap
+        || input.disclosed_failure_conflation != crate::relayed::DISCLOSED_FAILURE_CONFLATION
+    {
+        return Err(Error::new(
+            "graduation wrapper substituted its disclosed bounty, principal, cap, or failure policy",
+        ));
+    }
+    Ok(())
+}
+
 fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
     let file_name = path
         .file_name()
@@ -887,11 +1170,7 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     // malformed input refuses before a single RPC call, not mid-ladder.
     let market: Option<crate::model::MarketRunInput> = match &args.market_path {
         None => None,
-        Some(path) => {
-            let input: crate::model::MarketRunInput = serde_json::from_slice(&fs::read(path)?)?;
-            crate::market::validate_market_input(&input)?;
-            Some(input)
-        }
+        Some(path) => Some(load_market_input(&fs::read(path)?)?),
     };
 
     // Every detector, always, before anything is written. A stage that is
@@ -1238,6 +1517,121 @@ pub(crate) fn acknowledgment_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_direct_compiler(registry: Pubkey) -> crate::direct_market::DirectMarketCompilerOwnedV1 {
+        crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("deployment widths"),
+        )
+    }
+
+    fn graduation_market_value() -> Value {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let relayer = Pubkey::new_from_array([0x42; 32]);
+        let direct = test_direct_compiler(registry);
+        let venue = crate::relayed::RelayedVenueFactsV1 {
+            program: [0x51; 32],
+            programdata: [0x52; 32],
+            pool: [0x53; 32],
+            elf_digest: [0x54; 32],
+            deployment_slot: 99,
+            upgrade_authority: [0x55; 32],
+        };
+        let window = crate::relayed::WindowChoiceV1 {
+            start_unix_seconds: 1_800_000_000,
+            end_unix_seconds: 1_800_003_600,
+            max_age_seconds: 900,
+        };
+        let facts = crate::relayed::relayed_market_input(
+            registry,
+            relayer.to_bytes(),
+            &window,
+            &venue,
+            direct.compiler(),
+        )
+        .expect("graduation producer");
+        json!({
+            "schema": GRADUATION_MARKET_INPUT_SCHEMA_V1,
+            "market": facts.input,
+            "account_set_id": hex(&facts.account_set_id),
+            "relayer_attestation": relayer.to_string(),
+            "relayer_key_set_hex": hex(&facts.relayer_key_set_bytes),
+            "relayer_key_set_digest": hex(&facts.relayer_key_set_digest),
+            "venue_release_digest": hex(&facts.venue_release_digest),
+            "relayed_adapter_config_digest": hex(&facts.relayed_adapter_config_digest),
+            "source_spec_digest": hex(&facts.source_spec_digest),
+            "window": {
+                "start_unix_seconds": window.start_unix_seconds,
+                "end_unix_seconds": window.end_unix_seconds,
+                "max_age_seconds": window.max_age_seconds,
+            },
+            "walk_bounty_lamports": crate::relayed::WALK_BOUNTY_LAMPORTS,
+            "admitted_principal_atoms": facts.admitted_principal_atoms.to_string(),
+            "admitted_principal_cap_atoms": facts.admitted_principal_cap_atoms.to_string(),
+            "disclosed_failure_conflation": crate::relayed::DISCLOSED_FAILURE_CONFLATION,
+        })
+    }
+
+    #[test]
+    fn market_loader_accepts_bare_and_authenticated_graduation_inputs() {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = test_direct_compiler(registry);
+        let bare = crate::market::demo_market_input(registry, direct.compiler())
+            .expect("bare devnet market");
+        assert_eq!(
+            load_market_input(&serde_json::to_vec(&bare).expect("bare JSON"))
+                .expect("bare input")
+                .product_id,
+            bare.product_id
+        );
+
+        let wrapped = graduation_market_value();
+        let loaded = load_market_input(&serde_json::to_vec(&wrapped).expect("wrapper JSON"))
+            .expect("authenticated graduation input");
+        assert_eq!(loaded.product_id, wrapped["market"]["product_id"]);
+    }
+
+    #[test]
+    fn graduation_loader_refuses_unknown_schema_and_unknown_fields() {
+        let exact = graduation_market_value();
+
+        let mut wrong_schema = exact.clone();
+        wrong_schema["schema"] = json!("dclutch-graduation-market-input-v2");
+        let refusal = load_market_input(&serde_json::to_vec(&wrong_schema).expect("JSON"))
+            .err()
+            .expect("unknown schema refuses");
+        assert!(
+            refusal.0.contains("unsupported graduation"),
+            "{}",
+            refusal.0
+        );
+
+        let mut wrapper_unknown = exact.clone();
+        wrapper_unknown["shadow_market"] = wrapper_unknown["market"].clone();
+        assert!(load_market_input(&serde_json::to_vec(&wrapper_unknown).expect("JSON")).is_err());
+
+        let mut bare_unknown = exact["market"].clone();
+        bare_unknown["schema_shadow"] = json!(GRADUATION_MARKET_INPUT_SCHEMA_V1);
+        assert!(load_market_input(&serde_json::to_vec(&bare_unknown).expect("JSON")).is_err());
+    }
+
+    #[test]
+    fn graduation_loader_refuses_digest_window_and_inner_market_substitution() {
+        let exact = graduation_market_value();
+
+        let mut digest = exact.clone();
+        digest["relayer_key_set_digest"] = json!("11".repeat(32));
+        assert!(load_market_input(&serde_json::to_vec(&digest).expect("JSON")).is_err());
+
+        let mut window = exact.clone();
+        window["window"]["start_unix_seconds"] = json!(1_799_999_999_i64);
+        assert!(load_market_input(&serde_json::to_vec(&window).expect("JSON")).is_err());
+
+        let mut market = exact;
+        market["market"]["product_id"] = json!("22".repeat(32));
+        assert!(load_market_input(&serde_json::to_vec(&market).expect("JSON")).is_err());
+    }
 
     #[test]
     fn fake_runner_crash_restart_preserves_checkpoint_and_finalizes_atomically() {
