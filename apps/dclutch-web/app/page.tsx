@@ -1,5 +1,5 @@
-import MarketWorkbench from '@/components/MarketWorkbench';
+import SiteLanding from '@/components/SiteLanding';
 
 export default function Home() {
-  return <MarketWorkbench />;
+  return <SiteLanding />;
 }
