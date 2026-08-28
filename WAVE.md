@@ -445,13 +445,14 @@ question with a recommended answer, not an inventory row.
   truth.** DCLTCAT1 had no writer in the tree — its only founding route needed
   the deleted monolith ELF — so it was never a second authority, only a second
   vocabulary waiting to become one. Buried with carve-outs. Two residues are
-  NAMED, not swept: (a) core-contract's `MarketRoot`/`MarketIdentity` survive
-  with exactly two readers — general-config's test-only
-  `plan_general_activation_v2`/`v3`, and
-  `trading-sbf/src/dealer/v3_accelerator_accounts.rs:499`, which decodes a
-  232-byte `MarketRoot` out of the 352-byte `CoreState` the chain actually
-  holds and therefore ALWAYS refuses (three sibling sites in the same program
-  get it right); (b) the browser's `lib/decoders.ts` DCLTCAT1 arm waits on
+  NAMED, not swept: (a) core-contract's `MarketRoot`/`MarketIdentity` now have
+  exactly ONE production reader left — general-config's test-only
+  `plan_general_activation_v2`/`v3`. The second, the Dealer accelerator's
+  232-byte `MarketRoot` decode of the 352-byte `CoreState` the chain actually
+  holds, is FIXED (DLR-HOT, a6d68ab4): it reads `CoreState` with the canonical
+  Claims-aggregate join set, and `MarketRoot` survives in that file only inside
+  the regression test that pins the two representations apart;
+  (b) the browser's `lib/decoders.ts` DCLTCAT1 arm waits on
   `lib/economicSuccessor.ts`, which is itself stratum and belongs to the
   economic-web lane.
 - The Hoard vault has no chain-derivable address (namespaced by caller-chosen
@@ -590,9 +591,12 @@ DELDEC, LEANGUARD, WEBGHOST-pending (economic/generalSuccessor deletion +
 productV2 split + DCLTPRQ2 collision + abi:verify into npm test — launches
 when DELDEC yields to avoid productV2.ts collision).
 QUEUED with owners:
-- Tranche-A Dealer: v3_accelerator_accounts.rs:499 decodes bare MarketRoot
-  where the chain holds CoreState — the campaign is representation-broken
-  before it starts (Fable P5a).
+- Tranche-A Dealer: CLOSED by DLR-HOT (a6d68ab4). v3_accelerator_accounts.rs
+  decoded a bare MarketRoot where the chain holds CoreState (Fable P5a) — it
+  refused on LENGTH before reading one join. Now the canonical join set, with
+  the address re-derived from MarketCoreStateSeedsV2 per that type's own
+  contract. The campaign is no longer representation-broken; what it still
+  lacks is the chain fixture (below).
 - U-014 owner: the Direct AOT inversion — deployed accelerator accelerates
   the superseded V2 descriptor; the V3 AOT is selectable by nothing and
   carries one recorded admission disagreement (P5g).
@@ -670,15 +674,37 @@ QUEUED with owners:
   `apps/dclutch-web/lib/generated/registeredDirect.ts` carries layout offsets and
   magics only. Nothing regenerated; no stale window existed to close.
 
-- DLR-HOT (charters at wave convergence) — NOW ALSO the admitted-AOT positive
-  round-trip campaign (the lane is un-dead after three fixes: the 38-literal,
-  F1's bare hash, F9's raw-index walk; dealer_chain.rs is 210 staged lines vs
-  the 3,134-line Direct fixture — size it as a campaign, use BUNDLE's
-  builder). Top-of-lane checks per GEN-HOT's executed patterns: (i) does Dealer's descriptor name effect_kernel v4
-  SCHEMA_RELEASE_ID_V4? (ii) does its profile's span selector get written by
-  the family RequestProfile — if not the family is forced to AdmittedAot and
-  inherits the whole extras frame. Plus the known CoreState-decode defect
-  (v3_accelerator_accounts.rs:499). The spans machinery is landed and free.
+- DLR-HOT — RAN 2026-08-27 night. The two top-of-lane checks are ANSWERED, the
+  decode defect is FIXED, the frontier instrument is landed and advanced two
+  stages, and DIAG-82's gate is green on the accelerator link. The round trip
+  does NOT reach Accepted and this entry does not pretend otherwise.
+  - (i) Dealer's selector-9 descriptor DOES name `effect_kernel::v4::`
+    `SCHEMA_RELEASE_ID_V4` (`v4_scenario_release.rs`, `CapabilityArtifactsV4`
+    `.effect`). No General V3/V4 cascade here; that check cost a lane and cost
+    this one nothing.
+  - (ii) The span selector is NOT request-written, so **the family is forced
+    AdmittedAot and inherits the whole extras frame.** Of Profile13's nine
+    dynamic spans the RequestProfile writes exactly two selectors (scalar 0
+    position count → span 4; scalar 99 evidence count → span 7). The six
+    optional Custody route-span selectors (scalars 7..12) are written by
+    `project_scenario_custody_bank_v4` in the ADMITTED CANDIDATE BANK — the
+    accelerator's own output — and span 8's scratch-page count (scalar 101) is
+    Hot-derived, documented in place as written by neither Request nor Effect.
+    Consequence with teeth: `dealer_scenario_scratch_page_count_v4` refuses
+    inline transport outright and admits only `AuthenticatedScratchPages` at
+    exactly 6 pages, so the fixture has no inline shortcut.
+  - What DLR-HOT still lacks is one thing, sized: the Dealer chain fixture.
+    `dealer_chain.rs` is still 210 lines of staged imports with zero `pub fn`.
+    BUNDLE's builder does NOT model the admitted-AOT frame (`bundle.rs` emits
+    `fixed(39) ++ runtime[5..]`; `general.rs:82-92` names the gap and calls it
+    the next builder-side lane), and its `derive_dynamic_span_widths` admits at
+    most ONE profile-only span while Dealer has seven. The lever nobody has
+    used: `operator/dealer_scenario_hot_v4.rs` (605 lines) already computes the
+    exact `fixed(39) ++ extras(8) ++ authorities ++ suffix` layout AND all nine
+    span counts, for Dealer specifically.
+  - The frontier now clears six stages and stops in
+    `authenticate_product_runtime_v3` on the Product graph — four finalized
+    Registry records. Everything before it is bought and differentially proven.
 - RECORDS-MIGRATE (charters at wave convergence, batched with the combined
   identity regen): the layout audit's wire-breaking migrations — FundingStateV1
   63.8% (drop `released`, totals, allocation pads), seal stored-PDA→bumps
