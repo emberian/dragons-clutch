@@ -165,9 +165,10 @@ mod tests {
         SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,
         encode_series_consume_account_profile_v4_atomic,
     };
+    use crate::series::effect_v4::SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4;
 
     fn profile_bytes() -> Vec<u8> {
-        let lengths = [0_u32; 157];
+        let lengths = [0_u32; SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize];
         let mut scratch = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
         let mut output = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
         encode_series_consume_account_profile_v4_atomic(
@@ -208,10 +209,10 @@ mod tests {
                 .expect("representative privileges");
             // A frame the chain would actually present: every coordinate the
             // profile declares writable is included writable, exactly as
-            // `validate_accounts` requires. Coordinate 53 is additionally
+            // `validate_accounts` requires. Coordinate 59 is additionally
             // writable without declaring it, which is the legitimate
             // effect-permission case a route view must NOT upgrade.
-            let writable = declared.writable() || representative == 53;
+            let writable = declared.writable() || representative == 59;
             physical.push(account(writable, declared.executable()));
             ordinal += 1;
         }
@@ -224,19 +225,19 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("profile");
         let span_counts = [1_u32];
         let physical = physical_accounts(profile, span_counts[0]);
-        assert_eq!(physical.len(), 65);
+        assert_eq!(physical.len(), 69);
         let view = PhysicalAccountsV4::new(&[], &physical);
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
-        assert_eq!(logical.len(), 158);
+        assert_eq!(logical.len(), 162);
         let logical_at = |coordinate: usize| {
             logical
                 .get(coordinate)
                 .expect("logical coordinate inside the expanded frame")
         };
         assert_eq!(logical_at(18).key, logical_at(20).key);
-        assert_eq!(logical_at(53).key, logical_at(137).key);
-        assert!(logical_at(53).is_writable);
+        assert_eq!(logical_at(59).key, logical_at(141).key);
+        assert!(logical_at(59).is_writable);
 
         // The dynamic path is reached through the one entry point that owns
         // it; `downgraded_effect_accounts_v3` dispatches on
@@ -254,11 +255,11 @@ mod tests {
         assert!(at(18).is_writable);
         assert!(at(20).is_writable);
         assert_eq!(at(18).key, at(20).key);
-        // 53 and its alias 137 are readonly at the representative, so both
+        // 59 and its alias 141 are readonly at the representative, so both
         // child views stay readonly: inheriting from the representative is not
         // a blanket upgrade.
-        assert!(!at(53).is_writable);
-        assert!(!at(137).is_writable);
+        assert!(!at(59).is_writable);
+        assert!(!at(141).is_writable);
     }
 
     /// A route view must never claim a privilege the transaction did not grant,

@@ -26,8 +26,10 @@ use solana_program::{
 };
 
 const CALLER_AUTHORITY: usize = 0;
-const FOUND_CORE_PROGRAM: usize = 19;
-const FOUND_TICKET_RAW: usize = 39;
+// The ordinary Found37 frame owns Core at 25. Series appends its ticket raw
+// account eight positions after the complete 37-account Found frame.
+const FOUND_CORE_PROGRAM: usize = 25;
+const FOUND_TICKET_RAW: usize = 37 + 8;
 const OPEN_CORE_PROGRAM: usize = 13;
 const OPEN_TICKET_RAW: usize = 21;
 
@@ -52,7 +54,9 @@ pub fn process_instruction(
     let open = instruction_data
         .len()
         .checked_sub(CLAIMS_FOUNDING_RECEIPT_BYTES_V5)
-        .and_then(|start| instruction_data.get(start..start + CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.len()))
+        .and_then(|start| {
+            instruction_data.get(start..start + CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.len())
+        })
         == Some(CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.as_slice());
     let (core_index, ticket_index) = if open {
         (OPEN_CORE_PROGRAM, OPEN_TICKET_RAW)

@@ -86,7 +86,7 @@ const OPEN_ACCOUNT_START: u16 = CLAIMS_ACCOUNT_START + SERIES_CONSUME_CLAIMS_ACC
 const _: () = assert!(SERIES_CONSUME_IR_REQUEST_BYTES_V3 == 3_040);
 const _: () = assert!(SERIES_CONSUME_BASE_EFFECT_BYTES_V4 == 3_264);
 const _: () = assert!(SERIES_CONSUME_EFFECT_BYTES_V4 == 3_336);
-const _: () = assert!(OPEN_ACCOUNT_START + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 == 157);
+const _: () = assert!(OPEN_ACCOUNT_START + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3 == 161);
 
 /// Exact child requests owned by the canonical child codecs.
 ///

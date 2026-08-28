@@ -78,8 +78,12 @@ use crate::{
 
 /// Fixed account count before the ordered FundingState prefix and Claims suffix.
 pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V3 + 11;
-/// Exact evidence suffix after the ordered FundingState accounts for Found.
-pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
+/// Exact V2 evidence suffix after the ordered FundingState accounts for Found.
+///
+/// Found37 already authenticates the linked basis pair. V2 therefore has one
+/// physical observation of that finalized record rather than repeating its
+/// raw/staging accounts in this suffix.
+pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2: usize = 13;
 const MAXIMUM_FUNDING_STATES_V1: usize = 16;
 
 struct SeriesConsumeAccounts<'accounts, 'info> {
@@ -105,8 +109,6 @@ struct SeriesFoundSuffix<'accounts, 'info> {
     hoard: &'accounts AccountInfo<'info>,
     funding_source: &'accounts AccountInfo<'info>,
     funding_source_replay: &'accounts AccountInfo<'info>,
-    linked_basis_raw: &'accounts AccountInfo<'info>,
-    linked_basis_staging: &'accounts AccountInfo<'info>,
     claims_program: &'accounts AccountInfo<'info>,
     claims_programdata: &'accounts AccountInfo<'info>,
     custody_program: &'accounts AccountInfo<'info>,
@@ -119,7 +121,7 @@ struct SeriesFoundSuffix<'accounts, 'info> {
 
 impl<'accounts, 'info> SeriesFoundSuffix<'accounts, 'info> {
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
-        if accounts.len() != SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1 {
+        if accounts.len() != SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2 {
             return Err(CoreSbfError::AccountFrame);
         }
         let value = Self {
@@ -128,16 +130,14 @@ impl<'accounts, 'info> SeriesFoundSuffix<'accounts, 'info> {
             hoard: account(accounts, 2)?,
             funding_source: account(accounts, 3)?,
             funding_source_replay: account(accounts, 4)?,
-            linked_basis_raw: account(accounts, 5)?,
-            linked_basis_staging: account(accounts, 6)?,
-            claims_program: account(accounts, 7)?,
-            claims_programdata: account(accounts, 8)?,
-            custody_program: account(accounts, 9)?,
-            custody_programdata: account(accounts, 10)?,
-            aggregate: account(accounts, 11)?,
-            position: account(accounts, 12)?,
-            admission: account(accounts, 13)?,
-            founder: account(accounts, 14)?,
+            claims_program: account(accounts, 5)?,
+            claims_programdata: account(accounts, 6)?,
+            custody_program: account(accounts, 7)?,
+            custody_programdata: account(accounts, 8)?,
+            aggregate: account(accounts, 9)?,
+            position: account(accounts, 10)?,
+            admission: account(accounts, 11)?,
+            founder: account(accounts, 12)?,
         };
         if value.permit.is_signer
             || !value.permit.is_writable
@@ -156,8 +156,6 @@ impl<'accounts, 'info> SeriesFoundSuffix<'accounts, 'info> {
             value.hoard,
             value.funding_source,
             value.funding_source_replay,
-            value.linked_basis_raw,
-            value.linked_basis_staging,
             value.claims_programdata,
             value.custody_programdata,
             value.aggregate,
@@ -420,7 +418,7 @@ fn fixed_suffix<'accounts, 'info>(
     let funding_count = frame
         .tail
         .len()
-        .checked_sub(SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1)
+        .checked_sub(SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2)
         .ok_or(CoreSbfError::AccountFrame)?;
     if funding_count == 0 || funding_count > MAXIMUM_FUNDING_STATES_V1 {
         return Err(CoreSbfError::AccountFrame);
@@ -911,7 +909,7 @@ fn prepare_permit<'accounts, 'info>(
     lock_receipt_bytes: &[u8],
     rent: &Rent,
 ) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
-    let product = authenticate_product_facts(frame, suffix, prepared, rent)?;
+    let product = authenticate_product_facts(frame, prepared, rent)?;
     let projected = authenticate_projected_facts(
         program_id,
         frame,
@@ -940,7 +938,6 @@ fn prepare_permit<'accounts, 'info>(
 #[inline(never)]
 fn authenticate_product_facts<'accounts, 'info>(
     frame: &SeriesConsumeAccounts<'accounts, 'info>,
-    suffix: SeriesFoundSuffix<'accounts, 'info>,
     prepared: &PreparedFound,
     rent: &Rent,
 ) -> Result<ProductFacts, CoreSbfError> {
@@ -949,8 +946,8 @@ fn authenticate_product_facts<'accounts, 'info>(
         rent,
         *prepared.runtime,
         FinalizedRecordFrameV2 {
-            raw: suffix.linked_basis_raw,
-            staging: suffix.linked_basis_staging,
+            raw: frame.found.linked_basis_raw,
+            staging: frame.found.linked_basis_staging,
         },
     )
     .map_err(|_| CoreSbfError::Reference)?;
