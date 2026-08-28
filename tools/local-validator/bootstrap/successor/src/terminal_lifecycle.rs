@@ -562,9 +562,10 @@ pub(crate) fn usage() -> &'static str {
      reauthenticates the complete payout graph, derives a crash-stable parent context from the \
      immutable request and authenticated prestate (never the observation slot), and emits the \
      exact dclutch-wallet-terminal-payout-plan-input-v1 accepted by the existing ALT planner. \
-     Core's fresh terminal_receipt is the sole terminal identity: categorical Markets bind the \
-     accepted Resolution certificate, while rational Markets derive and authenticate their terminal \
-     coordinate. Missing canonical native-composition publication evidence is a hard lifecycle blocker. \
+     Core's fresh terminal_receipt is the sole terminal identity and always names the accepted \
+     Resolution certificate. Categorical and graded-failure payouts authenticate that certificate; \
+     graded-success payout remains refused until the Claims terminal ABI consumes it directly. \
+     Missing canonical native-composition publication evidence is a hard lifecycle blocker. \
      Mainnet-beta is refused unconditionally."
 }
 
