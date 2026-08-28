@@ -1072,12 +1072,23 @@ class ReconcileTest(unittest.TestCase):
             )
 
     def test_owned_loopback_hot_two_position_omission_alias_order_and_fill_refuse(self):
+        def substitute_buyer_geometry(event):
+            buyer = event["positions"][1]
+            owner = base64.b64decode(buyer["preDataBase64"])[56:88]
+            buyer["preDataBase64"] = base64.b64encode(
+                position_data(owner, 1, [0, 0, 0])
+            ).decode()
+            buyer["postDataBase64"] = base64.b64encode(
+                position_data(owner, 2, [2000, 0, 0])
+            ).decode()
+
         mutations = [
             (lambda event: event.pop("positions"), "one Hot owner"),
             (lambda event: event["positions"].pop(), "exact ordered"),
             (lambda event: event["positions"].__setitem__(1, copy.deepcopy(event["positions"][0])), "alias"),
             (lambda event: event["positions"].reverse(), "single-outcome fill"),
             (lambda event: event["positions"][0].__setitem__("owner", event["positions"][1]["owner"]), "substitutes owner"),
+            (substitute_buyer_geometry, "geometry differs"),
         ]
         for mutate, message in mutations:
             with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:

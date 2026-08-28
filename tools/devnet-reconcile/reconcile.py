@@ -841,6 +841,11 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         fill = decimal(event["direct"]["fillAtoms"], "Direct Position fillAtoms")
         seller = projected_positions[0]
         buyer = projected_positions[1]
+        if any(
+            seller["pre"][field] != buyer["pre"][field]
+            for field in ("claimCount", "aggregateHex", "basisHex")
+        ):
+            refuse("Direct seller and buyer Position geometry differs")
         seller_deltas = [int(after) - int(before) for before, after in zip(seller["pre"]["balancesAtoms"], seller["post"]["balancesAtoms"], strict=True)]
         buyer_deltas = [int(after) - int(before) for before, after in zip(buyer["pre"]["balancesAtoms"], buyer["post"]["balancesAtoms"], strict=True)]
         changed = [index for index, (seller_delta, buyer_delta) in enumerate(zip(seller_deltas, buyer_deltas, strict=True)) if seller_delta or buyer_delta]
