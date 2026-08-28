@@ -408,5 +408,18 @@ describe('permanent-devnet founding exterior', () => {
       context(), { out: () => undefined, err: () => undefined }, files4.binary,
       files4.operation, files4.journal, null, false, successfulDependencies([]),
     )).toThrow(/duplicate JSON object key "schema"/);
+
+    const files5 = fixture(root());
+    const keyAlias = JSON.parse(readFileSync(files5.operation, 'utf8')) as {
+      campaign: { evidence: string; keypairs: Array<{ path: string }> };
+    };
+    keyAlias.campaign.evidence = keyAlias.campaign.keypairs[0]?.path as string;
+    writeFileSync(files5.operation, JSON.stringify(keyAlias));
+    const aliasCalls: string[][] = [];
+    expect(() => runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined }, files5.binary,
+      files5.operation, files5.journal, null, false, successfulDependencies(aliasCalls),
+    )).toThrow(/must not overwrite a signer or Market input file/);
+    expect(aliasCalls).toHaveLength(0);
   });
 });

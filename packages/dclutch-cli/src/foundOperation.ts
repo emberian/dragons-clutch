@@ -435,6 +435,19 @@ function parseOperation(source: Uint8Array): FoundOperationV1 {
   if (new Set(outputs).size !== outputs.length || outputs.includes(operation.plan)) {
     throw new Error('market, campaign, and participant outputs must be distinct and must not overwrite the plan');
   }
+  const protectedInputs = [
+    ...operation.campaign.keypairs.map((row) => row.path),
+    operation.participant.positionOwnerKeypair,
+    operation.participant.feePayerKeypair,
+  ];
+  if (operation.participant.collateral !== null) {
+    protectedInputs.push(operation.participant.collateral.sourceOwnerKeypair);
+  }
+  const priceUpdateIndex = operation.market.arguments.indexOf('--price-update');
+  if (priceUpdateIndex >= 0) protectedInputs.push(operation.market.arguments[priceUpdateIndex + 1] as string);
+  if (outputs.some((path) => protectedInputs.includes(path))) {
+    throw new Error('market, campaign, and participant outputs must not overwrite a signer or Market input file');
+  }
   return operation;
 }
 
