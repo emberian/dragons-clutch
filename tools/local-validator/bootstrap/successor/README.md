@@ -130,6 +130,21 @@ second scalar-or-file authority path. `demo-market` is a retired local-only
 fixture: it always refuses because a local fixture cannot authenticate the
 permanent devnet Direct deployment, and it will not invent those facts.
 
+## One durable terminal workflow
+
+Use `devnet-terminal-sequence-v1` for the complete six-stage terminal workflow.
+Without `--execute`, it takes bounded finalized devnet observations and saves
+one unsigned durable next action before it can open your fee-payer key. With
+`--execute`, it reauthenticates that saved action through the stage's semantic
+owner, saves the exact signed packet and signature before the first send, and
+accepts only the exact finalized transaction, balances, return data, and
+account poststates. Rerun the same session and journal directory to advance.
+
+There is no separate one-transaction lifecycle planner. In particular, no
+unsigned packet becomes durable evidence merely because a caller was told to
+save it. The six-stage sequence and its journal are the only public terminal
+transaction owner.
+
 ## `--keypair-seed`: deterministic keys, loopback only
 
 `run` takes an optional `--keypair-seed <64 lowercase hex>`. Default is absent,

@@ -30,6 +30,7 @@ mod user_position_admission;
 mod wallet_terminal;
 
 type Result<T> = core::result::Result<T, Error>;
+const PUBLIC_TERMINAL_COMMANDS_V1: [&str; 1] = ["devnet-terminal-sequence-v1"];
 
 #[derive(Debug)]
 struct Error(String);
@@ -85,10 +86,7 @@ fn run() -> Result<()> {
         Some("wallet-terminal-payout-input") => {
             terminal_lifecycle::run_wallet_terminal_input(arguments.collect())
         }
-        Some("terminal-lifecycle-plan") => {
-            terminal_lifecycle::run_terminal_lifecycle_plan(arguments.collect())
-        }
-        Some("devnet-terminal-sequence-v1") => {
+        Some(command) if command == PUBLIC_TERMINAL_COMMANDS_V1[0] => {
             terminal_sequence::run_terminal_sequence(arguments.collect())
         }
         Some("wallet-terminal-payout-alt-plan") => wallet_terminal::run_alt(arguments.collect()),
@@ -1247,7 +1245,6 @@ fn usage() {
     println!("{}", release_capture::usage());
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
-    println!("{}", terminal_lifecycle::lifecycle_usage());
     println!("{}", terminal_sequence::usage());
     println!("{}", user_position_admission::usage());
     println!("{}", flagship_resolution::usage());
@@ -1372,6 +1369,16 @@ mod tests {
         assert!(usage.contains("devnet-carry-forward-capture-v1"));
         assert!(usage.contains("devnet-prepare-programdata-capture-v1"));
         assert!(usage.contains("read-only and key-free"));
+    }
+
+    #[test]
+    fn public_terminal_surface_has_one_canonical_six_stage_owner() {
+        assert_eq!(PUBLIC_TERMINAL_COMMANDS_V1, ["devnet-terminal-sequence-v1"]);
+        let canonical = terminal_sequence::usage();
+        assert!(canonical.contains(PUBLIC_TERMINAL_COMMANDS_V1[0]));
+        assert!(canonical.contains("unsigned durable next action before any key"));
+        assert!(canonical.contains("persists the signed packet"));
+        assert!(!terminal_lifecycle::usage().contains("terminal-lifecycle-plan"));
     }
 
     #[test]
