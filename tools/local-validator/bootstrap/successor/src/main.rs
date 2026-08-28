@@ -8,6 +8,10 @@ use solana_sdk::pubkey::Pubkey;
 mod campaign;
 mod cluster;
 mod direct_market;
+mod direct_trade;
+mod direct_trade_producer;
+mod direct_trade_setup;
+mod direct_trade_setup_journal;
 mod flagship_resolution;
 mod local_mutable;
 // The journey campaign's conservation engine, shared textually the same way
@@ -19,6 +23,8 @@ mod ledger;
 mod market;
 mod model;
 mod plan;
+mod private_activity;
+mod private_lifecycle;
 mod pyth_vaa_provisioning;
 mod relayed;
 mod release_capture;
@@ -128,6 +134,13 @@ fn run() -> Result<()> {
         Some("local-private-validator-wallet-terminal-payout-v1") => {
             wallet_terminal_payout_exterior::run(arguments.collect())
         }
+        Some("devnet-direct-trade-v1") => direct_trade::run_devnet(arguments.collect()),
+        Some("local-private-validator-direct-trade-v1") => {
+            direct_trade::run_owned_loopback(arguments.collect())
+        }
+        Some("local-private-validator-direct-trade-produce-v1") => {
+            direct_trade_producer::run_owned_loopback(arguments.collect())
+        }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some(command) if command == OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[0] => {
             flagship_resolution::run_owned_loopback(arguments.collect())
@@ -135,6 +148,35 @@ fn run() -> Result<()> {
         Some("devnet-pyth-vaa-provision-v1") => pyth_vaa_provisioning::run(arguments.collect()),
         Some("local-private-validator-pyth-vaa-provision-v1") => {
             terminal_exterior_pyth::run(arguments.collect())
+        }
+        Some("local-private-validator-pyth-provider-closure-v1") => {
+            terminal_exterior_pyth::run_provider_closure(arguments.collect())
+        }
+        Some(command) if command == private_activity::STAGE_COMMAND_V1 => {
+            let parsed = private_activity::parse_stage_args(arguments.collect::<Vec<_>>())?;
+            let value = private_activity::run_stage(parsed)?;
+            stdout_json_value_v1(&value)
+        }
+        Some(command) if command == private_activity::MANIFEST_COMMAND_V1 => {
+            let parsed = private_activity::parse_manifest_args(arguments.collect::<Vec<_>>())?;
+            let value = private_activity::run_manifest(parsed)?;
+            stdout_json_value_v1(&value)
+        }
+        Some(command) if command == private_activity::CAPTURE_COMMAND_V1 => {
+            let parsed = private_activity::parse_capture_args(arguments.collect::<Vec<_>>())?;
+            let value = private_activity::run_capture(parsed)?;
+            stdout_json_value_v1(&value)
+        }
+        Some(command) if command == private_activity::LIFECYCLE_SESSION_COMMAND_V1 => {
+            let parsed =
+                private_activity::parse_lifecycle_session_args(arguments.collect::<Vec<_>>())?;
+            let value = private_activity::run_lifecycle_session(parsed)?;
+            stdout_json_value_v1(&value)
+        }
+        Some(command) if command == private_lifecycle::COMMAND_V1 => {
+            let parsed = private_lifecycle::parse_args(arguments.collect::<Vec<_>>())?;
+            let value = private_lifecycle::run(parsed)?;
+            stdout_json_value_v1(&value)
         }
         Some("local-mutable-prepare-v1") => local_mutable::run_prepare(arguments.collect()),
         Some("local-mutable-plan-authenticate-v1") => {
@@ -150,6 +192,13 @@ fn run() -> Result<()> {
         }
         Some(command) => Err(Error::new(format!("unknown command: {command}"))),
     }
+}
+
+fn stdout_json_value_v1(value: &serde_json::Value) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, value)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
 }
 
 fn run_runtime(arguments: Vec<String>) -> Result<()> {
@@ -1290,10 +1339,21 @@ fn usage() {
     println!("{}", user_position_admission::local_usage());
     println!("{}", pyth_vaa_provisioning::usage());
     println!("{}", terminal_exterior_pyth::usage());
+    println!(
+        "\n  dclutch-local-successor-bootstrap \
+         local-private-validator-pyth-provider-closure-v1 \
+         --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \
+         --local-validator-profile ABSOLUTE_JSON \
+         --finalized-capture ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON\n"
+    );
+    println!("{}", private_activity::usage());
+    println!("{}", private_lifecycle::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
     println!("{}", wallet_terminal_payout_exterior::usage());
+    println!("{}", direct_trade::usage());
+    println!("{}", direct_trade_producer::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
          ABSOLUTE_JSON [--market ABSOLUTE_JSON] --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... \
