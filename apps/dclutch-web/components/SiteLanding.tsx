@@ -36,7 +36,7 @@ export default function SiteLanding() {
       <aside>
         <span>Where this stands</span>
         <strong>On devnet — nothing for sale</strong>
-        <p>dClutch runs on Solana's devnet, a public test network whose
+        <p>dClutch runs on Solana&apos;s devnet, a public test network whose
         tokens are worthless by construction. The programs are deployed and
         the first markets are being set up; you can watch it all happen live
         below. There is no token, nothing to buy, and no value at risk
