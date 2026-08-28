@@ -829,6 +829,36 @@ ember's explicit go.
   byte-identical), the four state envelopes, the OpenBatch root-write answer
   at common_rule's coordinate-0 arm. Evidence: GENERAL_TRIPLES_2026_08_27.md.
 
+## DEPLOY-1: EXECUTED — THE SUBSTRATE LIVES ON DEVNET; THE FOUNDING STOPPED AT ONE NAMED WALL (2026-08-27/28)
+
+Run under keyDEPLOY-1. Full record: docs/evidence/DEPLOY_1.md (citable;
+deployment sections final). THE DURABLE SUBSTRATE IS UP, ACTIVATED AND
+PERMANENT: seven roles deployed mutable per 0012 (TPU, ~2.5 min, byte-verified
+both sides), plan minted from the real ProgramData observations, nine records
++ profile + five-role activation under the slot-pin admission on the public
+cluster (Trading 697,109 CU), all detector-confirmed. The founding seam
+(DRIVER's spec-vs-plan) is WIRED — campaign --market, chain-reading detector,
+partial-refusal, detector==verifier — and proven end-to-end locally (DCLTGMF1
+at 1,199,823-class CU under the driver); on devnet it drove Found31 + both
+DCLTPCB1 lanes with real signatures and stopped at the chain's own answer:
+**TooManyAccountLocks — the DCLTGMF1 atomic frame locks >64 unique accounts,
+devnet lacks increase_tx_account_lock_limit (local has it, 128), so the
+five-stage atomic founding cannot execute on today's devnet.** The wall is an
+authority item with a recommended answer (narrow the frame under 64 via the
+queued RECORDS-MIGRATE rows; atomicity re-decision is the fallback; a devnet
+feature activation is weather). Paid lessons, all fixed + committed: the
+forge-peek drift, Pubkey::new_unique probe addresses existing on devnet, the
+resubmit/rebuild-on-drop machinery, priority fees on campaign transactions,
+the replica-spoofed expiry verdict, and the meta-derived fee-only rollback
+proof. New driver surface: devnet-market (cadence-floor-refusing Pyth
+flagship input), graduation-market (relayed input from ONE author with the
+vertical, real mainnet venue facts), ledger-census (the journey's seven-law
+engine against any cluster). Web: default endpoint = public devnet, cluster
+named from its genesis hash, smoke pages one-record from live. Wallet 64.99
+-> 32.19 (31.77 parked rent; peak < 33 of the 40 cap). Doctrine earned:
+**send one preflighted probe of a new frame shape before spending a ladder on
+it** — skipPreflight hid the lock-limit refusal for four diagnosis cycles.
+
 ## DEPLOY-1 queue (triggers: PIN-0012 + DIAG-82 green)
 
 The durable devnet deploy and the first market living there. Charter =

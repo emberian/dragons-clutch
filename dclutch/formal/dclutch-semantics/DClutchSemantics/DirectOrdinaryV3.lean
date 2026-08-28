@@ -694,4 +694,71 @@ theorem a_venue_rate_above_the_denominator_refuses :
           identities⟩ = none := by
   native_decide
 
+/-! ## Geometry
+
+The one authored program is the program of EVERY market geometry, not of the
+canonical demo one. Product Runtime V2 fixes `region_count = cut_count + 1` and
+`outcome_count = region_count + 1`, so a market's geometry is the single number
+`outcome_count = cut_count + 2`; the canonical three-outcome demo is one cut.
+
+Nothing above is written per geometry. The tail count is an ARGUMENT of
+`execute`, the item body is folded once per tail coordinate, and the bank
+widths are affine in it — so the encoded program, and every artifact whose
+content identity is a digest of it, is the same at every geometry. These
+theorems are that claim, stated where a Rust translation can be checked
+against it. -/
+
+/-- The scalar bank is affine in the tail count at the emitted stride, so the
+tail count is a runtime width and never a compile-time one. -/
+theorem the_scalar_bank_is_affine_in_the_tail_count (tailCount : Nat) :
+    program.scalarWidth tailCount = 66 + tailCount * 2 := rfl
+
+/-- The identity bank does not grow with the geometry at all: ordinary Direct
+has no per-Product-item identity. -/
+theorem the_identity_bank_is_geometry_invariant (tailCount : Nat) :
+    program.identityWidth tailCount = 32 := by
+  simp [Program.identityWidth, program, commonIdentities, IdentitySlot.all]
+
+open Witness in
+/-- The geometry JRNY-2 named as the wall: four outcomes, two cuts. The SAME
+program admits it, with the same derived quote, at a tail of four. -/
+theorem the_four_outcome_geometry_admits :
+    quote (program.execute 4 ⟨scalars 4 [(.outcomeCount, 4)], identities⟩)
+      = some (5, 0, 10) := by
+  native_decide
+
+open Witness in
+/-- Two more geometries, either side of it: two outcomes (zero cuts) and five
+(three cuts). The traded outcome stays inside the tail and the fold still sums
+to exactly the transferred quantity. -/
+theorem the_two_and_five_outcome_geometries_admit :
+    quote (program.execute 2 ⟨scalars 2 [(.outcomeCount, 2)], identities⟩)
+        = some (5, 0, 10)
+      ∧ quote (program.execute 5 ⟨scalars 5 [(.outcomeCount, 5)], identities⟩)
+        = some (5, 0, 10) := by
+  native_decide
+
+open Witness in
+/-- The epilogue's exactly-one-item relation is not a property of the canonical
+geometry. At four outcomes, a traded outcome the Product tail does not carry is
+refused exactly as it is at three. -/
+theorem a_traded_outcome_outside_a_four_outcome_tail_refuses :
+    program.execute 4
+        ⟨scalars 4 [(.outcomeCount, 6), (.sellerOutcome, 5), (.buyerOutcome, 5)],
+          identities⟩ = none := by
+  native_decide
+
+open Witness in
+/-- And the divergence the tail count itself could open: an authenticated
+outcome count of four executed against a tail of THREE. The traded outcome is
+in range for the market and absent from the tail, so the fold writes nothing
+and the epilogue refuses. A runtime that projected a market's outcome count
+into the bank while folding a shorter tail would transfer Claims that no item
+coordinate accounts for; this is the clause that stops it. -/
+theorem a_tail_shorter_than_the_market_geometry_refuses :
+    program.execute 3
+        ⟨scalars 3 [(.outcomeCount, 4), (.sellerOutcome, 3), (.buyerOutcome, 3)],
+          identities⟩ = none := by
+  native_decide
+
 end DClutch.DirectOrdinaryV3

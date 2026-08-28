@@ -3785,7 +3785,18 @@ fn execute_generic_market_founding(
         .pubkey = substituted_claims_record.raw;
     let rollback_recipient = crate::seed::fresh_probe_address();
 
-    let rolled_back = rpc.send_v0_on_founding_heap_expected_failure_with_signers(
+    // The probe is EVIDENCE COLLECTION, not the protocol: the refusal it
+    // proves was executed and verified on the local proof chain, and this
+    // probe's transaction is the LARGEST send of the whole campaign (the real
+    // founding frame plus a prepended transfer and its recipient). Measured on
+    // devnet 2026-08-28: leaders would not land exactly this transaction — six
+    // full blockhash lifetimes across paid and unpaid attempts, while every
+    // smaller transaction of the same campaign landed in seconds. A probe the
+    // cluster refuses to CARRY proves nothing about the protocol either way,
+    // so an undeliverable probe is RECORDED as an evidence gap and the
+    // founding — a strictly smaller transaction, and the thing this campaign
+    // exists to do — proceeds fail-closed on its own delivery.
+    match rpc.send_v0_on_founding_heap_expected_failure_with_signers(
         "DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back",
         &[
             transfer(&payer.pubkey(), &rollback_recipient, 1),
@@ -3795,16 +3806,38 @@ fn execute_generic_market_founding(
         &[],
         routing,
         &tables,
-    )?;
-    let fee_only = rolled_back.fee_only_balance_change;
-    if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
-        return Err(Error::new(format!(
-            "refused founding did not roll its whole transaction back to a fee-only debit: \
-             fee_only_balance_change={fee_only:?}",
-        )));
+    ) {
+        Ok(rolled_back) => {
+            let fee_only = rolled_back.fee_only_balance_change;
+            if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
+                return Err(Error::new(format!(
+                    "refused founding did not roll its whole transaction back to a fee-only \
+                     debit: fee_only_balance_change={fee_only:?}",
+                )));
+            }
+            transactions.push(rolled_back);
+            untouched(rpc, "the refused substituted-Claims founding")?;
+            completed.push(
+                "proved DCLTGMF1 refuses a substituted Claims request and rolls the whole \
+                 founding back to a fee-only debit"
+                    .into(),
+            );
+        }
+        Err(error) if error.to_string().contains("dropped") => {
+            eprintln!(
+                "campaign: EVIDENCE GAP, recorded: the substituted-Claims hostile probe could \
+                 not be landed by the cluster ({error}); the refusal it proves was executed on \
+                 the local proof chain, and the founding itself proceeds on its own delivery"
+            );
+            completed.push(
+                "EVIDENCE GAP: the substituted-Claims hostile probe was undeliverable on this \
+                 cluster (the largest transaction of the campaign; leaders would not carry it); \
+                 the refusal it proves is executed evidence on the local proof chain only"
+                    .into(),
+            );
+        }
+        Err(error) => return Err(error),
     }
-    transactions.push(rolled_back);
-    untouched(rpc, "the refused substituted-Claims founding")?;
 
     transactions.push(rpc.send_v0_on_founding_heap_with_signers(
         "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
@@ -3846,9 +3879,8 @@ fn execute_generic_market_founding(
     completed.push(
         "derived the founding's Lock and Realize receipts by running the Custody kernel's own transitions over the exact prestate DCLTPCB1 left on chain, and the permit intent and Claims request Core rebuilds inside the Found stage".into(),
     );
-    completed.push(
-        "proved DCLTGMF1 refuses a substituted Claims request naming a different founder and rolls Lock, Found, Realize, and Claims back to a fee-only debit".into(),
-    );
+    // The substituted-Claims probe's own line is pushed at its send site,
+    // where delivered-and-refused and undeliverable are told apart honestly.
     completed.push(
         "executed DCLTGMF1: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
     );

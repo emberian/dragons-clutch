@@ -139,50 +139,83 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (eighth attempt: generation 4, detached from the operator session so an interrupted operator cannot reap it — attempt 7 was; the market records from earlier attempts are generation-independent and are reused verbatim). The addresses below
-are DERIVED TARGETS — the coordinates this input's founding will land at,
-computed off-chain and detector-confirmed absent before execution — NOT yet a
-live Open Market; the "Open Market" row becomes a live, verified account only
-when this section's transcript line says so. The earlier attempts' addresses
-are superseded and their small strands are named in §7 (three execution-found
-issues, all fixed); this lineage is updated if it moves again.**
+**Status: STOPPED AT A NAMED WALL — the market is NOT founded on devnet.**
+Ten attempts; each earlier one found and fixed a real driver defect (§7), the
+tenth reached the atomic founding itself and received the chain's own answer:
+`TooManyAccountLocks`. The DCLTGMF1 atomic founding — Lock, Found, Realize,
+Claims, Open; five stages, one transaction, which IS the design — locks more
+than 64 unique accounts; devnet's `increase_tx_account_lock_limit` feature
+account is **absent** (verified on chain), so devnet's limit is 64, while the
+local validator activates the feature (128), which is why the identical
+transaction executed there at 1,199,741 CU. A protocol-frame versus
+cluster-feature wall: no driver plumbing can clear it, and per the charter a
+stopped deploy with a named wall is a success. The derived targets below are
+what this input's founding lands at whenever the wall lifts; everything
+through DCLTPCB1 executed on devnet with real signatures.
 
 The story: protection against SOL/USD leaving the 120.00–180.00 band at a
 real terminal window, resolved by the real devnet Pyth receiver. Founded
 under kappa as a founder-side discipline (the on-chain cap is the
 RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
-| fact | derived target (pending founding completion) |
+| fact | derived target (founding stopped at the named wall) |
 |---|---|
-| **Open Market** (not yet live) | `8ryiQkudYjoqHt5zY3UcVYbbbJoiLBvbYrsm3XCDipgd` |
-| Found31 Market (generation 4) | `Bbn2YUaxGz3bTLAmPES6zki9tuN3baprMaMqPE7Lo2Wd` |
-| abort-lane Market (generation 6, staged and unwound) | `7zow2MrvZrJJ1Q8srznUVEU7zW97EEX1prg9SR3Bt721` |
-| collateral mint (Token-2022, 6 decimals) | `58TCVHLaUwWhAuKU89RQ9pAiK4kM7YJnb2Ee4bK67zf1` |
-| realm record | `xSxNtCBFRPwbrCi1KL7fPpd4qGwUHs8jMpBstcEtzFc` |
+| **Open Market** (not yet live) | `Csa2B4ZKRZYD889njds8GyN6Lmdt4SUZHJUdLieXoG1u` |
+| Found31 Market (generation 1) | `HYjpq3dgqVvbEVqJJHyyAkpihYpzw7HuyZQvFBM21Eso` |
+| abort-lane Market (generation 3, staged and unwound) | `4R8RirZavRF6Dsp9xRUL3iLiSbwtgZ2w3wLTbbr6o5uA` |
+| collateral mint (Token-2022, 6 decimals) | `5xZQoY3dHzuxWHyXudgx73Jevi7BR8WHo9u7iQxwCgM8` |
+| realm record | `6Lvs7x2hQCvVsKvWkrsYTRkZzUWUhiN8cdt6u8wUt8fP` |
 | band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
 | terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
 | `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
 | provider | the committed devnet Pyth row (`devnet_release_v1`), SOL/USD `PriceUpdateV2` at `7AviUf9nL62mcxNbQGKm4nKDQnPjswo6c5MX4D57HmyE` |
 
-*(the founding transcript's facts — transaction counts, DCLTGMF1 CU, the
-Open poststate — land here when the campaign completes)*
+What DID execute on devnet for this lineage, with real finalized signatures
+(attempt 10, priority-fee send path): the realm record + collateral, the
+Market-scoped RentV2 credit, the Found31 routing table, **Found31 with both
+hostile probes refused-and-rolled-back and the Market created (223,385 CU)**,
+and **DCLTPCB1 — the four-stage projected-Custody founding prestate — with
+both of its hostile probes refused (719,995 CU)**. The substituted-Claims
+hostile probe was undeliverable (it shares the over-limit frame) and is
+recorded as an evidence gap; its refusal is executed evidence on the local
+proof chain.
 
 ### 6.2 The abandoned market (relayed, relayer deliberately silent)
 
-**Status: input compiled (real venue facts, failure-shaped window, 250,000
-lamport walk bounty disclosed in the manifest quote); founding queued behind
-the flagship.**
+**Status: NOT FOUNDED — input compiled and ready (real venue facts,
+failure-shaped window, the 250,000-lamport walk bounty disclosed in the
+manifest quote), but its founding shares the flagship's DCLTGMF1 frame and
+therefore the same `TooManyAccountLocks` wall. One command once the wall
+lifts.**
 
 ### 6.3 The mainnet-observer graduation market (relayed, operated daemon)
 
-**Status: gated, deliberately.** The founding pins an `account_set_id` this
-lane derived as `63918468…` over the real watched set; the operated daemon's
-own `show-config` must independently print the same value before anything is
-founded against it — two authors, one number. Founding proceeds on that
-cross-check.
+**Status: NOT FOUNDED — doubly gated.** The founding pins an
+`account_set_id` this lane derived as `63918468…` over the real watched set;
+the operated daemon's own `show-config` must independently print the same
+value before anything is founded against it (two authors, one number) — and
+the founding itself shares the flagship's `TooManyAccountLocks` wall. The
+operated relayer is live and disarmed on the box, its fee payer funded, its
+attestation key pinned by the compiled input.
 
 ## 7. Frictions and findings
 
+- **THE WALL, named by the chain itself: `TooManyAccountLocks`.** The
+  DCLTGMF1 atomic founding locks more than 64 unique accounts;
+  `increase_tx_account_lock_limit`'s feature account is absent on devnet
+  (limit 64) and active on the local validator (128), which is why the
+  identical transaction executed locally and can never execute on today's
+  devnet. Ten founding attempts hid this behind one property: every hostile
+  probe is sent `skipPreflight` (an expected-failure transaction must not be
+  vetoed by simulation), so the over-limit transactions produced no error —
+  leaders silently declined to schedule them, which presented as eternal
+  transaction drops and consumed four real diagnosis cycles (the probe
+  addresses, the read floor, the resubmit, the priority fee — each a genuine
+  fix for a genuine defect, none of them this). The tenth attempt's
+  evidence-gap machinery let the REAL founding send with preflight ON, and
+  the simulator named the wall in one second. Lesson for every campaign
+  after this one: **send one preflighted probe of a new frame shape before
+  spending a ladder on it.**
 - **The founding detector consumed the forge key it was looking at.**
   `KeyForge::keypair` issues a fresh index per call; the detector's
   pre-execution derivation drew `collateral-mint[0]`, the executor founded on
@@ -225,6 +258,19 @@ cross-check.
   the same signed bytes every ~30 s (idempotent by signature — a duplicate
   lands as the same signature and the chain deduplicates) until a status
   appears or the deadline passes.
+- **A compute-heavy transaction at priority zero is what a leader drops
+  first — and the drop verdict itself was being spoofed.** Attempt 8
+  completed the diagnosis: every small transaction landed in seconds while
+  the 1.4M-CU DCLTGMF1-route transactions were left behind for full
+  blockhash lifetimes, repeatedly, at priority zero. Every campaign
+  transaction now carries `SetComputeUnitPrice` at 50,000 microlamports/CU
+  (~70,000 lamports of priority on a 1.4M-CU transaction). And the
+  height-vs-lastValidBlockHeight expiry check was declaring "dropped" ~20 s
+  into a measured 148-block (~60 s) margin, because the load-balanced
+  endpoint served the blockhash from one replica and the height from a
+  fresher one; expiry is now believed only from this process's own wall
+  clock (≥75 s since submit) plus a finalization-depth margin, so a false
+  Dropped can never rebuild a transaction that was still in flight.
 - **Read-your-writes, made structural anyway.** The driver's `Rpc` now
   carries a per-connection read floor — every confirmed transaction raises
   it to its finalized slot, and every single-account read passes it as
@@ -259,34 +305,55 @@ cross-check.
 
 ## 8. What SMOKE-1 still needs
 
-The durable substrate is up, activated, and permanent (§2–§3); the founding
-is wired, proven end-to-end on the local harness (DCLTGMF1 at 1,199,741 CU),
-and driven on devnet through DCLTPCB1 with the atomic founding gated only by
-devnet transport, now hardened (§7). What remains for the full three-market
-exchange:
+The durable substrate is up, activated, permanent, and detector-confirmed
+(§2–§3). The founding seam is wired, proven end-to-end on the local harness
+(DCLTGMF1 at 1,199,741 CU), and driven on devnet through Found31 and DCLTPCB1
+with real signatures; the atomic founding itself is stopped at one named,
+chain-confirmed wall. In order of consequence:
 
-1. **The graduation market's `account_set_id` cross-check.** This lane and the
-   operated relayer daemon (INFRA-RELAY, on the Hetzner box) each derive the
-   watched-set identity independently; the daemon's `show-config` must print
-   the `63918468…` this lane derived before the market is founded against it.
-   Two authors, one number — deliberately gated, not blocked.
-2. **The relayer fee payer is funded** (`8Naox…`, 0.05 SOL) and its attestation
-   key (`7gAqs…`) is what the graduation input pins; when INFRA-RELAY arms the
-   box's `[submit]` block this lane hands it MARKET + GENERATION + the derived
-   vacancy.
-3. **The daemon's initial observation windows** run from this machine for the
-   mainnet-observer market once it founds (charter item 4), then the box owns
-   them standing.
-4. **The redemption ALTs** (PAYOUT's browser step-2 rider, DCLTSQ03) publish
-   per market once each is Open.
-5. **The N-trader life + conservation ledger** run against these markets;
-   `ledger-census` is the driver subcommand that runs the journey's seven-law
-   engine against the public chain, one census per boundary.
-6. **The web** un-dark-launches `/smoke` and `/bounty` with the real market
-   addresses (the one-record `lib/smokeMarkets.ts` flip) once they found; the
-   endpoint default already points at public devnet and names the cluster from
-   its genesis hash.
+1. **THE WALL (authority decision, recommended answer attached).** The
+   DCLTGMF1 frame must lock **at most 64 unique accounts** to execute on
+   devnet — `TooManyAccountLocks`, `increase_tx_account_lock_limit` absent
+   there, active locally. Recommended: measure the frame's exact unique-lock
+   census, then take the frame-narrowing rows already queued
+   (RECORDS-MIGRATE: the Found-frame +6 accounts, stored bumps, funding-state
+   footprint) with 64 as the design bound; treat a devnet feature activation
+   as weather, not a plan; re-deciding the five-stage atomicity is the
+   fallback authority question if narrowing cannot reach 64. Every other
+   market (abandoned, graduation, BTC/ETH extras) founds with one command
+   each once this lifts — their inputs are compiled and committed tooling.
+2. **The graduation market's `account_set_id` cross-check** with the operated
+   daemon's `show-config` (`63918468…` from this lane; two authors, one
+   number), then INFRA-RELAY's arming with MARKET + GENERATION + vacancy.
+   The relayer is live disarmed on the box, fee payer funded, attestation key
+   pinned by the compiled input.
+3. **The founding-prestate unwinds**: the sol6/sol7/sol9 staged DCLTPCB1
+   prestates (each ~500M demo atoms of its own lineage's mint + ~0.01 SOL of
+   rents) unwind through DCLTPCA1 after their 500,000-slot expiries (~2.3
+   days) — three cleanup rows, no real principal.
+4. **The N-trader life + conservation ledger** (`ledger-census` is built and
+   documented; four traders funded and waiting) and **the redemption ALTs**
+   (PAYOUT's step-2 rider) — both per market, once one is Open.
+5. **The web smoke pages** flip live via the one-record `lib/smokeMarkets.ts`
+   edit once markets exist; the endpoint default already points at public
+   devnet and names the cluster from its genesis hash.
 
-**Status of this section: the substrate and the wiring are done and final; the
-markets and the life are the SMOKE-1 continuation, unblocked by everything
-above.**
+## 9. The wallet ledger, final for this run
+
+| checkpoint | lamports | SOL |
+|---|---:|---:|
+| start (= SMOKE-0's final) | 64,990,412,120 | 64.990412120 |
+| seven roles deployed (rent parked) | 33,187,407,520 | 33.187407520 |
+| record layer + five-role activation | 33,151,551,640 | 33.151551640 |
+| INFRA-RELAY fee payer funded (0.05) | 33,101,546,640 | 33.101546640 |
+| four traders funded (4 × 0.02) | 33,021,526,640 | ~33.021 |
+| after ten founding attempts (final) | 32,185,584,146 | 32.185584146 |
+
+Founding-attempt spend ≈ 0.836 SOL total: market-record rents (content-
+addressed, reused by every retry and by every future founding of these
+inputs), per-lineage collateral/credit/ALT rents across the paid-lesson
+strands (§7), ~1,000+ transaction signatures, and priority fees at 50,000
+µlam/CU on the final attempts. Peak exposure never exceeded 32.9 SOL against
+the 40 SOL cap; the ~31.77 SOL of program rent is parked, never burned, and
+iterable by `Upgrade` at fee cost per decision 0012. Nothing was recycled;
+the substrate is permanent.
