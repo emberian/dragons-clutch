@@ -25,6 +25,7 @@ mod release_capture;
 mod rpc;
 mod runtime;
 mod seed;
+mod terminal_exterior_pyth;
 mod terminal_lifecycle;
 mod terminal_sequence;
 mod upgrade;
@@ -113,6 +114,9 @@ fn run() -> Result<()> {
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-pyth-vaa-provision-v1") => pyth_vaa_provisioning::run(arguments.collect()),
+        Some("local-private-validator-pyth-vaa-provision-v1") => {
+            terminal_exterior_pyth::run(arguments.collect())
+        }
         Some("local-mutable-prepare-v1") => local_mutable::run_prepare(arguments.collect()),
         Some("local-mutable-plan-authenticate-v1") => {
             local_mutable::run_authenticate(arguments.collect())
@@ -1261,6 +1265,7 @@ fn usage() {
     println!("{}", user_position_admission::usage());
     println!("{}", user_position_admission::local_usage());
     println!("{}", pyth_vaa_provisioning::usage());
+    println!("{}", terminal_exterior_pyth::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", wallet_terminal::usage());
     println!(
