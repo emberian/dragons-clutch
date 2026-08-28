@@ -139,9 +139,10 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (the campaign is executing as this
-revision is committed); the addresses below are the derived targets the
-founding detector reported before execution and are final either way.**
+**Status: founding IN PROGRESS on devnet (third attempt, the first with both
+execution-found driver defects fixed — §7 tells that story; the first two
+attempts' derived addresses are superseded and their small strands are named
+there).**
 
 The story: protection against SOL/USD leaving the 120.00–180.00 band at a
 real terminal window, resolved by the real devnet Pyth receiver. Founded
@@ -150,11 +151,11 @@ RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
 | fact | value |
 |---|---|
-| **Open Market** | `HEzCuDvrKP9ScVK8dZqULRzw78U3922yk5q7cu3riqK` |
-| Found31 Market (generation 1) | `9oww4URBNczg83g6ZzRD8zvcFfVeKTimAutwKm6qAuZa` |
-| abort-lane Market (generation 3, staged and unwound) | `5ZtTvhPLeP1HjLfHBWwnfZ2B5wrNj8AamzZoGof8uGHk` |
-| collateral mint (Token-2022, 6 decimals) | `YyQtrWnqAFqx4D2MZdnS3eK8TgM1Ewabx9waExH99aD` |
-| realm record | `2D4qAzXUyDK5qwVa5HxDvvRtPQR5iojXUAF4Am5dAAeu` |
+| **Open Market** | `i8cvbLNy2er3qyDrqKq4xs67ZoKrZFToX5KRFyPab5G` |
+| Found31 Market (generation 1) | `Apim2SxmTQh8ChiBEj8BWG9r7FwNPiMD4C8rFaAxpbgE` |
+| abort-lane Market (generation 3, staged and unwound) | `FFCfUgnDxsTK7bFvsBzre13dDXWEZGfFAuH8kPbWgLLN` |
+| collateral mint (Token-2022, 6 decimals) | `84cKfptadusKXVjuf9SCrC2saCuxjPTzH1ksDYP7D6rs` |
+| realm record | `J4n7pzwoPDjkV1qHDQmCeRfe9rPufQL4ymSRNL7wEidX` |
 | band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
 | terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
 | `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
@@ -179,6 +180,41 @@ cross-check.
 
 ## 7. Frictions and findings
 
+- **The founding detector consumed the forge key it was looking at.**
+  `KeyForge::keypair` issues a fresh index per call; the detector's
+  pre-execution derivation drew `collateral-mint[0]`, the executor founded on
+  `[1]`, and the post-execution verifier peeked `[2]` — so the local proof
+  opened its Market at 1,199,823-class CU (measured 1,199,741) and then
+  reported it absent. Fixed: `KeyForge::peek_pubkey` (non-consuming, refused
+  on a random forge whose future key does not exist until drawn); the
+  campaign peeks once and threads one value through detector, report, and
+  verify. Found by the first driven founding; invisible to every unit test
+  that had ever passed.
+- **A load-balanced public endpoint broke read-your-writes.** The first
+  devnet founding attempt died at the Found31 rollback equality: the hostile
+  probe refused exactly as designed (136,444 CU consumed), but the payer
+  balance was read back through a replica still catching up, and the check
+  called a correct rollback wrong. Fixed structurally: the driver's `Rpc`
+  carries a per-connection read floor — every confirmed transaction raises it
+  to its finalized slot, and every single-account read passes it as
+  `minContextSlot`, retrying the node's `-32016` not-yet-reached answer
+  inside the confirmation deadline. On a single-node loopback the floor is
+  always met; the class is invisible there by construction.
+- **The second attempt found the probe the first had not needed**: attempt 1
+  had also created `collateral-wallet[0]` (initialized against the index-1
+  mint), and attempt 2 — peek fixed, mint back at index 0 — collided on that
+  wallet mid-transaction ("account already in use") because the detector's
+  partial probe list covered the mint but not the wallet. The wallet is now
+  peeked and probed the same way, so a half-founding refuses with the account
+  named. Attempt 3 runs on a fresh collateral key set (`sol2-*`), which is
+  what moved §6.1's addresses.
+- **Strands from the paid lessons**, on devnet, never recycled per the
+  charter: attempt 1's index-1 collateral mint + `wallet[0]`
+  (`8Lng2CshnKa8fGUBac1svdGzSvif1HSt9U4DE7uys5o5`, holding the index-1
+  atoms), its realm record, one Market-scoped RentV2 credit, one Found31
+  routing table (≈ well under 0.01 SOL total). The mint-independent records
+  — product graph, source specs, manifest, basis — are content-addressed and
+  are **reused verbatim** by every retry.
 - The relayed-vertical build was red at HEAD: DRIVER's `cluster.rs` split made
   the successor's `rpc.rs`/`seed.rs` import `crate::cluster`, and the
   vertical's `#[path]` module list never gained it (the journey's did). One
