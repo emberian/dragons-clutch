@@ -1110,7 +1110,7 @@ def prepare_wallets(manifest: Manifest, work: Path, keygen: Path) -> dict[str, A
         public = authenticated_state(public_ledger_path, "public wallet ledger")
         if private.get("schema") != PRIVATE_INDEX_SCHEMA or public.get("schema") != WALLET_LEDGER_SCHEMA or private.get("scenarioSha256") != manifest.scenario.sha256 or public.get("scenarioSha256") != manifest.scenario.sha256:
             raise Refusal("existing wallet ledgers belong to another scenario")
-        verify_wallet_files(private, public, manifest, keygen)
+        verify_wallet_files(private, public, manifest, keygen, work)
         return public
 
     private_rows: list[dict[str, Any]] = []
@@ -1162,7 +1162,13 @@ def prepare_wallets(manifest: Manifest, work: Path, keygen: Path) -> dict[str, A
         raise
 
 
-def verify_wallet_files(private: Mapping[str, Any], public: Mapping[str, Any], manifest: Manifest, keygen: Path) -> None:
+def verify_wallet_files(
+    private: Mapping[str, Any],
+    public: Mapping[str, Any],
+    manifest: Manifest,
+    keygen: Path,
+    work: Path,
+) -> None:
     if private.get("keygenSha256") != sha256_file(keygen):
         raise Refusal("wallet keygen binary changed since preparation")
     private_rows = exact_list(private.get("wallets"), "private wallet rows")
@@ -1175,6 +1181,15 @@ def verify_wallet_files(private: Mapping[str, Any], public: Mapping[str, Any], m
         if private_row.get("id") != spec.wallet_id or public_row.get("id") != spec.wallet_id or private_row.get("address") != public_row.get("address"):
             raise Refusal(f"wallet ledgers substitute {spec.wallet_id}")
         keypair = canonical_existing_file(text(private_row.get("keypair"), f"wallet {spec.wallet_id} keypair"), f"wallet {spec.wallet_id} keypair")
+        expected_keypair = wallet_paths(work)[0] / f"{spec.wallet_id}.json"
+        try:
+            expected_keypair = expected_keypair.resolve(strict=True)
+        except OSError as error:
+            raise Refusal(f"wallet {spec.wallet_id} exact disposable key path is absent") from error
+        if keypair != expected_keypair:
+            raise Refusal(
+                f"wallet {spec.wallet_id} keypair is not its exact disposable scenario path"
+            )
         mode = stat.S_IMODE(keypair.stat().st_mode)
         if mode & 0o077:
             raise Refusal(f"wallet {spec.wallet_id} keypair is not private (mode {mode:o})")
@@ -1412,7 +1427,7 @@ def load_wallet_indexes(manifest: Manifest, work: Path, keygen: Path) -> tuple[d
         raise Refusal("prepare-wallets must complete before funding or activity")
     private = authenticated_state(private_path, "private wallet index")
     public = authenticated_state(public_path, "public wallet ledger")
-    verify_wallet_files(private, public, manifest, keygen)
+    verify_wallet_files(private, public, manifest, keygen, work)
     return private, public
 
 

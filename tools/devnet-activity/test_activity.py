@@ -415,6 +415,16 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(key_path.stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.work / "private").stat().st_mode & 0o777, 0o700)
 
+        substituted = self.work / "private" / "not-a-scenario-wallet.json"
+        substituted.write_text(SECRET_MARKER, encoding="utf-8")
+        substituted.chmod(0o600)
+        private_path = self.work / "private" / "wallet-index.json"
+        private = activity.authenticated_state(private_path, "private wallet index")
+        private["wallets"][0]["keypair"] = str(substituted)
+        activity.atomic_write_json(private_path, private)
+        with self.assertRaisesRegex(activity.Refusal, "exact disposable scenario path"):
+            activity.prepare_wallets(manifest, self.work, self.keygen)
+
     def test_funding_finalizes_exact_transaction_arithmetic(self) -> None:
         state = RpcState()
         with rpc_server(state) as rpc_url:
