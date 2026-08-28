@@ -225,6 +225,19 @@ cross-check.
   the same signed bytes every ~30 s (idempotent by signature — a duplicate
   lands as the same signature and the chain deduplicates) until a status
   appears or the deadline passes.
+- **A compute-heavy transaction at priority zero is what a leader drops
+  first — and the drop verdict itself was being spoofed.** Attempt 8
+  completed the diagnosis: every small transaction landed in seconds while
+  the 1.4M-CU DCLTGMF1-route transactions were left behind for full
+  blockhash lifetimes, repeatedly, at priority zero. Every campaign
+  transaction now carries `SetComputeUnitPrice` at 50,000 microlamports/CU
+  (~70,000 lamports of priority on a 1.4M-CU transaction). And the
+  height-vs-lastValidBlockHeight expiry check was declaring "dropped" ~20 s
+  into a measured 148-block (~60 s) margin, because the load-balanced
+  endpoint served the blockhash from one replica and the height from a
+  fresher one; expiry is now believed only from this process's own wall
+  clock (≥75 s since submit) plus a finalization-depth margin, so a false
+  Dropped can never rebuild a transaction that was still in flight.
 - **Read-your-writes, made structural anyway.** The driver's `Rpc` now
   carries a per-connection read floor — every confirmed transaction raises
   it to its finalized slot, and every single-account read passes it as
