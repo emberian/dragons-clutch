@@ -14,14 +14,21 @@
 //! alone, and for that reason.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::indexing_slicing)]
 
-use std::{env, fs, path::PathBuf};
+use std::{collections::HashSet, env, fs, path::PathBuf};
 
 use crate::{
     DirectHotDeploymentWidthsV5,
     chain::install_direct_hot_chain_accounts_v5,
     fixture::{DirectHotChainFixtureV5, DirectHotChainInputV5, build_direct_hot_chain_fixture_v5},
 };
-use dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
+use dclutch_capability_program_contract::hot_v3::{
+    HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+    HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
+    HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+    HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+    HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
+    HOT_TRANSITION_STAGING_ACCOUNT_V3,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_direct_codec::native_evidence_v3::{
     DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
@@ -1042,13 +1049,19 @@ pub async fn submit_v0_observed(
         && instructions
             .get(2)
             .is_some_and(|instruction| instruction.program_id == REGISTRY_PROGRAM_ID)
+        && instructions
+            .get(2)
+            .is_some_and(has_canonical_sealed_execution_aliases)
     {
         // Compact native evidence references both maker keys from the exact
         // following Registry/Trading bytes instead of restating 64 bytes. That
         // pays for the mandatory 40-byte SetComputeUnitLimit addition and leaves
-        // 28 bytes: 1,228 + 40 - 64 = 1,204.
+        // 28 bytes before the validated-artifact seal was introduced:
+        // 1,228 + 40 - 64 = 1,204. The execution-only seal projection aliases
+        // its six authenticated staging coordinates to the matching raw
+        // coordinates, removing six lookup indexes and producing 1,198.
         assert_eq!(
-            wire, 1_204,
+            wire, 1_198,
             "budgeted transparent continuation wire changed"
         );
     }
@@ -1086,6 +1099,47 @@ pub async fn submit_v0_observed(
                     .map(|returned| (returned.program_id, returned.data)),
             }
         }))
+}
+
+fn has_canonical_sealed_execution_aliases(instruction: &Instruction) -> bool {
+    const REGISTRY_HOT_CHILD_START: usize = 6;
+    const SEALED_ALIASES: [(usize, usize); 6] = [
+        (
+            HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+            HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+            HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+            HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_TRANSITION_RAW_ACCOUNT_V3,
+            HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        ),
+        (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
+        (
+            HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+            HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        ),
+    ];
+    let fixed = instruction
+        .accounts
+        .get(REGISTRY_HOT_CHILD_START..REGISTRY_HOT_CHILD_START + HOT_FIXED_ACCOUNT_COUNT_V3);
+    let Some(fixed) = fixed else {
+        return false;
+    };
+    SEALED_ALIASES.iter().all(|(raw, staging)| {
+        fixed.get(*raw).map(|meta| meta.pubkey) == fixed.get(*staging).map(|meta| meta.pubkey)
+    }) && fixed
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect::<HashSet<_>>()
+        .len()
+        == HOT_FIXED_ACCOUNT_COUNT_V3 - SEALED_ALIASES.len()
 }
 
 /// Exact metadata retained from one successful canonical v0 execution.

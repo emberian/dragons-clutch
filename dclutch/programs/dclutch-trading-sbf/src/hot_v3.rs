@@ -201,7 +201,9 @@ use crate::{
     execution_strategy_v2::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-        authenticate_activated_current_deployment, authenticate_execution_strategy_v2,
+        authenticate_activated_current_deployment,
+        authenticate_execution_strategy_from_sealed_capability_v2,
+        authenticate_execution_strategy_v2,
     },
     native_signature::{
         SysvarInstructionV1, borrow_authenticated_instructions_v1,
@@ -1884,6 +1886,19 @@ pub fn process_hot_execution_v3(
     let selected_program = selected_descriptor.program();
     let selected_action = selected_entry.selector();
 
+    // A Direct ordinary execution spends the write-once artifact verdict it
+    // authenticates below. Its six sealed staging coordinates therefore carry
+    // the matching raw account again: the seal is the durable proof that the
+    // real staging cursor was vacant when this exact raw body was admitted.
+    // Other Hot families and Direct actions keep the fully-distinct frame.
+    let selected_kind = context.selection().kind().to_bytes();
+    if frame.uses_sealed_execution_aliases()
+        != (selected_kind == DIRECT_SUCCESSOR_KIND_ID_V3
+            && selected_action == DirectExecutionActionV3::InlineOrdinary as u32)
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+
     // Decision 0005: the validated-artifact seal for exactly this descriptor,
     // this action, this authenticated Trading interpreter release and this
     // Market-selected Registry. Authenticated before any artifact it names is
@@ -1931,7 +1946,6 @@ pub fn process_hot_execution_v3(
         record_bumps.config_raw(),
         record_bumps.config_staging(),
     )?;
-    let selected_kind = context.selection().kind().to_bytes();
     let direct_config = if selected_kind == DIRECT_SUCCESSOR_KIND_ID_V3
         && selected_action == DirectExecutionActionV3::InlineOrdinary as u32
     {
@@ -2042,12 +2056,12 @@ pub fn process_hot_execution_v3(
     let request_profile =
         decode_sealed_request_profile(*descriptor, &request_profile_data, request_profile_token)?;
 
-    let (strategy, strategy_extras_end) = authenticate_strategy_boxed_v3(
+    let (strategy, strategy_extras_end) = authenticate_strategy_from_sealed_boxed_v3(
         &frame,
         accounts,
         *context,
-        selected_descriptor.schema(),
         selected_program,
+        descriptor.as_ref(),
         invocation.strategy_extras_start,
     )?;
 
@@ -3400,6 +3414,76 @@ fn authenticate_strategy_boxed_v3<'accounts, 'info>(
         context,
         selected_schema,
         selected_program,
+        frame.registry,
+        frame.rent,
+        &strategy_accounts,
+    )?;
+    if strategy.strategy().disposition() == StrategyDispositionV2::ShadowAot
+        && strategy
+            .strategy()
+            .transport_profile()
+            .map_err(|_| TradingSbfError::Content)?
+            != AcceleratorTransportProfileV2::ShadowTranscriptV3
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    if strategy.strategy().disposition() == StrategyDispositionV2::AdmittedAot
+        && strategy
+            .strategy()
+            .transport_profile()
+            .map_err(|_| TradingSbfError::Content)?
+            != AcceleratorTransportProfileV2::ChunkedBankV2
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok((Box::new(strategy), strategy_extras_end))
+}
+
+#[inline(never)]
+fn authenticate_strategy_from_sealed_boxed_v3<'accounts, 'info>(
+    frame: &HotFrameV3<'accounts, 'info>,
+    accounts: &'accounts [AccountInfo<'info>],
+    context: TradingFamilyContextV1,
+    selected_program: ContentId,
+    descriptor: &CapabilityProgramV4,
+    strategy_extras_start: usize,
+) -> Result<(Box<AuthenticatedExecutionStrategyV2>, usize), ProgramError> {
+    let strategy_data = frame
+        .strategy_raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    if strategy_data.len() != EXECUTION_STRATEGY_PROGRAM_BYTES_V2 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let preliminary_strategy =
+        ExecutionStrategyProgramV2::decode(&strategy_data).map_err(|_| TradingSbfError::Content)?;
+    drop(strategy_data);
+    let strategy_account_count = match preliminary_strategy.disposition() {
+        StrategyDispositionV2::Interpreted => INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2,
+        StrategyDispositionV2::ShadowAot => SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
+        StrategyDispositionV2::AdmittedAot => ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2,
+    };
+    let strategy_extra_count = strategy_account_count
+        .checked_sub(INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)
+        .ok_or(TradingSbfError::Content)?;
+    let strategy_extras_end = strategy_extras_start
+        .checked_add(strategy_extra_count)
+        .ok_or(TradingSbfError::Content)?;
+    let strategy_extras = accounts
+        .get(strategy_extras_start..strategy_extras_end)
+        .ok_or(TradingSbfError::Content)?;
+    let mut strategy_accounts = Vec::with_capacity(strategy_account_count);
+    strategy_accounts.extend_from_slice(&[
+        frame.descriptor_raw.clone(),
+        frame.descriptor_staging.clone(),
+        frame.strategy_raw.clone(),
+        frame.strategy_staging.clone(),
+    ]);
+    strategy_accounts.extend_from_slice(strategy_extras);
+    let strategy = authenticate_execution_strategy_from_sealed_capability_v2(
+        context,
+        selected_program,
+        descriptor,
         frame.registry,
         frame.rent,
         &strategy_accounts,
@@ -10177,6 +10261,78 @@ struct HotFrameV3<'accounts, 'info> {
     capability_seal: &'accounts AccountInfo<'info>,
 }
 
+/// Exact fixed-coordinate aliases admitted only by sealed Direct execution.
+///
+/// Seal materialization remains fully distinct. Once written, the immutable
+/// seal owns the six finalized staging observations and Hot needs only each
+/// live raw body plus that verdict. Keeping the fixed coordinate count stable
+/// avoids a second wire ABI while removing six unique transaction locks.
+const SEALED_EXECUTION_FIXED_ALIASES_V3: [(usize, usize); 6] = [
+    (
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+    ),
+    (
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+    ),
+    (
+        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+    ),
+    (
+        HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3,
+    ),
+    (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
+    (
+        HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+    ),
+];
+
+fn is_sealed_execution_fixed_alias_v3(left: usize, right: usize) -> bool {
+    SEALED_EXECUTION_FIXED_ALIASES_V3.contains(&(left, right))
+}
+
+/// Admit either the old fully-distinct frame or all six canonical seal-backed
+/// aliases. Partial, wrong-pair, or seventh aliases refuse before any account
+/// body is trusted.
+fn validate_hot_fixed_alias_shape_v3(accounts: &[AccountInfo<'_>]) -> Result<bool, ProgramError> {
+    let fixed = accounts
+        .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
+        .ok_or(TradingSbfError::Content)?;
+    let sealed_alias_count = SEALED_EXECUTION_FIXED_ALIASES_V3
+        .iter()
+        .filter(|(raw, staging)| {
+            fixed
+                .get(*raw)
+                .zip(fixed.get(*staging))
+                .is_some_and(|(raw, staging)| raw.key == staging.key)
+        })
+        .count();
+    if sealed_alias_count != 0 && sealed_alias_count != SEALED_EXECUTION_FIXED_ALIASES_V3.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    for (left, account) in fixed.iter().enumerate() {
+        for (offset, other) in fixed
+            .get(left.saturating_add(1)..)
+            .ok_or(TradingSbfError::Content)?
+            .iter()
+            .enumerate()
+        {
+            let right = left
+                .checked_add(offset)
+                .and_then(|value| value.checked_add(1))
+                .ok_or(TradingSbfError::Content)?;
+            if other.key == account.key && !is_sealed_execution_fixed_alias_v3(left, right) {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+    }
+    Ok(sealed_alias_count == SEALED_EXECUTION_FIXED_ALIASES_V3.len())
+}
+
 impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
     fn from_accounts(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
         if accounts.len() < HOT_FIXED_ACCOUNT_COUNT_V3 {
@@ -10254,22 +10410,34 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
         {
             return Err(TradingSbfError::Content.into());
         }
-        for (left, account) in accounts
-            .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
-            .ok_or(TradingSbfError::Content)?
-            .iter()
-            .enumerate()
-        {
-            if accounts
-                .get(left.saturating_add(1)..HOT_FIXED_ACCOUNT_COUNT_V3)
-                .ok_or(TradingSbfError::Content)?
-                .iter()
-                .any(|other| other.key == account.key)
-            {
-                return Err(TradingSbfError::Content.into());
-            }
-        }
+        validate_hot_fixed_alias_shape_v3(accounts)?;
         Ok(value)
+    }
+
+    fn uses_sealed_execution_aliases(self) -> bool {
+        SEALED_EXECUTION_FIXED_ALIASES_V3
+            .iter()
+            .all(|(raw, staging)| {
+                let raw = match *raw {
+                    HOT_DESCRIPTOR_RAW_ACCOUNT_V3 => self.descriptor_raw,
+                    HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3 => self.account_profile_raw,
+                    HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3 => self.request_profile_raw,
+                    HOT_TRANSITION_RAW_ACCOUNT_V3 => self.transition_raw,
+                    HOT_EFFECT_RAW_ACCOUNT_V3 => self.effect_raw,
+                    HOT_LIFECYCLE_RAW_ACCOUNT_V3 => self.lifecycle_raw,
+                    _ => return false,
+                };
+                let staging = match *staging {
+                    HOT_DESCRIPTOR_STAGING_ACCOUNT_V3 => self.descriptor_staging,
+                    HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3 => self.account_profile_staging,
+                    HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3 => self.request_profile_staging,
+                    HOT_TRANSITION_STAGING_ACCOUNT_V3 => self.transition_staging,
+                    HOT_EFFECT_STAGING_ACCOUNT_V3 => self.effect_staging,
+                    HOT_LIFECYCLE_STAGING_ACCOUNT_V3 => self.lifecycle_staging,
+                    _ => return false,
+                };
+                raw.key == staging.key
+            })
     }
 
     /// Parse the seal outer's fixed prefix: read-only root, writable seal.
@@ -10404,6 +10572,67 @@ mod tests {
         INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES_V3, InstructionV3, ProgramGeometryV3,
         ScalarRegisterV3, encode_program_atomic,
     };
+
+    fn readonly_info(key: Pubkey) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            false,
+            false,
+            Box::leak(Box::new(0_u64)),
+            Box::leak(Vec::new().into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::new_unique())),
+            false,
+        )
+    }
+
+    fn distinct_fixed_infos() -> Vec<AccountInfo<'static>> {
+        (0..HOT_FIXED_ACCOUNT_COUNT_V3)
+            .map(|_| readonly_info(Pubkey::new_unique()))
+            .collect()
+    }
+
+    fn alias_fixed_slot(accounts: &mut [AccountInfo<'static>], raw: usize, staging: usize) {
+        let raw = accounts.get(raw).expect("raw fixed slot").clone();
+        *accounts.get_mut(staging).expect("staging fixed slot") = raw;
+    }
+
+    #[test]
+    fn sealed_execution_fixed_alias_set_is_all_or_nothing_and_exact() {
+        let distinct = distinct_fixed_infos();
+        assert!(!validate_hot_fixed_alias_shape_v3(&distinct).expect("distinct fixed frame"));
+
+        let mut sealed = distinct_fixed_infos();
+        for (raw, staging) in SEALED_EXECUTION_FIXED_ALIASES_V3 {
+            alias_fixed_slot(&mut sealed, raw, staging);
+        }
+        assert!(validate_hot_fixed_alias_shape_v3(&sealed).expect("exact six sealed aliases"));
+
+        let mut partial = distinct_fixed_infos();
+        alias_fixed_slot(
+            &mut partial,
+            HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+            HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        );
+        assert!(validate_hot_fixed_alias_shape_v3(&partial).is_err());
+
+        let mut wrong_pair = sealed.clone();
+        let wrong = wrong_pair
+            .get(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3)
+            .expect("account-profile raw fixed slot")
+            .clone();
+        *wrong_pair
+            .get_mut(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3)
+            .expect("descriptor staging fixed slot") = wrong;
+        assert!(validate_hot_fixed_alias_shape_v3(&wrong_pair).is_err());
+
+        let mut seventh = sealed;
+        alias_fixed_slot(
+            &mut seventh,
+            HOT_CONFIG_RAW_ACCOUNT_V3,
+            HOT_CONFIG_STAGING_ACCOUNT_V3,
+        );
+        assert!(validate_hot_fixed_alias_shape_v3(&seventh).is_err());
+    }
 
     #[test]
     fn lifecycle_rent_credit_v2_binds_market_release_and_generation() {
