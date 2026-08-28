@@ -108,10 +108,20 @@ expect_refusal "legacy keep-elf mode refuses before using stale evidence" \
     "refusing --keep-elf" "$RUNNER" --work "$SCRATCH/keep" --keep-elf
 
 if grep -Fq 'cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked' "$RUNNER" \
-    && grep -Fq "build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked" "$RUNNER"; then
-    ok "release builds and recorded commands require the committed lockfiles"
+    && grep -Fq "build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked" "$RUNNER" \
+    && grep -Fq 'cargo build --release --locked --offline -p dclutch-release-tool' "$RUNNER"; then
+    ok "release and host-tool builds require the committed lockfiles"
 else
     not_ok "release runner lost its locked-build admission"
+fi
+
+if grep -Fq 'cargo-locks-before.tsv' "$RUNNER" \
+    && grep -Fq 'cargo-locks-after.tsv' "$RUNNER" \
+    && grep -Fq 'cargo_lock_immutability=passed' "$RUNNER" \
+    && grep -Fq 'refusing: Cargo.lock set changed while building the candidate' "$RUNNER"; then
+    ok "complete Cargo.lock set is byte-compared around the candidate build"
+else
+    not_ok "release runner lost its repository-wide lock immutability proof"
 fi
 
 if grep -Fq 'CHECKED_UPGRADE_GATE.json' "$RUNNER" \

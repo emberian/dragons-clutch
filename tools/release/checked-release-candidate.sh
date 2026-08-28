@@ -94,11 +94,26 @@ BUILD_LOG="$WORK/build.log"
 BUILD_LINKS="$WORK/build-links.tsv"
 BUILD_RUN="$WORK/build-run.txt"
 SOURCE_TREE="$WORK/source-tree.txt"
+LOCKS_BEFORE="$WORK/cargo-locks-before.tsv"
+LOCKS_AFTER="$WORK/cargo-locks-after.tsv"
 UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
 run_tool() { "$TOOL" "$@"; }
+write_lock_manifest() {
+    local root="$1"
+    local out="$2"
+    (
+        cd "$root"
+        find . -type f -name Cargo.lock -print \
+            | sed 's#^\./##' \
+            | LC_ALL=C sort \
+            | while IFS= read -r lock; do
+                printf '%s\t%s\n' "$lock" "$(sha256 "$lock")"
+            done
+    ) > "$out"
+}
 
 # Loader V3's canonical address, decoded from its base58 spelling rather than
 # pasted as a magic constant.
@@ -130,6 +145,8 @@ BUILD_LOG="$WORK/build.log"
 BUILD_LINKS="$WORK/build-links.tsv"
 BUILD_RUN="$WORK/build-run.txt"
 SOURCE_TREE="$WORK/source-tree.txt"
+LOCKS_BEFORE="$WORK/cargo-locks-before.tsv"
+LOCKS_AFTER="$WORK/cargo-locks-after.tsv"
 UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
 rm -f "$UPGRADE_GATE" "$SUMMARY"
 rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR"
@@ -147,6 +164,16 @@ echo "commit: $SOURCE_REVISION"
 rm -rf "$SOURCE"
 mkdir -p "$SOURCE"
 git -C "$REPO" archive "$SOURCE_REVISION" | tar -x -C "$SOURCE"
+
+# Cargo's `--locked` refusal is the per-invocation admission. This manifest is
+# the repository-wide complement: it proves that no build created, removed, or
+# rewrote any Cargo.lock anywhere in the archived source tree. The archive
+# contains tracked files only, so a newly created nested lock is visible too.
+write_lock_manifest "$SOURCE" "$LOCKS_BEFORE"
+LOCK_COUNT="$(wc -l < "$LOCKS_BEFORE" | tr -d ' ')"
+[ "$LOCK_COUNT" -gt 0 ] \
+    || { echo "refusing: source archive contains no Cargo.lock files" >&2; exit 1; }
+LOCK_SET_DIGEST="$(sha256 "$LOCKS_BEFORE")"
 
 # The orchestrator and its two measurement parsers are part of the admitted
 # source, not ambient host helpers. Refuse an invocation whose script bytes do
@@ -374,7 +401,7 @@ fi
 if [ -z "$TOOL" ]; then
     TOOL="$HOST_TARGET/release/dclutch-release-tool"
     ( cd "$SOURCE" && CARGO_TARGET_DIR="$HOST_TARGET" \
-        cargo build --release -p dclutch-release-tool ) >>"$BUILD_LOG" 2>&1
+        cargo build --release --locked --offline -p dclutch-release-tool ) >>"$BUILD_LOG" 2>&1
 fi
 [ -x "$TOOL" ] || { echo "release tool not executable: $TOOL" >&2; exit 1; }
 
@@ -527,6 +554,16 @@ cmp -s "$INFRA_DIR/infrastructure.txt" "$INFRA_DIR/inspect-infrastructure.txt" \
     || { echo "inspect-infrastructure projection differs" >&2; exit 1; }
 echo "checked: immutable Core/Registry/Rent infrastructure"
 
+# Do this after every source-tree Cargo invocation, including the host release
+# tool. `--locked` should make mutation impossible; byte-compare the complete
+# set anyway so the candidate carries the proof instead of relying on intent.
+write_lock_manifest "$SOURCE" "$LOCKS_AFTER"
+if ! cmp -s "$LOCKS_BEFORE" "$LOCKS_AFTER"; then
+    echo "refusing: Cargo.lock set changed while building the candidate" >&2
+    diff -u "$LOCKS_BEFORE" "$LOCKS_AFTER" >&2 || true
+    exit 1
+fi
+
 # ------------------------------------------------------------------- summary
 {
     printf 'format=dclutch-checked-release-candidate-summary-v1\n'
@@ -535,6 +572,9 @@ echo "checked: immutable Core/Registry/Rent infrastructure"
     printf 'source_revision=%s\n' "$SOURCE_REVISION"
     printf 'source_digest=%s\n' "$SOURCE_DIGEST"
     printf 'root_cargo_lock_digest=%s\n' "$ROOT_LOCK_DIGEST"
+    printf 'cargo_lock_count=%s\n' "$LOCK_COUNT"
+    printf 'cargo_lock_set_sha256=%s\n' "$LOCK_SET_DIGEST"
+    printf 'cargo_lock_immutability=passed\n'
     printf 'rustc_version=%s\n' "$RUSTC_VERSION"
     printf 'solana_version=%s\n' "$SOLANA_VERSION"
     printf 'cargo_build_sbf_version=%s\n' "$BUILD_SBF_VERSION"
@@ -652,6 +692,8 @@ gate = {
     "build_run_id": os.environ["GATE_BUILD_RUN_ID"],
     "link_count": len(links),
     "source_tree_manifest": evidence("source-tree.txt"),
+    "cargo_locks_before_manifest": evidence("cargo-locks-before.tsv"),
+    "cargo_locks_after_manifest": evidence("cargo-locks-after.tsv"),
     "build_links_manifest": evidence("build-links.tsv"),
     "build_run_manifest": evidence("build-run.txt"),
     "diagnostics_manifest": evidence("build-diagnostics.txt"),
