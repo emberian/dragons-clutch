@@ -8,14 +8,13 @@
 //! `terminal_sequence`; this module neither reads keys nor signs or submits a
 //! transaction.
 
-use std::{collections::BTreeMap, io::Write, path::PathBuf};
+use std::{io::Write, path::PathBuf};
 
 use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_market_core_codec::CoreState;
 use dclutch_operator::ObservedAccount;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
@@ -23,8 +22,9 @@ use crate::{
     Error, Result,
     campaign::{
         CampaignAccountEvidenceV1, CampaignTerminalEvidenceV1, parse_campaign_terminal_evidence_v1,
+        parse_campaign_terminal_evidence_with_expected_cluster_v1,
     },
-    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
+    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, WritePolicyV1},
@@ -75,11 +75,35 @@ enum CoreTerminalReceiptMeaningV1 {
 }
 
 pub(crate) fn run_wallet_terminal_input(arguments: Vec<String>) -> Result<()> {
+    stdout_json(&produce_wallet_terminal_input_v1(
+        arguments,
+        ExpectedClusterV1::Devnet,
+    )?)
+}
+
+pub(crate) fn produce_wallet_terminal_input_owned_loopback_v1(
+    arguments: Vec<String>,
+) -> Result<PlanInputV1> {
+    produce_wallet_terminal_input_v1(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn produce_wallet_terminal_input_v1(
+    arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<PlanInputV1> {
     let arguments = parse_arguments(arguments)?;
+    expected_cluster.authenticate(&arguments.origin)?;
     let plan_source = std::fs::read(&arguments.plan)?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
     let evidence_source = std::fs::read(&arguments.evidence)?;
-    let evidence = parse_campaign_terminal_evidence_v1(&evidence_source)?;
+    let evidence = if expected_cluster == ExpectedClusterV1::Devnet {
+        parse_campaign_terminal_evidence_v1(&evidence_source)?
+    } else {
+        parse_campaign_terminal_evidence_with_expected_cluster_v1(
+            &evidence_source,
+            expected_cluster,
+        )?
+    };
     authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
     require_terminal_composition_evidence(&evidence)?;
 
@@ -141,7 +165,7 @@ pub(crate) fn run_wallet_terminal_input(arguments: Vec<String>) -> Result<()> {
         "wallet-terminal-payout-input: authenticated one finalized snapshot at slot {} with live Core {}",
         snapshot.observation.slot, receipt_label,
     );
-    stdout_json(&input)
+    Ok(input)
 }
 
 fn authenticate_core_terminal_receipt_meaning_v1(
@@ -571,6 +595,8 @@ pub(crate) fn usage() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use dclutch_claims_svm::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
@@ -578,6 +604,7 @@ mod tests {
     };
     use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness};
     use dclutch_operator::{Finality, Observation, ObservedAccount};
+    use serde_json::Value;
     use solana_sdk_ids::system_program;
 
     use super::*;
