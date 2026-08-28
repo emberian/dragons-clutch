@@ -134,6 +134,11 @@ def write_spec(root: Path, rpc_url: str) -> Path:
             "cwd": str(ROOT),
             "environment": {},
         },
+        "teardown": {
+            "argv": [python, str(fake), "teardown", "{caseWork}", "{rpcUrl}"],
+            "cwd": str(ROOT),
+            "environment": {},
+        },
         "session": "session.json",
         "journalDir": "journals",
         "sessionSchema": "dclutch-fake-owned-loopback-lifecycle-v1",
@@ -166,6 +171,8 @@ class LifecycleChaosTests(unittest.TestCase):
                 self.assertEqual(row["killedIntentSha256"], MODULE.sha256_bytes(f"fake-intent:{boundary}".encode()))
                 self.assertTrue((work / "cases" / f"kill-{boundary}" / "attempt-1-killed").is_dir())
                 self.assertTrue((work / "cases" / f"kill-{boundary}" / "attempt-2-resumed").is_dir())
+            for case in MODULE.ALL_CASES:
+                self.assertTrue((work / "cases" / case / "teardown" / "receipt.json").is_file())
             refusal_rows = [row for row in summary["cases"] if row["expectedRefusal"]]
             self.assertEqual(
                 {row["case"] for row in refusal_rows},

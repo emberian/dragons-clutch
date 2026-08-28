@@ -261,12 +261,14 @@ def observe(case_work: Path) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3 or argv[0] not in {"session", "observe"}:
-        print("usage: fake_session.py session|observe CASE_WORK RPC_URL", file=sys.stderr)
+    if len(argv) != 3 or argv[0] not in {"session", "observe", "teardown"}:
+        print("usage: fake_session.py session|observe|teardown CASE_WORK RPC_URL", file=sys.stderr)
         return 2
     case_work = Path(argv[1])
     if argv[0] == "observe":
         return observe(case_work)
+    if argv[0] == "teardown":
+        return 0
     return run_session(case_work, argv[2])
 
 
