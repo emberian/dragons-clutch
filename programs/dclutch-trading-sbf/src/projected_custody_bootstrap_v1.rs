@@ -542,12 +542,9 @@ fn stage_founding_capability_funding_v2(
         facts.capability_entry_index,
     )?;
     let required_union = manifest_required_union(manifest.entry_count())?;
-    validate_funding_ledger_masks_v2(
-        manifest.entry_count(),
-        required_union,
-        &[resolution_mask, trading_mask],
-    )
-    .map_err(|_| TradingSbfError::Content)?;
+    let ordered_masks = canonical_funding_mask_order_v2(resolution_mask, trading_mask)?;
+    validate_funding_ledger_masks_v2(manifest.entry_count(), required_union, &ordered_masks)
+        .map_err(|_| TradingSbfError::Content)?;
     let project_found = ProjectFoundRequestV2::new(Request::administrative(
         Action::Found,
         facts.generation,
@@ -600,6 +597,29 @@ fn canonical_funding_list_id_v2(
     trading_mask: u16,
     trading_ledger: &Pubkey,
 ) -> Result<Identity, ProgramError> {
+    let ordered_masks = canonical_funding_mask_order_v2(resolution_mask, trading_mask)?;
+    let resolution =
+        Identity::new(resolution_ledger.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+    let trading = Identity::new(trading_ledger.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+    let ordered = if ordered_masks[0] == resolution_mask {
+        [resolution, trading]
+    } else {
+        [trading, resolution]
+    };
+    generic_founding_funding_list_id_v1(&ordered).map_err(|_| TradingSbfError::Content.into())
+}
+
+/// Put the two named controller subsets in the canonical physical order.
+///
+/// FundingLedgerV2's shared validator and the founding artifact both order
+/// ledgers by their lowest selected manifest bit. Direct is entry zero in the
+/// live compiler today, so fixed controller order is specifically wrong there:
+/// `[Resolution=0b1110, Trading=0b0001]` must become `[0b0001, 0b1110]` before
+/// partition validation or the honest frame refuses before Resolution's CPI.
+fn canonical_funding_mask_order_v2(
+    resolution_mask: u16,
+    trading_mask: u16,
+) -> Result<[u16; 2], ProgramError> {
     if resolution_mask == 0 || trading_mask == 0 {
         return Err(TradingSbfError::Content.into());
     }
@@ -608,15 +628,11 @@ fn canonical_funding_list_id_v2(
     if resolution_bit == trading_bit {
         return Err(TradingSbfError::Content.into());
     }
-    let resolution =
-        Identity::new(resolution_ledger.to_bytes()).map_err(|_| TradingSbfError::Content)?;
-    let trading = Identity::new(trading_ledger.to_bytes()).map_err(|_| TradingSbfError::Content)?;
-    let ordered = if resolution_bit < trading_bit {
-        [resolution, trading]
+    Ok(if resolution_bit < trading_bit {
+        [resolution_mask, trading_mask]
     } else {
-        [trading, resolution]
-    };
-    generic_founding_funding_list_id_v1(&ordered).map_err(|_| TradingSbfError::Content.into())
+        [trading_mask, resolution_mask]
+    })
 }
 
 /// Partition the exact four-entry founding manifest by semantic ownership.
@@ -1618,6 +1634,24 @@ mod tests {
                 ),
                 Ok([0b1111 ^ trading_mask, trading_mask])
             );
+
+            // A different singleton is a syntactically valid partition, but
+            // it is not this artifact's authenticated Trading selection. The
+            // ownership projection must refuse every such substitution before
+            // physical ordering can make the masks look canonical.
+            for substituted_index in 0_usize..4 {
+                if substituted_index == trading_index {
+                    continue;
+                }
+                assert_eq!(
+                    controller_masks(
+                        manifest,
+                        [0x50; 32],
+                        u16::try_from(substituted_index).expect("substituted index"),
+                    ),
+                    Err(TradingSbfError::Content.into())
+                );
+            }
         }
     }
 
@@ -1776,6 +1810,9 @@ mod tests {
         for trading_index in 0_u16..4 {
             let trading_mask = 1_u16 << trading_index;
             let resolution_mask = 0b1111 ^ trading_mask;
+            let ordered_masks =
+                canonical_funding_mask_order_v2(resolution_mask, trading_mask).expect("order");
+            assert!(validate_funding_ledger_masks_v2(4, 0b1111, &ordered_masks).is_ok());
             let resolution_id = Identity::new(resolution.to_bytes()).expect("Resolution");
             let trading_id = Identity::new(trading.to_bytes()).expect("Trading");
             let expected = if resolution_mask.trailing_zeros() < trading_mask.trailing_zeros() {
@@ -1791,11 +1828,31 @@ mod tests {
         }
     }
 
+    /// The live Direct compiler selects manifest bit zero. Controller-name
+    /// order therefore presents Resolution's `0b1110` before Trading's
+    /// `0b0001`, which the FundingLedger contract correctly refuses as a
+    /// noncanonical physical partition. Canonicalizing before that validator is
+    /// load-bearing: the old order dies before the Resolution CPI and leaves
+    /// the otherwise honest DCLTPCB2 frame unable to stage.
+    #[test]
+    fn live_direct_bit_zero_partition_is_ordered_before_validation() {
+        let resolution_mask = 0b1110;
+        let trading_mask = 0b0001;
+        assert!(
+            validate_funding_ledger_masks_v2(4, 0b1111, &[resolution_mask, trading_mask],).is_err()
+        );
+        let ordered =
+            canonical_funding_mask_order_v2(resolution_mask, trading_mask).expect("canonical");
+        assert_eq!(ordered, [trading_mask, resolution_mask]);
+        assert!(validate_funding_ledger_masks_v2(4, 0b1111, &ordered).is_ok());
+    }
+
     #[test]
     fn funding_list_order_refuses_empty_or_ambiguous_lowest_bits() {
         let resolution = Pubkey::new_from_array([0x52; 32]);
         let trading = Pubkey::new_from_array([0x53; 32]);
         for (resolution_mask, trading_mask) in [(0, 1), (1, 0), (0b0011, 0b0001)] {
+            assert!(canonical_funding_mask_order_v2(resolution_mask, trading_mask).is_err());
             assert_eq!(
                 canonical_funding_list_id_v2(resolution_mask, &resolution, trading_mask, &trading,),
                 Err(TradingSbfError::Content.into())
