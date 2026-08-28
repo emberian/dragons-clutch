@@ -2,7 +2,8 @@
 # HOT-CU: sweep the SHIPPED-ELF Hot tail's compute at the protocol default heap.
 #
 #   build the ELFs -> run `hot_heap_frame_is_inert` once per fixture seed ->
-#   report PASS n/N, MEAN, MIN, MAX, and the trading ELF sha256 they belong to.
+#   report PASS n/N and, only at N/N, MEAN, MIN, MAX, and the trading ELF
+#   sha256 they belong to.
 #
 # This is W2p/W2q/DIAG-82's measurement, promoted out of /tmp. It lived in
 # `/private/tmp/w2q/sweep.sh` while several board entries quoted pass counts
@@ -120,9 +121,10 @@ usage: tools/gauntlet/hot-cu/run-hot-cu.sh [options]
                    substrate keeps its own logs and summary under --work.
   -h, --help       show this message
 
-Prints PASS n/N, MEAN, MIN, MAX and the trading ELF sha256. Exits nonzero if
-any seed failed. Read the M-61 block at the top of this file, or README.md,
-before quoting any single number it prints.
+Prints PASS n/N and the trading ELF sha256. MEAN, MIN, and MAX are emitted only
+when every requested seed completed; a partial run has no sweep mean. Exits
+nonzero if any seed failed. Read the M-61 block at the top of this file, or
+README.md, before quoting any number it prints.
 USAGE
 }
 
@@ -376,23 +378,30 @@ done
 
 # ------------------------------------------------------------- 3. the statistic
 #
-# MEAN/MIN/MAX are over the seeds that COMPLETED and printed a figure. A seed
-# that exhausted the meter has no figure to average -- the pass count is what
-# carries it, which is the other half of why M-61 asks for both numbers and not
-# for a margin.
+# A sweep mean exists only when EVERY requested seed completed and printed a
+# figure. Averaging the survivors of a failed sweep changes the sample and can
+# make PASS 19/20 look like it carries a 20-seed mean. The pass count carries a
+# partial run; the observed per-seed figures remain in the logs for diagnosis.
 say "result"
-if [ "$pass" -gt 0 ]; then
+if [ "$pass" -eq "$SEEDS" ]; then
     read -r MEAN MIN MAX <<EOF
 $(awk '{ t += $1; if (n++ == 0 || $1 < lo) lo = $1; if ($1 > hi) hi = $1 }
        END { printf "%d %d %d\n", int(t / n + 0.5), lo, hi }' "$OBSERVED")
 EOF
+    MEAN_JSON="$MEAN"
+    MIN_JSON="$MIN"
+    MAX_JSON="$MAX"
+    ALL_SEEDS_COMPLETED=true
 else
-    MEAN=0; MIN=0; MAX=0
+    MEAN_JSON=null
+    MIN_JSON=null
+    MAX_JSON=null
+    ALL_SEEDS_COMPLETED=false
 fi
 
 printf 'PASS %d/%d\n' "$pass" "$SEEDS"
-if [ "$pass" -gt 0 ]; then
-    printf "MEAN %'d CU   (over the %d seeds that completed, of 1,400,000)\n" "$MEAN" "$pass"
+if [ "$pass" -eq "$SEEDS" ]; then
+    printf "MEAN %'d CU   (over all %d requested seeds, of 1,400,000)\n" "$MEAN" "$SEEDS"
     printf "MIN  %'d CU\n" "$MIN"
     printf "MAX  %'d CU\n" "$MAX"
     # Rounded to NEAREST, not floored. Per M-61 a delta decomposes as
@@ -401,7 +410,8 @@ if [ "$pass" -gt 0 ]; then
     printf "SPREAD %'d CU  ~ %d bump-search iterations at 1,500 CU each\n" \
         "$((MAX - MIN))" "$(( (MAX - MIN + 750) / 1500 ))"
 else
-    echo "MEAN -   MIN -   MAX -   (no seed completed)"
+    printf 'MEAN -   MIN -   MAX -   (requires PASS %d/%d; %d completed)\n' \
+        "$SEEDS" "$SEEDS" "$pass"
 fi
 printf 'ELF  %s  dclutch_trading_sbf.so\n' "$TRADING_SHA"
 printf 'SRC  %s\n' "$PROVENANCE"
@@ -428,7 +438,7 @@ fi
 
 cat > "$SUMMARY" <<EOF
 {
-  "schema": "dclutch-hot-cu-sweep-v1",
+  "schema": "dclutch-hot-cu-sweep-v2",
   "artifact_provenance": "$PROVENANCE",
   "trading_elf_sha256": "$TRADING_SHA",
   "elf_dir": "$ELF_DIR",
@@ -438,12 +448,13 @@ cat > "$SUMMARY" <<EOF
   "seeds": $SEEDS,
   "pass": $pass,
   "fail": $fail,
-  "mean_cu": $MEAN,
-  "min_cu": $MIN,
-  "max_cu": $MAX,
+  "all_seeds_completed": $ALL_SEEDS_COMPLETED,
+  "mean_cu": $MEAN_JSON,
+  "min_cu": $MIN_JSON,
+  "max_cu": $MAX_JSON,
   "ceiling_cu": 1400000,
   "observed_cu": [$(paste -sd, - < "$OBSERVED")],
-  "statistic": "PASS and MEAN. min/max are the observed spread of a bump-search lottery (M-61), not bounds; they are keyed to trading_elf_sha256 and a one-byte ELF change redraws every seed.",
+  "statistic": "PASS and an all-requested-seed MEAN. A partial run has null mean/min/max. Complete-run min/max are the observed spread of a bump-search lottery (M-61), not bounds; they are keyed to trading_elf_sha256 and a one-byte ELF change redraws every seed.",
   "cross_substrate": "A difference between two substrates' means is redraw PLUS effect: the substrate moves the release identity and so redraws every seed. Subtract the immutable-pinned arm, which is the same digest arm at a different identity, to separate them."
 }
 EOF
