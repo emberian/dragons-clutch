@@ -43,8 +43,8 @@ use crate::TradingSbfError;
 use super::{
     HotFrameV3, HotRoleAuthenticationV3, StaticRegisterOwnershipV5, account,
     authenticate_market_boxed_v3, authenticate_root_boxed_v3, borrow_finalized_record,
-    borrow_record_against, decode_capability_program_boxed_v3, decode_request_profile,
-    decode_selected_effect_v4, require_static_register_ownership_v5,
+    decode_capability_program_boxed_v3, decode_request_profile, decode_selected_effect_v4,
+    require_static_register_ownership_v5,
 };
 
 /// First account after the fixed hot prefix on the seal outer: the rent payer.
@@ -417,17 +417,16 @@ pub(super) fn authenticate_capability_seal_v3<'a>(
     Ok(closure)
 }
 
-/// Borrow one finalized record against the addresses a Trading seal derived.
+/// Borrow one live raw record against the finalized coordinates a Trading seal
+/// derived and persisted.
 ///
-/// The seal's row supplies the two canonical Registry addresses that
-/// `borrow_finalized_record` would otherwise re-derive with two
-/// `find_program_address` calls from the very same seeds under the very same
-/// Registry, which is a seed of the seal. Everything else is the identical
-/// conjunction, `hash(bytes) == digest` included: the row is honoured only
-/// after its `schema` and `content_digest` are required to equal the identities
-/// the authenticated descriptor names for this role. The caller mints the
-/// sealed token from the returned borrow, so the token can never name a range
-/// the caller did not just authenticate.
+/// Seal materialization authenticated the real raw/staging pair under the
+/// Market-selected Registry and wrote both coordinates into a write-once
+/// Trading-owned verdict. Sealed execution carries the raw account again in
+/// the staging slot; the exact alias is a wire-shape assertion, not a claim
+/// that a raw account is a vacant staging cursor. The live raw body is still
+/// reauthenticated by owner, privileges, rent, exact width, and complete-body
+/// digest before the sealed token is minted.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn borrow_sealed_record<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
@@ -440,18 +439,33 @@ pub(super) fn borrow_sealed_record<'a, 'info>(
     digest: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
     let row: SealedRecordRowV1 = closure.row(role).map_err(|_| TradingSbfError::Content)?;
-    if row.schema() != schema || row.content_digest() != digest {
+    if row.schema() != schema
+        || row.content_digest() != digest
+        || row.raw_record_account() != raw.key.to_bytes()
+        || row.staging_account() == row.raw_record_account()
+        || staging.key != raw.key
+        || staging.owner != raw.owner
+        || staging.is_signer != raw.is_signer
+        || staging.is_writable != raw.is_writable
+        || staging.executable != raw.executable
+    {
         return Err(TradingSbfError::Content.into());
     }
-    borrow_record_against(
-        frame,
-        raw,
-        staging,
-        rent,
-        digest,
-        Pubkey::new_from_array(row.raw_record_account()),
-        Pubkey::new_from_array(row.staging_account()),
-    )
+    let data = raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    if raw.owner != frame.registry.key
+        || raw.is_signer
+        || raw.is_writable
+        || raw.executable
+        || usize::try_from(row.exact_data_length()).map_err(|_| TradingSbfError::Content)?
+            != data.len()
+        || solana_program::hash::hash(&data).to_bytes() != digest
+        || !rent.is_exempt(raw.lamports(), data.len())
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(core::cell::Ref::map(data, |bytes| &**bytes))
 }
 
 /// Mint one sealed-artifact token for a record this invocation just borrowed.

@@ -177,7 +177,11 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_fits_its_compact_packet() {
     );
     // One signature plus its count byte: this transaction has a single signer.
     let wire = 1 + 64 + message.serialize().len();
-    assert_eq!(wire, 1_212, "compact Hot plus heap-request wire changed");
+    // The execution-only CapabilitySeal projection aliases its six exact
+    // staging coordinates to their authenticated raw coordinates. Each alias
+    // removes one loaded-account index without changing the instruction data
+    // or signer/static-key set: 1,212 - 6 = 1,206 bytes.
+    assert_eq!(wire, 1_206, "compact Hot plus heap-request wire changed");
     assert!(wire <= PACKET_LIMIT);
 
     let transaction =

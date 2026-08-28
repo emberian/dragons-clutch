@@ -8,7 +8,12 @@ use std::{env, fs, path::PathBuf};
 
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
-    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionAckV3, HotExecutionEnvelopeV3},
+    hot_v3::{
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionAckV3,
+        HotExecutionEnvelopeV3,
+    },
 };
 use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_ACTION_OFFSET_V1, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1,
@@ -555,6 +560,121 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     assert_eq!(ack.root_poststate_digest, hash(&root.data).to_bytes());
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SealedExecutionAliasHostile {
+    Partial,
+    WrongRaw,
+    SeventhAlias,
+    WritableRaw,
+}
+
+/// The Registry transparent-continuation prefix precedes the exact child Hot
+/// frame in the outer instruction assembled by `registry_hot_instruction`.
+const REGISTRY_HOT_CHILD_START: usize = 6;
+
+fn apply_sealed_execution_alias_hostile(
+    hostile: SealedExecutionAliasHostile,
+    outer: &mut Instruction,
+    direct: &DirectCase,
+) {
+    let child_meta = |index: usize| REGISTRY_HOT_CHILD_START + index;
+    match hostile {
+        SealedExecutionAliasHostile::Partial => {
+            let distinct_staging = direct
+                .chain
+                .capability_seal_accounts
+                .get(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3)
+                .expect("distinct descriptor staging")
+                .clone();
+            *outer
+                .accounts
+                .get_mut(child_meta(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3))
+                .expect("descriptor staging meta") = distinct_staging;
+        }
+        SealedExecutionAliasHostile::WrongRaw => {
+            let wrong = direct
+                .chain
+                .hot_instruction
+                .accounts
+                .get(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3)
+                .expect("account-profile raw")
+                .clone();
+            *outer
+                .accounts
+                .get_mut(child_meta(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3))
+                .expect("descriptor staging meta") = wrong;
+        }
+        SealedExecutionAliasHostile::SeventhAlias => {
+            let config_raw = direct
+                .chain
+                .hot_instruction
+                .accounts
+                .get(HOT_CONFIG_RAW_ACCOUNT_V3)
+                .expect("config raw")
+                .clone();
+            *outer
+                .accounts
+                .get_mut(child_meta(HOT_CONFIG_STAGING_ACCOUNT_V3))
+                .expect("config staging meta") = config_raw;
+        }
+        SealedExecutionAliasHostile::WritableRaw => {
+            outer
+                .accounts
+                .get_mut(child_meta(HOT_DESCRIPTOR_RAW_ACCOUNT_V3))
+                .expect("descriptor raw meta")
+                .is_writable = true;
+        }
+    }
+}
+
+/// The six duplicate metas are an exact, sealed execution shape rather than a
+/// general relaxation of Hot fixed-account distinctness. Exercise the real
+/// Registry and Trading ELFs for every boundary: an incomplete set, a staging
+/// coordinate pointed at the wrong raw record, a seventh duplicate outside the
+/// closed set, and a privilege escalation caused by message-key coalescing.
+/// Each refusal reaches Trading, carries the semantic Content code, and rolls
+/// back every tracked byte and lamport.
+#[tokio::test]
+async fn real_hot_refuses_noncanonical_sealed_execution_aliases_atomically() {
+    for hostile in [
+        SealedExecutionAliasHostile::Partial,
+        SealedExecutionAliasHostile::WrongRaw,
+        SealedExecutionAliasHostile::SeventhAlias,
+        SealedExecutionAliasHostile::WritableRaw,
+    ] {
+        let artifacts = elves();
+        let mut test = program_test(&artifacts);
+        let releases = add_release_waist(&mut test, &artifacts);
+        let direct = direct_case(&mut test, releases, &artifacts, false);
+        let mut instructions = direct_registry_instructions(releases, &direct);
+        apply_sealed_execution_alias_hostile(hostile, &mut instructions[2], &direct);
+        let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+        add_lookup_table(&mut test, &addresses);
+        let mut context = start_with_substrate(test, fixture_substrate()).await;
+        let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+        let refusal = submit_v0(
+            &mut context,
+            &instructions,
+            addresses,
+            Some(&direct.payer),
+            &[],
+        )
+        .await
+        .expect_err("noncanonical sealed execution aliases unexpectedly executed");
+        assert_refusal(&refusal, TRADING_CONTENT_REFUSAL_CODE);
+        assert!(
+            refusal.invoked(TRADING_PROGRAM_ID),
+            "{hostile:?} never reached Trading: {:#?}",
+            refusal.logs
+        );
+        let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+        assert_eq!(
+            after, before,
+            "{hostile:?} changed a tracked byte or lamport"
+        );
+    }
+}
+
 async fn assert_postjoin_hostile_rolls_back(
     test: ProgramTest,
     releases: Releases,
@@ -788,21 +908,21 @@ fn a_geometry_that_does_not_fit_ran_out_of_compute(outcomes: u32, refusal: &Refu
 async fn the_family_trades_every_geometry_it_is_given() {
     let artifacts = elves();
     for outcomes in 2..=10_u32 {
-        match trade_at_geometry(&artifacts, outcomes).await {
-            Ok(units) => {
-                println!(
-                    "geometry: {outcomes} outcomes ({} cuts) traded at {units} CU",
-                    outcomes - 2
-                );
-                assert!(units > 0 && units <= COMPUTE_LIMIT);
-            }
-            Err(refusal) => {
-                a_geometry_that_does_not_fit_ran_out_of_compute(outcomes, &refusal);
-                panic!(
-                    "a {outcomes}-outcome market ran out of compute; the measured wall was 31 \
-                     outcomes and something has made the hot path much more expensive"
-                );
-            }
+        let execution = trade_at_geometry(&artifacts, outcomes).await;
+        if let Err(refusal) = &execution {
+            a_geometry_that_does_not_fit_ran_out_of_compute(outcomes, refusal);
+        }
+        assert!(
+            execution.is_ok(),
+            "a {outcomes}-outcome market ran out of compute; the measured wall was 31 outcomes \
+             and something has made the hot path much more expensive"
+        );
+        if let Ok(units) = execution {
+            println!(
+                "geometry: {outcomes} outcomes ({} cuts) traded at {units} CU",
+                outcomes - 2
+            );
+            assert!(units > 0 && units <= COMPUTE_LIMIT);
         }
     }
 }
@@ -1066,13 +1186,8 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
 /// The account list is the hot fixed prefix with the root read-only and the
 /// seal writable, followed by the rent payer and the System Program.
 fn seal_instruction(direct: &DirectCase, action: u32, descriptor_digest: [u8; 32]) -> Instruction {
-    let mut accounts = direct
-        .chain
-        .hot_instruction
-        .accounts
-        .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
-        .expect("hot fixed prefix")
-        .to_vec();
+    let mut accounts = direct.chain.capability_seal_accounts.clone();
+    assert_eq!(accounts.len(), HOT_FIXED_ACCOUNT_COUNT_V3);
     for meta in accounts.iter_mut() {
         meta.is_writable = meta.pubkey == direct.chain.capability_seal;
         meta.is_signer = false;
