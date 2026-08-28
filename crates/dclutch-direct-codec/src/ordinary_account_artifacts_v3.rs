@@ -997,22 +997,40 @@ mod tests {
     };
 
     fn lengths(basis_bytes: u32) -> [u32; FIXED_ACCOUNTS] {
+        lengths_at(CANONICAL_OUTCOMES, basis_bytes)
+    }
+
+    /// The canonical demo geometry's outcome count.
+    ///
+    /// Product Runtime V2 pins `region_count = cut_count + 1` and
+    /// `outcome_count = region_count + 1`, so an outcome count of three is
+    /// exactly one cut. `direct-hot`'s fixture builds that geometry:
+    /// `cuts = [0]`, `coefficients = [1, 1, 1]`.
+    const CANONICAL_OUTCOMES: usize = 3;
+
+    /// Every logical account observation of ONE market geometry.
+    ///
+    /// The only free parameter is the outcome count: every runtime-width
+    /// account the profile pins is affine in it with a stride this file
+    /// already owns, so a caller cannot state a geometry two of these
+    /// accounts disagree about.
+    fn lengths_at(outcomes: usize, basis_bytes: u32) -> [u32; FIXED_ACCOUNTS] {
         let mut output = [0_u32; FIXED_ACCOUNTS];
         output[0] = width(ROOT_BYTES).expect("root");
         output[1] = width(DIRECT_EXECUTION_CONFIG_BYTES_V1).expect("config");
         output[2] = width(PRODUCT_RECORD_BYTES_V2).expect("product");
-        output[3] =
-            width(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES).expect("portfolio");
+        output[3] = width(PORTFOLIO_HEADER_BYTES + outcomes * PORTFOLIO_COEFFICIENT_BYTES)
+            .expect("portfolio");
         output[4] = basis_bytes;
         output[5] = width(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
         output[7] = width(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("lifecycle RentCredit");
         output[8] = width(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
         output[10] = width(LOADER_V3_PROGRAM_BYTES).expect("Rent program");
-        output[13] =
-            width(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 3 * CLAIMS_ROW_BYTES).expect("market");
+        output[13] = width(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + outcomes * CLAIMS_ROW_BYTES)
+            .expect("market");
         output[14] = basis_bytes;
         output[16] = output[2];
-        output[18] = width(DOMAIN_AFFINE_BASE_BYTES + 3 * DOMAIN_CUT_BYTES).expect("domain");
+        output[18] = width(DOMAIN_AFFINE_BASE_BYTES + outcomes * DOMAIN_CUT_BYTES).expect("domain");
         output[20] = output[3];
         output[22] = 17;
         output[23] = width(CORE_STATE_BYTES).expect("Core");
@@ -1024,7 +1042,7 @@ mod tests {
         output[29] = 1_024;
         output[30] = width(LOADER_V3_PROGRAM_BYTES).expect("Core program");
         output[31] = 1_024;
-        output[32] = width(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 3 * CLAIMS_ROW_BYTES)
+        output[32] = width(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + outcomes * CLAIMS_ROW_BYTES)
             .expect("position");
         output[33] = output[32];
         output[34] = 0;
@@ -1072,6 +1090,89 @@ mod tests {
         )
         .expect("profile");
         output
+    }
+
+    /// The emitted Profile14 is the SAME BYTES at every admissible geometry.
+    ///
+    /// This is the identity control for geometry-parametric emission. Every
+    /// runtime-width account this profile pins is stated as an affine
+    /// `(data_length, data_item_stride)` rule against the transaction's own
+    /// Product tail count, never as a resolved width, and the family declares
+    /// `item_account_stride = 0`, so no coordinate appears or disappears with
+    /// the geometry. A market with four outcomes and one with three therefore
+    /// select the SAME AccountProfile content identity, and
+    /// `DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3` is one identity for the
+    /// whole family rather than one per market.
+    ///
+    /// If this test ever fails, geometry-parametric emission is required and
+    /// the failing coordinate is the one that leaked an observed width into
+    /// the artifact.
+    #[test]
+    fn the_emitted_profile_is_byte_identical_at_every_admissible_geometry() {
+        let canonical = emit(&lengths_at(CANONICAL_OUTCOMES, 256));
+        let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        let mut emitted = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        for outcomes in 2..=16_usize {
+            // The ProductBasis record is variable-width within its fixed
+            // canonical prefix, so its observation moves with the geometry too.
+            let basis = width(BASIS_PREFIX_BYTES + outcomes * 8).expect("basis");
+            let lengths = lengths_at(outcomes, basis);
+            assert_eq!(
+                encode_direct_inline_ordinary_account_profile_v3_atomic(
+                    DirectInlineOrdinaryAccountProfileInputV3 {
+                        logical_data_lengths: &lengths,
+                    },
+                    &mut scratch,
+                    &mut emitted,
+                ),
+                Ok(()),
+                "outcome count {outcomes} refused"
+            );
+            assert_eq!(
+                emitted, canonical,
+                "AccountProfile bytes moved at outcome count {outcomes}"
+            );
+        }
+    }
+
+    /// A geometry whose accounts disagree is refused, at every coordinate.
+    ///
+    /// The profile does not merely fail to pin the geometry -- it requires the
+    /// caller's observations to state ONE geometry. Each perturbation below
+    /// moves exactly one runtime-width account off the common outcome count.
+    #[test]
+    fn one_account_disagreeing_about_the_geometry_is_refused() {
+        let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        let mut output = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        // Portfolio, Claims aggregate, result domain, and both Position
+        // records, in the coordinates `validate_lengths` cross-checks.
+        for (coordinate, stride) in [
+            (3_usize, PORTFOLIO_COEFFICIENT_BYTES),
+            (usize::from(CLAIMS_MARKET_ACCOUNT), CLAIMS_ROW_BYTES),
+            (18, DOMAIN_CUT_BYTES),
+            (
+                usize::from(CLAIMS_SOURCE_POSITION_ACCOUNT),
+                CLAIMS_ROW_BYTES,
+            ),
+            (
+                usize::from(CLAIMS_DESTINATION_POSITION_ACCOUNT),
+                CLAIMS_ROW_BYTES,
+            ),
+        ] {
+            let mut lengths = lengths_at(4, width(BASIS_PREFIX_BYTES + 32).expect("basis"));
+            lengths[coordinate] += width(stride).expect("stride");
+            assert_eq!(
+                encode_direct_inline_ordinary_account_profile_v3_atomic(
+                    DirectInlineOrdinaryAccountProfileInputV3 {
+                        logical_data_lengths: &lengths,
+                    },
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(DirectOrdinaryAccountArtifactErrorV3::Geometry),
+                "coordinate {coordinate} was allowed to disagree about the geometry"
+            );
+        }
     }
 
     #[test]
