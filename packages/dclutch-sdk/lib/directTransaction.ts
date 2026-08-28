@@ -17,9 +17,6 @@ import {
 import { POSITION_PDA_DOMAIN_V1 } from './generated/realmPositionV1';
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 
-// Internal compatibility while the Found builder moves to the neutral owner.
-export { SOLANA_PACKET_BYTES_V1 as PACKET_DATA_SIZE } from './solanaLimits';
-
 export const CONTROLLER_SEED = new TextEncoder().encode('dclutch-controller-v1');
 export const REPLAY_SEED = new TextEncoder().encode('dclutch/direct-replay/v3');
 /**
