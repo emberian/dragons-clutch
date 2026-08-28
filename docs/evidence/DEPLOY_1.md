@@ -139,7 +139,7 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (ninth attempt: fresh identity at generation 1, detached, and the first with a priority fee on every transaction plus the unspoofable drop verdict — §7 carries the complete diagnosis). The addresses below
+**Status: founding IN PROGRESS on devnet (tenth attempt: the first where an undeliverable hostile probe is a recorded evidence gap rather than a founding-killer — the real founding, a strictly smaller transaction, proceeds fail-closed on its own delivery; §7 carries the complete diagnosis). The addresses below
 are DERIVED TARGETS — the coordinates this input's founding will land at,
 computed off-chain and detector-confirmed absent before execution — NOT yet a
 live Open Market; the "Open Market" row becomes a live, verified account only
@@ -154,11 +154,11 @@ RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
 | fact | derived target (pending founding completion) |
 |---|---|
-| **Open Market** (not yet live) | `CK9hsq9vtnUc4U68A5ktHSfX6vHVHtRwUi2BjDV1nnTe` |
-| Found31 Market (generation 1) | `7D3xvorxrpLhU6P1CWeYXjRhwjRwhzVAChWJdeBdBVJF` |
-| abort-lane Market (generation 3, staged and unwound) | `C1yGFRJpJE2SWyLnEPVxP3Z65SZA28KgWyP9oPjh7Cwg` |
-| collateral mint (Token-2022, 6 decimals) | `4VCF9Hzoc5fzks5c3XwU27Xj44UJ7a7Re8ownDq4Udhr` |
-| realm record | `ANCrmRVuwPry6ajkgyvVUzrCuYXPXaTVNWpVccqCTFKx` |
+| **Open Market** (not yet live) | `Csa2B4ZKRZYD889njds8GyN6Lmdt4SUZHJUdLieXoG1u` |
+| Found31 Market (generation 1) | `HYjpq3dgqVvbEVqJJHyyAkpihYpzw7HuyZQvFBM21Eso` |
+| abort-lane Market (generation 3, staged and unwound) | `4R8RirZavRF6Dsp9xRUL3iLiSbwtgZ2w3wLTbbr6o5uA` |
+| collateral mint (Token-2022, 6 decimals) | `5xZQoY3dHzuxWHyXudgx73Jevi7BR8WHo9u7iQxwCgM8` |
+| realm record | `6Lvs7x2hQCvVsKvWkrsYTRkZzUWUhiN8cdt6u8wUt8fP` |
 | band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
 | terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
 | `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
