@@ -267,11 +267,52 @@ def owned_loopback_fixture(root: pathlib.Path):
     evidence = root / "evidence"
     evidence.mkdir()
     (evidence / "fixture-journal.json").write_bytes(source_raw)
+    stage_directory = evidence / "stages"
+    stage_directory.mkdir()
+    session_stages = []
+    for stage in reconcile.OWNED_LOOPBACK_COMPLETED_STAGES:
+        relative = f"stages/{stage}.json"
+        stage_source = {
+            "schema": f"dclutch-fixture-{stage}-completion-v1",
+            "status": "finalized",
+        }
+        stage_path = evidence / relative
+        stage_path.write_bytes(reconcile.canonical_bytes(stage_source))
+        session_stages.append(
+            {
+                "stage": stage,
+                "path": relative,
+                "sha256": hashlib.sha256(stage_path.read_bytes()).hexdigest(),
+                "schema": stage_source["schema"],
+                "completionPointer": "/status",
+                "completionValue": "finalized",
+            }
+        )
     session = {
-        "schema": "dclutch-local-private-validator-lifecycle-v1",
+        "schema": reconcile.OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA,
         "status": "finalized",
+        "cluster": "owned-loopback",
+        "genesisHash": genesis,
+        "stages": session_stages,
+        "completedStages": list(reconcile.OWNED_LOOPBACK_COMPLETED_STAGES),
+        "stageSetSha256": hashlib.sha256(
+            reconcile.canonical_bytes(session_stages)
+        ).hexdigest(),
     }
     (evidence / "session.json").write_bytes(reconcile.canonical_bytes(session))
+    chaos = {
+        "schema": reconcile.OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA,
+        "status": "finalized",
+        "stages": [
+            {
+                "stage": stage,
+                "status": "finalized",
+                "intentSha256": hashlib.sha256(stage.encode()).hexdigest(),
+            }
+            for stage in reconcile.OWNED_LOOPBACK_CHAOS_STAGES
+        ],
+    }
+    (evidence / "chaos-session.json").write_bytes(reconcile.canonical_bytes(chaos))
     terminal_session = {
         "schema": reconcile.OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA,
         "phase": "finalized",
@@ -384,6 +425,7 @@ def owned_loopback_fixture(root: pathlib.Path):
     }
     terminal_completion_path.write_bytes(reconcile.canonical_bytes(terminal_completion))
     journals = [
+        journal("chaos-session.json", chaos["schema"], "/status"),
         journal("fixture-journal.json", source["schema"], "/phase"),
         journal("session.json", session["schema"], "/status"),
         journal(
@@ -392,6 +434,15 @@ def owned_loopback_fixture(root: pathlib.Path):
             "/status",
         ),
     ]
+    journals.extend(
+        journal(
+            f"stages/{stage}.json",
+            f"dclutch-fixture-{stage}-completion-v1",
+            "/status",
+        )
+        for stage in reconcile.OWNED_LOOPBACK_COMPLETED_STAGES
+    )
+    journals.sort(key=lambda row: row["path"])
     programs = []
     loader = reconcile.LOADER_V3_PROGRAM_ID
     authority, authority_raw = key(81)
@@ -484,10 +535,18 @@ def owned_loopback_fixture(root: pathlib.Path):
         "journalSetSha256": hashlib.sha256(reconcile.canonical_bytes(journals)).hexdigest(),
         "privateSession": {
             "path": "session.json",
-            "sha256": journals[1]["sha256"],
+            "sha256": hashlib.sha256((evidence / "session.json").read_bytes()).hexdigest(),
             "schema": session["schema"],
             "status": "finalized",
             "completedStages": list(reconcile.OWNED_LOOPBACK_COMPLETED_STAGES),
+        },
+        "chaosSession": {
+            "path": "chaos-session.json",
+            "sha256": hashlib.sha256(
+                (evidence / "chaos-session.json").read_bytes()
+            ).hexdigest(),
+            "schema": reconcile.OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA,
+            "status": "finalized",
         },
     }
     receipt_path.write_bytes(reconcile.canonical_bytes(receipt))
@@ -984,6 +1043,69 @@ class ReconcileTest(unittest.TestCase):
             with self.assertRaisesRegex(reconcile.Refusal, "partial"):
                 reconcile.authenticate_owned_loopback_session(
                     receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence, manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_self_consistent_partial_session_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            session_path = evidence / "session.json"
+            session = json.loads(session_path.read_text())
+            session["stages"].pop()
+            session["completedStages"].pop()
+            session["stageSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(session["stages"])
+            ).hexdigest()
+            session_path.write_bytes(reconcile.canonical_bytes(session))
+            session_sha256 = hashlib.sha256(session_path.read_bytes()).hexdigest()
+            receipt["privateSession"]["sha256"] = session_sha256
+            receipt["privateSession"]["completedStages"] = session["completedStages"]
+            session_journal = next(
+                row for row in receipt["journals"] if row["path"] == "session.json"
+            )
+            session_journal["sha256"] = session_sha256
+            receipt["journalSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(receipt["journals"])
+            ).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "partial"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path,
+                    hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    evidence,
+                    manifest_path,
+                    capture_path,
+                    manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_self_consistent_partial_chaos_session_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            chaos_path = evidence / "chaos-session.json"
+            chaos = json.loads(chaos_path.read_text())
+            chaos["stages"].pop()
+            chaos_path.write_bytes(reconcile.canonical_bytes(chaos))
+            chaos_sha256 = hashlib.sha256(chaos_path.read_bytes()).hexdigest()
+            receipt["chaosSession"]["sha256"] = chaos_sha256
+            chaos_journal = next(
+                row for row in receipt["journals"] if row["path"] == "chaos-session.json"
+            )
+            chaos_journal["sha256"] = chaos_sha256
+            receipt["journalSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(receipt["journals"])
+            ).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "eight-stage hostile run"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path,
+                    hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    evidence,
+                    manifest_path,
+                    capture_path,
+                    manifest,
                     reconcile.captured_owned_loopback(capture_path),
                 )
 

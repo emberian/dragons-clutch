@@ -35,6 +35,12 @@ OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA = (
 )
 OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA = "dclutch-local-successor-infrastructure-plan-v2"
 OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA = "dclutch-successor-local-validator-profile-v1"
+OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA = (
+    "dclutch-owned-loopback-private-lifecycle-session-v1"
+)
+OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA = (
+    "dclutch-owned-loopback-private-lifecycle-chaos-session-v1"
+)
 OWNED_LOOPBACK_DOSSIER_SCHEMA = "dclutch-owned-loopback-activity-dossier-v1"
 OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA = (
     "dclutch-owned-loopback-terminal-sequence-completion-v1"
@@ -48,6 +54,9 @@ OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA = (
 EVENT_KINDS = ("founding", "participant", "direct", "resolution", "payout", "retirement")
 OWNED_LOOPBACK_COMPLETED_STAGES = (
     "founding", "participant", "alt", "seal", "direct", "resolution", "payout", "retirement",
+)
+OWNED_LOOPBACK_CHAOS_STAGES = (
+    "founding", "participant", "alt", "seal", "hot", "resolution", "payout", "retire",
 )
 OWNED_LOOPBACK_PROGRAM_ROLES = (
     "registry", "rent", "custody", "resolution", "claims", "trading", "core",
@@ -1621,6 +1630,180 @@ def authenticate_owned_loopback_provider_closure(
     }
 
 
+def authenticate_owned_loopback_private_session(
+    session_relative: str,
+    session_raw: bytes,
+    session_value: Any,
+    receipt_value: Any,
+    evidence_root: pathlib.Path,
+    genesis_hash: str,
+    journals: list[dict[str, str]],
+) -> dict[str, Any]:
+    receipt = exact_keys(
+        receipt_value,
+        {"path", "sha256", "schema", "status", "completedStages"},
+        set(),
+        "owned-loopback private session reference",
+    )
+    session = exact_keys(
+        session_value,
+        {
+            "schema", "status", "cluster", "genesisHash", "stages", "completedStages",
+            "stageSetSha256",
+        },
+        set(),
+        "owned-loopback private session",
+    )
+    completed = session["completedStages"]
+    if (
+        receipt["path"] != session_relative
+        or digest(receipt["sha256"], "private session sha256") != sha256_bytes(session_raw)
+        or receipt["schema"] != OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA
+        or receipt["status"] != "finalized"
+        or receipt["completedStages"] != completed
+        or session["schema"] != OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA
+        or session["status"] != "finalized"
+        or session["cluster"] != "owned-loopback"
+        or pubkey(session["genesisHash"], "private session genesisHash") != genesis_hash
+        or completed != list(OWNED_LOOPBACK_COMPLETED_STAGES)
+    ):
+        refuse("owned-loopback private session is missing, substituted, provisional, or partial")
+
+    stages = session["stages"]
+    if not isinstance(stages, list) or len(stages) != len(OWNED_LOOPBACK_COMPLETED_STAGES):
+        refuse("owned-loopback private session omits the exact eight lifecycle stage owners")
+    journal_by_path = {journal["path"]: journal for journal in journals}
+    projected_stages: list[dict[str, str]] = []
+    stage_paths: set[str] = set()
+    for index, (raw_stage, expected_stage) in enumerate(
+        zip(stages, OWNED_LOOPBACK_COMPLETED_STAGES, strict=True)
+    ):
+        stage = exact_keys(
+            raw_stage,
+            {
+                "stage", "path", "sha256", "schema", "completionPointer",
+                "completionValue",
+            },
+            set(),
+            f"private session stage {index}",
+        )
+        stage_path, relative = canonical_relative_evidence(
+            evidence_root, stage["path"], f"private session stage {expected_stage}"
+        )
+        if (
+            stage["stage"] != expected_stage
+            or relative == session_relative
+            or relative in stage_paths
+            or stage["completionValue"] != "finalized"
+        ):
+            refuse("private session stage order, ownership, or completion is noncanonical")
+        stage_paths.add(relative)
+        stage_raw, stage_source = read_evidence_file(stage_path)
+        source_schema = text(stage["schema"], f"private session stage {expected_stage} schema")
+        completion_pointer = text(
+            stage["completionPointer"],
+            f"private session stage {expected_stage} completionPointer",
+        )
+        projected = {
+            "stage": expected_stage,
+            "path": relative,
+            "sha256": digest(stage["sha256"], f"private session stage {expected_stage} sha256"),
+            "schema": source_schema,
+            "completionPointer": completion_pointer,
+            "completionValue": "finalized",
+        }
+        journal = journal_by_path.get(relative)
+        if (
+            journal is None
+            or projected["sha256"] != sha256_bytes(stage_raw)
+            or stage_source.get("schema") != source_schema
+            or json_pointer(
+                stage_source, completion_pointer, f"private session stage {expected_stage}"
+            ) != "finalized"
+            or {key: projected[key] for key in (
+                "path", "sha256", "schema", "completionPointer", "completionValue"
+            )} != journal
+        ):
+            refuse("private session stage bytes differ from the authenticated journal closure")
+        projected_stages.append(projected)
+    stage_set_sha256 = digest(session["stageSetSha256"], "private session stageSetSha256")
+    if stage_set_sha256 != sha256_bytes(canonical_bytes(projected_stages)):
+        refuse("private session stageSetSha256 differs from its exact ordered rows")
+    return {
+        "path": session_relative,
+        "sha256": receipt["sha256"],
+        "schema": OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA,
+        "status": "finalized",
+        "completedStages": list(OWNED_LOOPBACK_COMPLETED_STAGES),
+        "stageSetSha256": stage_set_sha256,
+    }
+
+
+def authenticate_owned_loopback_chaos_session(
+    receipt_value: Any,
+    evidence_root: pathlib.Path,
+    journals: list[dict[str, str]],
+) -> dict[str, str]:
+    receipt = exact_keys(
+        receipt_value,
+        {"path", "sha256", "schema", "status"},
+        set(),
+        "owned-loopback chaos session reference",
+    )
+    path, relative = canonical_relative_evidence(
+        evidence_root, receipt["path"], "chaos session"
+    )
+    raw, source = read_evidence_file(path)
+    source = exact_keys(
+        source,
+        {"schema", "status", "stages"},
+        set(),
+        "owned-loopback chaos session",
+    )
+    chaos_sha256 = digest(receipt["sha256"], "chaos session sha256")
+    if (
+        receipt["schema"] != OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA
+        or receipt["status"] != "finalized"
+        or source["schema"] != OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA
+        or source["status"] != "finalized"
+        or chaos_sha256 != sha256_bytes(raw)
+    ):
+        refuse("owned-loopback chaos session is missing, substituted, or provisional")
+    stages = source["stages"]
+    if not isinstance(stages, list) or len(stages) != len(OWNED_LOOPBACK_CHAOS_STAGES):
+        refuse("owned-loopback chaos session omits the exact eight-stage hostile run")
+    for index, (raw_stage, expected_stage) in enumerate(
+        zip(stages, OWNED_LOOPBACK_CHAOS_STAGES, strict=True)
+    ):
+        stage = exact_keys(
+            raw_stage,
+            {"stage", "status", "intentSha256"},
+            set(),
+            f"chaos session stage {index}",
+        )
+        if (
+            stage["stage"] != expected_stage
+            or stage["status"] != "finalized"
+        ):
+            refuse("chaos session stage order or completion is noncanonical")
+        digest(stage["intentSha256"], f"chaos session {expected_stage} intentSha256")
+    journal = next((row for row in journals if row["path"] == relative), None)
+    if journal != {
+        "path": relative,
+        "sha256": chaos_sha256,
+        "schema": OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA,
+        "completionPointer": "/status",
+        "completionValue": "finalized",
+    }:
+        refuse("chaos session differs from the authenticated journal closure")
+    return {
+        "path": relative,
+        "sha256": chaos_sha256,
+        "schema": OWNED_LOOPBACK_CHAOS_SESSION_SCHEMA,
+        "status": "finalized",
+    }
+
+
 def authenticate_owned_loopback_session(
     receipt_path: pathlib.Path,
     expected_receipt_sha256: str,
@@ -1644,7 +1827,7 @@ def authenticate_owned_loopback_session(
         {
             "schema", "status", "cluster", "sourceCommit", "checkedReleaseGateSha256",
             "programs", "manifestSha256", "capture", "providerClosure", "journals",
-            "journalSetSha256", "privateSession",
+            "journalSetSha256", "privateSession", "chaosSession",
         },
         set(),
         "owned-loopback session receipt",
@@ -1823,26 +2006,30 @@ def authenticate_owned_loopback_session(
     if terminal_completion is None:
         refuse("owned-loopback receipt omits typed terminal completion")
 
-    private_session = exact_keys(
+    private_session_ref = exact_keys(
         receipt["privateSession"],
         {"path", "sha256", "schema", "status", "completedStages"},
         set(),
-        "owned-loopback private session",
+        "owned-loopback private session reference",
     )
     session_path, session_relative = canonical_relative_evidence(
-        root, private_session["path"], "private session"
+        root, private_session_ref["path"], "private session"
     )
     session_raw, session = read_evidence_file(session_path)
-    completed = private_session["completedStages"]
-    if (
-        session_relative not in journal_paths
-        or digest(private_session["sha256"], "private session sha256") != sha256_bytes(session_raw)
-        or session.get("schema") != private_session["schema"]
-        or private_session["status"] != "finalized"
-        or session.get("status", session.get("phase")) != "finalized"
-        or completed != list(OWNED_LOOPBACK_COMPLETED_STAGES)
-    ):
-        refuse("owned-loopback private session is missing, substituted, provisional, or partial")
+    if session_relative not in journal_paths:
+        refuse("owned-loopback private session is absent from the authenticated journal closure")
+    private_session = authenticate_owned_loopback_private_session(
+        session_relative,
+        session_raw,
+        session,
+        private_session_ref,
+        root,
+        genesis,
+        projected_journals,
+    )
+    chaos_session = authenticate_owned_loopback_chaos_session(
+        receipt["chaosSession"], root, projected_journals
+    )
 
     return {
         "classification": "owned-loopback-local-evidence-not-public-devnet-or-live-observation",
@@ -1853,7 +2040,8 @@ def authenticate_owned_loopback_session(
         "programs": projected_programs,
         "providerClosure": provider_closure,
         "journalSetSha256": receipt["journalSetSha256"],
-        "privateSessionSha256": private_session["sha256"],
+        "privateSession": private_session,
+        "chaosSession": chaos_session,
         "terminalCompletion": terminal_completion,
     }
 
