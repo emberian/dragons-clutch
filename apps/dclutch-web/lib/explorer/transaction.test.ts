@@ -60,6 +60,7 @@ function meta(overrides: Partial<TransactionMetaObservation> = {}): TransactionM
     postBalances: Object.freeze(addresses.map(() => '999000')),
     logMessages: Object.freeze([]),
     innerInstructions: Object.freeze([]),
+    returnData: null,
     transactionBytes: bytes,
     ...overrides,
   });

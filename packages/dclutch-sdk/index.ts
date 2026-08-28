@@ -17,6 +17,7 @@
 // Reading the chain: the bounded, hostile-decoding RPC client and the
 // account projections built on it.
 export * from './lib/rpc';
+export * from './lib/transactionReturnData';
 export * from './lib/decoders';
 export * from './lib/records';
 export * from './lib/marketDiscovery';

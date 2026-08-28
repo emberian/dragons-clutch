@@ -2,6 +2,10 @@ import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 
 import { decodeBase64 } from './bytes';
 import {
+  decodeTransactionReturnDataV1,
+  type TransactionReturnDataObservationV1,
+} from '../../../packages/dclutch-sdk/lib/transactionReturnData';
+import {
   AccountProjection,
   classifyHeader,
   crossCheckBindings,
@@ -125,6 +129,8 @@ export type TransactionMetaObservation = Readonly<{
   postBalances: ReadonlyArray<string>;
   logMessages: ReadonlyArray<string>;
   innerInstructions: ReadonlyArray<InnerInstructionObservation>;
+  /** Exact final program return data, or explicit absence. */
+  returnData: TransactionReturnDataObservationV1 | null;
   transactionBytes: Uint8Array;
 }>;
 
@@ -541,6 +547,7 @@ export class SolanaRpcClient {
         ? meta.logMessages.slice(0, MAX_LOG_MESSAGES).map(boundedLogMessage)
         : []),
       innerInstructions: Object.freeze(readInnerInstructions(meta.innerInstructions)),
+      returnData: decodeTransactionReturnDataV1(meta.returnData),
       transactionBytes: bytes,
     });
   }
