@@ -1,10 +1,7 @@
 'use client';
 
-import { TransactionMessage, VersionedTransaction, type AddressLookupTableAccount, type TransactionInstruction } from '@solana/web3.js';
 import Nav from '@/components/Nav';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-
-import { PublicKey } from '@solana/web3.js';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
 import {
@@ -47,10 +44,7 @@ import {
   resolutionDeadlineV1,
 } from '@/lib/founding/windowCadence';
 import { hex, sha256 } from '@/lib/bytes';
-import { planLookupTableV1, lookupTableAccountV1, type LookupTablePlanV1 } from '@/lib/founding/lookupTable';
 import { SolanaRpcClient } from '@/lib/rpc';
-import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@/lib/walletHandoff';
-import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 
 type StepId = 'product' | 'window' | 'funding' | 'review' | 'submit';
@@ -60,7 +54,7 @@ const STEPS: ReadonlyArray<Readonly<{ id: StepId; number: string; title: string;
   { id: 'window', number: '02', title: 'Window width', blurb: '§12.3’s cadence table. The operator states a width; nothing here states one for them.' },
   { id: 'funding', number: '03', title: 'Principal & funding', blurb: 'Seven segregated compartments, and the κ capacity bound checked at the atom.' },
   { id: 'review', number: '04', title: 'Review the ladder', blurb: 'The exact transaction set, with every rung labelled by what actually builds it.' },
-  { id: 'submit', number: '05', title: 'Sign & submit', blurb: 'The rungs a browser can drive, signed by a wallet against a finalized RPC.' },
+  { id: 'submit', number: '05', title: 'Inspect only', blurb: 'Reacquire the browser-previewable pair without signing or spending.' },
 ]);
 
 const STATUS_LABEL: Readonly<Record<FoundingRungStatusV1, string>> = Object.freeze({
@@ -88,9 +82,6 @@ const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: strin
   { field: 'manipulationFloorRecord', label: 'Manipulation floor raw' },
   { field: 'capabilityManifestRecord', label: 'Capability manifest raw' },
 ]);
-
-type SubmitStageId = 'rent-credit' | 'routing-table' | 'found31';
-type SubmitStage = Readonly<{ id: SubmitStageId; label: string; signature: string | null; status: 'pending' | 'signing' | 'submitted' | 'refused'; detail: string }>;
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : 'refused without a usable reason';
@@ -155,10 +146,6 @@ export default function CreateMarketWizard() {
   };
   const [plan, setPlan] = useState<CoreFoundPlanV2 | null>(null);
   const [planStatus, setPlanStatus] = useState('No transaction has been constructed. The ladder below is the plan, not a promise.');
-  const [stages, setStages] = useState<ReadonlyArray<SubmitStage>>([]);
-  const [table, setTable] = useState<AddressLookupTableAccount | null>(null);
-  const [walletStatus, setWalletStatus] = useState('No wallet connected.');
-  const wallets = useWalletDirectoryV1();
 
   const product = useMemo(() => {
     const denominator = bigintOrNull(cutDenominator);
@@ -279,137 +266,9 @@ export default function CreateMarketWizard() {
       if (generationValue === null || generationValue <= 0n) throw new Error('generation must be a positive integer');
       const next = await prepareCoreFoundV2(new SolanaRpcClient(endpoint), { ...effectiveAddresses, generation: generationValue });
       setPlan(next);
-      setTable(null);
-      setStages([
-        { id: 'rent-credit', label: 'Lifecycle RentCredit Create', signature: null, status: next.rentCreditState === 'created' ? 'submitted' : 'pending', detail: next.rentCreditState === 'created' ? 'Already created on this chain for this Market and generation.' : `${next.rentCreateWireBytes?.length ?? 0} bytes · unsigned` },
-        { id: 'routing-table', label: `Routing table · ${next.routableAddresses.length} addresses`, signature: null, status: 'pending', detail: 'Not created. Found37 does not fit a packet without it.' },
-        { id: 'found31', label: 'Found37 — Market at Founding', signature: null, status: 'pending', detail: next.foundRefusal ?? `${next.wireBytes?.length ?? 0} bytes · unsigned` },
-      ]);
-      setPlanStatus(`Accepted at finalized slot ${next.observedSlot}. Nothing is signed or submitted.`);
+      setPlanStatus(`Accepted as a read-only preview at finalized slot ${next.observedSlot}. Nothing can be signed or submitted from this page.`);
     } catch (error) {
       setPlanStatus(`Refused: ${reason(error)}`);
-    }
-  }
-
-  function updateStage(target: SubmitStage['id'], patch: Partial<SubmitStage>): void {
-    setStages((current) => current.map((stage) => (stage.id === target ? { ...stage, ...patch } : stage)));
-  }
-
-  /** Sign one transaction with the connected wallet and submit it, once. */
-  async function signAndSubmitOne(transaction: VersionedTransaction, client: SolanaRpcClient): Promise<string> {
-    const signed = await requestWalletTransactionSignatureV1(client, wallets.handoff(endpoint), transaction, addresses.payer);
-    if (!signed.complete) throw new Error('the wallet did not complete the signature set');
-    return submitSignedTransactionV1(client, signed.wireBytes);
-  }
-
-  /**
-   * Wait for one submitted signature to finalize, or say why it did not.
-   *
-   * Submission is not landing, and every stage here is a precondition of the
-   * next: the lifecycle credit must exist before Found37 names it, and a lookup
-   * table is usable only strictly after the slot that last extended it.
-   */
-  async function awaitFinalized(client: SolanaRpcClient, signature: string): Promise<string> {
-    for (let attempt = 0; attempt < 90; attempt += 1) {
-      const status = await client.signatureStatus(signature);
-      if (status?.err) throw new Error(`${signature} failed on chain: ${JSON.stringify(status.err)}`);
-      if (status?.confirmation === 'finalized') return status.slot;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    throw new Error(`${signature} did not finalize within ninety seconds`);
-  }
-
-  function compile(instructions: ReadonlyArray<TransactionInstruction>, blockhash: string): VersionedTransaction {
-    return new VersionedTransaction(new TransactionMessage({
-      payerKey: new PublicKey(addresses.payer),
-      recentBlockhash: blockhash,
-      instructions: [...instructions],
-    }).compileToV0Message());
-  }
-
-  function updateStage(target: SubmitStageId, patch: Partial<SubmitStage>): void {
-    setStages((current) => current.map((stage) => (stage.id === target ? { ...stage, ...patch } : stage)));
-  }
-
-  /**
-   * Build the routing table Found37 rides, and read it back off the chain.
-   *
-   * The create and every extend page is its own transaction and its own wallet
-   * signature; nothing is batched behind one click that the operator did not
-   * see. The table's contents are then re-read at finalized commitment and
-   * compared against the plan, because a client that compiles indexes against
-   * the list it built the plan FROM rather than against the table itself hands
-   * the program a permuted account frame -- which is a refusal three layers
-   * away from its cause.
-   */
-  async function buildRoutingTable(client: SolanaRpcClient, current: CoreFoundPlanV2): Promise<AddressLookupTableAccount> {
-    const recentSlot = await client.finalizedSlot();
-    const routing: LookupTablePlanV1 = planLookupTableV1({
-      authority: addresses.payer,
-      payer: addresses.payer,
-      recentSlot: BigInt(recentSlot),
-      addresses: current.routableAddresses,
-    });
-    let lastSlot = recentSlot;
-    const pages = [routing.create, ...routing.extensions];
-    for (let index = 0; index < pages.length; index += 1) {
-      updateStage('routing-table', { detail: `Signing ${index === 0 ? 'create' : `extend page ${index}`} of ${pages.length}…` });
-      const blockhash = await client.latestMutationBlockhash();
-      const signature = await signAndSubmitOne(compile([pages[index]], blockhash.blockhash), client);
-      lastSlot = await awaitFinalized(client, signature);
-      updateStage('routing-table', { signature, detail: `${index + 1} of ${pages.length} finalized at slot ${lastSlot}` });
-    }
-    // Strictly after the slot that last extended it.
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      if (BigInt(await client.finalizedSlot()) > BigInt(lastSlot)) break;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    const account = await lookupTableAccountV1(client, routing.lookupTable, routing.addresses);
-    updateStage('routing-table', { status: 'submitted', detail: `${routing.lookupTable} · ${routing.addresses.length} addresses, contents verified against the plan` });
-    return account;
-  }
-
-  /**
-   * Run one rung, then stop.
-   *
-   * Deliberately one rung per click. Chaining them would be deciding on the
-   * operator's behalf that the previous one landed.
-   */
-  async function runStage(target: SubmitStageId): Promise<void> {
-    if (plan === null) return;
-    const client = new SolanaRpcClient(endpoint);
-    updateStage(target, { status: 'signing', detail: 'Awaiting the wallet’s signature…' });
-    try {
-      if (target === 'rent-credit') {
-        if (plan.rentCreateTransaction === null) throw new Error('the lifecycle RentCredit already exists for this Market and generation');
-        const signature = await signAndSubmitOne(plan.rentCreateTransaction, client);
-        updateStage(target, { detail: 'Submitted. Waiting for finality…', signature });
-        const slot = await awaitFinalized(client, signature);
-        updateStage(target, { status: 'submitted', detail: `Finalized at slot ${slot}` });
-        setWalletStatus(`Lifecycle RentCredit finalized as ${signature}.`);
-        return;
-      }
-      if (target === 'routing-table') {
-        setTable(await buildRoutingTable(client, plan));
-        setWalletStatus('Routing table finalized and its contents verified.');
-        return;
-      }
-      if (table === null) throw new Error('Found37 does not fit a packet without its routing table; build that first');
-      // Recompiled against the finalized table, and reauthenticated from
-      // scratch: the chain has moved since the plan was built, and a stale
-      // blockhash or a changed record is a refusal rather than a surprise.
-      const generationValue = BigInt(generation);
-      const routed = await prepareCoreFoundV2(client, { ...effectiveAddresses, generation: generationValue, lookupTable: table });
-      if (routed.transaction === null) throw new Error(routed.foundRefusal ?? 'Found37 could not be compiled');
-      if (routed.market !== plan.market) throw new Error('the Market address changed between planning and submission');
-      const signature = await signAndSubmitOne(routed.transaction, client);
-      updateStage(target, { detail: `Submitted · ${routed.wireBytes?.length ?? 0} bytes. Waiting for finality…`, signature });
-      const slot = await awaitFinalized(client, signature);
-      updateStage(target, { status: 'submitted', detail: `Finalized at slot ${slot} · Market ${routed.market} is at phase Founding`, signature });
-      setWalletStatus(`Found37 finalized as ${signature}.`);
-    } catch (error) {
-      updateStage(target, { status: 'refused', detail: `Refused: ${reason(error)}` });
-      setWalletStatus(`Refused: ${reason(error)}`);
     }
   }
 
@@ -418,7 +277,7 @@ export default function CreateMarketWizard() {
 
     <section className="market-heading">
       <div>
-        <div className="market-kicker"><span>Create · range protection</span><span>DCLTGMF2 atomic route</span></div>
+        <div className="market-kicker"><span>Design · range protection</span><span>DCLTGMF2 read-only preview</span></div>
         <h1>State a band.<br />Price the window.<br />See the whole ladder.</h1>
       </div>
       <p>
@@ -627,21 +486,9 @@ export default function CreateMarketWizard() {
 
     {step === 'submit' && <section className="direct-card">
       <header className="direct-card-heading"><span>05</span><div>
-        <h2>Sign and submit the rungs a browser can drive</h2>
-        <p>Against a validator whose record graph and collateral Mint already exist, the two Core rungs are reachable from a wallet at a generation nothing has used. Each is signed and submitted separately: the lifecycle credit must confirm before Found37 is submitted, and chaining them would be deciding on your behalf that the first one landed.</p>
+        <h2>Inspect the browser-previewable founding pair</h2>
+        <p>This read-only check reacquires the immutable releases, Product semantics, and account frame at finalized commitment. It does not ask for a wallet, create a lookup table, sign a transaction, spend devnet SOL, or open a Market.</p>
       </div></header>
-
-      <WalletDirectory
-        directory={wallets}
-        purpose="founding payer and rent-refund wallet"
-        onConnected={(address) => {
-          // The connected wallet is the payer and, by default, the immutable
-          // rent-refund beneficiary. Both remain editable: a founding that
-          // refunds to a different wallet is legitimate and common.
-          setAddresses((current) => ({ ...current, payer: address, refundWallet: current.refundWallet || address }));
-          setWalletStatus(`${address} connected. No signature has been requested.`);
-        }}
-      />
 
       <form className="wizard-chain-form" onSubmit={buildChainPlan}>
         <div className="direct-form-grid">
@@ -654,7 +501,7 @@ export default function CreateMarketWizard() {
             <input required spellCheck={false} value={effectiveAddresses[field]} onChange={(event) => setAddresses((current) => ({ ...current, [field]: event.target.value.trim() }))} />
           </label>)}
         </div>
-        <button type="submit">Construct the unsigned lifecycle + Found37 pair</button>
+        <button type="submit">Inspect and construct the unsigned preview</button>
         <p className="direct-status" aria-live="polite">{planStatus}</p>
       </form>
 
@@ -667,38 +514,13 @@ export default function CreateMarketWizard() {
           <div><dt>Rent debit</dt><dd>{plan.rentCreditRentDebit} credit + {plan.marketRentTopUp} Market lamports</dd></div>
           <div><dt>Blockhash validity</dt><dd>through block height {plan.lastValidBlockHeight}</dd></div>
         </dl>
-
-        <div className="signing-grid">
-          <article>
-            <span>Wallet identity</span>
-            <strong>{wallets.address ?? 'not connected'}</strong>
-            <p>{walletStatus}</p>
-          </article>
-          <article>
-            <span>Submission boundary</span>
-            <strong>{stages.filter((stage) => stage.status === 'submitted').length} / {stages.length} submitted</strong>
-            <p>Nothing is submitted without a separate click. Preflight is never skipped.</p>
-          </article>
-        </div>
-
-        <ol className="wizard-stages">
-          {stages.map((stage) => <li key={stage.id} className={stage.status}>
-            <div><strong>{stage.label}</strong><span className={`wizard-badge ${stage.status}`}>{stage.status}</span></div>
-            <p>{stage.detail}</p>
-            {stage.signature && <code>{stage.signature}</code>}
-            <button
-              type="button"
-              disabled={stage.status === 'signing' || stage.status === 'submitted' || wallets.address === null}
-              onClick={() => void runStage(stage.id)}
-            >Sign &amp; submit this transaction</button>
-          </li>)}
-        </ol>
-        <p className="direct-refusal">
-          Submitting Found37 leaves a Market in phase <em>Founding</em>: identity exists, obligations and readiness are
-          still being assembled, and no liabilities or trading are admitted. Reaching <em>Open</em> is the DCLTGMF2 rung,
-          which needs the projected-Custody prestate the review step marks tooling-only.
-        </p>
       </>}
+      <p className="direct-refusal">
+        This page deliberately has no signing or submission button. The partial browser pair would spend devnet funds
+        and stop at phase <em>Founding</em>; it is not an open Market. The complete operator campaign owns the durable
+        journal, every founding rung, the final <em>Open</em> transition, and recovery after a crash. Until that complete
+        caller is available here, use this page only to review the design and inspect the unsigned preview.
+      </p>
     </section>}
   </main>;
 }
