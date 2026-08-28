@@ -100,7 +100,7 @@ export default function BountyWalk() {
 
     <section className="trade-v3-card">
       <header><span>04</span><div><h2>Building a compatible wallet flow</h2><p>This reader page does not maintain a handwritten copy of instruction bytes or account ordering. Those facts belong to the generated route reference, where builders can check them against the source that owns them.</p></div></header>
-      <p className="direct-status"><a href={docsHrefV1('reference/routes.html', 'docs/reference/routes.md')}>Open the generated route reference →</a></p>
+      <p className="direct-status"><a href={docsHrefV1('reference/abi/routeCensus.html', 'docs/reference/abi/routeCensus.md')}>Open the generated route reference →</a></p>
     </section>
 
     <footer className="product-footer">

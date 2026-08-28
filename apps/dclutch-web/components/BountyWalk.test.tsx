@@ -45,6 +45,7 @@ describe('the smoke story and bounty pages speak to the reader', () => {
 
   it('keeps handwritten instruction bytes off the reader page', () => {
     expect(bounty).toContain('Open the generated route reference');
+    expect(bounty).toContain('reference/abi/routeCensus.md');
     expect(bounty).not.toContain('DCLTRIX1');
     expect(bounty).not.toContain('dclutch/resolution-cert/v3');
     expect(bounty).not.toContain('Accounts, in order');
