@@ -1,0 +1,368 @@
+{
+  "schema": "dclutch-pyth-sponsored-push-safety-matrix-v1",
+  "target": {
+    "cluster": "devnet",
+    "account": "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
+    "receiverProgram": "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
+    "pushProgram": "pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT",
+    "shard": "0",
+    "bump": "252",
+    "feedIdHex": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+  },
+  "verdict": {
+    "currentHead": "reject-drop-in",
+    "design": "conditional-accept"
+  },
+  "rows": [
+    {
+      "id": "cluster",
+      "boundary": "Release selection",
+      "predicate": "The authenticated cluster genesis is devnet and equals the cluster id in the selected legacy sponsored release.",
+      "owner": "Pyth deployment release plus the caller's checked cluster admission",
+      "attack": "Cross-cluster release or account substitution",
+      "status": "closed-existing",
+      "evidencePath": "crates/dclutch-pyth-svm/src/devnet.rs",
+      "requiredChange": "Reuse the existing explicit genesis bind; never infer cluster identity from a URL or program address."
+    },
+    {
+      "id": "release",
+      "boundary": "Immutable provider selection",
+      "predicate": "Founding selects one distinct legacy sponsored-push release; it cannot reinterpret the accepted upgraded Receiver/Router release.",
+      "owner": "A new immutable sponsored-push deployment release selected by Source",
+      "attack": "DTO substitution or silently changing the meaning of PythReleaseV1",
+      "status": "required-new-owner",
+      "evidencePath": "crates/dclutch-pyth-svm/src/release.rs",
+      "requiredChange": "Add one distinct release/profile identity carrying every legacy deployment pin; leave the upgraded pull release meaning unchanged."
+    },
+    {
+      "id": "feed",
+      "boundary": "Economic series identity",
+      "predicate": "The full PriceUpdateV2 body names feed ef0d...b56d and the Market's sole PythAdapterConfig names the same feed.",
+      "owner": "PythAdapterConfigV1 selected by authenticated Source records",
+      "attack": "A genuine fully verified update for another Pyth feed",
+      "status": "closed-existing",
+      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "requiredChange": "Reuse PythAdapterConfigV1 feed equality unchanged; do not add a caller-supplied feed truth."
+    },
+    {
+      "id": "pda-account",
+      "boundary": "Canonical sponsored stream",
+      "predicate": "The update account is exactly the shard-zero PDA of [0u16 little-endian, SOL/USD feed id] under pythWS... with bump 252, equal to 7UV....",
+      "owner": "The new sponsored release/profile",
+      "attack": "An arbitrary Receiver-owned pull account carrying a valid SOL/USD update",
+      "status": "required-new-owner",
+      "evidencePath": "fixtures/pyth/upgraded-2026-08-26/PROVENANCE.md",
+      "requiredChange": "Persist the exact account, shard and push program once; the physical outer must rederive and compare the PDA."
+    },
+    {
+      "id": "account-owner",
+      "boundary": "Account authenticity",
+      "predicate": "At execution the exact 7UV... account is non-executable and owned by rec5....",
+      "owner": "The sponsored Resolution physical outer",
+      "attack": "System-owned, attacker-owned, or executable account with forged PriceUpdateV2 bytes",
+      "status": "required-new-owner",
+      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "requiredChange": "Authenticate AccountInfo owner and executable state before parsing; FullPriceUpdateV2 deliberately does not own this check."
+    },
+    {
+      "id": "push-deployment",
+      "boundary": "PDA signer and sponsored updater",
+      "predicate": "The legacy push Program links to the exact ProgramData, upgrade authority, deployment slot and accepted ELF digest named by the sponsored release.",
+      "owner": "The new sponsored deployment release plus Loader V3 authentication",
+      "attack": "Mutable push-program upgrade changes PDA signing, closing, or feed-account rules",
+      "status": "required-new-owner",
+      "evidencePath": "fixtures/pyth/upgraded-2026-08-26/PROVENANCE.md",
+      "requiredChange": "Observe and publish the legacy devnet push Program/ProgramData pins; PythReleaseV1 currently has no push-program fields."
+    },
+    {
+      "id": "receiver-deployment",
+      "boundary": "PriceUpdateV2 writer",
+      "predicate": "The legacy rec5... Program, ProgramData, deployment slot, upgrade authority, Config and ABI are authenticated from one accepted legacy release.",
+      "owner": "The new sponsored deployment release plus Loader V3 authentication",
+      "attack": "Using rec5 bytes under the currently accepted rec2 upgraded release or accepting a superseded deployment slot",
+      "status": "required-new-owner",
+      "evidencePath": "docs/design/MAINNET_STATE_RELAY.md",
+      "requiredChange": "Publish exact current devnet legacy Receiver pins and refuse slot drift under decision 0012."
+    },
+    {
+      "id": "verification-level",
+      "boundary": "Provider signature result",
+      "predicate": "The body is exactly 134 bytes, has discriminator 22f123639d7ef4cd, Full tag 1 and a zero allocation tail.",
+      "owner": "FullPriceUpdateV2",
+      "attack": "Partial, unknown, truncated, extended, or noncanonical verification representation",
+      "status": "closed-existing",
+      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "requiredChange": "Reuse FullPriceUpdateV2 unchanged; never lower to the SDK's configurable Partial verification."
+    },
+    {
+      "id": "write-authority",
+      "boundary": "Mutation and close authority",
+      "predicate": "The serialized write_authority equals the exact 7UV... PDA, which is also the account address.",
+      "owner": "The sponsored Resolution physical outer after the exact parser",
+      "attack": "A Receiver-owned account controlled by a user or a different PDA",
+      "status": "required-new-owner",
+      "evidencePath": "crates/dclutch-pyth-svm/src/cluster_observation.rs",
+      "requiredChange": "Compare writer, account and rederived push PDA by exact equality in the onchain frame."
+    },
+    {
+      "id": "posted-slot",
+      "boundary": "Solana posting chronology",
+      "predicate": "posted_slot is nonzero and no greater than the authenticated Clock slot; the receipt records both posted and consumed slots.",
+      "owner": "The sponsored Resolution physical outer and canonical receipt",
+      "attack": "Future-slot body, uninitialized body, or receipt that cannot reconstruct consumption delay",
+      "status": "required-new-owner",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/provider_v3.rs",
+      "requiredChange": "Reuse the current slot predicate and receipt fields without importing the ephemeral lifecycle account."
+    },
+    {
+      "id": "publication-window",
+      "boundary": "What period the Market sold",
+      "predicate": "publish_time is positive and lies inclusively inside the immutable WindowSpec [start,end].",
+      "owner": "PythProviderAdapterObligationV2 over authenticated Source records",
+      "attack": "A genuine price from before the Market opened or after its question closed",
+      "status": "closed-existing",
+      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "requiredChange": "Call the existing normalization owner; do not duplicate window logic in the sponsored adapter."
+    },
+    {
+      "id": "clock-freshness",
+      "boundary": "What this cluster will still act on",
+      "predicate": "publish_time lies inclusively inside [Clock-now-max_age, Clock-now+max_future_skew] with checked arithmetic.",
+      "owner": "PythProviderAdapterObligationV2 over authenticated Clock",
+      "attack": "Stale replay or future-dated signed update",
+      "status": "closed-existing",
+      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "requiredChange": "Reuse the existing freshness owner and its distinct ProviderFreshness refusal."
+    },
+    {
+      "id": "confidence",
+      "boundary": "Pyth uncertainty admission",
+      "predicate": "confidence*10000 <= abs(price)*max_confidence_bps using exact widened integers and the immutable inclusive bound.",
+      "owner": "PythAdapterConfigV1",
+      "attack": "A fully verified but too-uncertain Pyth observation",
+      "status": "closed-existing",
+      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "requiredChange": "Reuse the existing inclusive checked inequality; no adapter-side approximation or float is admitted."
+    },
+    {
+      "id": "exponent-rounding",
+      "boundary": "Scaled-integer normalization",
+      "predicate": "The raw exponent exactly equals the immutable expected exponent; admitted signed i64 price becomes i128 atoms without rescaling or rounding.",
+      "owner": "PythAdapterConfigV1 and the Product's result-domain integer cuts",
+      "attack": "Unit substitution, decimal drift, unchecked power-of-ten scaling, or a second rounding boundary",
+      "status": "closed-existing",
+      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "requiredChange": "Reuse identity normalization; Product cuts must be compiled in the same raw exponent unit."
+    },
+    {
+      "id": "digest-race",
+      "boundary": "Mutable sponsored account handoff",
+      "predicate": "The snapshot request does not precommit mutable update bytes; the instruction authenticates one atomic AccountInfo snapshot and derives its sealed content digest onchain.",
+      "owner": "A new sponsored snapshot request and sealed-record schema",
+      "attack": "A legitimate sponsor update between client preflight and landing makes the request unusable or invites an alternate offchain byte truth",
+      "status": "must-refuse",
+      "evidencePath": "crates/dclutch-resolution-codec/src/provider_v3.rs",
+      "requiredChange": "Do not reuse expected_update_digest, post_params_body_digest, provider_submitter or ProviderUpdateLifecycleV3 in snapshot admission."
+    },
+    {
+      "id": "snapshot-identity",
+      "boundary": "Canonical durable observation",
+      "predicate": "The candidate PDA derives from a domain plus market, generation, sponsored release, exact price account, publish_time, posted_slot and SHA-256 of the full 134-byte body.",
+      "owner": "One new fixed-layout sponsored-observation record contract",
+      "attack": "Two bodies collide, one body is sealed twice under different names, or a caller supplies parallel observation identity",
+      "status": "required-new-owner",
+      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "requiredChange": "Make the body digest part of the PDA and stored canonical preimage; same body converges, distinct bodies cannot alias."
+    },
+    {
+      "id": "snapshot-admission",
+      "boundary": "Mutable source to immutable candidate",
+      "predicate": "One instruction authenticates Market/generation/release, exact live account owner/PDA/body, Full/feed/writer/slot, window, freshness, confidence and exponent against one Clock snapshot before creating the candidate.",
+      "owner": "The sponsored snapshot physical outer calling existing Source normalization",
+      "attack": "RPC preflight becomes authority, a price is sealed after it is stale/out of window, or account bytes change between checks",
+      "status": "required-new-owner",
+      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "requiredChange": "Perform every check, candidate creation and head advancement atomically onchain; RPC/watchers only trigger the attempt."
+    },
+    {
+      "id": "snapshot-immutability",
+      "boundary": "Durable evidence bytes",
+      "predicate": "The Resolution-owned candidate stores the exact 134 bytes, digest and admission Clock facts once and has no update instruction or mutable consumed-status field.",
+      "owner": "The sponsored-observation record contract",
+      "attack": "Sealed evidence is edited, replaced, or given a second consumed-state truth",
+      "status": "required-new-owner",
+      "evidencePath": "crates/dclutch-resolution-codec/src/provider_v3.rs",
+      "requiredChange": "Use fixed layout and one-write initialization; Source phase/certificate remains the sole terminal-consumption truth."
+    },
+    {
+      "id": "snapshot-funding",
+      "boundary": "Permissionless storage capitalization",
+      "predicate": "A signer funds candidate and, when absent, head rent plus transaction fees explicitly; no Hoard principal, future fee, bounty or Market rent source is touched, and refund recipients are stored.",
+      "owner": "The sponsored snapshot instruction and fixed records",
+      "attack": "Snapshot liveness spends collateral compartments or creates unfunded persistent state",
+      "status": "required-new-owner",
+      "evidencePath": "AGENTS.md",
+      "requiredChange": "Require external sponsor funding and exact rent checks; persist refund recipients for terminal cleanup."
+    },
+    {
+      "id": "snapshot-consume",
+      "boundary": "Durable terminal resolution",
+      "predicate": "Consume authenticates the finalized head, selected candidate PDA, owner, exact bytes/digest, Market/generation/release and Source graph, but does not re-age the snapshot against the later Clock.",
+      "owner": "A distinct sponsored-candidate Resolution consume instruction",
+      "attack": "Durable evidence becomes stale again after admission or mutable upstream state is reintroduced at consume time",
+      "status": "required-new-owner",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/provider_v3.rs",
+      "requiredChange": "Reuse Product mapping and Source single-write transition from the selected immutable candidate; do not require the upstream account at consume."
+    },
+    {
+      "id": "snapshot-cleanup",
+      "boundary": "Rent recovery",
+      "predicate": "Candidates and head cannot close while Source is Primary; after candidate resolution or funded failure, permissionless cleanup refunds each account's lamports to its stored sponsor.",
+      "owner": "One sponsored-record cleanup instruction authenticated by terminal Source/certificate state",
+      "attack": "Evidence disappears before consumption, rent is redirected, or losing candidates remain permanently stranded",
+      "status": "required-new-owner",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs",
+      "requiredChange": "Add terminal-only close with fixed refund destinations; failed consume leaves candidates and head intact and retryable."
+    },
+    {
+      "id": "cross-market-reuse",
+      "boundary": "Observation scope",
+      "predicate": "Market and generation are in candidate and head PDAs and bodies; one Market cannot consume another Market's candidate even when release/account/update bytes match.",
+      "owner": "The sponsored record identities and consume frame",
+      "attack": "Cross-market replay bypasses a different window, Product or release selection",
+      "status": "must-refuse",
+      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "requiredChange": "Keep candidates per Market/generation. Shared observations remain a separately founded SourceAccessProfile, not an optimization here."
+    },
+    {
+      "id": "candidate-head",
+      "boundary": "Canonical resolver selection",
+      "predicate": "One head PDA per market/generation/release advances monotonically only to the greatest submitted candidate ordered by (publish_time, posted_slot, body_digest).",
+      "owner": "A new sponsored best-valid-submitted head record",
+      "attack": "A resolver selects a favorable earlier valid candidate or a later submission rewinds the selected candidate",
+      "status": "required-new-owner",
+      "evidencePath": "AGENTS.md",
+      "requiredChange": "Create each immutable candidate and compare/advance the head atomically. Name the result best valid submitted candidate, never optimal or provider-latest."
+    },
+    {
+      "id": "head-finalization",
+      "boundary": "Candidate-set closure",
+      "predicate": "The head may finalize after Clock is strictly greater than window.end+maximum_age; it may finalize earlier from an authenticated upstream publish_time strictly greater than window.end only when the exact deployed push ELF is proven to enforce strict publish-time increase.",
+      "owner": "The sponsored-head finalization instruction, existing freshness policy and, only for early closure, the accepted push semantic release",
+      "attack": "Consumption occurs while a later in-window candidate can still appear or be posted",
+      "status": "required-new-owner",
+      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "requiredChange": "Always implement the Clock-deadline closure with checked arithmetic. Gate the optional earlier upstream-advancement closure on exact push ProgramData/ELF-to-source binding and a rewind hostile."
+    },
+    {
+      "id": "monotonicity-proof",
+      "boundary": "Mutable account history",
+      "predicate": "The exact pinned legacy push program rejects a post unless its publish_time is strictly greater than the account's current publish_time.",
+      "owner": "Pinned legacy push source/ELF semantic evidence, not SDK PriceUpdateV2 layout",
+      "attack": "After account time passes window.end, a delayed older signed in-window message rewinds the account and invalidates head closure",
+      "status": "required-new-owner",
+      "evidencePath": "docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md",
+      "requiredChange": "Bind the deployed ProgramData ELF digest reproducibly to the exact strict-increase push source and pass an exact-ELF equal/older-time hostile. Receiver source provenance, Full verification and prev_publish_time alone are insufficient."
+    },
+    {
+      "id": "late-posting",
+      "boundary": "Out-of-order provider delivery",
+      "predicate": "After Clock is strictly greater than window.end+maximum_age, admission refuses every in-window message even if upstream later rewinds; before that deadline, upstream advancement closes early only under the separately proven strict push invariant.",
+      "owner": "The immutable Clock deadline, with the pinned push monotonicity invariant as an optional early-closure owner",
+      "attack": "Delayed delivery adds a better valid candidate after the supposedly final head",
+      "status": "must-refuse",
+      "evidencePath": "crates/dclutch-source-contract/src/provider_join_v2.rs",
+      "requiredChange": "Test the exact deadline boundary and the push rewind counterexample independently. Failure to prove push monotonicity disables only early closure, never the deadline closure."
+    },
+    {
+      "id": "replay",
+      "boundary": "Terminal transition",
+      "predicate": "Snapshot-time freshness/window checks admit candidates, finalized head removes resolver choice, and Source phase single-writes so only one candidate can terminalize.",
+      "owner": "SourceResolutionStateV2 plus existing provider normalization",
+      "attack": "Replaying a previously accepted body or resolving twice from two admissible posts",
+      "status": "closed-existing",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/provider_v3.rs",
+      "requiredChange": "Reuse the existing failure-atomic Source transition. Candidate records stay immutable; head selection is the sole pre-terminal ordering state."
+    },
+    {
+      "id": "substitution",
+      "boundary": "Whole account frame",
+      "predicate": "Account address, owner, body feed, writer, push PDA and one selected release all agree; every frame account remains unique.",
+      "owner": "The sponsored Resolution physical outer",
+      "attack": "Coherent account/provider/feed substitution or aliasing another frame role to the price account",
+      "status": "must-refuse",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/provider_instruction_v3.rs",
+      "requiredChange": "Add hostile tests that substitute each fact alone and all facts coherently while holding the Market-selected release fixed."
+    },
+    {
+      "id": "closing",
+      "boundary": "Persistent account availability",
+      "predicate": "At snapshot admission the upstream account still exists with exact owner, length, rent exemption and read-only privilege; after sealing, consume needs only the intact DClutch-owned candidate and head.",
+      "owner": "The sponsored snapshot physical outer, then the sealed candidate contract",
+      "attack": "Push authority closes or reallocates the account before snapshot, or terminal consumption is incorrectly coupled back to mutable upstream availability",
+      "status": "must-refuse",
+      "evidencePath": "crates/dclutch-pyth-svm/src/price_update.rs",
+      "requiredChange": "Authenticate live AccountInfo state at snapshot and refuse absent/reallocated upstream state; never require it again after an admissible immutable candidate exists."
+    },
+    {
+      "id": "upgrade-downgrade",
+      "boundary": "Mutable provider programs",
+      "predicate": "Legacy Receiver and push Program deployment slots equal the accepted release; any upgrade yields ReleaseSuperseded rather than falling back to another generation.",
+      "owner": "Sponsored deployment release and Registry slot-pin admission",
+      "attack": "Provider program upgrade, rollback, or mixing legacy account with upgraded release",
+      "status": "required-new-owner",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/lib.rs",
+      "requiredChange": "Authenticate both legacy deployments and map slot movement to the existing ReleaseSuperseded operational state."
+    },
+    {
+      "id": "sponsor-liveness",
+      "boundary": "Update availability",
+      "predicate": "Sponsor and watcher activity are evidence only: neither guarantees a future post or timely candidate submission, while sealed candidates preserve observations that the mutable account later overwrites.",
+      "owner": "Product disclosure, WindowSpec and funded permissionless failure walk",
+      "attack": "Sponsor silence, delayed posts, or a later post overwriting the only historical in-window value",
+      "status": "operational-constraint",
+      "evidencePath": "docs/design/MAINNET_STATE_RELAY.md",
+      "requiredChange": "Keep the funded failure route after the strict deadline and authenticate head vacancy before failure. Report the dated 100-signature activity sample separately from publish-time cadence and never call it a bound."
+    },
+    {
+      "id": "single-answer",
+      "boundary": "Economic finality",
+      "predicate": "Snapshots only add immutable candidates and monotonically advance one head while Source remains Primary; after set closure, exactly one atomic candidate-consume or head-vacant failure transition moves Source out of Primary and creates the certificate.",
+      "owner": "SourceResolutionStateV2",
+      "attack": "Two prices resolve one Market or certificate and Source state diverge",
+      "status": "closed-existing",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/provider_v3.rs",
+      "requiredChange": "Reuse the existing plan and commit seam; candidate/head state selects evidence but never becomes a second terminal Source truth."
+    },
+    {
+      "id": "direct-fast-path",
+      "boundary": "Optional same-transaction consumption",
+      "predicate": "A direct live-account consume, if ever implemented, applies the identical release/account/body/Source predicates atomically and is a separately selected capability; it is never the durable flagship liveness path or an implicit fallback.",
+      "owner": "A future separately founded SourceAccessProfile",
+      "attack": "The mutable latest-value account silently bypasses candidate ordering, set closure or the Market's selected transport",
+      "status": "must-refuse",
+      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "requiredChange": "Park this path unless it has a caller and full hostile suite. The flagship profile must snapshot, order and consume sealed evidence."
+    },
+    {
+      "id": "no-failover",
+      "boundary": "Canonical provider truth",
+      "predicate": "A Market founded on legacy 7UV... never silently tries upgraded 7Avi..., Hermes pull, or an arbitrary Receiver account.",
+      "owner": "The immutable Source-selected sponsored release/profile",
+      "attack": "Parallel provider/account truth changes the proposition after liabilities exist",
+      "status": "must-refuse",
+      "evidencePath": "crates/dclutch-source-contract/src/lib.rs",
+      "requiredChange": "Keep one exact legacy account/release per Market; any future alternative is a separately founded capability."
+    },
+    {
+      "id": "rent-privilege",
+      "boundary": "Read-only upstream snapshot",
+      "predicate": "The exact Receiver-owned update is rent-exempt, non-executable, non-signer and read-only in the sponsored snapshot frame.",
+      "owner": "The sponsored snapshot physical outer",
+      "attack": "Writable CPI side effect, signer confusion, drained rent, or alias-driven mutation",
+      "status": "must-refuse",
+      "evidencePath": "programs/dclutch-resolution-proof-sbf/src/provider_instruction_v3.rs",
+      "requiredChange": "Freeze the new frame privileges and add hostile writable/signer/executable/rent/alias tests."
+    }
+  ]
+}
