@@ -45,7 +45,7 @@ contains the host-tool and all sequential SBF child builds:
 ```sh
 SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
   tools/release/checked-release-candidate.sh \
-    --work /tank/dclutch-build/checked-<commit>-<unique-run> \
+    --work /tank/dregg-build/dclutch-checked-<commit>-<unique-run> \
     --commit <commit>
 ```
 
