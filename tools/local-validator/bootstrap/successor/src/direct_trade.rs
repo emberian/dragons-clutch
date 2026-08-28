@@ -4319,6 +4319,7 @@ fn recover_finalized_hot_evidence_v1(
     if journal.schema != direct_journal_schema_v1(&validated.public.cluster)?
         || journal.public_manifest_sha256 != validated.public_sha256
         || journal.private_session_sha256 != validated.private_sha256
+        || journal.intent_sha256 != journal_intent_sha256_v1(&journal)?
         || journal.state_sha256 != journal_state_sha256(&journal)?
     {
         return Err(refusal("Direct terminal journal identity changed"));
@@ -4530,6 +4531,7 @@ pub(crate) fn authenticate_owned_loopback_finalized_evidence_v1(
     require_unique_json_v1(&journal_bytes, "embedded Direct Hot journal")?;
     let journal: DirectTradeJournalV1 = serde_json::from_slice(&journal_bytes)?;
     authenticate_embedded_hot_journal_v1(&public, &evidence, &journal)?;
+    authenticate_embedded_direct_mutations_v1(rpc, &public, &evidence, &journal)?;
 
     let route_keys = route_keys(&public.route)?;
     let snapshot = finalized_snapshot(rpc, &route_keys)?;
@@ -4835,6 +4837,581 @@ fn authenticate_embedded_hot_journal_v1(
         return Err(refusal(
             "embedded Direct Hot packet changed its exact 4+57=61 / 1,159-byte geometry",
         ));
+    }
+    Ok(())
+}
+
+fn authenticate_embedded_direct_mutations_v1(
+    rpc: &mut Rpc,
+    public: &DirectTradePublicManifestV1,
+    evidence: &DirectTradeFinalizedEvidenceV1,
+    hot: &DirectTradeJournalV1,
+) -> Result<()> {
+    let extension_count = hot
+        .lookup_addresses
+        .len()
+        .checked_add(19)
+        .ok_or_else(|| refusal("embedded Direct extension count overflowed"))?
+        / 20;
+    let expected_mutation_count = extension_count
+        .checked_add(6)
+        .ok_or_else(|| refusal("embedded Direct mutation count overflowed"))?;
+    if evidence.mutations.len() != expected_mutation_count {
+        return Err(refusal(
+            "embedded Direct evidence did not own the exact setup/ALT/seal/Hot mutation count",
+        ));
+    }
+    let mut previous_slot = 0_u64;
+    for (index, row) in evidence.mutations.iter().enumerate() {
+        if evidence
+            .mutations
+            .iter()
+            .take(index)
+            .any(|earlier| earlier.path == row.path || earlier.signature == row.signature)
+            || row.path == evidence.lookup_activation.path
+            || row.slot < previous_slot
+        {
+            return Err(refusal(
+                "embedded Direct mutation reused a path/signature or reversed finalized slot order",
+            ));
+        }
+        previous_slot = row.slot;
+    }
+
+    let binding = DirectSetupManifestBindingV1::new(
+        evidence.public_manifest_sha256.clone(),
+        evidence.private_session_sha256.clone(),
+    )?;
+    let replay = load_embedded_setup_mutation_v1(&evidence.mutations[0], "replay-setup")?;
+    let token = load_embedded_setup_mutation_v1(&evidence.mutations[1], "token-setup")?;
+    authenticate_direct_setup_chain_v1(&binding, &replay, &token)?;
+    authenticate_embedded_setup_mutation_v1(
+        rpc,
+        public,
+        &evidence.mutations[0],
+        &replay,
+        DirectSetupStageV1::ReplaySetup,
+    )?;
+    authenticate_embedded_setup_mutation_v1(
+        rpc,
+        public,
+        &evidence.mutations[1],
+        &token,
+        DirectSetupStageV1::TokenSetup,
+    )?;
+
+    let action_rows = &evidence.mutations[2..];
+    let mut creation_slot = None;
+    for (ordinal, row) in action_rows.iter().enumerate() {
+        let (expected_kind, expected_stage, expected_action_index, expected_prefix) =
+            if ordinal == 0 {
+                ("lookup-create", DirectTradeStageV1::LookupCreate, 0, None)
+            } else if ordinal <= extension_count {
+                (
+                    "lookup-extend",
+                    DirectTradeStageV1::LookupExtend,
+                    ordinal,
+                    Some(ordinal.saturating_mul(20).min(hot.lookup_addresses.len())),
+                )
+            } else if ordinal == extension_count + 1 {
+                (
+                    "lookup-freeze",
+                    DirectTradeStageV1::LookupFreeze,
+                    extension_count + 1,
+                    None,
+                )
+            } else if ordinal == extension_count + 2 {
+                (
+                    "capability-seal",
+                    DirectTradeStageV1::CapabilitySeal,
+                    extension_count + 3,
+                    None,
+                )
+            } else if ordinal == extension_count + 3 {
+                ("hot", DirectTradeStageV1::Hot, extension_count + 4, None)
+            } else {
+                return Err(refusal("embedded Direct mutation order was not total"));
+            };
+        let journal = load_embedded_action_mutation_v1(row)?;
+        if row.kind != expected_kind
+            || row.prefix_len != expected_prefix
+            || journal.stage != expected_stage
+            || usize::from(journal.action_index) != expected_action_index
+            || journal.phase != DirectTradeJournalPhaseV1::Finalized
+            || journal.schema != direct_journal_schema_v1(&public.cluster)?
+            || journal.public_manifest_sha256 != evidence.public_manifest_sha256
+            || journal.private_session_sha256 != evidence.private_session_sha256
+            || journal.lookup_table != hot.lookup_table
+            || journal.lookup_addresses != hot.lookup_addresses
+            || journal.lookup_addresses_sha256 != hot.lookup_addresses_sha256
+            || journal.intent_sha256 != journal_intent_sha256_v1(&journal)?
+            || journal.state_sha256 != journal_state_sha256(&journal)?
+            || row.intent_sha256 != journal.intent_sha256
+            || row.schema != journal.schema
+            || row.completion_pointer != "/phase"
+            || row.completion_value != "finalized"
+            || journal.expected_signature.as_deref() != Some(row.signature.as_str())
+            || journal.finalized_slot != Some(row.slot)
+            || row.fee_payer != public.payer
+            || journal.fee_lamports != Some(row.fee_lamports)
+            || journal.compute_units_consumed != Some(row.compute_units_consumed)
+            || journal.fee_lamports != journal.exact_fee_lamports
+            || creation_slot.is_some_and(|slot| slot != journal.lookup_creation_slot)
+        {
+            return Err(refusal(
+                "embedded Direct mutation journal identity, order, intent, fee, or completion changed",
+            ));
+        }
+        creation_slot.get_or_insert(journal.lookup_creation_slot);
+        let message = decode_canonical_base64_v1(
+            journal
+                .message_base64
+                .as_deref()
+                .ok_or_else(|| refusal("embedded Direct mutation omitted message"))?,
+            "embedded Direct mutation message",
+        )?;
+        if journal.message_sha256.as_deref() != Some(sha256_hex(&message).as_str()) {
+            return Err(refusal("embedded Direct mutation message digest changed"));
+        }
+        authenticate_signed_journal_v1(&journal, &message)?;
+        authenticate_finalized_direct_history_v1(rpc, &journal)?;
+        if expected_stage == DirectTradeStageV1::Hot && &journal != hot {
+            return Err(refusal(
+                "embedded Direct Hot mutation differed from the terminal Hot journal",
+            ));
+        }
+    }
+
+    let activation = load_embedded_activation_observation_v1(&evidence.lookup_activation)?;
+    let expected_activation_index = extension_count
+        .checked_add(2)
+        .ok_or_else(|| refusal("embedded Direct activation index overflowed"))?;
+    let freeze_slot = evidence
+        .mutations
+        .get(extension_count + 2)
+        .ok_or_else(|| refusal("embedded Direct lookup freeze mutation disappeared"))?
+        .slot;
+    let seal_slot = evidence
+        .mutations
+        .get(extension_count + 3)
+        .ok_or_else(|| refusal("embedded Direct capability-seal mutation disappeared"))?
+        .slot;
+    authenticate_lookup_activation_slot_order_v1(
+        activation
+            .finalized_slot
+            .ok_or_else(|| refusal("embedded Direct lookup activation omitted finalized slot"))?,
+        activation.lookup_creation_slot,
+        freeze_slot,
+        seal_slot,
+    )?;
+    if activation.stage != DirectTradeStageV1::LookupActivation
+        || activation.phase != DirectTradeJournalPhaseV1::Finalized
+        || usize::from(activation.action_index) != expected_activation_index
+        || activation.schema != direct_journal_schema_v1(&public.cluster)?
+        || activation.public_manifest_sha256 != evidence.public_manifest_sha256
+        || activation.private_session_sha256 != evidence.private_session_sha256
+        || activation.lookup_table != hot.lookup_table
+        || activation.lookup_addresses != hot.lookup_addresses
+        || activation.lookup_addresses_sha256 != hot.lookup_addresses_sha256
+        || activation.lookup_creation_slot != creation_slot.unwrap_or_default()
+        || activation.intent_sha256 != journal_intent_sha256_v1(&activation)?
+        || activation.state_sha256 != journal_state_sha256(&activation)?
+        || activation.intent_sha256 != evidence.lookup_activation.intent_sha256
+        || activation.finalized_slot != Some(evidence.lookup_activation.finalized_slot)
+        || activation.message_base64.is_some()
+        || activation.message_sha256.is_some()
+        || activation.last_valid_block_height.is_some()
+        || activation.exact_fee_lamports.is_some()
+        || activation.expected_wire_bytes.is_some()
+        || activation.unique_message_account_count.is_some()
+        || activation.signed_packet_base64.is_some()
+        || activation.expected_signature.is_some()
+        || activation.expected_return_data_producer.is_some()
+        || activation.expected_return_data_base64.is_some()
+        || !activation.expected_prestates.is_empty()
+        || !activation.expected_poststates.is_empty()
+        || activation.transaction_sha256.is_some()
+        || activation.fee_lamports.is_some()
+        || activation.compute_units_consumed.is_some()
+        || activation.return_data_producer.is_some()
+        || activation.return_data_base64.is_some()
+        || activation.return_data_was_null.is_some()
+        || !activation.finalized_poststates.is_empty()
+    {
+        return Err(refusal(
+            "embedded Direct lookup activation was not the exact signatureless later observation",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_lookup_activation_slot_order_v1(
+    activation_slot: u64,
+    creation_slot: u64,
+    freeze_slot: u64,
+    seal_slot: u64,
+) -> Result<()> {
+    if activation_slot <= creation_slot
+        || activation_slot < freeze_slot
+        || activation_slot > seal_slot
+    {
+        return Err(refusal(
+            "embedded Direct lookup activation was outside the freeze-to-seal interval",
+        ));
+    }
+    Ok(())
+}
+
+fn load_embedded_setup_mutation_v1(
+    row: &DirectFinalizedMutationEvidenceV1,
+    expected_kind: &str,
+) -> Result<DirectSetupJournalV1> {
+    let path = absolute_existing_file(Path::new(&row.path), "embedded Direct setup journal")?;
+    let bytes = fs::read(path)?;
+    require_unique_json_v1(&bytes, "embedded Direct setup journal")?;
+    if row.kind != expected_kind
+        || row.prefix_len.is_some()
+        || row.sha256 != sha256_hex(&bytes)
+        || row.schema != DIRECT_SETUP_JOURNAL_SCHEMA_V1
+        || row.completion_pointer != "/phase"
+        || row.completion_value != "finalized"
+    {
+        return Err(refusal("embedded Direct setup mutation descriptor changed"));
+    }
+    serde_json::from_slice(&bytes).map_err(Into::into)
+}
+
+fn load_embedded_action_mutation_v1(
+    row: &DirectFinalizedMutationEvidenceV1,
+) -> Result<DirectTradeJournalV1> {
+    let path = absolute_existing_file(Path::new(&row.path), "embedded Direct mutation journal")?;
+    let bytes = fs::read(path)?;
+    require_unique_json_v1(&bytes, "embedded Direct mutation journal")?;
+    if row.sha256 != sha256_hex(&bytes) {
+        return Err(refusal("embedded Direct mutation file digest changed"));
+    }
+    serde_json::from_slice(&bytes).map_err(Into::into)
+}
+
+fn load_embedded_activation_observation_v1(
+    row: &DirectLookupActivationEvidenceV1,
+) -> Result<DirectTradeJournalV1> {
+    let path = absolute_existing_file(
+        Path::new(&row.path),
+        "embedded Direct lookup activation journal",
+    )?;
+    let bytes = fs::read(path)?;
+    require_unique_json_v1(&bytes, "embedded Direct lookup activation journal")?;
+    if row.sha256 != sha256_hex(&bytes)
+        || row.completion_pointer != "/phase"
+        || row.completion_value != "finalized"
+    {
+        return Err(refusal(
+            "embedded Direct lookup activation descriptor changed",
+        ));
+    }
+    let journal: DirectTradeJournalV1 = serde_json::from_slice(&bytes)?;
+    if row.schema != journal.schema
+        || row.lookup_table != journal.lookup_table
+        || row.lookup_addresses_sha256 != journal.lookup_addresses_sha256
+    {
+        return Err(refusal(
+            "embedded Direct lookup activation coordinates changed",
+        ));
+    }
+    Ok(journal)
+}
+
+fn authenticate_embedded_setup_mutation_v1(
+    rpc: &mut Rpc,
+    public: &DirectTradePublicManifestV1,
+    row: &DirectFinalizedMutationEvidenceV1,
+    journal: &DirectSetupJournalV1,
+    expected_stage: DirectSetupStageV1,
+) -> Result<()> {
+    if journal.stage != expected_stage
+        || journal.phase != DirectSetupJournalPhaseV1::Finalized
+        || row.intent_sha256 != journal.message_sha256
+        || journal.expected_signature.as_deref() != Some(row.signature.as_str())
+        || journal.finalized_slot != Some(row.slot)
+        || journal.expected_signer != row.fee_payer
+        || row.fee_payer != public.payer
+        || journal.fee_lamports != Some(row.fee_lamports)
+        || journal.compute_units_consumed != Some(row.compute_units_consumed)
+        || journal.fee_lamports != Some(journal.exact_fee_lamports)
+        || journal.return_data != journal.expected_return_data
+        || journal.finalized_poststates != journal.expected_poststates
+    {
+        return Err(refusal(
+            "embedded Direct setup mutation signature, fee, CU, receipt, or poststate changed",
+        ));
+    }
+    let message_bytes =
+        decode_canonical_base64_v1(&journal.message_base64, "embedded Direct setup message")?;
+    if journal.message_sha256 != sha256_hex(&message_bytes) {
+        return Err(refusal("embedded Direct setup message digest changed"));
+    }
+    let message: VersionedMessage = bincode::deserialize(&message_bytes)
+        .map_err(|error| Error::new(format!("embedded Direct setup message: {error}")))?;
+    let VersionedMessage::Legacy(message) = message else {
+        return Err(refusal("embedded Direct setup message was not legacy"));
+    };
+    let instruction = message
+        .instructions
+        .first()
+        .filter(|_| message.instructions.len() == 1)
+        .ok_or_else(|| refusal("embedded Direct setup message did not own one instruction"))?;
+    let payer = message
+        .account_keys
+        .first()
+        .ok_or_else(|| refusal("embedded Direct setup message omitted payer"))?;
+    let program = message
+        .account_keys
+        .get(usize::from(instruction.program_id_index))
+        .ok_or_else(|| refusal("embedded Direct setup program index was out of range"))?;
+    let (request_base64, trading_program) = match expected_stage {
+        DirectSetupStageV1::ReplaySetup => (
+            public.replay_setup.request_base64.as_str(),
+            public.route.fixed.trading_program.as_str(),
+        ),
+        DirectSetupStageV1::TokenSetup => (
+            public.token_setup.request_base64.as_str(),
+            public.token_setup.trading_program.as_str(),
+        ),
+    };
+    let request = decode_canonical_base64_v1(request_base64, "embedded Direct setup request")?;
+    if *payer != parse_key(&public.payer, "embedded Direct payer")?
+        || *program != parse_key(trading_program, "embedded Direct Trading program")?
+        || instruction.data != request
+    {
+        return Err(refusal(
+            "embedded Direct setup message changed its payer, Trading program, or exact request",
+        ));
+    }
+    authenticate_embedded_finalized_setup_history_v1(rpc, public, journal)
+}
+
+fn authenticate_embedded_finalized_setup_history_v1(
+    rpc: &mut Rpc,
+    public: &DirectTradePublicManifestV1,
+    journal: &DirectSetupJournalV1,
+) -> Result<()> {
+    let signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| refusal("embedded Direct setup omitted signature"))?;
+    let transaction = finalized_direct_transaction_v1(rpc, signature)?
+        .ok_or_else(|| refusal("embedded Direct setup finalization disappeared"))?;
+    let finalized_slot = transaction.get("slot").and_then(Value::as_u64);
+    let meta = transaction
+        .get("meta")
+        .ok_or_else(|| refusal("embedded Direct setup history omitted meta"))?;
+    if meta.get("err").is_some_and(|value| !value.is_null()) {
+        return Err(refusal("embedded Direct setup transaction failed"));
+    }
+    let tuple = transaction
+        .get("transaction")
+        .and_then(Value::as_array)
+        .filter(|tuple| tuple.len() == 2 && tuple.get(1).and_then(Value::as_str) == Some("base64"))
+        .ok_or_else(|| refusal("embedded Direct setup history was not exact base64"))?;
+    let encoded = tuple
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("embedded Direct setup history omitted packet"))?;
+    let packet = decode_canonical_base64_v1(encoded, "embedded Direct setup history packet")?;
+    if journal.signed_packet_base64.as_deref() != Some(encoded)
+        || journal.signed_packet_sha256.as_deref() != Some(sha256_hex(&packet).as_str())
+        || journal.transaction_sha256.as_deref() != Some(sha256_hex(&packet).as_str())
+    {
+        return Err(refusal(
+            "embedded Direct setup history differed byte-for-byte from its journal",
+        ));
+    }
+    let wire_transaction: VersionedTransaction = bincode::deserialize(&packet)
+        .map_err(|error| Error::new(format!("embedded Direct setup packet: {error}")))?;
+    let VersionedMessage::Legacy(message) = &wire_transaction.message else {
+        return Err(refusal("embedded Direct setup packet unexpectedly used v0"));
+    };
+    let balances = |name: &str| -> Result<Vec<u64>> {
+        meta.get(name)
+            .and_then(Value::as_array)
+            .ok_or_else(|| refusal(format!("embedded Direct setup {name} was not an array")))?
+            .iter()
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or_else(|| refusal(format!("embedded Direct setup {name} was not u64")))
+            })
+            .collect()
+    };
+    let pre = balances("preBalances")?;
+    let post = balances("postBalances")?;
+    let fee = meta
+        .get("fee")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| refusal("embedded Direct setup fee was not u64"))?;
+    let pre_total = pre
+        .iter()
+        .try_fold(0_u128, |sum, value| sum.checked_add(u128::from(*value)));
+    let post_total = post
+        .iter()
+        .try_fold(0_u128, |sum, value| sum.checked_add(u128::from(*value)));
+    if pre.len() != message.account_keys.len()
+        || post.len() != message.account_keys.len()
+        || fee != journal.exact_fee_lamports
+        || Some(fee) != journal.fee_lamports
+        || pre_total.and_then(|before| post_total.and_then(|after| before.checked_sub(after)))
+            != Some(u128::from(fee))
+        || finalized_slot != journal.finalized_slot
+        || meta.get("computeUnitsConsumed").and_then(Value::as_u64)
+            != journal.compute_units_consumed
+    {
+        return Err(refusal(
+            "embedded Direct setup slot, fee, CU, or conserved lamport history changed",
+        ));
+    }
+    let at = |key: Pubkey| -> Result<(u64, u64)> {
+        let index = message
+            .account_keys
+            .iter()
+            .position(|candidate| *candidate == key)
+            .ok_or_else(|| refusal(format!("embedded Direct setup history omitted {key}")))?;
+        Ok((pre[index], post[index]))
+    };
+    let expected_return = journal
+        .expected_return_data
+        .as_ref()
+        .ok_or_else(|| refusal("embedded Direct setup omitted expected receipt"))?;
+    let (producer, body) = parse_direct_return_data_v1(meta)?;
+    if producer.as_deref() != Some(expected_return.producer.as_str())
+        || body.as_deref() != Some(expected_return.body_base64.as_str())
+    {
+        return Err(refusal(
+            "embedded Direct setup finalized receipt producer or body changed",
+        ));
+    }
+    let payer = parse_key(&public.payer, "embedded Direct setup payer")?;
+    let (payer_before, payer_after) = at(payer)?;
+    match journal.stage {
+        DirectSetupStageV1::ReplaySetup => {
+            let receipt =
+                DirectReplaySetupReceiptV1::decode(&expected_return.body()?).map_err(|error| {
+                    Error::new(format!("embedded Direct replay receipt: {error:?}"))
+                })?;
+            let replay = Pubkey::new_from_array(receipt.custody_replay);
+            let refund = Pubkey::new_from_array(receipt.rent_refund);
+            let (replay_before, replay_after) = at(replay)?;
+            let (refund_before, refund_after) = at(refund)?;
+            let poststate = journal
+                .expected_poststates
+                .first()
+                .filter(|_| {
+                    journal.expected_poststates.len() == 1
+                        && journal.finalized_poststates.len() == 1
+                })
+                .ok_or_else(|| refusal("embedded Direct replay poststate width changed"))?;
+            if receipt.request_digest
+                != hex32(
+                    &public.replay_setup.request_sha256,
+                    "Direct replay request digest",
+                )?
+                || receipt.market != parse_key(&public.market, "Direct replay Market")?.to_bytes()
+                || receipt.maker
+                    != parse_key(&public.replay_setup.maker, "Direct replay maker")?.to_bytes()
+                || receipt.maker_root
+                    != parse_key(&public.replay_setup.maker_root, "Direct replay maker root")?
+                        .to_bytes()
+                || replay
+                    != parse_key(&public.replay_setup.custody_replay, "Direct replay account")?
+                || refund != parse_key(&public.replay_setup.rent_refund, "Direct replay refund")?
+                || receipt.payer != payer.to_bytes()
+                || payer_before.checked_sub(payer_after) != fee.checked_add(receipt.payer_top_up)
+                || refund_after.checked_sub(refund_before) != Some(receipt.refunded_excess)
+                || replay_before != receipt.observed_lamports
+                || replay_after != receipt.exact_rent
+                || poststate.address != replay.to_string()
+                || poststate.lamports != receipt.exact_rent
+                || hex32(&poststate.data_sha256, "Direct replay poststate digest")?
+                    != receipt.custody_replay_digest
+            {
+                return Err(refusal(
+                    "embedded Direct replay setup receipt or lamport normalization changed",
+                ));
+            }
+        }
+        DirectSetupStageV1::TokenSetup => {
+            let receipt = DirectTokenSetupReceiptV1::decode(&expected_return.body()?)
+                .map_err(|error| Error::new(format!("embedded Direct token receipt: {error:?}")))?;
+            let seller = Pubkey::new_from_array(receipt.seller_token);
+            let fee_token = Pubkey::new_from_array(receipt.fee_token);
+            let refund = Pubkey::new_from_array(receipt.rent_refund);
+            let (seller_before, seller_after) = at(seller)?;
+            let (fee_before, fee_after) = at(fee_token)?;
+            let (refund_before, refund_after) = at(refund)?;
+            let total_top_up = receipt
+                .seller_normalization
+                .payer_top_up
+                .checked_add(receipt.fee_normalization.payer_top_up)
+                .ok_or_else(|| refusal("embedded Direct token top-up overflowed"))?;
+            let total_refund = receipt
+                .seller_normalization
+                .refunded_excess
+                .checked_add(receipt.fee_normalization.refunded_excess)
+                .ok_or_else(|| refusal("embedded Direct token refund overflowed"))?;
+            let expected = &journal.expected_poststates;
+            if receipt.request_digest
+                != hex32(
+                    &public.token_setup.request_sha256,
+                    "Direct token request digest",
+                )?
+                || receipt.market != parse_key(&public.market, "Direct token Market")?.to_bytes()
+                || receipt.release_set
+                    != hex32(&public.context.release_set, "Direct token release set")?
+                || receipt.seller_position
+                    != parse_key(
+                        &public.route.claims.seller_position,
+                        "Direct token seller Position",
+                    )?
+                    .to_bytes()
+                || receipt.collateral_mint
+                    != parse_key(&public.token_setup.mint, "Direct token Mint")?.to_bytes()
+                || receipt.token_program
+                    != parse_key(&public.token_setup.token_program, "Direct token program")?
+                        .to_bytes()
+                || receipt.seller_owner
+                    != parse_key(&public.token_setup.seller_owner, "Direct token seller")?
+                        .to_bytes()
+                || receipt.fee_recipient
+                    != parse_key(&public.token_setup.fee_recipient, "Direct fee recipient")?
+                        .to_bytes()
+                || seller != parse_key(&public.token_setup.seller_token, "Direct seller token")?
+                || fee_token != parse_key(&public.token_setup.fee_token, "Direct fee token")?
+                || refund != parse_key(&public.token_setup.rent_refund, "Direct token refund")?
+                || receipt.payer != payer.to_bytes()
+                || payer_before.checked_sub(payer_after) != fee.checked_add(total_top_up)
+                || refund_after.checked_sub(refund_before) != Some(total_refund)
+                || seller_before != receipt.seller_normalization.observed_lamports
+                || seller_after != receipt.seller_normalization.exact_rent
+                || fee_before != receipt.fee_normalization.observed_lamports
+                || fee_after != receipt.fee_normalization.exact_rent
+                || expected.len() != 4
+                || journal.finalized_poststates.len() != 4
+                || expected[0].address != seller.to_string()
+                || hex32(
+                    &expected[0].data_sha256,
+                    "Direct seller token poststate digest",
+                )? != receipt.seller_poststate_digest
+                || expected[1].address != fee_token.to_string()
+                || hex32(
+                    &expected[1].data_sha256,
+                    "Direct fee token poststate digest",
+                )? != receipt.fee_poststate_digest
+            {
+                return Err(refusal(
+                    "embedded Direct token setup receipt or lamport normalization changed",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -5622,10 +6199,11 @@ mod tests {
         DirectTradeExpectedPoststateV1, DirectTradeJournalPhaseV1, DirectTradeJournalV1,
         DirectTradeStageV1, JOURNAL_SCHEMA_V1, OWNED_EVIDENCE_SCHEMA_V1, OWNED_JOURNAL_SCHEMA_V1,
         OWNED_PRIVATE_SESSION_SCHEMA_V1, OWNED_PUBLIC_MANIFEST_SCHEMA_V1,
-        authenticate_direct_history_v1, direct_evidence_schema_v1, direct_journal_schema_v1,
-        direct_private_schema_v1, direct_public_schema_v1, expected_stage_v1, hex32,
-        journal_intent_sha256_v1, journal_state_sha256, refresh_direct_journal_digest_v1,
-        require_unique_json_v1, verify_expected_direct_poststates_v1, write_direct_journal_v1,
+        authenticate_direct_history_v1, authenticate_lookup_activation_slot_order_v1,
+        direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
+        direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
+        journal_state_sha256, refresh_direct_journal_digest_v1, require_unique_json_v1,
+        verify_expected_direct_poststates_v1, write_direct_journal_v1,
     };
     use crate::cluster::ExpectedClusterV1;
     use dclutch_operator::{Finality, Observation, ObservedAccount};
@@ -5696,6 +6274,15 @@ mod tests {
         );
         assert_eq!(expected_stage_v1(6, 2), Some(DirectTradeStageV1::Hot));
         assert_eq!(expected_stage_v1(7, 2), None);
+    }
+
+    #[test]
+    fn lookup_activation_is_strictly_after_creation_and_between_freeze_and_seal() {
+        assert!(authenticate_lookup_activation_slot_order_v1(11, 10, 11, 12).is_ok());
+        assert!(authenticate_lookup_activation_slot_order_v1(12, 10, 11, 12).is_ok());
+        assert!(authenticate_lookup_activation_slot_order_v1(10, 10, 10, 12).is_err());
+        assert!(authenticate_lookup_activation_slot_order_v1(11, 10, 12, 13).is_err());
+        assert!(authenticate_lookup_activation_slot_order_v1(13, 10, 11, 12).is_err());
     }
 
     #[test]
