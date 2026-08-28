@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { LIVE, liveRpcAccount, mutate } from '@/fixtures/liveOpenMarket';
+import { currentCoreMarketV3, LIVE, liveRpcAccount, mutate } from '@/fixtures/liveOpenMarket';
 import { sha256 } from '../bytes';
-import { REALM_SCHEMA_RELEASE_ID_V1 } from '../generated/coreFound';
+import {
+  CORE_STATE_PHASE_OFFSET,
+  CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+  CORE_STATE_TERMINAL_WINNER_OFFSET,
+  REALM_SCHEMA_RELEASE_ID_V1,
+} from '../generated/coreFound';
 import { deriveFinalizedRecordAddressesV1 } from '../releaseRegistry';
 import type { RpcAccount, SolanaRpcClient } from '../rpc';
 import { inspectMarketLens, type LensNode } from './marketLens';
@@ -34,7 +39,7 @@ function client(accounts: ReadonlyMap<string, RpcAccount>): Pick<SolanaRpcClient
   };
 }
 
-async function chain(marketData: Uint8Array = LIVE.market.data): Promise<Map<string, RpcAccount>> {
+async function chain(marketData: Uint8Array = currentCoreMarketV3()): Promise<Map<string, RpcAccount>> {
   const accounts = new Map<string, RpcAccount>([
     [LIVE.market.address, liveRpcAccount(LIVE.market, { data: marketData })],
     [LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate)],
@@ -147,10 +152,9 @@ describe('the Market lens', () => {
   });
 
   it('shows a terminal Market’s receipt identity without inventing an account for it', async () => {
-    // Core V2: phase@10, terminal winner@12, terminal receipt@320.
     const terminal = mutate(
-      mutate(mutate(LIVE.market.data, 10, 2), 12, 1),
-      320,
+      mutate(mutate(currentCoreMarketV3(), CORE_STATE_PHASE_OFFSET, 2), CORE_STATE_TERMINAL_WINNER_OFFSET, 1),
+      CORE_STATE_TERMINAL_RECEIPT_OFFSET,
       new Uint8Array(32).fill(0x77),
     );
     const lens = await inspectMarketLens(client(await chain(terminal)), {
@@ -164,7 +168,7 @@ describe('the Market lens', () => {
   });
 
   it('degrades to one honest node when the Market itself does not decode', async () => {
-    const broken = mutate(LIVE.market.data, 0, new TextEncoder().encode('DCLTZZZ9'));
+    const broken = mutate(currentCoreMarketV3(), 0, new TextEncoder().encode('DCLTZZZ9'));
     const lens = await inspectMarketLens(client(await chain(broken)), {
       ...full,
       address: LIVE.market.address,

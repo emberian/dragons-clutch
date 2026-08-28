@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { LIVE, liveRpcAccount } from '@/fixtures/liveOpenMarket';
+import { currentCoreMarketV3, LIVE, liveRpcAccount } from '@/fixtures/liveOpenMarket';
 import { sha256 } from '@/lib/bytes';
 import { REALM_SCHEMA_RELEASE_ID_V1 } from '@/lib/generated/coreFound';
 import { requiredBackingMeaningV1 } from '@/lib/marketDetail';
@@ -36,7 +36,7 @@ function client(accounts: ReadonlyMap<string, RpcAccount>): Pick<SolanaRpcClient
 describe('CellStrip over the live fixture', () => {
   it('renders the Claims aggregate the discovery join actually decodes', async () => {
     const accounts = new Map<string, RpcAccount>([
-      [LIVE.market.address, liveRpcAccount(LIVE.market)],
+      [LIVE.market.address, liveRpcAccount(LIVE.market, { data: currentCoreMarketV3() })],
       [LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate)],
     ]);
     const realm = deriveFinalizedRecordAddressesV1(LIVE.programs.registry, REALM_SCHEMA_RELEASE_ID_V1, await sha256(LIVE.realmRecord.data));
