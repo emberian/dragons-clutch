@@ -15,6 +15,13 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::TradingSbfError;
 
+/// Close-profile identity register seeded with the authenticated RentCredit.
+///
+/// Common activation identities occupy `0..12`; the close generation adds
+/// exactly this first extension slot so an AccountProfile can anchor the
+/// writable credit account without trusting a request-supplied address.
+pub const TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2: u16 = 12;
+
 /// Borrowed exact activation request after the Core effect envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TradingActivationRequestV2<'a> {
@@ -22,6 +29,14 @@ pub struct TradingActivationRequestV2<'a> {
     funding: CapabilityFundingHeaderV2,
     family_request: &'a [u8],
 }
+
+/// Borrowed exact close request after the Core effect envelope.
+///
+/// Activation and close deliberately share one hostile-decoded wire owner:
+/// `selector(144) || funding-header(16) || family request`. The envelope action
+/// and the ProgramSet-selected descriptor are the versioned action authorities;
+/// this alias cannot introduce a parallel DTO truth.
+pub type TradingCloseRequestV2<'a> = TradingActivationRequestV2<'a>;
 
 impl<'a> TradingActivationRequestV2<'a> {
     /// Hostile-decode `selector(144) || funding-header(16) || family request`.
