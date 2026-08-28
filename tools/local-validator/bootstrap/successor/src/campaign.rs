@@ -462,10 +462,9 @@ pub(crate) fn founding_state(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     input: &crate::model::MarketRunInput,
-    forge: &KeyForge,
+    collateral_mint: Pubkey,
 ) -> Result<(StageStateV1, crate::market::FoundingTargetsV1)> {
-    let mint = forge.keypair(role::COLLATERAL_MINT).pubkey();
-    let targets = crate::market::derive_founding_targets(plan, input, mint)?;
+    let targets = crate::market::derive_founding_targets(plan, input, collateral_mint)?;
     let state = match crate::market::observe_open_market(rpc, plan, &targets)? {
         crate::market::OpenMarketObservationV1::Open => StageStateV1::Complete,
         crate::market::OpenMarketObservationV1::Other(detail) => StageStateV1::Conflict(detail),
@@ -770,13 +769,20 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     states.push((StageV1::Publication, publication_state(&mut rpc, &plan)?));
     states.push((StageV1::Initialize, initialize_state(&mut rpc, &plan)?));
     states.push((StageV1::Activation, activation_state(&mut rpc, &plan)?));
-    let founding_targets = match &market {
+    // PEEKED, never drawn: the detector must look at exactly the mint key the
+    // executor will draw, and drawing it here would shift the executor onto
+    // the next index (the measured drift `KeyForge::peek_pubkey` documents).
+    let founding_mint = match &market {
         None => None,
-        Some(input) => {
-            let (state, targets) = founding_state(&mut rpc, &plan, input, &forge)?;
+        Some(_) => Some(forge.peek_pubkey(role::COLLATERAL_MINT)?),
+    };
+    let founding_targets = match (&market, founding_mint) {
+        (Some(input), Some(mint)) => {
+            let (state, targets) = founding_state(&mut rpc, &plan, input, mint)?;
             states.push((StageV1::Founding, state));
             Some(targets)
         }
+        _ => None,
     };
 
     let wallet = wallet_arithmetic(&mut rpc, &plan, authority.pubkey())?;
@@ -872,6 +878,7 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
         &authority,
         &forge,
         market.as_ref(),
+        founding_mint,
         &states,
         args.through,
     )
@@ -882,12 +889,14 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
 /// The stages through activation sign with the Core authority alone; the
 /// founding is the one that needs the forge's other roles and the market
 /// input, and it refuses by name when the input is absent.
+#[allow(clippy::too_many_arguments)]
 fn execute_stages(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     authority: &Keypair,
     forge: &KeyForge,
     market: Option<&crate::model::MarketRunInput>,
+    founding_mint: Option<Pubkey>,
     states: &[(StageV1, StageStateV1)],
     through: StageV1,
 ) -> Result<()> {
@@ -971,6 +980,9 @@ fn execute_stages(
                          hand against the same input.",
                     )));
                 }
+                let mint = founding_mint.ok_or_else(|| {
+                    Error::new("the founding stage reached execution without a peeked mint key")
+                })?;
                 let evidence = crate::market::execute_found_market(
                     rpc,
                     plan,
@@ -980,8 +992,11 @@ fn execute_stages(
                     &mut transactions,
                 )?;
                 // Detector == verifier: the same read that would have skipped
-                // this stage must pass now that it executed.
-                let (poststate, targets) = founding_state(rpc, plan, input, forge)?;
+                // this stage must pass now that it executed — against the SAME
+                // peeked mint, never a fresh draw (the executor advanced the
+                // forge's counter; a fresh peek would name the next founding's
+                // mint and report this one absent).
+                let (poststate, targets) = founding_state(rpc, plan, input, mint)?;
                 if poststate != StageStateV1::Complete {
                     return Err(Error::new(format!(
                         "the founding executed but its own detector does not read Complete \

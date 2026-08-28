@@ -115,6 +115,18 @@ pub(crate) struct Rpc {
     policy: WritePolicyV1,
     /// When the last request went out, so the next one can wait its turn.
     last_call: Option<Instant>,
+    /// The finalized slot of this connection's newest confirmed transaction.
+    ///
+    /// Read-your-writes, made structural: a public endpoint load-balances
+    /// across replicas, and a single-account read served by a replica still
+    /// catching up can answer from BEFORE a transaction this same connection
+    /// already confirmed as finalized. On loopback the floor is always
+    /// already met and nothing changes; against devnet it turned a passed
+    /// hostile-probe rollback check into a false accusation (measured
+    /// 2026-08-28, the first driven devnet founding: the payer-balance
+    /// equality read a stale replica and refused a rollback that had in fact
+    /// rolled back). Every single-account read waits this floor out.
+    read_floor: u64,
 }
 
 impl Rpc {
@@ -169,6 +181,7 @@ impl Rpc {
             pacing,
             policy,
             last_call: None,
+            read_floor: 0,
         })
     }
 
@@ -255,10 +268,35 @@ impl Rpc {
     }
 
     pub(crate) fn account(&mut self, address: Pubkey) -> Result<Option<RpcAccount>> {
-        let value = self.call(
-            "getAccountInfo",
-            &json!([address.to_string(), {"encoding":"base64","commitment":"finalized"}]),
-        )?;
+        // `minContextSlot` is this connection's own read floor: the node must
+        // answer from a snapshot at or past the newest transaction this
+        // connection confirmed, or say it cannot yet (-32016), which is
+        // retried within the confirmation deadline rather than surfaced as a
+        // stale answer. A node that never catches up still fails loudly.
+        let deadline = Instant::now() + self.pacing.confirm_timeout;
+        let value = loop {
+            let result = self.call(
+                "getAccountInfo",
+                &json!([address.to_string(), {
+                    "encoding":"base64",
+                    "commitment":"finalized",
+                    "minContextSlot": self.read_floor
+                }]),
+            );
+            match result {
+                Ok(value) => break value,
+                Err(error) => {
+                    let text = error.to_string();
+                    let behind = text.contains("-32016")
+                        || text.contains("Minimum context slot has not been reached");
+                    if behind && Instant::now() < deadline {
+                        thread::sleep(Duration::from_millis(200));
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        };
         let Some(account) = value.get("value") else {
             return Err(Error::new("getAccountInfo omitted value"));
         };
@@ -798,6 +836,7 @@ impl Rpc {
             .ok_or_else(|| Error::new(format!("{label} transaction omitted slot")))?;
         let fee_lamports = u64_field(meta, "fee")?;
         let compute_units_consumed = meta.get("computeUnitsConsumed").and_then(Value::as_u64);
+        self.read_floor = self.read_floor.max(slot);
         eprintln!(
             "campaign transaction: slot={slot} fee={fee_lamports} compute_units={} {label}",
             compute_units_consumed
