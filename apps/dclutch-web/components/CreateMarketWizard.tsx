@@ -69,7 +69,7 @@ const STATUS_LABEL: Readonly<Record<FoundingRungStatusV1, string>> = Object.free
   'tooling-only': 'tooling only',
 });
 
-type AddressField = Exclude<keyof CoreFoundInputV2, 'generation'>;
+type AddressField = Exclude<keyof CoreFoundInputV2, 'generation' | 'lookupTable'>;
 type AddressValues = Record<AddressField, string>;
 
 const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string }>> = Object.freeze([
@@ -81,9 +81,12 @@ const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: strin
   { field: 'productRecord', label: 'Product Runtime V2 raw' },
   { field: 'resultDomainRecord', label: 'Result domain raw' },
   { field: 'portfolioRecord', label: 'Portfolio raw' },
-  { field: 'sourceMaterialRecord', label: 'SourceMaterialV2 raw' },
+  { field: 'linkedBasisRecord', label: 'Linked basis raw' },
+  { field: 'sourceMaterialRecord', label: 'SourceMaterialV3 raw' },
+  { field: 'sourceSpecRecord', label: 'Source spec raw' },
+  { field: 'capacityProfileRecord', label: 'Source capacity profile raw' },
+  { field: 'manipulationFloorRecord', label: 'Manipulation floor raw' },
   { field: 'capabilityManifestRecord', label: 'Capability manifest raw' },
-  { field: 'executionReleaseSetRecord', label: 'Execution release set raw' },
 ]);
 
 type SubmitStageId = 'rent-credit' | 'routing-table' | 'found31';
@@ -270,7 +273,7 @@ export default function CreateMarketWizard() {
   async function buildChainPlan(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setPlan(null);
-    setPlanStatus('Reacquiring immutable releases, Product semantics, and all 31 accounts at finalized commitment…');
+    setPlanStatus('Reacquiring immutable releases, Product semantics, and all 37 accounts at finalized commitment…');
     try {
       const generationValue = bigintOrNull(generation);
       if (generationValue === null || generationValue <= 0n) throw new Error('generation must be a positive integer');
@@ -279,8 +282,8 @@ export default function CreateMarketWizard() {
       setTable(null);
       setStages([
         { id: 'rent-credit', label: 'Lifecycle RentCredit Create', signature: null, status: next.rentCreditState === 'created' ? 'submitted' : 'pending', detail: next.rentCreditState === 'created' ? 'Already created on this chain for this Market and generation.' : `${next.rentCreateWireBytes?.length ?? 0} bytes · unsigned` },
-        { id: 'routing-table', label: `Routing table · ${next.routableAddresses.length} addresses`, signature: null, status: 'pending', detail: 'Not created. Found31 does not fit a packet without it.' },
-        { id: 'found31', label: 'Found31 — Market at Founding', signature: null, status: 'pending', detail: next.foundRefusal ?? `${next.wireBytes?.length ?? 0} bytes · unsigned` },
+        { id: 'routing-table', label: `Routing table · ${next.routableAddresses.length} addresses`, signature: null, status: 'pending', detail: 'Not created. Found37 does not fit a packet without it.' },
+        { id: 'found31', label: 'Found37 — Market at Founding', signature: null, status: 'pending', detail: next.foundRefusal ?? `${next.wireBytes?.length ?? 0} bytes · unsigned` },
       ]);
       setPlanStatus(`Accepted at finalized slot ${next.observedSlot}. Nothing is signed or submitted.`);
     } catch (error) {
@@ -303,7 +306,7 @@ export default function CreateMarketWizard() {
    * Wait for one submitted signature to finalize, or say why it did not.
    *
    * Submission is not landing, and every stage here is a precondition of the
-   * next: the lifecycle credit must exist before Found31 names it, and a lookup
+   * next: the lifecycle credit must exist before Found37 names it, and a lookup
    * table is usable only strictly after the slot that last extended it.
    */
   async function awaitFinalized(client: SolanaRpcClient, signature: string): Promise<string> {
@@ -329,7 +332,7 @@ export default function CreateMarketWizard() {
   }
 
   /**
-   * Build the routing table Found31 rides, and read it back off the chain.
+   * Build the routing table Found37 rides, and read it back off the chain.
    *
    * The create and every extend page is its own transaction and its own wallet
    * signature; nothing is batched behind one click that the operator did not
@@ -391,19 +394,19 @@ export default function CreateMarketWizard() {
         setWalletStatus('Routing table finalized and its contents verified.');
         return;
       }
-      if (table === null) throw new Error('Found31 does not fit a packet without its routing table; build that first');
+      if (table === null) throw new Error('Found37 does not fit a packet without its routing table; build that first');
       // Recompiled against the finalized table, and reauthenticated from
       // scratch: the chain has moved since the plan was built, and a stale
       // blockhash or a changed record is a refusal rather than a surprise.
       const generationValue = BigInt(generation);
       const routed = await prepareCoreFoundV2(client, { ...effectiveAddresses, generation: generationValue, lookupTable: table });
-      if (routed.transaction === null) throw new Error(routed.foundRefusal ?? 'Found31 could not be compiled');
+      if (routed.transaction === null) throw new Error(routed.foundRefusal ?? 'Found37 could not be compiled');
       if (routed.market !== plan.market) throw new Error('the Market address changed between planning and submission');
       const signature = await signAndSubmitOne(routed.transaction, client);
       updateStage(target, { detail: `Submitted · ${routed.wireBytes?.length ?? 0} bytes. Waiting for finality…`, signature });
       const slot = await awaitFinalized(client, signature);
       updateStage(target, { status: 'submitted', detail: `Finalized at slot ${slot} · Market ${routed.market} is at phase Founding`, signature });
-      setWalletStatus(`Found31 finalized as ${signature}.`);
+      setWalletStatus(`Found37 finalized as ${signature}.`);
     } catch (error) {
       updateStage(target, { status: 'refused', detail: `Refused: ${reason(error)}` });
       setWalletStatus(`Refused: ${reason(error)}`);
@@ -415,7 +418,7 @@ export default function CreateMarketWizard() {
 
     <section className="market-heading">
       <div>
-        <div className="market-kicker"><span>Create · range protection</span><span>DCLTGMF1 atomic route</span></div>
+        <div className="market-kicker"><span>Create · range protection</span><span>DCLTGMF2 atomic route</span></div>
         <h1>State a band.<br />Price the window.<br />See the whole ladder.</h1>
       </div>
       <p>
@@ -625,7 +628,7 @@ export default function CreateMarketWizard() {
     {step === 'submit' && <section className="direct-card">
       <header className="direct-card-heading"><span>05</span><div>
         <h2>Sign and submit the rungs a browser can drive</h2>
-        <p>Against a validator whose record graph and collateral Mint already exist, the two Core rungs are reachable from a wallet at a generation nothing has used. Each is signed and submitted separately: the lifecycle credit must confirm before Found31 is submitted, and chaining them would be deciding on your behalf that the first one landed.</p>
+        <p>Against a validator whose record graph and collateral Mint already exist, the two Core rungs are reachable from a wallet at a generation nothing has used. Each is signed and submitted separately: the lifecycle credit must confirm before Found37 is submitted, and chaining them would be deciding on your behalf that the first one landed.</p>
       </div></header>
 
       <WalletDirectory
@@ -651,7 +654,7 @@ export default function CreateMarketWizard() {
             <input required spellCheck={false} value={effectiveAddresses[field]} onChange={(event) => setAddresses((current) => ({ ...current, [field]: event.target.value.trim() }))} />
           </label>)}
         </div>
-        <button type="submit">Construct the unsigned lifecycle + Found31 pair</button>
+        <button type="submit">Construct the unsigned lifecycle + Found37 pair</button>
         <p className="direct-status" aria-live="polite">{planStatus}</p>
       </form>
 
@@ -691,8 +694,8 @@ export default function CreateMarketWizard() {
           </li>)}
         </ol>
         <p className="direct-refusal">
-          Submitting Found31 leaves a Market in phase <em>Founding</em>: identity exists, obligations and readiness are
-          still being assembled, and no liabilities or trading are admitted. Reaching <em>Open</em> is the DCLTGMF1 rung,
+          Submitting Found37 leaves a Market in phase <em>Founding</em>: identity exists, obligations and readiness are
+          still being assembled, and no liabilities or trading are admitted. Reaching <em>Open</em> is the DCLTGMF2 rung,
           which needs the projected-Custody prestate the review step marks tooling-only.
         </p>
       </>}

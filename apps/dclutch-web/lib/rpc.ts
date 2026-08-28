@@ -549,7 +549,7 @@ export class SolanaRpcClient {
    * Read one submitted signature's confirmation status.
    *
    * Submission is not landing. A route whose next transaction depends on the
-   * previous one's effect -- a lifecycle credit before Found31, a lookup table
+   * previous one's effect -- a lifecycle credit before Found37, a lookup table
    * before anything routes through it -- has to observe that effect rather than
    * assume it, and a lookup table specifically is usable only strictly after
    * the slot that last extended it.
