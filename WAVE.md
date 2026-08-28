@@ -965,3 +965,43 @@ chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
   authenticate_product_runtime_v3; the seeds-exclude-own-address probe trick
   is landed. Also: dealer/README.md's 35-account packet exemption is stale
   under an admitted bundle — re-answer, don't inherit.
+
+## HANDOFF — Claude session closes, codex takes the baton (2026-08-27 night)
+
+WHAT IS TRUE TONIGHT, all publicly verifiable:
+- Seven programs PERMANENT on devnet (addresses in DEPLOY_1.md §2), mutable
+  per decision 0012, five-role activation measured on the public cluster.
+  31.77 SOL parked; wallet ~32.2.
+- clutch.dregg.pro is the real app: opens on content (baked deployment
+  manifest, live-verified), lists the six Founding-phase devnet markets
+  cold, decodes all 51 record types + refusals by name, charts per the
+  dataviz discipline, one nav, consoles with provenance. HTTPS cert may
+  still be provisioning (re-triggered; flip https_enforced when it exists).
+- The whole market life is proven on local validators (found → trade →
+  resolve by real Pyth → redeem atoms → retire-to-Retiring); geometry is a
+  non-wall (2..30 outcomes on one artifact set, proven in Lean); the gate
+  is 20/20 seed-proof; the relay daemon runs armed-ready on the anchor
+  with a hash-chained public log.
+- Filings: 1717 FILED (2026-08-27). 1388 ready to file (date bump + ember's
+  one bracketed line; citation gate satisfied at dragons-clutch a9e587ab).
+
+CODEX MISSION #1 — THE FOUNDING LOCK WALL (the one gate to the first open
+devnet market): DCLTGMF1's atomic frame locks >64 unique accounts; devnet
+lacks increase_tx_account_lock_limit (64 vs local 128). DEPLOY_1.md §8 has
+the yielded recommendation: unique-lock census first, then frame narrowing
+via the RECORDS-MIGRATE rows, shipped as a 0012 Upgrade cycle. The wall
+also blocks: the flagship + graduation + abandoned markets (driver
+subcommands exist, one command each once founding lands), the browser buy
+on devnet (GEO-ART's recipe: emit nothing, activate the existing artifacts),
+and SMOKE-1's story pages (dark-launched, ready).
+
+THE QUEUE, every lane with its lever named in its entry above: DLR-ACCEPT
+(the operator's layout computer), RECORDS-MIGRATE + the cliff-doctrine
+pass (two exhibits priced; ride the same Upgrade as the lock narrowing),
+GEN-SEVEN (one unit, rungs laid), Fractional twin (road mapped by
+STRUCT-CHILD/CAMP), VX vinext upgrade, SMOKE-1 cleanup rows (sol6/7/9
+prestates), M-46 attribution, SN7 smalls. Standing rules that bind: lane.sh
+for commits/fmt; the frame-diagnostic SCRIPT over every shipped link;
+M-61 margin reporting (pass count + mean); parked-is-not-landed; the
+board (/private/tmp/dclutch-wave-board.md, archived copy in docs/) is
+append-only coordination, never authority; reader-voice on anything public.
