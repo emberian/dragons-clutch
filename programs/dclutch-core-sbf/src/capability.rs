@@ -12,7 +12,8 @@ use alloc::vec::Vec;
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, FundingLedgerCloseCustodyV2,
-    FundingLedgerStatusV2, FundingLedgerV2, validate_funding_ledger_masks_v2,
+    FundingLedgerStatusV2, FundingLedgerV2, capability_dependency_closure_mask_v1,
+    validate_funding_ledger_masks_v2,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
@@ -409,7 +410,8 @@ fn validate_funding_header(
     selection: CapabilityExecutionSelectionV1,
     manifest: CapabilityManifestV1<'_>,
 ) -> Result<u16, CoreSbfError> {
-    let expected = dependency_closure_mask(manifest, selection.entry_index())?;
+    let expected = capability_dependency_closure_mask_v1(manifest, selection.entry_index())
+        .map_err(|_| CoreSbfError::Funding)?;
     let logical_count =
         u8::try_from(expected.count_ones()).map_err(|_| CoreSbfError::Arithmetic)?;
     if funding_header.logical_count() != logical_count || funding_header.selected_mask() != expected
@@ -419,45 +421,13 @@ fn validate_funding_header(
     Ok(expected)
 }
 
+#[cfg(test)]
 fn dependency_closure_mask(
     manifest: CapabilityManifestV1<'_>,
     selected_entry_index: u16,
 ) -> Result<u16, CoreSbfError> {
-    if selected_entry_index >= manifest.entry_count() {
-        return Err(CoreSbfError::Funding);
-    }
-    let selected_bit = 1_u16
-        .checked_shl(u32::from(selected_entry_index))
-        .ok_or(CoreSbfError::Arithmetic)?;
-    let mut closure = selected_bit;
-    loop {
-        let before = closure;
-        let mut entry_index = 0_u16;
-        while entry_index < manifest.entry_count() {
-            let entry_bit = 1_u16
-                .checked_shl(u32::from(entry_index))
-                .ok_or(CoreSbfError::Arithmetic)?;
-            if closure & entry_bit != 0 {
-                let entry = manifest
-                    .entry(entry_index)
-                    .map_err(|_| CoreSbfError::Funding)?;
-                let mut position = 0_usize;
-                while position < usize::from(entry.dependency_count()) {
-                    let dependency = entry
-                        .dependency(position)
-                        .map_err(|_| CoreSbfError::Funding)?;
-                    closure |= 1_u16
-                        .checked_shl(u32::from(dependency))
-                        .ok_or(CoreSbfError::Arithmetic)?;
-                    position = position.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
-                }
-            }
-            entry_index = entry_index.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
-        }
-        if closure == before {
-            return Ok(closure);
-        }
-    }
+    capability_dependency_closure_mask_v1(manifest, selected_entry_index)
+        .map_err(|_| CoreSbfError::Funding)
 }
 
 struct LedgerTransitionPlan {
