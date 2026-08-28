@@ -37,7 +37,8 @@ pub mod admitted_composition_v3;
 #[cfg(any(
     feature = "families",
     feature = "series-family",
-    feature = "dealer-family"
+    feature = "dealer-family",
+    feature = "outer-only"
 ))]
 pub mod claims_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
@@ -46,7 +47,8 @@ pub mod core_composition_v3;
 #[cfg(any(
     feature = "families",
     feature = "series-family",
-    feature = "dealer-family"
+    feature = "dealer-family",
+    feature = "outer-only"
 ))]
 pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
