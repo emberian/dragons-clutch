@@ -96,6 +96,8 @@ import {
 
 const key = (byte: number) => new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
 const digest = (byte: number) => byte.toString(16).padStart(2, '0').repeat(32);
+const addressIdentity = (value: string) => Buffer.from(new PublicKey(value).toBytes()).toString('hex');
+const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
 function inputValue() {
   const owner = key(2);
@@ -140,11 +142,15 @@ function route(): WalletTerminalPayoutRouteV3 {
     'aggregate', 'linkedBasisRaw', 'linkedBasisStaging', 'productRaw', 'productStaging',
     'resultDomainRaw', 'resultDomainStaging', 'portfolioRaw', 'portfolioStaging', 'market',
     'activationCache', 'registryProgram', 'claimsProgram', 'claimsProgramData', 'coreProgram',
-    'coreProgramData', 'position', 'exposureRaw', 'exposureStaging', 'custodyProgram',
-    'terminalCoordinateRaw', 'terminalCoordinateStaging', 'realmRaw', 'realmStaging',
+    'coreProgramData', 'resolutionProgram', 'resolutionProgramData', 'position', 'exposureRaw',
+    'exposureStaging', 'custodyProgram', 'terminalCertificate', 'realmRaw', 'realmStaging',
     'custodyReplay', 'collateralMint', 'hoard', 'recipient', 'custodyAuthority', 'tokenProgram',
   ] as const;
-  const value = Object.fromEntries(names.map((name, offset) => [name, key(30 + offset)]));
+  const value = Object.fromEntries(names.map((name, offset) => [name, key(30 + offset)])) as Record<typeof names[number], string>;
+  const [resolutionProgramData] = PublicKey.findProgramAddressSync([
+    new PublicKey(value.resolutionProgram).toBytes(),
+  ], UPGRADEABLE_LOADER);
+  value.resolutionProgramData = resolutionProgramData.toBase58();
   return value as WalletTerminalPayoutRouteV3;
 }
 
@@ -164,7 +170,7 @@ function preparedFixture() {
   const request = {
     releaseSet: digest(1), market: payoutRoute.market, realm: digest(2), parentContext: digest(3),
     productRecordDigest: digest(4), exposureId: digest(5), exposureDigest: digest(6),
-    terminalRecordDigest: digest(7), owner: signer.publicKey.toBase58(), position: payoutRoute.position,
+    terminalRecordDigest: addressIdentity(payoutRoute.terminalCertificate), owner: signer.publicKey.toBase58(), position: payoutRoute.position,
     recipientOwner: signer.publicKey.toBase58(), recipient: payoutRoute.recipient,
     claimsProgram: payoutRoute.claimsProgram, custodyProgram: payoutRoute.custodyProgram,
     collateralMint: payoutRoute.collateralMint, tokenProgram: payoutRoute.tokenProgram,

@@ -20,6 +20,7 @@ import {
 } from '../src/commands/redeem';
 
 const DEVNET = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
 function key(byte: number): string {
   return new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -27,6 +28,10 @@ function key(byte: number): string {
 
 function identity(byte: number): string {
   return byte.toString(16).padStart(2, '0').repeat(32);
+}
+
+function addressIdentity(value: string): string {
+  return Buffer.from(new PublicKey(value).toBytes()).toString('hex');
 }
 
 function manifestValue(): Record<string, unknown> {
@@ -42,12 +47,16 @@ function manifestValue(): Record<string, unknown> {
     'aggregate', 'linkedBasisRaw', 'linkedBasisStaging', 'productRaw', 'productStaging',
     'resultDomainRaw', 'resultDomainStaging', 'portfolioRaw', 'portfolioStaging',
     'market', 'activationCache', 'registryProgram', 'claimsProgram', 'claimsProgramData',
-    'coreProgram', 'coreProgramData', 'position', 'exposureRaw', 'exposureStaging',
-    'custodyProgram', 'terminalCoordinateRaw', 'terminalCoordinateStaging', 'realmRaw',
+    'coreProgram', 'coreProgramData', 'resolutionProgram', 'resolutionProgramData', 'position',
+    'exposureRaw', 'exposureStaging', 'custodyProgram', 'terminalCertificate', 'realmRaw',
     'realmStaging', 'custodyReplay', 'collateralMint', 'hoard', 'recipient',
     'custodyAuthority', 'tokenProgram',
   ] as const;
-  const route = Object.fromEntries(routeFields.map((field, index) => [field, key(20 + index)]));
+  const route = Object.fromEntries(routeFields.map((field, index) => [field, key(20 + index)])) as Record<typeof routeFields[number], string>;
+  const [resolutionProgramData] = PublicKey.findProgramAddressSync([
+    new PublicKey(route.resolutionProgram).toBytes(),
+  ], UPGRADEABLE_LOADER);
+  route.resolutionProgramData = resolutionProgramData.toBase58();
   Object.assign(route, { market, position, claimsProgram, custodyProgram, collateralMint, tokenProgram, recipient });
   return {
     format: 'dclutch-wallet-terminal-payout-v3',
@@ -56,7 +65,7 @@ function manifestValue(): Record<string, unknown> {
     request: {
       releaseSet: identity(10), market, realm: identity(11), parentContext: identity(12),
       productRecordDigest: identity(13), exposureId: identity(14), exposureDigest: identity(15),
-      terminalRecordDigest: identity(16), owner, position, recipientOwner: owner, recipient,
+      terminalRecordDigest: addressIdentity(route.terminalCertificate), owner, position, recipientOwner: owner, recipient,
       claimsProgram, custodyProgram, collateralMint, tokenProgram, semanticBasisId: identity(17),
       linkedBasisRecordDigest: identity(18), generation: '1', expectedMarketRevision: '2',
       expectedPositionRevision: '3', expectedCustodyRevision: '4', quantity: '7',

@@ -102,6 +102,7 @@ import {
   SIGNED_DELTA_WIRE_VERSION_V3,
   TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3,
   TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
+  TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3,
   TERMINAL_SETTLEMENT_CLAIM_INDEX_OFFSET_V3,
   TERMINAL_SETTLEMENT_CLAIMS_PROGRAM_OFFSET_V3,
   TERMINAL_SETTLEMENT_COLLATERAL_MINT_OFFSET_V3,
@@ -147,6 +148,8 @@ import {
   TERMINAL_SETTLEMENT_RECIPIENT_OWNER_OFFSET_V3,
   TERMINAL_SETTLEMENT_RECIPIENT_TOKEN_OFFSET_V3,
   TERMINAL_SETTLEMENT_RELEASE_OFFSET_V3,
+  TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+  TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
   TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
   TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3,
   TERMINAL_SETTLEMENT_ROLE_OFFSET_V3,
@@ -186,6 +189,7 @@ const TOKEN_AMOUNT_OFFSET = TOKEN_ACCOUNT_AMOUNT_OFFSET_V1;
 const TOKEN_STATE_OFFSET = TOKEN_ACCOUNT_STATE_OFFSET_V1;
 const LEGACY_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 const REPLAY_LAST_REQUEST_OFFSET = CUSTODY_REPLAY_GENERATION_OFFSET_V1 + 8;
 const REPLAY_LAST_POSTSTATE_OFFSET = REPLAY_LAST_REQUEST_OFFSET + 32;
 
@@ -282,9 +286,10 @@ export type WalletTerminalPayoutRouteV3 = Readonly<{
   resultDomainStaging: string; portfolioRaw: string; portfolioStaging: string;
   market: string; activationCache: string; registryProgram: string;
   claimsProgram: string; claimsProgramData: string; coreProgram: string;
-  coreProgramData: string; position: string; exposureRaw: string;
-  exposureStaging: string; custodyProgram: string; terminalCoordinateRaw: string;
-  terminalCoordinateStaging: string; realmRaw: string; realmStaging: string;
+  coreProgramData: string; resolutionProgram: string; resolutionProgramData: string;
+  position: string; exposureRaw: string; exposureStaging: string;
+  custodyProgram: string; terminalCertificate: string;
+  realmRaw: string; realmStaging: string;
   custodyReplay: string; collateralMint: string; hoard: string; recipient: string;
   custodyAuthority: string; tokenProgram: string;
 }>;
@@ -507,6 +512,20 @@ function validateRoute(input: WalletTerminalPayoutBuildInputV3, context: Uint8Ar
   if (route.tokenProgram !== LEGACY_TOKEN_PROGRAM && route.tokenProgram !== TOKEN_2022_PROGRAM) {
     throw new Error('payout route selects an unsupported token program');
   }
+  validateTerminalAuthority(route, request);
+}
+
+function validateTerminalAuthority(route: WalletTerminalPayoutRouteV3, request: WalletTerminalPayoutRequestV3): void {
+  const certificate = key(route.terminalCertificate, 'Resolution certificate');
+  if (hex(certificate.toBytes()) !== request.terminalRecordDigest) {
+    throw new Error('Resolution certificate differs from the Core terminal receipt identity');
+  }
+  const [programData] = PublicKey.findProgramAddressSync([
+    key(route.resolutionProgram, 'Resolution program').toBytes(),
+  ], UPGRADEABLE_LOADER);
+  if (route.resolutionProgramData !== programData.toBase58()) {
+    throw new Error('Resolution ProgramData is not the canonical Loader-v3 authority coordinate');
+  }
 }
 
 async function custodyEvidence(input: WalletTerminalPayoutBuildInputV3, requestBytes: Uint8Array, requestDigest: Uint8Array, signedPacketDigest: Uint8Array): Promise<Readonly<{ caller: string; requestDigest: Uint8Array }>> {
@@ -572,7 +591,8 @@ function payoutMetas(route: WalletTerminalPayoutRouteV3, owner: string, custodyC
     readonly(route.claimsProgramData), readonly(route.claimsProgram), readonly(route.claimsProgramData),
     readonly(route.coreProgram), readonly(route.coreProgramData), writable(route.position),
     readonly(route.exposureRaw), readonly(route.exposureStaging), readonly(custodyCaller),
-    readonly(route.custodyProgram), readonly(route.terminalCoordinateRaw), readonly(route.terminalCoordinateStaging),
+    readonly(route.custodyProgram), readonly(route.terminalCertificate), readonly(route.resolutionProgram),
+    readonly(route.resolutionProgramData),
     readonly(route.realmRaw), readonly(route.realmStaging), writable(route.custodyReplay),
     readonly(route.collateralMint), writable(route.hoard), writable(route.recipient),
     readonly(route.custodyAuthority), readonly(route.tokenProgram),
@@ -600,7 +620,17 @@ export async function buildWalletTerminalPayoutV3(input: WalletTerminalPayoutBui
   const signedTableDigest = await hashv(SIGNED_TABLE_DOMAIN, tables.positions, tables.aggregates, tables.deltas);
   const custody = await custodyEvidence(input, requestBytes, requestDigest, signedPacketDigest);
   const metas = payoutMetas(input.route, request.owner, custody.caller);
-  if (metas.length !== ACCOUNT_COUNT) throw new Error('terminal payout account frame is not exactly 35 accounts');
+  if (metas.length !== ACCOUNT_COUNT) throw new Error('terminal payout account frame is not exactly 36 accounts');
+  for (const [index, address] of [
+    [TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3, input.route.terminalCertificate],
+    [TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3, input.route.resolutionProgram],
+    [TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3, input.route.resolutionProgramData],
+  ] as const) {
+    const meta = metas[index];
+    if (meta === undefined || meta.pubkey.toBase58() !== address || meta.isSigner || meta.isWritable) {
+      throw new Error('terminal payout certificate authority is not in its exact readonly frame coordinate');
+    }
+  }
   const instruction = new TransactionInstruction({ programId: key(request.claimsProgram, 'Claims program'), keys: metas, data: requestBytes as Buffer });
   return Object.freeze({
     observedSlot: input.observedSlot, route: input.route, request, requestBytes, requestDigest,
@@ -775,7 +805,7 @@ export function parseWalletTerminalPayoutManifestV3(source: string): WalletTermi
   exactKeys(parsed, ['format', 'route', 'custodyContext', 'request', 'signedPacketBase64', 'payout', 'lookupTable'], 'payout manifest');
   const routeValue = parsed.route; const requestValue = parsed.request;
   if (parsed.format !== 'dclutch-wallet-terminal-payout-v3' || !plain(routeValue) || !plain(requestValue)) throw new Error('payout manifest has another format or shape');
-  const routeFields = ['aggregate', 'linkedBasisRaw', 'linkedBasisStaging', 'productRaw', 'productStaging', 'resultDomainRaw', 'resultDomainStaging', 'portfolioRaw', 'portfolioStaging', 'market', 'activationCache', 'registryProgram', 'claimsProgram', 'claimsProgramData', 'coreProgram', 'coreProgramData', 'position', 'exposureRaw', 'exposureStaging', 'custodyProgram', 'terminalCoordinateRaw', 'terminalCoordinateStaging', 'realmRaw', 'realmStaging', 'custodyReplay', 'collateralMint', 'hoard', 'recipient', 'custodyAuthority', 'tokenProgram'] as const;
+  const routeFields = ['aggregate', 'linkedBasisRaw', 'linkedBasisStaging', 'productRaw', 'productStaging', 'resultDomainRaw', 'resultDomainStaging', 'portfolioRaw', 'portfolioStaging', 'market', 'activationCache', 'registryProgram', 'claimsProgram', 'claimsProgramData', 'coreProgram', 'coreProgramData', 'resolutionProgram', 'resolutionProgramData', 'position', 'exposureRaw', 'exposureStaging', 'custodyProgram', 'terminalCertificate', 'realmRaw', 'realmStaging', 'custodyReplay', 'collateralMint', 'hoard', 'recipient', 'custodyAuthority', 'tokenProgram'] as const;
   const requestFields = ['releaseSet', 'market', 'realm', 'parentContext', 'productRecordDigest', 'exposureId', 'exposureDigest', 'terminalRecordDigest', 'owner', 'position', 'recipientOwner', 'recipient', 'claimsProgram', 'custodyProgram', 'collateralMint', 'tokenProgram', 'semanticBasisId', 'linkedBasisRecordDigest', 'generation', 'expectedMarketRevision', 'expectedPositionRevision', 'expectedCustodyRevision', 'quantity', 'claimIndex', 'transferIndex'] as const;
   exactKeys(routeValue, routeFields, 'payout route'); exactKeys(requestValue, requestFields, 'payout request');
   const route = Object.fromEntries(routeFields.map((field) => [field, textField(routeValue[field], `route ${field}`, 96)])) as WalletTerminalPayoutRouteV3;
@@ -785,6 +815,8 @@ export function parseWalletTerminalPayoutManifestV3(source: string): WalletTermi
   const request = Object.freeze({ ...requestText, claimIndex, transferIndex }) as WalletTerminalPayoutRequestV3;
   // Run every fixed request validation now, before chain acquisition.
   encodeWalletTerminalPayoutRequestV3(request);
+  for (const [field, value] of Object.entries(route)) key(value, `route ${field}`);
+  validateTerminalAuthority(route, request);
   key(textField(parsed.lookupTable, 'lookup table', 96), 'lookup table');
   requestIdentity(textField(parsed.custodyContext, 'Custody context', 64), 'Custody context');
   decimal(textField(parsed.payout, 'payout', 32), 'payout');
