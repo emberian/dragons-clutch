@@ -35,12 +35,12 @@ export default function SiteLanding() {
       </div>
       <aside>
         <span>Where this stands</span>
-        <strong>Not live yet</strong>
-        <p>dClutch is not deployed on any network. There is no live market, no
-        token, and nothing to buy today. Everything on this site describes
-        software running on a local test chain — the app below reads whatever
-        chain you point it at, and with nothing deployed it will refuse, with
-        reasons.</p>
+        <strong>On devnet — nothing for sale</strong>
+        <p>dClutch runs on Solana's devnet, a public test network whose
+        tokens are worthless by construction. The programs are deployed and
+        the first markets are being set up; you can watch it all happen live
+        below. There is no token, nothing to buy, and no value at risk
+        anywhere.</p>
       </aside>
     </section>
 
