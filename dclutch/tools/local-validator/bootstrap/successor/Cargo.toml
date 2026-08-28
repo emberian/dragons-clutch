@@ -15,8 +15,10 @@ base64 = "=0.22.1"
 bincode = "=1.3.3"
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
+dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
+dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-market-founding-v1-operator = { path = "../../../../crates/dclutch-market-founding-v1-operator" }
 dclutch-operator = { path = "../../../../crates/dclutch-operator" }

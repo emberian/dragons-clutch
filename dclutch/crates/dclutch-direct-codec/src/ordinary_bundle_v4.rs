@@ -360,7 +360,7 @@ fn artifact(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     extern crate std;
 
     use super::*;
@@ -527,6 +527,10 @@ mod tests {
             capacity_profile: [0x44; 32],
         })
         .expect("bundle")
+    }
+
+    pub(crate) fn canonical_bundle_for_cross_module_tests() -> DirectInlineOrdinaryHotBundleV4 {
+        build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis"))
     }
 
     /// The same witness the registered family carries, on the live path.

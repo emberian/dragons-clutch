@@ -6,6 +6,7 @@ use solana_sdk::pubkey::Pubkey;
 
 mod campaign;
 mod cluster;
+mod direct_market;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
 // helpers stay allowed the way every #[path] include here is.
@@ -78,6 +79,9 @@ fn run() -> Result<()> {
         Some("ledger-census") => run_ledger_census(arguments.collect()),
         Some("wallet-terminal-payout-input") => {
             terminal_lifecycle::run_wallet_terminal_input(arguments.collect())
+        }
+        Some("terminal-lifecycle-plan") => {
+            terminal_lifecycle::run_terminal_lifecycle_plan(arguments.collect())
         }
         Some("wallet-terminal-payout-alt-plan") => wallet_terminal::run_alt(arguments.collect()),
         Some("wallet-terminal-payout-plan") => wallet_terminal::run(arguments.collect()),
@@ -207,27 +211,67 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
     campaign::execute(args)
 }
 
+#[derive(Default)]
+struct DirectCompilerArgumentsV1 {
+    plan: Option<String>,
+    execution_config: Option<String>,
+    activation_deadline_slot: Option<String>,
+    root_rent_minimum_lamports: Option<String>,
+}
+
+impl DirectCompilerArgumentsV1 {
+    fn slot(&mut self, argument: &str) -> Option<&mut Option<String>> {
+        match argument {
+            "--plan" => Some(&mut self.plan),
+            "--direct-execution-config" => Some(&mut self.execution_config),
+            "--direct-activation-deadline-slot" => Some(&mut self.activation_deadline_slot),
+            "--direct-root-rent-minimum-lamports" => Some(&mut self.root_rent_minimum_lamports),
+            _ => None,
+        }
+    }
+
+    fn load(self, registry: Pubkey) -> Result<direct_market::DirectMarketCompilerOwnedV1> {
+        let decimal = |value: Option<String>, label: &str| -> Result<u64> {
+            required(value, label)?
+                .parse::<u64>()
+                .map_err(|_| Error::new(format!("{label} must be a decimal u64")))
+        };
+        direct_market::DirectMarketCompilerOwnedV1::load(
+            &absolute(self.plan, "--plan")?,
+            &absolute(self.execution_config, "--direct-execution-config")?,
+            registry,
+            decimal(
+                self.activation_deadline_slot,
+                "--direct-activation-deadline-slot",
+            )?,
+            decimal(
+                self.root_rent_minimum_lamports,
+                "--direct-root-rent-minimum-lamports",
+            )?,
+        )
+    }
+}
+
 fn run_demo_market(arguments: Vec<String>) -> Result<()> {
     let mut registry = None;
+    let mut direct = DirectCompilerArgumentsV1::default();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
         let slot = match argument.as_str() {
-            "--registry-program-id" => &mut registry,
-            _ => {
-                return Err(Error::new(format!(
-                    "unknown demo-market argument: {argument}"
-                )));
-            }
-        };
+            "--registry-program-id" => Some(&mut registry),
+            _ => direct.slot(&argument),
+        }
+        .ok_or_else(|| Error::new(format!("unknown demo-market argument: {argument}")))?;
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
     }
     let registry = parse_pubkey(registry, "--registry-program-id")?;
-    let input = market::demo_market_input(registry)?;
+    let direct = direct.load(registry)?;
+    let input = market::demo_market_input(registry, direct.compiler())?;
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
     stdout.write_all(b"\n")?;
@@ -254,30 +298,28 @@ fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
     let mut coordinate_domain_name = None;
     let mut feed_label = None;
     let mut generation = None;
+    let mut direct = DirectCompilerArgumentsV1::default();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
         let slot = match argument.as_str() {
-            "--registry-program-id" => &mut registry,
-            "--price-update" => &mut price_update,
-            "--window-start" => &mut window_start,
-            "--window-width-seconds" => &mut window_width,
-            "--max-age-seconds" => &mut max_age,
-            "--cut-denominator" => &mut cut_denominator,
-            "--cuts" => &mut cuts,
-            "--coefficients" => &mut coefficients,
-            "--product" => &mut product_name,
-            "--coordinate-domain" => &mut coordinate_domain_name,
-            "--feed" => &mut feed_label,
-            "--generation" => &mut generation,
-            _ => {
-                return Err(Error::new(format!(
-                    "unknown devnet-market argument: {argument}"
-                )));
-            }
-        };
+            "--registry-program-id" => Some(&mut registry),
+            "--price-update" => Some(&mut price_update),
+            "--window-start" => Some(&mut window_start),
+            "--window-width-seconds" => Some(&mut window_width),
+            "--max-age-seconds" => Some(&mut max_age),
+            "--cut-denominator" => Some(&mut cut_denominator),
+            "--cuts" => Some(&mut cuts),
+            "--coefficients" => Some(&mut coefficients),
+            "--product" => Some(&mut product_name),
+            "--coordinate-domain" => Some(&mut coordinate_domain_name),
+            "--feed" => Some(&mut feed_label),
+            "--generation" => Some(&mut generation),
+            _ => direct.slot(&argument),
+        }
+        .ok_or_else(|| Error::new(format!("unknown devnet-market argument: {argument}")))?;
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
@@ -335,7 +377,8 @@ fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
             Some(value) => decimal::<u64>(Some(value), "--generation")?,
         },
     };
-    let input = market::devnet_market_input(spec)?;
+    let direct = direct.load(registry)?;
+    let input = market::devnet_market_input(spec, direct.compiler())?;
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
     stdout.write_all(b"\n")?;
@@ -372,9 +415,9 @@ fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
     let mut positions: Vec<(String, Pubkey)> = Vec::new();
     let mut watches: Vec<(String, Pubkey)> = Vec::new();
     fn labeled(value: &str, flag: &str) -> Result<(String, Pubkey)> {
-        let (label, address) = value.split_once('=').ok_or_else(|| {
-            Error::new(format!("{flag} takes LABEL=PUBKEY, got {value:?}"))
-        })?;
+        let (label, address) = value
+            .split_once('=')
+            .ok_or_else(|| Error::new(format!("{flag} takes LABEL=PUBKEY, got {value:?}")))?;
         Ok((label.to_owned(), plan::pubkey(address)?))
     }
     let mut iterator = arguments.into_iter();
@@ -516,29 +559,27 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
     let mut window_start = None;
     let mut window_end = None;
     let mut max_age = None;
+    let mut direct = DirectCompilerArgumentsV1::default();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
         let slot = match argument.as_str() {
-            "--registry-program-id" => &mut registry,
-            "--relayer-attestation" => &mut relayer,
-            "--pool" => &mut pool,
-            "--venue-program" => &mut venue_program,
-            "--venue-programdata" => &mut venue_programdata,
-            "--venue-deployment-slot" => &mut venue_slot,
-            "--venue-upgrade-authority" => &mut venue_authority,
-            "--venue-elf-sha256" => &mut venue_elf_sha256,
-            "--window-start" => &mut window_start,
-            "--window-end" => &mut window_end,
-            "--max-age-seconds" => &mut max_age,
-            _ => {
-                return Err(Error::new(format!(
-                    "unknown graduation-market argument: {argument}"
-                )));
-            }
-        };
+            "--registry-program-id" => Some(&mut registry),
+            "--relayer-attestation" => Some(&mut relayer),
+            "--pool" => Some(&mut pool),
+            "--venue-program" => Some(&mut venue_program),
+            "--venue-programdata" => Some(&mut venue_programdata),
+            "--venue-deployment-slot" => Some(&mut venue_slot),
+            "--venue-upgrade-authority" => Some(&mut venue_authority),
+            "--venue-elf-sha256" => Some(&mut venue_elf_sha256),
+            "--window-start" => Some(&mut window_start),
+            "--window-end" => Some(&mut window_end),
+            "--max-age-seconds" => Some(&mut max_age),
+            _ => direct.slot(&argument),
+        }
+        .ok_or_else(|| Error::new(format!("unknown graduation-market argument: {argument}")))?;
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
@@ -567,8 +608,7 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
     // pin them; overridable for a different venue.
     let venue = relayed::RelayedVenueFactsV1 {
         program: parse_pubkey(
-            venue_program
-                .or_else(|| Some("dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN".into())),
+            venue_program.or_else(|| Some("dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN".into())),
             "--venue-program",
         )?
         .to_bytes(),
@@ -589,7 +629,14 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
         max_age_seconds: decimal::<u32>(max_age, "--max-age-seconds")?,
     };
     let relayer = parse_pubkey(relayer, "--relayer-attestation")?;
-    let facts = relayed::relayed_market_input(registry, relayer.to_bytes(), &window, &venue)?;
+    let direct = direct.load(registry)?;
+    let facts = relayed::relayed_market_input(
+        registry,
+        relayer.to_bytes(),
+        &window,
+        &venue,
+        direct.compiler(),
+    )?;
     let hex = |bytes: &[u8]| plan::hex(bytes);
     let report = serde_json::json!({
         "schema": "dclutch-graduation-market-input-v1",
@@ -875,6 +922,7 @@ fn usage() {
     usage_supervisor();
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
+    println!("{}", terminal_lifecycle::lifecycle_usage());
     println!("{}", wallet_terminal::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
@@ -909,10 +957,14 @@ fn usage() {
     );
     println!(
         "\n  dclutch-local-successor-bootstrap devnet-market --registry-program-id PUBKEY \
+         --plan ABSOLUTE_JSON --direct-execution-config ABSOLUTE_FILE \
+         --direct-activation-deadline-slot U64 --direct-root-rent-minimum-lamports U64 \
          --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
          [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
          [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
          dclutch-local-successor-bootstrap graduation-market --registry-program-id PUBKEY \
+         --plan ABSOLUTE_JSON --direct-execution-config ABSOLUTE_FILE \
+         --direct-activation-deadline-slot U64 --direct-root-rent-minimum-lamports U64 \
          --relayer-attestation PUBKEY --pool PUBKEY --venue-deployment-slot U64 \
          --venue-upgrade-authority PUBKEY --venue-elf-sha256 HEX64 --window-start I64 \
          --window-end I64 --max-age-seconds U32 [--venue-program PUBKEY] \

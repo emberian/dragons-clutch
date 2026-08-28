@@ -103,7 +103,32 @@ pub(crate) struct MarketRunInput {
     pub(crate) pyth_adapter_config_hex: String,
     pub(crate) recovery_policy_hex: String,
     pub(crate) capability_manifest_hex: String,
+    /// Complete Direct record closure selected by the one non-Resolution
+    /// manifest entry. The field is syntactically required; `None` exists only
+    /// while an in-process producer is assembling the Resolution base and is
+    /// refused by `validate_market_input`.
+    pub(crate) direct_capability: Option<DirectMarketCapabilityV1>,
     pub(crate) linked_basis_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DirectMarketCapabilityV1 {
+    pub(crate) execution_config_hex: String,
+    pub(crate) ordinary_account_profile_hex: String,
+    pub(crate) ordinary_lifecycle_policy_hex: String,
+    pub(crate) ordinary_request_profile_hex: String,
+    pub(crate) ordinary_transition_hex: String,
+    pub(crate) ordinary_strategy_hex: String,
+    pub(crate) ordinary_effect_hex: String,
+    pub(crate) ordinary_descriptor_hex: String,
+    pub(crate) native_close_account_profile_hex: String,
+    pub(crate) native_close_effect_hex: String,
+    pub(crate) native_close_descriptor_hex: String,
+    pub(crate) program_set_hex: String,
+    pub(crate) activation_deadline_slot: u64,
+    pub(crate) root_rent_minimum_lamports: u64,
+    pub(crate) selected_manifest_entry_index: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -269,6 +294,11 @@ pub(crate) struct SuccessorRunEvidence {
     /// seed: enough to say which seed produced a run's compute-unit numbers,
     /// not enough to sign as it.
     pub(crate) keypair_seed_sha256: Option<String>,
+    /// Exact founding action context persisted by the Claims/Custody join.
+    /// This is a routing hint for terminal planners; they re-derive and verify
+    /// it from the finalized founding aggregate before using it.
+    #[serde(rename = "foundingCustodyContext")]
+    pub(crate) founding_custody_context: String,
     pub(crate) completed: Vec<String>,
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,

@@ -25,6 +25,8 @@ mod generated;
 
 pub use generated::*;
 
+/// Safe atomic encoder for the variable-width V1 descriptor.
+pub mod encode_v1;
 /// Family-neutral Trading V3 hot instruction, frame, and acknowledgment ABI.
 pub mod hot_v3;
 /// Action-selected sets of exact Capability Program V3 bundles.
@@ -95,6 +97,10 @@ pub mod activation_registers_v2 {
     pub const ACTIVATION_COMMON_SCALARS_V2: usize = 8;
     /// Common identity registers every activation profile must declare at least.
     pub const ACTIVATION_COMMON_IDENTITIES_V2: usize = 12;
+    /// First family-owned scalar coordinate after the common bank.
+    pub const ACTIVATION_FIRST_FAMILY_SCALAR_V2: u16 = 8;
+    /// First family-owned identity coordinate after the common bank.
+    pub const ACTIVATION_FIRST_FAMILY_IDENTITY_V2: u16 = 12;
 
     /// `CoreEffectActionV1::ActivateCapability` as a scalar.
     pub const ACTIVATION_ACTION_SCALAR_V2: u16 = 0;

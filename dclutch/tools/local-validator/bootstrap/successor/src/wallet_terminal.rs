@@ -479,7 +479,7 @@ impl FinalizedSnapshotV1 {
         })
     }
 
-    fn account(&self, key: Pubkey) -> Result<&ObservedAccount> {
+    pub(crate) fn account(&self, key: Pubkey) -> Result<&ObservedAccount> {
         self.accounts
             .get(&key)
             .ok_or_else(|| Error::new(format!("wallet payout snapshot omitted {key}")))
@@ -1093,7 +1093,7 @@ fn authenticate_record<'a>(
     Ok(raw)
 }
 
-fn authenticate_role(
+pub(crate) fn authenticate_role(
     registry: &ObservedAccount,
     cache: &ObservedAccount,
     release_set: [u8; 32],
@@ -1232,7 +1232,7 @@ fn manifest(
     }
 }
 
-fn record_pair(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> RecordPairV1 {
+pub(crate) fn record_pair(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> RecordPairV1 {
     RecordPairV1 {
         schema,
         digest,
