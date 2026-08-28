@@ -197,6 +197,16 @@ pub(crate) struct TransactionEvidence {
     pub(crate) slot: u64,
     pub(crate) transaction_metadata_available: bool,
     pub(crate) fee_lamports: Option<u64>,
+    /// Whether this transaction's own balance record says it moved NOTHING
+    /// but the payer's fee: `postBalances[0] + fee == preBalances[0]` and
+    /// every other pre/post pair equal (static and loaded addresses alike).
+    ///
+    /// This is the rollback property read from ONE atomic record the chain
+    /// wrote, instead of separate before/after account reads that race a
+    /// load-balanced endpoint's replicas (measured 2026-08-28: two devnet
+    /// founding attempts died at a rollback check whose on-chain arithmetic
+    /// was exact). `None` when the transaction metadata carried no balances.
+    pub(crate) fee_only_balance_change: Option<bool>,
     pub(crate) compute_units_consumed: Option<u64>,
     pub(crate) error: Option<serde_json::Value>,
     pub(crate) logs: Vec<String>,

@@ -836,6 +836,21 @@ impl Rpc {
             .ok_or_else(|| Error::new(format!("{label} transaction omitted slot")))?;
         let fee_lamports = u64_field(meta, "fee")?;
         let compute_units_consumed = meta.get("computeUnitsConsumed").and_then(Value::as_u64);
+        let fee_only_balance_change = (|| {
+            let pre = meta.get("preBalances")?.as_array()?;
+            let post = meta.get("postBalances")?.as_array()?;
+            if pre.len() != post.len() || pre.is_empty() {
+                return None;
+            }
+            let payer_pre = pre.first()?.as_u64()?;
+            let payer_post = post.first()?.as_u64()?;
+            let others_unmoved = pre
+                .iter()
+                .zip(post.iter())
+                .skip(1)
+                .all(|(before, after)| before.as_u64() == after.as_u64());
+            Some(payer_post.checked_add(fee_lamports)? == payer_pre && others_unmoved)
+        })();
         self.read_floor = self.read_floor.max(slot);
         eprintln!(
             "campaign transaction: slot={slot} fee={fee_lamports} compute_units={} {label}",
@@ -860,6 +875,7 @@ impl Rpc {
             slot,
             transaction_metadata_available: true,
             fee_lamports: Some(fee_lamports),
+            fee_only_balance_change,
             compute_units_consumed,
             error: meta_error,
             logs,
@@ -906,6 +922,7 @@ impl Rpc {
             slot: u64_field(&status, "slot")?,
             transaction_metadata_available: false,
             fee_lamports: None,
+            fee_only_balance_change: None,
             compute_units_consumed: None,
             error: None,
             logs: Vec::new(),

@@ -418,7 +418,7 @@ pub(crate) fn found_through_open(
     }
     verify_activation(&mut rpc, &plan)?;
 
-    let rollback_recipient = Pubkey::new_unique();
+    let rollback_recipient = crate::seed::fresh_probe_address();
     let authority_before = rpc.required_account(authority.pubkey(), "Core authority wallet")?;
     if rpc.account(rollback_recipient)?.is_some() {
         return Err(Error::new("rollback recipient unexpectedly existed"));
