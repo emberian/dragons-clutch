@@ -37,6 +37,7 @@ const WEB_ONLY = new Set([
 const SDK_OWNED_REEXPORTS = new Set([
   'lib/founding/principalCapacity.ts',
   'lib/marketDiscovery.ts',
+  'lib/rationalTerminalChainV4.ts',
 ]);
 
 /** SDK files with deliberate local edits; never auto-copied. */

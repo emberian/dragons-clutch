@@ -11,6 +11,13 @@ import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u6
 import { decodeCapabilityManifestV1 } from './capabilityManifest';
 import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import {
+  EXECUTION_ROLE_CLAIMS_V1,
+  EXECUTION_ROLE_CORE_V1,
+  EXECUTION_ROLE_CUSTODY_V1,
+  EXECUTION_ROLE_RESOLUTION_V1,
+  EXECUTION_ROLE_TRADING_V1,
+} from './generated/claimsCustodyReplayV1';
+import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
   CORE_STATE_BYTES,
   LIABILITY_BASIS_MARKET_SEED_V2 as CLAIMS_MARKET_SEED,
@@ -307,6 +314,7 @@ export type RationalHotCoreViewV2 = Readonly<{
   terminalWinner: number;
   terminalReceipt: Uint8Array;
   realm: Uint8Array;
+  resolutionPolicy: Uint8Array;
   productRecord: Uint8Array;
   productId: Uint8Array;
   manifest: Uint8Array;
@@ -332,7 +340,7 @@ export function decodeRationalHotCoreV2(address: string, account: RpcAccount, co
   if (generation === 0n) throw new Error('CoreStateV2 generation is zero');
   return Object.freeze({
     phase, readiness, terminalWinner: u32(account.data, 12), terminalReceipt: identities[8],
-    realm: identities[0], productRecord: identities[1], productId: identities[2], manifest: identities[4],
+    realm: identities[0], productRecord: identities[1], productId: identities[2], resolutionPolicy: identities[3], manifest: identities[4],
     releaseSet: identities[5], registry: new PublicKey(identities[6]).toBase58(), generation,
     rentCredit: new PublicKey(identities[7]).toBase58(),
   });
@@ -624,6 +632,7 @@ export async function authenticateRationalHotActivationV4(
   claims: string; claimsProgramData: string;
   trading: string; tradingProgramData: string;
   custody: string; custodyProgramData: string;
+  resolution: string; resolutionProgramData: string;
 }>> {
   if (cache.owner !== registry || cache.executable || cache.data.length !== ACTIVATION_CACHE_BYTES || ascii(cache.data, 0, 8) !== 'DCLTACT1' || u16(cache.data, 8) !== 1 || u16(cache.data, 10) !== 1) {
     throw new Error('activation cache has the wrong Registry owner or exact ABI');
@@ -645,15 +654,16 @@ export async function authenticateRationalHotActivationV4(
   }
   const decodedRelease = await decodeExecutionReleaseSetV1(releaseBytes);
   if (decodedRelease.id !== hex(releaseSet)) throw new Error('activation cache does not reconstruct the Core-selected release set');
-  if (artifacts[0].program !== core || artifacts[0].programData !== coreProgramData
-      || artifacts[2].program !== trading || artifacts[2].programData !== tradingProgramData) {
+  if (artifacts[EXECUTION_ROLE_CORE_V1].program !== core || artifacts[EXECUTION_ROLE_CORE_V1].programData !== coreProgramData
+      || artifacts[EXECUTION_ROLE_TRADING_V1].program !== trading || artifacts[EXECUTION_ROLE_TRADING_V1].programData !== tradingProgramData) {
     throw new Error('activation cache Core/Trading deployments differ from Hot fixed programs');
   }
   return Object.freeze({
-    core: artifacts[0].program, coreProgramData: artifacts[0].programData,
-    claims: artifacts[1].program, claimsProgramData: artifacts[1].programData,
-    trading: artifacts[2].program, tradingProgramData: artifacts[2].programData,
-    custody: artifacts[3].program, custodyProgramData: artifacts[3].programData,
+    core: artifacts[EXECUTION_ROLE_CORE_V1].program, coreProgramData: artifacts[EXECUTION_ROLE_CORE_V1].programData,
+    claims: artifacts[EXECUTION_ROLE_CLAIMS_V1].program, claimsProgramData: artifacts[EXECUTION_ROLE_CLAIMS_V1].programData,
+    trading: artifacts[EXECUTION_ROLE_TRADING_V1].program, tradingProgramData: artifacts[EXECUTION_ROLE_TRADING_V1].programData,
+    custody: artifacts[EXECUTION_ROLE_CUSTODY_V1].program, custodyProgramData: artifacts[EXECUTION_ROLE_CUSTODY_V1].programData,
+    resolution: artifacts[EXECUTION_ROLE_RESOLUTION_V1].program, resolutionProgramData: artifacts[EXECUTION_ROLE_RESOLUTION_V1].programData,
   });
 }
 

@@ -49,6 +49,7 @@ export * from './lib/solanaLimits';
 // terminal redemption wire.
 export * from './lib/claimsCustodyReplay';
 export * from './lib/walletTerminalPayoutV3';
+export * from './lib/resolutionCertificateV2';
 
 // Founding and infrastructure: the record graph a market stands on.
 export * from './lib/coreFound';
@@ -56,6 +57,7 @@ export * from './lib/infrastructure';
 export * from './lib/capabilityManifest';
 export * from './lib/founding/principalCapacity';
 export * from './lib/releaseRegistry';
+export * from './lib/rationalTerminalChainV4';
 
 // Local-validator conformance: verify a running successor byte-for-byte
 // against the committed checkpoint fixture.

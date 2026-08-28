@@ -70,6 +70,16 @@ facts before you ask for a signature. `inspectMarketDetailV1`
 `inspectPortfolioV1` (`@dclutch/sdk/portfolio`) derives a user's positions
 directly from market addresses — no indexer involved.
 
+For a terminal Market, Core's `terminal_receipt` is the address of the
+Resolution-owned `ResolutionCertificateV2` account. Do not use that pubkey as
+a content digest or derive Registry raw/staging records from it. Decode the
+exact 312-byte certificate, preserve its i128 numerator and u64 denominator,
+and bind its receipt account, Market, Source material, Product-record digest,
+generation, and native u32 selector back to Core before displaying a payout.
+The SDK's `decodeResolutionCertificateV2` and
+`bindTerminalResolutionCertificateV2` do those checks. A graded payout remains
+display-only until Claims is upgraded to consume that certificate directly.
+
 ## Checking the founding principal cap
 
 Import the generated floor identity and the decoder from the SDK. The decoder

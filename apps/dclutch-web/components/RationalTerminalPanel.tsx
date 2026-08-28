@@ -8,6 +8,7 @@ import {
   type RationalTerminalReadinessV4,
 } from '@/lib/rationalTerminalChainV4';
 import { SolanaRpcClient } from '@/lib/rpc';
+import { HOT_FIXED_ACCOUNT_COUNT_V3 } from '@/lib/generated/directInlineV3';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
@@ -35,7 +36,7 @@ function outcome(text: string): number {
 
 function fixedAddresses(text: string): string[] {
   const addresses = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-  if (addresses.length !== 38) throw new Error(`Hot frame needs exactly 38 address lines; received ${addresses.length}`);
+  if (addresses.length !== HOT_FIXED_ACCOUNT_COUNT_V3) throw new Error(`Hot frame needs exactly ${HOT_FIXED_ACCOUNT_COUNT_V3} address lines; received ${addresses.length}`);
   return addresses;
 }
 
@@ -57,7 +58,7 @@ export default function RationalTerminalPanel() {
 
   async function inspect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setState({ kind: 'loading', message: 'Reacquiring terminal Core, CapabilityV4, Product N, representation K, ProductBasisV3, and exact terminal coordinate…' });
+    setState({ kind: 'loading', message: 'Reacquiring terminal Core, CapabilityV4, Product N, representation K, ProductBasisV3, and the exact Resolution certificate…' });
     try {
       const next = await inspectRationalTerminalReadinessV4(new SolanaRpcClient(endpoint), {
         payer, actor, descriptorId: descriptor, lookupTable, fixedAccounts: fixedAddresses(fixed),
@@ -75,13 +76,13 @@ export default function RationalTerminalPanel() {
     </section>
 
     <form className="trade-v3-card route-card" onSubmit={(event) => void inspect(event)}>
-      <header><span>08</span><div><h2>Authenticate CapabilityV4 and evaluate Product terminal semantics</h2><p>The browser derives the selected basis record from fixed-frame content addressing, checks its Product/domain semantic identity, and follows Core&apos;s authenticated rational coordinate only when the resolved scenario requires one.</p></div></header>
+      <header><span>08</span><div><h2>Authenticate CapabilityV4 and evaluate Product terminal semantics</h2><p>The browser derives the selected basis record, checks its Product/domain identity, and reads Core&apos;s receipt as the real Resolution-owned certificate. It never invents Registry records from that account address.</p></div></header>
       <div className="direct-form-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Transaction payer identity</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /></label><label><span>Representation actor</span><input required value={actor} onChange={(event) => setActor(event.target.value.trim())} /></label><label><span>Representation descriptor digest · 64 hex</span><input required value={descriptor} onChange={(event) => setDescriptor(event.target.value.trim().toLowerCase())} /></label><label><span>Selected native claim · zero based</span><input inputMode="numeric" required value={selected} onChange={(event) => setSelected(event.target.value.trim())} /></label><label><span>Raw native claim quantity</span><input inputMode="numeric" required value={quantity} onChange={(event) => setQuantity(event.target.value.trim())} /></label><label><span>Canonical address lookup table</span><input required value={lookupTable} onChange={(event) => setLookupTable(event.target.value.trim())} /></label></div>
-      <label><span>Hot fixed38 addresses · one canonical base58 address per line</span><textarea required rows={12} value={fixed} onChange={(event) => setFixed(event.target.value)} /></label>
+      <label><span>Hot fixed{HOT_FIXED_ACCOUNT_COUNT_V3} addresses · one canonical base58 address per line</span><textarea required rows={12} value={fixed} onChange={(event) => setFixed(event.target.value)} /></label>
       <WalletDirectory directory={wallets} purpose="payer / actor identity" onConnected={adoptIdentity} />
       <div className="direct-actions"><button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading terminal semantics…' : 'Evaluate chain-derived terminal payout'}</button></div>
       <p className="direct-status">{walletStatus}</p><p className="direct-status" aria-live="polite">{state.message}</p>
-      {inspection && summary && <div className="trade-v3-evidence"><article><span>Independent widths</span><strong>K={inspection.representationWidth} · N={inspection.resultOutcomeCount}</strong><small>winner {inspection.terminalWinner} · claim {inspection.selectedOutcome}</small></article><article><span>Raw burn</span><strong>{inspection.rawShardBurn.toString()} shard atoms</strong><small>{inspection.rawQuantity.toString()} native claim units</small></article><article><span>Exact payout</span><strong>{inspection.payout.rawPayout.toString()} collateral atoms</strong><small>{inspection.payout.losing ? 'valid losing zero path' : `${inspection.payout.payoutPerShard.toString()} per native claim`}</small></article><article><span>Scenario</span><strong>{inspection.payout.scenario}</strong><small>{summary.basis.slice(0, 16)}… ProductBasisV3</small></article></div>}
+      {inspection && summary && <div className="trade-v3-evidence"><article><span>Independent widths</span><strong>K={inspection.representationWidth} · N={inspection.resultOutcomeCount}</strong><small>winner {inspection.terminalWinner} · claim {inspection.selectedOutcome}</small></article><article><span>Resolution certificate</span><strong>{inspection.terminalCertificate.kind}</strong><small>{inspection.terminalCertificate.resultNumerator.toString()}/{inspection.terminalCertificate.resultDenominator.toString()} · native i128/u64</small></article><article><span>Exact payout</span><strong>{inspection.payout.rawPayout.toString()} collateral atoms</strong><small>{inspection.payout.losing ? 'valid losing zero path' : `${inspection.payout.payoutPerShard.toString()} per native claim`}</small></article><article><span>Scenario</span><strong>{inspection.payout.scenario}</strong><small>{summary.basis.slice(0, 16)}… ProductBasisV3</small></article></div>}
       {inspection && <div className="direct-output"><dl><div><dt>Execution status</dt><dd>{inspection.refusal}</dd></div><div><dt>Semantic projection</dt><dd>This page is an untrusted client projection. Onchain Claims repeats ProductBasis evaluation and the Rust operator alone emits SignedDeltaV3/Custody material.</dd></div></dl></div>}
     </form>
   </>;
