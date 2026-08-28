@@ -19,5 +19,6 @@ Two generated reference pages back these guides up:
 generated reference — routes, costs, decisions — lives in the
 [repository](../reference/README.md).
 
-dClutch is not live yet: no deployment, no live market, nothing to buy
-today. The guides describe the protocol as it runs on a local test chain.
+The seven dClutch programs are deployed on Solana devnet. There is no open
+market, no value at risk, and nothing to buy today. These guides describe the
+devnet preview and the local test-chain workflows; neither is mainnet evidence.

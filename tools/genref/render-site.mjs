@@ -38,7 +38,9 @@
 //
 // Why the app owns the root. The export emits ROOT-ABSOLUTE URLs for both its
 // assets (`/_next/…`) and its own navigation (`/markets`, `/create`), and
-// vinext 1.0.0-beta.3 offers no way to move both:
+// The domain-root mount was established against vinext 1.0.0-beta.3. The
+// artifact-level invariant below remains version-independent: assets and app
+// routes must resolve together at the URLs the export emitted.
 //
 //   - `basePath` is incompatible with output:'export' -- its export
 //     prerenderer requests un-prefixed paths and skips every route;
@@ -406,25 +408,26 @@ function page({ title, body, depth, crumbs, style }) {
 ${crumbHtml}
 ${body}
 </main>
-<footer>dClutch is not live yet: no deployment, no live market, nothing to
-buy. <a href="${repoUrl.replace(/\/blob\/.*$/, "")}">Repository</a>.</footer>
+<footer>dClutch has seven programs on Solana devnet. There is no open market,
+no value at risk, and nothing to buy. This is not a mainnet release.
+<a href="${repoUrl.replace(/\/blob\/.*$/, "")}">Repository</a>.</footer>
 </body>
 </html>
 `;
 }
 
-// The documentation landing, at docs/index.html. What dClutch IS, and the
-// fact that it is not deployed, are the app's landing to state -- this page is
-// the section's own front door and says what is IN the section.
+// The documentation landing, at docs/index.html. This page is the section's
+// own front door and states the deployed devnet boundary without turning it
+// into a mainnet or open-market claim.
 const DOCS_BODY = `<h1>dClutch documentation</h1>
 <p>Everything below is generated from, or lives beside, the code it
 describes. dClutch is a Solana protocol for markets on real-world numbers:
 you buy claims on the outcome you believe in, and every claim is fully
 backed by collateral locked up before the claim exists.</p>
-<div class="unreleased"><strong>Not live yet.</strong> dClutch is not
-deployed on any network. There is no live market, no token, and nothing to
-buy today. Everything on this site describes software running on a local
-test chain.</div>
+<div class="unreleased"><strong>Devnet preview.</strong> The seven programs
+are deployed on Solana devnet. There is no open market, no value at risk, and
+nothing to buy today. Devnet and local test-chain runs are not mainnet
+evidence.</div>
 <ul class="cards">
 <li><strong><a href="guides/README.html">Guides</a></strong>
 Start here: what a claim is, how protection works, how to run a market,

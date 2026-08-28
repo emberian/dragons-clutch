@@ -2,13 +2,14 @@ import type { NextConfig } from 'next';
 
 // DCLUTCH_PAGES_EXPORT=1 switches the build to a fully static export for the
 // GitHub Pages artifact (dragons-clutch .github/workflows/pages.yml). The
-// default build stays the Cloudflare worker target; nothing about the app's
-// runtime behavior differs between the two — every route is client-rendered
-// against whatever chain the viewer configures.
+// default build stays worker-compatible; that does not claim a Cloudflare
+// deployment. Nothing about the app's runtime behavior differs between the
+// two — every route is client-rendered against the selected chain.
 //
 // The export is built for a DOMAIN ROOT, and the Pages artifact mounts it
-// there (tools/genref/render-site.mjs). Both of vinext 1.0.0-beta.3's
-// relocation knobs were measured against output:'export' on 2026-08-27:
+// there (tools/genref/render-site.mjs). The relocation behavior below was
+// measured against vinext 1.0.0-beta.3 on 2026-08-27; the artifact link check,
+// not that historical version number, enforces the current root-mount result:
 //
 //   - basePath is broken. Its export prerenderer requests un-prefixed paths
 //     and skips every route, so the export comes out empty. DCLUTCH_PAGES_BASE_PATH
