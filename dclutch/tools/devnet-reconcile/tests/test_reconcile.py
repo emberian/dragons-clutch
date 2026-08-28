@@ -138,11 +138,14 @@ def fixture():
         "market": "protocol", "closed_protocol": "protocol", "token_authority": "wallet",
         "token_program": "protocol", "protocol_owner": "protocol",
     }
-    accounts = [
-        {"ref": name, "address": identities[name][0], "kind": account_kinds[name], "role": name.replace("_", "-")}
-        for name in names
-    ]
-    zero_digest = hashlib.sha256(b"source").hexdigest()
+    accounts = []
+    for name in names:
+        account = {"ref": name, "address": identities[name][0], "kind": account_kinds[name], "role": name.replace("_", "-")}
+        if account["kind"] == "token":
+            account.update({"mint": mint_address, "assetClass": "collateral", "authority": identities["token_authority"][0], "programOwner": identities["token_program"][0]})
+        accounts.append(account)
+    source_bytes = b'{"schema":"fixture-semantic-owner-journal-v1"}\n'
+    zero_digest = hashlib.sha256(source_bytes).hexdigest()
     pos_pre = position_data(identities["token_authority"][1], 1, [100, 0])
     pos_post = position_data(identities["token_authority"][1], 2, [50, 0])
     cert = certificate_data(identities["market"][1])
@@ -159,6 +162,7 @@ def fixture():
             "feeLamports": "5000",
             "lamportDeltas": [{"account": ref, "lamports": str(amount)} for ref, amount in lamports.items()],
             "tokenDeltas": [{"account": ref, "atoms": str(amount)} for ref, amount in tokens.items()],
+            "sourcePath": "fixture-journal.json",
             "sourceSha256": zero_digest,
             **extra,
         }
@@ -225,11 +229,19 @@ def fixture():
         identities["hoard_token"][0]: (mint_address, authority, 1000, 950),
         identities["recipient_token"][0]: (mint_address, authority, 0, 50),
     }
+    running_lamports = {}
     for ev in events:
         lamports = {identities[item["account"]][0]: int(item["lamports"]) for item in ev["lamportDeltas"]}
         changes = participant_changes if ev["kind"] == "participant" else direct_changes if ev["kind"] == "direct" else payout_changes if ev["kind"] == "payout" else {}
         addresses = list(lamports) + list(changes)
-        transactions[ev["signature"]] = transaction(ev["signature"], int(ev["slot"]), addresses, lamports, changes)
+        tx = transaction(ev["signature"], int(ev["slot"]), addresses, lamports, changes)
+        for address, delta in lamports.items():
+            index = addresses.index(address)
+            before = running_lamports.get(address, 100_000)
+            tx["meta"]["preBalances"][index] = before
+            tx["meta"]["postBalances"][index] = before + delta
+            running_lamports[address] = before + delta
+        transactions[ev["signature"]] = tx
     capture = {"schema": reconcile.CAPTURE_SCHEMA, "genesisHash": reconcile.DEVNET_GENESIS_HASH, "transactions": transactions, "accounts": capture_accounts}
     return manifest, capture
 
@@ -240,6 +252,7 @@ class ReconcileTest(unittest.TestCase):
         dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
         self.assertEqual(dossier["schema"], reconcile.DOSSIER_SCHEMA)
         self.assertEqual(dossier["signatureScheme"], "none")
+        self.assertEqual(dossier["evidence"]["rpc"]["mode"], "captured-finalized-rpc-replay")
         self.assertEqual(dossier["totals"]["transactionFeesLamports"], "30000")
         self.assertEqual(dossier["totals"]["protocolFeesAtoms"], "20")
         self.assertEqual(dossier["totals"]["hoardPrincipalPaidAtoms"], "50")
@@ -273,7 +286,123 @@ class ReconcileTest(unittest.TestCase):
             tx = capture["transactions"]["signature-participant"]
             tx["meta"]["preTokenBalances"][0]["mint"] = other
             tx["meta"]["postTokenBalances"][0]["mint"] = other
-        self.assert_refuses(mutate, "non-Realm collateral mint")
+        self.assert_refuses(mutate, "declared token-account mint")
+
+    def test_token_authority_substitution_refuses(self):
+        def mutate(manifest, capture):
+            other, _ = key(95)
+            tx = capture["transactions"]["signature-participant"]
+            tx["meta"]["preTokenBalances"][0]["owner"] = other
+            tx["meta"]["postTokenBalances"][0]["owner"] = other
+        self.assert_refuses(mutate, "mint or authority")
+
+    def test_fee_payer_substitution_refuses(self):
+        def mutate(manifest, capture):
+            tx = capture["transactions"]["signature-founding"]
+            keys = tx["transaction"]["message"]["accountKeys"]
+            other = manifest["accounts"][1]["address"]
+            keys[0] = other
+        self.assert_refuses(mutate, "substitutes its fee payer")
+
+    def test_declared_claim_mint_may_differ_from_collateral(self):
+        manifest, capture = fixture()
+        claim_mint, claim_raw = key(94)
+        participant = next(account for account in manifest["accounts"] if account["ref"] == "participant_token")
+        participant.update(mint=claim_mint, assetClass="claim")
+        expected = next(account for account in manifest["finalAccounts"] if account["account"] == "participant_token")
+        expected["mint"] = claim_mint
+        authority = next(account for account in manifest["accounts"] if account["ref"] == "token_authority")["address"]
+        authority_raw = reconcile.b58decode(authority, "fixture authority")
+        data = token_data(claim_raw, authority_raw, 100)
+        expected["dataSha256"] = hashlib.sha256(data).hexdigest()
+        address = participant["address"]
+        capture["accounts"][address]["value"]["data"] = [base64.b64encode(data).decode(), "base64"]
+        tx = capture["transactions"]["signature-participant"]
+        tx["meta"]["preTokenBalances"][1]["mint"] = claim_mint
+        tx["meta"]["postTokenBalances"][1]["mint"] = claim_mint
+        dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
+        self.assertEqual(dossier["schema"], reconcile.DOSSIER_SCHEMA)
+
+    def test_multiple_direct_fills_and_payouts_are_all_aggregated(self):
+        manifest, capture = fixture()
+        by_ref = {account["ref"]: account for account in manifest["accounts"]}
+        mint = manifest["events"][2]["direct"]["mint"]
+        authority = by_ref["token_authority"]["address"]
+        second_direct = copy.deepcopy(manifest["events"][2])
+        second_direct.update(id="event-direct-2", signature="signature-direct-2", operation="fixture-direct-2")
+        second_direct["direct"].update(fillAtoms="1000")
+        second_direct["tokenDeltas"] = [
+            {"account": "seller_token", "atoms": "995"},
+            {"account": "buyer_token", "atoms": "-1005"},
+            {"account": "fee_token", "atoms": "10"},
+        ]
+        direct_addresses = [by_ref[ref]["address"] for ref in ("payer", "seller_token", "buyer_token", "fee_token")]
+        capture["transactions"][second_direct["signature"]] = transaction(
+            second_direct["signature"], 0, direct_addresses,
+            {by_ref["payer"]["address"]: -5000},
+            {
+                by_ref["seller_token"]["address"]: (mint, authority, 1990, 2985),
+                by_ref["buyer_token"]["address"]: (mint, authority, 2990, 1985),
+                by_ref["fee_token"]["address"]: (mint, authority, 20, 30),
+            },
+        )
+        first_payout = manifest["events"][4]
+        second_payout = copy.deepcopy(first_payout)
+        second_payout.update(id="event-payout-2", signature="signature-payout-2", operation="fixture-payout-2")
+        position_2 = base64.b64decode(first_payout["position"]["postDataBase64"])
+        position_3 = position_data(reconcile.b58decode(authority, "fixture authority"), 3, [0, 0])
+        second_payout["position"] = {
+            "account": "position", "preDataBase64": base64.b64encode(position_2).decode(),
+            "postDataBase64": base64.b64encode(position_3).decode(),
+        }
+        payout_addresses = [by_ref[ref]["address"] for ref in ("payer", "hoard_token", "recipient_token")]
+        capture["transactions"][second_payout["signature"]] = transaction(
+            second_payout["signature"], 0, payout_addresses,
+            {by_ref["payer"]["address"]: -5000},
+            {
+                by_ref["hoard_token"]["address"]: (mint, authority, 950, 900),
+                by_ref["recipient_token"]["address"]: (mint, authority, 50, 100),
+            },
+        )
+        manifest["events"].insert(3, second_direct)
+        manifest["events"].insert(-1, second_payout)
+        for index, event in enumerate(manifest["events"]):
+            event["predecessor"] = None if index == 0 else manifest["events"][index - 1]["id"]
+            event["slot"] = str(101 + index)
+            capture["transactions"][event["signature"]]["slot"] = 101 + index
+        payer = by_ref["payer"]["address"]
+        running = 100_000
+        for event in manifest["events"]:
+            tx = capture["transactions"][event["signature"]]
+            index = tx["transaction"]["message"]["accountKeys"].index(payer)
+            delta = next(int(item["lamports"]) for item in event["lamportDeltas"] if item["account"] == "payer")
+            tx["meta"]["preBalances"][index] = running
+            tx["meta"]["postBalances"][index] = running + delta
+            running += delta
+        token_program = by_ref["token_program"]["address"]
+        authority_raw = reconcile.b58decode(authority, "fixture authority")
+        mint_raw = reconcile.b58decode(mint, "fixture mint")
+        for ref, amount in (("seller_token", 2985), ("buyer_token", 1985), ("fee_token", 30), ("hoard_token", 900), ("recipient_token", 100)):
+            data = token_data(mint_raw, authority_raw, amount)
+            expected = next(item for item in manifest["finalAccounts"] if item["account"] == ref)
+            expected.update(amountAtoms=str(amount), dataSha256=hashlib.sha256(data).hexdigest())
+            capture["accounts"][by_ref[ref]["address"]]["value"] = rpc_account(token_program, 2_039_280, data)
+        position_expected = next(item for item in manifest["finalAccounts"] if item["account"] == "position")
+        position_expected["dataSha256"] = hashlib.sha256(position_3).hexdigest()
+        capture["accounts"][by_ref["position"]["address"]]["value"]["data"] = [base64.b64encode(position_3).decode(), "base64"]
+        source_set = [{"event": event["id"], "sha256": event["sourceSha256"]} for event in manifest["events"]]
+        manifest["sourceSetSha256"] = hashlib.sha256(reconcile.canonical_bytes(source_set)).hexdigest()
+        dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
+        self.assertEqual(dossier["totals"]["protocolFeesAtoms"], "30")
+        self.assertEqual(dossier["totals"]["hoardPrincipalPaidAtoms"], "100")
+        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "40000")
+
+    def test_discontinuous_wallet_history_refuses(self):
+        def mutate(manifest, capture):
+            tx = capture["transactions"]["signature-participant"]
+            tx["meta"]["preBalances"][0] += 1
+            tx["meta"]["postBalances"][0] += 1
+        self.assert_refuses(mutate, "lamport history.*discontinuous")
 
     def test_side_fee_substitution_refuses(self):
         def mutate(manifest, capture):
@@ -297,7 +426,7 @@ class ReconcileTest(unittest.TestCase):
             tx = capture["transactions"]["signature-payout"]
             tx["meta"]["preTokenBalances"][1]["mint"] = other
             tx["meta"]["postTokenBalances"][1]["mint"] = other
-        self.assert_refuses(mutate, "non-Realm collateral mint")
+        self.assert_refuses(mutate, "declared token-account mint")
 
     def test_missing_retired_vacancy_refuses(self):
         def mutate(manifest, capture):
@@ -323,11 +452,23 @@ class ReconcileTest(unittest.TestCase):
             manifest_path = root / "manifest.json"
             capture_path = root / "capture.json"
             out_path = root / "dossier.json"
+            journal_root = root / "evidence"
+            journal_root.mkdir()
+            (journal_root / "fixture-journal.json").write_bytes(b'{"schema":"fixture-semantic-owner-journal-v1"}\n')
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             capture_path.write_text(json.dumps(capture), encoding="utf-8")
-            status = reconcile.main(["captured", "--manifest", str(manifest_path), "--rpc-capture", str(capture_path), "--out", str(out_path)])
+            status = reconcile.main(["captured", "--manifest", str(manifest_path), "--journal-root", str(journal_root), "--rpc-capture", str(capture_path), "--out", str(out_path)])
             self.assertEqual(status, 0)
-            self.assertEqual(json.loads(out_path.read_text()), reconcile.reconcile(manifest, reconcile.CapturedRpc(capture)))
+            capture_sha256 = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+            self.assertEqual(json.loads(out_path.read_text()), reconcile.reconcile(manifest, reconcile.CapturedRpc(capture, capture_sha256)))
+
+    def test_source_journal_digest_substitution_refuses_before_rpc(self):
+        manifest, _ = fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "fixture-journal.json").write_text('{"schema":"substituted"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(reconcile.Refusal, "digest differs"):
+                reconcile.authenticate_sources(manifest, root)
 
 
 if __name__ == "__main__":

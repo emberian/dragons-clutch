@@ -63,6 +63,20 @@ def load_json(path: pathlib.Path) -> Any:
         refuse(f"cannot read strict JSON {path}: {error}")
 
 
+def read_evidence_file(path: pathlib.Path) -> tuple[bytes, Any]:
+    try:
+        size = path.stat().st_size
+        if size > MAX_JSON_BYTES:
+            refuse(f"{path} exceeds the {MAX_JSON_BYTES}-byte evidence bound")
+        raw = path.read_bytes()
+        decoded = json.loads(raw, object_pairs_hook=unique_object)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        refuse(f"cannot read strict source journal {path}: {error}")
+    if not isinstance(decoded, dict):
+        refuse(f"source journal {path} must be a JSON object")
+    return raw, decoded
+
+
 def canonical_bytes(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
 
@@ -251,8 +265,12 @@ def decode_certificate(data: bytes) -> dict[str, Any]:
 
 
 class CapturedRpc:
-    def __init__(self, value: dict[str, Any]) -> None:
+    def __init__(self, value: dict[str, Any], capture_sha256: str | None = None) -> None:
         self.value = value
+        self.capture_sha256 = capture_sha256 or sha256_bytes(canonical_bytes(value))
+
+    def provenance(self) -> dict[str, str]:
+        return {"mode": "captured-finalized-rpc-replay", "captureSha256": self.capture_sha256}
 
     def genesis_hash(self) -> str:
         return text(self.value.get("genesisHash"), "capture genesisHash")
@@ -278,6 +296,9 @@ class LiveRpc:
         self.url = url
         self.timeout = timeout
         self.request_id = 0
+
+    def provenance(self) -> dict[str, str]:
+        return {"mode": "live-finalized-rpc", "endpointSha256": sha256_bytes(self.url.encode())}
 
     def call(self, method: str, params: list[Any]) -> Any:
         self.request_id += 1
@@ -392,7 +413,7 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     accounts: dict[str, dict[str, Any]] = {}
     addresses: set[str] = set()
     for index, item in enumerate(raw_accounts):
-        item = exact_keys(item, {"ref", "address", "kind", "role"}, set(), f"accounts[{index}]")
+        item = exact_keys(item, {"ref", "address", "kind", "role"}, {"mint", "assetClass", "authority", "programOwner"}, f"accounts[{index}]")
         ref = text(item["ref"], "account ref")
         address = pubkey(item["address"], f"account {ref} address")
         if ref in accounts or address in addresses:
@@ -400,6 +421,16 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
         if item["kind"] not in ("wallet", "token", "position", "certificate", "protocol"):
             refuse(f"account {ref} has an unknown kind")
         text(item["role"], f"account {ref} role")
+        if item["kind"] == "token":
+            if set(item) != {"ref", "address", "kind", "role", "mint", "assetClass", "authority", "programOwner"}:
+                refuse(f"token account {ref} must declare exact mint, class, authority, and program owner")
+            pubkey(item["mint"], f"token account {ref} mint")
+            pubkey(item["authority"], f"token account {ref} authority")
+            pubkey(item["programOwner"], f"token account {ref} programOwner")
+            if item["assetClass"] not in ("collateral", "claim"):
+                refuse(f"token account {ref} has an unknown assetClass")
+        elif any(field in item for field in ("mint", "assetClass", "authority", "programOwner")):
+            refuse(f"non-token account {ref} declares token-only fields")
         accounts[ref] = item
         addresses.add(address)
     events = manifest["events"]
@@ -411,7 +442,7 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     previous: str | None = None
     prior_slot = -1
     for index, event in enumerate(events):
-        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "lamportDeltas", "tokenDeltas", "sourceSha256"}, {"direct", "position", "certificate", "payout", "retirement"}, f"events[{index}]")
+        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "lamportDeltas", "tokenDeltas", "sourcePath", "sourceSha256"}, {"direct", "position", "certificate", "payout", "retirement"}, f"events[{index}]")
         event_id = text(event["id"], "event id")
         text(event["operation"], f"event {event_id} operation")
         signature = text(event["signature"], f"event {event_id} signature")
@@ -432,6 +463,10 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
         if fee_ref not in accounts or accounts[fee_ref]["kind"] != "wallet":
             refuse(f"event {event_id} fee payer is not a declared wallet")
         decimal(event["feeLamports"], f"event {event_id} fee")
+        source_path = text(event["sourcePath"], f"event {event_id} sourcePath")
+        parts = pathlib.PurePosixPath(source_path)
+        if parts.is_absolute() or source_path != parts.as_posix() or any(part in ("", ".", "..") for part in parts.parts):
+            refuse(f"event {event_id} sourcePath is not a canonical relative path")
         digest(event["sourceSha256"], f"event {event_id} sourceSha256")
         parse_delta_list(event["lamportDeltas"], "lamportDeltas", accounts)
         parse_delta_list(event["tokenDeltas"], "tokenDeltas", accounts)
@@ -442,13 +477,16 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     if sha256_bytes(canonical_bytes(source_set)) != manifest["sourceSetSha256"]:
         refuse("sourceSetSha256 does not bind the ordered operation evidence")
     semantic_fields = {
-        "direct": ("direct", 1), "certificate": ("resolution", 1),
-        "payout": ("payout", 1),
+        "direct": ("direct", 1, None), "certificate": ("resolution", 1, 1),
+        "payout": ("payout", 1, None),
     }
-    for field, (owner_kind, count) in semantic_fields.items():
+    for field, (owner_kind, minimum, maximum) in semantic_fields.items():
         owners = [event for event in events if field in event]
-        if len(owners) != count or any(event["kind"] != owner_kind for event in owners):
-            refuse(f"activity must have exactly one {owner_kind}-owned {field} fact")
+        if len(owners) < minimum or (maximum is not None and len(owners) > maximum) or any(event["kind"] != owner_kind for event in owners):
+            refuse(f"activity has an invalid number or owner of {field} facts")
+    for event in events:
+        if event["kind"] in ("direct", "payout") and event["tokenDeltas"] and event["kind"] not in event:
+            refuse(f"token-moving {event['kind']} event {event['id']} omitted its exact economic facts")
     if any(("retirement" in event) != (event["kind"] == "retirement") for event in events):
         refuse("every retirement transaction, and no other kind, must own retirement facts")
     final_accounts = manifest["finalAccounts"]
@@ -475,10 +513,42 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
                 pubkey(expected["mint"], f"final token {ref} mint")
                 pubkey(expected["authority"], f"final token {ref} authority")
                 decimal(expected["amountAtoms"], f"final token {ref} amountAtoms")
+                if expected["mint"] != accounts[ref]["mint"]:
+                    refuse(f"final token account {ref} differs from its declared mint")
+                if expected["authority"] != accounts[ref]["authority"] or expected["owner"] != accounts[ref]["programOwner"]:
+                    refuse(f"final token account {ref} differs from its declared authority or program owner")
     critical_refs = {ref for ref, account in accounts.items() if account["kind"] in ("token", "position", "certificate")}
     if not critical_refs.issubset(final_refs):
         refuse("finalAccounts omits a token, Position, or certificate account")
     return accounts, events
+
+
+def authenticate_sources(manifest: dict[str, Any], journal_root: pathlib.Path) -> None:
+    _, events = validate_manifest(manifest)
+    try:
+        root = journal_root.resolve(strict=True)
+    except OSError as error:
+        refuse(f"cannot resolve journal root {journal_root}: {error}")
+    if not root.is_dir():
+        refuse("journal root is not a directory")
+    observed: dict[str, str] = {}
+    for event in events:
+        relative = event["sourcePath"]
+        if relative not in observed:
+            try:
+                source = (root / relative).resolve(strict=True)
+            except OSError as error:
+                refuse(f"cannot resolve source journal {relative}: {error}")
+            try:
+                source.relative_to(root)
+            except ValueError:
+                refuse(f"source journal {relative} escapes its journal root")
+            if not source.is_file():
+                refuse(f"source journal {relative} is not a file")
+            raw, _ = read_evidence_file(source)
+            observed[relative] = sha256_bytes(raw)
+        if observed[relative] != event["sourceSha256"]:
+            refuse(f"event {event['id']} source journal digest differs from exact bytes")
 
 
 def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], rpc: Any, collateral_mint: str) -> dict[str, Any]:
@@ -499,10 +569,13 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     if not isinstance(signatures, list) or not signatures or signatures[0] != event["signature"]:
         refuse("RPC transaction does not bind its requested first signature")
     keys = account_keys(result)
+    if keys[0] != accounts[event["feePayer"]]["address"]:
+        refuse(f"transaction {event['signature']} substitutes its fee payer")
     pre = meta.get("preBalances"); post = meta.get("postBalances")
     if not isinstance(pre, list) or not isinstance(post, list) or len(pre) != len(keys) or len(post) != len(keys):
         refuse("transaction lamport balance vectors differ from account keys")
     observed_lamports: dict[str, int] = {}
+    observed_lamport_states: dict[str, tuple[int, int]] = {}
     by_address = {account["address"]: ref for ref, account in accounts.items()}
     for index, address in enumerate(keys):
         if not isinstance(pre[index], int) or not isinstance(post[index], int):
@@ -513,6 +586,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
             if ref is None:
                 refuse(f"transaction changed undeclared lamport account {address}")
             observed_lamports[ref] = delta
+            observed_lamport_states[ref] = (pre[index], post[index])
     expected_lamports = parse_delta_list(event["lamportDeltas"], "lamportDeltas", accounts)
     if observed_lamports != expected_lamports:
         refuse(f"event {event['id']} lamport deltas differ from finalized transaction")
@@ -520,6 +594,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     post_tokens = token_amounts(meta, "postTokenBalances", keys)
     observed_tokens: dict[str, int] = {}
     token_mints: dict[str, str] = {}
+    observed_token_states: dict[str, tuple[int, int, str, str]] = {}
     for address in set(pre_tokens) | set(post_tokens):
         before = pre_tokens.get(address); after = post_tokens.get(address)
         mint = (before or after)[0]
@@ -532,16 +607,29 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
                 refuse(f"transaction changed undeclared token account {address}")
             observed_tokens[ref] = amount
             token_mints[ref] = mint
+            owner = (after or before)[1]
+            observed_token_states[ref] = (before[2] if before else 0, after[2] if after else 0, mint, owner)
     expected_tokens = parse_delta_list(event["tokenDeltas"], "tokenDeltas", accounts)
     if observed_tokens != expected_tokens:
         refuse(f"event {event['id']} token deltas differ from finalized transaction")
-    if any(mint != collateral_mint for mint in token_mints.values()):
-        refuse(f"event {event['id']} mixes a non-Realm collateral mint")
+    if any(
+        mint != accounts[ref]["mint"] or observed_token_states[ref][3] != accounts[ref]["authority"]
+        for ref, mint in token_mints.items()
+    ):
+        refuse(f"event {event['id']} substitutes a declared token-account mint or authority")
     projection: dict[str, Any] = {
         "id": event["id"], "kind": event["kind"], "operation": event["operation"], "predecessor": event["predecessor"],
         "signature": event["signature"], "slot": event["slot"], "feePayer": event["feePayer"],
         "transactionFeeLamports": event["feeLamports"], "lamportDeltas": event["lamportDeltas"],
         "tokenDeltas": event["tokenDeltas"], "sourceSha256": event["sourceSha256"],
+        "lamportObservations": [
+            {"account": ref, "beforeLamports": str(observed_lamport_states[ref][0]), "afterLamports": str(observed_lamport_states[ref][1]), "deltaLamports": str(observed_lamports[ref])}
+            for ref in sorted(observed_lamport_states)
+        ],
+        "tokenObservations": [
+            {"account": ref, "mint": observed_token_states[ref][2], "owner": observed_token_states[ref][3], "beforeAtoms": str(observed_token_states[ref][0]), "afterAtoms": str(observed_token_states[ref][1]), "deltaAtoms": str(observed_tokens[ref])}
+            for ref in sorted(observed_token_states)
+        ],
     }
     if event["kind"] == "direct":
         direct = exact_keys(event.get("direct"), {"fillAtoms", "executionPrice", "priceScale", "feeBasisPointsPerSide", "sellerToken", "buyerToken", "feeRecipientToken", "mint"}, set(), "direct facts")
@@ -552,7 +640,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         if fill == 0 or scale == 0 or bps != 50:
             refuse("Direct exact fill/scale or 50-bps-per-side policy is invalid")
         refs = [direct["sellerToken"], direct["buyerToken"], direct["feeRecipientToken"]]
-        if len(set(refs)) != 3 or any(ref not in accounts or accounts[ref]["kind"] != "token" for ref in refs):
+        if len(set(refs)) != 3 or any(ref not in accounts or accounts[ref]["kind"] != "token" or accounts[ref]["assetClass"] != "collateral" for ref in refs):
             refuse("Direct seller, buyer, and fee recipient token roles alias or are absent")
         mint = pubkey(direct["mint"], "Direct mint")
         if mint != collateral_mint:
@@ -598,7 +686,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         payout = exact_keys(event.get("payout"), {"hoardToken", "recipientToken", "position", "principalAtoms", "claimsBurnedAtoms", "mint"}, set(), "payout facts")
         principal = decimal(payout["principalAtoms"], "payout principal")
         hoard = payout["hoardToken"]; recipient = payout["recipientToken"]
-        if hoard == recipient or any(ref not in accounts or accounts[ref]["kind"] != "token" for ref in (hoard, recipient)):
+        if hoard == recipient or any(ref not in accounts or accounts[ref]["kind"] != "token" or accounts[ref]["assetClass"] != "collateral" for ref in (hoard, recipient)):
             refuse("payout Hoard and recipient token roles alias or are absent")
         mint = pubkey(payout["mint"], "payout mint")
         if token_mints.get(hoard) != mint or token_mints.get(recipient) != mint:
@@ -670,29 +758,72 @@ def reconcile_final_accounts(manifest: dict[str, Any], accounts: dict[str, dict[
 
 def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
     accounts, events = validate_manifest(manifest)
-    direct_event = next(event for event in events if "direct" in event)
-    collateral_mint = pubkey(direct_event["direct"]["mint"], "lifecycle collateral mint")
-    for expected in manifest["finalAccounts"]:
-        if not expected["closed"] and accounts[expected["account"]]["kind"] == "token" and expected["mint"] != collateral_mint:
-            refuse("final token accounts mix a non-Realm collateral mint")
+    direct_events = [event for event in events if "direct" in event]
+    collateral_mint = pubkey(direct_events[0]["direct"]["mint"], "lifecycle collateral mint")
+    for direct_event in direct_events:
+        if direct_event["direct"]["mint"] != collateral_mint:
+            refuse("Direct events disagree on the lifecycle collateral mint")
+        for ref in (direct_event["direct"]["sellerToken"], direct_event["direct"]["buyerToken"], direct_event["direct"]["feeRecipientToken"]):
+            if ref not in accounts or accounts[ref].get("mint") != collateral_mint:
+                refuse("Direct account inventory differs from the lifecycle collateral mint")
+    payout_events = [event for event in events if "payout" in event]
+    for payout_event in payout_events:
+        if payout_event["payout"]["mint"] != collateral_mint:
+            refuse("payout events disagree on the lifecycle collateral mint")
+        for ref in (payout_event["payout"]["hoardToken"], payout_event["payout"]["recipientToken"]):
+            if ref not in accounts or accounts[ref].get("mint") != collateral_mint:
+                refuse("payout account inventory differs from the lifecycle collateral mint")
     genesis = rpc.genesis_hash()
     if genesis != DEVNET_GENESIS_HASH:
         refuse(f"RPC genesis {genesis!r} is not exact Solana devnet")
     projections = [reconcile_event(event, accounts, rpc, collateral_mint) for event in events]
+    last_lamports: dict[str, int] = {}
+    last_tokens: dict[str, int] = {}
+    last_positions: dict[str, dict[str, Any]] = {}
+    for event in projections:
+        for observation in event["lamportObservations"]:
+            ref = observation["account"]
+            before = int(observation["beforeLamports"])
+            if ref in last_lamports and last_lamports[ref] != before:
+                refuse(f"activity lamport history for {ref} is discontinuous")
+            last_lamports[ref] = int(observation["afterLamports"])
+        for observation in event["tokenObservations"]:
+            ref = observation["account"]
+            before = int(observation["beforeAtoms"])
+            if ref in last_tokens and last_tokens[ref] != before:
+                refuse(f"activity token history for {ref} is discontinuous")
+            last_tokens[ref] = int(observation["afterAtoms"])
+        if "position" in event:
+            ref = event["position"]["account"]
+            if ref in last_positions and last_positions[ref] != event["position"]["pre"]:
+                refuse(f"activity Position history for {ref} is discontinuous")
+            last_positions[ref] = event["position"]["post"]
     final = reconcile_final_accounts(manifest, accounts, rpc, max(int(event["slot"]) for event in events))
+    for observed in final:
+        ref = observed["account"]
+        if observed["closed"]:
+            continue
+        if ref in last_tokens and int(observed["amountAtoms"]) != last_tokens[ref]:
+            refuse(f"final token account {ref} advanced outside the activity chain")
+        if ref in last_positions and observed.get("position") != last_positions[ref]:
+            refuse(f"final Position {ref} advanced outside the activity chain")
     transaction_fees = sum(int(event["feeLamports"]) for event in events)
-    direct = next(item["direct"] for item in projections if item["kind"] == "direct")
-    payout = next(item["payout"] for item in projections if item["kind"] == "payout")
+    directs = [item["direct"] for item in projections if "direct" in item]
+    payouts = [item["payout"] for item in projections if "payout" in item]
     source_digests = [{"event": event["id"], "sha256": event["sourceSha256"]} for event in events]
-    evidence_core = {"manifestSha256": sha256_bytes(canonical_bytes(manifest)), "sourceDigests": source_digests}
+    evidence_core = {
+        "manifestSha256": sha256_bytes(canonical_bytes(manifest)),
+        "sourceDigests": source_digests,
+        "rpc": rpc.provenance(),
+    }
     dossier: dict[str, Any] = {
         "schema": DOSSIER_SCHEMA, "signatureScheme": "none", "activityId": manifest["activityId"],
         "cluster": {"kind": "devnet", "genesisHash": genesis}, "evidence": evidence_core,
         "accounts": manifest["accounts"], "events": projections, "finalAccounts": final,
         "totals": {
             "transactionFeesLamports": str(transaction_fees),
-            "protocolFeesAtoms": direct["feeRecipientAtoms"],
-            "hoardPrincipalPaidAtoms": payout["principalAtoms"],
+            "protocolFeesAtoms": str(sum(int(direct["feeRecipientAtoms"]) for direct in directs)),
+            "hoardPrincipalPaidAtoms": str(sum(int(payout["principalAtoms"]) for payout in payouts)),
             "hoardPrincipalClassification": "collateral-principal-not-fee-bounty-rent-reserve-or-treasury",
         },
     }
@@ -701,11 +832,11 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
 
 
 def captured(path: pathlib.Path) -> CapturedRpc:
-    value = load_json(path)
+    raw, value = read_evidence_file(path)
     value = exact_keys(value, {"schema", "genesisHash", "transactions", "accounts"}, set(), "captured RPC")
     if value["schema"] != CAPTURE_SCHEMA:
         refuse("captured RPC schema is not admitted")
-    return CapturedRpc(value)
+    return CapturedRpc(value, sha256_bytes(raw))
 
 
 def write_dossier(path: pathlib.Path | None, dossier: dict[str, Any]) -> None:
@@ -722,10 +853,12 @@ def parser() -> argparse.ArgumentParser:
     offline = sub.add_parser("captured", help="reconcile a captured finalized RPC fixture")
     offline.add_argument("--manifest", required=True, type=pathlib.Path)
     offline.add_argument("--rpc-capture", required=True, type=pathlib.Path)
+    offline.add_argument("--journal-root", required=True, type=pathlib.Path)
     offline.add_argument("--out", type=pathlib.Path)
     follow = sub.add_parser("follow", help="bounded finalized-only devnet polling")
     follow.add_argument("--manifest", required=True, type=pathlib.Path)
     follow.add_argument("--rpc-url", required=True)
+    follow.add_argument("--journal-root", required=True, type=pathlib.Path)
     follow.add_argument("--out", type=pathlib.Path)
     follow.add_argument("--max-polls", type=int, default=5)
     follow.add_argument("--interval-seconds", type=float, default=2.0)
@@ -737,6 +870,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         manifest = load_json(args.manifest)
+        authenticate_sources(manifest, args.journal_root)
         if args.command == "captured":
             dossier = reconcile(manifest, captured(args.rpc_capture))
         else:

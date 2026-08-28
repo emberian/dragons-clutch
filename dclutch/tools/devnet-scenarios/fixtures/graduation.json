@@ -1,0 +1,3252 @@
+{
+  "schema": "dclutch-devnet-economic-scenario-v1",
+  "version": 1,
+  "scenarioId": "graduation-four-outcome",
+  "bodyDigestScope": "canonical-compact-scenario-body-json-v1",
+  "bodySha256": "223a89a6ab4e387b15d5f0a8c54445ba686403a374100226e9f9bdb8ac729a5e",
+  "body": {
+    "scenarioId": "graduation-four-outcome",
+    "title": "Relayed mainnet graduation market",
+    "description": "A four-state graduation observation exercises different wallet sizes, both fill completion classes, independent 50-bps floors, categorical redemption, and full projected retirement. The observation transport remains a runtime adapter concern.",
+    "clusterTarget": "devnet",
+    "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "evidenceLevel": "scenario-only",
+    "market": {
+      "profile": "graduation",
+      "marketRef": "market.graduation-four-outcome",
+      "inputArtifact": null,
+      "outcomeCount": 4,
+      "collateralMintRef": "mint.graduation-four-outcome.collateral",
+      "claimMintRefs": [
+        "mint.graduation-four-outcome.claim.0",
+        "mint.graduation-four-outcome.claim.1",
+        "mint.graduation-four-outcome.claim.2",
+        "mint.graduation-four-outcome.claim.3"
+      ],
+      "resolution": {
+        "kind": "categorical",
+        "selector": 0,
+        "payoutAtomsPerClaim": [
+          "1",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "priceScaleAtoms": "1000",
+      "feeDenominator": "10000",
+      "feeBasisPointsPerSide": 50,
+      "feeRecipientAccountRef": "token.graduation-four-outcome.deployer.collateral",
+      "hoardPrincipalAccountRef": "token.graduation-four-outcome.hoard-principal"
+    },
+    "limits": {
+      "maxConcurrency": 1,
+      "minDispatchIntervalMs": 1500,
+      "maxTransactions": 96,
+      "pollIntervalMs": 1000,
+      "maxPolls": 180
+    },
+    "wallets": [
+      {
+        "id": "gaia",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.graduation-four-outcome.gaia.collateral",
+        "claimAccountRefs": [
+          "token.graduation-four-outcome.gaia.claim.0",
+          "token.graduation-four-outcome.gaia.claim.1",
+          "token.graduation-four-outcome.gaia.claim.2",
+          "token.graduation-four-outcome.gaia.claim.3"
+        ],
+        "positionAccountRef": "position.graduation-four-outcome.gaia"
+      },
+      {
+        "id": "helios",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.graduation-four-outcome.helios.collateral",
+        "claimAccountRefs": [
+          "token.graduation-four-outcome.helios.claim.0",
+          "token.graduation-four-outcome.helios.claim.1",
+          "token.graduation-four-outcome.helios.claim.2",
+          "token.graduation-four-outcome.helios.claim.3"
+        ],
+        "positionAccountRef": "position.graduation-four-outcome.helios"
+      },
+      {
+        "id": "iris",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.graduation-four-outcome.iris.collateral",
+        "claimAccountRefs": [
+          "token.graduation-four-outcome.iris.claim.0",
+          "token.graduation-four-outcome.iris.claim.1",
+          "token.graduation-four-outcome.iris.claim.2",
+          "token.graduation-four-outcome.iris.claim.3"
+        ],
+        "positionAccountRef": "position.graduation-four-outcome.iris"
+      },
+      {
+        "id": "juniper",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.graduation-four-outcome.juniper.collateral",
+        "claimAccountRefs": [
+          "token.graduation-four-outcome.juniper.claim.0",
+          "token.graduation-four-outcome.juniper.claim.1",
+          "token.graduation-four-outcome.juniper.claim.2",
+          "token.graduation-four-outcome.juniper.claim.3"
+        ],
+        "positionAccountRef": "position.graduation-four-outcome.juniper"
+      },
+      {
+        "id": "deployer",
+        "roles": [
+          "fee-payer",
+          "fee-recipient",
+          "retirement-beneficiary"
+        ],
+        "fundingLamports": "150000000",
+        "collateralAccountRef": "token.graduation-four-outcome.deployer.collateral",
+        "claimAccountRefs": [],
+        "positionAccountRef": null
+      }
+    ],
+    "accounts": [
+      {
+        "id": "market.graduation-four-outcome",
+        "kind": "market",
+        "address": null,
+        "expectedOwnerRef": "program.core",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "certificate.graduation-four-outcome",
+        "kind": "certificate",
+        "address": null,
+        "expectedOwnerRef": "program.resolution",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.graduation-four-outcome.hoard-principal",
+        "kind": "hoard-principal",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.collateral",
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "wallet.gaia",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.graduation-four-outcome.gaia.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "gaia"
+      },
+      {
+        "id": "token.graduation-four-outcome.gaia.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "gaia"
+      },
+      {
+        "id": "token.graduation-four-outcome.gaia.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "gaia"
+      },
+      {
+        "id": "token.graduation-four-outcome.gaia.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "gaia"
+      },
+      {
+        "id": "token.graduation-four-outcome.gaia.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "gaia"
+      },
+      {
+        "id": "position.graduation-four-outcome.gaia",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "gaia"
+      },
+      {
+        "id": "wallet.helios",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.graduation-four-outcome.helios.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "helios"
+      },
+      {
+        "id": "token.graduation-four-outcome.helios.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "helios"
+      },
+      {
+        "id": "token.graduation-four-outcome.helios.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "helios"
+      },
+      {
+        "id": "token.graduation-four-outcome.helios.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "helios"
+      },
+      {
+        "id": "token.graduation-four-outcome.helios.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "helios"
+      },
+      {
+        "id": "position.graduation-four-outcome.helios",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "helios"
+      },
+      {
+        "id": "wallet.iris",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.graduation-four-outcome.iris.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "iris"
+      },
+      {
+        "id": "token.graduation-four-outcome.iris.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "iris"
+      },
+      {
+        "id": "token.graduation-four-outcome.iris.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "iris"
+      },
+      {
+        "id": "token.graduation-four-outcome.iris.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "iris"
+      },
+      {
+        "id": "token.graduation-four-outcome.iris.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "iris"
+      },
+      {
+        "id": "position.graduation-four-outcome.iris",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "iris"
+      },
+      {
+        "id": "wallet.juniper",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.graduation-four-outcome.juniper.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "juniper"
+      },
+      {
+        "id": "token.graduation-four-outcome.juniper.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "juniper"
+      },
+      {
+        "id": "token.graduation-four-outcome.juniper.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "juniper"
+      },
+      {
+        "id": "token.graduation-four-outcome.juniper.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "juniper"
+      },
+      {
+        "id": "token.graduation-four-outcome.juniper.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "juniper"
+      },
+      {
+        "id": "position.graduation-four-outcome.juniper",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "juniper"
+      },
+      {
+        "id": "wallet.deployer",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.graduation-four-outcome.deployer.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.graduation-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "deployer"
+      }
+    ],
+    "initialSnapshot": {
+      "accountStates": [
+        {
+          "accountRef": "certificate.graduation-four-outcome",
+          "state": "absent"
+        },
+        {
+          "accountRef": "market.graduation-four-outcome",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.gaia",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.helios",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.iris",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.juniper",
+          "state": "absent"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.deployer.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.hoard-principal",
+          "state": "absent"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.deployer",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.gaia",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.helios",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.iris",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.juniper",
+          "state": "present"
+        }
+      ],
+      "tokenBalances": [
+        {
+          "accountRef": "token.graduation-four-outcome.deployer.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "60000"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "60000"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.hoard-principal",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "60000"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "60000"
+        }
+      ],
+      "positionRevisions": [
+        {
+          "positionAccountRef": "position.graduation-four-outcome.gaia",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.graduation-four-outcome.helios",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.graduation-four-outcome.iris",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.graduation-four-outcome.juniper",
+          "revision": "0"
+        }
+      ]
+    },
+    "operations": [
+      {
+        "id": "graduation-four-outcome-found",
+        "order": 0,
+        "kind": "found",
+        "predecessorId": null,
+        "dependencyIds": [],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/graduation-market + campaign/found",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-graduation-market-input-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-found",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "found",
+          "marketRef": "market.graduation-four-outcome",
+          "marketInputArtifact": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.graduation-four-outcome",
+              "before": "absent",
+              "after": "present"
+            },
+            {
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.graduation-four-outcome",
+              "before": "absent",
+              "after": "present"
+            },
+            {
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        }
+      },
+      {
+        "id": "graduation-four-outcome-participant-gaia",
+        "order": 1,
+        "kind": "participant",
+        "predecessorId": "graduation-four-outcome-found",
+        "dependencyIds": [
+          "graduation-four-outcome-found"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-participant-gaia",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "gaia",
+          "completeSetAtoms": "600",
+          "collateralPrincipalAtoms": "600"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.gaia",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.gaia",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.gaia",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.gaia",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-participant-helios",
+        "order": 2,
+        "kind": "participant",
+        "predecessorId": "graduation-four-outcome-participant-gaia",
+        "dependencyIds": [
+          "graduation-four-outcome-participant-gaia"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-participant-helios",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "helios",
+          "completeSetAtoms": "900",
+          "collateralPrincipalAtoms": "900"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-900"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.helios",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-900"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "900"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.helios",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-participant-iris",
+        "order": 3,
+        "kind": "participant",
+        "predecessorId": "graduation-four-outcome-participant-helios",
+        "dependencyIds": [
+          "graduation-four-outcome-participant-helios"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-participant-iris",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "iris",
+          "completeSetAtoms": "500",
+          "collateralPrincipalAtoms": "500"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.iris",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.iris",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.iris",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.iris",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-participant-juniper",
+        "order": 4,
+        "kind": "participant",
+        "predecessorId": "graduation-four-outcome-participant-iris",
+        "dependencyIds": [
+          "graduation-four-outcome-participant-iris"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-participant-juniper",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "juniper",
+          "completeSetAtoms": "300",
+          "collateralPrincipalAtoms": "300"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-300"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.juniper",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-300"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.graduation-four-outcome.juniper",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-direct-gaia-helios-o0-full",
+        "order": 5,
+        "kind": "direct",
+        "predecessorId": "graduation-four-outcome-participant-juniper",
+        "dependencyIds": [
+          "graduation-four-outcome-participant-juniper"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-direct-gaia-helios-o0-full",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "gaia",
+          "buyerWalletRef": "helios",
+          "outcome": 0,
+          "claimMintRef": "mint.graduation-four-outcome.claim.0",
+          "fillAtoms": "600",
+          "remainingBeforeAtoms": "600",
+          "remainingAfterAtoms": "0",
+          "completion": "full",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "400",
+          "grossCollateralAtoms": "240",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "1",
+          "buyerFeeAtoms": "1",
+          "sellerNetAtoms": "239",
+          "buyerDebitAtoms": "241",
+          "feeRecipientCreditAtoms": "2"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "239"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-241"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.deployer.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.gaia",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-direct-helios-iris-o1-partial",
+        "order": 6,
+        "kind": "direct",
+        "predecessorId": "graduation-direct-gaia-helios-o0-full",
+        "dependencyIds": [
+          "graduation-direct-gaia-helios-o0-full"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-direct-helios-iris-o1-partial",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "helios",
+          "buyerWalletRef": "iris",
+          "outcome": 1,
+          "claimMintRef": "mint.graduation-four-outcome.claim.1",
+          "fillAtoms": "300",
+          "remainingBeforeAtoms": "900",
+          "remainingAfterAtoms": "600",
+          "completion": "partial",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "600",
+          "grossCollateralAtoms": "180",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "0",
+          "buyerFeeAtoms": "0",
+          "sellerNetAtoms": "180",
+          "buyerDebitAtoms": "180",
+          "feeRecipientCreditAtoms": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-300"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "180"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-180"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.deployer.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.graduation-four-outcome.iris",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-direct-iris-juniper-o2-full",
+        "order": 7,
+        "kind": "direct",
+        "predecessorId": "graduation-direct-helios-iris-o1-partial",
+        "dependencyIds": [
+          "graduation-direct-helios-iris-o1-partial"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-direct-iris-juniper-o2-full",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "iris",
+          "buyerWalletRef": "juniper",
+          "outcome": 2,
+          "claimMintRef": "mint.graduation-four-outcome.claim.2",
+          "fillAtoms": "500",
+          "remainingBeforeAtoms": "500",
+          "remainingAfterAtoms": "0",
+          "completion": "full",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "800",
+          "grossCollateralAtoms": "400",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "2",
+          "buyerFeeAtoms": "2",
+          "sellerNetAtoms": "398",
+          "buyerDebitAtoms": "402",
+          "feeRecipientCreditAtoms": "4"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "398"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-402"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.deployer.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "4"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.iris",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-direct-juniper-gaia-o3-partial",
+        "order": 8,
+        "kind": "direct",
+        "predecessorId": "graduation-direct-iris-juniper-o2-full",
+        "dependencyIds": [
+          "graduation-direct-iris-juniper-o2-full"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-direct-juniper-gaia-o3-partial",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "juniper",
+          "buyerWalletRef": "gaia",
+          "outcome": 3,
+          "claimMintRef": "mint.graduation-four-outcome.claim.3",
+          "fillAtoms": "200",
+          "remainingBeforeAtoms": "300",
+          "remainingAfterAtoms": "100",
+          "completion": "partial",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "500",
+          "grossCollateralAtoms": "100",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "0",
+          "buyerFeeAtoms": "0",
+          "sellerNetAtoms": "100",
+          "buyerDebitAtoms": "100",
+          "feeRecipientCreditAtoms": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-200"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "100"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-100"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.deployer.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.graduation-four-outcome.gaia",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-resolve",
+        "order": 9,
+        "kind": "resolve",
+        "predecessorId": "graduation-direct-juniper-gaia-o3-partial",
+        "dependencyIds": [
+          "graduation-direct-juniper-gaia-o3-partial"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "relayed-graduation-resolution",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-resolve",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "resolve",
+          "certificateAccountRef": "certificate.graduation-four-outcome",
+          "selector": 0,
+          "payoutAtomsPerClaim": [
+            "1",
+            "0",
+            "0",
+            "0"
+          ],
+          "expectedOwnerRef": "program.resolution",
+          "dataSha256": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "certificate.graduation-four-outcome",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-gaia-o1",
+        "order": 10,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-resolve",
+        "dependencyIds": [
+          "graduation-four-outcome-resolve"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-gaia-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "gaia",
+          "outcome": 1,
+          "claimAtomsBurned": "600",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.gaia",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-gaia-o2",
+        "order": 11,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-gaia-o1",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-gaia-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-gaia-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "gaia",
+          "outcome": 2,
+          "claimAtomsBurned": "600",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.gaia",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-gaia-o3",
+        "order": 12,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-gaia-o2",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-gaia-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-gaia-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "gaia",
+          "outcome": 3,
+          "claimAtomsBurned": "800",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-800"
+            },
+            {
+              "walletRef": "gaia",
+              "accountRef": "token.graduation-four-outcome.gaia.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.gaia",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-helios-o0",
+        "order": 13,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-gaia-o3",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-gaia-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-helios-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "helios",
+          "outcome": 0,
+          "claimAtomsBurned": "1500",
+          "payoutAtomsPerClaim": "1",
+          "collateralAtomsCredited": "1500",
+          "hoardPrincipalAtomsDebited": "1500"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1500"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1500"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-helios-o1",
+        "order": 14,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-helios-o0",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-helios-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-helios-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "helios",
+          "outcome": 1,
+          "claimAtomsBurned": "600",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-helios-o2",
+        "order": 15,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-helios-o1",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-helios-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-helios-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "helios",
+          "outcome": 2,
+          "claimAtomsBurned": "900",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-helios-o3",
+        "order": 16,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-helios-o2",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-helios-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-helios-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "helios",
+          "outcome": 3,
+          "claimAtomsBurned": "900",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-900"
+            },
+            {
+              "walletRef": "helios",
+              "accountRef": "token.graduation-four-outcome.helios.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.helios",
+              "beforeRevision": "6",
+              "afterRevision": "7",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-iris-o0",
+        "order": 17,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-helios-o3",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-helios-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-iris-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "iris",
+          "outcome": 0,
+          "claimAtomsBurned": "500",
+          "payoutAtomsPerClaim": "1",
+          "collateralAtomsCredited": "500",
+          "hoardPrincipalAtomsDebited": "500"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.iris",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-iris-o1",
+        "order": 18,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-iris-o0",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-iris-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-iris-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "iris",
+          "outcome": 1,
+          "claimAtomsBurned": "800",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-800"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.iris",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-iris-o3",
+        "order": 19,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-iris-o1",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-iris-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-iris-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "iris",
+          "outcome": 3,
+          "claimAtomsBurned": "500",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": "iris",
+              "accountRef": "token.graduation-four-outcome.iris.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.iris",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-juniper-o0",
+        "order": 20,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-iris-o3",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-iris-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-juniper-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "juniper",
+          "outcome": 0,
+          "claimAtomsBurned": "300",
+          "payoutAtomsPerClaim": "1",
+          "collateralAtomsCredited": "300",
+          "hoardPrincipalAtomsDebited": "300"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.0",
+              "mintRef": "mint.graduation-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-300"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-juniper-o1",
+        "order": 21,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-juniper-o0",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-juniper-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-juniper-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "juniper",
+          "outcome": 1,
+          "claimAtomsBurned": "300",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.1",
+              "mintRef": "mint.graduation-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-300"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-juniper-o2",
+        "order": 22,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-juniper-o1",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-juniper-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-juniper-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "juniper",
+          "outcome": 2,
+          "claimAtomsBurned": "800",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+              "mintRef": "mint.graduation-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-800"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-redeem-juniper-o3",
+        "order": 23,
+        "kind": "redeem",
+        "predecessorId": "graduation-four-outcome-redeem-juniper-o2",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-juniper-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-redeem-juniper-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "juniper",
+          "outcome": 3,
+          "claimAtomsBurned": "100",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+              "mintRef": "mint.graduation-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-100"
+            },
+            {
+              "walletRef": "juniper",
+              "accountRef": "token.graduation-four-outcome.juniper.collateral",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "mintRef": "mint.graduation-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.graduation-four-outcome.juniper",
+              "beforeRevision": "6",
+              "afterRevision": "7",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "graduation-four-outcome-retire",
+        "order": 24,
+        "kind": "retire",
+        "predecessorId": "graduation-four-outcome-redeem-juniper-o3",
+        "dependencyIds": [
+          "graduation-four-outcome-redeem-juniper-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "terminal-retirement",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.graduation-four-outcome.graduation-four-outcome-retire",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "retire",
+          "eligible": true,
+          "closureAccountRefs": [
+            "market.graduation-four-outcome",
+            "certificate.graduation-four-outcome",
+            "position.graduation-four-outcome.gaia",
+            "position.graduation-four-outcome.helios",
+            "position.graduation-four-outcome.iris",
+            "position.graduation-four-outcome.juniper",
+            "token.graduation-four-outcome.hoard-principal"
+          ],
+          "rentRefundWalletRef": "deployer",
+          "rentRefundLamports": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.graduation-four-outcome",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "certificate.graduation-four-outcome",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.graduation-four-outcome.gaia",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.graduation-four-outcome.helios",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.graduation-four-outcome.iris",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.graduation-four-outcome.juniper",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "token.graduation-four-outcome.hoard-principal",
+              "before": "present",
+              "after": "closed"
+            }
+          ],
+          "positionChanges": []
+        }
+      }
+    ],
+    "finalSnapshot": {
+      "accountStates": [
+        {
+          "accountRef": "certificate.graduation-four-outcome",
+          "state": "closed"
+        },
+        {
+          "accountRef": "market.graduation-four-outcome",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.gaia",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.helios",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.iris",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.graduation-four-outcome.juniper",
+          "state": "closed"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.deployer.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.hoard-principal",
+          "state": "closed"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.deployer",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.gaia",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.helios",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.iris",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.juniper",
+          "state": "present"
+        }
+      ],
+      "tokenBalances": [
+        {
+          "accountRef": "token.graduation-four-outcome.deployer.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "6"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.gaia.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "59539"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.helios.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "60539"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.hoard-principal",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.iris.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "60218"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.0",
+          "mintRef": "mint.graduation-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.1",
+          "mintRef": "mint.graduation-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.2",
+          "mintRef": "mint.graduation-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.claim.3",
+          "mintRef": "mint.graduation-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.graduation-four-outcome.juniper.collateral",
+          "mintRef": "mint.graduation-four-outcome.collateral",
+          "atoms": "59698"
+        }
+      ],
+      "positionRevisions": [
+        {
+          "positionAccountRef": "position.graduation-four-outcome.gaia",
+          "revision": "6"
+        },
+        {
+          "positionAccountRef": "position.graduation-four-outcome.helios",
+          "revision": "7"
+        },
+        {
+          "positionAccountRef": "position.graduation-four-outcome.iris",
+          "revision": "6"
+        },
+        {
+          "positionAccountRef": "position.graduation-four-outcome.juniper",
+          "revision": "7"
+        }
+      ]
+    },
+    "retireEligible": true
+  }
+}

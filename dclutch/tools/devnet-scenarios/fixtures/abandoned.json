@@ -1,0 +1,3241 @@
+{
+  "schema": "dclutch-devnet-economic-scenario-v1",
+  "version": 1,
+  "scenarioId": "abandoned-graded-failure",
+  "bodyDigestScope": "canonical-compact-scenario-body-json-v1",
+  "bodySha256": "d281239a175c4b76614b41caa45e94481272bfd970b4c148485097d89c015b0f",
+  "body": {
+    "scenarioId": "abandoned-graded-failure",
+    "title": "Abandoned relayer funded-failure market",
+    "description": "The relayer deliberately stays silent. The funded failure walk selects a graded exact-complement failure partition [0,2,3,5] at scale ten, producing zero and positive payouts across varied portfolios before projected retirement.",
+    "clusterTarget": "devnet",
+    "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "evidenceLevel": "scenario-only",
+    "market": {
+      "profile": "abandoned",
+      "marketRef": "market.abandoned-graded-failure",
+      "inputArtifact": null,
+      "outcomeCount": 4,
+      "collateralMintRef": "mint.abandoned-graded-failure.collateral",
+      "claimMintRefs": [
+        "mint.abandoned-graded-failure.claim.0",
+        "mint.abandoned-graded-failure.claim.1",
+        "mint.abandoned-graded-failure.claim.2",
+        "mint.abandoned-graded-failure.claim.3"
+      ],
+      "resolution": {
+        "kind": "graded-failure",
+        "payoutScale": "10",
+        "payoutAtomsPerClaim": [
+          "0",
+          "2",
+          "3",
+          "5"
+        ]
+      },
+      "priceScaleAtoms": "1000",
+      "feeDenominator": "10000",
+      "feeBasisPointsPerSide": 50,
+      "feeRecipientAccountRef": "token.abandoned-graded-failure.deployer.collateral",
+      "hoardPrincipalAccountRef": "token.abandoned-graded-failure.hoard-principal"
+    },
+    "limits": {
+      "maxConcurrency": 1,
+      "minDispatchIntervalMs": 1500,
+      "maxTransactions": 96,
+      "pollIntervalMs": 1000,
+      "maxPolls": 180
+    },
+    "wallets": [
+      {
+        "id": "kite",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.abandoned-graded-failure.kite.collateral",
+        "claimAccountRefs": [
+          "token.abandoned-graded-failure.kite.claim.0",
+          "token.abandoned-graded-failure.kite.claim.1",
+          "token.abandoned-graded-failure.kite.claim.2",
+          "token.abandoned-graded-failure.kite.claim.3"
+        ],
+        "positionAccountRef": "position.abandoned-graded-failure.kite"
+      },
+      {
+        "id": "luna",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.abandoned-graded-failure.luna.collateral",
+        "claimAccountRefs": [
+          "token.abandoned-graded-failure.luna.claim.0",
+          "token.abandoned-graded-failure.luna.claim.1",
+          "token.abandoned-graded-failure.luna.claim.2",
+          "token.abandoned-graded-failure.luna.claim.3"
+        ],
+        "positionAccountRef": "position.abandoned-graded-failure.luna"
+      },
+      {
+        "id": "moss",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.abandoned-graded-failure.moss.collateral",
+        "claimAccountRefs": [
+          "token.abandoned-graded-failure.moss.claim.0",
+          "token.abandoned-graded-failure.moss.claim.1",
+          "token.abandoned-graded-failure.moss.claim.2",
+          "token.abandoned-graded-failure.moss.claim.3"
+        ],
+        "positionAccountRef": "position.abandoned-graded-failure.moss"
+      },
+      {
+        "id": "nova",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.abandoned-graded-failure.nova.collateral",
+        "claimAccountRefs": [
+          "token.abandoned-graded-failure.nova.claim.0",
+          "token.abandoned-graded-failure.nova.claim.1",
+          "token.abandoned-graded-failure.nova.claim.2",
+          "token.abandoned-graded-failure.nova.claim.3"
+        ],
+        "positionAccountRef": "position.abandoned-graded-failure.nova"
+      },
+      {
+        "id": "deployer",
+        "roles": [
+          "fee-payer",
+          "fee-recipient",
+          "retirement-beneficiary"
+        ],
+        "fundingLamports": "150000000",
+        "collateralAccountRef": "token.abandoned-graded-failure.deployer.collateral",
+        "claimAccountRefs": [],
+        "positionAccountRef": null
+      }
+    ],
+    "accounts": [
+      {
+        "id": "market.abandoned-graded-failure",
+        "kind": "market",
+        "address": null,
+        "expectedOwnerRef": "program.core",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "certificate.abandoned-graded-failure",
+        "kind": "certificate",
+        "address": null,
+        "expectedOwnerRef": "program.resolution",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.abandoned-graded-failure.hoard-principal",
+        "kind": "hoard-principal",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.collateral",
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "wallet.kite",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.abandoned-graded-failure.kite.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.collateral",
+        "tokenAuthorityWalletRef": "kite"
+      },
+      {
+        "id": "token.abandoned-graded-failure.kite.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.0",
+        "tokenAuthorityWalletRef": "kite"
+      },
+      {
+        "id": "token.abandoned-graded-failure.kite.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.1",
+        "tokenAuthorityWalletRef": "kite"
+      },
+      {
+        "id": "token.abandoned-graded-failure.kite.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.2",
+        "tokenAuthorityWalletRef": "kite"
+      },
+      {
+        "id": "token.abandoned-graded-failure.kite.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.3",
+        "tokenAuthorityWalletRef": "kite"
+      },
+      {
+        "id": "position.abandoned-graded-failure.kite",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "kite"
+      },
+      {
+        "id": "wallet.luna",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.abandoned-graded-failure.luna.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.collateral",
+        "tokenAuthorityWalletRef": "luna"
+      },
+      {
+        "id": "token.abandoned-graded-failure.luna.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.0",
+        "tokenAuthorityWalletRef": "luna"
+      },
+      {
+        "id": "token.abandoned-graded-failure.luna.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.1",
+        "tokenAuthorityWalletRef": "luna"
+      },
+      {
+        "id": "token.abandoned-graded-failure.luna.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.2",
+        "tokenAuthorityWalletRef": "luna"
+      },
+      {
+        "id": "token.abandoned-graded-failure.luna.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.3",
+        "tokenAuthorityWalletRef": "luna"
+      },
+      {
+        "id": "position.abandoned-graded-failure.luna",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "luna"
+      },
+      {
+        "id": "wallet.moss",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.abandoned-graded-failure.moss.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.collateral",
+        "tokenAuthorityWalletRef": "moss"
+      },
+      {
+        "id": "token.abandoned-graded-failure.moss.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.0",
+        "tokenAuthorityWalletRef": "moss"
+      },
+      {
+        "id": "token.abandoned-graded-failure.moss.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.1",
+        "tokenAuthorityWalletRef": "moss"
+      },
+      {
+        "id": "token.abandoned-graded-failure.moss.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.2",
+        "tokenAuthorityWalletRef": "moss"
+      },
+      {
+        "id": "token.abandoned-graded-failure.moss.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.3",
+        "tokenAuthorityWalletRef": "moss"
+      },
+      {
+        "id": "position.abandoned-graded-failure.moss",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "moss"
+      },
+      {
+        "id": "wallet.nova",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.abandoned-graded-failure.nova.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.collateral",
+        "tokenAuthorityWalletRef": "nova"
+      },
+      {
+        "id": "token.abandoned-graded-failure.nova.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.0",
+        "tokenAuthorityWalletRef": "nova"
+      },
+      {
+        "id": "token.abandoned-graded-failure.nova.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.1",
+        "tokenAuthorityWalletRef": "nova"
+      },
+      {
+        "id": "token.abandoned-graded-failure.nova.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.2",
+        "tokenAuthorityWalletRef": "nova"
+      },
+      {
+        "id": "token.abandoned-graded-failure.nova.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.claim.3",
+        "tokenAuthorityWalletRef": "nova"
+      },
+      {
+        "id": "position.abandoned-graded-failure.nova",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "nova"
+      },
+      {
+        "id": "wallet.deployer",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.abandoned-graded-failure.deployer.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.abandoned-graded-failure.collateral",
+        "tokenAuthorityWalletRef": "deployer"
+      }
+    ],
+    "initialSnapshot": {
+      "accountStates": [
+        {
+          "accountRef": "certificate.abandoned-graded-failure",
+          "state": "absent"
+        },
+        {
+          "accountRef": "market.abandoned-graded-failure",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.kite",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.luna",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.moss",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.nova",
+          "state": "absent"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.hoard-principal",
+          "state": "absent"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.deployer",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.kite",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.luna",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.moss",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.nova",
+          "state": "present"
+        }
+      ],
+      "tokenBalances": [
+        {
+          "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.hoard-principal",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "100000"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "100000"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "100000"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "100000"
+        }
+      ],
+      "positionRevisions": [
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.kite",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.luna",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.moss",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.nova",
+          "revision": "0"
+        }
+      ]
+    },
+    "operations": [
+      {
+        "id": "abandoned-graded-failure-found",
+        "order": 0,
+        "kind": "found",
+        "predecessorId": null,
+        "dependencyIds": [],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "graded-failure-market-founding",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-found",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "found",
+          "marketRef": "market.abandoned-graded-failure",
+          "marketInputArtifact": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.abandoned-graded-failure",
+              "before": "absent",
+              "after": "present"
+            },
+            {
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-participant-kite",
+        "order": 1,
+        "kind": "participant",
+        "predecessorId": "abandoned-graded-failure-found",
+        "dependencyIds": [
+          "abandoned-graded-failure-found"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-participant-kite",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "kite",
+          "completeSetAtoms": "800",
+          "collateralPrincipalAtoms": "8000"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-8000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "8000"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.kite",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-8000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "8000"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "800"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.kite",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-participant-luna",
+        "order": 2,
+        "kind": "participant",
+        "predecessorId": "abandoned-graded-failure-participant-kite",
+        "dependencyIds": [
+          "abandoned-graded-failure-participant-kite"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-participant-luna",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "luna",
+          "completeSetAtoms": "500",
+          "collateralPrincipalAtoms": "5000"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-5000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "5000"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.luna",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.luna",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-5000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "5000"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.luna",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.luna",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-participant-moss",
+        "order": 3,
+        "kind": "participant",
+        "predecessorId": "abandoned-graded-failure-participant-luna",
+        "dependencyIds": [
+          "abandoned-graded-failure-participant-luna"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-participant-moss",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "moss",
+          "completeSetAtoms": "350",
+          "collateralPrincipalAtoms": "3500"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-3500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "3500"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.moss",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-3500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "3500"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "350"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.moss",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-participant-nova",
+        "order": 4,
+        "kind": "participant",
+        "predecessorId": "abandoned-graded-failure-participant-moss",
+        "dependencyIds": [
+          "abandoned-graded-failure-participant-moss"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-participant-nova",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "nova",
+          "completeSetAtoms": "200",
+          "collateralPrincipalAtoms": "2000"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-2000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2000"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.nova",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.nova",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-2000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2000"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.abandoned-graded-failure.nova",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.nova",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-direct-kite-luna-o0-partial",
+        "order": 5,
+        "kind": "direct",
+        "predecessorId": "abandoned-graded-failure-participant-nova",
+        "dependencyIds": [
+          "abandoned-graded-failure-participant-nova"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-direct-kite-luna-o0-partial",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "kite",
+          "buyerWalletRef": "luna",
+          "outcome": 0,
+          "claimMintRef": "mint.abandoned-graded-failure.claim.0",
+          "fillAtoms": "300",
+          "remainingBeforeAtoms": "800",
+          "remainingAfterAtoms": "500",
+          "completion": "partial",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "200",
+          "grossCollateralAtoms": "60",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "0",
+          "buyerFeeAtoms": "0",
+          "sellerNetAtoms": "60",
+          "buyerDebitAtoms": "60",
+          "feeRecipientCreditAtoms": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-300"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "300"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "60"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-60"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.luna",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-direct-luna-moss-o1-full",
+        "order": 6,
+        "kind": "direct",
+        "predecessorId": "abandoned-direct-kite-luna-o0-partial",
+        "dependencyIds": [
+          "abandoned-direct-kite-luna-o0-partial"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-direct-luna-moss-o1-full",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "luna",
+          "buyerWalletRef": "moss",
+          "outcome": 1,
+          "claimMintRef": "mint.abandoned-graded-failure.claim.1",
+          "fillAtoms": "500",
+          "remainingBeforeAtoms": "500",
+          "remainingAfterAtoms": "0",
+          "completion": "full",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "400",
+          "grossCollateralAtoms": "200",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "1",
+          "buyerFeeAtoms": "1",
+          "sellerNetAtoms": "199",
+          "buyerDebitAtoms": "201",
+          "feeRecipientCreditAtoms": "2"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "199"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-201"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.luna",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-direct-moss-nova-o2-partial",
+        "order": 7,
+        "kind": "direct",
+        "predecessorId": "abandoned-direct-luna-moss-o1-full",
+        "dependencyIds": [
+          "abandoned-direct-luna-moss-o1-full"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-direct-moss-nova-o2-partial",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "moss",
+          "buyerWalletRef": "nova",
+          "outcome": 2,
+          "claimMintRef": "mint.abandoned-graded-failure.claim.2",
+          "fillAtoms": "150",
+          "remainingBeforeAtoms": "350",
+          "remainingAfterAtoms": "200",
+          "completion": "partial",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "600",
+          "grossCollateralAtoms": "90",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "0",
+          "buyerFeeAtoms": "0",
+          "sellerNetAtoms": "90",
+          "buyerDebitAtoms": "90",
+          "feeRecipientCreditAtoms": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-150"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "150"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "90"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-90"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.nova",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-direct-nova-kite-o3-full",
+        "order": 8,
+        "kind": "direct",
+        "predecessorId": "abandoned-direct-moss-nova-o2-partial",
+        "dependencyIds": [
+          "abandoned-direct-moss-nova-o2-partial"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-direct-nova-kite-o3-full",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "nova",
+          "buyerWalletRef": "kite",
+          "outcome": 3,
+          "claimMintRef": "mint.abandoned-graded-failure.claim.3",
+          "fillAtoms": "200",
+          "remainingBeforeAtoms": "200",
+          "remainingAfterAtoms": "0",
+          "completion": "full",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "800",
+          "grossCollateralAtoms": "160",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "0",
+          "buyerFeeAtoms": "0",
+          "sellerNetAtoms": "160",
+          "buyerDebitAtoms": "160",
+          "feeRecipientCreditAtoms": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-200"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "160"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-160"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.nova",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-resolve",
+        "order": 9,
+        "kind": "resolve",
+        "predecessorId": "abandoned-direct-nova-kite-o3-full",
+        "dependencyIds": [
+          "abandoned-direct-nova-kite-o3-full"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "funded-failure-resolution",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-resolve",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "resolve",
+          "certificateAccountRef": "certificate.abandoned-graded-failure",
+          "selector": 3,
+          "payoutAtomsPerClaim": [
+            "0",
+            "2",
+            "3",
+            "5"
+          ],
+          "expectedOwnerRef": "program.resolution",
+          "dataSha256": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "certificate.abandoned-graded-failure",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-kite-o0",
+        "order": 10,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-resolve",
+        "dependencyIds": [
+          "abandoned-graded-failure-resolve"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-kite-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "kite",
+          "outcome": 0,
+          "claimAtomsBurned": "500",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-kite-o1",
+        "order": 11,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-kite-o0",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-kite-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-kite-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "kite",
+          "outcome": 1,
+          "claimAtomsBurned": "800",
+          "payoutAtomsPerClaim": "2",
+          "collateralAtomsCredited": "1600",
+          "hoardPrincipalAtomsDebited": "1600"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1600"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1600"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-kite-o2",
+        "order": 12,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-kite-o1",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-kite-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-kite-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "kite",
+          "outcome": 2,
+          "claimAtomsBurned": "800",
+          "payoutAtomsPerClaim": "3",
+          "collateralAtomsCredited": "2400",
+          "hoardPrincipalAtomsDebited": "2400"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-800"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2400"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-2400"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-kite-o3",
+        "order": 13,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-kite-o2",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-kite-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-kite-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "kite",
+          "outcome": 3,
+          "claimAtomsBurned": "1000",
+          "payoutAtomsPerClaim": "5",
+          "collateralAtomsCredited": "5000",
+          "hoardPrincipalAtomsDebited": "5000"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1000"
+            },
+            {
+              "walletRef": "kite",
+              "accountRef": "token.abandoned-graded-failure.kite.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "5000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-5000"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.kite",
+              "beforeRevision": "6",
+              "afterRevision": "7",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-luna-o0",
+        "order": 14,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-kite-o3",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-kite-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-luna-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "luna",
+          "outcome": 0,
+          "claimAtomsBurned": "800",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-800"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.luna",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-luna-o2",
+        "order": 15,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-luna-o0",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-luna-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-luna-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "luna",
+          "outcome": 2,
+          "claimAtomsBurned": "500",
+          "payoutAtomsPerClaim": "3",
+          "collateralAtomsCredited": "1500",
+          "hoardPrincipalAtomsDebited": "1500"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1500"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.luna",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-luna-o3",
+        "order": 16,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-luna-o2",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-luna-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-luna-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "luna",
+          "outcome": 3,
+          "claimAtomsBurned": "500",
+          "payoutAtomsPerClaim": "5",
+          "collateralAtomsCredited": "2500",
+          "hoardPrincipalAtomsDebited": "2500"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-500"
+            },
+            {
+              "walletRef": "luna",
+              "accountRef": "token.abandoned-graded-failure.luna.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2500"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-2500"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.luna",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-moss-o0",
+        "order": 17,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-luna-o3",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-luna-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-moss-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "moss",
+          "outcome": 0,
+          "claimAtomsBurned": "350",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-moss-o1",
+        "order": 18,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-moss-o0",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-moss-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-moss-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "moss",
+          "outcome": 1,
+          "claimAtomsBurned": "850",
+          "payoutAtomsPerClaim": "2",
+          "collateralAtomsCredited": "1700",
+          "hoardPrincipalAtomsDebited": "1700"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-850"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1700"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1700"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-moss-o2",
+        "order": 19,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-moss-o1",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-moss-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-moss-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "moss",
+          "outcome": 2,
+          "claimAtomsBurned": "200",
+          "payoutAtomsPerClaim": "3",
+          "collateralAtomsCredited": "600",
+          "hoardPrincipalAtomsDebited": "600"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-200"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "600"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-moss-o3",
+        "order": 20,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-moss-o2",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-moss-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-moss-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "moss",
+          "outcome": 3,
+          "claimAtomsBurned": "350",
+          "payoutAtomsPerClaim": "5",
+          "collateralAtomsCredited": "1750",
+          "hoardPrincipalAtomsDebited": "1750"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.claim.3",
+              "mintRef": "mint.abandoned-graded-failure.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-350"
+            },
+            {
+              "walletRef": "moss",
+              "accountRef": "token.abandoned-graded-failure.moss.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1750"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1750"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.moss",
+              "beforeRevision": "6",
+              "afterRevision": "7",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-nova-o0",
+        "order": 21,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-moss-o3",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-moss-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-nova-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "nova",
+          "outcome": 0,
+          "claimAtomsBurned": "200",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.0",
+              "mintRef": "mint.abandoned-graded-failure.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.nova",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-nova-o1",
+        "order": 22,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-nova-o0",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-nova-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-nova-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "nova",
+          "outcome": 1,
+          "claimAtomsBurned": "200",
+          "payoutAtomsPerClaim": "2",
+          "collateralAtomsCredited": "400",
+          "hoardPrincipalAtomsDebited": "400"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.1",
+              "mintRef": "mint.abandoned-graded-failure.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-200"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-400"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.nova",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-redeem-nova-o2",
+        "order": 23,
+        "kind": "redeem",
+        "predecessorId": "abandoned-graded-failure-redeem-nova-o1",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-nova-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-redeem-nova-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "nova",
+          "outcome": 2,
+          "claimAtomsBurned": "350",
+          "payoutAtomsPerClaim": "3",
+          "collateralAtomsCredited": "1050",
+          "hoardPrincipalAtomsDebited": "1050"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+              "mintRef": "mint.abandoned-graded-failure.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-350"
+            },
+            {
+              "walletRef": "nova",
+              "accountRef": "token.abandoned-graded-failure.nova.collateral",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1050"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "mintRef": "mint.abandoned-graded-failure.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1050"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.abandoned-graded-failure.nova",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "abandoned-graded-failure-retire",
+        "order": 24,
+        "kind": "retire",
+        "predecessorId": "abandoned-graded-failure-redeem-nova-o2",
+        "dependencyIds": [
+          "abandoned-graded-failure-redeem-nova-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "terminal-retirement",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.abandoned-graded-failure.abandoned-graded-failure-retire",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "retire",
+          "eligible": true,
+          "closureAccountRefs": [
+            "market.abandoned-graded-failure",
+            "certificate.abandoned-graded-failure",
+            "position.abandoned-graded-failure.kite",
+            "position.abandoned-graded-failure.luna",
+            "position.abandoned-graded-failure.moss",
+            "position.abandoned-graded-failure.nova",
+            "token.abandoned-graded-failure.hoard-principal"
+          ],
+          "rentRefundWalletRef": "deployer",
+          "rentRefundLamports": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.abandoned-graded-failure",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "certificate.abandoned-graded-failure",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.abandoned-graded-failure.kite",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.abandoned-graded-failure.luna",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.abandoned-graded-failure.moss",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.abandoned-graded-failure.nova",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "token.abandoned-graded-failure.hoard-principal",
+              "before": "present",
+              "after": "closed"
+            }
+          ],
+          "positionChanges": []
+        }
+      }
+    ],
+    "finalSnapshot": {
+      "accountStates": [
+        {
+          "accountRef": "certificate.abandoned-graded-failure",
+          "state": "closed"
+        },
+        {
+          "accountRef": "market.abandoned-graded-failure",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.kite",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.luna",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.moss",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.abandoned-graded-failure.nova",
+          "state": "closed"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.hoard-principal",
+          "state": "closed"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.deployer",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.kite",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.luna",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.moss",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.nova",
+          "state": "present"
+        }
+      ],
+      "tokenBalances": [
+        {
+          "accountRef": "token.abandoned-graded-failure.deployer.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "2"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.hoard-principal",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.kite.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "100900"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.luna.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "99139"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.moss.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "100439"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.0",
+          "mintRef": "mint.abandoned-graded-failure.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.1",
+          "mintRef": "mint.abandoned-graded-failure.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.2",
+          "mintRef": "mint.abandoned-graded-failure.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.claim.3",
+          "mintRef": "mint.abandoned-graded-failure.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.abandoned-graded-failure.nova.collateral",
+          "mintRef": "mint.abandoned-graded-failure.collateral",
+          "atoms": "99520"
+        }
+      ],
+      "positionRevisions": [
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.kite",
+          "revision": "7"
+        },
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.luna",
+          "revision": "6"
+        },
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.moss",
+          "revision": "7"
+        },
+        {
+          "positionAccountRef": "position.abandoned-graded-failure.nova",
+          "revision": "6"
+        }
+      ]
+    },
+    "retireEligible": true
+  }
+}
