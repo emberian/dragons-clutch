@@ -19,7 +19,6 @@ use dclutch_claims_svm::{
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_core_contract::{MarketRoot, Phase};
 use dclutch_custody_contract::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
@@ -27,6 +26,9 @@ use dclutch_custody_contract::{
 use dclutch_dealer_codec::{
     config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
     scenario::ClaimsInventoryObservation,
+};
+use dclutch_market_core_codec::{
+    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -407,6 +409,63 @@ fn authenticate_config(
     Ok(config)
 }
 
+/// Exact facts the live Core Market header must carry for selector 9.
+///
+/// Every field is already authenticated by a different owner: the request, the
+/// immutable Dealer config, the Claims aggregate, the Product runtime, and the
+/// admitted invocation context. This structure exists so the Core side of each
+/// join is stated once, next to the decode that reads it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CoreMarketExpectationV4 {
+    market: [u8; 32],
+    generation: u64,
+    realm_id: [u8; 32],
+    product_instance_id: [u8; 32],
+    product_record: [u8; 32],
+    release_set: [u8; 32],
+    registry_program: [u8; 32],
+}
+
+/// Authenticate the live Core Market account body against selector 9's joins.
+///
+/// The Core Market account holds the 352-byte `CoreState` header written by
+/// market-core, not the 232-byte `MarketRoot` preimage. This decoded
+/// `MarketRoot` until 2026-08-27, so it refused on length before reading a
+/// single join and selector 9 could never authenticate a real chain Market.
+/// The join set is the one every other Core reader in the workspace uses
+/// against a Claims aggregate (`claims-sbf/src/sparse_native_transfer_v1.rs`,
+/// `affine_batch_v2.rs`, `terminal_settlement_v3.rs`): `product_id` is the
+/// Core-side name for the aggregate's `product_instance_id`, and the
+/// aggregate's `basis_id` has no Core-side field at all -- it is authenticated
+/// against the Product runtime's `semantic_basis_id` by the caller.
+fn authenticate_core_market_v4(
+    core_data: &[u8],
+    core_market: &Pubkey,
+    core_program: &Pubkey,
+    expected: CoreMarketExpectationV4,
+) -> Result<(), DealerScenarioAcceleratorErrorV4> {
+    let core =
+        CoreState::decode(core_data).map_err(|_| DealerScenarioAcceleratorErrorV4::Claims)?;
+    let derived = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
+        core_program,
+    )
+    .0;
+    if derived != *core_market
+        || core.phase != CorePhase::Open
+        || core.identity.market_id.to_bytes() != expected.market
+        || core.identity.generation != expected.generation
+        || core.identity.realm_id.to_bytes() != expected.realm_id
+        || core.identity.product_id.to_bytes() != expected.product_instance_id
+        || core.identity.product_record.to_bytes() != expected.product_record
+        || core.identity.selected_release_set.to_bytes() != expected.release_set
+        || core.identity.registry_program.to_bytes() != expected.registry_program
+    {
+        return Err(DealerScenarioAcceleratorErrorV4::Claims);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn authenticate_config_context_join(
     config: DealerConfigV4,
@@ -454,6 +513,7 @@ fn authenticate_claims(
     if aggregate.owner.to_bytes() != claims_program
         || core_market.key.to_bytes() != request.market
         || core_market.owner != core_program.key
+        || core_market.data_len() != STATE_BYTES
         || !core_program.executable
     {
         return Err(DealerScenarioAcceleratorErrorV4::Claims);
@@ -495,17 +555,25 @@ fn authenticate_claims(
     let core_data = core_market
         .try_borrow_data()
         .map_err(|_| DealerScenarioAcceleratorErrorV4::Claims)?;
-    let core =
-        MarketRoot::decode(&core_data).map_err(|_| DealerScenarioAcceleratorErrorV4::Claims)?;
-    let identity = core.identity();
-    if core.phase() != Phase::Open
-        || identity.generation() != request.generation
-        || identity.realm_id().to_bytes() != config.realm()
-        || identity.product_instance_id().to_bytes() != market.product_instance_id
-        || identity.claim_basis_id().to_bytes() != market.basis_id
-    {
-        return Err(DealerScenarioAcceleratorErrorV4::Claims);
-    }
+    authenticate_core_market_v4(
+        &core_data,
+        core_market.key,
+        core_program.key,
+        CoreMarketExpectationV4 {
+            market: request.market,
+            generation: request.generation,
+            realm_id: config.realm(),
+            product_instance_id: market.product_instance_id,
+            product_record: invocation
+                .product_runtime()
+                .runtime
+                .product_record
+                .content_digest
+                .to_bytes(),
+            release_set: request.release_set,
+            registry_program: invocation.context().registry_program.to_bytes(),
+        },
+    )?;
     drop(core_data);
 
     let plan = request
@@ -1244,5 +1312,199 @@ mod tests {
             ),
             Err(DealerScenarioAcceleratorErrorV4::SemanticJoin)
         );
+    }
+
+    fn core_identity() -> dclutch_market_core_codec::MarketIdentity {
+        use dclutch_market_core_codec::{Identity, MarketIdentity};
+        let identity = |tag: u8| Identity::new(id(tag)).expect("nonzero identity");
+        MarketIdentity {
+            market_id: identity(0xa1),
+            realm_id: identity(0xa2),
+            product_record: identity(0xa3),
+            product_id: identity(0xa4),
+            resolution_policy: identity(0xa5),
+            capability_manifest: identity(0xa6),
+            selected_release_set: identity(0xa7),
+            registry_program: identity(0xa8),
+            generation: 9,
+        }
+    }
+
+    /// Build the exact account body market-core writes, at its own PDA.
+    fn live_core_market() -> (Pubkey, Pubkey, [u8; STATE_BYTES], CoreMarketExpectationV4) {
+        use dclutch_market_core_codec::{Identity, Readiness};
+        let core_program = Pubkey::new_from_array(id(0xc0));
+        let mut identity = core_identity();
+        let key = Pubkey::find_program_address(
+            &MarketCoreStateSeedsV2::new(identity).as_slices(),
+            &core_program,
+        )
+        .0;
+        identity.market_id = Identity::new(key.to_bytes()).expect("derived market id");
+        let state = CoreState {
+            phase: CorePhase::Open,
+            readiness: Readiness::Consumed,
+            terminal_winner: 0,
+            identity,
+            outstanding_capabilities: 1,
+            rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
+            terminal_receipt: None,
+        };
+        let expectation = CoreMarketExpectationV4 {
+            market: key.to_bytes(),
+            generation: identity.generation,
+            realm_id: identity.realm_id.to_bytes(),
+            product_instance_id: identity.product_id.to_bytes(),
+            product_record: identity.product_record.to_bytes(),
+            release_set: identity.selected_release_set.to_bytes(),
+            registry_program: identity.registry_program.to_bytes(),
+        };
+        (
+            core_program,
+            key,
+            state.encode().expect("canonical Open state"),
+            expectation,
+        )
+    }
+
+    /// Regression: selector 9 decoded the Core Market as the 232-byte
+    /// `MarketRoot` preimage while the chain stores the 352-byte `CoreState`
+    /// header, so it refused on length before reading one join. The accelerator
+    /// could never authenticate a real Market and the family campaign was
+    /// representation-broken before it started.
+    #[test]
+    fn the_live_core_state_header_authenticates_and_the_market_root_preimage_cannot() {
+        use dclutch_core_contract::{ContentId, MarketIdentity as RootIdentity, MarketRoot};
+
+        let (core_program, key, body, expectation) = live_core_market();
+        assert_eq!(body.len(), STATE_BYTES);
+        assert_eq!(STATE_BYTES, 352);
+        assert_eq!(
+            authenticate_core_market_v4(&body, &key, &core_program, expectation),
+            Ok(())
+        );
+
+        let content = |tag: u8| ContentId::new(id(tag)).expect("nonzero content id");
+        let root = MarketRoot::founding(
+            RootIdentity::new(
+                content(0xa2),
+                content(0xa4),
+                content(0xb1),
+                content(0xa5),
+                content(0xa6),
+                9,
+            ),
+            id(0xa9),
+        )
+        .expect("canonical founding root")
+        .to_bytes();
+        assert_eq!(root.len(), dclutch_core_contract::MARKET_ROOT_BYTES);
+        assert_ne!(root.len(), STATE_BYTES);
+        assert_eq!(
+            authenticate_core_market_v4(&root, &key, &core_program, expectation),
+            Err(DealerScenarioAcceleratorErrorV4::Claims)
+        );
+    }
+
+    /// Every Core-side join is load-bearing, including the address the seeds
+    /// derive: a substituted Market account key refuses even when the body is
+    /// the canonical one written by market-core.
+    #[test]
+    fn each_core_market_join_refuses_on_its_own() {
+        let (core_program, key, body, expectation) = live_core_market();
+        let refuse = |expected: CoreMarketExpectationV4| {
+            assert_eq!(
+                authenticate_core_market_v4(&body, &key, &core_program, expected),
+                Err(DealerScenarioAcceleratorErrorV4::Claims)
+            );
+        };
+        refuse(CoreMarketExpectationV4 {
+            market: id(0xf0),
+            ..expectation
+        });
+        refuse(CoreMarketExpectationV4 {
+            generation: 10,
+            ..expectation
+        });
+        refuse(CoreMarketExpectationV4 {
+            realm_id: id(0xf1),
+            ..expectation
+        });
+        refuse(CoreMarketExpectationV4 {
+            product_instance_id: id(0xf2),
+            ..expectation
+        });
+        refuse(CoreMarketExpectationV4 {
+            product_record: id(0xf3),
+            ..expectation
+        });
+        refuse(CoreMarketExpectationV4 {
+            release_set: id(0xf4),
+            ..expectation
+        });
+        refuse(CoreMarketExpectationV4 {
+            registry_program: id(0xf5),
+            ..expectation
+        });
+        assert_eq!(
+            authenticate_core_market_v4(
+                &body,
+                &Pubkey::new_from_array(id(0xf6)),
+                &core_program,
+                expectation
+            ),
+            Err(DealerScenarioAcceleratorErrorV4::Claims)
+        );
+        assert_eq!(
+            authenticate_core_market_v4(
+                &body,
+                &key,
+                &Pubkey::new_from_array(id(0xf7)),
+                expectation
+            ),
+            Err(DealerScenarioAcceleratorErrorV4::Claims)
+        );
+    }
+
+    /// A Market that has not opened, or has left Open, is not tradeable.
+    #[test]
+    fn only_an_open_market_authenticates() {
+        use dclutch_market_core_codec::{Identity, Readiness};
+
+        let (core_program, key, _, expectation) = live_core_market();
+        let mut identity = core_identity();
+        identity.market_id = Identity::new(key.to_bytes()).expect("derived market id");
+        for (phase, receipt) in [
+            (CorePhase::Founding, None),
+            (
+                CorePhase::Terminal,
+                Some(Identity::new(id(0xaa)).expect("receipt")),
+            ),
+            (
+                CorePhase::Retiring,
+                Some(Identity::new(id(0xaa)).expect("receipt")),
+            ),
+        ] {
+            let body = CoreState {
+                phase,
+                readiness: if matches!(phase, CorePhase::Founding) {
+                    Readiness::Prepaid
+                } else {
+                    Readiness::Consumed
+                },
+                terminal_winner: 0,
+                identity,
+                outstanding_capabilities: 1,
+                rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
+                terminal_receipt: receipt,
+            }
+            .encode()
+            .expect("canonical state");
+            assert_eq!(
+                authenticate_core_market_v4(&body, &key, &core_program, expectation),
+                Err(DealerScenarioAcceleratorErrorV4::Claims),
+                "phase {phase:?} must not authenticate a trade"
+            );
+        }
     }
 }
