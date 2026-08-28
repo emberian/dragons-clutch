@@ -175,7 +175,7 @@ Run these rows at the same combined freeze as the private-validator checkpoint:
 7. Regenerate every affected browser ABI owner, then the route census, GENREF,
    SBOM, and notices through their temp-file/atomic-replace generators. Require
    the second generation/check pass to be byte-identical. The last known stale
-   route authority had 105 routes and 209 refusal codes.
+   route authority had 107 routes and 209 refusal codes.
 8. Produce the exact seven-row deployment disposition: Core, Claims, Trading,
    Resolution, and Custody are `Upgrade`; Registry and Rent are `CarryForward`.
    Bind each row to the checked gate and current finalized Loader observation.
