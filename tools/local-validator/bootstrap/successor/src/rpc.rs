@@ -243,7 +243,7 @@ impl<'de> Visitor<'de> for ExactJsonValueVisitorV1 {
     }
 }
 
-fn parse_json_without_duplicate_keys_v1(bytes: &[u8]) -> Result<Value> {
+pub(crate) fn parse_json_without_duplicate_keys_v1(bytes: &[u8]) -> Result<Value> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value = ExactJsonValueSeedV1
         .deserialize(&mut deserializer)

@@ -19,6 +19,7 @@ mod market;
 mod model;
 mod plan;
 mod relayed;
+mod release_capture;
 mod rpc;
 mod runtime;
 mod seed;
@@ -98,6 +99,12 @@ fn run() -> Result<()> {
         Some("devnet-upgrade-extend-v1") => upgrade::run_extension(arguments.collect()),
         Some("devnet-upgrade-v1") => upgrade::run(arguments.collect()),
         Some("devnet-deployment-set-journal-v2") => upgrade::run_set_journal(arguments.collect()),
+        Some("devnet-carry-forward-capture-v1") => {
+            release_capture::run_carry_forward(arguments.collect())
+        }
+        Some("devnet-prepare-programdata-capture-v1") => {
+            release_capture::run_prepare_programdata(arguments.collect())
+        }
         Some("devnet-user-position-admission-v1") => {
             user_position_admission::run(arguments.collect())
         }
@@ -1229,6 +1236,7 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     usage_supervisor();
+    println!("{}", release_capture::usage());
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
     println!("{}", terminal_lifecycle::lifecycle_usage());
@@ -1355,5 +1363,13 @@ mod tests {
                 refusal.0
             );
         }
+    }
+
+    #[test]
+    fn usage_names_both_key_free_release_capture_commands() {
+        let usage = release_capture::usage();
+        assert!(usage.contains("devnet-carry-forward-capture-v1"));
+        assert!(usage.contains("devnet-prepare-programdata-capture-v1"));
+        assert!(usage.contains("read-only and key-free"));
     }
 }
