@@ -17,6 +17,12 @@ pub struct AuthenticatedProductGraphObservationV3 {
     pub outcome_count: u32,
     /// SHA-256 identity of the authenticated Product root record.
     pub product_record: [u8; 32],
+    /// Stable Product identity joined by all three records.
+    pub product_id: [u8; 32],
+    /// ResultDomain content identity selected by the Product record.
+    pub result_domain_id: [u8; 32],
+    /// Semantic liability-basis identity selected by the Product graph.
+    pub liability_basis_id: [u8; 32],
 }
 
 /// Same-snapshot finalized Product, ResultDomain, and Portfolio coordinates.
@@ -83,6 +89,9 @@ pub fn authenticate_product_graph_observation_v3(
     Ok(AuthenticatedProductGraphObservationV3 {
         outcome_count: admitted.join.outcome_count,
         product_record: admitted.product_record_digest.to_bytes(),
+        product_id: admitted.join.product_id.to_bytes(),
+        result_domain_id: admitted.join.result_domain_id.to_bytes(),
+        liability_basis_id: admitted.join.liability_basis_id.to_bytes(),
     })
 }
 

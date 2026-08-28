@@ -15,6 +15,7 @@ default = []
 dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
 dclutch-bearer-v2-operator = { path = "../dclutch-bearer-v2-operator" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
