@@ -26,12 +26,21 @@
 //! The journey's conservation ledger is threaded through every stage boundary.
 #![forbid(unsafe_code)]
 
-use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
+use std::{env, error::Error as StdError, fmt};
 
 // ------------------------------------------------------------- tier-1, verbatim
+#[path = "../../../local-validator/bootstrap/successor/src/campaign.rs"]
+#[allow(dead_code)]
+mod campaign;
 #[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
 #[allow(dead_code)]
 mod cluster;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_market.rs"]
+#[allow(dead_code)]
+mod direct_market;
+#[path = "../../../local-validator/bootstrap/successor/src/local_mutable.rs"]
+#[allow(dead_code)]
+mod local_mutable;
 #[path = "../../../local-validator/bootstrap/successor/src/market.rs"]
 #[allow(dead_code)]
 mod market;
@@ -41,6 +50,9 @@ mod model;
 #[path = "../../../local-validator/bootstrap/successor/src/plan.rs"]
 #[allow(dead_code)]
 mod plan;
+#[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
+#[allow(dead_code)]
+mod relayed;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
@@ -50,6 +62,9 @@ mod runtime;
 #[path = "../../../local-validator/bootstrap/successor/src/seed.rs"]
 #[allow(dead_code)]
 mod seed;
+#[path = "../../../local-validator/bootstrap/successor/src/upgrade.rs"]
+#[allow(dead_code)]
+mod upgrade;
 
 // ------------------------------------------------------- the journey's ledger
 #[path = "../../journey/src/ledger.rs"]
@@ -57,10 +72,15 @@ mod seed;
 mod ledger;
 
 // ------------------------------------------------------------- this campaign
+#[allow(dead_code)]
 mod daemon;
+#[allow(dead_code)]
 mod input;
+#[allow(dead_code)]
 mod relayworld;
+#[allow(dead_code)]
 mod twin;
+#[allow(dead_code)]
 mod vertical;
 
 type Result<T> = core::result::Result<T, Error>;
@@ -120,68 +140,33 @@ fn run() -> Result<()> {
     }
 }
 
-fn run_vertical(arguments: Vec<String>) -> Result<()> {
-    let mut walk = None;
-    let mut spec_template = None;
-    let mut transcript = None;
-    let mut relayer_bin = None;
-    let mut work = None;
-    let mut keypair_seed = None;
-    let mut iterator = arguments.into_iter();
-    while let Some(argument) = iterator.next() {
-        let value = iterator
-            .next()
-            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
-        let slot = match argument.as_str() {
-            "--walk" => &mut walk,
-            "--spec-template" => &mut spec_template,
-            "--transcript" => &mut transcript,
-            "--relayer-bin" => &mut relayer_bin,
-            "--work" => &mut work,
-            "--keypair-seed" => &mut keypair_seed,
-            _ => return Err(Error::new(format!("unknown run argument: {argument}"))),
-        };
-        if slot.replace(value).is_some() {
-            return Err(Error::new(format!("{argument} may be supplied only once")));
-        }
-    }
-    let walk = match walk.as_deref() {
-        Some("success") => vertical::WalkV1::Success,
-        Some("failure") => vertical::WalkV1::Failure,
-        other => {
-            return Err(Error::new(format!(
-                "--walk must be success or failure, found {other:?}"
-            )));
-        }
-    };
-    let transcript_value = vertical::execute(vertical::VerticalRequestV1 {
-        walk,
-        spec_template: absolute(spec_template, "--spec-template")?,
-        transcript: absolute(transcript, "--transcript")?,
-        relayer_bin: absolute(relayer_bin, "--relayer-bin")?,
-        work: absolute(work, "--work")?,
-        keypair_seed,
-    })?;
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&transcript_value)?)?;
-    stdout.write_all(b"\n")?;
-    Ok(())
-}
-
-fn required(value: Option<String>, label: &str) -> Result<String> {
-    value.ok_or_else(|| Error::new(format!("{label} is required")))
-}
-
-fn absolute(value: Option<String>, label: &str) -> Result<PathBuf> {
-    let path = PathBuf::from(required(value, label)?);
-    if !path.is_absolute() {
-        return Err(Error::new(format!("{label} must be absolute")));
-    }
-    Ok(path)
+fn run_vertical(_arguments: Vec<String>) -> Result<()> {
+    Err(Error::new(
+        "relayed-vertical is parked: Direct is deployment-bound, but this runner compiles its \
+         replacement market before a checked local mutable plan and live loopback substrate \
+         exist. Restore it only as prepare-mutable -> authenticate live substrate -> compile \
+         market -> found -> relay; fixture Direct identities are refused",
+    ))
 }
 
 fn usage() {
     println!(
+        "PARKED: this command refuses before reading files or starting a validator. Direct is \
+         deployment-bound now; restore this runner only as prepare checked substrate, authenticate \
+         live loopback accounts, compile with DirectMarketCompilerOwnedV1::load_local, then found \
+         and relay. Do not substitute fixture identities.\n\nHistorical interface (not executable):"
+    );
+    println!(
         "Usage:\n  dclutch-relayed-vertical-campaign run --walk success|failure \\\n      --spec-template ABSOLUTE_JSON --transcript ABSOLUTE_NEW_JSON \\\n      --relayer-bin ABSOLUTE_DCLUTCH_RELAYER --work ABSOLUTE_DIR \\\n      [--keypair-seed 64_LOWERCASE_HEX]\n\nThe spec template is a `dclutch-local-successor-run-spec-v2` document whose\n`market` field this campaign REPLACES with the relayed graduation market it\ncompiles at run time (the market's terminal window is wall-clock content and\nthe relayer key set is generated per run, so the input cannot be static).\nEverything runs on 127.0.0.1: the successor validator on the template's own\nport block, and the mainnet twin on a port this campaign binds under --work.\nNothing here signs with a persisted key or touches a public cluster."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn relayed_vertical_refuses_pre_plan_direct_compilation() {
+        let error = super::run_vertical(Vec::new()).expect_err("parked vertical must refuse");
+        assert!(error.0.contains("before a checked local mutable plan"));
+        assert!(error.0.contains("fixture Direct identities are refused"));
+    }
 }
