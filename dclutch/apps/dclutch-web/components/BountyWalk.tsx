@@ -2,6 +2,7 @@ import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 
 import { SMOKE_MARKETS_V1 } from '@/lib/smokeMarkets';
+import { marketDetailHrefV1 } from '@/lib/marketHref';
 
 /**
  * The failure-walk bounty page, written for the wallet that will collect it.
@@ -56,7 +57,7 @@ export default function BountyWalk() {
         <span>Where this stands</span>
         <strong>{live ? 'Live on Solana devnet' : 'Not live yet'}</strong>
         {live
-          ? <p>The abandoned market is live at <Anchor href={`/markets/${abandoned.address}`}><code>{abandoned.address}</code></Anchor>{abandoned.liveNote === null ? '' : ` — ${abandoned.liveNote}`}. The walk arms only after the market&apos;s deadline passes and its escrow is funded; until then this page is the practice run.</p>
+          ? <p>The abandoned market is live at <Anchor href={marketDetailHrefV1(abandoned.address)}><code>{abandoned.address}</code></Anchor>{abandoned.liveNote === null ? '' : ` — ${abandoned.liveNote}`}. The walk arms only after the market&apos;s deadline passes and its escrow is funded; until then this page is the practice run.</p>
           : <p>No such market is live on any public network today. We have run this exact walk end-to-end on a local test network — the numbers below come from that run, and each one says so.</p>}
       </aside>
     </section>

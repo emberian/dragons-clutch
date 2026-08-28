@@ -23,6 +23,7 @@ import {
 } from '@/lib/portfolio';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
+import { marketDetailHrefV1 } from '@/lib/marketHref';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -34,7 +35,7 @@ function errorMessage(error: unknown): string {
 
 function MarketHeading({ market, address }: Readonly<{ market: MarketDiscoveryCardV1; address: string }>) {
   return <div className="market-card-top">
-    <Anchor href={`/markets/${address}`} title={address}>{shortAddressV1(address, 8)}</Anchor>
+    <Anchor href={marketDetailHrefV1(address)} title={address}>{shortAddressV1(address, 8)}</Anchor>
     <span className={`provenance-chip${market.provenance.kind === 'refused' ? ' refused' : ''}`}>{provenanceChipV1(market.provenance)}</span>
     <span className={`phase-chip${market.status === 'decoded' ? ` phase-${market.phase.toLowerCase()}` : ''}`}>{market.status === 'decoded' ? market.phase : 'no phase'}</span>
   </div>;

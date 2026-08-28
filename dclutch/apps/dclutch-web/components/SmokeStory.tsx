@@ -2,6 +2,7 @@ import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 
 import { SMOKE_MARKETS_V1, smokeIsLiveV1 } from '@/lib/smokeMarkets';
+import { marketDetailHrefV1 } from '@/lib/marketHref';
 
 /**
  * The three-markets story, written for the reader.
@@ -16,7 +17,7 @@ export default function SmokeStory() {
   const marketLink = (market: { address: string | null; liveNote: string | null }) =>
     market.address === null ? null : (
       <div className="direct-actions">
-        <Anchor className="secondary-action" href={`/markets/${market.address}`}>Open the live market →</Anchor>
+        <Anchor className="secondary-action" href={marketDetailHrefV1(market.address)}>Open the live market →</Anchor>
         {market.liveNote === null ? null : <span className="direct-status">{market.liveNote}</span>}
       </div>
     );

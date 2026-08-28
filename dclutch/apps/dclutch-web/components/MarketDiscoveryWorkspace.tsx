@@ -17,6 +17,7 @@ import {
   type MarketDiscoveryV1,
   type MarketEnumerationV1,
 } from '@/lib/marketDiscovery';
+import { marketDetailHrefV1 } from '@/lib/marketHref';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
 
@@ -49,7 +50,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
   if (card.status === 'refused') {
     return <article className="market-discovery-card refused">
       <div className="market-card-top"><span className="provenance-chip refused">{provenanceChipV1(card.provenance)}</span><span className="phase-chip">no phase</span></div>
-      <h3><Anchor href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
+      <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
       <p className="market-refusal">{card.refusal}</p>
       <p className="market-observation">Finalized observation slot {card.observedSlot}</p>
     </article>;
@@ -59,7 +60,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
       <span className={`phase-chip phase-${card.phase.toLowerCase()}`}>{card.phase}</span>
     </div>
-    <h3><Anchor href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
+    <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
     <dl className="market-card-facts">
       <div><dt>Generation</dt><dd>{card.generation}</dd></div>
       <div><dt>Founding readiness</dt><dd>{card.readiness}</dd></div>
@@ -80,7 +81,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
     {card.hoard.status === 'derived'
       ? <p className="market-hoard-note">Hoard principal <strong>{card.hoard.principalAtoms}</strong> atoms, held by this Market&apos;s Custody transfer authority at <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>, in the Custody namespace the Claims aggregate records.</p>
       : <p className="market-capability-refusal"><span>Hoard {card.hoard.status}</span>{card.hoard.reason}</p>}
-    <p className="market-observation"><Anchor href={`/markets/${card.address}`}>Open this Market field by field →</Anchor></p>
+    <p className="market-observation"><Anchor href={marketDetailHrefV1(card.address)}>Open this Market field by field →</Anchor></p>
     {card.collateral.status !== 'bound' && <p className="market-refusal">{card.collateral.reason}</p>}
     {card.liability.status !== 'bound' && <p className="market-refusal">{card.liability.reason}</p>}
     <CapabilityBadges capabilities={card.capabilities} />
