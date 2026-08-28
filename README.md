@@ -11,9 +11,13 @@ Every claim is backed by collateral locked in the market's vault (its
 liquidation, no margin call, and no way for a market to owe more than it
 holds. The most you can ever lose is what you paid.
 
-**dClutch is not live yet.** There is no deployment you can use, no live
-market, and nothing to buy today. Everything below runs on a local test
-chain that you can run yourself.
+**dClutch is not live yet.** There is nothing to buy and no value at
+risk anywhere. As of August 27, 2026 the seven programs are deployed to
+Solana's devnet — a public test network whose tokens are worthless by
+construction — each verified byte-for-byte against its source build
+([the deployment record](docs/evidence/DEPLOY_1.md)). The first devnet
+markets are being set up now; everything below also runs on a local test
+chain you can run yourself.
 
 ## What works today
 
@@ -107,6 +111,24 @@ harnesses.
 - [`apps/dclutch-web`](apps/dclutch-web) — the web app.
 - [`docs/decisions/`](docs/decisions) — why the architecture is the way it
   is.
+
+## The artifacts, and where they come from
+
+The tools and consoles pass a handful of artifacts between them. Every one
+has exactly one producer:
+
+| Artifact | Made by | Lives | Used by |
+| --- | --- | --- | --- |
+| Checked release (per program + the multiprogram evidence) | `tools/release` (the checked-release pipeline) | `release/` build output | the deploy runbook; the web Console's activation page |
+| Deployment plan (`plan.json` + genesis accounts) | the bootstrap producer (`tools/local-validator/bootstrap/successor`) | your work directory | the campaign driver; validator launch |
+| Finalized records (products, sources, configs) | published on chain by the campaign driver | **on the chain** — fetch by address, never paste | every program; the web app reads them live |
+| Market spec (`run-spec`) | you, via the create wizard or a spec file | your work directory | founding |
+| Keypairs | `solana-keygen` (or the driver's per-role forge) | files you keep | signing; the address a keypair file prints is the one you fund |
+| Relay publication log | the relay daemon | [portal.dregg.studio/relay/](https://portal.dregg.studio/relay/) | anyone checking the operator is alive |
+| Evidence documents | each campaign, as it runs | [`docs/evidence/`](docs/evidence) | humans; the reference site |
+
+If a console asks you to paste something and you don't know where it comes
+from, that's a bug in the console — this table is the answer key.
 
 ## Try it
 
