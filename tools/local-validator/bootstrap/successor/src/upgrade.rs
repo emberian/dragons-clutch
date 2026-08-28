@@ -10955,6 +10955,81 @@ mod tests {
                 .contains("substituted a Registry or Rent binding"),
             "{error}"
         );
+
+        let mut substituted_schema = plan.clone();
+        let registry =
+            crate::plan::pubkey(&substituted_schema.registry.program_id).expect("Registry program");
+        let pair = substituted_schema
+            .records
+            .get_mut("registry_artifact_release")
+            .expect("Registry ArtifactRelease");
+        let substituted_schema_id = [0x5a; 32];
+        let content = crate::plan::hex32(&pair.content_sha256).expect("record content digest");
+        pair.schema_id = crate::plan::hex(&substituted_schema_id);
+        pair.raw = Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, &substituted_schema_id, &content],
+            &registry,
+        )
+        .0
+        .to_string();
+        pair.staging = Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &substituted_schema_id, &content],
+            &registry,
+        )
+        .0
+        .to_string();
+        let error =
+            crate::campaign::authenticate_checked_campaign_plan(&substituted_schema, &loopback)
+                .expect_err("coherent ArtifactRelease schema/address substitution must refuse");
+        assert!(
+            error.to_string().contains("ArtifactRelease schema"),
+            "{error}"
+        );
+
+        let registry_program_pin = plan
+            .genesis_accounts
+            .get("loader.registry.program")
+            .expect("Registry Program account pin");
+        let registry_program_path =
+            PathBuf::from(&plan.account_dir).join(format!("{}.json", registry_program_pin.address));
+        let original_registry_program =
+            fs::read(&registry_program_path).expect("Registry Program account JSON");
+        let mut changed_registry_program = original_registry_program.clone();
+        changed_registry_program.push(b'\n');
+        fs::write(&registry_program_path, changed_registry_program)
+            .expect("change Registry Program account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect_err("changed account JSON must refuse");
+        assert!(error.to_string().contains("file digest"), "{error}");
+        fs::write(&registry_program_path, &original_registry_program)
+            .expect("restore Registry Program account JSON");
+
+        let extra_path = PathBuf::from(&plan.account_dir).join("extra.json");
+        fs::write(&extra_path, b"{}\n").expect("write extra account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect_err("extra account JSON must refuse");
+        assert!(error.to_string().contains("missing, extra"), "{error}");
+        fs::remove_file(&extra_path).expect("remove extra account JSON");
+
+        let held_path = work.join("held-registry-program.json");
+        fs::rename(&registry_program_path, &held_path).expect("hold Registry Program account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect_err("missing account JSON must refuse");
+        assert!(error.to_string().contains("missing, extra"), "{error}");
+        fs::rename(&held_path, &registry_program_path)
+            .expect("restore missing Registry Program account JSON");
+
+        let mut aliased_set = checked.clone();
+        aliased_set.roles[1].program_id = aliased_set.roles[0].programdata_id.clone();
+        let authority = crate::plan::pubkey(&aliased_set.retained_upgrade_authority)
+            .expect("retained authority");
+        let error = crate::local_mutable::authenticate_exact_local_account_dir_v1(
+            &plan,
+            &aliased_set,
+            authority,
+        )
+        .expect_err("Program/ProgramData alias must refuse");
+        assert!(error.to_string().contains("aliased"), "{error}");
     }
 
     #[test]

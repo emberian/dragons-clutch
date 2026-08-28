@@ -15,13 +15,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use solana_program::rent::Rent;
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signer as _},
 };
-use solana_sdk_ids::bpf_loader_upgradeable;
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 use crate::{
     Error, Result,
@@ -205,25 +207,169 @@ pub(crate) fn authenticate_checked_local_mutable_plan_v1(plan: &SuccessorPlan) -
             "checked local mutable plan evidence changed after preparation",
         ));
     }
-    for role in &set.roles {
-        let genesis = plan
+    authenticate_exact_local_account_dir_v1(plan, set, authority)
+}
+
+pub(crate) fn authenticate_exact_local_account_dir_v1(
+    plan: &SuccessorPlan,
+    set: &CheckedLocalMutableSetPinV1,
+    authority: Pubkey,
+) -> Result<()> {
+    let directory = PathBuf::from(&plan.account_dir);
+    if !directory.is_absolute() {
+        return Err(Error::new(
+            "checked local account directory must be absolute",
+        ));
+    }
+    let metadata = fs::symlink_metadata(&directory)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(Error::new(
+            "checked local account directory must be one non-symlink directory",
+        ));
+    }
+    if fs::canonicalize(&directory)? != directory {
+        return Err(Error::new(
+            "checked local account directory path is not canonical",
+        ));
+    }
+
+    let mut expected_labels = BTreeSet::new();
+    for role in crate::upgrade::CHECKED_ROLE_ORDER_V1 {
+        let (_, loader_label) = local_role_projection(plan, role)?;
+        expected_labels.insert(format!("loader.{loader_label}.program"));
+        expected_labels.insert(format!("loader.{loader_label}.programdata"));
+    }
+    if plan.genesis_accounts.len() != 14
+        || plan
             .genesis_accounts
-            .values()
-            .find(|pin| pin.address == role.programdata_id)
-            .ok_or_else(|| {
-                Error::new(format!(
-                    "checked local {} ProgramData is absent from the genesis account closure",
-                    role.role
-                ))
-            })?;
-        if genesis.data_sha256 != role.programdata_account_sha256 {
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != expected_labels
+    {
+        return Err(Error::new(
+            "checked local plan does not contain the exact fourteen Loader account pins",
+        ));
+    }
+
+    let expected_files = plan
+        .genesis_accounts
+        .values()
+        .map(|pin| format!("{}.json", pin.address))
+        .collect::<BTreeSet<_>>();
+    let mut observed_files = BTreeSet::new();
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| Error::new("checked local account filename is not UTF-8"))?;
+        let entry_metadata = fs::symlink_metadata(entry.path())?;
+        if entry_metadata.file_type().is_symlink() || !entry_metadata.file_type().is_file() {
+            return Err(Error::new(
+                "checked local account directory contains a non-regular entry",
+            ));
+        }
+        if !observed_files.insert(name) {
+            return Err(Error::new(
+                "checked local account directory repeated a filename",
+            ));
+        }
+    }
+    if observed_files != expected_files {
+        return Err(Error::new(
+            "checked local account directory has a missing, extra, or renamed account JSON",
+        ));
+    }
+
+    let mut coordinates = BTreeSet::new();
+    for role in &set.roles {
+        let (pin, loader_label) = local_role_projection(plan, &role.role)?;
+        let program_label = format!("loader.{loader_label}.program");
+        let programdata_label = format!("loader.{loader_label}.programdata");
+        let program_pin = plan
+            .genesis_accounts
+            .get(&program_label)
+            .ok_or_else(|| Error::new(format!("checked local plan omitted {program_label}")))?;
+        let programdata_pin = plan
+            .genesis_accounts
+            .get(&programdata_label)
+            .ok_or_else(|| Error::new(format!("checked local plan omitted {programdata_label}")))?;
+        let program = crate::plan::authenticate_cli_account_file_v1(
+            &directory.join(format!("{}.json", program_pin.address)),
+            program_pin,
+        )?;
+        let programdata = crate::plan::authenticate_cli_account_file_v1(
+            &directory.join(format!("{}.json", programdata_pin.address)),
+            programdata_pin,
+        )?;
+        let program_key = pubkey(&role.program_id)?;
+        let programdata_key = pubkey(&role.programdata_id)?;
+        for coordinate in [program_key, programdata_key] {
+            if coordinate == Pubkey::default()
+                || coordinate == system_program::ID
+                || coordinate == bpf_loader_upgradeable::ID
+                || !coordinates.insert(coordinate)
+            {
+                return Err(Error::new(
+                    "checked local Loader coordinates are aliased or reserved",
+                ));
+            }
+        }
+        let program_view = ProgramV3View::parse(&program.data)
+            .map_err(|error| Error::new(format!("{} Program: {error:?}", role.role)))?;
+        let programdata_view = ProgramDataV3View::parse(&programdata.data)
+            .map_err(|error| Error::new(format!("{} ProgramData: {error:?}", role.role)))?;
+        if program.pubkey != program_key
+            || program_pin.address != role.program_id
+            || program.owner != bpf_loader_upgradeable::ID
+            || !program.executable
+            || program.rent_epoch != 0
+            || program.lamports < Rent::default().minimum_balance(program.data.len())
+            || program_view.programdata() != programdata_key.to_bytes()
+            || programdata.pubkey != programdata_key
+            || programdata_pin.address != role.programdata_id
+            || programdata.owner != bpf_loader_upgradeable::ID
+            || programdata.executable
+            || programdata.rent_epoch != 0
+            || programdata.lamports < Rent::default().minimum_balance(programdata.data.len())
+            || programdata_view.deployment_slot() != role.deployment_slot
+            || programdata_view.upgrade_authority() != Some(authority.to_bytes())
+            || hex(&Sha256::digest(programdata_view.elf())) != role.live_elf_sha256
+            || programdata_pin.data_sha256 != role.programdata_account_sha256
+            || pin.program_id != role.program_id
+            || pin.programdata_id != role.programdata_id
+        {
             return Err(Error::new(format!(
-                "checked local {} ProgramData genesis bytes differ from the release pin",
+                "checked local {} Loader pair or on-disk account evidence changed",
                 role.role
             )));
         }
     }
+    if coordinates.len() != 14 {
+        return Err(Error::new(
+            "checked local account directory does not close over fourteen distinct coordinates",
+        ));
+    }
     Ok(())
+}
+
+fn local_role_projection<'a>(
+    plan: &'a SuccessorPlan,
+    role: &str,
+) -> Result<(&'a ProgramPin, &'static str)> {
+    match role {
+        "registry" => Ok((&plan.registry, "registry")),
+        "rent" => Ok((&plan.rent_credit, "rent-credit")),
+        "custody" => Ok((&plan.custody, "custody")),
+        "resolution" => Ok((&plan.resolution, "resolution")),
+        "claims" => Ok((&plan.claims, "claims")),
+        "trading" => Ok((&plan.trading, "trading")),
+        "core" => Ok((&plan.core, "core")),
+        _ => Err(Error::new(format!(
+            "unknown checked local Loader role {role}"
+        ))),
+    }
 }
 
 fn checked_local_set_digest_v1(set: &CheckedLocalMutableSetPinV1) -> Result<String> {

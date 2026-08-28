@@ -74,7 +74,7 @@ use std::{
 };
 
 use dclutch_pyth_svm::devnet_release_v1;
-use dclutch_registry_contract::ArtifactReleaseV1;
+use dclutch_registry_contract::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
     ProgramV3View,
@@ -1855,6 +1855,11 @@ fn authenticate_checked_plan_role_projection(
         .records
         .get(record_label)
         .ok_or_else(|| Error::new(format!("saved plan omitted {record_label}")))?;
+    if pair.schema_id != hex(&ARTIFACT_RELEASE_SCHEMA_ID_V1) {
+        return Err(Error::new(format!(
+            "saved plan {record_label} substituted the ArtifactRelease schema"
+        )));
+    }
     let body = runtime::decode_hex(&pair.body_hex)?;
     let body_sha = hex(&<sha2::Sha256 as sha2::Digest>::digest(&body));
     let release = ArtifactReleaseV1::decode(&body).map_err(|error| {

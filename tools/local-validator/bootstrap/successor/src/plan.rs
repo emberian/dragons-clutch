@@ -24,7 +24,7 @@ use dclutch_release_set_contract::{
 use dclutch_resolution_codec::{
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_program::rent::Rent;
 use solana_sdk::pubkey::Pubkey;
@@ -330,21 +330,120 @@ fn role_deployment(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct CliAccount {
     pubkey: String,
     account: CliAccountBody,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 struct CliAccountBody {
     lamports: u64,
-    data: (String, &'static str),
+    data: (String, String),
     owner: String,
     executable: bool,
     rent_epoch: u64,
     space: usize,
+}
+
+pub(crate) struct CheckedCliAccountV1 {
+    pub(crate) pubkey: Pubkey,
+    pub(crate) owner: Pubkey,
+    pub(crate) lamports: u64,
+    pub(crate) data: Vec<u8>,
+    pub(crate) executable: bool,
+    pub(crate) rent_epoch: u64,
+}
+
+const MAX_CLI_ACCOUNT_FILE_BYTES_V1: u64 = 16 * 1024 * 1024;
+
+pub(crate) fn authenticate_cli_account_file_v1(
+    path: &Path,
+    pin: &GenesisAccountPin,
+) -> Result<CheckedCliAccountV1> {
+    if !path.is_absolute() {
+        return Err(Error::new("genesis account JSON path must be absolute"));
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.len() > MAX_CLI_ACCOUNT_FILE_BYTES_V1
+    {
+        return Err(Error::new(
+            "genesis account JSON must be one bounded regular non-symlink file",
+        ));
+    }
+    let bytes = fs::read(path)?;
+    if hex(&sha256_bytes(&bytes)) != pin.json_file_sha256 {
+        return Err(Error::new(
+            "genesis account JSON bytes differ from their persisted file digest",
+        ));
+    }
+    let value = crate::rpc::parse_json_without_duplicate_keys_v1(&bytes)?;
+    let account: CliAccount = serde_json::from_value(value)?;
+    let address = pubkey(&account.pubkey)?;
+    let owner = pubkey(&account.account.owner)?;
+    if account.pubkey != pin.address
+        || account.account.owner != pin.owner
+        || account.account.lamports != pin.lamports
+        || account.account.rent_epoch != 0
+        || account.account.data.1 != "base64"
+    {
+        return Err(Error::new(
+            "genesis account JSON header differs from its persisted account pin",
+        ));
+    }
+    let data = BASE64
+        .decode(&account.account.data.0)
+        .map_err(|error| Error::new(format!("genesis account data base64: {error}")))?;
+    if BASE64.encode(&data) != account.account.data.0
+        || account.account.space != data.len()
+        || account.account.space != pin.data_len
+        || hex(&sha256_bytes(&data)) != pin.data_sha256
+        || account_sha256_v1(
+            owner,
+            account.account.lamports,
+            account.account.executable,
+            account.account.rent_epoch,
+            &data,
+        )? != pin.account_sha256
+    {
+        return Err(Error::new(
+            "genesis account JSON data, space, or account digest differs from its persisted pin",
+        ));
+    }
+    Ok(CheckedCliAccountV1 {
+        pubkey: address,
+        owner,
+        lamports: account.account.lamports,
+        data,
+        executable: account.account.executable,
+        rent_epoch: account.account.rent_epoch,
+    })
+}
+
+fn account_sha256_v1(
+    owner: Pubkey,
+    lamports: u64,
+    executable: bool,
+    rent_epoch: u64,
+    data: &[u8],
+) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(owner.as_ref());
+    hasher.update(lamports.to_le_bytes());
+    hasher.update([u8::from(executable)]);
+    hasher.update(rent_epoch.to_le_bytes());
+    hasher.update(
+        u64::try_from(data.len())
+            .map_err(|_| Error::new("account width does not fit u64"))?
+            .to_le_bytes(),
+    );
+    hasher.update(data);
+    Ok(hex(&hasher.finalize()))
 }
 
 struct PlanWriter {
@@ -369,6 +468,14 @@ impl PlanWriter {
         })
     }
 
+    fn sync(&self) -> Result<()> {
+        fs::File::open(&self.directory)?.sync_all()?;
+        if let Some(parent) = self.directory.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+
     fn add(
         &mut self,
         label: impl Into<String>,
@@ -390,7 +497,7 @@ impl PlanWriter {
             pubkey: address.to_string(),
             account: CliAccountBody {
                 lamports,
-                data: (BASE64.encode(data), "base64"),
+                data: (BASE64.encode(data), "base64".into()),
                 owner: owner.to_string(),
                 executable,
                 rent_epoch: 0,
@@ -400,24 +507,13 @@ impl PlanWriter {
         let path = self.directory.join(format!("{address}.json"));
         let mut file_bytes = serde_json::to_vec_pretty(&output)?;
         file_bytes.push(b'\n');
-        OpenOptions::new()
+        let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
-            .map_err(|error| Error::new(format!("create {}: {error}", path.display())))?
-            .write_all(&file_bytes)?;
-
-        let mut account_hasher = Sha256::new();
-        account_hasher.update(owner.as_ref());
-        account_hasher.update(lamports.to_le_bytes());
-        account_hasher.update([u8::from(executable)]);
-        account_hasher.update(0_u64.to_le_bytes());
-        account_hasher.update(
-            u64::try_from(data.len())
-                .map_err(|_| Error::new("account width does not fit u64"))?
-                .to_le_bytes(),
-        );
-        account_hasher.update(data);
+            .map_err(|error| Error::new(format!("create {}: {error}", path.display())))?;
+        file.write_all(&file_bytes)?;
+        file.sync_all()?;
         self.accounts.insert(
             label,
             GenesisAccountPin {
@@ -426,7 +522,7 @@ impl PlanWriter {
                 lamports,
                 data_len: data.len(),
                 data_sha256: hex(&sha256_bytes(data)),
-                account_sha256: hex(&account_hasher.finalize()),
+                account_sha256: account_sha256_v1(owner, lamports, executable, 0, data)?,
                 json_file_sha256: hex(&sha256_bytes(&file_bytes)),
             },
         );
@@ -1082,6 +1178,7 @@ fn prepare_inner(
             )
         })
         .transpose()?;
+    writer.sync()?;
     let plan = SuccessorPlan {
         schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
         genesis_boundary: if checked_local_mutable_gate.is_some() {
@@ -1160,11 +1257,15 @@ fn prepare_inner(
     };
     let mut bytes = serde_json::to_vec_pretty(&plan)?;
     bytes.push(b'\n');
-    OpenOptions::new()
+    let mut plan_file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&args.plan_path)?
-        .write_all(&bytes)?;
+        .open(&args.plan_path)?;
+    plan_file.write_all(&bytes)?;
+    plan_file.sync_all()?;
+    if let Some(parent) = args.plan_path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
     Ok(plan)
 }
 
