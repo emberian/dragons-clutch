@@ -33,10 +33,9 @@ use std::{env, fs, path::PathBuf};
 
 use dclutch_product_runtime_v2::ContentId;
 use dclutch_product_runtime_v2_admission::{
-    ADMISSION_RECEIPT_BYTES_V2, ADMISSION_REQUEST_BYTES_V2, AdmissionReceiptV2,
-    AdmissionRequestV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
-    PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
-    RESULT_DOMAIN_SCHEMA_ID_V2,
+    ADMISSION_RECEIPT_BYTES_V2, ADMISSION_REQUEST_BYTES_V2, AdmissionReceiptV2, AdmissionRequestV2,
+    FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2,
+    PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 
 const NOTE: &str = "Two-sided wire vector for the LIVE Product Runtime V2 admission ABI. Produced by crates/dclutch-product-runtime-v2-admission/tests/browser_wire_vector.rs and re-produced independently by apps/dclutch-web/lib/productRuntimeV2Admission.test.ts. The Rust crate is the authority: if the wire moves, the Rust test fails first. The three request digests are the three record schema identities, each the SHA-256 of a preimage documented in the crate; the receipt's content/raw/staging identities are arbitrary distinct nonzero fills supplied as encoder INPUTS, never as expected answers. DCLTPRQ2 names two incompatible 112-byte requests -- this is the live admission one, whose bytes 10..16 must be zero, not the dead evaluator one that wrote 1 at byte 10.";
@@ -85,7 +84,9 @@ fn canonical_product_record() -> [u8; PRODUCT_RECORD_BYTES_V2] {
         id(PORTFOLIO_SCHEMA_ID_V2),
     );
     let mut bytes = [0_u8; PRODUCT_RECORD_BYTES_V2];
-    record.encode_into(&mut bytes).expect("Product record encodes");
+    record
+        .encode_into(&mut bytes)
+        .expect("Product record encodes");
     bytes
 }
 

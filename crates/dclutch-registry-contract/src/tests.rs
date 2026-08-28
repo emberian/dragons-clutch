@@ -10,9 +10,8 @@ use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1,
     ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1, ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1,
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    Error, ExecutionReleaseActivationInputsV1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, Error, ExecutionReleaseActivationInputsV1,
     activate_execution_release_set_v1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };

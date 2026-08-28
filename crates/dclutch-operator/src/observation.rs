@@ -16,7 +16,7 @@ use solana_program::{
     account_info::AccountInfo, clock::Clock, hash::hash, pubkey::Pubkey, rent::Rent,
     sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{sysvar, system_program};
+use solana_sdk_ids::{system_program, sysvar};
 
 use crate::ObservedAccount;
 

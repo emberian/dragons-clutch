@@ -5628,8 +5628,12 @@ async fn a_cross_market_position_is_not_payable_here() {
     let (test, fixture) = fixture(true);
     let mut context = test.start_with_context().await;
     create_claims_custody_replay(&mut context, &fixture).await;
-    let (table, addresses) =
-        wallet_payout_lookup_table(&mut context, &fixture, "claims rational-representation-v2: cross-market wallet payout").await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: cross-market wallet payout",
+    )
+    .await;
     let before = snapshot(&mut context, &fixture).await;
 
     let honest = observed(&mut context, fixture.actor_position).await;

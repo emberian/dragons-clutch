@@ -80,11 +80,14 @@ fn an_empty_signature_is_refused_before_anything_is_written() {
             error: None,
             logs: &[],
             compute_units_consumed: None,
-        wire_bytes: None,
+            wire_bytes: None,
         },
     );
     assert!(matches!(refused, Err(EvidenceError::EmptySignature)));
-    assert!(!directory.exists(), "a refused record must not create the directory");
+    assert!(
+        !directory.exists(),
+        "a refused record must not create the directory"
+    );
 
     let unlabelled = record_into(
         &directory,
@@ -95,7 +98,7 @@ fn an_empty_signature_is_refused_before_anything_is_written() {
             error: None,
             logs: &[],
             compute_units_consumed: None,
-        wire_bytes: None,
+            wire_bytes: None,
         },
     );
     assert!(matches!(unlabelled, Err(EvidenceError::EmptyLabel)));
@@ -110,7 +113,7 @@ fn an_empty_signature_is_refused_before_anything_is_written() {
             error: None,
             logs: &[],
             compute_units_consumed: None,
-        wire_bytes: None,
+            wire_bytes: None,
         },
     )
     .expect("a labelled, signed transaction records");
@@ -149,13 +152,16 @@ fn fold_emits_one_document_with_every_record_and_no_trailing_comma() {
             error: None,
             logs: &logs(&["Program E3M3 invoke [1]"]),
             compute_units_consumed: Some(1),
-        wire_bytes: None,
+            wire_bytes: None,
         });
         fs::write(directory.join(format!("{signature}.json")), body).expect("record");
     }
     let document = fold(&directory).expect("fold");
     assert_eq!(document.matches("\"label\": \"step\"").count(), 3);
-    assert!(!document.contains(",\n  ]"), "a trailing comma is invalid JSON");
+    assert!(
+        !document.contains(",\n  ]"),
+        "a trailing comma is invalid JSON"
+    );
     assert!(document.contains("\"transactions\": ["));
     let _ = fs::remove_dir_all(&directory);
 }

@@ -1354,7 +1354,8 @@ fn authenticate_failure_funding<'a>(
         funding,
     )
     .map_err(|_| ResolutionError::Funding)?;
-    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0 != *account_info.key
+    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0
+        != *account_info.key
     {
         return Err(ResolutionError::Funding.into());
     }

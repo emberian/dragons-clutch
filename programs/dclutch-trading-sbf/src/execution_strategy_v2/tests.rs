@@ -658,8 +658,7 @@ fn current_loader_slot_elf_owner_link_and_immutability_are_mandatory() {
     // what makes the market life fit on a substrate the project can iterate --
     // and it is refused BY NAME the instant an `Upgrade` moves the slot.
     let authority = Pubkey::new_from_array([206; 32]);
-    let pinned =
-        Fixture::with_upgrade_authority(StrategyDispositionV2::ShadowAot, Some(authority));
+    let pinned = Fixture::with_upgrade_authority(StrategyDispositionV2::ShadowAot, Some(authority));
     assert!(
         pinned.authenticate().is_ok(),
         "a slot-pinned exact-authority deployment is admissible AOT",

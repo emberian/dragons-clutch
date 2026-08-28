@@ -84,9 +84,7 @@ pub fn generic_founding_funding_list_id_v1(funding_states: &[Identity]) -> Resul
         )?;
     }
     let written = FUNDING_LIST_PREFIX_BYTES_V1 + funding_states.len() * IDENTITY_BYTES;
-    Identity::new(digest(
-        preimage.get(..written).ok_or(Error::InvalidLength)?,
-    ))
+    Identity::new(digest(preimage.get(..written).ok_or(Error::InvalidLength)?))
 }
 
 /// Stage of the atomic generic founding protocol.
