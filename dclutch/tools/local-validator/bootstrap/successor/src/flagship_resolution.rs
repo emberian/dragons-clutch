@@ -152,6 +152,17 @@ fn expected_pyth_release(expected: ExpectedClusterV1) -> Result<PythReleaseV1> {
     }
 }
 
+const fn expected_receiver_minimum_signatures(expected: ExpectedClusterV1) -> u8 {
+    match expected {
+        // The current five-guardian public release happens to use the same
+        // value as strict majority, but it remains a distinct Config fact.
+        ExpectedClusterV1::Devnet => 3,
+        // The pinned 19-guardian lab Config accepts five signatures while
+        // Router verification requires strict-majority ten.
+        ExpectedClusterV1::OwnedLoopback => 5,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LookupTablesV1 {
@@ -1580,7 +1591,8 @@ fn authenticate_selected_pyth_release(
         || config.executable
         || hash(&config.data).to_bytes() != release.config_digest()
         || config_view.router_program() != release.router_program()
-        || config_view.minimum_signatures() != release.required_guardian_count()
+        || config_view.minimum_signatures()
+            != expected_receiver_minimum_signatures(expected_cluster)
     {
         return Err(Error::new(
             "Receiver Config owner, body, router, or threshold refused",

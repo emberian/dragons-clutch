@@ -27,6 +27,7 @@ use dclutch_pyth_svm::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -52,6 +53,8 @@ const JOURNAL_SCHEMA_V1: &str = "dclutch-owned-loopback-pyth-prerequisite-transa
 const FACTS_SCHEMA_V1: &str = "dclutch-flagship-pyth-update-facts-v1";
 const WRITE_CHUNK_BYTES_V1: usize = 600;
 const PACKET_BYTES_V1: usize = 1_232;
+const VERIFY_COMPUTE_UNIT_LIMIT_V1: u32 = 400_000;
+const LOCAL_RECEIVER_MINIMUM_SIGNATURES_V1: u8 = 5;
 const FINALITY_WAIT_V1: Duration = Duration::from_secs(60);
 
 const ROUTER_INITIALIZE: &[u8] =
@@ -174,6 +177,7 @@ struct IntentV1 {
     instruction_program: String,
     instruction_accounts: Vec<(String, bool, bool)>,
     instruction_data_base64: String,
+    compute_unit_limit: Option<u32>,
     message_base64: String,
     message_sha256: String,
     required_signers: Vec<String>,
@@ -317,7 +321,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         return Ok(());
     };
     require_canonical_journal_prefix_v1(&arguments, action)?;
-    let instruction = instruction_v1(&mut rpc, &arguments, &addresses, &snapshot, action)?;
+    let instructions = instructions_v1(&mut rpc, &arguments, &addresses, &snapshot, action)?;
     let journal = build_journal_v1(
         &mut rpc,
         &arguments,
@@ -325,7 +329,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         &snapshot,
         &genesis,
         action,
-        instruction,
+        instructions,
     )?;
     let path = arguments.journal_dir.join(action.file_name());
     write_journal_v1(&path, &journal, true)?;
@@ -553,10 +557,9 @@ fn next_action_v1(
     }
     if encoded.data.get(..8) != Some(ENCODED_VAA_DISCRIMINATOR_V1.as_slice())
         || encoded.data.get(9..41) != Some(arguments.payer.as_ref())
-        || encoded.data.get(41) != Some(&1)
     {
         return Err(Error::new(
-            "local EncodedVaa discriminator, authority, or version refused",
+            "local EncodedVaa discriminator or authority refused",
         ));
     }
     let length = u32::from_le_bytes(
@@ -567,38 +570,48 @@ fn next_action_v1(
             .try_into()
             .map_err(|_| Error::new("local EncodedVaa length width changed"))?,
     ) as usize;
-    if length > SIGNED_VAA.len()
-        || encoded.data.get(46..46 + length) != Some(&SIGNED_VAA[..length])
-        || encoded.data[46 + length..].iter().any(|byte| *byte != 0)
+    if length != SIGNED_VAA.len() {
+        return Err(Error::new(
+            "local EncodedVaa allocated vector width differed from the pinned VAA",
+        ));
+    }
+    let payload = encoded
+        .data
+        .get(46..46 + length)
+        .ok_or_else(|| Error::new("local EncodedVaa payload was truncated"))?;
+    if payload.iter().all(|byte| *byte == 0) {
+        return Ok(Some(ActionV1::EncodedVaaWrite0000));
+    }
+    if payload.get(..WRITE_CHUNK_BYTES_V1) == Some(&SIGNED_VAA[..WRITE_CHUNK_BYTES_V1])
+        && payload[WRITE_CHUNK_BYTES_V1..]
+            .iter()
+            .all(|byte| *byte == 0)
     {
+        return Ok(Some(ActionV1::EncodedVaaWrite0600));
+    }
+    if payload != SIGNED_VAA {
         return Err(Error::new(
             "local EncodedVaa write prefix or vacant tail differed from the pinned VAA",
         ));
     }
-    if length == 0 {
-        return Ok(Some(ActionV1::EncodedVaaWrite0000));
-    }
-    if length == WRITE_CHUNK_BYTES_V1 {
-        return Ok(Some(ActionV1::EncodedVaaWrite0600));
-    }
-    if length != SIGNED_VAA.len() {
-        return Err(Error::new(
-            "local EncodedVaa carried a noncanonical VAA chunk boundary",
-        ));
-    }
     if encoded.data.get(8) != Some(&ENCODED_VAA_VERIFIED_STATUS_V1) {
+        if encoded.data.get(8) != Some(&1) || encoded.data.get(41) != Some(&0) {
+            return Err(Error::new(
+                "local EncodedVaa writing status or pre-verification account version refused",
+            ));
+        }
         return Ok(Some(ActionV1::EncodedVaaVerify));
     }
     Ok(None)
 }
 
-fn instruction_v1(
+fn instructions_v1(
     rpc: &mut Rpc,
     arguments: &ArgumentsV1,
     addresses: &AddressesV1,
     snapshot: &SnapshotV1,
     action: ActionV1,
-) -> Result<Instruction> {
+) -> Result<Vec<Instruction>> {
     let instruction = match action {
         ActionV1::RouterInitialize => Instruction {
             program_id: addresses.router,
@@ -689,7 +702,18 @@ fn instruction_v1(
             data: anchor_discriminator_v1(b"global:verify_encoded_vaa_v1"),
         },
     };
-    Ok(instruction)
+    let mut instructions = Vec::with_capacity(if action == ActionV1::EncodedVaaVerify {
+        2
+    } else {
+        1
+    });
+    if action == ActionV1::EncodedVaaVerify {
+        instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(
+            VERIFY_COMPUTE_UNIT_LIMIT_V1,
+        ));
+    }
+    instructions.push(instruction);
+    Ok(instructions)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -700,14 +724,21 @@ fn build_journal_v1(
     snapshot: &SnapshotV1,
     genesis: &str,
     action: ActionV1,
-    instruction: Instruction,
+    instructions: Vec<Instruction>,
 ) -> Result<JournalV1> {
+    let provider_instruction = instructions
+        .last()
+        .ok_or_else(|| Error::new("local Pyth action omitted its provider instruction"))?;
+    let compute_unit_limit =
+        (action == ActionV1::EncodedVaaVerify).then_some(VERIFY_COMPUTE_UNIT_LIMIT_V1);
+    if instructions.len() != 1 + usize::from(compute_unit_limit.is_some()) {
+        return Err(Error::new(
+            "local Pyth action changed its exact instruction count",
+        ));
+    }
     let (recent_blockhash, last_valid_block_height) = latest_blockhash_v1(rpc)?;
-    let message = Message::new_with_blockhash(
-        std::slice::from_ref(&instruction),
-        Some(&arguments.payer),
-        &recent_blockhash,
-    );
+    let message =
+        Message::new_with_blockhash(&instructions, Some(&arguments.payer), &recent_blockhash);
     let expected_signers = if action.needs_encoded_signer() {
         vec![arguments.payer, arguments.encoded_vaa]
     } else {
@@ -765,13 +796,14 @@ fn build_journal_v1(
         observation_unix_timestamp,
         recent_blockhash: recent_blockhash.to_string(),
         last_valid_block_height,
-        instruction_program: instruction.program_id.to_string(),
-        instruction_accounts: instruction
+        instruction_program: provider_instruction.program_id.to_string(),
+        instruction_accounts: provider_instruction
             .accounts
             .iter()
             .map(|meta| (meta.pubkey.to_string(), meta.is_signer, meta.is_writable))
             .collect(),
-        instruction_data_base64: BASE64.encode(&instruction.data),
+        instruction_data_base64: BASE64.encode(&provider_instruction.data),
+        compute_unit_limit,
         message_base64,
         message_sha256: sha256_hex_v1(&message_bytes),
         required_signers: expected_signers.iter().map(ToString::to_string).collect(),
@@ -1182,7 +1214,12 @@ fn authenticate_complete_v1(
         || config_view.router_program() != addresses.router.to_bytes()
         || config_view.data_source_count() != 1
         || config_view.fee() != 1
-        || config_view.minimum_signatures() != release.required_guardian_count()
+        // Receiver acceptance policy and Router VAA quorum are separate
+        // persisted facts in this superseded 19-guardian lab capture: 5 and
+        // strict-majority 10 respectively.  The exact Config digest above
+        // binds the former; the GuardianSet authentication below binds the
+        // latter.
+        || config_view.minimum_signatures() != LOCAL_RECEIVER_MINIMUM_SIGNATURES_V1
         || Sha256::digest(&config.data).as_slice() != release.config_digest()
     {
         return Err(Error::new(
@@ -1416,15 +1453,29 @@ fn authenticate_journal_v1(
     let data = BASE64
         .decode(&journal.intent.instruction_data_base64)
         .map_err(|error| Error::new(format!("local Pyth instruction base64: {error}")))?;
-    let expected = Message::new_with_blockhash(
-        &[Instruction {
-            program_id: program,
-            accounts,
-            data,
-        }],
-        Some(&arguments.payer),
-        &blockhash,
-    );
+    let provider_instruction = Instruction {
+        program_id: program,
+        accounts,
+        data,
+    };
+    let expected_instructions = match journal.intent.compute_unit_limit {
+        Some(limit)
+            if action == ActionV1::EncodedVaaVerify && limit == VERIFY_COMPUTE_UNIT_LIMIT_V1 =>
+        {
+            vec![
+                ComputeBudgetInstruction::set_compute_unit_limit(limit),
+                provider_instruction,
+            ]
+        }
+        None if action != ActionV1::EncodedVaaVerify => vec![provider_instruction],
+        _ => {
+            return Err(Error::new(
+                "local Pyth compute-unit limit was absent, misplaced, or changed",
+            ));
+        }
+    };
+    let expected =
+        Message::new_with_blockhash(&expected_instructions, Some(&arguments.payer), &blockhash);
     let message_bytes = BASE64
         .decode(&journal.intent.message_base64)
         .map_err(|error| Error::new(format!("local Pyth message base64: {error}")))?;
@@ -1820,6 +1871,8 @@ mod tests {
             ActionV1::ORDERED.len()
         );
         assert!(ActionV1::EncodedVaaCreate.needs_encoded_signer());
+        assert_eq!(VERIFY_COMPUTE_UNIT_LIMIT_V1, 400_000);
+        assert_eq!(LOCAL_RECEIVER_MINIMUM_SIGNATURES_V1, 5);
         assert!(
             ActionV1::ORDERED
                 .iter()

@@ -36,7 +36,8 @@ unless the selected owner projection is already durably `submitted`.
 `lifecycle_chaos.py` consumes a strict `dclutch-lifecycle-chaos-spec-v1` JSON
 document. The spec must sit beside a non-symlink `fixture/` directory and name:
 
-- one opaque session command and one read-only observer command;
+- one opaque session command, one read-only observer command, and one
+  idempotent exact teardown command;
 - literal `owned-loopback`, the exact source commit, and an optional literal
   `http://127.0.0.1:PORT` upstream;
 - relative session, journal, canonical evidence, and replacement-evidence
@@ -51,6 +52,7 @@ supervisor supplies only three environment values:
 DCLUTCH_LIFECYCLE_CHAOS_CONTROL=/absolute/case/control
 DCLUTCH_LIFECYCLE_CHAOS_CASE=<named-case>
 DCLUTCH_LIFECYCLE_CHAOS_RPC_URL=http://127.0.0.1:PORT
+DCLUTCH_LIFECYCLE_CHAOS_OBSERVATION=before|after  # observer only
 ```
 
 The opaque driver creates `control/PREPARED.json` with exactly:
@@ -93,6 +95,11 @@ The observer prints sorted exact account rows with raw data, its SHA-256,
 owner, executable flag, and lamports under
 `dclutch-lifecycle-chaos-snapshot-v1`. This gate recomputes every digest and
 the account-count/lamport totals before comparison.
+
+The session command may leave its fresh case-owned validator alive, but may
+not reuse it for another case. After the independent `after` observation (or
+after any refusal in the shell), the teardown command must idempotently stop
+only the process group recorded for that case and verify its exit state.
 
 ## Run
 

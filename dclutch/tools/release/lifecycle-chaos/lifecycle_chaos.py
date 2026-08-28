@@ -86,6 +86,7 @@ class Spec:
     source_revision: str
     command: CommandTemplate
     observer: CommandTemplate
+    teardown: CommandTemplate
     session_relative: Path
     journal_relative: Path
     session_schema: str
@@ -354,6 +355,7 @@ def parse_spec(path: Path) -> Spec:
         "sourceRevision",
         "command",
         "observer",
+        "teardown",
         "session",
         "journalDir",
         "sessionSchema",
@@ -392,6 +394,7 @@ def parse_spec(path: Path) -> Spec:
         revision,
         command_template(document["command"], "session command"),
         command_template(document["observer"], "observer command"),
+        command_template(document["teardown"], "teardown command"),
         relative_path(document["session"], "session path"),
         relative_path(document["journalDir"], "journal directory"),
         schema,
@@ -647,11 +650,32 @@ def observe(
         rpc_url=rpc_url,
         control=control,
     )
+    environment["DCLUTCH_LIFECYCLE_CHAOS_OBSERVATION"] = label
     result = run_process(argv, cwd, environment, spec.case_timeout_seconds)
     record_attempt(case_work / f"observation-{label}", argv, result)
     if result.returncode != 0:
         raise Refusal(f"{case} observer failed with status {result.returncode}")
     return validate_snapshot(result.stdout, f"{case} snapshot")
+
+
+def teardown_case(
+    spec: Spec,
+    case: str,
+    case_work: Path,
+    rpc_url: str,
+    control: Path,
+) -> None:
+    argv, cwd, environment = expanded_command(
+        spec.teardown,
+        case=case,
+        case_work=case_work,
+        rpc_url=rpc_url,
+        control=control,
+    )
+    result = run_process(argv, cwd, environment, spec.journal_timeout_seconds)
+    record_attempt(case_work / "teardown", argv, result)
+    if result.returncode != 0:
+        raise Refusal(f"{case} exact teardown failed with status {result.returncode}")
 
 
 def validate_session(spec: Spec, case_work: Path) -> dict[str, Any]:
@@ -1134,30 +1158,34 @@ def run_with_handshake(
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    wait_prepared(control, child, spec.journal_timeout_seconds)
-    before = prestart_fault(spec, case, case_work)
-    go = {"schema": CONTROL_SCHEMA, "state": "go"}
-    if case in {"wallet-underfund", "wallet-surplus"}:
-        wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
-        before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
-        atomic_json(control / "GO.json", go)
-    elif case == "late-child-refusal":
-        atomic_json(control / "GO.json", go)
-        wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
-        before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
-        atomic_json(
-            control / "FAULT_GO.json",
-            {"schema": CONTROL_SCHEMA, "state": "fault-go", "fault": case},
-        )
-    else:
-        before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
-        atomic_json(control / "GO.json", go)
     try:
+        wait_prepared(control, child, spec.journal_timeout_seconds)
+        before = prestart_fault(spec, case, case_work)
+        go = {"schema": CONTROL_SCHEMA, "state": "go"}
+        if case in {"wallet-underfund", "wallet-surplus"}:
+            wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
+            before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
+            atomic_json(control / "GO.json", go)
+        elif case == "late-child-refusal":
+            atomic_json(control / "GO.json", go)
+            wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
+            before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
+            atomic_json(
+                control / "FAULT_GO.json",
+                {"schema": CONTROL_SCHEMA, "state": "fault-go", "fault": case},
+            )
+        else:
+            before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
+            atomic_json(control / "GO.json", go)
         stdout, stderr = child.communicate(timeout=spec.case_timeout_seconds)
     except subprocess.TimeoutExpired:
         terminate_group(child, force=True)
         stdout, stderr = child.communicate()
         raise Refusal(f"{case} exceeded its bounded session timeout")
+    except Exception:
+        terminate_group(child, force=True)
+        child.communicate()
+        raise
     result = ProcessResult(child.returncode, stdout, stderr, time.monotonic_ns() - started)
     record_attempt(case_work / "attempt-1", argv, result)
     return result, before, before_snapshot
@@ -1177,6 +1205,7 @@ def case_result(
     killed_intent: str | None = None
     evidence_before: str | None = None
     before_snapshot: dict[str, Any] | None = None
+    cleanup_attempted = False
     try:
         if case in RPC_CASES or case.startswith("kill-"):
             if spec.rpc_upstream is None:
@@ -1237,6 +1266,14 @@ def case_result(
             session_digest = sha256_bytes(
                 (json.dumps(session, separators=(",", ":"), sort_keys=True)).encode()
             )
+        cleanup_attempted = True
+        teardown_case(
+            spec,
+            case,
+            case_work,
+            spec.rpc_upstream or rpc_url,
+            control,
+        )
         output = {
             "case": case,
             "status": "passed",
@@ -1253,8 +1290,18 @@ def case_result(
         write_json_new(case_work / "RESULT.json", output)
         return output, snapshot
     finally:
-        if proxy is not None:
-            proxy.__exit__()
+        try:
+            if proxy is not None:
+                proxy.__exit__()
+        finally:
+            if not cleanup_attempted:
+                teardown_case(
+                    spec,
+                    case,
+                    case_work,
+                    spec.rpc_upstream or rpc_url,
+                    control,
+                )
 
 
 def run(spec: Spec, work: Path, selected: Sequence[str]) -> dict[str, Any]:
