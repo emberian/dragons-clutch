@@ -139,8 +139,10 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (fifth attempt, the first with the
-actual probe-address bug fixed — §7 tells the whole story; the earlier
+**Status: founding IN PROGRESS on devnet (sixth attempt, the first with the
+resubmit-on-drop fix — the fifth reached DCLTGMF1 and lost its hostile probe
+to a devnet transaction drop; §7 tells the whole story of the three
+execution-found issues; the earlier attempts' addresses are superseded — §7 tells the whole story; the earlier
 attempts' derived addresses are superseded and their small strands are named
 there). The addresses below are the fifth attempt's derived targets and are
 updated if the lineage moves again.**
@@ -152,11 +154,11 @@ RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
 | fact | value |
 |---|---|
-| **Open Market** | `EgpRigX7ryBMZmHv9CetiAA6hnomuuNeeV9jySBZzunS` |
-| Found31 Market (generation 1) | `8CvFsyJM2EZj9mqKhZKo98QRMbjTV2XyDZdtB4H6PdJC` |
-| abort-lane Market (generation 3, staged and unwound) | `4QZUjoH9G1VAmvfoN7i72Mx6nhNbkK7BnUV1JNUP2nqM` |
-| collateral mint (Token-2022, 6 decimals) | `DjgUpRBjvP8C411DL6jpuiMcmg3wSc9LCTHA2uSyGtE7` |
-| realm record | `JM8iYSbJSNPHNMk11wJLA4svDZLopVhRtJ3cjVQS3Xt` |
+| **Open Market** | `EZqnVKwJ8TpvhPEsJqBGXMvaHb8sYSomi1LuAPyNbetP` |
+| Found31 Market (generation 1) | `3Dhpq9tufPuBMroMfUNaWhfZMPfLFh6MG7vwhJFfqjMm` |
+| abort-lane Market (generation 3, staged and unwound) | `J538ytiecEVETqrvF2dBzW1S2PZKH2EiESoWbQfwCVxb` |
+| collateral mint (Token-2022, 6 decimals) | `DrePPA8suSQ6A2aBGoywg9GFsQFnaP531dzsKJajdSrs` |
+| realm record | `GDScHZhFLKfQACGhy8u31pfiNikPXLypr94PjX9PR5PZ` |
 | band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
 | terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
 | `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
@@ -211,6 +213,18 @@ cross-check.
   record the chain wrote, covering every account the transaction touched —
   with every refusal printing its component values so a compound condition
   can never again cost a diagnosis cycle.
+- **Devnet drops transactions, and the founding met it at its last hostile
+  probe.** The fifth attempt reached the DCLTGMF1 stage — Found31 (224,735 CU)
+  and both DCLTPCB1 lanes (700,292 CU) landed and verified — and then died on
+  the substituted-Claims hostile probe: devnet dropped that transaction (its
+  blockhash expired before it landed), no status ever appeared, and `confirm`
+  hit its 300 s deadline and hard-errored. No principal moved — the Lock lives
+  inside the atomic DCLTGMF1, which never ran. This is the "devnet dies
+  mid-ladder" case reaching a transaction the driver did not resubmit, and it
+  is a genuine network property, not a defect. Fixed: `confirm` now resubmits
+  the same signed bytes every ~30 s (idempotent by signature — a duplicate
+  lands as the same signature and the chain deduplicates) until a status
+  appears or the deadline passes.
 - **Read-your-writes, made structural anyway.** The driver's `Rpc` now
   carries a per-connection read floor — every confirmed transaction raises
   it to its finalized slot, and every single-account read passes it as
