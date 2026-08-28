@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { inspectAccount, type ExplorerAccountResult } from '@/lib/explorer/account';
@@ -721,7 +722,7 @@ export default function ChainExplorer() {
   // keeps a re-render from re-reading the same query.
   const startedRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = `${query.view} ${query.q} ${chain.endpoint}`;
+    const key = `${query.view}\0${query.q}\0${chain.endpoint}`;
     if (query.q === '' || startedRef.current === key) return;
     startedRef.current = key;
     let cancelled = false;
@@ -771,12 +772,13 @@ export default function ChainExplorer() {
   return (
     <main className="shell xp" onClick={onJump}>
       <header className="masthead">
-        <Link className="brand" href="/"><span className="brand-mark" aria-hidden="true">dC</span><span>dClutch</span></Link>
+        <Anchor className="brand" href="/"><span className="brand-mark" aria-hidden="true">dC</span><span>dClutch</span></Anchor>
         <nav className="xp-nav">
-          <Link href="/markets">Markets</Link>
-          <Link href="/portfolio">Portfolio</Link>
-          <Link href="/activity">Activity</Link>
-          <Link className="active" href="/explorer">Explorer</Link>
+          <Anchor href="/markets">Markets</Anchor>
+          <Anchor href="/portfolio">Portfolio</Anchor>
+          <Anchor href="/activity">Activity</Anchor>
+          <Anchor className="active" href="/explorer">Explorer</Anchor>
+          <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
         </nav>
         <div className="header-boundaries">
           <p className="read-only-pill"><span aria-hidden="true" /> Read-only projection</p>

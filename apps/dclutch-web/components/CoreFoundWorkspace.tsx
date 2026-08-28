@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useState } from 'react';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
@@ -90,7 +91,7 @@ export default function CoreFoundWorkspace() {
 
   const ready = state.kind === 'ready' ? state : null;
   return <main className="product-shell direct-workspace found-workspace">
-    <header className="product-nav"><Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link><nav><Link className="active" href="/found">Create</Link><Link href="/product-v2">Product</Link><Link href="/release">Release</Link><Link href="/workbench">Workbench</Link></nav><div className="preview-control"><span className="preview-dot" /> finalized RPC · unsigned only</div></header>
+    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor className="active" href="/found">Create</Anchor><Anchor href="/product-v2">Product</Anchor><Anchor href="/release">Release</Anchor><Anchor href="/workbench">Workbench</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><div className="preview-control"><span className="preview-dot" /> finalized RPC · unsigned only</div></header>
 
     <section className="market-heading found-heading"><div><div className="market-kicker"><span>Core Found · Runtime V2</span><span>Real 31-account frame</span></div><h1>Found one common<br />Core Market.</h1></div><p>This is not a market mockup. The builder derives the Market and its lifecycle-scoped RentCredit from canonical Registry records, verifies runtime-width Product semantics and immutable infrastructure, then emits the two bounded unsigned packets required by the current ABI.</p></section>
 
@@ -123,7 +124,7 @@ export default function CoreFoundWorkspace() {
           ? <div className="direct-refusal">
               <strong>Found31 is not downloadable from this route.</strong> {ready.plan.foundRefusal} Its {ready.plan.routableAddresses.length} routable
               addresses are derived and available; building the table and submitting through a wallet is what the
-              <Link href="/create"> create wizard</Link> does. This route emits unsigned packets only, and an unsigned
+              <Anchor href="/create"> create wizard</Anchor> does. This route emits unsigned packets only, and an unsigned
               packet that cannot be assembled is better said than silently truncated.
             </div>
           : <>

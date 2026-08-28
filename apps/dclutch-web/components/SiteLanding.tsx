@@ -1,6 +1,6 @@
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
 
-import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
+import { docsHrefV1, docsIndexHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 
 /**
  * The front door.
@@ -19,14 +19,15 @@ import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 export default function SiteLanding() {
   return <main className="product-shell trade-v3-shell">
     <header className="product-nav">
-      <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav>
-        <Link href="/markets">Markets</Link>
-        <Link href="/create">Create</Link>
-        <Link href="/trade">Trade</Link>
-        <Link href="/portfolio">Portfolio</Link>
-        <Link href="/explorer">Explorer</Link>
-        <Link href="/workbench">Workbench</Link>
+        <Anchor href="/markets">Markets</Anchor>
+        <Anchor href="/create">Create</Anchor>
+        <Anchor href="/trade">Trade</Anchor>
+        <Anchor href="/portfolio">Portfolio</Anchor>
+        <Anchor href="/explorer">Explorer</Anchor>
+        <Anchor href="/workbench">Workbench</Anchor>
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
       </nav>
       <span className="preview-control"><i className="preview-dot" />not live yet</span>
     </header>
@@ -56,20 +57,20 @@ export default function SiteLanding() {
     <section className="trade-v3-card">
       <header><span>01</span><div><h2>The app</h2><p>Point it at a chain and it shows you what is actually on that chain. No sample market, no made-up price. Since nothing is deployed yet, expect it to refuse — and to tell you why.</p></div></header>
       <div className="direct-actions">
-        <Link className="secondary-action" href="/markets">Discover markets →</Link>
-        <Link className="secondary-action" href="/create">Create a market →</Link>
-        <Link className="secondary-action" href="/trade">Trade →</Link>
-        <Link className="secondary-action" href="/portfolio">Portfolio →</Link>
-        <Link className="secondary-action" href="/explorer">Chain explorer →</Link>
-        <Link className="secondary-action" href="/workbench">Lifecycle workbench →</Link>
+        <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
+        <Anchor className="secondary-action" href="/create">Create a market →</Anchor>
+        <Anchor className="secondary-action" href="/trade">Trade →</Anchor>
+        <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
+        <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
+        <Anchor className="secondary-action" href="/workbench">Lifecycle workbench →</Anchor>
       </div>
     </section>
 
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
       <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
       <div className="direct-actions">
-        <Link className="secondary-action" href="/smoke">Read the story →</Link>
-        <Link className="secondary-action" href="/bounty">How the bounty works →</Link>
+        <Anchor className="secondary-action" href="/smoke">Read the story →</Anchor>
+        <Anchor className="secondary-action" href="/bounty">How the bounty works →</Anchor>
       </div>
     </section>}
 

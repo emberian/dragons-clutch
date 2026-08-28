@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useMemo, useState } from 'react';
 
 import {
@@ -284,7 +285,7 @@ export default function DirectTradeWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <header className="product-nav"><Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link><nav><Link href="/create">Create</Link><Link className="active" href="/trade">Trade</Link><Link href="/liquidity">Liquidity</Link><Link href="/release">Release</Link></nav><span className="preview-control"><i className="preview-dot" />local / user-selected RPC</span></header>
+    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor href="/create">Create</Anchor><Anchor className="active" href="/trade">Trade</Anchor><Anchor href="/liquidity">Liquidity</Anchor><Anchor href="/release">Release</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />local / user-selected RPC</span></header>
 
     <section className="trade-v3-hero"><div><p className="eyebrow">Direct · inline ordinary · runtime width</p><h1>One signed price.<br /><em>One checked route.</em></h1><p>This workbench reads the current Market, Product width, schema-bound ProgramSetV2 → CapabilityProgramV4 selection, finalized Profile14/LifecycleV5 interpreters, Loader state, and checked release evidence before it constructs one packet-safe native-Ed25519 + Trading pair.</p></div><aside><span>Execution boundary</span><strong>{inspection?.checkedOuter.status === 'checked' ? 'recognized V4-capable release' : 'fail closed'}</strong><p>No checked immutable V4-capable Trading manifest, no executable transaction. Static account lists are never authority.</p></aside></section>
 

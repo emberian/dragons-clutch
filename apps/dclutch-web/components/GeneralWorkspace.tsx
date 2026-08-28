@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useState } from 'react';
 
 import {
@@ -78,7 +79,7 @@ export default function GeneralWorkspace() {
   }
 
   return <main className="product-shell direct-workspace">
-    <header className="product-nav"><Link className="brand" href="/">dClutch</Link><nav><Link href="/direct">Direct</Link><Link className="active" href="/general">General</Link><Link href="/explorer">Explorer</Link></nav><span className="preview-control"><i className="preview-dot" />offline until asked</span></header>
+    <header className="product-nav"><Anchor className="brand" href="/">dClutch</Anchor><nav><Anchor href="/direct">Direct</Anchor><Anchor className="active" href="/general">General</Anchor><Anchor href="/explorer">Explorer</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />offline until asked</span></header>
     <section className="market-heading"><div><div className="market-kicker"><span>seven successor actions</span><span>runtime-width</span><span>unsigned v0</span></div><h1>General clearing, from candidate selection through terminal close.</h1><p>Consume the canonical Rust operator’s finalized V5 plan for Consider, Freeze, Initialize, Collect, Materialize, Distribute, or Close. The browser independently checks the packet and request, can reacquire its exact chain dependencies, and never signs or submits.</p></div></section>
 
     <form className="direct-card" onSubmit={inspect} aria-labelledby="general-plan">

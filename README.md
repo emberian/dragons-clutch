@@ -17,9 +17,17 @@ chain that you can run yourself.
 
 ## What works today
 
-- A market runs its whole life on a local validator: created, funded,
-  opened, traded, resolved against a real Pyth price, redeemed, and
-  retired.
+- On a local test validator, a market is created, funded, opened, and
+  resolved on chain, after which it begins winding down. Resolution runs
+  through the same Pyth and Wormhole programs that are deployed on
+  mainnet, and they really do check the signatures — but the price they
+  check is a recorded one signed by a test key, not a live Pyth
+  publication.
+- Trading between two counterparties, moving claims between holders, and
+  paying out a winning claim run against those same programs in a test
+  harness, at the real compute and memory limits. None of the three has
+  been driven on a validator yet, and winding a market all the way down
+  to retired has not run anywhere yet.
 - Opening a market is all-or-nothing: one atomic transaction locks the
   collateral, creates the market, and opens trading — or rolls the whole
   thing back.

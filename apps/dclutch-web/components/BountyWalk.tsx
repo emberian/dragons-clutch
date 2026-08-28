@@ -1,4 +1,7 @@
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
+
+import { SMOKE_MARKETS_V1 } from '@/lib/smokeMarkets';
 
 /**
  * The failure-walk bounty page, written for the wallet that will collect it.
@@ -38,17 +41,20 @@ const REFUSALS = Object.freeze([
 ]);
 
 export default function BountyWalk() {
+  const abandoned = SMOKE_MARKETS_V1.abandoned;
+  const live = abandoned.address !== null;
   return <main className="product-shell trade-v3-shell">
     <header className="product-nav">
-      <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav>
-        <Link href="/markets">Markets</Link>
-        <Link href="/portfolio">Portfolio</Link>
-        <Link href="/activity">Activity</Link>
-        <Link href="/smoke">The smoke</Link>
-        <Link className="active" href="/bounty">Bounty</Link>
+        <Anchor href="/markets">Markets</Anchor>
+        <Anchor href="/portfolio">Portfolio</Anchor>
+        <Anchor href="/activity">Activity</Anchor>
+        <Anchor href="/smoke">The smoke</Anchor>
+        <Anchor className="active" href="/bounty">Bounty</Anchor>
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
       </nav>
-      <span className="preview-control"><i className="preview-dot" />not live yet</span>
+      <span className="preview-control"><i className="preview-dot" />{live ? 'live on devnet' : 'not live yet'}</span>
     </header>
 
     <section className="trade-v3-hero">
@@ -59,8 +65,10 @@ export default function BountyWalk() {
       </div>
       <aside>
         <span>Where this stands</span>
-        <strong>Not live yet</strong>
-        <p>No such market is live on any public network today. We have run this exact walk end-to-end on a local test network — the numbers below come from that run, and each one says so.</p>
+        <strong>{live ? 'Live on Solana devnet' : 'Not live yet'}</strong>
+        {live
+          ? <p>The abandoned market is live at <Anchor href={`/markets/${abandoned.address}`}><code>{abandoned.address}</code></Anchor>{abandoned.liveNote === null ? '' : ` — ${abandoned.liveNote}`}. The walk arms only after the market&apos;s deadline passes and its escrow is funded; until then this page is the practice run.</p>
+          : <p>No such market is live on any public network today. We have run this exact walk end-to-end on a local test network — the numbers below come from that run, and each one says so.</p>}
       </aside>
     </section>
 
@@ -116,7 +124,7 @@ export default function BountyWalk() {
 
     <footer className="product-footer">
       <span>A silent data source cannot strand a market — it can only pay you to finish it</span>
-      <span>Live markets: none yet — this page will link them when that changes</span>
+      <span>{live ? 'The abandoned market is linked above; the walk is yours once its deadline passes' : 'Live markets: none yet — this page will link them when that changes'}</span>
     </footer>
   </main>;
 }

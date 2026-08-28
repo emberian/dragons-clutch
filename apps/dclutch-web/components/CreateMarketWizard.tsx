@@ -1,7 +1,8 @@
 'use client';
 
 import { TransactionMessage, VersionedTransaction, type AddressLookupTableAccount, type TransactionInstruction } from '@solana/web3.js';
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 
 import { PublicKey } from '@solana/web3.js';
@@ -405,8 +406,8 @@ export default function CreateMarketWizard() {
 
   return <main className="product-shell wizard-shell">
     <header className="product-nav">
-      <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
-      <nav><Link href="/markets">Markets</Link><Link className="active" href="/create">Create</Link><Link href="/portfolio">Portfolio</Link><Link href="/workbench">Workbench</Link></nav>
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
+      <nav><Anchor href="/markets">Markets</Anchor><Anchor className="active" href="/create">Create</Anchor><Anchor href="/portfolio">Portfolio</Anchor><Anchor href="/workbench">Workbench</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav>
       <span className="preview-control"><i className="preview-dot" />founding wizard · local RPC</span>
     </header>
 

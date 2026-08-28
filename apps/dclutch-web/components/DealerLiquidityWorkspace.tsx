@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useState } from 'react';
 
 import {
@@ -155,7 +156,7 @@ export default function DealerLiquidityWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <header className="product-nav"><Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link><nav><Link href="/create">Create</Link><Link href="/trade">Trade</Link><Link className="active" href="/liquidity">Liquidity</Link><Link href="/release">Release</Link></nav><span className="preview-control"><i className="preview-dot" />local / user-selected RPC</span></header>
+    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor href="/create">Create</Anchor><Anchor href="/trade">Trade</Anchor><Anchor className="active" href="/liquidity">Liquidity</Anchor><Anchor href="/release">Release</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />local / user-selected RPC</span></header>
 
     <section className="trade-v3-hero"><div><p className="eyebrow">Dealer · junior equity · six executable shapes</p><h1>Liquidity is a residual.<br /><em>Backed by current custody.</em></h1><p>Contribute or redeem scenario-solvent Dealer equity through the exact action/P-selected Hot route. The browser treats every pasted address and request byte as hostile until finalized Core, Registry, Product, LP, obligation, artifact, and deployment state rejoin.</p></div><aside><span>Executable successor</span><strong>{inspection?.checkedOuter.status === 'checked' ? `${inspection.request.action} · P${inspection.request.signedPositionCount}` : 'fail closed'}</strong><p>Selectors 1–6 only. LP open/close and scenario trading remain hidden until their production outer routes are complete.</p></aside></section>
 

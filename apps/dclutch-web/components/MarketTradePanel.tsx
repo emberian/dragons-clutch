@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
 import { useMemo, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
@@ -242,7 +242,7 @@ export default function MarketTradePanel({
 
     <div className="direct-actions">
       <button type="button" onClick={() => void inspect()}>Ask the chain about trading here</button>
-      <Link className="secondary-action" href="/trade">Advanced: full route workbench →</Link>
+      <Anchor className="secondary-action" href="/trade">Advanced: full route workbench →</Anchor>
     </div>
     <p className="direct-status" aria-live="polite">{spineStatus}</p>
 

@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useState } from 'react';
 
 import RedeemFlow from '@/components/RedeemFlow';
@@ -32,7 +33,7 @@ function errorMessage(error: unknown): string {
 
 function MarketHeading({ market, address }: Readonly<{ market: MarketDiscoveryCardV1; address: string }>) {
   return <div className="market-card-top">
-    <Link href={`/markets/${address}`} title={address}>{shortAddressV1(address, 8)}</Link>
+    <Anchor href={`/markets/${address}`} title={address}>{shortAddressV1(address, 8)}</Anchor>
     <span className={`provenance-chip${market.provenance.kind === 'refused' ? ' refused' : ''}`}>{provenanceChipV1(market.provenance)}</span>
     <span className={`phase-chip${market.status === 'decoded' ? ` phase-${market.phase.toLowerCase()}` : ''}`}>{market.status === 'decoded' ? market.phase : 'no phase'}</span>
   </div>;
@@ -159,17 +160,18 @@ export default function PortfolioWorkspace() {
 
   return <main className="product-shell trade-v3-shell">
     <header className="product-nav">
-      <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav>
-        <Link href="/markets">Markets</Link>
-        <Link className="active" href="/portfolio">Portfolio</Link>
-        <Link href="/activity">Activity</Link>
-        <Link href="/create">Create</Link>
-        <Link href="/trade">Trade</Link>
-        <Link href="/liquidity">Liquidity</Link>
-        <Link href="/redeem">Represent</Link>
-        <Link href="/release">Release</Link>
-        <Link href="/explorer">Explorer</Link>
+        <Anchor href="/markets">Markets</Anchor>
+        <Anchor className="active" href="/portfolio">Portfolio</Anchor>
+        <Anchor href="/activity">Activity</Anchor>
+        <Anchor href="/create">Create</Anchor>
+        <Anchor href="/trade">Trade</Anchor>
+        <Anchor href="/liquidity">Liquidity</Anchor>
+        <Anchor href="/redeem">Represent</Anchor>
+        <Anchor href="/release">Release</Anchor>
+        <Anchor href="/explorer">Explorer</Anchor>
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
       </nav>
       <span className="preview-control"><i className="preview-dot" />raw-u64 economics</span>
     </header>
