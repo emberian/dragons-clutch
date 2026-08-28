@@ -290,6 +290,44 @@ pub(crate) struct CheckedUpgradeSetPinV1 {
     pub(crate) roles: Vec<CheckedUpgradeRolePinV1>,
 }
 
+/// One exact mutable Loader pair installed into a fresh localhost validator.
+///
+/// This is not a devnet Upgrade receipt.  It binds a checked-release ELF to
+/// the ProgramData image that the local launcher installs, including the
+/// retained authority and synthetic nonzero deployment slot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalMutableRolePinV1 {
+    pub(crate) role: String,
+    pub(crate) program_id: String,
+    pub(crate) programdata_id: String,
+    pub(crate) checked_candidate_elf_path: String,
+    pub(crate) checked_candidate_elf_sha256: String,
+    pub(crate) live_elf_sha256: String,
+    pub(crate) programdata_account_sha256: String,
+    pub(crate) deployment_slot: u64,
+    pub(crate) semantic_release_id: String,
+}
+
+/// Checked provenance for the seven-role decision-0012 localhost substrate.
+///
+/// Permanent-devnet plans continue to require `checked_upgrade_set`; this
+/// sibling is admitted only for loopback and is rooted in a fresh checked
+/// release gate plus exact genesis ProgramData images.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalMutableSetPinV1 {
+    pub(crate) schema: String,
+    pub(crate) checked_release_gate_path: String,
+    pub(crate) checked_release_gate_sha256: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_tree_sha256: String,
+    pub(crate) solana_cli_version: String,
+    pub(crate) retained_upgrade_authority: String,
+    pub(crate) set_sha256: String,
+    pub(crate) roles: Vec<CheckedLocalMutableRolePinV1>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct GenesisAccountPin {
     pub(crate) address: String,
@@ -322,6 +360,10 @@ pub(crate) struct SuccessorPlan {
     /// Upgrade journal instead of accepting caller-authored release facts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) checked_upgrade_set: Option<CheckedUpgradeSetPinV1>,
+    /// Present only for an exact checked-release set installed into a fresh
+    /// localhost validator with all seven decision-0012 authorities retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checked_local_mutable_set: Option<CheckedLocalMutableSetPinV1>,
     pub(crate) infrastructure_profile: InfrastructureProfilePin,
     pub(crate) records: BTreeMap<String, RecordPair>,
     /// `"genesis"` or `"transaction"`. Devnet has no genesis, so the
