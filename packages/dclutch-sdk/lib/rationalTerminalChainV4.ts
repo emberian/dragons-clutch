@@ -7,6 +7,7 @@ import { inspectRationalCapabilityCommonV4 } from './rationalCapabilityChainV4';
 import {
   acquireRationalHotAccountsV4,
   authenticateRationalProductBasisRecordV3,
+  type RationalHotCoreViewV3,
   type RationalHotRpcV4,
 } from './rationalRetireReceiptV4';
 import {
@@ -47,6 +48,53 @@ export type RationalTerminalReadinessV4 = Readonly<{
 }>;
 
 /**
+ * Authenticate Core's current terminal receipt as one direct Resolution-owned
+ * certificate account. Keeping this join separate makes it adversarially
+ * testable without rebuilding the unrelated Capability/Product graph.
+ */
+export async function authenticateCoreTerminalResolutionCertificateV4(
+  client: RationalHotRpcV4,
+  input: Readonly<{
+    observedSlot: string;
+    marketAddress: string;
+    market: RationalHotCoreViewV3;
+    resolutionProgram: string;
+    outcomeCount: number;
+  }>,
+): Promise<Readonly<{
+  observedSlot: string;
+  address: string;
+  certificate: ResolutionCertificateV2;
+}>> {
+  if (input.market.phase !== 'Terminal' || input.market.readiness !== 'Consumed') {
+    throw new Error('ResolutionCertificateV2 authentication requires the current terminal Core lifecycle');
+  }
+  const address = new PublicKey(input.market.terminalReceipt).toBase58();
+  const observation = await acquireRationalHotAccountsV4(client, [address], input.observedSlot);
+  const account = observation.accounts.get(address);
+  if (account === null || account === undefined) throw new Error('Core terminal ResolutionCertificateV2 is absent');
+  if (account.owner !== input.resolutionProgram || account.executable
+      || account.data.length !== RESOLUTION_CERTIFICATE_BYTES_V2) {
+    throw new Error('Core terminal receipt is not exact Resolution-owned ResolutionCertificateV2 state');
+  }
+  const rent = await client.minimumBalanceForRentExemption(RESOLUTION_CERTIFICATE_BYTES_V2);
+  if (BigInt(account.lamports) < BigInt(rent.lamports)) throw new Error('ResolutionCertificateV2 is below its current exact rent minimum');
+  const certificate = bindTerminalResolutionCertificateV2(
+    decodeResolutionCertificateV2(account.data),
+    {
+      receiptAccount: new PublicKey(address).toBytes(),
+      market: new PublicKey(input.marketAddress).toBytes(),
+      sourceMaterial: input.market.resolutionPolicy,
+      productRecordDigest: input.market.productRecord,
+      generation: input.market.generation,
+      selector: input.market.terminalWinner,
+      outcomeCount: input.outcomeCount,
+    },
+  );
+  return Object.freeze({ observedSlot: observation.slot, address, certificate });
+}
+
+/**
  * Read the complete immutable Product/representation terminal semantics.
  * This is an untrusted browser projection; the Rust operator remains the sole
  * emitter of SignedDeltaV3 and Custody authority/digest material.
@@ -83,28 +131,15 @@ export async function inspectRationalTerminalReadinessV4(
   });
   if (input.selectedOutcome >= admitted.basis.width) throw new Error('selected representation outcome is outside Product basis K');
   if (common.market.terminalWinner >= common.product.outcomeCount) throw new Error('Core terminal winner is outside Product result N');
-  const terminalCertificateAddress = new PublicKey(common.market.terminalReceipt).toBase58();
-  const observation = await acquireRationalHotAccountsV4(client, [terminalCertificateAddress], common.observedSlot);
-  const terminalAccount = observation.accounts.get(terminalCertificateAddress);
-  if (terminalAccount === null || terminalAccount === undefined) throw new Error('Core terminal ResolutionCertificateV2 is absent');
-  if (terminalAccount.owner !== common.activation.resolution || terminalAccount.executable
-      || terminalAccount.data.length !== RESOLUTION_CERTIFICATE_BYTES_V2) {
-    throw new Error('Core terminal receipt is not exact Resolution-owned ResolutionCertificateV2 state');
-  }
-  const rent = await client.minimumBalanceForRentExemption(RESOLUTION_CERTIFICATE_BYTES_V2);
-  if (BigInt(terminalAccount.lamports) < BigInt(rent.lamports)) throw new Error('ResolutionCertificateV2 is below its current exact rent minimum');
-  const terminalCertificate = bindTerminalResolutionCertificateV2(
-    decodeResolutionCertificateV2(terminalAccount.data),
-    {
-      receiptAccount: new PublicKey(terminalCertificateAddress).toBytes(),
-      market: new PublicKey(common.marketAddress).toBytes(),
-      sourceMaterial: common.market.resolutionPolicy,
-      productRecordDigest: common.market.productRecord,
-      generation: common.market.generation,
-      selector: common.market.terminalWinner,
-      outcomeCount: common.product.outcomeCount,
-    },
-  );
+  const terminal = await authenticateCoreTerminalResolutionCertificateV4(client, {
+    observedSlot: common.observedSlot,
+    marketAddress: common.marketAddress,
+    market: common.market,
+    resolutionProgram: common.activation.resolution,
+    outcomeCount: common.product.outcomeCount,
+  });
+  const terminalCertificateAddress = terminal.address;
+  const terminalCertificate = terminal.certificate;
   const terminalCoordinate = admitted.basis.kind === 'graded-exact-complement'
       && terminalCertificate.kind === 'resolution-success'
     ? Object.freeze({ numerator: terminalCertificate.resultNumerator, denominator: terminalCertificate.resultDenominator })
@@ -119,7 +154,7 @@ export async function inspectRationalTerminalReadinessV4(
   const refusal = payout.scenario === 'graded-rational'
     ? 'The deployed Claims terminal_settlement_v3 still derives an impossible Registry coordinate from Core terminal_receipt. This client authenticates the real ResolutionCertificateV2 and refuses submission until a Claims Upgrade consumes that certificate directly.'
     : 'The browser authenticates the canonical ResolutionCertificateV2, but has no binding to the canonical Rust SignedDeltaV3/Custody emitter. It will not reconstruct that authority or request digest in TypeScript.';
-  return Object.freeze({ observedSlot: observation.slot, market: common.marketAddress, generation: common.market.generation,
+  return Object.freeze({ observedSlot: terminal.observedSlot, market: common.marketAddress, generation: common.market.generation,
     actor: common.actor, descriptorId: common.descriptorId, capabilityDigest: common.capabilitySelection.digest,
     basisDigest: admitted.digest, semanticBasisId: admitted.semanticBasisId,
     resultOutcomeCount: common.product.outcomeCount, representationWidth: admitted.basis.width,
