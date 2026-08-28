@@ -1,19 +1,25 @@
 # @dclutch/sdk
 
-The client surface of the dClutch protocol: the generated ABI modules, the
-proven transaction builders, and the hostile decoders that grew up inside
-`apps/dclutch-web/lib/` as the de facto SDK. This package is their one home;
-the web app imports them from here.
+The read-first client surface of the dClutch protocol: generated ABI modules,
+hostile decoders, exact arithmetic previews, and transaction surfaces only
+when their caller owns the complete journal and finalization boundary. The CLI
+imports this package. The web app still carries tracked mirrors while the
+consumer flip is unfinished; `scripts/sync-from-web.mjs` reports that drift and
+must be read before claiming the two surfaces have converged.
 
 ## Contract
 
 - **Connection-agnostic.** Nothing here constructs an RPC connection, reads a
   wallet, or touches a browser global. `SolanaRpcClient` takes an endpoint
   (and optionally a `fetch`); every chain-reading function takes the client
-  as an argument; every builder returns instructions or transactions for the
-  caller to sign. The package typechecks against the plain node lib set —
+  as an argument. The package typechecks against the plain node lib set —
   `dom` is deliberately absent from `tsconfig.json`, so a browser dependency
   cannot land here silently.
+- **Caller-complete mutation only.** Direct exposes route authentication,
+  intent bytes, and exact arithmetic preview, not its internal unsigned packet
+  compiler. The wallet subpath exposes unsigned-packet inspection, not generic
+  signing or submission. A mutation surface opens only with its durable phase
+  journal, exact returned acknowledgement, and finalized poststate proof.
 - **Generated truth.** `lib/generated/` is emitted from the protocol's own
   authorities — Lean schemas via `scripts/lean-emit.mjs`, Rust contract
   sources via the `scripts/generate-*.mjs` scrapers — and every module has a
@@ -38,8 +44,9 @@ step.
 
 ## Layout
 
-- `index.ts` — curated root exports; every module is also reachable as
-  `@dclutch/sdk/<module>` and `@dclutch/sdk/generated/<module>`.
+- `index.ts` — curated root exports. Public subpaths resolve through
+  `package.json`; `directInlineV3` and `walletHandoff` deliberately resolve to
+  read-only facades rather than their internal conformance modules.
 - `lib/` — the modules and their tests, colocated.
 - `lib/generated/` — emitted ABI mirrors; regenerate with `npm run
   abi:<surface>`, never edit.

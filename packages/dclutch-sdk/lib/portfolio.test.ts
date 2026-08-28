@@ -1,9 +1,14 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
+import { currentCoreMarketV3, LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
 import { sha256 } from './bytes';
-import { REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+import {
+  CORE_STATE_PHASE_OFFSET,
+  CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+  CORE_STATE_TERMINAL_WINNER_OFFSET,
+  REALM_SCHEMA_RELEASE_ID_V1,
+} from './generated/coreFound';
 import { deriveClaimsAggregateAddressV2, deriveClaimsPositionAddressV2 } from './marketCoreV2';
 import { provenanceChipV1 } from './marketDiscovery';
 import {
@@ -44,7 +49,7 @@ function client(accounts: ReadonlyMap<string, RpcAccount>): SolanaRpcClient {
 
 async function chain(overrides: Readonly<{ market?: Uint8Array; position?: Uint8Array | null }> = {}): Promise<Map<string, RpcAccount>> {
   const accounts = new Map<string, RpcAccount>([
-    [LIVE.market.address, liveRpcAccount(LIVE.market, { data: overrides.market ?? LIVE.market.data })],
+    [LIVE.market.address, liveRpcAccount(LIVE.market, { data: overrides.market ?? currentCoreMarketV3() })],
     [LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate)],
   ]);
   if (overrides.position !== null) {
@@ -100,7 +105,11 @@ describe('portfolio by Claims Position derivation', () => {
   });
 
   it('reports the exact redeemable payout after a terminal receipt, including the zeros', async () => {
-    const terminal = mutate(mutate(mutate(LIVE.market.data, 10, 2), 12, 1), 320, new Uint8Array(32).fill(0x77));
+    const terminal = mutate(
+      mutate(mutate(currentCoreMarketV3(), CORE_STATE_PHASE_OFFSET, 2), CORE_STATE_TERMINAL_WINNER_OFFSET, 1),
+      CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+      new Uint8Array(32).fill(0x77),
+    );
     const portfolio = await inspectPortfolioV1(client(await chain({ market: terminal })), request);
     const [entry] = portfolio.entries;
     if (entry.market.status !== 'decoded') throw new Error(entry.market.refusal);

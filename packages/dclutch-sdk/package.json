@@ -2,7 +2,7 @@
   "name": "@dclutch/sdk",
   "version": "0.1.0",
   "private": true,
-  "description": "Client SDK for the dClutch protocol: the generated ABI modules, proven transaction builders, and hostile decoders extracted from the web app. Connection-agnostic - the caller supplies an RPC endpoint and a signer.",
+  "description": "Read-first client SDK for dClutch: generated ABI modules, hostile decoders, exact previews, and only caller-complete transaction surfaces.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "engines": {
@@ -10,6 +10,8 @@
   },
   "exports": {
     ".": "./index.ts",
+    "./directInlineV3": "./lib/directInlinePublicV3.ts",
+    "./walletHandoff": "./lib/walletInspection.ts",
     "./directTransaction": null,
     "./directCodec": null,
     "./registeredDirect": null,

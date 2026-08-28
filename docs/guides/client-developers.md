@@ -134,15 +134,12 @@ After that payment record and the lookup table are finalized, prepare the
 payout from the current accounts. Save the unsigned plan before opening a
 wallet. After the wallet signs, save both the complete signed bytes and the
 transaction id before the only submission. If the RPC response is lost,
-poll that saved id; never rebuild, resign, or resend the payout.
+poll that saved id; never rebuild, resign, or resend the payout. The public SDK
+does not expose a generic sign-and-send helper: such a helper cannot prove that
+the workflow durably crossed those phases. Use the CLI's payout journal or
+build a caller-specific journal with the same phase boundary.
 
 ```ts
-import {
-  requestWalletTransactionSignatureV1,
-  requireSubmittedSignatureMatchV1,
-  submitSignedTransactionV1,
-  transactionSignatureV1,
-} from '@dclutch/sdk/walletHandoff';
 import {
   finalizeWalletTerminalPayoutV3,
   prepareWalletTerminalPayoutV3,
@@ -151,23 +148,15 @@ import {
 const plan = await prepareWalletTerminalPayoutV3(client, manifest, owner);
 await saveUnsignedPlan(plan); // durable before the wallet opens
 
-const signed = await requestWalletTransactionSignatureV1(
-  client,
-  connectedWallet,
-  plan.transaction,
-  owner,
-);
-if (!signed.complete) throw new Error('the payout is not completely signed');
-const transactionId = transactionSignatureV1(signed.transaction.signatures[0]!);
-await saveSignedPacket(transactionId, signed.wireBytes); // durable before send
-
-const returned = await submitSignedTransactionV1(client, signed.wireBytes);
-requireSubmittedSignatureMatchV1(transactionId, returned);
+// Your caller-specific journal now owns wallet signing, Signed persistence,
+// Submitted persistence, and the sole maxRetries=0 send. It returns the exact
+// saved id and bytes; it never rebuilds or resends a Submitted packet.
+const { transactionId, signedWireBytes } = await payoutJournal.submitOnce(plan);
 const completed = await finalizeWalletTerminalPayoutV3(
   client,
   transactionId,
   plan,
-  signed.wireBytes,
+  signedWireBytes,
 );
 ```
 

@@ -26,6 +26,7 @@ import {
   CORE_STATE_MAGIC,
   CORE_STATE_MARKET_ID_OFFSET,
   CORE_STATE_PHASE_OFFSET,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
   CORE_STATE_PRODUCT_ID_OFFSET,
   CORE_STATE_PRODUCT_RECORD_OFFSET,
   CORE_STATE_READINESS_OFFSET,
@@ -161,6 +162,7 @@ function marketFixture(manifestDigest: Uint8Array, phase: number): Uint8Array {
   bytes.set(identity(65), CORE_STATE_SELECTED_RELEASE_SET_OFFSET);
   bytes.set(new PublicKey(REGISTRY).toBytes(), CORE_STATE_REGISTRY_PROGRAM_OFFSET);
   putU64(bytes, CORE_STATE_GENERATION_OFFSET, 2n);
+  putU64(bytes, CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET, 1_000_000n);
   bytes.set(new PublicKey(Keypair.fromSeed(new Uint8Array(32).fill(66)).publicKey.toBytes()).toBytes(), CORE_STATE_RENT_BENEFICIARY_OFFSET);
   if (phase === CORE_PHASE_TERMINAL_TAG) {
     putU32(bytes, CORE_STATE_TERMINAL_WINNER_OFFSET, 1);
@@ -311,6 +313,7 @@ describe('the Direct trade spine', () => {
     expect(directPacketWallV1(1_232)).toBeNull();
     expect(directPacketWallV1(1_233)?.detail).toContain('1,233 bytes');
     expect(() => directPacketWallV1(-1)).toThrow(/nonnegative safe integer/);
-    expect(DIRECT_PRESTATE_WALL_V1.detail).toContain('ADR-0008');
+    expect(DIRECT_PRESTATE_WALL_V1.detail).toContain('distinct Token-2022 collateral account');
+    expect(DIRECT_PRESTATE_WALL_V1.detail).not.toContain('does not exist');
   });
 });
