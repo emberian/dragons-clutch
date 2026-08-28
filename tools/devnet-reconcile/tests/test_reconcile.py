@@ -142,7 +142,7 @@ def fixture():
     for name in names:
         account = {"ref": name, "address": identities[name][0], "kind": account_kinds[name], "role": name.replace("_", "-")}
         if account["kind"] == "token":
-            account.update({"mint": mint_address, "assetClass": "collateral"})
+            account.update({"mint": mint_address, "assetClass": "collateral", "authority": identities["token_authority"][0], "programOwner": identities["token_program"][0]})
         accounts.append(account)
     source_bytes = b'{"schema":"fixture-semantic-owner-journal-v1"}\n'
     zero_digest = hashlib.sha256(source_bytes).hexdigest()
@@ -286,6 +286,22 @@ class ReconcileTest(unittest.TestCase):
             tx["meta"]["preTokenBalances"][0]["mint"] = other
             tx["meta"]["postTokenBalances"][0]["mint"] = other
         self.assert_refuses(mutate, "declared token-account mint")
+
+    def test_token_authority_substitution_refuses(self):
+        def mutate(manifest, capture):
+            other, _ = key(95)
+            tx = capture["transactions"]["signature-participant"]
+            tx["meta"]["preTokenBalances"][0]["owner"] = other
+            tx["meta"]["postTokenBalances"][0]["owner"] = other
+        self.assert_refuses(mutate, "mint or authority")
+
+    def test_fee_payer_substitution_refuses(self):
+        def mutate(manifest, capture):
+            tx = capture["transactions"]["signature-founding"]
+            keys = tx["transaction"]["message"]["accountKeys"]
+            other = manifest["accounts"][1]["address"]
+            keys[0] = other
+        self.assert_refuses(mutate, "substitutes its fee payer")
 
     def test_declared_claim_mint_may_differ_from_collateral(self):
         manifest, capture = fixture()

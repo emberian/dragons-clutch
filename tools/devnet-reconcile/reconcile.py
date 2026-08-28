@@ -406,7 +406,7 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     accounts: dict[str, dict[str, Any]] = {}
     addresses: set[str] = set()
     for index, item in enumerate(raw_accounts):
-        item = exact_keys(item, {"ref", "address", "kind", "role"}, {"mint", "assetClass"}, f"accounts[{index}]")
+        item = exact_keys(item, {"ref", "address", "kind", "role"}, {"mint", "assetClass", "authority", "programOwner"}, f"accounts[{index}]")
         ref = text(item["ref"], "account ref")
         address = pubkey(item["address"], f"account {ref} address")
         if ref in accounts or address in addresses:
@@ -415,12 +415,14 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
             refuse(f"account {ref} has an unknown kind")
         text(item["role"], f"account {ref} role")
         if item["kind"] == "token":
-            if set(item) != {"ref", "address", "kind", "role", "mint", "assetClass"}:
-                refuse(f"token account {ref} must declare its exact mint and assetClass")
+            if set(item) != {"ref", "address", "kind", "role", "mint", "assetClass", "authority", "programOwner"}:
+                refuse(f"token account {ref} must declare exact mint, class, authority, and program owner")
             pubkey(item["mint"], f"token account {ref} mint")
+            pubkey(item["authority"], f"token account {ref} authority")
+            pubkey(item["programOwner"], f"token account {ref} programOwner")
             if item["assetClass"] not in ("collateral", "claim"):
                 refuse(f"token account {ref} has an unknown assetClass")
-        elif "mint" in item or "assetClass" in item:
+        elif any(field in item for field in ("mint", "assetClass", "authority", "programOwner")):
             refuse(f"non-token account {ref} declares token-only fields")
         accounts[ref] = item
         addresses.add(address)
@@ -506,6 +508,8 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
                 decimal(expected["amountAtoms"], f"final token {ref} amountAtoms")
                 if expected["mint"] != accounts[ref]["mint"]:
                     refuse(f"final token account {ref} differs from its declared mint")
+                if expected["authority"] != accounts[ref]["authority"] or expected["owner"] != accounts[ref]["programOwner"]:
+                    refuse(f"final token account {ref} differs from its declared authority or program owner")
     critical_refs = {ref for ref, account in accounts.items() if account["kind"] in ("token", "position", "certificate")}
     if not critical_refs.issubset(final_refs):
         refuse("finalAccounts omits a token, Position, or certificate account")
@@ -558,6 +562,8 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     if not isinstance(signatures, list) or not signatures or signatures[0] != event["signature"]:
         refuse("RPC transaction does not bind its requested first signature")
     keys = account_keys(result)
+    if keys[0] != accounts[event["feePayer"]]["address"]:
+        refuse(f"transaction {event['signature']} substitutes its fee payer")
     pre = meta.get("preBalances"); post = meta.get("postBalances")
     if not isinstance(pre, list) or not isinstance(post, list) or len(pre) != len(keys) or len(post) != len(keys):
         refuse("transaction lamport balance vectors differ from account keys")
@@ -599,8 +605,11 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     expected_tokens = parse_delta_list(event["tokenDeltas"], "tokenDeltas", accounts)
     if observed_tokens != expected_tokens:
         refuse(f"event {event['id']} token deltas differ from finalized transaction")
-    if any(mint != accounts[ref]["mint"] for ref, mint in token_mints.items()):
-        refuse(f"event {event['id']} substitutes a declared token-account mint")
+    if any(
+        mint != accounts[ref]["mint"] or observed_token_states[ref][3] != accounts[ref]["authority"]
+        for ref, mint in token_mints.items()
+    ):
+        refuse(f"event {event['id']} substitutes a declared token-account mint or authority")
     projection: dict[str, Any] = {
         "id": event["id"], "kind": event["kind"], "operation": event["operation"], "predecessor": event["predecessor"],
         "signature": event["signature"], "slot": event["slot"], "feePayer": event["feePayer"],
