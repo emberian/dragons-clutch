@@ -98,14 +98,20 @@ describe('browser wallet directory panel', () => {
   });
 });
 
-describe('workspaces reach wallets through the directory', () => {
-  it('replaces the bespoke connect button on identity-only and signing surfaces alike', () => {
-    for (const html of [renderToStaticMarkup(<RationalOpenPanel />), renderToStaticMarkup(<DirectTradeWorkspace />)]) {
-      expect(html).toContain('Browser wallet · Wallet Standard');
-      expect(html).toContain('No Wallet Standard registry exists in this runtime');
-      expect(html).not.toContain('Connect identity');
-      expect(html).not.toContain('Connect payer');
-    }
+describe('workspace wallet boundaries', () => {
+  it('keeps the Wallet Standard directory on the release-gated Rational open route', () => {
+    const html = renderToStaticMarkup(<RationalOpenPanel />);
+    expect(html).toContain('Browser wallet · Wallet Standard');
+    expect(html).toContain('No Wallet Standard registry exists in this runtime');
+    expect(html).not.toContain('Connect identity');
+    expect(html).not.toContain('Connect payer');
+  });
+
+  it('keeps the read-only Direct preview free of wallet and transaction controls', () => {
+    const html = renderToStaticMarkup(<DirectTradeWorkspace />);
+    expect(html).not.toContain('Browser wallet · Wallet Standard');
+    expect(html).toContain('This page has no wallet connection, signature request, packet download, or submission control.');
+    expect(html).toContain('No wallet request · no packet builder · no submission path');
   });
 
   it('keeps every release-gated signing control disabled on the Rational open route', () => {

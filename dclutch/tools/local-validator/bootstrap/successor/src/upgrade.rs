@@ -17,9 +17,12 @@ use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
     io::Write as _,
+    os::unix::process::CommandExt as _,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, Stdio},
     str::FromStr as _,
+    thread,
+    time::Duration,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -64,7 +67,7 @@ use crate::{
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
 
-const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v5";
+const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v6";
 const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v1";
 const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
@@ -85,10 +88,12 @@ const DEPLOYMENT_SET_JOURNAL_FLAG: &str = "--deployment-set-journal";
 const BUFFER_PUBKEY_FLAG: &str = "--buffer-pubkey";
 const BUFFER_KEYPAIR_FLAG: &str = "--buffer-keypair";
 const BUFFER_METADATA_BYTES: usize = 37;
+const BUFFER_WRITER_LEASE_SCHEMA: &str = "dclutch-buffer-writer-lease-v2";
+const BUFFER_WRITER_PERMIT_SCHEMA: &str = "dclutch-buffer-writer-permit-v1";
 /// A conservative finalized-height horizon for the one-attempt
 /// `write-buffer` subprocess. Agave's recent blockhash lifetime is shorter
-/// than this bound. A retry is still refused unless bounded Buffer history and
-/// the exact account body prove that no prior child can remain pending.
+/// than this bound. A retry is still refused unless the exact leased process
+/// identity is gone and bounded Buffer history accounts for the old attempt.
 const BUFFER_WRITE_EXPIRY_BLOCKS: u64 = 512;
 /// A provisional operator reserve above the exact rent top-up. The receipt
 /// records the actual fee separately; this bound is lifted by measured devnet
@@ -563,6 +568,47 @@ struct ExpiredLoaderPacketV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct BufferWriterLeaseV1 {
+    schema: String,
+    operation_id: String,
+    attempt_ordinal: u64,
+    pid: u32,
+    process_group_id: u32,
+    process_start_token: String,
+    process_nonce: String,
+    command_sha256: String,
+    lease_path: String,
+    permit_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BufferWriteAttemptV1 {
+    lease: BufferWriterLeaseV1,
+    armed_finalized_block_height: u64,
+    expiry_finalized_block_height: u64,
+    exit_observed_finalized_block_height: Option<u64>,
+    exit_disposition: Option<String>,
+}
+
+struct BufferWriterQueryV1<'a> {
+    operation_id: &'a str,
+    attempt_ordinal: u64,
+    command_arguments: &'a [String],
+    command_sha256: &'a str,
+    lease_path: &'a Path,
+    permit_path: &'a Path,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BufferWriterStatusV1 {
+    AliveStopped,
+    AliveRunning,
+    Exited,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ExtensionReceiptV1 {
     schema: String,
     phase: ReceiptPhaseV1,
@@ -642,6 +688,7 @@ struct UpgradeReceiptV1 {
     buffer_upload_transactions: Option<Vec<Value>>,
     buffer_upload_transactions_sha256: Option<String>,
     buffer_upload_wallet_after_lamports: Option<u64>,
+    buffer_write_attempts: Vec<BufferWriteAttemptV1>,
     expired_packets: Vec<ExpiredLoaderPacketV1>,
     unsigned_message_base64: Option<String>,
     unsigned_message_sha256: Option<String>,
@@ -659,6 +706,17 @@ struct UpgradeReceiptV1 {
     dump_sha256: Option<String>,
     dump_shape: Option<String>,
     receipt_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptTransitionLockV1 {
+    schema: String,
+    owner_pid: u32,
+    owner_start_token: String,
+    expected_receipt_sha256: Option<String>,
+    target_receipt_sha256: String,
+    pending_file_name: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -793,6 +851,14 @@ enum LoaderActionV1 {
     Upgrade { buffer: Pubkey },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum JournaledSignatureStatusV1 {
+    NotFound,
+    Pending,
+    FinalizedSuccess,
+    FinalizedFailure(String),
+}
+
 struct LoaderActionQueryV1<'a> {
     origin: &'a ClusterOriginV1,
     program_id: Pubkey,
@@ -851,6 +917,10 @@ struct BufferUploadEvidenceV1 {
 
 trait CliRunner {
     fn run(&mut self, arguments: &[String]) -> Result<CliOutput>;
+
+    fn enforces_fresh_deployment_set_boundary(&self) -> bool {
+        false
+    }
 
     fn read_snapshot(&mut self, _query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
         Err(Error::new(
@@ -920,6 +990,16 @@ trait CliRunner {
         ))
     }
 
+    fn journaled_signature_status(
+        &mut self,
+        _origin: &ClusterOriginV1,
+        _signature: &str,
+    ) -> Result<JournaledSignatureStatusV1> {
+        Err(Error::new(
+            "CLI runner does not provide exact journaled signature status",
+        ))
+    }
+
     fn read_buffer(
         &mut self,
         _origin: &ClusterOriginV1,
@@ -950,13 +1030,150 @@ trait CliRunner {
             "CLI runner does not provide bounded Buffer upload attribution",
         ))
     }
+
+    fn start_buffer_writer(
+        &mut self,
+        _query: &BufferWriterQueryV1<'_>,
+    ) -> Result<BufferWriterLeaseV1> {
+        Err(Error::new(
+            "CLI runner does not provide a leased Buffer writer",
+        ))
+    }
+
+    fn buffer_writer_status(
+        &mut self,
+        _lease: &BufferWriterLeaseV1,
+    ) -> Result<BufferWriterStatusV1> {
+        Err(Error::new(
+            "CLI runner does not provide Buffer writer liveness",
+        ))
+    }
+
+    fn continue_buffer_writer(
+        &mut self,
+        _query: &BufferWriterQueryV1<'_>,
+        _lease: &BufferWriterLeaseV1,
+    ) -> Result<CliOutput> {
+        Err(Error::new(
+            "CLI runner does not provide leased Buffer continuation",
+        ))
+    }
 }
 
 struct SystemCliRunner {
     executable: PathBuf,
+    buffer_child: Option<Child>,
+}
+
+fn load_buffer_writer_lease(query: &BufferWriterQueryV1<'_>) -> Result<BufferWriterLeaseV1> {
+    let bytes = read_regular_reference(query.lease_path, "Buffer writer lease")?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| Error::new("Buffer writer lease is not UTF-8"))?
+        .trim_end();
+    let fields = text.split('\t').collect::<Vec<_>>();
+    if fields.len() != 8
+        || fields[0] != BUFFER_WRITER_LEASE_SCHEMA
+        || fields[1] != query.operation_id
+        || fields[2] != query.attempt_ordinal.to_string()
+        || fields[7] != query.command_sha256
+    {
+        return Err(Error::new(
+            "Buffer writer lease differs from the exact operation, attempt, or command",
+        ));
+    }
+    let pid = fields[3]
+        .parse::<u32>()
+        .map_err(|_| Error::new("Buffer writer lease PID is invalid"))?;
+    let process_group_id = fields[4]
+        .parse::<u32>()
+        .map_err(|_| Error::new("Buffer writer lease process group is invalid"))?;
+    if pid == 0 || process_group_id != pid || fields[5].is_empty() {
+        return Err(Error::new(
+            "Buffer writer lease lacks its exact private process group/start token",
+        ));
+    }
+    require_digest(fields[6], "Buffer writer process nonce")?;
+    require_digest(fields[7], "Buffer writer command SHA-256")?;
+    Ok(BufferWriterLeaseV1 {
+        schema: BUFFER_WRITER_LEASE_SCHEMA.into(),
+        operation_id: query.operation_id.into(),
+        attempt_ordinal: query.attempt_ordinal,
+        pid,
+        process_group_id,
+        process_start_token: fields[5].into(),
+        process_nonce: fields[6].into(),
+        command_sha256: fields[7].into(),
+        lease_path: query.lease_path.to_string_lossy().into_owned(),
+        permit_path: query.permit_path.to_string_lossy().into_owned(),
+    })
+}
+
+fn process_group_id(pid: u32) -> Result<Option<u32>> {
+    let output = Command::new("/bin/ps")
+        .args(["-o", "pgid=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(text.parse::<u32>().map_err(|_| {
+        Error::new("process group query returned invalid integer")
+    })?))
+}
+
+fn buffer_writer_permit_bytes(lease: &BufferWriterLeaseV1) -> Vec<u8> {
+    format!(
+        "{BUFFER_WRITER_PERMIT_SCHEMA}\t{}\t{}\t{}\t{}\t{}\t{}",
+        lease.operation_id,
+        lease.attempt_ordinal,
+        lease.pid,
+        lease.process_start_token,
+        lease.process_nonce,
+        lease.command_sha256,
+    )
+    .into_bytes()
+}
+
+fn buffer_writer_permit_published(lease: &BufferWriterLeaseV1) -> Result<bool> {
+    let path = Path::new(&lease.permit_path);
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            let bytes = read_regular_reference(path, "Buffer writer permit")?;
+            if bytes != buffer_writer_permit_bytes(lease) {
+                return Err(Error::new(
+                    "Buffer writer permit does not bind the exact durable lease",
+                ));
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn buffer_writer_process_nonce_is_live(lease: &BufferWriterLeaseV1) -> Result<bool> {
+    let output = Command::new("/bin/ps")
+        .args(["eww", "-p", &lease.pid.to_string(), "-o", "command="])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .output()?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let marker = format!("DCLUTCH_BUFFER_WRITER_ID={}", lease.process_nonce);
+    Ok(String::from_utf8_lossy(&output.stdout).contains(&marker))
 }
 
 impl CliRunner for SystemCliRunner {
+    fn enforces_fresh_deployment_set_boundary(&self) -> bool {
+        true
+    }
+
     fn run(&mut self, arguments: &[String]) -> Result<CliOutput> {
         let output = Command::new(&self.executable).args(arguments).output()?;
         Ok(CliOutput {
@@ -1033,6 +1250,14 @@ impl CliRunner for SystemCliRunner {
         .ok_or_else(|| Error::new("getBlockHeight result was not u64"))
     }
 
+    fn journaled_signature_status(
+        &mut self,
+        origin: &ClusterOriginV1,
+        signature: &str,
+    ) -> Result<JournaledSignatureStatusV1> {
+        journaled_signature_status_via_rpc(origin, signature)
+    }
+
     fn read_buffer(
         &mut self,
         origin: &ClusterOriginV1,
@@ -1063,6 +1288,177 @@ impl CliRunner for SystemCliRunner {
     ) -> Result<BufferUploadEvidenceV1> {
         authenticate_buffer_upload_via_rpc(query)
     }
+
+    fn start_buffer_writer(
+        &mut self,
+        query: &BufferWriterQueryV1<'_>,
+    ) -> Result<BufferWriterLeaseV1> {
+        match fs::symlink_metadata(query.lease_path) {
+            Ok(_) => {
+                let lease = load_buffer_writer_lease(query)?;
+                match fs::symlink_metadata(query.permit_path) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(lease);
+                    }
+                    Ok(_) => {
+                        return Err(Error::new(
+                            "unbound existing Buffer writer lease already has a premature permit",
+                        ));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        match fs::symlink_metadata(query.permit_path) {
+            Ok(_) => {
+                return Err(Error::new(
+                    "fresh Buffer writer attempt found a pre-existing permit; no subprocess was started",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let parent = query
+            .lease_path
+            .parent()
+            .ok_or_else(|| Error::new("Buffer writer lease omitted parent"))?;
+        if !parent.is_dir() || query.permit_path.parent() != Some(parent) {
+            return Err(Error::new(
+                "Buffer writer lease and permit must share one existing evidence directory",
+            ));
+        }
+        let script = r#"set -eu
+lease=$1
+operation=$2
+attempt=$3
+command_sha=$4
+permit=$5
+nonce=$6
+shift 6
+export LC_ALL=C TZ=UTC DCLUTCH_BUFFER_WRITER_ID="$nonce"
+pid=$$
+pgid=$(/bin/ps -o pgid= -p "$pid" | tr -d ' ')
+started=$(/bin/ps -o lstart= -p "$pid" | sed 's/^ *//;s/ *$//')
+umask 077
+set -C
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' 'dclutch-buffer-writer-lease-v2' "$operation" "$attempt" "$pid" "$pgid" "$started" "$nonce" "$command_sha" > "$lease"
+/bin/sync
+while [ ! -f "$permit" ]; do sleep 0.05; done
+[ ! -L "$permit" ]
+actual=$(cat "$permit")
+expected=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' 'dclutch-buffer-writer-permit-v1' "$operation" "$attempt" "$pid" "$started" "$nonce" "$command_sha")
+[ "$actual" = "$expected" ]
+exec "$@"
+"#;
+        let process_nonce = digest(&Keypair::new().to_bytes());
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .arg("dclutch-buffer-writer")
+            .arg(query.lease_path)
+            .arg(query.operation_id)
+            .arg(query.attempt_ordinal.to_string())
+            .arg(query.command_sha256)
+            .arg(query.permit_path)
+            .arg(&process_nonce)
+            .arg(&self.executable)
+            .args(query.command_arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .env("DCLUTCH_BUFFER_WRITER_ID", &process_nonce)
+            .process_group(0);
+        let child = command.spawn()?;
+        self.buffer_child = Some(child);
+        for _ in 0..500 {
+            if query.lease_path.exists() {
+                let lease = load_buffer_writer_lease(query)?;
+                sync_parent_directory(parent)?;
+                return Ok(lease);
+            }
+            if self
+                .buffer_child
+                .as_mut()
+                .expect("stored Buffer child")
+                .try_wait()?
+                .is_some()
+            {
+                return Err(Error::new(
+                    "Buffer writer supervisor exited before publishing its durable lease",
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        Err(Error::new(
+            "Buffer writer supervisor did not publish its durable lease within five seconds",
+        ))
+    }
+
+    fn buffer_writer_status(
+        &mut self,
+        lease: &BufferWriterLeaseV1,
+    ) -> Result<BufferWriterStatusV1> {
+        if process_start_token(lease.pid)?.as_deref() != Some(lease.process_start_token.as_str()) {
+            return Ok(BufferWriterStatusV1::Exited);
+        }
+        if process_group_id(lease.pid)? != Some(lease.process_group_id) {
+            return Err(Error::new(
+                "Buffer writer PID still exists under a substituted process group; it will not be signaled",
+            ));
+        }
+        if !buffer_writer_process_nonce_is_live(lease)? {
+            return Err(Error::new(
+                "Buffer writer PID/start/group exists without its exact random process identity; it will not be attached or signaled",
+            ));
+        }
+        Ok(if buffer_writer_permit_published(lease)? {
+            BufferWriterStatusV1::AliveRunning
+        } else {
+            BufferWriterStatusV1::AliveStopped
+        })
+    }
+
+    fn continue_buffer_writer(
+        &mut self,
+        query: &BufferWriterQueryV1<'_>,
+        lease: &BufferWriterLeaseV1,
+    ) -> Result<CliOutput> {
+        if self.buffer_writer_status(lease)? == BufferWriterStatusV1::Exited {
+            return Err(Error::new(
+                "leased Buffer writer exited before continuation",
+            ));
+        }
+        if !buffer_writer_permit_published(lease)? {
+            let mut permit = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(query.permit_path)?;
+            permit.write_all(&buffer_writer_permit_bytes(lease))?;
+            permit.sync_all()?;
+            sync_parent_directory(
+                query
+                    .permit_path
+                    .parent()
+                    .ok_or_else(|| Error::new("Buffer writer permit omitted parent"))?,
+            )?;
+        }
+        let Some(child) = self.buffer_child.take() else {
+            return Err(Error::new(
+                "exact leased Buffer writer is alive after operator restart; wait for that PID/process-group/start-token to exit before attaching or re-arming",
+            ));
+        };
+        let output = child.wait_with_output()?;
+        Ok(CliOutput {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
 }
 
 /// Parse and execute the versioned command with the real Solana CLI.
@@ -1070,6 +1466,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let args = parse_args(arguments)?;
     let mut runner = SystemCliRunner {
         executable: args.solana_cli.clone(),
+        buffer_child: None,
     };
     let mut stdout = std::io::stdout().lock();
     if args.preflight {
@@ -1168,6 +1565,7 @@ pub(crate) fn run_extension(arguments: Vec<String>) -> Result<()> {
     let args = parse_extension_args(arguments)?;
     let mut runner = SystemCliRunner {
         executable: args.solana_cli.clone(),
+        buffer_child: None,
     };
     let receipt = execute_extension_with_runner(&args, &mut runner)?;
     let mut stdout = std::io::stdout().lock();
@@ -1182,6 +1580,7 @@ pub(crate) fn run_set_journal(arguments: Vec<String>) -> Result<()> {
     let args = parse_set_args(arguments)?;
     let mut runner = SystemCliRunner {
         executable: args.solana_cli.clone(),
+        buffer_child: None,
     };
     let report = audit_set_journal_with_runner(&args, &mut runner)?;
     let mut stdout = std::io::stdout().lock();
@@ -1383,14 +1782,21 @@ fn audit_set_journal_with_runner(
                 journal.solana_cli_version, admission.gate.solana_cli_version
             )));
         }
-        let receipt_phase = match &role.receipt.sha256 {
-            Some(_) => Some(
-                load_receipt(&role_args.receipt_path)?
-                    .ok_or_else(|| Error::new("pinned deployment-set receipt disappeared"))?
-                    .phase,
-            ),
-            None => None,
-        };
+        let loaded_receipt = load_receipt(&role_args.receipt_path)?;
+        let receipt_phase = loaded_receipt.as_ref().map(|receipt| receipt.phase.clone());
+        if role.receipt.sha256.is_some() && loaded_receipt.is_none() {
+            return Err(Error::new("pinned deployment-set receipt disappeared"));
+        }
+        if role.receipt.sha256.is_none()
+            && loaded_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.phase == ReceiptPhaseV1::Complete)
+        {
+            return Err(Error::new(format!(
+                "complete deployment-set role {} must pin its exact receipt digest before the set can advance",
+                role.role
+            )));
+        }
         match (&receipt_phase, &role.dump.sha256) {
             (Some(ReceiptPhaseV1::Complete), Some(_)) => {}
             (Some(ReceiptPhaseV1::Complete), None) => {
@@ -1638,6 +2044,7 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
             PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len()
         )));
     }
+    let _ = unique_deployment_set_paths(&journal, &journal_path)?;
     let mut identities = BTreeSet::new();
     for (index, (role, (expected_role, expected_program, expected_programdata))) in journal
         .roles
@@ -1699,7 +2106,29 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
                     Error::new(format!("Upgrade role {} omitted its baseline", role.role))
                 })?;
                 read_pinned_reference(baseline, &format!("{} baseline", role.role))?;
-                read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+                if role.receipt.sha256.is_some() {
+                    read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+                } else {
+                    let path = exact_reference_path(
+                        &role.receipt.canonical_path,
+                        &format!("{} in-flight receipt", role.role),
+                    )?;
+                    if read_existing_regular_receipt(
+                        &path,
+                        &format!("{} in-flight receipt", role.role),
+                    )?
+                    .is_none()
+                    {
+                        let parent = path
+                            .parent()
+                            .ok_or_else(|| Error::new("in-flight receipt path omitted a parent"))?;
+                        if fs::canonicalize(parent)? != parent {
+                            return Err(Error::new(
+                                "in-flight receipt parent is not an exact canonical directory",
+                            ));
+                        }
+                    }
+                }
             }
         }
         read_optional_reference(&role.dump, &format!("{} dump", role.role))?;
@@ -1707,10 +2136,60 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
     Ok((journal, journal_sha256))
 }
 
+fn unique_deployment_set_paths(
+    journal: &UpgradeSetJournalV1,
+    journal_path: &Path,
+) -> Result<BTreeSet<PathBuf>> {
+    let mut paths = BTreeSet::new();
+    if !paths.insert(journal_path.to_path_buf()) {
+        return Err(Error::new("deployment-set journal path aliases itself"));
+    }
+    let mut insert = |path: &str, label: &str| -> Result<()> {
+        let path = exact_reference_path(path, label)?;
+        if !paths.insert(path) {
+            return Err(Error::new(format!(
+                "deployment-set evidence/output paths alias at {label}"
+            )));
+        }
+        Ok(())
+    };
+    insert(
+        &journal.checked_release_gate.canonical_path,
+        "checked-release gate",
+    )?;
+    insert(
+        &journal.infrastructure_carry_forward.canonical_path,
+        "carry-forward snapshot",
+    )?;
+    for role in &journal.roles {
+        if let Some(baseline) = &role.baseline {
+            insert(&baseline.canonical_path, &format!("{} baseline", role.role))?;
+        }
+        insert(
+            &role.receipt.canonical_path,
+            &format!("{} receipt", role.role),
+        )?;
+        insert(&role.dump.canonical_path, &format!("{} dump", role.role))?;
+    }
+    Ok(paths)
+}
+
+fn deployment_set_plan_sha256(journal: &UpgradeSetJournalV1) -> Result<String> {
+    let mut plan = journal.clone();
+    for role in &mut plan.roles {
+        if role.disposition == CheckedDeploymentDispositionV1::Upgrade {
+            role.receipt.sha256 = None;
+            role.dump.sha256 = None;
+        }
+    }
+    Ok(digest(&serde_json::to_vec(&plan)?))
+}
+
 fn require_mutation_permit(
     args: &UpgradeArgsV1,
     expected_journal_sha256: Option<&str>,
     require_upgrade_receipt_path: bool,
+    freshly_audited_raw_journal_sha256: Option<&str>,
 ) -> Result<String> {
     if matches!(args.role.as_str(), "registry" | "rent") {
         return Err(Error::new(
@@ -1724,10 +2203,9 @@ fn require_mutation_permit(
         "deployment-set mutation journal",
     )?;
     let bytes = read_regular_reference(&path, "deployment-set mutation journal")?;
-    let journal_sha256 = digest(&bytes);
-    if expected_journal_sha256.is_some_and(|expected| expected != journal_sha256) {
+    if freshly_audited_raw_journal_sha256.is_some_and(|expected| digest(&bytes) != expected) {
         return Err(Error::new(
-            "deployment-set journal changed after the mutation plan was fsynced",
+            "deployment-set journal changed after its fresh full mutation-boundary audit",
         ));
     }
     let journal: UpgradeSetJournalV1 = serde_json::from_slice(&bytes).map_err(|error| {
@@ -1735,6 +2213,18 @@ fn require_mutation_permit(
             "deployment-set mutation journal is not canonical {SET_JOURNAL_SCHEMA} JSON: {error}"
         ))
     })?;
+    let plan_paths = unique_deployment_set_paths(&journal, &path)?;
+    if !require_upgrade_receipt_path && plan_paths.contains(&args.receipt_path) {
+        return Err(Error::new(
+            "extension receipt path aliases deployment-set evidence or an Upgrade output path",
+        ));
+    }
+    let journal_sha256 = deployment_set_plan_sha256(&journal)?;
+    if expected_journal_sha256.is_some_and(|expected| expected != journal_sha256) {
+        return Err(Error::new(
+            "deployment-set immutable plan changed after the mutation receipt was fsynced",
+        ));
+    }
     if journal.schema != SET_JOURNAL_SCHEMA
         || journal.devnet_genesis_hash != DEVNET_GENESIS_HASH
         || (require_upgrade_receipt_path
@@ -1821,13 +2311,61 @@ fn require_mutation_permit(
             .is_none_or(|baseline| Path::new(&baseline.canonical_path) != args.baseline_path)
         || (require_upgrade_receipt_path
             && Path::new(&target.receipt.canonical_path) != args.receipt_path)
+        || (require_upgrade_receipt_path
+            && Path::new(&target.dump.canonical_path) != args.dump_path)
     {
         return Err(Error::new(format!(
-            "deployment-set next role is {} at ordinal {index}, not exact requested {}:{}:{}",
+            "deployment-set next role is {} at ordinal {index}, not exact requested role/path {}:{}:{}; an extension receipt must not replace the fixed Upgrade receipt",
             target.role, args.role, args.program_id, args.programdata_id
         )));
     }
     Ok(journal_sha256)
+}
+
+fn authenticate_mutation_boundary(
+    args: &UpgradeArgsV1,
+    runner: &mut impl CliRunner,
+) -> Result<Option<String>> {
+    if !runner.enforces_fresh_deployment_set_boundary() {
+        return Ok(None);
+    }
+    let report = audit_set_journal_with_runner(
+        &UpgradeSetArgsV1 {
+            origin: args.origin.clone(),
+            journal_path: args.deployment_set_journal_path.clone(),
+            solana_cli: args.solana_cli.clone(),
+        },
+        runner,
+    )?;
+    let next = report
+        .next_role
+        .ok_or_else(|| Error::new("deployment set is complete; no mutation is permitted"))?;
+    if next.role != args.role
+        || next.program_id != args.program_id.to_string()
+        || next.programdata_id != args.programdata_id.to_string()
+    {
+        return Err(Error::new(
+            "fresh deployment-set audit does not name this exact permanent row as the next mutation",
+        ));
+    }
+    Ok(Some(report.journal_sha256))
+}
+
+fn authenticate_phase_mutation_boundary(
+    args: &UpgradeArgsV1,
+    runner: &mut impl CliRunner,
+    phase: ReceiptPhaseV1,
+) -> Result<Option<String>> {
+    if matches!(phase, ReceiptPhaseV1::Submitted | ReceiptPhaseV1::Complete) {
+        // Submitted is already past the sole send boundary. A fresh set audit
+        // may legitimately see either its old prestate or its new poststate;
+        // exact packet/status/account recovery owns that ambiguity. If a null
+        // expired packet is archived, the continuation loop audits again
+        // before it can prepare or send a replacement.
+        Ok(None)
+    } else {
+        authenticate_mutation_boundary(args, runner)
+    }
 }
 
 fn read_pinned_reference(reference: &SetPinnedFileV1, label: &str) -> Result<Vec<u8>> {
@@ -2644,6 +3182,7 @@ pub(crate) fn authenticate_complete_deployment_set_for_prepare_live(
     };
     let mut runner = SystemCliRunner {
         executable: solana_cli.to_path_buf(),
+        buffer_child: None,
     };
     let audit = audit_set_journal_with_runner(&args, &mut runner)?;
     let audit_digest = audit
@@ -3042,7 +3581,9 @@ fn execute_with_runner(
     }
     match existing {
         None => {
-            let deployment_set_journal_sha256 = require_mutation_permit(args, None, true)?;
+            let audited_journal = authenticate_mutation_boundary(args, runner)?;
+            let deployment_set_journal_sha256 =
+                require_mutation_permit(args, None, true, audited_journal.as_deref())?;
             let before = read_snapshot(runner, args, baseline.context_slot)?;
             require_baseline_prestate(baseline, &before.loader)?;
             require_candidate_fits(&before, candidate_live)?;
@@ -3109,6 +3650,7 @@ fn execute_with_runner(
                 buffer_upload_transactions: None,
                 buffer_upload_transactions_sha256: None,
                 buffer_upload_wallet_after_lamports: None,
+                buffer_write_attempts: Vec::new(),
                 expired_packets: Vec::new(),
                 unsigned_message_base64: None,
                 unsigned_message_sha256: None,
@@ -3141,7 +3683,14 @@ fn execute_with_runner(
                     | ReceiptPhaseV1::Submitted
             ) =>
         {
-            require_mutation_permit(args, Some(&receipt.deployment_set_journal_sha256), true)?;
+            let audited_journal =
+                authenticate_phase_mutation_boundary(args, runner, receipt.phase.clone())?;
+            require_mutation_permit(
+                args,
+                Some(&receipt.deployment_set_journal_sha256),
+                true,
+                audited_journal.as_deref(),
+            )?;
             let current = read_snapshot(runner, args, receipt.before_context_slot)?;
             if receipt.phase != ReceiptPhaseV1::Submitted && current.loader != receipt.before {
                 return Err(Error::new(
@@ -3252,6 +3801,57 @@ fn preflight_with_runner(
                 return Err(Error::new(
                     "preflight found drift from the prepared receipt prestate",
                 ));
+            }
+        }
+        Some(receipt) if receipt.phase == ReceiptPhaseV1::BufferWriteArmed => {
+            if observation.loader != receipt.before
+                || observation.wallet_lamports > receipt.wallet_before_lamports
+            {
+                return Err(Error::new(
+                    "preflight found drift from the armed Buffer receipt prestate",
+                ));
+            }
+            let lease = &receipt
+                .buffer_write_attempts
+                .last()
+                .ok_or_else(|| Error::new("armed receipt omitted Buffer writer lease"))?
+                .lease;
+            let _ = runner.buffer_writer_status(lease)?;
+        }
+        Some(receipt)
+            if matches!(
+                receipt.phase,
+                ReceiptPhaseV1::BufferReady
+                    | ReceiptPhaseV1::MessagePrepared
+                    | ReceiptPhaseV1::SignedNotSubmitted
+            ) =>
+        {
+            if observation.loader != receipt.before
+                || observation.wallet_lamports
+                    != receipt
+                        .buffer_upload_wallet_after_lamports
+                        .ok_or_else(|| Error::new("Buffer-ready receipt omitted payer balance"))?
+            {
+                return Err(Error::new(
+                    "preflight found drift from the exact Buffer-ready Loader/payer prestate",
+                ));
+            }
+            let buffer = runner
+                .read_buffer(
+                    &args.origin,
+                    parse_pubkey(&receipt.buffer_pubkey, "receipt Buffer")?,
+                    args.expected_upgrade_authority,
+                    receipt.before_context_slot,
+                )?
+                .ok_or_else(|| Error::new("preflight found the exact ready Buffer missing"))?;
+            if buffer.account_sha256
+                != receipt
+                    .buffer_ready_account_sha256
+                    .as_deref()
+                    .unwrap_or_default()
+                || buffer.payload_sha256 != receipt.raw_elf_sha256
+            {
+                return Err(Error::new("preflight found the ready Buffer body drifted"));
             }
         }
         Some(receipt) if receipt.phase == ReceiptPhaseV1::Submitted => {
@@ -3396,7 +3996,9 @@ fn execute_extension_with_runner(
 
     match existing {
         None => {
-            let deployment_set_journal_sha256 = require_mutation_permit(&shadow, None, false)?;
+            let audited_journal = authenticate_mutation_boundary(&shadow, runner)?;
+            let deployment_set_journal_sha256 =
+                require_mutation_permit(&shadow, None, false, audited_journal.as_deref())?;
             let before = read_snapshot(runner, &shadow, baseline.context_slot)?;
             require_baseline_prestate(&baseline, &before.loader)?;
             let required = baseline
@@ -3461,7 +4063,14 @@ fn execute_extension_with_runner(
                     | ReceiptPhaseV1::Submitted
             ) =>
         {
-            require_mutation_permit(&shadow, Some(&receipt.deployment_set_journal_sha256), false)?;
+            let audited_journal =
+                authenticate_phase_mutation_boundary(&shadow, runner, receipt.phase.clone())?;
+            require_mutation_permit(
+                &shadow,
+                Some(&receipt.deployment_set_journal_sha256),
+                false,
+                audited_journal.as_deref(),
+            )?;
             let current = read_snapshot(runner, &shadow, receipt.before_context_slot)?;
             if receipt.phase != ReceiptPhaseV1::Submitted {
                 require_baseline_prestate(&baseline, &current.loader)?;
@@ -3550,7 +4159,14 @@ fn continue_extension(
         action: LoaderActionV1::Extend { additional_bytes },
     };
     loop {
-        require_mutation_permit(shadow, Some(&receipt.deployment_set_journal_sha256), false)?;
+        let audited_journal =
+            authenticate_phase_mutation_boundary(shadow, runner, receipt.phase.clone())?;
+        require_mutation_permit(
+            shadow,
+            Some(&receipt.deployment_set_journal_sha256),
+            false,
+            audited_journal.as_deref(),
+        )?;
         match receipt.phase {
             ReceiptPhaseV1::Prepared => {
                 let unsigned = runner.prepare_loader_action(&query)?;
@@ -3657,6 +4273,28 @@ fn finish_submitted_extension(
             return Err(Error::new(
                 "extension deployment slot did not advance and its exact prestate moved; recovery is ambiguous",
             ));
+        }
+        let signature = receipt
+            .transaction_signature
+            .as_deref()
+            .ok_or_else(|| Error::new("submitted extension omitted signature"))?;
+        match runner.journaled_signature_status(&args.origin, signature)? {
+            JournaledSignatureStatusV1::FinalizedFailure(error) => {
+                return Err(Error::new(format!(
+                    "journaled extension finalized with failure {error}; its fee/prestate boundary must be attributed before any replacement"
+                )));
+            }
+            JournaledSignatureStatusV1::FinalizedSuccess => {
+                return Err(Error::new(
+                    "journaled extension is finalized successful but the exact finalized Loader snapshot has not caught up",
+                ));
+            }
+            JournaledSignatureStatusV1::Pending => {
+                return Err(Error::new(
+                    "journaled extension signature is still present and pending; recovery is poll-only even after blockhash expiry",
+                ));
+            }
+            JournaledSignatureStatusV1::NotFound => {}
         }
         let finalized_height = runner.finalized_block_height(&args.origin)?;
         let last_valid = receipt
@@ -3818,6 +4456,125 @@ fn archive_expired_extension_packet(
     Ok(())
 }
 
+fn buffer_write_arguments(
+    args: &UpgradeArgsV1,
+    gate: &ValidatedUpgradeGateV1,
+) -> Result<Vec<String>> {
+    Ok(vec![
+        "program".into(),
+        "write-buffer".into(),
+        path_argument(&args.elf_path, "--elf")?,
+        "--url".into(),
+        args.origin.url().into(),
+        "--buffer".into(),
+        path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?,
+        "--buffer-authority".into(),
+        path_argument(&args.authority_keypair, "--buffer-authority")?,
+        "--fee-payer".into(),
+        path_argument(&args.fee_payer_keypair, "--fee-payer")?,
+        "--max-len".into(),
+        gate.raw_elf.len().to_string(),
+        "--max-sign-attempts".into(),
+        "1".into(),
+        "--output".into(),
+        "json".into(),
+    ])
+}
+
+fn buffer_write_command_sha256(
+    args: &UpgradeArgsV1,
+    command_arguments: &[String],
+) -> Result<String> {
+    Ok(digest(&serde_json::to_vec(&serde_json::json!({
+        "solana_cli": path_argument(&args.solana_cli, "--solana-cli")?,
+        "arguments": command_arguments,
+    }))?))
+}
+
+fn buffer_writer_paths(
+    args: &UpgradeArgsV1,
+    operation_id: &str,
+    attempt_ordinal: u64,
+) -> Result<(PathBuf, PathBuf)> {
+    let parent = args
+        .receipt_path
+        .parent()
+        .ok_or_else(|| Error::new("Upgrade receipt omitted parent"))?;
+    let name = args
+        .receipt_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::new("Upgrade receipt file name is not UTF-8"))?;
+    Ok((
+        parent.join(format!(
+            ".{name}.{operation_id}.{attempt_ordinal}.buffer-writer-lease"
+        )),
+        parent.join(format!(
+            ".{name}.{operation_id}.{attempt_ordinal}.buffer-writer-permit"
+        )),
+    ))
+}
+
+fn buffer_writer_query<'a>(
+    args: &UpgradeArgsV1,
+    receipt: &'a UpgradeReceiptV1,
+    command_arguments: &'a [String],
+    command_sha256: &'a str,
+    attempt_ordinal: u64,
+    lease_path: &'a Path,
+    permit_path: &'a Path,
+) -> BufferWriterQueryV1<'a> {
+    let _ = args;
+    BufferWriterQueryV1 {
+        operation_id: &receipt.operation_id,
+        attempt_ordinal,
+        command_arguments,
+        command_sha256,
+        lease_path,
+        permit_path,
+    }
+}
+
+fn start_leased_buffer_attempt(
+    runner: &mut impl CliRunner,
+    args: &UpgradeArgsV1,
+    gate: &ValidatedUpgradeGateV1,
+    receipt: &mut UpgradeReceiptV1,
+    armed_height: u64,
+) -> Result<()> {
+    let attempt_ordinal = u64::try_from(receipt.buffer_write_attempts.len())
+        .map_err(|_| Error::new("Buffer writer attempt ordinal overflow"))?;
+    let command_arguments = buffer_write_arguments(args, gate)?;
+    let command_sha256 = buffer_write_command_sha256(args, &command_arguments)?;
+    let (lease_path, permit_path) =
+        buffer_writer_paths(args, &receipt.operation_id, attempt_ordinal)?;
+    let query = buffer_writer_query(
+        args,
+        receipt,
+        &command_arguments,
+        &command_sha256,
+        attempt_ordinal,
+        &lease_path,
+        &permit_path,
+    );
+    let lease = runner.start_buffer_writer(&query)?;
+    let expiry = armed_height
+        .checked_add(BUFFER_WRITE_EXPIRY_BLOCKS)
+        .ok_or_else(|| Error::new("Buffer writer expiry overflow"))?;
+    receipt.phase = ReceiptPhaseV1::BufferWriteArmed;
+    receipt.buffer_write_armed_block_height = Some(armed_height);
+    receipt.buffer_write_expiry_block_height = Some(expiry);
+    receipt.buffer_write_cli_output = None;
+    receipt.buffer_write_attempts.push(BufferWriteAttemptV1 {
+        lease,
+        armed_finalized_block_height: armed_height,
+        expiry_finalized_block_height: expiry,
+        exit_observed_finalized_block_height: None,
+        exit_disposition: None,
+    });
+    write_receipt(&args.receipt_path, receipt)
+}
+
 fn continue_upgrade(
     runner: &mut impl CliRunner,
     args: &UpgradeArgsV1,
@@ -3837,9 +4594,15 @@ fn continue_upgrade(
             buffer: args.buffer_pubkey,
         },
     };
-    let mut newly_armed = false;
     loop {
-        require_mutation_permit(args, Some(&receipt.deployment_set_journal_sha256), true)?;
+        let audited_journal =
+            authenticate_phase_mutation_boundary(args, runner, receipt.phase.clone())?;
+        require_mutation_permit(
+            args,
+            Some(&receipt.deployment_set_journal_sha256),
+            true,
+            audited_journal.as_deref(),
+        )?;
         match receipt.phase {
             ReceiptPhaseV1::Prepared => {
                 if runner
@@ -3856,42 +4619,46 @@ fn continue_upgrade(
                     ));
                 }
                 let armed_height = runner.finalized_block_height(&args.origin)?;
-                receipt.phase = ReceiptPhaseV1::BufferWriteArmed;
-                receipt.buffer_write_armed_block_height = Some(armed_height);
-                receipt.buffer_write_expiry_block_height = Some(
-                    armed_height
-                        .checked_add(BUFFER_WRITE_EXPIRY_BLOCKS)
-                        .ok_or_else(|| Error::new("Buffer expiry height overflow"))?,
-                );
-                write_receipt(&args.receipt_path, receipt)?;
-                newly_armed = true;
+                start_leased_buffer_attempt(runner, args, gate, receipt, armed_height)?;
             }
             ReceiptPhaseV1::BufferWriteArmed => {
-                if authenticate_ready_buffer(runner, args, gate, receipt)? {
-                    newly_armed = false;
+                let attempt_index = receipt
+                    .buffer_write_attempts
+                    .len()
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::new("armed Buffer receipt omitted writer attempt"))?;
+                let lease = receipt.buffer_write_attempts[attempt_index].lease.clone();
+                let status = runner.buffer_writer_status(&lease)?;
+                if status == BufferWriterStatusV1::Exited {
+                    if receipt.buffer_write_attempts[attempt_index]
+                        .exit_observed_finalized_block_height
+                        .is_none()
+                    {
+                        let height = runner.finalized_block_height(&args.origin)?;
+                        receipt.buffer_write_attempts[attempt_index]
+                            .exit_observed_finalized_block_height = Some(height);
+                        receipt.buffer_write_attempts[attempt_index].exit_disposition =
+                            Some("lost_after_operator_crash".into());
+                        write_receipt(&args.receipt_path, receipt)?;
+                    }
+                    if authenticate_ready_buffer(runner, args, gate, receipt)? {
+                        continue;
+                    }
+                    let height = runner.finalized_block_height(&args.origin)?;
+                    let expiry =
+                        receipt.buffer_write_attempts[attempt_index].expiry_finalized_block_height;
+                    if height <= expiry {
+                        return Err(Error::new(format!(
+                            "leased Buffer writer exited without an exact finalized Buffer; no second writer is allowed before conservative expiry {expiry} (current {height})"
+                        )));
+                    }
+                    start_leased_buffer_attempt(runner, args, gate, receipt, height)?;
                     continue;
                 }
-                let height = runner.finalized_block_height(&args.origin)?;
-                let expiry = receipt
-                    .buffer_write_expiry_block_height
-                    .ok_or_else(|| Error::new("armed Buffer receipt omitted expiry height"))?;
-                if !newly_armed && height <= expiry {
-                    return Err(Error::new(format!(
-                        "persistent Buffer upload remains pending through finalized height {height}; no second writer is allowed before conservative expiry {expiry}"
-                    )));
-                }
-                if !newly_armed {
-                    receipt.buffer_write_armed_block_height = Some(height);
-                    receipt.buffer_write_expiry_block_height = Some(
-                        height
-                            .checked_add(BUFFER_WRITE_EXPIRY_BLOCKS)
-                            .ok_or_else(|| Error::new("Buffer re-arm expiry overflow"))?,
-                    );
-                    receipt.buffer_write_cli_output = None;
-                    write_receipt(&args.receipt_path, receipt)?;
-                }
-                // The exact Buffer identity, ELF, rent, authority, payer and
-                // retry horizon are fsynced before any of these key reads.
+
+                // The exact Buffer identity, ELF, rent, authority, payer,
+                // PID, start token, private process group and retry horizon
+                // are fsynced before any of these key reads or the permit.
                 authenticate_keypair(
                     runner,
                     args,
@@ -3913,29 +4680,29 @@ fn continue_upgrade(
                     args.fee_payer,
                     "Buffer fee payer",
                 )?;
-                let output = invoke(
-                    runner,
-                    args,
-                    &[
-                        "program".into(),
-                        "write-buffer".into(),
-                        path_argument(&args.elf_path, "--elf")?,
-                        "--url".into(),
-                        args.origin.url().into(),
-                        "--buffer".into(),
-                        path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?,
-                        "--buffer-authority".into(),
-                        path_argument(&args.authority_keypair, "--buffer-authority")?,
-                        "--fee-payer".into(),
-                        path_argument(&args.fee_payer_keypair, "--fee-payer")?,
-                        "--max-len".into(),
-                        gate.raw_elf.len().to_string(),
-                        "--max-sign-attempts".into(),
-                        "1".into(),
-                        "--output".into(),
-                        "json".into(),
-                    ],
-                )?;
+                let command_arguments = buffer_write_arguments(args, gate)?;
+                let command_sha256 = buffer_write_command_sha256(args, &command_arguments)?;
+                let query = BufferWriterQueryV1 {
+                    operation_id: &receipt.operation_id,
+                    attempt_ordinal: lease.attempt_ordinal,
+                    command_arguments: &command_arguments,
+                    command_sha256: &command_sha256,
+                    lease_path: Path::new(&lease.lease_path),
+                    permit_path: Path::new(&lease.permit_path),
+                };
+                let output = runner.continue_buffer_writer(&query, &lease)?;
+                if !output.success {
+                    let height = runner.finalized_block_height(&args.origin)?;
+                    receipt.buffer_write_attempts[attempt_index]
+                        .exit_observed_finalized_block_height = Some(height);
+                    receipt.buffer_write_attempts[attempt_index].exit_disposition =
+                        Some("returned_failure".into());
+                    write_receipt(&args.receipt_path, receipt)?;
+                    return Err(Error::new(format!(
+                        "leased write-buffer failed after one attempt: {}",
+                        redact(&output.stderr, args)
+                    )));
+                }
                 let parsed: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
                     Error::new(format!(
                         "write-buffer output was lost or invalid after its one attempt: {error}; receipt remains armed and recovery is read-only"
@@ -3951,8 +4718,12 @@ fn continue_upgrade(
                     ));
                 }
                 receipt.buffer_write_cli_output = Some(parsed);
+                let height = runner.finalized_block_height(&args.origin)?;
+                receipt.buffer_write_attempts[attempt_index].exit_observed_finalized_block_height =
+                    Some(height);
+                receipt.buffer_write_attempts[attempt_index].exit_disposition =
+                    Some("returned_success".into());
                 write_receipt(&args.receipt_path, receipt)?;
-                newly_armed = false;
                 if !authenticate_ready_buffer(runner, args, gate, receipt)? {
                     return Err(Error::new(
                         "one-attempt Buffer writer returned before exact payload finalized; recovery is poll-only until expiry",
@@ -4137,6 +4908,37 @@ fn finish_submitted(
             return Err(Error::new(
                 "Upgrade deployment slot has no slot advance and its ProgramData or authenticated Buffer moved; recovery is ambiguous",
             ));
+        }
+        let expected_payer = receipt
+            .buffer_upload_wallet_after_lamports
+            .ok_or_else(|| Error::new("submitted Upgrade omitted payer post-upload balance"))?;
+        if after.wallet_lamports != expected_payer {
+            return Err(Error::new(format!(
+                "submitted Upgrade payer moved from journaled post-upload balance {expected_payer} to {}; a failed or external transaction fee must be attributed before any replacement",
+                after.wallet_lamports
+            )));
+        }
+        let signature = receipt
+            .transaction_signature
+            .as_deref()
+            .ok_or_else(|| Error::new("submitted Upgrade omitted signature"))?;
+        match runner.journaled_signature_status(&args.origin, signature)? {
+            JournaledSignatureStatusV1::FinalizedFailure(error) => {
+                return Err(Error::new(format!(
+                    "journaled Upgrade finalized with failure {error}; its charged fee must be attributed before any replacement"
+                )));
+            }
+            JournaledSignatureStatusV1::FinalizedSuccess => {
+                return Err(Error::new(
+                    "journaled Upgrade is finalized successful but the exact finalized Loader snapshot has not caught up",
+                ));
+            }
+            JournaledSignatureStatusV1::Pending => {
+                return Err(Error::new(
+                    "journaled Upgrade signature is still present and pending; recovery is poll-only even after blockhash expiry",
+                ));
+            }
+            JournaledSignatureStatusV1::NotFound => {}
         }
         let finalized_height = runner.finalized_block_height(&args.origin)?;
         let last_valid = receipt
@@ -5398,6 +6200,52 @@ fn send_loader_action_via_rpc(
     Ok(returned)
 }
 
+fn journaled_signature_status_via_rpc(
+    origin: &ClusterOriginV1,
+    signature: &str,
+) -> Result<JournaledSignatureStatusV1> {
+    let _ = Signature::from_str(signature)
+        .map_err(|_| Error::new("journaled Loader signature is invalid"))?;
+    let mut rpc = Rpc::connect_cluster(origin, WritePolicyV1::ReadsOnly)?;
+    let value = rpc.call(
+        "getSignatureStatuses",
+        &serde_json::json!([[signature], {"searchTransactionHistory":true}]),
+    )?;
+    let rows = value
+        .get("value")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("getSignatureStatuses omitted value array"))?;
+    if rows.len() != 1 {
+        return Err(Error::new(
+            "getSignatureStatuses did not return exactly one journaled signature row",
+        ));
+    }
+    let Some(row) = rows[0].as_object() else {
+        if rows[0].is_null() {
+            return Ok(JournaledSignatureStatusV1::NotFound);
+        }
+        return Err(Error::new(
+            "journaled signature status row is not an object",
+        ));
+    };
+    let confirmation = row
+        .get("confirmationStatus")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("journaled signature status omitted confirmationStatus"))?;
+    if confirmation != "finalized" {
+        return Ok(JournaledSignatureStatusV1::Pending);
+    }
+    match row.get("err") {
+        Some(error) if !error.is_null() => Ok(JournaledSignatureStatusV1::FinalizedFailure(
+            serde_json::to_string(error)?,
+        )),
+        Some(_) => Ok(JournaledSignatureStatusV1::FinalizedSuccess),
+        None => Err(Error::new(
+            "finalized journaled signature status omitted err",
+        )),
+    }
+}
+
 fn read_buffer_via_rpc(
     origin: &ClusterOriginV1,
     buffer: Pubkey,
@@ -6149,6 +6997,83 @@ fn redact(text: &str, args: &UpgradeArgsV1) -> String {
         )
 }
 
+fn validate_buffer_write_attempts(
+    args: &UpgradeArgsV1,
+    gate: &ValidatedUpgradeGateV1,
+    receipt: &UpgradeReceiptV1,
+) -> Result<()> {
+    let command_sha256 = (args.buffer_pubkey != Pubkey::default())
+        .then(|| buffer_write_arguments(args, gate))
+        .transpose()?
+        .map(|arguments| buffer_write_command_sha256(args, &arguments))
+        .transpose()?;
+    let mut identities = BTreeSet::new();
+    for (index, attempt) in receipt.buffer_write_attempts.iter().enumerate() {
+        let ordinal = u64::try_from(index).expect("attempt index fits u64");
+        let (lease_path, permit_path) = buffer_writer_paths(args, &receipt.operation_id, ordinal)?;
+        if attempt.lease.schema != BUFFER_WRITER_LEASE_SCHEMA
+            || attempt.lease.operation_id != receipt.operation_id
+            || attempt.lease.attempt_ordinal != ordinal
+            || attempt.lease.pid == 0
+            || attempt.lease.process_group_id != attempt.lease.pid
+            || attempt.lease.process_start_token.is_empty()
+            || require_digest(&attempt.lease.process_nonce, "Buffer process nonce").is_err()
+            || command_sha256
+                .as_ref()
+                .is_some_and(|expected| attempt.lease.command_sha256 != *expected)
+            || require_digest(&attempt.lease.command_sha256, "Buffer command SHA-256").is_err()
+            || Path::new(&attempt.lease.lease_path) != lease_path
+            || Path::new(&attempt.lease.permit_path) != permit_path
+            || attempt.expiry_finalized_block_height
+                != attempt
+                    .armed_finalized_block_height
+                    .checked_add(BUFFER_WRITE_EXPIRY_BLOCKS)
+                    .ok_or_else(|| Error::new("Buffer attempt expiry overflow"))?
+            || attempt.exit_observed_finalized_block_height.is_some()
+                != attempt.exit_disposition.is_some()
+            || !identities.insert((
+                attempt.lease.pid,
+                attempt.lease.process_start_token.as_str(),
+                attempt.lease.process_nonce.as_str(),
+            ))
+        {
+            return Err(Error::new(
+                "Buffer writer attempt history has a substituted lease, command, window, process identity, or exit boundary",
+            ));
+        }
+        if attempt.exit_disposition.as_deref().is_some_and(|value| {
+            !matches!(
+                value,
+                "returned_success" | "returned_failure" | "lost_after_operator_crash"
+            )
+        }) {
+            return Err(Error::new("Buffer writer exit disposition is invalid"));
+        }
+        if index + 1 < receipt.buffer_write_attempts.len() {
+            let exit_height = attempt.exit_observed_finalized_block_height.ok_or_else(|| {
+                Error::new("every superseded Buffer writer attempt must retain its exact exit boundary")
+            })?;
+            let successor = &receipt.buffer_write_attempts[index + 1];
+            if successor.armed_finalized_block_height <= attempt.expiry_finalized_block_height
+                || successor.armed_finalized_block_height < exit_height
+            {
+                return Err(Error::new(
+                    "Buffer writer successor was armed before prior expiry and exact exit observation",
+                ));
+            }
+        }
+    }
+    if let Some(last) = receipt.buffer_write_attempts.last()
+        && (receipt.buffer_write_armed_block_height != Some(last.armed_finalized_block_height)
+            || receipt.buffer_write_expiry_block_height != Some(last.expiry_finalized_block_height))
+    {
+        return Err(Error::new(
+            "Buffer writer current arm fields differ from the durable attempt history",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_receipt_binding(
     args: &UpgradeArgsV1,
     gate: &ValidatedUpgradeGateV1,
@@ -6212,6 +7137,7 @@ fn validate_receipt_binding(
     if receipt.operation_id != expected_operation {
         return Err(Error::new("Upgrade receipt operation_id is not canonical"));
     }
+    validate_buffer_write_attempts(args, gate, receipt)?;
     let no_buffer_ready = receipt.buffer_ready_context_slot.is_none()
         && receipt.buffer_ready_account_sha256.is_none()
         && receipt.buffer_ready_lamports.is_none()
@@ -6259,7 +7185,8 @@ fn validate_receipt_binding(
         && receipt.transaction_signature.is_none();
     match receipt.phase {
         ReceiptPhaseV1::Prepared => {
-            if receipt.buffer_write_armed_block_height.is_some()
+            if !receipt.buffer_write_attempts.is_empty()
+                || receipt.buffer_write_armed_block_height.is_some()
                 || receipt.buffer_write_expiry_block_height.is_some()
                 || receipt.buffer_write_cli_output.is_some()
                 || !no_buffer_ready
@@ -6280,7 +7207,8 @@ fn validate_receipt_binding(
             }
         }
         ReceiptPhaseV1::BufferWriteArmed => {
-            if receipt.buffer_write_armed_block_height.is_none()
+            if receipt.buffer_write_attempts.is_empty()
+                || receipt.buffer_write_armed_block_height.is_none()
                 || receipt.buffer_write_expiry_block_height.is_none()
                 || !no_buffer_ready
                 || !no_unsigned
@@ -6298,7 +7226,12 @@ fn validate_receipt_binding(
             }
         }
         ReceiptPhaseV1::BufferReady => {
-            if !has_buffer_ready
+            if receipt.buffer_write_attempts.is_empty()
+                || receipt
+                    .buffer_write_attempts
+                    .last()
+                    .is_none_or(|attempt| attempt.exit_observed_finalized_block_height.is_none())
+                || !has_buffer_ready
                 || !no_unsigned
                 || !no_signed
                 || receipt.solana_cli_output.is_some()
@@ -6779,28 +7712,26 @@ fn validate_expired_packets(packets: &[ExpiredLoaderPacketV1]) -> Result<()> {
 }
 
 fn load_receipt(path: &Path) -> Result<Option<UpgradeReceiptV1>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
+    match read_existing_regular_receipt(path, "Upgrade receipt")? {
+        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
             Error::new(format!(
                 "existing Upgrade receipt {} is invalid: {error}",
                 path.display()
             ))
         })?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+        None => Ok(None),
     }
 }
 
 fn load_extension_receipt(path: &Path) -> Result<Option<ExtensionReceiptV1>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
+    match read_existing_regular_receipt(path, "extension receipt")? {
+        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
             Error::new(format!(
                 "existing extension receipt {} is invalid: {error}",
                 path.display()
             ))
         })?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+        None => Ok(None),
     }
 }
 
@@ -6871,14 +7802,183 @@ fn write_json_atomic_replace<T: Serialize>(path: &Path, value: &T) -> Result<()>
     Ok(())
 }
 
-/// Publishes one receipt transition under a fail-closed, operation-local CAS.
-///
-/// `expected_receipt_sha256 == None` is creation and therefore uses a hard
-/// link as an atomic no-clobber publish. Updates compare the exact prior
-/// receipt digest while holding the lock. The lock file and every published
-/// directory entry are fsynced before the next destructive boundary can be
-/// reached. A process crash may leave the lock behind; that is deliberately a
-/// manual-recovery refusal, never permission for a second operator to guess.
+const RECEIPT_TRANSITION_LOCK_SCHEMA: &str = "dclutch-receipt-transition-lock-v1";
+
+fn read_existing_regular_receipt(path: &Path, label: &str) -> Result<Option<Vec<u8>>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                return Err(Error::new(format!(
+                    "{label} must be one regular non-symlink file"
+                )));
+            }
+            if fs::canonicalize(path)? != path {
+                return Err(Error::new(format!(
+                    "{label} path is not canonical or traverses a symlink"
+                )));
+            }
+            Ok(Some(fs::read(path)?))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn canonical_embedded_receipt_sha256(bytes: &[u8], label: &str) -> Result<String> {
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| Error::new(format!("{label} is not JSON: {error}")))?;
+    let embedded = value
+        .get("receipt_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new(format!("{label} omitted receipt_sha256")))?
+        .to_owned();
+    require_digest(&embedded, &format!("{label} embedded receipt SHA-256"))?;
+    let canonical = match value.get("schema").and_then(Value::as_str) {
+        Some(SCHEMA) => {
+            let mut receipt: UpgradeReceiptV1 = serde_json::from_value(value.clone())?;
+            receipt.receipt_sha256.clear();
+            serde_json::to_vec(&receipt)?
+        }
+        Some(EXTENSION_SCHEMA) => {
+            let mut receipt: ExtensionReceiptV1 = serde_json::from_value(value.clone())?;
+            receipt.receipt_sha256.clear();
+            serde_json::to_vec(&receipt)?
+        }
+        _ => {
+            value
+                .as_object_mut()
+                .expect("receipt digest field proves object")
+                .insert("receipt_sha256".into(), Value::String(String::new()));
+            serde_json::to_vec(&value)?
+        }
+    };
+    if digest(&canonical) != embedded {
+        return Err(Error::new(format!(
+            "{label} body differs from its embedded canonical receipt SHA-256"
+        )));
+    }
+    Ok(embedded)
+}
+
+fn process_start_token(pid: u32) -> Result<Option<String>> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Err(Error::new(
+            "process identity PID is outside the host-safe range",
+        ));
+    }
+    let output = Command::new("/bin/ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .output()?;
+    if !output.status.success() {
+        let alive = Command::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?
+            .success();
+        if alive {
+            return Err(Error::new(
+                "process exists but its exact operating-system start token cannot be read",
+            ));
+        }
+        return Ok(None);
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!token.is_empty()).then_some(token))
+}
+
+fn publish_receipt_transition(path: &Path, pending: &Path, expected: Option<&str>) -> Result<()> {
+    match expected {
+        None => fs::hard_link(pending, path).map_err(|error| {
+            Error::new(format!(
+                "no-clobber receipt publish {} failed: {error}",
+                path.display()
+            ))
+        })?,
+        Some(expected) => {
+            let current = read_existing_regular_receipt(path, "receipt CAS publish target")?
+                .ok_or_else(|| Error::new("receipt CAS publish target disappeared"))?;
+            if canonical_embedded_receipt_sha256(&current, "receipt CAS publish target")?
+                != expected
+            {
+                return Err(Error::new(
+                    "receipt CAS publish target changed before atomic replacement",
+                ));
+            }
+            fs::rename(pending, path)?;
+        }
+    }
+    sync_parent_directory(
+        path.parent()
+            .ok_or_else(|| Error::new("receipt path omitted parent"))?,
+    )
+}
+
+fn recover_receipt_transition(path: &Path, lock_path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("receipt path omitted parent"))?;
+    let lock_bytes = read_regular_reference(lock_path, "receipt transition lock")?;
+    let lock: ReceiptTransitionLockV1 = serde_json::from_slice(&lock_bytes)?;
+    if lock.schema != RECEIPT_TRANSITION_LOCK_SCHEMA
+        || lock.pending_file_name.contains('/')
+        || lock.pending_file_name.contains("..")
+    {
+        return Err(Error::new("receipt transition lock identity is invalid"));
+    }
+    require_digest(
+        &lock.target_receipt_sha256,
+        "receipt transition target SHA-256",
+    )?;
+    if let Some(expected) = &lock.expected_receipt_sha256 {
+        require_digest(expected, "receipt transition prior SHA-256")?;
+    }
+    let live_owner = process_start_token(lock.owner_pid)?;
+    let current_pid = std::process::id();
+    let current_start = process_start_token(current_pid)?;
+    if live_owner.as_deref() == Some(lock.owner_start_token.as_str())
+        && (lock.owner_pid != current_pid
+            || current_start.as_deref() != Some(lock.owner_start_token.as_str()))
+    {
+        return Err(Error::new(format!(
+            "receipt transition is still owned by exact live process {} ({})",
+            lock.owner_pid, lock.owner_start_token
+        )));
+    }
+    let pending = parent.join(&lock.pending_file_name);
+    let current = match read_existing_regular_receipt(path, "published receipt during recovery")? {
+        Some(bytes) => Some(canonical_embedded_receipt_sha256(
+            &bytes,
+            "published receipt during recovery",
+        )?),
+        None => None,
+    };
+    if current.as_deref() != Some(lock.target_receipt_sha256.as_str()) {
+        if current.as_deref() != lock.expected_receipt_sha256.as_deref() {
+            return Err(Error::new(
+                "stale receipt transition found a published receipt other than its exact prior or target; no bytes were overwritten",
+            ));
+        }
+        let pending_bytes = read_regular_reference(&pending, "receipt transition pending file")?;
+        if canonical_embedded_receipt_sha256(&pending_bytes, "pending receipt during recovery")?
+            != lock.target_receipt_sha256
+        {
+            return Err(Error::new(
+                "stale receipt transition pending file differs from its durable target",
+            ));
+        }
+        publish_receipt_transition(path, &pending, lock.expected_receipt_sha256.as_deref())?;
+    }
+    if pending.exists() {
+        fs::remove_file(&pending)?;
+    }
+    fs::remove_file(lock_path)?;
+    sync_parent_directory(parent)
+}
+
+/// Publishes one receipt transition under a crash-recoverable exact-content CAS.
 fn write_json_atomic_receipt_cas<T: Serialize>(
     path: &Path,
     value: &T,
@@ -6897,106 +7997,103 @@ fn write_json_atomic_receipt_cas<T: Serialize>(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| Error::new("receipt file name is not UTF-8"))?;
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    let target = canonical_embedded_receipt_sha256(&bytes, "new receipt transition")?;
     let lock_path = parent.join(format!(".{file_name}.lock"));
-    let temporary = parent.join(format!(
-        ".{file_name}.{}.receipt-pending",
-        std::process::id()
-    ));
-    let lock = OpenOptions::new()
+    if lock_path.exists() {
+        recover_receipt_transition(path, &lock_path)?;
+    }
+    if let Some(expected) = expected_receipt_sha256 {
+        require_digest(expected, "prior receipt SHA-256")?;
+    }
+    let current = match read_existing_regular_receipt(path, "prior receipt during CAS")? {
+        Some(bytes) => Some(canonical_embedded_receipt_sha256(
+            &bytes,
+            "prior receipt during CAS",
+        )?),
+        None => None,
+    };
+    if current.as_deref() == Some(target.as_str()) {
+        return Ok(());
+    }
+    if current.as_deref() != expected_receipt_sha256 {
+        return Err(Error::new(
+            "receipt changed since this transition loaded it; exact-content stale writer refused",
+        ));
+    }
+    let pending_file_name = format!(".{file_name}.{target}.receipt-pending");
+    let pending = parent.join(&pending_file_name);
+    match OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&lock_path)
-        .map_err(|error| {
-            Error::new(format!(
-                "receipt transition lock {} is unavailable; another operator or an unreviewed crashed transition owns it: {error}",
-                lock_path.display()
-            ))
-        })?;
-    lock.sync_all()?;
-    sync_parent_directory(parent)?;
-
-    let transition = (|| -> Result<()> {
-        match expected_receipt_sha256 {
-            None => match fs::symlink_metadata(path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Ok(_) => {
-                    return Err(Error::new(format!(
-                        "receipt {} already exists; creation is no-clobber",
-                        path.display()
-                    )));
-                }
-                Err(error) => return Err(error.into()),
-            },
-            Some(expected) => {
-                require_digest(expected, "prior receipt SHA-256")?;
-                let metadata = fs::symlink_metadata(path).map_err(|error| {
-                    Error::new(format!(
-                        "prior receipt {} cannot be inspected for CAS: {error}",
-                        path.display()
-                    ))
-                })?;
-                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                    return Err(Error::new(
-                        "prior receipt is not one regular non-symlink file",
-                    ));
-                }
-                let current: Value = serde_json::from_slice(&fs::read(path)?).map_err(|error| {
-                    Error::new(format!("prior receipt is invalid during CAS: {error}"))
-                })?;
-                if current.get("receipt_sha256").and_then(Value::as_str) != Some(expected) {
-                    return Err(Error::new(
-                        "receipt changed since this transition loaded it; concurrent or stale writer refused",
-                    ));
-                }
+        .open(&pending)
+    {
+        Ok(mut file) => {
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if read_regular_reference(&pending, "existing receipt pending file")? != bytes {
+                return Err(Error::new(
+                    "existing receipt pending file has substituted bytes",
+                ));
             }
         }
-
-        let bytes = serde_json::to_vec_pretty(value)?;
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|error| {
-                Error::new(format!(
-                    "could not create receipt temporary {}: {error}",
-                    temporary.display()
-                ))
-            })?;
-        file.write_all(&bytes)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        drop(file);
-
-        if expected_receipt_sha256.is_none() {
-            fs::hard_link(&temporary, path).map_err(|error| {
-                Error::new(format!(
-                    "no-clobber receipt publish {} failed: {error}",
-                    path.display()
-                ))
-            })?;
-        } else {
-            fs::rename(&temporary, path)?;
-        }
-        sync_parent_directory(parent)?;
-        if temporary.exists() {
-            fs::remove_file(&temporary)?;
-            sync_parent_directory(parent)?;
-        }
-        Ok(())
-    })();
-
-    if transition.is_err() && temporary.exists() {
-        let _ = fs::remove_file(&temporary);
+        Err(error) => return Err(error.into()),
     }
-    drop(lock);
-    fs::remove_file(&lock_path).map_err(|error| {
+    sync_parent_directory(parent)?;
+    let owner_pid = std::process::id();
+    let owner_start_token = process_start_token(owner_pid)?
+        .ok_or_else(|| Error::new("cannot bind receipt transition to current process start"))?;
+    let lock = ReceiptTransitionLockV1 {
+        schema: RECEIPT_TRANSITION_LOCK_SCHEMA.into(),
+        owner_pid,
+        owner_start_token,
+        expected_receipt_sha256: expected_receipt_sha256.map(str::to_owned),
+        target_receipt_sha256: target,
+        pending_file_name,
+    };
+    let candidate = parent.join(format!(
+        ".{file_name}.{owner_pid}.{}.lock-candidate",
+        lock.target_receipt_sha256
+    ));
+    let candidate_bytes = serde_json::to_vec_pretty(&lock)?;
+    match OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&candidate)
+    {
+        Ok(mut file) => {
+            file.write_all(&candidate_bytes)?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let mut expected = candidate_bytes;
+            expected.push(b'\n');
+            if read_regular_reference(&candidate, "orphan receipt lock candidate")? != expected {
+                return Err(Error::new(
+                    "orphan receipt lock candidate has substituted bytes",
+                ));
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    sync_parent_directory(parent)?;
+    fs::hard_link(&candidate, &lock_path).map_err(|error| {
         Error::new(format!(
-            "receipt transition completed but lock {} could not be removed: {error}",
-            lock_path.display()
+            "receipt transition lock acquisition failed: {error}"
         ))
     })?;
     sync_parent_directory(parent)?;
-    transition
+    fs::remove_file(&candidate)?;
+    publish_receipt_transition(path, &pending, expected_receipt_sha256)?;
+    if pending.exists() {
+        fs::remove_file(&pending)?;
+    }
+    fs::remove_file(&lock_path)?;
+    sync_parent_directory(parent)
 }
 
 fn sync_parent_directory(parent: &Path) -> Result<()> {
@@ -7146,6 +8243,10 @@ mod tests {
         payer_signer: Keypair,
         send_count: u64,
         sign_count: u64,
+        buffer_writer_alive: bool,
+        crash_after_buffer_lease: bool,
+        buffer_writer_restart_without_handle: bool,
+        signature_status_override: Option<JournaledSignatureStatusV1>,
         calls: Vec<Vec<String>>,
         snapshot_minimum_slots: Vec<u64>,
         forced: VecDeque<CliOutput>,
@@ -7194,6 +8295,10 @@ mod tests {
                 payer_signer: fixture.payer_signer.insecure_clone(),
                 send_count: 0,
                 sign_count: 0,
+                buffer_writer_alive: false,
+                crash_after_buffer_lease: false,
+                buffer_writer_restart_without_handle: false,
+                signature_status_override: None,
                 calls: Vec::new(),
                 snapshot_minimum_slots: Vec::new(),
                 forced: VecDeque::new(),
@@ -7553,6 +8658,21 @@ mod tests {
             Ok(self.finalized_height)
         }
 
+        fn journaled_signature_status(
+            &mut self,
+            _origin: &ClusterOriginV1,
+            _signature: &str,
+        ) -> Result<JournaledSignatureStatusV1> {
+            if let Some(status) = &self.signature_status_override {
+                return Ok(status.clone());
+            }
+            Ok(if self.deployed {
+                JournaledSignatureStatusV1::FinalizedSuccess
+            } else {
+                JournaledSignatureStatusV1::NotFound
+            })
+        }
+
         fn read_buffer(
             &mut self,
             _origin: &ClusterOriginV1,
@@ -7605,6 +8725,56 @@ mod tests {
                 transactions,
                 fee_lamports: self.buffer_upload_fee_lamports,
             })
+        }
+
+        fn start_buffer_writer(
+            &mut self,
+            query: &BufferWriterQueryV1<'_>,
+        ) -> Result<BufferWriterLeaseV1> {
+            self.buffer_writer_alive = true;
+            Ok(BufferWriterLeaseV1 {
+                schema: BUFFER_WRITER_LEASE_SCHEMA.into(),
+                operation_id: query.operation_id.into(),
+                attempt_ordinal: query.attempt_ordinal,
+                pid: 41,
+                process_group_id: 41,
+                process_start_token: "synthetic-start-token".into(),
+                process_nonce: "41".repeat(32),
+                command_sha256: query.command_sha256.into(),
+                lease_path: query.lease_path.to_string_lossy().into_owned(),
+                permit_path: query.permit_path.to_string_lossy().into_owned(),
+            })
+        }
+
+        fn buffer_writer_status(
+            &mut self,
+            _lease: &BufferWriterLeaseV1,
+        ) -> Result<BufferWriterStatusV1> {
+            Ok(if self.buffer_writer_alive {
+                BufferWriterStatusV1::AliveStopped
+            } else {
+                BufferWriterStatusV1::Exited
+            })
+        }
+
+        fn continue_buffer_writer(
+            &mut self,
+            query: &BufferWriterQueryV1<'_>,
+            _lease: &BufferWriterLeaseV1,
+        ) -> Result<CliOutput> {
+            if self.crash_after_buffer_lease {
+                return Err(Error::new(
+                    "synthetic crash after durable Buffer writer lease",
+                ));
+            }
+            if self.buffer_writer_restart_without_handle {
+                return Err(Error::new(
+                    "exact leased Buffer writer is alive after operator restart",
+                ));
+            }
+            let output = self.run(query.command_arguments)?;
+            self.buffer_writer_alive = false;
+            Ok(output)
         }
     }
 
@@ -8188,6 +9358,10 @@ mod tests {
     }
 
     impl CliRunner for MixedSetAuditRunner {
+        fn enforces_fresh_deployment_set_boundary(&self) -> bool {
+            true
+        }
+
         fn run(&mut self, arguments: &[String]) -> Result<CliOutput> {
             self.calls.push(arguments.to_vec());
             let stdout = match arguments.first().map(String::as_str) {
@@ -8428,6 +9602,7 @@ mod tests {
                         buffer_upload_transactions: Some(Vec::new()),
                         buffer_upload_transactions_sha256: Some(digest(b"[]")),
                         buffer_upload_wallet_after_lamports: Some(999_999),
+                        buffer_write_attempts: Vec::new(),
                         expired_packets: Vec::new(),
                         unsigned_message_base64: Some(BASE64.encode(b"fixture-message")),
                         unsigned_message_sha256: Some(digest(b"fixture-message")),
@@ -8469,6 +9644,33 @@ mod tests {
                         receipt_sha256: String::new(),
                     };
                     receipt.operation_id = operation_id_from_receipt(&receipt);
+                    let (lease_path, permit_path) = buffer_writer_paths(
+                        &UpgradeArgsV1 {
+                            receipt_path: receipt_path.clone(),
+                            ..fixture.args.clone()
+                        },
+                        &receipt.operation_id,
+                        0,
+                    )
+                    .expect("fixture Buffer writer paths");
+                    receipt.buffer_write_attempts.push(BufferWriteAttemptV1 {
+                        lease: BufferWriterLeaseV1 {
+                            schema: BUFFER_WRITER_LEASE_SCHEMA.into(),
+                            operation_id: receipt.operation_id.clone(),
+                            attempt_ordinal: 0,
+                            pid: 41,
+                            process_group_id: 41,
+                            process_start_token: format!("fixture-{role}"),
+                            process_nonce: digest(role.as_bytes()),
+                            command_sha256: digest(b"fixture-buffer-command"),
+                            lease_path: lease_path.to_string_lossy().into_owned(),
+                            permit_path: permit_path.to_string_lossy().into_owned(),
+                        },
+                        armed_finalized_block_height: context_slot,
+                        expiry_finalized_block_height: context_slot + BUFFER_WRITE_EXPIRY_BLOCKS,
+                        exit_observed_finalized_block_height: Some(context_slot),
+                        exit_disposition: Some("returned_success".into()),
+                    });
                     receipt.receipt_sha256 =
                         digest(&serde_json::to_vec(&receipt).expect("receipt JSON"));
                     fs::write(
@@ -8828,6 +10030,33 @@ mod tests {
 
     #[test]
     fn mixed_set_refuses_every_disposition_and_role_closure_substitution() {
+        let in_flight = MixedSetFixture::new(0);
+        let in_flight_path = PathBuf::from(&in_flight.journal.roles[2].receipt.canonical_path);
+        let outside = in_flight
+            ._fixture
+            ._directory
+            .0
+            .join("outside-in-flight-receipt.json");
+        fs::write(&outside, b"{}\n").expect("outside in-flight receipt");
+        std::os::unix::fs::symlink(&outside, &in_flight_path).expect("in-flight receipt symlink");
+        assert!(
+            load_set_journal_path(&in_flight.args.journal_path)
+                .expect_err("unpinned in-flight receipt symlink")
+                .to_string()
+                .contains("regular non-symlink")
+        );
+
+        let mut aliases = MixedSetFixture::new(0);
+        aliases.journal.roles[3].receipt.canonical_path =
+            aliases.journal.roles[2].dump.canonical_path.clone();
+        aliases.rewrite_journal();
+        assert!(
+            load_set_journal_path(&aliases.args.journal_path)
+                .expect_err("future receipt cannot alias another role's future dump")
+                .to_string()
+                .contains("paths alias")
+        );
+
         let mut tag = MixedSetFixture::new(0);
         tag.journal.roles[0].disposition = CheckedDeploymentDispositionV1::Upgrade;
         tag.rewrite_journal();
@@ -8888,6 +10117,46 @@ mod tests {
                 .to_string()
                 .contains("exactly 7")
         );
+
+        let mut substituted_prior = MixedSetFixture::new(2);
+        substituted_prior.journal.roles.swap(2, 3);
+        let custody_identity = PERMANENT_DEVNET_UPGRADE_TARGETS_V1[2];
+        let resolution_identity = PERMANENT_DEVNET_UPGRADE_TARGETS_V1[3];
+        substituted_prior.journal.roles[2].role = custody_identity.0.into();
+        substituted_prior.journal.roles[2].program_id = custody_identity.1.into();
+        substituted_prior.journal.roles[2].programdata_id = custody_identity.2.into();
+        substituted_prior.journal.roles[3].role = resolution_identity.0.into();
+        substituted_prior.journal.roles[3].program_id = resolution_identity.1.into();
+        substituted_prior.journal.roles[3].programdata_id = resolution_identity.2.into();
+        substituted_prior.rewrite_journal();
+        let error =
+            audit_set_journal_with_runner(&substituted_prior.args, &mut substituted_prior.runner)
+                .expect_err(
+                    "prior Complete receipt cannot be substituted under another permanent row",
+                );
+        assert!(
+            error.to_string().contains("existing Upgrade receipt")
+                || error.to_string().contains("exact role")
+                || error.to_string().contains("baseline")
+        );
+
+        let mut baseline_drift = MixedSetFixture::new(0);
+        let baseline_path = PathBuf::from(
+            &baseline_drift.journal.roles[2]
+                .baseline
+                .as_ref()
+                .expect("Custody baseline")
+                .canonical_path,
+        );
+        OpenOptions::new()
+            .append(true)
+            .open(&baseline_path)
+            .expect("baseline")
+            .write_all(b"\n")
+            .expect("baseline drift");
+        let error = audit_set_journal_with_runner(&baseline_drift.args, &mut baseline_drift.runner)
+            .expect_err("target baseline bytes must remain pinned");
+        assert!(error.to_string().contains("baseline SHA-256"));
     }
 
     #[test]
@@ -9249,6 +10518,46 @@ mod tests {
         let fixture = Fixture::new();
         let mut runner = FakeRunner::new(&fixture);
         let accepted = execute_with_runner(&fixture.args, &mut runner).expect("complete Upgrade");
+        let gate = validate_checked_release_gate(&fixture.args).expect("canonical gate");
+        let mut hostile_history = accepted.clone();
+        let prior = hostile_history
+            .buffer_write_attempts
+            .first_mut()
+            .expect("first Buffer attempt");
+        prior.exit_observed_finalized_block_height = None;
+        prior.exit_disposition = None;
+        let mut successor = prior.clone();
+        successor.lease.attempt_ordinal = 1;
+        successor.lease.pid = 42;
+        successor.lease.process_group_id = 42;
+        successor.lease.process_start_token = "synthetic-second-start".into();
+        successor.lease.process_nonce = "42".repeat(32);
+        let (lease_path, permit_path) = buffer_writer_paths(
+            &fixture.args,
+            &hostile_history.operation_id,
+            successor.lease.attempt_ordinal,
+        )
+        .expect("second attempt paths");
+        successor.lease.lease_path = lease_path.to_string_lossy().into_owned();
+        successor.lease.permit_path = permit_path.to_string_lossy().into_owned();
+        successor.armed_finalized_block_height = prior.expiry_finalized_block_height + 1;
+        successor.expiry_finalized_block_height =
+            successor.armed_finalized_block_height + BUFFER_WRITE_EXPIRY_BLOCKS;
+        successor.exit_observed_finalized_block_height =
+            Some(successor.armed_finalized_block_height);
+        successor.exit_disposition = Some("returned_success".into());
+        hostile_history.buffer_write_armed_block_height =
+            Some(successor.armed_finalized_block_height);
+        hostile_history.buffer_write_expiry_block_height =
+            Some(successor.expiry_finalized_block_height);
+        hostile_history.buffer_write_attempts.push(successor);
+        assert!(
+            validate_buffer_write_attempts(&fixture.args, &gate, &hostile_history)
+                .expect_err("superseded attempt without exit boundary")
+                .to_string()
+                .contains("superseded Buffer writer attempt")
+        );
+
         let mut hostile = accepted.clone();
         hostile.dump_sha256 = Some("f".repeat(64));
         fs::write(
@@ -10056,6 +11365,127 @@ mod tests {
     }
 
     #[test]
+    fn submitted_restart_never_enters_fresh_set_audit_before_signature_recovery() {
+        struct FreshAuditTrap;
+
+        impl CliRunner for FreshAuditTrap {
+            fn enforces_fresh_deployment_set_boundary(&self) -> bool {
+                panic!("Submitted recovery must not ask for a fresh set audit");
+            }
+
+            fn run(&mut self, _arguments: &[String]) -> Result<CliOutput> {
+                panic!("Submitted recovery helper must remain side-effect free");
+            }
+        }
+
+        let fixture = Fixture::new();
+        let mut runner = FreshAuditTrap;
+        assert!(
+            authenticate_phase_mutation_boundary(
+                &fixture.args,
+                &mut runner,
+                ReceiptPhaseV1::Submitted,
+            )
+            .expect("Submitted phase bypasses contradictory fresh poststate audit")
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn live_orphan_buffer_writer_blocks_attach_and_second_writer_until_exact_exit() {
+        let fixture = Fixture::new();
+        let mut crashed = FakeRunner::new(&fixture);
+        crashed.crash_after_buffer_lease = true;
+        let error = execute_with_runner(&fixture.args, &mut crashed)
+            .expect_err("synthetic crash after durable writer lease");
+        assert!(error.to_string().contains("durable Buffer writer lease"));
+        let armed = load_receipt(&fixture.args.receipt_path)
+            .expect("armed receipt read")
+            .expect("armed receipt");
+        assert_eq!(armed.phase, ReceiptPhaseV1::BufferWriteArmed);
+        assert_eq!(armed.buffer_write_attempts.len(), 1);
+        assert!(
+            armed.buffer_write_attempts[0]
+                .exit_observed_finalized_block_height
+                .is_none()
+        );
+
+        let mut orphan_alive = FakeRunner::new(&fixture);
+        orphan_alive.buffer_writer_alive = true;
+        orphan_alive.buffer_writer_restart_without_handle = true;
+        orphan_alive.buffer_written = true;
+        let error = execute_with_runner(&fixture.args, &mut orphan_alive)
+            .expect_err("live exact orphan must remain the sole writer");
+        assert!(error.to_string().contains("alive after operator restart"));
+        assert!(
+            orphan_alive
+                .calls
+                .iter()
+                .all(|call| { call.get(1).map(String::as_str) != Some("write-buffer") })
+        );
+
+        let mut exited = FakeRunner::new(&fixture);
+        exited.buffer_written = true;
+        let complete = execute_with_runner(&fixture.args, &mut exited)
+            .expect("exact exited writer permits authenticated Buffer attach");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(complete.buffer_write_attempts.len(), 1);
+        assert_eq!(
+            complete.buffer_write_attempts[0]
+                .exit_disposition
+                .as_deref(),
+            Some("lost_after_operator_crash")
+        );
+        assert!(
+            exited
+                .calls
+                .iter()
+                .all(|call| { call.get(1).map(String::as_str) != Some("write-buffer") })
+        );
+    }
+
+    #[test]
+    fn submitted_upgrade_expiry_requires_null_signature_and_exact_payer() {
+        let fixture = Fixture::new();
+        let mut crashed = FakeRunner::new(&fixture);
+        crashed.send_success = false;
+        execute_with_runner(&fixture.args, &mut crashed).expect_err("synthetic send interruption");
+        let submitted = load_receipt(&fixture.args.receipt_path)
+            .expect("submitted receipt read")
+            .expect("submitted receipt");
+        let expired_height = submitted.last_valid_block_height.expect("expiry") + 1;
+
+        let mut charged = FakeRunner::new(&fixture);
+        charged.buffer_written = true;
+        charged.buffer_upload_fee_lamports = 1;
+        charged.finalized_height = expired_height;
+        let error = execute_with_runner(&fixture.args, &mut charged)
+            .expect_err("charged failed packet cannot be replaced");
+        assert!(error.to_string().contains("payer moved"));
+        assert_eq!(charged.send_count, 0);
+
+        let mut pending = FakeRunner::new(&fixture);
+        pending.buffer_written = true;
+        pending.finalized_height = expired_height;
+        pending.signature_status_override = Some(JournaledSignatureStatusV1::Pending);
+        let error = execute_with_runner(&fixture.args, &mut pending)
+            .expect_err("present signature remains poll-only after expiry");
+        assert!(error.to_string().contains("still present and pending"));
+        assert_eq!(pending.send_count, 0);
+
+        let mut failed = FakeRunner::new(&fixture);
+        failed.buffer_written = true;
+        failed.finalized_height = expired_height;
+        failed.signature_status_override = Some(JournaledSignatureStatusV1::FinalizedFailure(
+            "InstructionError".into(),
+        ));
+        let error = execute_with_runner(&fixture.args, &mut failed)
+            .expect_err("finalized failure requires attribution");
+        assert!(error.to_string().contains("charged fee must be attributed"));
+        assert_eq!(failed.send_count, 0);
+    }
+
+    #[test]
     fn crash_after_send_before_response_attaches_exact_upgrade_without_resend() {
         let fixture = Fixture::new();
         let mut runner = FakeRunner::new(&fixture);
@@ -10134,17 +11564,21 @@ mod tests {
         before_sign.sign_success = false;
         let _ = execute_with_runner(&drift.args, &mut before_sign)
             .expect_err("message boundary for journal drift");
-        OpenOptions::new()
-            .append(true)
-            .open(&drift.args.deployment_set_journal_path)
-            .expect("journal append")
-            .write_all(b"\n")
-            .expect("journal drift");
+        let mut journal: UpgradeSetJournalV1 = serde_json::from_slice(
+            &fs::read(&drift.args.deployment_set_journal_path).expect("journal bytes"),
+        )
+        .expect("journal");
+        journal.source_tree_sha256 = "ab".repeat(32);
+        fs::write(
+            &drift.args.deployment_set_journal_path,
+            serde_json::to_vec_pretty(&journal).expect("drifted journal"),
+        )
+        .expect("journal drift");
         let mut refused = FakeRunner::new(&drift);
         refused.buffer_written = true;
         let error = execute_with_runner(&drift.args, &mut refused)
             .expect_err("journal digest drift must refuse before signing");
-        assert!(error.to_string().contains("journal changed"));
+        assert!(error.to_string().contains("immutable plan changed"));
         assert_eq!(refused.sign_count, 0);
         assert_eq!(refused.send_count, 0);
     }
@@ -10196,40 +11630,258 @@ mod tests {
     fn receipt_publish_is_no_clobber_and_cas_refuses_concurrent_writer() {
         let directory = TestDirectory::new();
         let path = directory.0.join("cas-receipt.json");
-        let initial_digest = "a".repeat(64);
-        write_json_atomic_receipt_cas(
-            &path,
-            &json!({"receipt_sha256": initial_digest, "writer": 0}),
-            None,
-        )
-        .expect("initial no-clobber receipt");
+        let receipt_value = |writer: u64| {
+            let mut value = json!({"receipt_sha256": "", "writer": writer});
+            let sha256 = digest(&serde_json::to_vec(&value).expect("CAS value"));
+            value["receipt_sha256"] = json!(sha256);
+            value
+        };
+        let initial = receipt_value(0);
+        let initial_digest = initial["receipt_sha256"]
+            .as_str()
+            .expect("initial digest")
+            .to_owned();
+        write_json_atomic_receipt_cas(&path, &initial, None).expect("initial no-clobber receipt");
         assert!(
-            write_json_atomic_receipt_cas(
-                &path,
-                &json!({"receipt_sha256": "b".repeat(64), "writer": 9}),
-                None,
-            )
-            .expect_err("second creator must not clobber")
-            .to_string()
-            .contains("already exists")
+            write_json_atomic_receipt_cas(&path, &receipt_value(9), None)
+                .expect_err("second creator must not clobber")
+                .to_string()
+                .contains("exact-content stale writer")
         );
 
-        write_json_atomic_receipt_cas(
-            &path,
-            &json!({"receipt_sha256": "b".repeat(64), "writer": 1}),
-            Some(&initial_digest),
-        )
-        .expect("first loaded writer wins CAS");
-        let error = write_json_atomic_receipt_cas(
-            &path,
-            &json!({"receipt_sha256": "c".repeat(64), "writer": 2}),
-            Some(&initial_digest),
-        )
-        .expect_err("stale concurrent writer must refuse");
-        assert!(error.to_string().contains("concurrent or stale writer"));
-        let value: Value = serde_json::from_slice(&fs::read(path).expect("CAS receipt bytes"))
+        let second = receipt_value(1);
+        write_json_atomic_receipt_cas(&path, &second, Some(&initial_digest))
+            .expect("first loaded writer wins CAS");
+        let error = write_json_atomic_receipt_cas(&path, &receipt_value(2), Some(&initial_digest))
+            .expect_err("stale concurrent writer must refuse");
+        assert!(error.to_string().contains("exact-content stale writer"));
+        let value: Value = serde_json::from_slice(&fs::read(&path).expect("CAS receipt bytes"))
             .expect("CAS receipt JSON");
         assert_eq!(value.get("writer").and_then(Value::as_u64), Some(1));
+
+        let mut hostile = value.clone();
+        hostile["writer"] = json!(77);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&hostile).expect("hostile receipt bytes"),
+        )
+        .expect("hostile same-inner-digest body");
+        let second_digest = second["receipt_sha256"].as_str().expect("second digest");
+        let error = write_json_atomic_receipt_cas(&path, &receipt_value(2), Some(second_digest))
+            .expect_err("changed body with retained embedded digest must refuse");
+        assert!(error.to_string().contains("body differs"));
+    }
+
+    #[test]
+    fn system_buffer_writer_lease_round_trips_and_preexisting_permit_refuses() {
+        let directory = TestDirectory::new();
+        let lease_path = directory.0.join("writer.lease");
+        let permit_path = directory.0.join("writer.permit");
+        let arguments = vec!["leased-buffer-smoke".into()];
+        let command_sha256 = digest(b"harmless-echo-command");
+        let operation_id = "ab".repeat(32);
+        let query = BufferWriterQueryV1 {
+            operation_id: &operation_id,
+            attempt_ordinal: 0,
+            command_arguments: &arguments,
+            command_sha256: &command_sha256,
+            lease_path: &lease_path,
+            permit_path: &permit_path,
+        };
+        let mut runner = SystemCliRunner {
+            executable: PathBuf::from("/bin/echo"),
+            buffer_child: None,
+        };
+        let lease = runner
+            .start_buffer_writer(&query)
+            .expect("real supervisor publishes parseable eight-field lease");
+        assert_eq!(lease.schema, BUFFER_WRITER_LEASE_SCHEMA);
+        assert_eq!(lease.process_group_id, lease.pid);
+        require_digest(&lease.process_nonce, "real process nonce").expect("strong nonce");
+        assert_eq!(
+            runner
+                .buffer_writer_status(&lease)
+                .expect("exact stopped writer status"),
+            BufferWriterStatusV1::AliveStopped
+        );
+        assert!(!permit_path.exists());
+        let output = runner
+            .continue_buffer_writer(&query, &lease)
+            .expect("durable exact permit releases real supervisor");
+        assert!(output.success);
+        assert_eq!(output.stdout.trim(), "leased-buffer-smoke");
+        assert_eq!(
+            runner
+                .buffer_writer_status(&lease)
+                .expect("exited writer status"),
+            BufferWriterStatusV1::Exited
+        );
+        assert_eq!(
+            read_regular_reference(&permit_path, "test permit").expect("permit bytes"),
+            buffer_writer_permit_bytes(&lease)
+        );
+        assert!(
+            runner
+                .start_buffer_writer(&query)
+                .expect_err("existing exact lease cannot attach across a premature permit")
+                .to_string()
+                .contains("premature permit")
+        );
+
+        let refused_lease = directory.0.join("refused.lease");
+        let refused_permit = directory.0.join("refused.permit");
+        fs::write(&refused_permit, b"stale").expect("pre-existing permit");
+        let refused_operation_id = "cd".repeat(32);
+        let refused_query = BufferWriterQueryV1 {
+            operation_id: &refused_operation_id,
+            attempt_ordinal: 0,
+            command_arguments: &arguments,
+            command_sha256: &command_sha256,
+            lease_path: &refused_lease,
+            permit_path: &refused_permit,
+        };
+        let error = runner
+            .start_buffer_writer(&refused_query)
+            .expect_err("pre-existing permit cannot release a fresh writer");
+        assert!(error.to_string().contains("pre-existing permit"));
+        assert!(!refused_lease.exists());
+
+        let symlink_lease = directory.0.join("symlink.lease");
+        let symlink_permit = directory.0.join("symlink.permit");
+        std::os::unix::fs::symlink(&permit_path, &symlink_permit)
+            .expect("pre-existing permit symlink");
+        let symlink_operation_id = "ef".repeat(32);
+        let symlink_query = BufferWriterQueryV1 {
+            operation_id: &symlink_operation_id,
+            attempt_ordinal: 0,
+            command_arguments: &arguments,
+            command_sha256: &command_sha256,
+            lease_path: &symlink_lease,
+            permit_path: &symlink_permit,
+        };
+        assert!(
+            runner
+                .start_buffer_writer(&symlink_query)
+                .expect_err("pre-existing permit symlink cannot release a fresh writer")
+                .to_string()
+                .contains("pre-existing permit")
+        );
+        assert!(!symlink_lease.exists());
+    }
+
+    #[test]
+    fn stale_receipt_transition_lock_finishes_exact_pending_target() {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("recovery-receipt.json");
+        let receipt_value = |writer: u64| {
+            let mut value = json!({"receipt_sha256": "", "writer": writer});
+            let sha256 = digest(&serde_json::to_vec(&value).expect("CAS value"));
+            value["receipt_sha256"] = json!(sha256);
+            value
+        };
+        let initial = receipt_value(0);
+        write_json_atomic_receipt_cas(&path, &initial, None).expect("initial receipt");
+        let initial_digest = initial["receipt_sha256"]
+            .as_str()
+            .expect("initial digest")
+            .to_owned();
+        let target = receipt_value(1);
+        let target_digest = target["receipt_sha256"]
+            .as_str()
+            .expect("target digest")
+            .to_owned();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("name");
+        let pending_file_name = format!(".{file_name}.{target_digest}.receipt-pending");
+        let pending = directory.0.join(&pending_file_name);
+        let mut target_bytes = serde_json::to_vec_pretty(&target).expect("target bytes");
+        target_bytes.push(b'\n');
+        fs::write(&pending, target_bytes).expect("crashed pending target");
+        let lock_path = directory.0.join(format!(".{file_name}.lock"));
+        let mut exited = Command::new("/usr/bin/true")
+            .spawn()
+            .expect("short-lived lock owner");
+        let exited_pid = exited.id();
+        exited.wait().expect("short-lived owner exit");
+        let stale_lock = ReceiptTransitionLockV1 {
+            schema: RECEIPT_TRANSITION_LOCK_SCHEMA.into(),
+            owner_pid: exited_pid,
+            owner_start_token: "gone-process".into(),
+            expected_receipt_sha256: Some(initial_digest.clone()),
+            target_receipt_sha256: target_digest,
+            pending_file_name,
+        };
+        fs::write(
+            &lock_path,
+            serde_json::to_vec_pretty(&stale_lock).expect("stale lock"),
+        )
+        .expect("crashed lock");
+        sync_parent_directory(&directory.0).expect("crash boundary fsync");
+
+        write_json_atomic_receipt_cas(&path, &target, Some(&initial_digest))
+            .expect("stale transition recovery");
+        let recovered: Value = serde_json::from_slice(&fs::read(&path).expect("recovered bytes"))
+            .expect("recovered JSON");
+        assert_eq!(recovered["writer"], json!(1));
+        assert!(!lock_path.exists());
+        assert!(!pending.exists());
+    }
+
+    #[test]
+    fn receipt_cas_refuses_a_symlink_publish_target() {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("receipt-link.json");
+        let outside = directory.0.join("outside-receipt.json");
+        let receipt_value = |writer: u64| {
+            let mut value = json!({"receipt_sha256": "", "writer": writer});
+            let sha256 = digest(&serde_json::to_vec(&value).expect("CAS value"));
+            value["receipt_sha256"] = json!(sha256);
+            value
+        };
+        let initial = receipt_value(0);
+        fs::write(
+            &outside,
+            serde_json::to_vec_pretty(&initial).expect("outside receipt"),
+        )
+        .expect("outside receipt bytes");
+        std::os::unix::fs::symlink(&outside, &path).expect("receipt symlink");
+        let initial_digest = initial["receipt_sha256"].as_str().expect("initial digest");
+        let error = write_json_atomic_receipt_cas(&path, &receipt_value(1), Some(initial_digest))
+            .expect_err("CAS must not follow or clobber a receipt symlink");
+        assert!(error.to_string().contains("regular non-symlink"));
+        let unchanged: Value =
+            serde_json::from_slice(&fs::read(&outside).expect("outside receipt unchanged"))
+                .expect("outside receipt JSON");
+        assert_eq!(unchanged["writer"], json!(0));
+        assert!(path.is_symlink());
+    }
+
+    #[test]
+    fn receipt_cas_refuses_a_symlink_pending_candidate() {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("receipt.json");
+        let mut target = json!({"receipt_sha256": "", "writer": 1});
+        let target_digest = digest(&serde_json::to_vec(&target).expect("target value"));
+        target["receipt_sha256"] = json!(target_digest);
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("name");
+        let pending = directory
+            .0
+            .join(format!(".{file_name}.{target_digest}.receipt-pending"));
+        let outside = directory.0.join("outside-pending.json");
+        let mut bytes = serde_json::to_vec_pretty(&target).expect("target bytes");
+        bytes.push(b'\n');
+        fs::write(&outside, bytes).expect("outside exact target");
+        std::os::unix::fs::symlink(&outside, &pending).expect("pending symlink");
+        let error = write_json_atomic_receipt_cas(&path, &target, None)
+            .expect_err("CAS must not publish a symlink pending candidate");
+        assert!(error.to_string().contains("regular non-symlink"));
+        assert!(!path.exists());
+        assert!(pending.is_symlink());
     }
 
     #[test]
@@ -10270,6 +11922,19 @@ mod tests {
     #[test]
     fn mutation_permit_refuses_carry_forward_and_out_of_order_roles() {
         let fixture = Fixture::new();
+        let error = require_mutation_permit(&fixture.args, None, false, None)
+            .expect_err("Extension receipt must not replace the journal's Upgrade receipt");
+        assert!(error.to_string().contains("extension receipt"));
+        let journal: UpgradeSetJournalV1 = serde_json::from_slice(
+            &fs::read(&fixture.args.deployment_set_journal_path).expect("journal bytes"),
+        )
+        .expect("journal");
+        let mut later_row_collision = fixture.args.clone();
+        later_row_collision.receipt_path = PathBuf::from(&journal.roles[3].receipt.canonical_path);
+        let error = require_mutation_permit(&later_row_collision, None, false, None)
+            .expect_err("Extension receipt must not consume a later Upgrade output path");
+        assert!(error.to_string().contains("aliases deployment-set"));
+
         let mut registry = fixture.args.clone();
         registry.role = "registry".into();
         registry.program_id =
@@ -10279,7 +11944,7 @@ mod tests {
             "Registry ProgramData",
         )
         .expect("Registry ProgramData");
-        let error = require_mutation_permit(&registry, None, true)
+        let error = require_mutation_permit(&registry, None, true, None)
             .expect_err("CarryForward Registry mutation must refuse");
         assert!(error.to_string().contains("CarryForward"));
 
@@ -10290,8 +11955,28 @@ mod tests {
         core.programdata_id =
             parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[6].2, "Core ProgramData")
                 .expect("Core ProgramData");
-        let error = require_mutation_permit(&core, None, true)
+        let error = require_mutation_permit(&core, None, true, None)
             .expect_err("Core before Custody must refuse");
+        assert!(error.to_string().contains("next role is custody"));
+
+        let wrong_dump = Fixture::new();
+        let mut journal: UpgradeSetJournalV1 = serde_json::from_slice(
+            &fs::read(&wrong_dump.args.deployment_set_journal_path).expect("journal bytes"),
+        )
+        .expect("journal");
+        journal.roles[2].dump.canonical_path = wrong_dump
+            ._directory
+            .0
+            .join("substituted-dump.so")
+            .to_string_lossy()
+            .into_owned();
+        fs::write(
+            &wrong_dump.args.deployment_set_journal_path,
+            serde_json::to_vec_pretty(&journal).expect("journal JSON"),
+        )
+        .expect("wrong dump journal");
+        let error = require_mutation_permit(&wrong_dump.args, None, true, None)
+            .expect_err("target dump path substitution must refuse");
         assert!(error.to_string().contains("next role is custody"));
     }
 

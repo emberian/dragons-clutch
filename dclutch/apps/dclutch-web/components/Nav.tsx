@@ -56,20 +56,28 @@ export default function Nav({
   status?: ReactNode;
 }>) {
   const consoleActive = current !== undefined && CONSOLE_PATHS.includes(current);
-  return <header className="product-nav">
-    <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-    <nav>
-      {PRODUCT_ITEMS.map((item) => (
-        <Anchor key={item.href} className={item.href === current ? 'active' : undefined} href={item.href}>
-          {item.label}
-        </Anchor>
-      ))}
-      <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-      <Anchor className={consoleActive ? 'active' : undefined} href="/console">Console</Anchor>
-    </nav>
-    <span className="nav-side">
-      <ClusterPicker />
-      <span className="preview-control"><i className="preview-dot" />{status}</span>
-    </span>
-  </header>;
+  return <>
+    <header className="product-nav">
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
+      <nav aria-label="Primary navigation">
+        {PRODUCT_ITEMS.map((item) => (
+          <Anchor
+            key={item.href}
+            className={item.href === current ? 'active' : undefined}
+            href={item.href}
+            aria-current={item.href === current ? 'page' : undefined}
+          >
+            {item.label}
+          </Anchor>
+        ))}
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
+        <Anchor className={consoleActive ? 'active' : undefined} href="/console" aria-current={consoleActive ? 'page' : undefined}>Console</Anchor>
+      </nav>
+      <span className="nav-side">
+        <ClusterPicker />
+        <span className="preview-control"><i className="preview-dot" />{status}</span>
+      </span>
+    </header>
+    <span id="main-content" className="main-content-anchor" tabIndex={-1} />
+  </>;
 }
