@@ -246,6 +246,98 @@ def fixture():
     return manifest, capture
 
 
+def owned_loopback_fixture(root: pathlib.Path):
+    manifest, capture = fixture()
+    genesis, _ = key(80)
+    manifest["schema"] = reconcile.OWNED_LOOPBACK_MANIFEST_SCHEMA
+    manifest["cluster"] = {"kind": "owned-loopback", "genesisHash": genesis}
+    source = {"schema": "fixture-semantic-owner-journal-v1", "phase": "finalized"}
+    source_raw = reconcile.canonical_bytes(source)
+    source_sha = hashlib.sha256(source_raw).hexdigest()
+    for event in manifest["events"]:
+        event["sourceSha256"] = source_sha
+    source_set = [{"event": event["id"], "sha256": source_sha} for event in manifest["events"]]
+    manifest["sourceSetSha256"] = hashlib.sha256(reconcile.canonical_bytes(source_set)).hexdigest()
+    capture.update(
+        schema=reconcile.OWNED_LOOPBACK_CAPTURE_SCHEMA,
+        genesisHash=genesis,
+        commitment="finalized",
+        finalizedSlot="200",
+    )
+    evidence = root / "evidence"
+    evidence.mkdir()
+    (evidence / "fixture-journal.json").write_bytes(source_raw)
+    session = {
+        "schema": "dclutch-local-private-validator-lifecycle-v1",
+        "status": "finalized",
+    }
+    (evidence / "session.json").write_bytes(reconcile.canonical_bytes(session))
+    manifest_path = root / "manifest.json"
+    capture_path = evidence / "capture.json"
+    receipt_path = root / "receipt.json"
+    manifest_path.write_bytes(reconcile.canonical_bytes(manifest))
+    capture_path.write_bytes(reconcile.canonical_bytes(capture))
+
+    def journal(path: str, schema: str, completion: str) -> dict[str, str]:
+        raw = (evidence / path).read_bytes()
+        return {
+            "path": path,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "schema": schema,
+            "completionField": completion,
+        }
+
+    journals = [
+        journal("fixture-journal.json", source["schema"], "phase"),
+        journal("session.json", session["schema"], "status"),
+    ]
+    programs = []
+    for index, role in enumerate(reconcile.OWNED_LOOPBACK_PROGRAM_ROLES):
+        program_id, _ = key(100 + index)
+        programdata, _ = key(120 + index)
+        programs.append(
+            {
+                "role": role,
+                "programId": program_id,
+                "programDataAddress": programdata,
+                "deploymentSlot": str(index + 1),
+                "elfSha256": f"{index + 1:02x}" * 32,
+                "genesisProgramDataSha256": f"{index + 21:02x}" * 32,
+            }
+        )
+    receipt = {
+        "schema": reconcile.OWNED_LOOPBACK_RECEIPT_SCHEMA,
+        "status": "finalized",
+        "cluster": manifest["cluster"],
+        "sourceCommit": "ab" * 20,
+        "checkedReleaseGateSha256": "cd" * 32,
+        "programs": programs,
+        "manifestSha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "capture": {
+            "path": "capture.json",
+            "sha256": hashlib.sha256(capture_path.read_bytes()).hexdigest(),
+            "schema": reconcile.OWNED_LOOPBACK_CAPTURE_SCHEMA,
+            "commitment": "finalized",
+            "finalizedSlot": "200",
+        },
+        "journals": journals,
+        "journalSetSha256": hashlib.sha256(reconcile.canonical_bytes(journals)).hexdigest(),
+        "privateSession": {
+            "path": "session.json",
+            "sha256": journals[1]["sha256"],
+            "schema": session["schema"],
+            "status": "finalized",
+            "completedStages": list(reconcile.EVENT_KINDS),
+        },
+    }
+    receipt_path.write_bytes(reconcile.canonical_bytes(receipt))
+    return manifest, capture, receipt, manifest_path, capture_path, receipt_path, evidence
+
+
+def rewrite_owned_loopback_receipt(receipt: dict, receipt_path: pathlib.Path) -> None:
+    receipt_path.write_bytes(reconcile.canonical_bytes(receipt))
+
+
 class ReconcileTest(unittest.TestCase):
     def test_complete_captured_activity_emits_deterministic_unsigned_dossier(self):
         manifest, capture = fixture()
@@ -469,6 +561,115 @@ class ReconcileTest(unittest.TestCase):
             (root / "fixture-journal.json").write_text('{"schema":"substituted"}\n', encoding="utf-8")
             with self.assertRaisesRegex(reconcile.Refusal, "digest differs"):
                 reconcile.authenticate_sources(manifest, root)
+
+    def test_owned_loopback_cli_emits_separately_typed_local_dossier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, _, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            out_path = root / "dossier.json"
+            status = reconcile.main(
+                [
+                    "owned-loopback-captured",
+                    "--manifest", str(manifest_path),
+                    "--rpc-capture", str(capture_path),
+                    "--session-receipt", str(receipt_path),
+                    "--expected-session-receipt-sha256", hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    "--evidence-root", str(evidence),
+                    "--out", str(out_path),
+                ]
+            )
+            self.assertEqual(status, 0)
+            dossier = json.loads(out_path.read_text())
+            self.assertEqual(dossier["schema"], reconcile.OWNED_LOOPBACK_DOSSIER_SCHEMA)
+            self.assertEqual(dossier["cluster"], manifest["cluster"])
+            self.assertEqual(
+                dossier["evidence"]["rpc"]["mode"],
+                "owned-loopback-captured-finalized-rpc-replay",
+            )
+            self.assertEqual(
+                dossier["evidence"]["ownedLoopbackSession"]["classification"],
+                "owned-loopback-local-evidence-not-public-devnet-or-live-observation",
+            )
+
+    def test_owned_loopback_manifest_can_never_enter_public_devnet_reconcile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(pathlib.Path(directory))
+            with self.assertRaisesRegex(reconcile.Refusal, "not admitted"):
+                reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
+
+    def test_public_devnet_manifest_can_never_enter_owned_loopback_reconcile(self):
+        manifest, capture = fixture()
+        capture.update(commitment="finalized", finalizedSlot="200")
+        rpc = reconcile.OwnedLoopbackCapturedRpc(capture)
+        with self.assertRaisesRegex(reconcile.Refusal, "public cluster genesis|not admitted"):
+            reconcile.reconcile_owned_loopback(manifest, rpc, {})
+
+    def test_owned_loopback_receipt_program_substitution_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            expected = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            receipt["programs"][0]["elfSha256"] = "ef" * 32
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            rpc = reconcile.captured_owned_loopback(capture_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "expected SHA-256"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, expected, evidence, manifest_path, capture_path, manifest, rpc
+                )
+
+    def test_owned_loopback_receipt_missing_program_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            receipt["programs"].pop()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "seven-plus-provider"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence, manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_provisional_receipt_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            receipt["status"] = "provisional"
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "provisional"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence, manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_partial_lifecycle_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            receipt["privateSession"]["completedStages"].pop()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "partial"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence, manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_missing_source_journal_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, _, _, _, _, evidence = owned_loopback_fixture(root)
+            (evidence / "fixture-journal.json").unlink()
+            with self.assertRaisesRegex(reconcile.Refusal, "cannot resolve source journal"):
+                reconcile.authenticate_owned_loopback_sources(manifest, evidence)
+
+    def test_owned_loopback_capture_finality_boundary_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            _, capture, _, _, capture_path, _, _ = owned_loopback_fixture(root)
+            capture["finalizedSlot"] = "100"
+            capture_path.write_bytes(reconcile.canonical_bytes(capture))
+            rpc = reconcile.captured_owned_loopback(capture_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "not covered by the finalized capture slot"):
+                rpc.transaction("signature-retirement")
 
 
 if __name__ == "__main__":
