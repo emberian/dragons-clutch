@@ -99,6 +99,7 @@ export default function ArtifactInput({
     <label className="artifact-file">
       <input
         type="file"
+        aria-label={`Choose ${label}`}
         onChange={(event) => { const file = event.target.files?.item(0) ?? null; if (file !== null) void readFile(file); event.target.value = ''; }}
       />
       <span>Drop the file here, or click to choose it</span>

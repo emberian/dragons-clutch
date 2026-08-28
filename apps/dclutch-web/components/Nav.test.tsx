@@ -18,19 +18,21 @@ describe('the site nav', () => {
     for (const retired of ['>Trade</a>', '>Liquidity</a>', '>Represent</a>', '>Release</a>', '>Direct</a>', '>General</a>', '>Workbench</a>', '>Operate</a>']) {
       expect(html).not.toContain(retired);
     }
-    expect((html.match(/<nav>/g) ?? []).length).toBe(1);
+    expect((html.match(/<nav aria-label="Primary navigation">/g) ?? []).length).toBe(1);
+    expect(html).toContain('<span id="main-content" class="main-content-anchor" tabindex="-1"></span>');
   });
 
   it('marks the current product route active, and only it', () => {
     const html = renderToStaticMarkup(<Nav current="/portfolio" />);
-    expect(html).toContain('href="/portfolio" class="active"');
+    expect(html).toContain('href="/portfolio" class="active" aria-current="page"');
     expect((html.match(/class="active"/g) ?? []).length).toBe(1);
+    expect((html.match(/aria-current="page"/g) ?? []).length).toBe(1);
   });
 
   it('lights the Console entry from any console route', () => {
     for (const path of ['/console', '/release', '/trade', '/workbench', '/local']) {
       const html = renderToStaticMarkup(<Nav current={path} />);
-      expect(html).toContain('href="/console" class="active"');
+      expect(html).toContain('href="/console" class="active" aria-current="page"');
     }
   });
 
