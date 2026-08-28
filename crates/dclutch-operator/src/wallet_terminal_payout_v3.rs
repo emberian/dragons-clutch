@@ -4,7 +4,7 @@
 //! campaign without creating a second payout implementation. Product payout,
 //! exposure translation, and the SignedDelta packet remain owned by
 //! `dclutch-claims-svm`; this host-only operator supplies the wallet request,
-//! exact 35-account frame, Custody caller PDA, sole canonical lookup sequence,
+//! exact 36-account frame, Custody caller PDA, sole canonical lookup sequence,
 //! unsigned v0 message, and independently checked postcondition.
 
 use dclutch_claims_svm::{

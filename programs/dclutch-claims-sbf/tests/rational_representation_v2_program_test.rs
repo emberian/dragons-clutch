@@ -4990,13 +4990,14 @@ fn wallet_payout_instruction(
 
 /// Submit one wallet payout over a live address-lookup table.
 ///
-/// This route CANNOT ride a legacy packet. Its frame is thirty-five accounts and
-/// its request is six hundred and forty bytes: 1,869 bytes measured against the
-/// 1,232-byte limit. That is a protocol fact about terminal settlement, not a
-/// campaign choice, and it is the one asymmetry between the redemption's two
-/// steps -- step one (`custody_replay_v1`, 711 bytes) is deliberately legacy so
-/// a redeemer can always create the cursor, and step two needs a published
-/// table. Any redemption builder, including the browser's, has to publish one.
+/// This route CANNOT ride a legacy packet. Its frame is thirty-six accounts and
+/// its request is six hundred and forty bytes; the measured legacy encoding
+/// exceeds the 1,232-byte limit. That is a protocol fact about terminal
+/// settlement, not a campaign choice, and it is the one asymmetry between the
+/// redemption's two steps -- step one (`custody_replay_v1`, 711 bytes) is
+/// deliberately legacy so a redeemer can always create the cursor, and step two
+/// needs a published table. Any redemption builder, including the browser's,
+/// has to publish one.
 async fn submit_wallet_payout(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -5013,11 +5014,14 @@ async fn submit_wallet_payout(
     } else {
         context.payer.pubkey()
     };
+    // Every call must produce a distinct transaction even when a hostile keeps
+    // the instruction bytes identical. ProgramTest records failed signatures;
+    // reusing the current blockhash can therefore prove only AlreadyProcessed
+    // (with no program logs) instead of exercising Claims' refusal again.
     let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
+        .get_new_latest_blockhash()
         .await
-        .expect("blockhash");
+        .expect("a distinct wallet-payout blockhash");
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &fee_payer,
