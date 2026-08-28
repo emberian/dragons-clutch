@@ -7,12 +7,23 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 
-import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { ascii, fromHex, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { decodeCapabilityManifestV1 } from './capabilityManifest';
 import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import {
+  decodeMarketCoreStateV2,
+  type MarketCorePhaseV2,
+  type MarketCoreReadinessV2,
+} from './marketCoreV2';
+import {
+  EXECUTION_ROLE_CLAIMS_V1,
+  EXECUTION_ROLE_CORE_V1,
+  EXECUTION_ROLE_CUSTODY_V1,
+  EXECUTION_ROLE_RESOLUTION_V1,
+  EXECUTION_ROLE_TRADING_V1,
+} from './generated/claimsCustodyReplayV1';
+import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-  CORE_STATE_BYTES,
   LIABILITY_BASIS_MARKET_SEED_V2 as CLAIMS_MARKET_SEED,
   LIABILITY_BASIS_POSITION_SEED_V2 as POSITION_SEED,
   LIFECYCLE_RENT_CREDIT_BYTES_V2,
@@ -301,40 +312,46 @@ export async function authenticateRationalProductBasisRecordV3(
   return Object.freeze({ basis, digest, semanticBasisId });
 }
 
-export type RationalHotCoreViewV2 = Readonly<{
-  phase: number;
-  readiness: number;
+export type RationalHotCoreViewV3 = Readonly<{
+  phase: MarketCorePhaseV2;
+  readiness: MarketCoreReadinessV2;
   terminalWinner: number;
   terminalReceipt: Uint8Array;
   realm: Uint8Array;
+  resolutionPolicy: Uint8Array;
   productRecord: Uint8Array;
   productId: Uint8Array;
   manifest: Uint8Array;
   releaseSet: Uint8Array;
   registry: string;
   generation: bigint;
-  rentCredit: string;
+  principalCapSets: bigint;
+  rentBeneficiary: string;
 }>;
 
-export function decodeRationalHotCoreV2(address: string, account: RpcAccount, coreProgram: string): RationalHotCoreViewV2 {
-  if (account.owner !== coreProgram || account.executable || account.data.length !== CORE_STATE_BYTES
-      || ascii(account.data, 0, 8) !== 'DCLTCOR2' || u16(account.data, 8) !== 2) {
-    throw new Error('Market is not exact nonexecutable CoreStateV2 under the selected Core program');
+/** Authenticate account ownership around the canonical current Core decoder. */
+export function authenticateRationalHotCoreV3(address: string, account: RpcAccount, coreProgram: string): RationalHotCoreViewV3 {
+  if (account.owner !== coreProgram || account.executable) {
+    throw new Error('Market is not nonexecutable state under the selected Core program');
   }
-  const phase = account.data[10] ?? 255;
-  const readiness = account.data[11] ?? 255;
-  if (phase > 4 || readiness > 2) throw new Error('CoreStateV2 phase/readiness tag is undefined');
-  const market = key(address, 'Market');
-  if (!same(slice(account.data, 16, 32), market.toBytes())) throw new Error('CoreStateV2 Market identity differs from its account address');
-  const identities = [48, 80, 112, 144, 176, 208, 240, 288, 320].map((offset) => slice(account.data, offset, 32));
-  identities.forEach((identity, index) => requireNonzero(identity, `CoreStateV2 identity ${index}`));
-  const generation = u64(account.data, 272);
-  if (generation === 0n) throw new Error('CoreStateV2 generation is zero');
+  const state = decodeMarketCoreStateV2(address, account.data);
+  if (state.marketId !== key(address, 'Market').toBase58()) throw new Error('Core Market identity differs from its account address');
+  const terminal = state.settlement.status === 'terminal' ? state.settlement : null;
   return Object.freeze({
-    phase, readiness, terminalWinner: u32(account.data, 12), terminalReceipt: identities[8],
-    realm: identities[0], productRecord: identities[1], productId: identities[2], manifest: identities[4],
-    releaseSet: identities[5], registry: new PublicKey(identities[6]).toBase58(), generation,
-    rentCredit: new PublicKey(identities[7]).toBase58(),
+    phase: state.phase,
+    readiness: state.readiness,
+    terminalWinner: terminal?.winner ?? 0,
+    terminalReceipt: terminal === null ? new Uint8Array(32) : fromHex(terminal.receiptId, 'Core terminal receipt'),
+    realm: fromHex(state.identity.realmId, 'Core Realm identity'),
+    productRecord: fromHex(state.identity.productRecordId, 'Core Product record identity'),
+    productId: fromHex(state.identity.productInstanceId, 'Core Product identity'),
+    resolutionPolicy: fromHex(state.identity.resolutionPolicyId, 'Core Resolution policy identity'),
+    manifest: fromHex(state.identity.capabilityManifestId, 'Core capability manifest identity'),
+    releaseSet: fromHex(state.identity.selectedReleaseSetId, 'Core selected release set'),
+    registry: state.identity.registryProgram,
+    generation: BigInt(state.identity.generation),
+    principalCapSets: BigInt(state.principalCapSets),
+    rentBeneficiary: state.rentBeneficiary,
   });
 }
 
@@ -624,6 +641,7 @@ export async function authenticateRationalHotActivationV4(
   claims: string; claimsProgramData: string;
   trading: string; tradingProgramData: string;
   custody: string; custodyProgramData: string;
+  resolution: string; resolutionProgramData: string;
 }>> {
   if (cache.owner !== registry || cache.executable || cache.data.length !== ACTIVATION_CACHE_BYTES || ascii(cache.data, 0, 8) !== 'DCLTACT1' || u16(cache.data, 8) !== 1 || u16(cache.data, 10) !== 1) {
     throw new Error('activation cache has the wrong Registry owner or exact ABI');
@@ -645,15 +663,16 @@ export async function authenticateRationalHotActivationV4(
   }
   const decodedRelease = await decodeExecutionReleaseSetV1(releaseBytes);
   if (decodedRelease.id !== hex(releaseSet)) throw new Error('activation cache does not reconstruct the Core-selected release set');
-  if (artifacts[0].program !== core || artifacts[0].programData !== coreProgramData
-      || artifacts[2].program !== trading || artifacts[2].programData !== tradingProgramData) {
+  if (artifacts[EXECUTION_ROLE_CORE_V1].program !== core || artifacts[EXECUTION_ROLE_CORE_V1].programData !== coreProgramData
+      || artifacts[EXECUTION_ROLE_TRADING_V1].program !== trading || artifacts[EXECUTION_ROLE_TRADING_V1].programData !== tradingProgramData) {
     throw new Error('activation cache Core/Trading deployments differ from Hot fixed programs');
   }
   return Object.freeze({
-    core: artifacts[0].program, coreProgramData: artifacts[0].programData,
-    claims: artifacts[1].program, claimsProgramData: artifacts[1].programData,
-    trading: artifacts[2].program, tradingProgramData: artifacts[2].programData,
-    custody: artifacts[3].program, custodyProgramData: artifacts[3].programData,
+    core: artifacts[EXECUTION_ROLE_CORE_V1].program, coreProgramData: artifacts[EXECUTION_ROLE_CORE_V1].programData,
+    claims: artifacts[EXECUTION_ROLE_CLAIMS_V1].program, claimsProgramData: artifacts[EXECUTION_ROLE_CLAIMS_V1].programData,
+    trading: artifacts[EXECUTION_ROLE_TRADING_V1].program, tradingProgramData: artifacts[EXECUTION_ROLE_TRADING_V1].programData,
+    custody: artifacts[EXECUTION_ROLE_CUSTODY_V1].program, custodyProgramData: artifacts[EXECUTION_ROLE_CUSTODY_V1].programData,
+    resolution: artifacts[EXECUTION_ROLE_RESOLUTION_V1].program, resolutionProgramData: artifacts[EXECUTION_ROLE_RESOLUTION_V1].programData,
   });
 }
 
@@ -703,12 +722,11 @@ export async function inspectRationalRetireReceiptV4(
   const coreProgram = fixed[Hot.HOT_CORE_PROGRAM_ACCOUNT_V3].address;
   const tradingProgram = fixed[Hot.HOT_TRADING_PROGRAM_ACCOUNT_V3].address;
   const registry = fixed[Hot.HOT_REGISTRY_PROGRAM_ACCOUNT_V3].address;
-  const market = decodeRationalHotCoreV2(marketAddress, required(first.accounts, marketAddress, 'Market'), coreProgram);
-  if (market.phase !== 3 || required(first.accounts, marketAddress, 'Market').data[11] !== 2
-      || isZero(slice(required(first.accounts, marketAddress, 'Market').data, 320, 32))) {
+  const market = authenticateRationalHotCoreV3(marketAddress, required(first.accounts, marketAddress, 'Market'), coreProgram);
+  if (market.phase !== 'Retiring' || market.readiness !== 'Consumed' || isZero(market.terminalReceipt)) {
     throw new Error('receipt retirement requires a Retiring, readiness-consumed Core Market with terminal receipt');
   }
-  if (market.registry !== registry) throw new Error('CoreStateV2 selects another Registry program');
+  if (market.registry !== registry) throw new Error('current Core Market selects another Registry program');
   if (fixed[Hot.HOT_RENT_SYSVAR_ACCOUNT_V3].address !== RENT_SYSVAR_ID || fixed[Hot.HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3].address !== SYSTEM_INSTRUCTIONS_SYSVAR) {
     throw new Error('Hot fixed frame substitutes a runtime sysvar');
   }
@@ -735,7 +753,7 @@ export async function inspectRationalRetireReceiptV4(
   if (receipt.toBase58() !== descriptor.receiptMint) throw new Error('descriptor receipt Mint is not the graph+Market+release Claims PDA');
   const aggregate = PublicKey.findProgramAddressSync([CLAIMS_MARKET_SEED, key(marketAddress, 'Market').toBytes()], key(activation.claims, 'Claims program'))[0].toBase58();
   const support = deriveRationalRetireReceiptSupportV4(activation.claims, descriptor.id, descriptor.support, aggregate);
-  const dynamic = [activation.claims, activation.claimsProgramData, aggregate, market.rentCredit, descriptor.receiptMint,
+  const dynamic = [activation.claims, activation.claimsProgramData, aggregate, market.rentBeneficiary, descriptor.receiptMint,
     TOKEN_2022_PROGRAM_ID, SYSTEM_PROGRAM_ID,
     ...support.flatMap((row) => [row.shardMint, row.structuredCustody, row.position, row.admission])];
   const second = await acquireRationalHotAccountsV4(client, dynamic, first.slot);
@@ -767,8 +785,8 @@ export async function inspectRationalRetireReceiptV4(
   const aggregateAccount = required(accounts, aggregate, 'Claims aggregate');
   if (aggregateAccount.owner !== activation.claims || aggregateAccount.executable) throw new Error('Claims aggregate has the wrong owner or executable bit');
   const claimsRevision = decodeClaimsMarket(aggregateAccount.data, marketAddress, market.releaseSet, registry, market.productRecord, market.realm, market.generation, admittedBasis.basis.width);
-  const creditAccount = required(accounts, market.rentCredit, 'LifecycleRentCreditV2');
-  const credit = decodeLifecycleRentCredit(market.rentCredit, creditAccount, marketAddress, market.releaseSet, market.generation);
+  const creditAccount = required(accounts, market.rentBeneficiary, 'LifecycleRentCreditV2');
+  const credit = decodeLifecycleRentCredit(market.rentBeneficiary, creditAccount, marketAddress, market.releaseSet, market.generation);
   const creditRent = BigInt((await client.minimumBalanceForRentExemption(LIFECYCLE_RENT_CREDIT_BYTES_V2)).lamports);
   if (credit.balance < creditRent) throw new Error('LifecycleRentCreditV2 is below its current exact rent minimum');
   const rentObservation = await acquireRationalHotAccountsV4(client, [credit.program], second.slot);
@@ -790,7 +808,7 @@ export async function inspectRationalRetireReceiptV4(
   }
   const familyBytes = encodeRationalRetireReceiptFamilyV4({
     releaseSet: market.releaseSet, market: marketAddress, graphId: descriptor.graphId, descriptorId: descriptor.id,
-    representationAuthority: authority.toBase58(), receiptMint: descriptor.receiptMint, rentCredit: market.rentCredit,
+    representationAuthority: authority.toBase58(), receiptMint: descriptor.receiptMint, rentCredit: market.rentBeneficiary,
     rentProgram: credit.program, generation: market.generation, claimsRevision,
     receiptLamports: BigInt(mintAccount.lamports), receiptRent, outcomeCount: admittedBasis.basis.width, rentBefore: credit.balance,
   });
@@ -814,7 +832,7 @@ export async function inspectRationalRetireReceiptV4(
     { address: authority.toBase58(), isSigner: false, isWritable: false },
     { address: descriptor.receiptMint, isSigner: false, isWritable: true },
     { address: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
-    { address: market.rentCredit, isSigner: false, isWritable: true },
+    { address: market.rentBeneficiary, isSigner: false, isWritable: true },
     { address: credit.program, isSigner: false, isWritable: false },
     { address: aggregate, isSigner: false, isWritable: false },
     { address: marketAddress, isSigner: false, isWritable: false },
@@ -834,7 +852,7 @@ export async function inspectRationalRetireReceiptV4(
     descriptorId: descriptor.id, graphId: descriptor.graphId, representationAuthority: authority.toBase58(),
     receiptMint: descriptor.receiptMint, claimsProgram: activation.claims, claimsRevision,
     representationWidth: admittedBasis.basis.width, resultOutcomeCount: product.outcomeCount,
-    rentCredit: market.rentCredit, rentProgram: credit.program,
+    rentCredit: market.rentBeneficiary, rentProgram: credit.program,
     receiptLamports: BigInt(mintAccount.lamports), receiptRentPrincipal: receiptRent, rentCreditBefore: credit.balance,
     familyBytes, familyDigest, childDigest: exactChildDigest, rootDigest: await sha256(rootAccount.data), callerAuthority: caller,
     executionStatus: 'blocked',

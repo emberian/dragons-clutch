@@ -396,9 +396,10 @@ export default function CreateMarketWizard() {
           {kappa.verdict.scaled !== null && kappa.verdict.bound !== null && <> This founding states {kappa.verdict.scaled.toLocaleString()} against a bound of {kappa.verdict.bound.toLocaleString()}.</>}
         </p>
         <p className="wizard-enforcement">
-          Enforcement: <strong>{kappa.verdict.enforcement}</strong>. The current onchain opening path does not enforce this
-          ratio, so this verdict is a design warning rather than a validator guarantee. A check made only at opening would
-          not be a permanent cap anyway, because later complete-set splits can increase the principal.
+          Enforcement: <strong>{kappa.verdict.enforcement}</strong>. ProjectFound authenticates the selected Source graph,
+          converts the atom cap to complete-set units at one floor-division boundary, and generic Found refuses a quantity
+          above that cap before mutation. Core then persists the exact <code>principal_cap_sets</code> value. This typed
+          preview is not chain evidence: the opening route still has to authenticate the floor and its three bindings.
         </p>
       </div> : <p className="direct-refusal">Refused: {kappa.message}</p>}
 

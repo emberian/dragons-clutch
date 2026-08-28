@@ -1,16 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
+import vectors from '../../fixtures/founding/generic-founding-vectors.json';
 import {
   BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
   CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
   CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+  MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1,
   PRINCIPAL_ADMISSION_CASES_V1,
+  PRINCIPAL_CAP_PROJECTION_CASES_V1,
 } from '../generated/principalCapacityV1';
 import {
   DEFAULT_CHAIN_STATE_CAPACITY_V1,
+  admitFoundingPrincipalV1,
+  admitGenericFoundingQuantityV1,
   admitPrincipalCapacityV1,
+  decodeManipulationFloorV1,
   formatCapacityV1,
   largestAdmittedPrincipalV1,
+  projectPrincipalCapSetsV1,
   type PrincipalCapacityV1,
 } from './principalCapacity';
 
@@ -98,14 +105,11 @@ describe('the kappa predicate names why it refused', () => {
 });
 
 describe('the kappa verdict states its own enforcement', () => {
-  it('always reports that no on-chain route applies it', () => {
-    // This is the field a UI must render beside the verdict. If kappa is ever
-    // wired into a founding route, this test is the thing that has to change,
-    // and its failure is the reminder to change the copy with it.
+  it('reports the current ProjectFound-to-Core enforcement boundary', () => {
     for (const principal of [1n, 4_654_518_500n, 4_654_518_501n]) {
-      expect(admitPrincipalCapacityV1(DEFAULT_CHAIN_STATE_CAPACITY_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1, principal).enforcement).toBe('off-chain-only');
+      expect(admitPrincipalCapacityV1(DEFAULT_CHAIN_STATE_CAPACITY_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1, principal).enforcement).toBe('projected-to-core');
     }
-    expect(admitPrincipalCapacityV1({ kind: 'unstated' }, 1n, 1n).enforcement).toBe('off-chain-only');
+    expect(admitPrincipalCapacityV1({ kind: 'unstated' }, 1n, 1n).enforcement).toBe('projected-to-core');
   });
 });
 
@@ -115,5 +119,84 @@ describe('the kappa predicate refuses inputs outside their declared widths', () 
     expect(() => admitPrincipalCapacityV1(bounded(1n, 4n), 1n, 1n << 128n)).toThrow(/outside u128/);
     expect(() => admitPrincipalCapacityV1(bounded(1n << 32n, 4n), 1n, 1n)).toThrow(/numerator is outside u32/);
     expect(() => admitPrincipalCapacityV1(bounded(1n, 1n << 32n), 1n, 1n)).toThrow(/denominator is outside u32/);
+  });
+});
+
+describe('Core principal_cap_sets projection and generic founding admission', () => {
+  it('matches every Lean-emitted atom-to-set projection row', () => {
+    expect(PRINCIPAL_CAP_PROJECTION_CASES_V1).toHaveLength(11);
+    for (const row of PRINCIPAL_CAP_PROJECTION_CASES_V1) {
+      if (row.projectedSets === null) {
+        expect(() => projectPrincipalCapSetsV1(row.capAtoms, row.basisScale)).toThrow(/basis scale is outside positive u64/);
+      } else {
+        expect(projectPrincipalCapSetsV1(row.capAtoms, row.basisScale)).toBe(row.projectedSets);
+      }
+    }
+  });
+
+  it('mirrors Core generic Found at absent, bounded, and explicit-unbounded boundaries', () => {
+    expect(admitGenericFoundingQuantityV1(0n, 1n)).toMatchObject({ admitted: false, refusal: 'PrincipalCapacityUnstated' });
+    expect(admitGenericFoundingQuantityV1(4n, 0n)).toMatchObject({ admitted: false, refusal: 'ZeroCapacity' });
+    expect(admitGenericFoundingQuantityV1(4n, 4n)).toMatchObject({ admitted: true, refusal: null, enforcement: 'core-generic-founding' });
+    expect(admitGenericFoundingQuantityV1(4n, 5n)).toMatchObject({ admitted: false, refusal: 'PrincipalExceedsCapacity' });
+    expect(admitGenericFoundingQuantityV1(MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1, MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1))
+      .toMatchObject({ admitted: true, refusal: null });
+  });
+
+  it('refuses values outside the exact u64 wire', () => {
+    expect(() => admitGenericFoundingQuantityV1(-1n, 1n)).toThrow(/principal_cap_sets is outside u64/);
+    expect(() => admitGenericFoundingQuantityV1(1n, 1n << 64n)).toThrow(/quantity is outside u64/);
+  });
+});
+
+describe('recognizing and binding a real ManipulationFloorV1 record', () => {
+  const floors = (vectors as Readonly<{ manipulationFloors: ReadonlyArray<Readonly<{
+    name: string; bytes: string; floorAtoms: string; basis: string; largestAdmitted: string; admitsBound: boolean; admitsBoundPlusOne: boolean;
+  }>> }>).manipulationFloors;
+  const bytesOf = (value: string) => Uint8Array.from(value.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+
+  it('decodes every first-party Rust vector and reaches its boundary verdict', () => {
+    expect(floors.length).toBeGreaterThan(0);
+    for (const vector of floors) {
+      const floor = decodeManipulationFloorV1(bytesOf(vector.bytes));
+      expect(floor.floorAtoms, vector.name).toBe(BigInt(vector.floorAtoms));
+      expect(floor.basis, vector.name).toBe(vector.basis);
+      expect(floor.sourceSpecId).toBe('11'.repeat(32));
+      expect(floor.adapterConfigId).toBe('22'.repeat(32));
+      expect(floor.collateralUnitId).toBe('33'.repeat(32));
+      expect(floor.derivationReleaseId).toBe('44'.repeat(32));
+      const binding = { sourceSpecId: floor.sourceSpecId, adapterConfigId: floor.adapterConfigId, collateralUnitId: floor.collateralUnitId };
+      const boundary = BigInt(vector.largestAdmitted);
+      expect(admitFoundingPrincipalV1(DEFAULT_CHAIN_STATE_CAPACITY_V1, floor, binding, boundary).admitted).toBe(vector.admitsBound);
+      expect(admitFoundingPrincipalV1(DEFAULT_CHAIN_STATE_CAPACITY_V1, floor, binding, boundary + 1n).admitted).toBe(vector.admitsBoundPlusOne);
+    }
+  });
+
+  it('refuses a substituted Source, adapter configuration, or collateral unit before arithmetic', () => {
+    const floor = decodeManipulationFloorV1(bytesOf(floors[0].bytes));
+    const binding = { sourceSpecId: floor.sourceSpecId, adapterConfigId: floor.adapterConfigId, collateralUnitId: floor.collateralUnitId };
+    for (const field of ['sourceSpecId', 'adapterConfigId', 'collateralUnitId'] as const) {
+      expect(() => admitFoundingPrincipalV1(DEFAULT_CHAIN_STATE_CAPACITY_V1, floor, { ...binding, [field]: 'ee'.repeat(32) }, 1n))
+        .toThrow(/derived for another Source, venue configuration, or collateral unit/);
+    }
+  });
+
+  it('hostile-decodes exact width, header, version, reserved runs, basis, and nonzero identities', () => {
+    const canonical = () => bytesOf(floors[0].bytes);
+    expect(() => decodeManipulationFloorV1(canonical().slice(0, 159))).toThrow(/not the 160/);
+    const wrongMagic = canonical(); wrongMagic[0] ^= 0xff;
+    expect(() => decodeManipulationFloorV1(wrongMagic)).toThrow(/not a ManipulationFloorV1/);
+    const wrongVersion = canonical(); wrongVersion[8] = 2;
+    expect(() => decodeManipulationFloorV1(wrongVersion)).toThrow(/unsupported schema version/);
+    for (const offset of [11, 152]) {
+      const dirty = canonical(); dirty[offset] = 1;
+      expect(() => decodeManipulationFloorV1(dirty)).toThrow(/reserved/);
+    }
+    const unknownBasis = canonical(); unknownBasis[10] = 0xff;
+    expect(() => decodeManipulationFloorV1(unknownBasis)).toThrow(/unknown derivation basis/);
+    for (const [offset, field] of [[16, 'Source spec'], [48, 'adapter config'], [80, 'collateral unit'], [112, 'derivation release']] as const) {
+      const vacuous = canonical(); vacuous.set(new Uint8Array(32), offset);
+      expect(() => decodeManipulationFloorV1(vacuous)).toThrow(new RegExp(`${field} is the reserved all-zero identity`));
+    }
   });
 });
