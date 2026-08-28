@@ -1680,6 +1680,7 @@ dependencies = [
  "dclutch-source-contract",
  "dclutch-token-svm",
  "solana-account 4.6.0",
+ "solana-compute-budget-interface",
  "solana-hash 4.6.0",
  "solana-message 3.1.0",
  "solana-program",

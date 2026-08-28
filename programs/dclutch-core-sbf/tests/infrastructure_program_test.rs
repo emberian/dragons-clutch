@@ -13,6 +13,7 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use solana_account::Account;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -27,6 +28,7 @@ use solana_transaction::Transaction;
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe1; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe2; 32]);
 const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe3; 32]);
+const PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 
 struct Artifacts {
     core: Vec<u8>,
@@ -312,7 +314,10 @@ async fn exact_loader_authority_initializes_once_and_cannot_update() {
         .await
         .expect("blockhash");
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction.clone()],
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(PROTOCOL_COMPUTE_UNIT_LIMIT),
+            instruction.clone(),
+        ],
         Some(&payer),
         &[&context.payer, &fixture.authority],
         blockhash,
@@ -341,7 +346,10 @@ async fn exact_loader_authority_initializes_once_and_cannot_update() {
         .await
         .expect("second blockhash");
     let replay = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(PROTOCOL_COMPUTE_UNIT_LIMIT),
+            instruction,
+        ],
         Some(&payer),
         &[&context.payer, &fixture.authority],
         blockhash,
