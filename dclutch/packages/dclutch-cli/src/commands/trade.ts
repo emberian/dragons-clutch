@@ -25,9 +25,11 @@ import {
 } from '@dclutch/sdk/directInlineV3';
 import { inspectDirectHotRouteV3, type DirectHotRouteInspectionV3, type DirectHotRouteManifestV3 } from '@dclutch/sdk/directHotChain';
 import type { Keypair } from '@solana/web3.js';
+import type { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import nacl from 'tweetnacl';
 
 import { loadKeypair, rpcClient, type CliContext } from '../context';
+import { assertExactDevnetMutation, devnetGenesisAcknowledgment } from '../mutation';
 import { block, type Io } from '../output';
 import { submitAndConfirm } from '../submit';
 
@@ -70,11 +72,11 @@ export function parseRouteManifestFile(text: string): DirectHotRouteManifestV3 {
   });
 }
 
-async function inspectRoute(context: CliContext): Promise<DirectHotRouteInspectionV3> {
+async function inspectRoute(context: CliContext, client = rpcClient(context)): Promise<DirectHotRouteInspectionV3> {
   const routePath = context.flags.route;
   if (typeof routePath !== 'string') throw new Error('pass --route <json> naming the Direct hot route (payer, fixed/strategy/runtime accounts, lookup tables)');
   const manifest = parseRouteManifestFile(readFileSync(routePath, 'utf8'));
-  return inspectDirectHotRouteV3(rpcClient(context), manifest);
+  return inspectDirectHotRouteV3(client, manifest);
 }
 
 // ------------------------------------------------------------------- intents
@@ -214,7 +216,10 @@ export async function intentCommand(context: CliContext, io: Io, sideText: strin
 }
 
 export async function tradeCommand(context: CliContext, io: Io, action: 'buy' | 'sell', env: NodeJS.ProcessEnv): Promise<number> {
-  const inspection = await inspectRoute(context);
+  const acknowledgment = devnetGenesisAcknowledgment(context);
+  const client: SolanaRpcClient = rpcClient(context);
+  await assertExactDevnetMutation(client, acknowledgment, `${action} route preparation`);
+  const inspection = await inspectRoute(context, client);
   if (inspection.route.outerEvidence.status !== 'checked') {
     io.err(`route is internally consistent but unrecognized: ${inspection.route.outerEvidence.status === 'unavailable' ? inspection.route.outerEvidence.reason : ''}`);
   }
@@ -236,12 +241,14 @@ export async function tradeCommand(context: CliContext, io: Io, action: 'buy' | 
       collateral: flagText(context, 'counter-collateral'),
       nonce: flagBig(context, 'counter-nonce', 1n),
     });
+    await assertExactDevnetMutation(client, acknowledgment, `${action} counterparty intent signature`);
     counterparty = signIntent(counterIntent, counterKeypair);
   } else {
     throw new Error(`a ${action} crosses a signed counterparty intent: pass --take <intent.json>, or --counter-keypair + --counter-collateral to self-match locally`);
   }
 
   const myIntent = buildIntent(context, inspection, mySide);
+  await assertExactDevnetMutation(client, acknowledgment, `${action} taker intent signature`);
   const mine = signIntent(myIntent, taker);
   const seller = mySide === 0 ? mine : counterparty;
   const buyer = mySide === 1 ? mine : counterparty;
@@ -266,7 +273,8 @@ export async function tradeCommand(context: CliContext, io: Io, action: 'buy' | 
   if (payer.publicKey.toBase58() !== inspection.route.payer) {
     throw new Error(`the route's fixed payer is ${inspection.route.payer}; the ${typeof context.flags.payer === 'string' ? '--payer' : '--keypair'} key is ${payer.publicKey.toBase58()} — pass --payer with the payer keypair`);
   }
+  await assertExactDevnetMutation(client, acknowledgment, `${action} transaction signature`);
   plan.transaction.sign([payer]);
-  const outcome = await submitAndConfirm(rpcClient(context), plan.transaction.serialize(), io);
+  const outcome = await submitAndConfirm(client, plan.transaction.serialize(), io, acknowledgment);
   return outcome.succeeded ? 0 : 1;
 }

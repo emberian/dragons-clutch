@@ -18,6 +18,7 @@ import { buildFailureWalkTransactionV1, type FailureWalkBookV1 } from '@dclutch/
 import { COMMIT_DEADLINE_FAILURE_FRAME_V1 } from '@dclutch/sdk/generated/relayTransportV1';
 
 import { loadKeypair, rpcClient, type CliContext } from '../context';
+import { assertExactDevnetMutation, devnetGenesisAcknowledgment, latestExactDevnetBlockhash } from '../mutation';
 import { block, type Io } from '../output';
 import { lamportDelta, submitAndConfirm } from '../submit';
 
@@ -42,14 +43,16 @@ export function decodeWalkBook(value: unknown): FailureWalkBookV1 {
 }
 
 export async function walk(context: CliContext, io: Io, env: NodeJS.ProcessEnv): Promise<number> {
+  const acknowledgment = devnetGenesisAcknowledgment(context);
+  const client = rpcClient(context);
+  await assertExactDevnetMutation(client, acknowledgment, 'failure-walk preparation');
   const bookPath = context.flags.book;
   if (typeof bookPath !== 'string') throw new Error('pass --book <json> with the frame addresses (fields are the frame slot names; see the client guide)');
   const book = decodeWalkBook(JSON.parse(readFileSync(bookPath, 'utf8')));
   const generation = BigInt(String(context.flags.generation ?? 1));
   const terminalSequence = BigInt(String(context.flags['terminal-sequence'] ?? 1));
   const walker = loadKeypair(context, env);
-  const client = rpcClient(context);
-  const blockhash = await client.latestBlockhash();
+  const blockhash = await latestExactDevnetBlockhash(client, acknowledgment, 'failure-walk blockhash acquisition');
   const transaction = buildFailureWalkTransactionV1(book, walker.publicKey.toBase58(), generation, terminalSequence, blockhash.blockhash);
   if (context.flags['dry-run'] === true) {
     io.out(`walk of market ${book.market}, generation ${generation}, terminal sequence ${terminalSequence} — NOT submitted`);
@@ -64,10 +67,11 @@ export async function walk(context: CliContext, io: Io, env: NodeJS.ProcessEnv):
     io.out(`  wire ${wire.length + 64} bytes signed, of 1232 — a bare legacy packet, no lookup table`);
     return 0;
   }
+  await assertExactDevnetMutation(client, acknowledgment, 'failure-walk transaction signature');
   transaction.sign(walker);
   const wire = transaction.serialize();
   io.out(`walking market ${book.market} to its explicit failure outcome (${wire.length} byte legacy packet)`);
-  const outcome = await submitAndConfirm(client, Uint8Array.from(wire), io);
+  const outcome = await submitAndConfirm(client, Uint8Array.from(wire), io, acknowledgment);
   if (!outcome.succeeded) return 1;
   if (outcome.meta !== null) {
     const delta = lamportDelta(outcome.meta, walker.publicKey.toBase58());

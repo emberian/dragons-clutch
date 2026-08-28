@@ -45,7 +45,7 @@ global flags:
   --payout-input <json>  exact Rust payout-plan input for redeem
   --payout-alt-plan <json>
                          persist/resume the owner-funded ordered ALT, then emit payout
-  --i-mean-devnet <hash> name devnet by its full genesis hash for redeem
+  --i-mean-devnet <hash> name devnet by its full genesis hash for buy, sell, redeem, and walk
 
 program ids come from --session or explicit --core-program/--claims-program/... flags.
 refusal codes: band = code >> 12; codes below 0x1000 are provably not dClutch's. See docs/guides/client-developers.md.`;

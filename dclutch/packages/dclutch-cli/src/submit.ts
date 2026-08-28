@@ -10,6 +10,7 @@ import type { SolanaRpcClient, TransactionMetaObservation } from '@dclutch/sdk/r
 import { renderRefusal } from '@dclutch/sdk/refusals';
 
 import { nameRefusals, type Io } from './output';
+import { assertExactDevnetMutation } from './mutation';
 
 const POLL_INTERVAL_MS = 500;
 const POLL_ATTEMPTS = 60;
@@ -20,9 +21,15 @@ export type SubmitOutcome = Readonly<{
   meta: TransactionMetaObservation | null;
 }>;
 
-export async function submitAndConfirm(client: SolanaRpcClient, wire: Uint8Array, io: Io): Promise<SubmitOutcome> {
+export async function submitAndConfirm(
+  client: SolanaRpcClient,
+  wire: Uint8Array,
+  io: Io,
+  devnetAcknowledgment: string,
+): Promise<SubmitOutcome> {
   // Errors propagate unnamed; the command's one `fail` renderer names any
   // custom code exactly once at the terminal boundary.
+  await assertExactDevnetMutation(client, devnetAcknowledgment, 'transaction submission');
   const signature = await client.sendRawTransaction(wire);
   io.out(`submitted ${signature}`);
   for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {

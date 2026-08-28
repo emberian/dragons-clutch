@@ -27,7 +27,8 @@ dclutch --session session.json intent sell --route route.json \
     --outcome 1 --fill 5 --price 400000 --collateral <acct> \
     --keypair maker.json --out sell-intent.json
 dclutch --session session.json buy --route route.json --take sell-intent.json \
-    --outcome 1 --fill 5 --price 400000 --collateral <acct> --keypair taker.json
+    --outcome 1 --fill 5 --price 400000 --collateral <acct> --keypair taker.json \
+    --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
 dclutch --session session.json portfolio
 dclutch --session session.json redeem --market <market> --keypair owner.json \
@@ -37,7 +38,8 @@ dclutch --session session.json redeem --market <market> --keypair owner.json \
 
 # the funded failure walk: a passed deadline is free money for whoever watched
 dclutch --session session.json walk --book walk-book.json \
-    --generation 1 --terminal-sequence 1 --keypair anyone.json
+    --generation 1 --terminal-sequence 1 --keypair anyone.json \
+    --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
 dclutch refusal 0x5000            # any custom code, named via the band registry
 ```
@@ -61,6 +63,11 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
   the SDK and web payout flow.
 - The keypair is always an explicit `--keypair <path>` or `$DCLUTCH_KEYPAIR`;
   there is no default-wallet fallback, deliberately.
+- Every public-chain mutation (`buy`, `sell`, `redeem`, and `walk`) requires
+  `--i-mean-devnet` with Solana devnet's full genesis hash. The endpoint proves
+  that exact identity again before every intent signature, transaction
+  signature, and submission; an RPC hostname and an earlier observation grant
+  no authority.
 - `--dry-run` on `buy`/`sell`/`redeem`/`walk` builds and prints everything
   and signs nothing.
 

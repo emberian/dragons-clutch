@@ -22,6 +22,7 @@ import {
 } from '@dclutch/sdk/walletTerminalPayoutV3';
 
 import { loadKeypair, programId, rpcClient, type CliContext } from '../context';
+import { assertExactDevnetMutation, devnetGenesisAcknowledgment } from '../mutation';
 import { block, type Io } from '../output';
 import {
   nextWalletTerminalPayoutAltActionV1,
@@ -205,16 +206,6 @@ async function finalizedAltObservation(
   return observeWalletTerminalPayoutAltV1(observed.slot, observed.account, plan.lookupTable);
 }
 
-async function assertRedeemDevnet(
-  client: ReturnType<typeof rpcClient>,
-  acknowledgment: string,
-): Promise<void> {
-  const admission = await client.assertMutationCluster();
-  if (admission.kind !== 'devnet' || admission.genesisHash !== acknowledgment) {
-    throw new Error('redeem requires the exact devnet genesis acknowledgment at every mutation boundary');
-  }
-}
-
 async function provisionAltFromRpc(
   client: ReturnType<typeof rpcClient>,
   plan: WalletTerminalPayoutAltPlanV1,
@@ -225,10 +216,10 @@ async function provisionAltFromRpc(
   return provisionWalletTerminalPayoutAltV1(plan, signer, {
     observe: () => finalizedAltObservation(client, plan),
     latestMutationBlockhash: async (minimumContextSlot) => {
-      await assertRedeemDevnet(client, acknowledgment);
+      await assertExactDevnetMutation(client, acknowledgment, 'redeem lookup-table blockhash acquisition');
       return client.latestBlockhash(minimumContextSlot);
     },
-    submit: async (wire) => (await submitAndConfirm(client, wire, io)).succeeded,
+    submit: async (wire) => (await submitAndConfirm(client, wire, io, acknowledgment)).succeeded,
     wait: () => new Promise((resolveWait) => setTimeout(resolveWait, 2_000)),
   });
 }
@@ -240,11 +231,10 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
   // producer itself still runs only after the replay has been admitted.
   const payoutInput = context.flags['payout-input'];
   if (typeof payoutInput !== 'string') throw new Error('pass --payout-input <wallet-terminal-payout input json>');
-  const devnetAcknowledgment = context.flags['i-mean-devnet'];
-  if (typeof devnetAcknowledgment !== 'string') throw new Error('pass --i-mean-devnet <full devnet genesis hash>');
+  const devnetAcknowledgment = devnetGenesisAcknowledgment(context);
   const keypair = loadKeypair(context, env);
   const client = rpcClient(context);
-  await assertRedeemDevnet(client, devnetAcknowledgment);
+  await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem preparation');
   const progressIo: Io = context.json ? Object.freeze({ out: io.err, err: io.err }) : io;
 
   // What is actually redeemable, before touching anything.
@@ -292,9 +282,9 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
       progressIo.out('dry run — nothing signed or submitted');
       return 0;
     }
-    await assertRedeemDevnet(client, devnetAcknowledgment);
+    await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem replay transaction signature');
     plan.transaction.sign([keypair]);
-    const outcome = await submitAndConfirm(client, plan.transaction.serialize(), progressIo);
+    const outcome = await submitAndConfirm(client, plan.transaction.serialize(), progressIo, devnetAcknowledgment);
     if (!outcome.succeeded) return 1;
     let finalizedReplay = false;
     for (let attempt = 0; attempt < 30; attempt += 1) {

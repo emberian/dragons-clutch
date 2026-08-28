@@ -141,23 +141,23 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x3000` | `CoreSbfError::Instruction` | Instruction bytes or action-specific inactive fields refused. | `programs/dclutch-core-sbf/src/lib.rs:87` |
-| `0x3001` | `CoreSbfError::AccountFrame` | Account count, order, privilege, executable flag, or alias refused. | `programs/dclutch-core-sbf/src/lib.rs:89` |
-| `0x3002` | `CoreSbfError::FinalizedRecord` | Finalized record owner, PDA, cursor absence, Rent, digest, or schema refused. | `programs/dclutch-core-sbf/src/lib.rs:91` |
-| `0x3003` | `CoreSbfError::Reference` | Realm/Product/result-domain/Market identity linkage refused. | `programs/dclutch-core-sbf/src/lib.rs:93` |
-| `0x3004` | `CoreSbfError::Release` | Registry cache, Loader-backed current deployment, or release-set join refused. | `programs/dclutch-core-sbf/src/lib.rs:95` |
-| `0x3005` | `CoreSbfError::Market` | Core Market PDA, owner, width, phase, or generation refused. | `programs/dclutch-core-sbf/src/lib.rs:97` |
-| `0x3006` | `CoreSbfError::RentCredit` | RentCredit owner, bytes, PDA, or persisted beneficiary refused. | `programs/dclutch-core-sbf/src/lib.rs:99` |
-| `0x3007` | `CoreSbfError::Creation` | System, Rent, Clock, vacant account, or exact creation plan refused. | `programs/dclutch-core-sbf/src/lib.rs:101` |
-| `0x3008` | `CoreSbfError::Funding` | Capability manifest entry, FundingState, custody, deadline, or PDA refused. | `programs/dclutch-core-sbf/src/lib.rs:103` |
-| `0x3009` | `CoreSbfError::CallerAuthority` | Canonical release-pinned Core caller authority refused. | `programs/dclutch-core-sbf/src/lib.rs:105` |
-| `0x300A` | `CoreSbfError::ChildCpi` | Selected child invocation or immediate return-data producer refused. | `programs/dclutch-core-sbf/src/lib.rs:107` |
-| `0x300B` | `CoreSbfError::ChildAck` | Child acknowledgement or post-funding physical delta refused. | `programs/dclutch-core-sbf/src/lib.rs:109` |
-| `0x300C` | `CoreSbfError::Transition` | Generated semantic transition refused. | `programs/dclutch-core-sbf/src/lib.rs:111` |
-| `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | `programs/dclutch-core-sbf/src/lib.rs:113` |
-| `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | `programs/dclutch-core-sbf/src/lib.rs:115` |
-| `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | `programs/dclutch-core-sbf/src/lib.rs:117` |
-| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:125` |
+| `0x3000` | `CoreSbfError::Instruction` | Instruction bytes or action-specific inactive fields refused. | `programs/dclutch-core-sbf/src/lib.rs:93` |
+| `0x3001` | `CoreSbfError::AccountFrame` | Account count, order, privilege, executable flag, or alias refused. | `programs/dclutch-core-sbf/src/lib.rs:95` |
+| `0x3002` | `CoreSbfError::FinalizedRecord` | Finalized record owner, PDA, cursor absence, Rent, digest, or schema refused. | `programs/dclutch-core-sbf/src/lib.rs:97` |
+| `0x3003` | `CoreSbfError::Reference` | Realm/Product/result-domain/Market identity linkage refused. | `programs/dclutch-core-sbf/src/lib.rs:99` |
+| `0x3004` | `CoreSbfError::Release` | Registry cache, Loader-backed current deployment, or release-set join refused. | `programs/dclutch-core-sbf/src/lib.rs:101` |
+| `0x3005` | `CoreSbfError::Market` | Core Market PDA, owner, width, phase, or generation refused. | `programs/dclutch-core-sbf/src/lib.rs:103` |
+| `0x3006` | `CoreSbfError::RentCredit` | RentCredit owner, bytes, PDA, or persisted beneficiary refused. | `programs/dclutch-core-sbf/src/lib.rs:105` |
+| `0x3007` | `CoreSbfError::Creation` | System, Rent, Clock, vacant account, or exact creation plan refused. | `programs/dclutch-core-sbf/src/lib.rs:107` |
+| `0x3008` | `CoreSbfError::Funding` | Capability manifest entry, funding ledger, custody, deadline, or PDA refused. | `programs/dclutch-core-sbf/src/lib.rs:109` |
+| `0x3009` | `CoreSbfError::CallerAuthority` | Canonical release-pinned Core caller authority refused. | `programs/dclutch-core-sbf/src/lib.rs:111` |
+| `0x300A` | `CoreSbfError::ChildCpi` | Selected child invocation or immediate return-data producer refused. | `programs/dclutch-core-sbf/src/lib.rs:113` |
+| `0x300B` | `CoreSbfError::ChildAck` | Child acknowledgement or post-funding physical delta refused. | `programs/dclutch-core-sbf/src/lib.rs:115` |
+| `0x300C` | `CoreSbfError::Transition` | Generated semantic transition refused. | `programs/dclutch-core-sbf/src/lib.rs:117` |
+| `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | `programs/dclutch-core-sbf/src/lib.rs:119` |
+| `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | `programs/dclutch-core-sbf/src/lib.rs:121` |
+| `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | `programs/dclutch-core-sbf/src/lib.rs:123` |
+| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:131` |
 
 ## custody
 
@@ -274,27 +274,27 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x8000` | `ResolutionError::AccountFrame` | Account count, order, privilege, executable state, or aliasing was invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:39` |
-| `0x8001` | `ResolutionError::Instruction` | The generated fixed-layout request refused hostile bytes. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:41` |
-| `0x8002` | `ResolutionError::OutputState` | A writable Source state or certificate account was not canonical. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:43` |
-| `0x8003` | `ResolutionError::MarketAuthority` | Market owner, root, lifecycle, generation, or Source binding was invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:45` |
-| `0x8004` | `ResolutionError::FinalizedRecord` | A finalized raw-record owner, PDA, digest, rent, or vacancy proof was invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:47` |
-| `0x8005` | `ResolutionError::ResolutionRelease` | The Market-selected Registry activation did not authorize this Resolution release. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:49` |
-| `0x8006` | `ResolutionError::ResolutionDeployment` | Current Loader V3 Program, ProgramData, ELF, slot, or upgrade policy was substituted. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:51` |
-| `0x8007` | `ResolutionError::SourceMaterial` | Source material or one of its embedded content identities was inconsistent. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:53` |
-| `0x8008` | `ResolutionError::ProductDomain` | The external Product-owned result-domain identity or bytes differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:55` |
-| `0x8009` | `ResolutionError::ProviderRelease` | The selected Pyth provider-release record or Loader accounts differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:57` |
-| `0x800A` | `ResolutionError::ProviderObservation` | Fully verified update authentication failed: the posted bytes, their digest, the write authority, the posted slot, or an evidence identity was not the one this frame committed to.  This used to be all of §12.3 as well. It is not any more: the three questions `docs/design/MAINNET_STATE_RELAY.md` §12.3 says an operator must be able to tell apart now have their own codes (`ProviderWindow`, `ProviderFreshness`, `ProviderConfiguration`), and this one is the residue — "the update itself did not authenticate". | `programs/dclutch-resolution-proof-sbf/src/lib.rs:67` |
-| `0x800B` | `ResolutionError::Sysvar` | Clock or Rent sysvar identity or bytes were invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:69` |
-| `0x800C` | `ResolutionError::Transition` | Provider-neutral Source admission or Product mapping refused. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:71` |
-| `0x800D` | `ResolutionError::Arithmetic` | Checked physical arithmetic or signed timestamp conversion failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:73` |
-| `0x800E` | `ResolutionError::Funding` | Canonical capability funding, typed custody, or exact bounty debit failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:75` |
-| `0x800F` | `ResolutionError::RelayedRecord` | The sealed relayed observation record was not consumable against this Market's authenticated Source graph. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:78` |
-| `0x8010` | `ResolutionError::RelayedWindow` | The relayed observation was admissible but did not satisfy the Product's own window: it is no answer rather than a wrong one, and the market is still live. Distinct from every "the bytes were wrong" refusal on purpose, because "come back later" and "something is broken" are not the same message to whoever is holding the position. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:84` |
-| `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`.  Like `RelayedWindow`, and for the same reason: this is no answer rather than a wrong one, and the Market is still live. §12.3's first operator question. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:91` |
-| `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`.  §12.3's second operator question, and the one whose answer is an instruction: if the publication is too OLD, a pinned fixture has outlived its declared shelf life and must be recaptured — not widened. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:99` |
-| `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits.  §12.3's third operator question. Unlike the first two this one is not "come back later": nothing about waiting changes it. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:106` |
-| `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:114` |
+| `0x8000` | `ResolutionError::AccountFrame` | Account count, order, privilege, executable state, or aliasing was invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:40` |
+| `0x8001` | `ResolutionError::Instruction` | The generated fixed-layout request refused hostile bytes. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:42` |
+| `0x8002` | `ResolutionError::OutputState` | A writable Source state or certificate account was not canonical. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:44` |
+| `0x8003` | `ResolutionError::MarketAuthority` | Market owner, root, lifecycle, generation, or Source binding was invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:46` |
+| `0x8004` | `ResolutionError::FinalizedRecord` | A finalized raw-record owner, PDA, digest, rent, or vacancy proof was invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:48` |
+| `0x8005` | `ResolutionError::ResolutionRelease` | The Market-selected Registry activation did not authorize this Resolution release. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:50` |
+| `0x8006` | `ResolutionError::ResolutionDeployment` | Current Loader V3 Program, ProgramData, ELF, slot, or upgrade policy was substituted. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:52` |
+| `0x8007` | `ResolutionError::SourceMaterial` | Source material or one of its embedded content identities was inconsistent. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:54` |
+| `0x8008` | `ResolutionError::ProductDomain` | The external Product-owned result-domain identity or bytes differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:56` |
+| `0x8009` | `ResolutionError::ProviderRelease` | The selected Pyth provider-release record or Loader accounts differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:58` |
+| `0x800A` | `ResolutionError::ProviderObservation` | Fully verified update authentication failed: the posted bytes, their digest, the write authority, the posted slot, or an evidence identity was not the one this frame committed to.  This used to be all of §12.3 as well. It is not any more: the three questions `docs/design/MAINNET_STATE_RELAY.md` §12.3 says an operator must be able to tell apart now have their own codes (`ProviderWindow`, `ProviderFreshness`, `ProviderConfiguration`), and this one is the residue — "the update itself did not authenticate". | `programs/dclutch-resolution-proof-sbf/src/lib.rs:68` |
+| `0x800B` | `ResolutionError::Sysvar` | Clock or Rent sysvar identity or bytes were invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:70` |
+| `0x800C` | `ResolutionError::Transition` | Provider-neutral Source admission or Product mapping refused. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:72` |
+| `0x800D` | `ResolutionError::Arithmetic` | Checked physical arithmetic or signed timestamp conversion failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:74` |
+| `0x800E` | `ResolutionError::Funding` | Canonical capability funding, typed custody, or exact bounty debit failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:76` |
+| `0x800F` | `ResolutionError::RelayedRecord` | The sealed relayed observation record was not consumable against this Market's authenticated Source graph. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:79` |
+| `0x8010` | `ResolutionError::RelayedWindow` | The relayed observation was admissible but did not satisfy the Product's own window: it is no answer rather than a wrong one, and the market is still live. Distinct from every "the bytes were wrong" refusal on purpose, because "come back later" and "something is broken" are not the same message to whoever is holding the position. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:85` |
+| `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`.  Like `RelayedWindow`, and for the same reason: this is no answer rather than a wrong one, and the Market is still live. §12.3's first operator question. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:92` |
+| `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`.  §12.3's second operator question, and the one whose answer is an instruction: if the publication is too OLD, a pinned fixture has outlived its declared shelf life and must be recaptured — not widened. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:100` |
+| `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits.  §12.3's third operator question. Unlike the first two this one is not "come back later": nothing about waiting changes it. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:107` |
+| `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:115` |
 
 ## series-shadow
 
@@ -310,14 +310,14 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:147` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:149` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:151` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:153` |
-| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:155` |
-| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:157` |
-| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:159` |
-| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:167` |
+| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:151` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:153` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:155` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:157` |
+| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:159` |
+| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:161` |
+| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:163` |
+| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:171` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |

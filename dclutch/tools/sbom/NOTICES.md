@@ -1467,6 +1467,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - core-foundation-sys 0.8.7 (cargo)
 - cpufeatures 0.2.17 (cargo)
 - cpufeatures 0.3.0 (cargo)
+- cpufeatures 0.3.1 (cargo)
 - crc32fast 1.5.1 (cargo)
 - crossbeam-channel 0.5.16 (cargo)
 - crossbeam-deque 0.8.7 (cargo)

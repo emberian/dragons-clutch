@@ -905,37 +905,17 @@ fn authenticate_generic_funding_and_capability_root(
     authenticate_derived_capability_root(frame.trading_program, request, manifest, manifest_id)?;
     let resolution = roles.projected_binding(Role::Resolution);
     let trading = roles.projected_binding(Role::Trading);
-    let mut expected_masks = [0_u16; 2];
+    let mut expected_masks = founding_controller_masks(
+        manifest,
+        resolution.semantic_release.to_bytes(),
+        request.capability_entry_index(),
+    )?;
     let mut expected_controllers = [resolution.program, trading.program];
-    let mut entry_index = 0_u16;
-    while entry_index < manifest.entry_count() {
-        let entry = manifest
-            .entry(entry_index)
-            .map_err(|_| CoreSbfError::Funding)?;
-        let bit = 1_u16
-            .checked_shl(u32::from(entry_index))
-            .ok_or(CoreSbfError::Arithmetic)?;
-        if entry.release_id().to_bytes() == resolution.semantic_release.to_bytes() {
-            expected_masks[0] |= bit;
-        } else if entry.release_id().to_bytes() == trading.semantic_release.to_bytes() {
-            expected_masks[1] |= bit;
-        } else {
-            return Err(CoreSbfError::Funding);
-        }
-        entry_index = entry_index.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
-    }
-    if expected_masks[0] == 0 {
-        expected_masks[0] = expected_masks[1];
-        expected_controllers[0] = expected_controllers[1];
-        expected_masks[1] = 0;
-    } else if expected_masks[1] != 0
-        && expected_masks[0].trailing_zeros() > expected_masks[1].trailing_zeros()
-    {
+    if expected_masks[0].trailing_zeros() > expected_masks[1].trailing_zeros() {
         expected_masks.swap(0, 1);
         expected_controllers.swap(0, 1);
     }
-    let physical_count = if expected_masks[1] == 0 { 1 } else { 2 };
-    if frame.funding.len() != physical_count {
+    if frame.funding.len() != expected_masks.len() {
         return Err(CoreSbfError::Funding);
     }
     let required_union = if manifest.entry_count() == 16 {
@@ -946,12 +926,8 @@ fn authenticate_generic_funding_and_capability_root(
             .and_then(|value| value.checked_sub(1))
             .ok_or(CoreSbfError::Arithmetic)?
     };
-    validate_funding_ledger_masks_v2(
-        manifest.entry_count(),
-        required_union,
-        &expected_masks[..physical_count],
-    )
-    .map_err(|_| CoreSbfError::Funding)?;
+    validate_funding_ledger_masks_v2(manifest.entry_count(), required_union, &expected_masks)
+        .map_err(|_| CoreSbfError::Funding)?;
 
     let mut keys = [Identity::new([1; 32]).map_err(|_| CoreSbfError::Funding)?;
         GENERIC_FOUNDING_MAX_FUNDING_STATES_V1];
@@ -1028,6 +1004,50 @@ fn authenticate_generic_funding_and_capability_root(
         return Err(CoreSbfError::Funding);
     }
     Ok(())
+}
+
+/// Derive the two controller-owned funding subsets from the authenticated
+/// founding selection rather than from physical manifest positions.
+///
+/// The selected capability release is content-addressed family data and is
+/// deliberately distinct from the generic Trading interpreter semantic
+/// release (decision 0003). Every companion entry must name the exact activated
+/// Resolution release. This generation's direct-capable founding is exactly
+/// one selected Trading entry plus three Resolution companions.
+fn founding_controller_masks(
+    manifest: CapabilityManifestV1<'_>,
+    resolution_semantic_release: [u8; 32],
+    trading_entry_index: u16,
+) -> Result<[u16; 2], CoreSbfError> {
+    let trading_entry = manifest
+        .entry(trading_entry_index)
+        .map_err(|_| CoreSbfError::Funding)?;
+    if trading_entry.release_id().to_bytes() == resolution_semantic_release {
+        return Err(CoreSbfError::Funding);
+    }
+    let trading_mask = 1_u16
+        .checked_shl(u32::from(trading_entry_index))
+        .ok_or(CoreSbfError::Arithmetic)?;
+    let mut resolution_mask = 0_u16;
+    let mut entry_index = 0_u16;
+    while entry_index < manifest.entry_count() {
+        if entry_index != trading_entry_index {
+            let entry = manifest
+                .entry(entry_index)
+                .map_err(|_| CoreSbfError::Funding)?;
+            if entry.release_id().to_bytes() != resolution_semantic_release {
+                return Err(CoreSbfError::Funding);
+            }
+            resolution_mask |= 1_u16
+                .checked_shl(u32::from(entry_index))
+                .ok_or(CoreSbfError::Arithmetic)?;
+        }
+        entry_index = entry_index.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
+    }
+    if manifest.entry_count() != 4 || resolution_mask.count_ones() != 3 {
+        return Err(CoreSbfError::Funding);
+    }
+    Ok([resolution_mask, trading_mask])
 }
 
 fn authenticate_generic_product(
@@ -2072,6 +2092,13 @@ fn identity(bytes: [u8; 32]) -> Result<dclutch_market_core_codec::Identity, Core
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+
     use super::*;
 
     fn id(byte: u8) -> [u8; 32] {
@@ -2121,6 +2148,93 @@ mod tests {
             position_lamports: 100,
             admission_lamports: 100,
         }
+    }
+
+    fn manifest_with_foreign_entries(foreign: &[usize]) -> Vec<u8> {
+        let native = CompartmentFundingV1::native_lamports(1).expect("native");
+        let none = CompartmentFundingV1::not_applicable();
+        let amounts =
+            FundingAmountsV1::new(native, native, none, none, native, none, none).expect("amounts");
+        let quote = FundingQuoteV1::new(amounts, None).expect("quote");
+        let mut entries = Vec::new();
+        for index in 0_usize..4 {
+            let byte = u8::try_from(index).expect("bounded index");
+            entries.push(
+                CapabilityEntryV1::new(
+                    CapabilityContentId::new([0x10 + byte; 32]).expect("kind"),
+                    CapabilityContentId::new(if foreign.contains(&index) {
+                        [0x31; 32]
+                    } else {
+                        [0x30; 32]
+                    })
+                    .expect("release"),
+                    CapabilityContentId::new([0x40 + byte; 32]).expect("config"),
+                    CapabilityContentId::new([0x50 + byte; 32]).expect("capacity"),
+                    CapabilityContentId::new([0x60; 32]).expect("schema"),
+                    CapabilityContentId::new([0x70; 32]).expect("derivation"),
+                    ActivationPolicy::RequiredAtFounding,
+                    0,
+                    0,
+                    [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                    quote,
+                )
+                .expect("entry"),
+            );
+        }
+        let mut bytes =
+            alloc::vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("manifest");
+        bytes
+    }
+
+    #[test]
+    fn founding_controller_masks_follow_the_authenticated_selected_entry() {
+        for trading_index in 0_usize..4 {
+            let bytes = manifest_with_foreign_entries(&[trading_index]);
+            let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
+            let trading_mask = 1_u16 << trading_index;
+            assert_eq!(
+                founding_controller_masks(
+                    manifest,
+                    [0x30; 32],
+                    u16::try_from(trading_index).expect("index"),
+                ),
+                Ok([0b1111 ^ trading_mask, trading_mask]),
+            );
+        }
+    }
+
+    #[test]
+    fn founding_controller_masks_refuse_ambiguous_or_invalid_selection() {
+        let all_resolution = manifest_with_foreign_entries(&[]);
+        assert_eq!(
+            founding_controller_masks(
+                CapabilityManifestV1::decode(&all_resolution).expect("manifest"),
+                [0x30; 32],
+                0,
+            ),
+            Err(CoreSbfError::Funding),
+        );
+
+        let two_foreign = manifest_with_foreign_entries(&[1, 3]);
+        assert_eq!(
+            founding_controller_masks(
+                CapabilityManifestV1::decode(&two_foreign).expect("manifest"),
+                [0x30; 32],
+                3,
+            ),
+            Err(CoreSbfError::Funding),
+        );
+
+        let one_foreign = manifest_with_foreign_entries(&[3]);
+        assert_eq!(
+            founding_controller_masks(
+                CapabilityManifestV1::decode(&one_foreign).expect("manifest"),
+                [0x30; 32],
+                4,
+            ),
+            Err(CoreSbfError::Funding),
+        );
     }
 
     #[test]

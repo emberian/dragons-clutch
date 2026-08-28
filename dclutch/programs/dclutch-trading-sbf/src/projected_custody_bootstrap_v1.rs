@@ -406,6 +406,7 @@ fn founding_funding_facts_v2(
         market: found.market().to_bytes(),
         generation: found.generation(),
         funding_list_id: found.funding_list_id(),
+        capability_entry_index: found.capability_entry_index(),
     })
 }
 
@@ -415,6 +416,7 @@ struct FoundingFundingFactsV1 {
     market: [u8; 32],
     generation: u64,
     funding_list_id: Identity,
+    capability_entry_index: u16,
 }
 
 /// Encode one request onto the heap.
@@ -534,12 +536,11 @@ fn stage_founding_capability_funding_v2(
     {
         return Err(TradingSbfError::Release.into());
     }
-    let resolution_mask = controller_mask(
+    let [resolution_mask, trading_mask] = controller_masks(
         manifest,
         resolution.release().semantic_release_id().to_bytes(),
+        facts.capability_entry_index,
     )?;
-    let trading_mask =
-        controller_mask(manifest, trading.release().semantic_release_id().to_bytes())?;
     let required_union = manifest_required_union(manifest.entry_count())?;
     validate_funding_ledger_masks_v2(
         manifest.entry_count(),
@@ -585,28 +586,47 @@ fn stage_founding_capability_funding_v2(
     Ok(())
 }
 
-fn controller_mask(
+/// Partition the exact four-entry founding manifest by semantic ownership.
+///
+/// Decision 0003 keeps the generic Trading interpreter semantic release
+/// distinct from a capability family's content-addressed release. The one
+/// manifest entry selected by the authenticated founding artifact is therefore
+/// Trading-owned, while every companion entry must name the activated
+/// Resolution controller release exactly. Physical bit positions are derived
+/// from that selected index; no ordering convention is authority.
+fn controller_masks(
     manifest: CapabilityManifestV1<'_>,
-    semantic_release: [u8; 32],
-) -> Result<u16, ProgramError> {
-    let mut mask = 0_u16;
-    for entry_index in 0_u16..manifest.entry_count() {
-        if manifest
-            .entry(entry_index)
-            .map_err(|_| TradingSbfError::Content)?
-            .release_id()
-            .to_bytes()
-            == semantic_release
-        {
-            mask |= 1_u16
-                .checked_shl(u32::from(entry_index))
-                .ok_or(TradingSbfError::Content)?;
-        }
-    }
-    if mask == 0 {
+    resolution_semantic_release: [u8; 32],
+    trading_entry_index: u16,
+) -> Result<[u16; 2], ProgramError> {
+    let trading_entry = manifest
+        .entry(trading_entry_index)
+        .map_err(|_| TradingSbfError::Content)?;
+    if trading_entry.release_id().to_bytes() == resolution_semantic_release {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(mask)
+    let trading_mask = 1_u16
+        .checked_shl(u32::from(trading_entry_index))
+        .ok_or(TradingSbfError::Content)?;
+    let mut resolution_mask = 0_u16;
+    for entry_index in 0_u16..manifest.entry_count() {
+        if entry_index == trading_entry_index {
+            continue;
+        }
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(|_| TradingSbfError::Content)?;
+        if entry.release_id().to_bytes() != resolution_semantic_release {
+            return Err(TradingSbfError::Content.into());
+        }
+        resolution_mask |= 1_u16
+            .checked_shl(u32::from(entry_index))
+            .ok_or(TradingSbfError::Content)?;
+    }
+    if manifest.entry_count() != 4 || resolution_mask.count_ones() != 3 {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok([resolution_mask, trading_mask])
 }
 
 fn manifest_required_union(entry_count: u16) -> Result<u16, ProgramError> {
@@ -1472,6 +1492,18 @@ mod tests {
     }
 
     fn demo_manifest(entries: usize) -> Vec<u8> {
+        let foreign = (3..entries).collect::<Vec<_>>();
+        demo_manifest_with_foreign_entries(entries, &foreign)
+    }
+
+    fn demo_manifest_with_trading(entries: usize, trading_index: Option<usize>) -> Vec<u8> {
+        match trading_index {
+            Some(index) => demo_manifest_with_foreign_entries(entries, &[index]),
+            None => demo_manifest_with_foreign_entries(entries, &[]),
+        }
+    }
+
+    fn demo_manifest_with_foreign_entries(entries: usize, foreign: &[usize]) -> Vec<u8> {
         use dclutch_capability_contract::{
             ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
             FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
@@ -1488,8 +1520,12 @@ mod tests {
             built.push(
                 CapabilityEntryV1::new(
                     ContentId::new([0x40 + byte; 32]).expect("kind"),
-                    ContentId::new(if index < 3 { [0x50; 32] } else { [0x51; 32] })
-                        .expect("release"),
+                    ContentId::new(if foreign.contains(&index) {
+                        [0x51; 32]
+                    } else {
+                        [0x50; 32]
+                    })
+                    .expect("release"),
                     ContentId::new([0x60 + byte; 32]).expect("config"),
                     ContentId::new([0x70 + byte; 32]).expect("capacity"),
                     ContentId::new([0x80; 32]).expect("schema"),
@@ -1509,6 +1545,85 @@ mod tests {
         bytes
     }
 
+    /// The bounded mask is the exact low-entry prefix. Entry count zero and
+    /// every width above the manifest profile refuse rather than collapsing to
+    /// an empty or wrapped partition.
+    #[test]
+    fn required_union_is_exact_at_zero_one_four_and_sixteen() {
+        assert_eq!(
+            manifest_required_union(0),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(manifest_required_union(1), Ok(0b1));
+        assert_eq!(manifest_required_union(4), Ok(0b1111));
+        assert_eq!(manifest_required_union(16), Ok(u16::MAX));
+        assert_eq!(
+            manifest_required_union(17),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(
+            manifest_required_union(u16::MAX),
+            Err(TradingSbfError::Content.into())
+        );
+    }
+
+    /// Canonical manifest ordering is by kind identity, not by controller.
+    /// Moving the selected Trading entry across every physical position moves
+    /// the two masks and nothing else; no literal `0b0111/0b1000` convention
+    /// participates in authority.
+    #[test]
+    fn controller_masks_follow_the_authenticated_selected_entry() {
+        for trading_index in 0_usize..4 {
+            let bytes = demo_manifest_with_trading(4, Some(trading_index));
+            let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
+            let trading_mask = 1_u16 << trading_index;
+            assert_eq!(
+                controller_masks(
+                    manifest,
+                    [0x50; 32],
+                    u16::try_from(trading_index).expect("index")
+                ),
+                Ok([0b1111 ^ trading_mask, trading_mask])
+            );
+        }
+    }
+
+    /// The selected entry must be the sole non-Resolution entry and the exact
+    /// four-entry cover is closed. A Resolution-selected root, a fifth row, or
+    /// a second foreign release all refuse before either ledger is created.
+    #[test]
+    fn controller_masks_refuse_ambiguous_or_non_exhaustive_ownership() {
+        let all_resolution = demo_manifest_with_trading(4, None);
+        assert_eq!(
+            controller_masks(
+                CapabilityManifestV1::decode(&all_resolution).expect("manifest"),
+                [0x50; 32],
+                0,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+
+        let five = demo_manifest_with_trading(5, Some(4));
+        assert_eq!(
+            controller_masks(
+                CapabilityManifestV1::decode(&five).expect("manifest"),
+                [0x50; 32],
+                4,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+
+        let two_foreign = demo_manifest_with_foreign_entries(4, &[1, 3]);
+        assert_eq!(
+            controller_masks(
+                CapabilityManifestV1::decode(&two_foreign).expect("manifest"),
+                [0x50; 32],
+                3,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+    }
+
     fn funding_list(manifest_bytes: &[u8], market: [u8; 32], generation: u64) -> Identity {
         let manifest = CapabilityManifestV1::decode(manifest_bytes).expect("manifest");
         let manifest_id = ContentId::new(hash(manifest_bytes).to_bytes()).expect("manifest id");
@@ -1517,6 +1632,7 @@ mod tests {
             market,
             generation,
             funding_list_id: Identity::new([1; 32]).expect("placeholder"),
+            capability_entry_index: 3,
         };
         let rent = Rent::default();
         let resolution = plan_funding_ledger_v2(
@@ -1568,6 +1684,7 @@ mod tests {
             market,
             generation: 7,
             funding_list_id: honest,
+            capability_entry_index: 3,
         };
         let rent = Rent::default();
         let resolution = plan_funding_ledger_v2(
