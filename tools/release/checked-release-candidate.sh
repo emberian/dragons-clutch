@@ -692,8 +692,6 @@ gate = {
     "build_run_id": os.environ["GATE_BUILD_RUN_ID"],
     "link_count": len(links),
     "source_tree_manifest": evidence("source-tree.txt"),
-    "cargo_locks_before_manifest": evidence("cargo-locks-before.tsv"),
-    "cargo_locks_after_manifest": evidence("cargo-locks-after.tsv"),
     "build_links_manifest": evidence("build-links.tsv"),
     "build_run_manifest": evidence("build-run.txt"),
     "diagnostics_manifest": evidence("build-diagnostics.txt"),

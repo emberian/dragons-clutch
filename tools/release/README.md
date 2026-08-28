@@ -27,8 +27,9 @@ first build and after the complete candidate, including the source-pinned host
 release tool. It refuses any added, removed, or changed lock and preserves both
 manifests as `cargo-locks-before.tsv` and `cargo-locks-after.tsv`. The summary's
 `cargo_lock_count`, `cargo_lock_set_sha256`, and
-`cargo_lock_immutability=passed` bind that repository-wide check; the Upgrade
-gate binds both manifests. The host tool itself builds `--locked --offline`.
+`cargo_lock_immutability=passed` bind that repository-wide check. The Upgrade
+gate's v1 JSON shape is unchanged; its source-tree digest already binds every
+committed lock byte. The host tool itself builds `--locked --offline`.
 
 After the ordinary artifact build is clean, the runner performs a separate
 fresh measurement build for each of the same thirteen links with
