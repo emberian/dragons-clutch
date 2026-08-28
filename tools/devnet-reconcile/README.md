@@ -44,6 +44,7 @@ Captured evidence is the reproducible gate:
 ```sh
 python3 tools/devnet-reconcile/reconcile.py captured \
   --manifest activity-manifest.json \
+  --journal-root evidence \
   --rpc-capture finalized-rpc.json \
   --out public-activity-dossier.json
 ```
@@ -55,6 +56,7 @@ Bounded live polling performs only `getGenesisHash`, finalized
 ```sh
 python3 tools/devnet-reconcile/reconcile.py follow \
   --manifest activity-manifest.json \
+  --journal-root evidence \
   --rpc-url https://api.devnet.solana.com \
   --max-polls 5 --interval-seconds 2 --timeout-seconds 10 \
   --out public-activity-dossier.json
@@ -75,8 +77,9 @@ contains:
 - `sourceSetSha256`: SHA-256 of the canonical ordered
   `[{"event":...,"sha256":...}]` source list;
 - `events`: one or more events in each of the six canonical phases, each with
-  an operation name, source digest, finalized identity, exact lamport/token
-  deltas, and its kind-specific facts;
+  an operation name, canonical relative `sourcePath`, digest of that exact
+  strict-JSON journal, finalized identity, exact lamport/token deltas, and its
+  kind-specific facts;
 - `finalAccounts`: exact current owner/lamports/data digest and Token-2022 fields,
   or `closed: true`.
 
@@ -86,6 +89,9 @@ signature. Its `accounts` map contains
 `{"contextSlot":"...","value":<getAccountInfo value>}` keyed by address.
 Strict JSON duplicate keys, unknown manifest fields, duplicate identities,
 forks, missing evidence, mixed mints, and substituted raw state all refuse.
+Source paths are confined beneath `--journal-root`; absolute paths, traversal,
+symlink escapes, non-JSON journals, and digest substitutions refuse before any
+RPC read.
 
 Run the local hostile corpus with:
 

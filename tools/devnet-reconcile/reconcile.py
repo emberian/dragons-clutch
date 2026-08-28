@@ -63,6 +63,20 @@ def load_json(path: pathlib.Path) -> Any:
         refuse(f"cannot read strict JSON {path}: {error}")
 
 
+def read_evidence_file(path: pathlib.Path) -> tuple[bytes, Any]:
+    try:
+        size = path.stat().st_size
+        if size > MAX_JSON_BYTES:
+            refuse(f"{path} exceeds the {MAX_JSON_BYTES}-byte evidence bound")
+        raw = path.read_bytes()
+        decoded = json.loads(raw, object_pairs_hook=unique_object)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        refuse(f"cannot read strict source journal {path}: {error}")
+    if not isinstance(decoded, dict):
+        refuse(f"source journal {path} must be a JSON object")
+    return raw, decoded
+
+
 def canonical_bytes(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
 
@@ -411,7 +425,7 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     previous: str | None = None
     prior_slot = -1
     for index, event in enumerate(events):
-        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "lamportDeltas", "tokenDeltas", "sourceSha256"}, {"direct", "position", "certificate", "payout", "retirement"}, f"events[{index}]")
+        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "lamportDeltas", "tokenDeltas", "sourcePath", "sourceSha256"}, {"direct", "position", "certificate", "payout", "retirement"}, f"events[{index}]")
         event_id = text(event["id"], "event id")
         text(event["operation"], f"event {event_id} operation")
         signature = text(event["signature"], f"event {event_id} signature")
@@ -432,6 +446,10 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
         if fee_ref not in accounts or accounts[fee_ref]["kind"] != "wallet":
             refuse(f"event {event_id} fee payer is not a declared wallet")
         decimal(event["feeLamports"], f"event {event_id} fee")
+        source_path = text(event["sourcePath"], f"event {event_id} sourcePath")
+        parts = pathlib.PurePosixPath(source_path)
+        if parts.is_absolute() or source_path != parts.as_posix() or any(part in ("", ".", "..") for part in parts.parts):
+            refuse(f"event {event_id} sourcePath is not a canonical relative path")
         digest(event["sourceSha256"], f"event {event_id} sourceSha256")
         parse_delta_list(event["lamportDeltas"], "lamportDeltas", accounts)
         parse_delta_list(event["tokenDeltas"], "tokenDeltas", accounts)
@@ -479,6 +497,34 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     if not critical_refs.issubset(final_refs):
         refuse("finalAccounts omits a token, Position, or certificate account")
     return accounts, events
+
+
+def authenticate_sources(manifest: dict[str, Any], journal_root: pathlib.Path) -> None:
+    _, events = validate_manifest(manifest)
+    try:
+        root = journal_root.resolve(strict=True)
+    except OSError as error:
+        refuse(f"cannot resolve journal root {journal_root}: {error}")
+    if not root.is_dir():
+        refuse("journal root is not a directory")
+    observed: dict[str, str] = {}
+    for event in events:
+        relative = event["sourcePath"]
+        if relative not in observed:
+            try:
+                source = (root / relative).resolve(strict=True)
+            except OSError as error:
+                refuse(f"cannot resolve source journal {relative}: {error}")
+            try:
+                source.relative_to(root)
+            except ValueError:
+                refuse(f"source journal {relative} escapes its journal root")
+            if not source.is_file():
+                refuse(f"source journal {relative} is not a file")
+            raw, _ = read_evidence_file(source)
+            observed[relative] = sha256_bytes(raw)
+        if observed[relative] != event["sourceSha256"]:
+            refuse(f"event {event['id']} source journal digest differs from exact bytes")
 
 
 def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], rpc: Any, collateral_mint: str) -> dict[str, Any]:
@@ -722,10 +768,12 @@ def parser() -> argparse.ArgumentParser:
     offline = sub.add_parser("captured", help="reconcile a captured finalized RPC fixture")
     offline.add_argument("--manifest", required=True, type=pathlib.Path)
     offline.add_argument("--rpc-capture", required=True, type=pathlib.Path)
+    offline.add_argument("--journal-root", required=True, type=pathlib.Path)
     offline.add_argument("--out", type=pathlib.Path)
     follow = sub.add_parser("follow", help="bounded finalized-only devnet polling")
     follow.add_argument("--manifest", required=True, type=pathlib.Path)
     follow.add_argument("--rpc-url", required=True)
+    follow.add_argument("--journal-root", required=True, type=pathlib.Path)
     follow.add_argument("--out", type=pathlib.Path)
     follow.add_argument("--max-polls", type=int, default=5)
     follow.add_argument("--interval-seconds", type=float, default=2.0)
@@ -737,6 +785,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         manifest = load_json(args.manifest)
+        authenticate_sources(manifest, args.journal_root)
         if args.command == "captured":
             dossier = reconcile(manifest, captured(args.rpc_capture))
         else:

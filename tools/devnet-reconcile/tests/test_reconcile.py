@@ -142,7 +142,8 @@ def fixture():
         {"ref": name, "address": identities[name][0], "kind": account_kinds[name], "role": name.replace("_", "-")}
         for name in names
     ]
-    zero_digest = hashlib.sha256(b"source").hexdigest()
+    source_bytes = b'{"schema":"fixture-semantic-owner-journal-v1"}\n'
+    zero_digest = hashlib.sha256(source_bytes).hexdigest()
     pos_pre = position_data(identities["token_authority"][1], 1, [100, 0])
     pos_post = position_data(identities["token_authority"][1], 2, [50, 0])
     cert = certificate_data(identities["market"][1])
@@ -159,6 +160,7 @@ def fixture():
             "feeLamports": "5000",
             "lamportDeltas": [{"account": ref, "lamports": str(amount)} for ref, amount in lamports.items()],
             "tokenDeltas": [{"account": ref, "atoms": str(amount)} for ref, amount in tokens.items()],
+            "sourcePath": "fixture-journal.json",
             "sourceSha256": zero_digest,
             **extra,
         }
@@ -323,11 +325,22 @@ class ReconcileTest(unittest.TestCase):
             manifest_path = root / "manifest.json"
             capture_path = root / "capture.json"
             out_path = root / "dossier.json"
+            journal_root = root / "evidence"
+            journal_root.mkdir()
+            (journal_root / "fixture-journal.json").write_bytes(b'{"schema":"fixture-semantic-owner-journal-v1"}\n')
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             capture_path.write_text(json.dumps(capture), encoding="utf-8")
-            status = reconcile.main(["captured", "--manifest", str(manifest_path), "--rpc-capture", str(capture_path), "--out", str(out_path)])
+            status = reconcile.main(["captured", "--manifest", str(manifest_path), "--journal-root", str(journal_root), "--rpc-capture", str(capture_path), "--out", str(out_path)])
             self.assertEqual(status, 0)
             self.assertEqual(json.loads(out_path.read_text()), reconcile.reconcile(manifest, reconcile.CapturedRpc(capture)))
+
+    def test_source_journal_digest_substitution_refuses_before_rpc(self):
+        manifest, _ = fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "fixture-journal.json").write_text('{"schema":"substituted"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(reconcile.Refusal, "digest differs"):
+                reconcile.authenticate_sources(manifest, root)
 
 
 if __name__ == "__main__":
