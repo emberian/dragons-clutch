@@ -17,6 +17,9 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
 };
 use dclutch_direct_codec::{
+    begin_retiring_bundle_v1::{
+        direct_begin_retiring_account_profile_schema_v1, direct_begin_retiring_effect_schema_v1,
+    },
     native_close_bundle_v1::{
         DIRECT_NATIVE_CLOSE_SELECTOR_V1, direct_native_close_account_profile_schema_v1,
         direct_native_close_effect_schema_v1, direct_native_close_request_v1,
@@ -29,7 +32,14 @@ use dclutch_direct_codec::{
         DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
     },
     ordinary_geometry_v3::DirectOrdinaryGeometryV3,
-    program_set_v4::build_direct_inline_ordinary_native_close_program_set_v1,
+    program_set_v4::{
+        build_direct_inline_ordinary_lifecycle_program_set_v1,
+        build_direct_inline_ordinary_native_close_program_set_v1,
+    },
+    retirement_v1::{
+        DirectBeginRetiringReceiptV1, DirectBeginRetiringRequestV1,
+        direct_begin_retiring_context_v1,
+    },
     successor::{
         DIRECT_EXECUTION_CONFIG_BYTES_V1, DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_STATE_BYTES_V1,
         DirectExecutionConfigV1, DirectRootStateV1,
@@ -759,6 +769,248 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     )
 }
 
+#[derive(Clone)]
+struct BeginRetiringRoute {
+    seed: u8,
+    instruction: Instruction,
+    root: Pubkey,
+    request: Vec<u8>,
+    expected_post_root: Vec<u8>,
+    expected_post_digest: [u8; 32],
+    root_lamports: u64,
+}
+
+fn build_begin_retiring_campaign() -> (ProgramTest, Vec<BeginRetiringRoute>, [u8; 32]) {
+    // Reuse the existing release-authenticated real-SBF deployment membrane;
+    // the extra close fixture accounts are disjoint and never appear in these
+    // top-level 20-account instructions.
+    let (mut test, _) = build_fixture(Fault::None);
+    let artifacts = artifacts();
+    let (release_set, _) = activation(&artifacts);
+    let cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+
+    let ordinary =
+        build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
+            account_profile: DirectInlineOrdinaryAccountProfileInputV3 {
+                logical_data_lengths: &ordinary_lengths(),
+            },
+            capacity_profile: CAPACITY_PROFILE,
+        })
+        .expect("canonical ordinary bundle");
+    let release = build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, CAPACITY_PROFILE)
+        .expect("canonical three-selector lifecycle release");
+    let ordinary_descriptor =
+        CapabilityProgramV4::decode(&release.ordinary.descriptor).expect("ordinary descriptor");
+    let config = DirectExecutionConfigV1::new(100, 0, [0x56; 32])
+        .expect("Direct config")
+        .encode();
+    let config_digest = hash(&config).to_bytes();
+    let root_space = CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1;
+    let root_lamports = Rent::default().minimum_balance(root_space);
+    let amounts = FundingAmountsV1::new(
+        CompartmentFundingV1::native_lamports(root_lamports.checked_sub(1).expect("rent quote"))
+            .expect("native rent quote"),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+    )
+    .expect("funding amounts");
+    let entry = CapabilityEntryV1::new(
+        content(ordinary_descriptor.kind().to_bytes()),
+        content(release.program_set_id),
+        content(config_digest),
+        content(ordinary_descriptor.capacity_profile().to_bytes()),
+        content(ordinary_descriptor.root_schema().to_bytes()),
+        content(ordinary_descriptor.derivation_policy().to_bytes()),
+        ActivationPolicy::PrepaidLazy,
+        u64::MAX,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        FundingQuoteV1::new(amounts, None).expect("funding quote"),
+    )
+    .expect("manifest entry");
+    let mut manifest = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&[entry], &mut manifest).expect("manifest");
+    let manifest_digest = hash(&manifest).to_bytes();
+    let manifest_id = content(manifest_digest);
+
+    let (manifest_raw, _, manifest_raw_bump, manifest_staging_bump) = add_record(
+        &mut test,
+        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest,
+    );
+    let (program_set_raw, program_set_staging, release_raw_bump, release_staging_bump) = add_record(
+        &mut test,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        release.program_set.clone(),
+    );
+    let (config_raw, config_staging, config_raw_bump, config_staging_bump) = add_record(
+        &mut test,
+        ordinary_descriptor.config_schema().to_bytes(),
+        config.to_vec(),
+    );
+    let (profile_raw, profile_staging, _, _) = add_record(
+        &mut test,
+        direct_begin_retiring_account_profile_schema_v1(),
+        release.begin_retiring.account_profile.clone(),
+    );
+    let (effect_raw, effect_staging, _, _) = add_record(
+        &mut test,
+        direct_begin_retiring_effect_schema_v1(),
+        release.begin_retiring.effect.clone(),
+    );
+    let (descriptor_raw, descriptor_staging, _, _) = add_record(
+        &mut test,
+        CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
+        release.begin_retiring.descriptor.clone(),
+    );
+    let selection = CapabilityExecutionSelectionV1::new(
+        0,
+        manifest_id,
+        content(ordinary_descriptor.kind().to_bytes()),
+        content(release.program_set_id),
+        content(config_digest),
+    )
+    .expect("selection")
+    .with_capability_release_record_bumps(release_raw_bump, release_staging_bump);
+    let record_bumps = SelectedRecordBumpsV1::new(
+        manifest_raw_bump,
+        manifest_staging_bump,
+        config_raw_bump,
+        config_staging_bump,
+    );
+
+    let mut routes = Vec::with_capacity(20);
+    for seed in 0_u8..20 {
+        let generation = 100_u64 + u64::from(seed);
+        let mut state = CoreState {
+            phase: Phase::Retiring,
+            readiness: Readiness::Consumed,
+            terminal_winner: u32::from(seed % 3),
+            identity: MarketIdentity {
+                market_id: identity([0x80_u8.wrapping_add(seed); 32]),
+                realm_id: identity([0x90_u8.wrapping_add(seed); 32]),
+                product_record: identity([0xa0_u8.wrapping_add(seed); 32]),
+                product_id: identity([0xb0_u8.wrapping_add(seed); 32]),
+                resolution_policy: identity([0xc0_u8.wrapping_add(seed); 32]),
+                capability_manifest: identity(manifest_digest),
+                selected_release_set: identity(release_set),
+                registry_program: identity(REGISTRY_PROGRAM_ID.to_bytes()),
+                generation,
+            },
+            outstanding_capabilities: 1,
+            principal_cap_sets: u64::MAX,
+            rent_beneficiary: identity([0xd0_u8.wrapping_add(seed); 32]),
+            terminal_receipt: Some(identity([0xe0_u8.wrapping_add(seed); 32])),
+        };
+        let market = Pubkey::find_program_address(
+            &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
+            &CORE_PROGRAM_ID,
+        )
+        .0;
+        state.identity.market_id = identity(market.to_bytes());
+        let market_data = state.encode().expect("Retiring Core Market");
+        add_account(&mut test, market, CORE_PROGRAM_ID, market_data.to_vec());
+
+        let header = CapabilityRootHeaderV1::new(
+            content(release_set),
+            market.to_bytes(),
+            generation,
+            selection,
+            record_bumps,
+        )
+        .expect("root header");
+        let root = Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID).0;
+        let mut root_data = header.to_bytes().to_vec();
+        root_data.extend_from_slice(&DirectRootStateV1::new().encode());
+        add_account_with_lamports(
+            &mut test,
+            root,
+            TRADING_PROGRAM_ID,
+            root_data.clone(),
+            root_lamports,
+        );
+        let context = direct_begin_retiring_context_v1(
+            release_set,
+            market.to_bytes(),
+            root.to_bytes(),
+            manifest_digest,
+            release.program_set_id,
+            config_digest,
+            generation,
+            0,
+        );
+        let request = DirectBeginRetiringRequestV1 {
+            release_set,
+            market: market.to_bytes(),
+            context,
+            root: root.to_bytes(),
+            manifest: manifest_digest,
+            program_set: release.program_set_id,
+            config: config_digest,
+            expected_market_digest: hash(&market_data).to_bytes(),
+            expected_root_digest: hash(&root_data).to_bytes(),
+            generation,
+            entry_index: 0,
+        }
+        .to_bytes()
+        .expect("begin-retiring request")
+        .to_vec();
+        let mut expected_post_root = header.to_bytes().to_vec();
+        expected_post_root.extend_from_slice(
+            &DirectRootStateV1::new()
+                .begin_retiring()
+                .expect("Retiring root")
+                .encode(),
+        );
+        let expected_post_digest = hash(&expected_post_root).to_bytes();
+        let accounts = vec![
+            AccountMeta::new(root, false),
+            AccountMeta::new_readonly(market, false),
+            AccountMeta::new_readonly(manifest_raw, false),
+            AccountMeta::new_readonly(program_set_raw, false),
+            AccountMeta::new_readonly(program_set_staging, false),
+            AccountMeta::new_readonly(descriptor_raw, false),
+            AccountMeta::new_readonly(descriptor_staging, false),
+            AccountMeta::new_readonly(config_raw, false),
+            AccountMeta::new_readonly(config_staging, false),
+            AccountMeta::new_readonly(profile_raw, false),
+            AccountMeta::new_readonly(profile_staging, false),
+            AccountMeta::new_readonly(effect_raw, false),
+            AccountMeta::new_readonly(effect_staging, false),
+            AccountMeta::new_readonly(cache, false),
+            AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+            AccountMeta::new_readonly(programdata_address(CORE_PROGRAM_ID), false),
+            AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
+            AccountMeta::new_readonly(programdata_address(TRADING_PROGRAM_ID), false),
+            AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+        ];
+        assert_eq!(accounts.len(), 20);
+        routes.push(BeginRetiringRoute {
+            seed,
+            instruction: Instruction {
+                program_id: TRADING_PROGRAM_ID,
+                accounts,
+                data: request.clone(),
+            },
+            root,
+            request,
+            expected_post_root,
+            expected_post_digest,
+            root_lamports,
+        });
+    }
+    (test, routes, hash(&artifacts.trading).to_bytes())
+}
+
 async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Option<Account> {
     context
         .banks_client
@@ -844,4 +1096,142 @@ async fn shifted_substituted_and_extra_aliases_refuse_with_rollback() {
         ];
         assert_eq!(after, before);
     }
+}
+
+fn hex32(bytes: [u8; 32]) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("hex formatting");
+    }
+    output
+}
+
+#[tokio::test]
+async fn begin_direct_retiring_m61_twenty_seed_real_sbf_campaign() {
+    use std::fmt::Write as _;
+
+    let (test, routes, trading_elf_digest) = build_begin_retiring_campaign();
+    assert_eq!(routes.len(), 20);
+    let mut context = test.start_with_context().await;
+    let mut units = Vec::with_capacity(routes.len());
+    let mut evidence = String::from("seed\tgeneration\tcompute_units\troot\tpost_digest\n");
+
+    for route in &routes {
+        let pre = account(&mut context, route.root)
+            .await
+            .expect("Open Direct root");
+        assert_eq!(pre.lamports, route.root_lamports);
+        let blockhash = context
+            .banks_client
+            .get_latest_blockhash()
+            .await
+            .expect("blockhash");
+        let transaction = Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+                route.instruction.clone(),
+            ],
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            blockhash,
+        );
+        let processed = context
+            .banks_client
+            .process_transaction_with_metadata(transaction)
+            .await
+            .expect("Banks RPC");
+        assert!(
+            processed.result.is_ok(),
+            "seed {} refused: {:?}",
+            route.seed,
+            processed.result
+        );
+        let metadata = processed.metadata.expect("transaction metadata");
+        let returned = metadata.return_data.expect("begin-retiring receipt");
+        assert_eq!(returned.program_id, TRADING_PROGRAM_ID);
+        let receipt = DirectBeginRetiringReceiptV1::decode(&returned.data)
+            .expect("receipt wire")
+            .authenticate_for_request(
+                &route.request,
+                route.expected_post_digest,
+                TRADING_PROGRAM_ID.to_bytes(),
+            )
+            .expect("receipt/request/poststate join");
+        assert_eq!(receipt.post_root_digest, route.expected_post_digest);
+        let post = account(&mut context, route.root)
+            .await
+            .expect("Retiring Direct root");
+        assert_eq!(post.owner, TRADING_PROGRAM_ID);
+        assert_eq!(post.lamports, route.root_lamports);
+        assert_eq!(post.data, route.expected_post_root);
+        units.push(metadata.compute_units_consumed);
+        writeln!(
+            &mut evidence,
+            "{}\t{}\t{}\t{}\t{}",
+            route.seed,
+            100_u64 + u64::from(route.seed),
+            metadata.compute_units_consumed,
+            route.root,
+            hex32(route.expected_post_digest),
+        )
+        .expect("evidence row");
+    }
+
+    let pass_count = units.len();
+    let sum = units
+        .iter()
+        .try_fold(0_u64, |total, value| total.checked_add(*value))
+        .expect("CU sum");
+    let mean = sum / u64::try_from(pass_count).expect("pass count");
+    let minimum = units.iter().copied().min().expect("minimum CU");
+    let maximum = units.iter().copied().max().expect("maximum CU");
+    assert_eq!(pass_count, 20);
+    println!(
+        "begin-direct-retiring M-61 pass={pass_count}/20 mean={mean} min={minimum} max={maximum} trading_elf_sha256={}",
+        hex32(trading_elf_digest),
+    );
+    writeln!(
+        &mut evidence,
+        "summary\tpass={pass_count}/20\tmean={mean}\tmin={minimum}\tmax={maximum}\ttrading_elf_sha256={}",
+        hex32(trading_elf_digest),
+    )
+    .expect("evidence summary");
+    if let Ok(directory) = env::var("DCLUTCH_RETIRE_CANDIDATE_DIR") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory).expect("candidate directory");
+        fs::write(directory.join("m61.tsv"), evidence).expect("candidate M-61 evidence");
+    }
+
+    // The same exact request now names the old Open preimage. Replay must
+    // refuse without changing one byte or lamport of the Retiring root.
+    let replay = routes.first().expect("first route");
+    let before = account(&mut context, replay.root)
+        .await
+        .expect("Retiring root before replay");
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("replay blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            replay.instruction.clone(),
+        ],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("replay Banks RPC");
+    assert!(processed.result.is_err(), "replay must refuse");
+    let after = account(&mut context, replay.root)
+        .await
+        .expect("Retiring root after replay");
+    assert_eq!(after, before);
 }

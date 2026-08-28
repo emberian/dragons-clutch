@@ -22,6 +22,91 @@ pub const RETIREMENT_REPLAY_HANDOFF_RECEIPT_BYTES_V1: usize = 512;
 /// Fixed Core and Custody account count.
 pub const RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1: usize = 23;
 
+/// Single semantic owner for the fixed Core-to-Custody handoff frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetirementReplayHandoffAccountLayoutV1;
+
+impl RetirementReplayHandoffAccountLayoutV1 {
+    /// Exact frame width.
+    pub const COUNT: usize = RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1;
+    /// Externally signing rent payer.
+    pub const PAYER: usize = 0;
+    /// Core Market.
+    pub const MARKET: usize = 1;
+    /// Registry activation cache.
+    pub const CACHE: usize = 2;
+    /// Registry program.
+    pub const REGISTRY: usize = 3;
+    /// Core program.
+    pub const CORE_PROGRAM: usize = 4;
+    /// Core ProgramData.
+    pub const CORE_PROGRAMDATA: usize = 5;
+    /// Trading program.
+    pub const TRADING_PROGRAM: usize = 6;
+    /// Trading ProgramData.
+    pub const TRADING_PROGRAMDATA: usize = 7;
+    /// Custody program.
+    pub const CUSTODY_PROGRAM: usize = 8;
+    /// Custody ProgramData.
+    pub const CUSTODY_PROGRAMDATA: usize = 9;
+    /// Core caller-authority PDA, signed only in the child CPI.
+    pub const CALLER_AUTHORITY: usize = 10;
+    /// Claims aggregate owning the retirement context.
+    pub const CLAIMS_AGGREGATE: usize = 11;
+    /// Finalized Realm record.
+    pub const REALM: usize = 12;
+    /// Vacant Realm staging cursor.
+    pub const REALM_STAGING: usize = 13;
+    /// Rent sysvar.
+    pub const RENT: usize = 14;
+    /// Market RentCredit.
+    pub const RENT_CREDIT: usize = 15;
+    /// Live Trading-role replay closed by the handoff.
+    pub const TRADING_REPLAY: usize = 16;
+    /// Vacant Core-role replay created by the handoff.
+    pub const CORE_REPLAY: usize = 17;
+    /// Shared Hoard token account.
+    pub const HOARD: usize = 18;
+    /// System program.
+    pub const SYSTEM: usize = 19;
+    /// Realm collateral mint.
+    pub const MINT: usize = 20;
+    /// Realm token program.
+    pub const TOKEN_PROGRAM: usize = 21;
+    /// Custody authority PDA.
+    pub const CUSTODY_AUTHORITY: usize = 22;
+}
+
+/// Named coordinates consumed by the two SBF parsers.
+#[allow(missing_docs)]
+pub mod retirement_replay_handoff_accounts_v1 {
+    use super::RetirementReplayHandoffAccountLayoutV1 as Layout;
+
+    pub const PAYER: usize = Layout::PAYER;
+    pub const MARKET: usize = Layout::MARKET;
+    pub const CACHE: usize = Layout::CACHE;
+    pub const REGISTRY: usize = Layout::REGISTRY;
+    pub const CORE_PROGRAM: usize = Layout::CORE_PROGRAM;
+    pub const CORE_PROGRAMDATA: usize = Layout::CORE_PROGRAMDATA;
+    pub const TRADING_PROGRAM: usize = Layout::TRADING_PROGRAM;
+    pub const TRADING_PROGRAMDATA: usize = Layout::TRADING_PROGRAMDATA;
+    pub const CUSTODY_PROGRAM: usize = Layout::CUSTODY_PROGRAM;
+    pub const CUSTODY_PROGRAMDATA: usize = Layout::CUSTODY_PROGRAMDATA;
+    pub const CALLER_AUTHORITY: usize = Layout::CALLER_AUTHORITY;
+    pub const CLAIMS_AGGREGATE: usize = Layout::CLAIMS_AGGREGATE;
+    pub const REALM: usize = Layout::REALM;
+    pub const REALM_STAGING: usize = Layout::REALM_STAGING;
+    pub const RENT: usize = Layout::RENT;
+    pub const RENT_CREDIT: usize = Layout::RENT_CREDIT;
+    pub const TRADING_REPLAY: usize = Layout::TRADING_REPLAY;
+    pub const CORE_REPLAY: usize = Layout::CORE_REPLAY;
+    pub const HOARD: usize = Layout::HOARD;
+    pub const SYSTEM: usize = Layout::SYSTEM;
+    pub const MINT: usize = Layout::MINT;
+    pub const TOKEN_PROGRAM: usize = Layout::TOKEN_PROGRAM;
+    pub const CUSTODY_AUTHORITY: usize = Layout::CUSTODY_AUTHORITY;
+}
+
 const VERSION_V1: u16 = 1;
 const MARKET_OFFSET: usize = 16;
 const CONTEXT_OFFSET: usize = 48;
@@ -662,6 +747,44 @@ fn put(output: &mut [u8], offset: usize, value: &[u8; 32]) {
 fn put_u64(output: &mut [u8], offset: usize, value: u64) {
     if let Some(slot) = output.get_mut(offset..offset.saturating_add(8)) {
         slot.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+#[cfg(test)]
+mod account_layout_tests {
+    use super::*;
+
+    #[test]
+    fn handoff_roles_are_contiguous_and_exact() {
+        assert_eq!(
+            [
+                RetirementReplayHandoffAccountLayoutV1::PAYER,
+                RetirementReplayHandoffAccountLayoutV1::MARKET,
+                RetirementReplayHandoffAccountLayoutV1::CACHE,
+                RetirementReplayHandoffAccountLayoutV1::REGISTRY,
+                RetirementReplayHandoffAccountLayoutV1::CORE_PROGRAM,
+                RetirementReplayHandoffAccountLayoutV1::CORE_PROGRAMDATA,
+                RetirementReplayHandoffAccountLayoutV1::TRADING_PROGRAM,
+                RetirementReplayHandoffAccountLayoutV1::TRADING_PROGRAMDATA,
+                RetirementReplayHandoffAccountLayoutV1::CUSTODY_PROGRAM,
+                RetirementReplayHandoffAccountLayoutV1::CUSTODY_PROGRAMDATA,
+                RetirementReplayHandoffAccountLayoutV1::CALLER_AUTHORITY,
+                RetirementReplayHandoffAccountLayoutV1::CLAIMS_AGGREGATE,
+                RetirementReplayHandoffAccountLayoutV1::REALM,
+                RetirementReplayHandoffAccountLayoutV1::REALM_STAGING,
+                RetirementReplayHandoffAccountLayoutV1::RENT,
+                RetirementReplayHandoffAccountLayoutV1::RENT_CREDIT,
+                RetirementReplayHandoffAccountLayoutV1::TRADING_REPLAY,
+                RetirementReplayHandoffAccountLayoutV1::CORE_REPLAY,
+                RetirementReplayHandoffAccountLayoutV1::HOARD,
+                RetirementReplayHandoffAccountLayoutV1::SYSTEM,
+                RetirementReplayHandoffAccountLayoutV1::MINT,
+                RetirementReplayHandoffAccountLayoutV1::TOKEN_PROGRAM,
+                RetirementReplayHandoffAccountLayoutV1::CUSTODY_AUTHORITY,
+            ],
+            core::array::from_fn::<_, 23, _>(|index| index)
+        );
+        assert_eq!(RetirementReplayHandoffAccountLayoutV1::COUNT, 23);
     }
 }
 

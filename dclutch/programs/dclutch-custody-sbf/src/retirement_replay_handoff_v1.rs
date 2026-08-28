@@ -10,7 +10,7 @@ use dclutch_custody_contract::{
     CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyVaultSeedsV1, RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1,
     RetirementReplayHandoffObservationV1, RetirementReplayHandoffPlanV1,
-    RetirementReplayHandoffRequestV1,
+    RetirementReplayHandoffRequestV1, retirement_replay_handoff_accounts_v1::*,
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
@@ -34,30 +34,6 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
 use super::{CustodySbfError, collateral_profile, read_custody_account, registry_role};
-
-const PAYER: usize = 0;
-const MARKET: usize = 1;
-const CACHE: usize = 2;
-const REGISTRY: usize = 3;
-const CORE_PROGRAM: usize = 4;
-const CORE_PROGRAMDATA: usize = 5;
-const TRADING_PROGRAM: usize = 6;
-const TRADING_PROGRAMDATA: usize = 7;
-const CUSTODY_PROGRAM: usize = 8;
-const CUSTODY_PROGRAMDATA: usize = 9;
-const CALLER_AUTHORITY: usize = 10;
-const CLAIMS_AGGREGATE: usize = 11;
-const REALM: usize = 12;
-const REALM_STAGING: usize = 13;
-const RENT: usize = 14;
-const RENT_CREDIT: usize = 15;
-const TRADING_REPLAY: usize = 16;
-const CORE_REPLAY: usize = 17;
-const HOARD: usize = 18;
-const SYSTEM: usize = 19;
-const MINT: usize = 20;
-const TOKEN_PROGRAM: usize = 21;
-const CUSTODY_AUTHORITY: usize = 22;
 
 /// Execute the one retirement-specific cross-role replay handoff.
 #[inline(never)]
