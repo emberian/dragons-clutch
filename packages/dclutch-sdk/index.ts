@@ -5,8 +5,9 @@
  * as the de facto SDK. The package is connection-agnostic by contract:
  * nothing in it constructs an
  * RPC client, reads a wallet, or touches a browser global — the caller
- * supplies an endpoint (or a `SolanaRpcClient`) and signs its own
- * transactions. The generated modules under `lib/generated/` are emitted
+ * supplies an endpoint (or a `SolanaRpcClient`). Its public RPC surface is
+ * read-only; a caller-specific durable workflow owns signing and the only
+ * submission. The generated modules under `lib/generated/` are emitted
  * from the protocol's Rust and Lean authorities and byte-gated by the
  * `abi:*:verify` scripts, which run inside `npm test`.
  *

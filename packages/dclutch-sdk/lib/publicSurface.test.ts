@@ -1,6 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
 
 type PackageManifest = Readonly<{
   exports: Readonly<Record<string, string | null>>;
@@ -28,6 +32,35 @@ const forbiddenWalletExports = [
   'submitSignedTransactionV1',
   'transactionSignatureV1',
 ] as const;
+
+const forbiddenRpcExports = [
+  'sendRawTransaction',
+  'sendTransaction',
+  'submitSignedTransaction',
+] as const;
+
+function externalConsumerDiagnostics(source: string): ReadonlyArray<ts.Diagnostic> {
+  const temporary = mkdtempSync(join(tmpdir(), 'dclutch-sdk-consumer-'));
+  try {
+    const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+    const packageLink = join(temporary, 'node_modules', '@dclutch', 'sdk');
+    mkdirSync(dirname(packageLink), { recursive: true });
+    symlinkSync(packageRoot, packageLink, 'dir');
+    const consumer = join(temporary, 'consumer.ts');
+    writeFileSync(consumer, source);
+    const options: ts.CompilerOptions = {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+    };
+    return ts.getPreEmitDiagnostics(ts.createProgram([consumer], options));
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+}
 
 describe('package public surface', () => {
   it('refuses retired Direct V1 entry points even through wildcard exports', () => {
@@ -68,5 +101,37 @@ describe('package public surface', () => {
     for (const name of forbiddenWalletExports) {
       expect(name in wallet, `${name} bypasses a caller-specific durable journal`).toBe(false);
     }
+  });
+
+  it('keeps the root and RPC subpath read-only at runtime', async () => {
+    const root = await import('@dclutch/sdk');
+    const rpc = await import('@dclutch/sdk/rpc');
+    const prototype = rpc.SolanaRpcClient.prototype as unknown as Record<string, unknown>;
+
+    expect(rpc.SolanaRpcClient).toBeTypeOf('function');
+    for (const name of forbiddenRpcExports) {
+      expect(name in root, `${name} escaped through the SDK root`).toBe(false);
+      expect(name in rpc, `${name} escaped through the RPC subpath`).toBe(false);
+      expect(name in prototype, `${name} escaped as an RPC client method`).toBe(false);
+    }
+  });
+
+  it('typechecks as an outside consumer only when submission and deep imports stay refused', () => {
+    const diagnostics = externalConsumerDiagnostics(`
+      import { SolanaRpcClient as RootClient } from '@dclutch/sdk';
+      import { SolanaRpcClient as RpcClient } from '@dclutch/sdk/rpc';
+      // @ts-expect-error the package root exposes read-only RPC, never submission
+      new RootClient('http://127.0.0.1:8899/').sendRawTransaction(new Uint8Array([1]));
+      // @ts-expect-error the RPC subpath exposes read-only RPC, never submission
+      new RpcClient('http://127.0.0.1:8899/').sendRawTransaction(new Uint8Array([1]));
+      // @ts-expect-error package exports do not admit filesystem-style deep imports
+      import('@dclutch/sdk/lib/rpc');
+    `);
+    expect(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([]);
+  });
+
+  it('refuses filesystem-style RPC deep imports at runtime', async () => {
+    // @ts-expect-error the package export map intentionally refuses this path
+    await expect(import('@dclutch/sdk/lib/rpc')).rejects.toThrow();
   });
 });

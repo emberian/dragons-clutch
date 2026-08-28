@@ -10,8 +10,9 @@ Two packages in this repository are yours:
 
 - **`@dclutch/sdk`** (`packages/dclutch-sdk`) — the client library. Typed
   decoders for every on-chain record, transaction builders for the core
-  flows, and a small RPC client. It never opens a connection or touches a
-  key by itself: you hand it an endpoint, you sign what it builds.
+  flows, and a small read-only RPC client. It never opens a connection,
+  touches a key, or submits a transaction by itself: you hand it an endpoint,
+  and a caller-specific durable workflow owns signing and submission.
 - **`@dclutch/cli`** (`packages/dclutch-cli`) — the `dclutch` terminal
   client, built entirely on the SDK. When you wonder how to wire a flow up,
   read the command that already does it (`src/commands/` is ~200 lines per
@@ -117,18 +118,13 @@ payment record if it does not exist, publish and freeze the payout lookup
 table, then sign the payout itself. Do not combine those steps into one
 optimistic submit loop.
 
-```ts
-import { inspectClaimsCustodyReplayV1 } from '@dclutch/sdk/claimsCustodyReplay';
-
-const state = await inspectClaimsCustodyReplayV1(client, {
-  marketAddress, claimsProgramId, custodyProgramId, registryProgramId,
-  payer: myKeypair.publicKey.toBase58(),
-});
-if (state.status === 'creatable') {
-  state.plan.transaction.sign([myKeypair]);
-  await client.sendRawTransaction(state.plan.transaction.serialize(), { maxRetries: 0 });
-}
-```
+`inspectClaimsCustodyReplayV1` (`@dclutch/sdk/claimsCustodyReplay`) can inspect
+that first record and compile the exact unsigned plan when it is absent. The
+public SDK deliberately stops there: it does not expose a transaction-submit
+transport. Give the plan to the same kind of caller-specific journal described
+below, persist its unsigned bytes before opening a wallet, and reacquire the
+finalized record before preparing the payout. Do not sign or submit directly
+from an inspection branch.
 
 After that payment record and the lookup table are finalized, prepare the
 payout from the current accounts. Save the unsigned plan before opening a

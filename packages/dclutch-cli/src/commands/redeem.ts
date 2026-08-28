@@ -19,6 +19,7 @@ import {
 } from '@dclutch/sdk/walletTerminalPayoutV3';
 
 import { loadKeypair, programId, rpcClient, type CliContext } from '../context';
+import { submitExactDevnetSignedPacketInternal } from '../internal/rpcSubmission';
 import { assertExactDevnetMutation, devnetGenesisAcknowledgment } from '../mutation';
 import { block, type Io } from '../output';
 import {
@@ -463,8 +464,10 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
       signed.wireBytes,
     );
     await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem Claims replay raw submission');
-    const submittedSignature = await client.sendRawTransaction(
+    const submittedSignature = await submitExactDevnetSignedPacketInternal(
+      client,
       submittedReplayWireBytesV1(submittedJournal, restored),
+      devnetAcknowledgment,
       { maxRetries: 0 },
     );
     if (submittedSignature !== signed.signature) {
@@ -628,8 +631,10 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
       signed.wireBytes,
     );
     await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem payout raw submission');
-    const submittedSignature = await client.sendRawTransaction(
+    const submittedSignature = await submitExactDevnetSignedPacketInternal(
+      client,
       submittedPayoutWireBytesV1(submittedJournal, prepared),
+      devnetAcknowledgment,
       { maxRetries: 0 },
     );
     if (submittedSignature !== signed.signature) {

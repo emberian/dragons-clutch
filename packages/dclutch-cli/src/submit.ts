@@ -9,6 +9,7 @@
 import type { SolanaRpcClient, TransactionMetaObservation } from '@dclutch/sdk/rpc';
 import { renderRefusal } from '@dclutch/sdk/refusals';
 
+import { submitExactDevnetSignedPacketInternal } from './internal/rpcSubmission';
 import { nameRefusals, type Io } from './output';
 import { assertExactDevnetMutation } from './mutation';
 
@@ -30,7 +31,7 @@ export async function submitAndConfirm(
   // Errors propagate unnamed; the command's one `fail` renderer names any
   // custom code exactly once at the terminal boundary.
   await assertExactDevnetMutation(client, devnetAcknowledgment, 'transaction submission');
-  const signature = await client.sendRawTransaction(wire);
+  const signature = await submitExactDevnetSignedPacketInternal(client, wire, devnetAcknowledgment);
   io.out(`submitted ${signature}`);
   for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
     const [status] = await client.signatureStatuses([signature]);
