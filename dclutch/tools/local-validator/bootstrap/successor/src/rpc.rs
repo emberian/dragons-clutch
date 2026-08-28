@@ -7,6 +7,10 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
 use reqwest::{Url, blocking::Client, redirect::Policy};
+use serde::{
+    Deserialize,
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use solana_sdk::{
@@ -89,6 +93,212 @@ pub(crate) struct RpcAccount {
     pub(crate) executable: bool,
     pub(crate) rent_epoch: u64,
     pub(crate) data: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcSuccessEnvelopeV1 {
+    jsonrpc: String,
+    id: u64,
+    result: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcErrorEnvelopeV1 {
+    jsonrpc: String,
+    id: u64,
+    error: RpcErrorBodyV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcErrorBodyV1 {
+    code: i64,
+    message: String,
+    #[serde(default)]
+    data: Option<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcContextValueV1<T> {
+    context: RpcContextV1,
+    value: T,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcContextV1 {
+    slot: u64,
+    #[serde(rename = "apiVersion", default)]
+    api_version: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcAccountWireV1 {
+    lamports: u64,
+    owner: String,
+    executable: bool,
+    #[serde(rename = "rentEpoch")]
+    rent_epoch: u64,
+    data: [String; 2],
+    space: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ExactJsonValueSeedV1;
+
+impl<'de> DeserializeSeed<'de> for ExactJsonValueSeedV1 {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> core::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ExactJsonValueVisitorV1)
+    }
+}
+
+struct ExactJsonValueVisitorV1;
+
+impl<'de> Visitor<'de> for ExactJsonValueVisitorV1 {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("one JSON value with no duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> core::result::Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("JSON number was not finite"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> core::result::Result<Self::Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> core::result::Result<Self::Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_none<E>(self) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_unit<E>(self) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> core::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        ExactJsonValueSeedV1.deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> core::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+        while let Some(value) = sequence.next_element_seed(ExactJsonValueSeedV1)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> core::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = serde_json::Map::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some(key) = map.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
+            let value = map.next_value_seed(ExactJsonValueSeedV1)?;
+            values.insert(key, value);
+        }
+        Ok(Value::Object(values))
+    }
+}
+
+fn parse_json_without_duplicate_keys_v1(bytes: &[u8]) -> Result<Value> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = ExactJsonValueSeedV1
+        .deserialize(&mut deserializer)
+        .map_err(|error| Error::new(format!("JSON: {error}")))?;
+    deserializer
+        .end()
+        .map_err(|error| Error::new(format!("JSON trailing bytes: {error}")))?;
+    Ok(value)
+}
+
+fn parse_rpc_response_v1(method: &str, request_id: u64, bytes: &[u8]) -> Result<Value> {
+    let body = parse_json_without_duplicate_keys_v1(bytes)
+        .map_err(|error| Error::new(format!("{method} {error}")))?;
+    let object = body
+        .as_object()
+        .ok_or_else(|| Error::new(format!("{method} RPC response was not an object")))?;
+    match (object.contains_key("result"), object.contains_key("error")) {
+        (true, false) => {
+            let envelope: RpcSuccessEnvelopeV1 = serde_json::from_value(body)
+                .map_err(|error| Error::new(format!("{method} RPC response shape: {error}")))?;
+            require_rpc_envelope_v1(method, request_id, &envelope.jsonrpc, envelope.id)?;
+            Ok(envelope.result)
+        }
+        (false, true) => {
+            let envelope: RpcErrorEnvelopeV1 = serde_json::from_value(body)
+                .map_err(|error| Error::new(format!("{method} RPC error shape: {error}")))?;
+            require_rpc_envelope_v1(method, request_id, &envelope.jsonrpc, envelope.id)?;
+            let data = envelope
+                .error
+                .data
+                .map(|value| format!(" data {value}"))
+                .unwrap_or_default();
+            Err(Error::new(format!(
+                "{method} RPC error: code {} message {}{data}",
+                envelope.error.code, envelope.error.message
+            )))
+        }
+        _ => Err(Error::new(format!(
+            "{method} RPC response must carry exactly one of result or error"
+        ))),
+    }
+}
+
+fn require_rpc_envelope_v1(
+    method: &str,
+    request_id: u64,
+    jsonrpc: &str,
+    response_id: u64,
+) -> Result<()> {
+    if jsonrpc != "2.0" || response_id != request_id {
+        return Err(Error::new(format!(
+            "{method} RPC response version or request ID differed"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether this connection is allowed to change anything on the cluster.
@@ -290,15 +500,10 @@ impl Rpc {
                 response.status()
             )));
         }
-        let body: Value = response
-            .json()
-            .map_err(|error| Error::new(format!("{method} JSON: {error}")))?;
-        if let Some(error) = body.get("error") {
-            return Err(Error::new(format!("{method} RPC error: {error}")));
-        }
-        body.get("result")
-            .cloned()
-            .ok_or_else(|| Error::new(format!("{method} response omitted result")))
+        let body = response
+            .bytes()
+            .map_err(|error| Error::new(format!("{method} response body: {error}")))?;
+        parse_rpc_response_v1(method, self.request_id, &body)
     }
 
     pub(crate) fn account(&mut self, address: Pubkey) -> Result<Option<RpcAccount>> {
@@ -331,31 +536,7 @@ impl Rpc {
                 }
             }
         };
-        let Some(account) = value.get("value") else {
-            return Err(Error::new("getAccountInfo omitted value"));
-        };
-        if account.is_null() {
-            return Ok(None);
-        }
-        let encoded = account
-            .get("data")
-            .and_then(Value::as_array)
-            .and_then(|values| values.first())
-            .and_then(Value::as_str)
-            .ok_or_else(|| Error::new("getAccountInfo omitted base64 data"))?;
-        let data = BASE64
-            .decode(encoded)
-            .map_err(|error| Error::new(format!("account base64: {error}")))?;
-        Ok(Some(RpcAccount {
-            lamports: u64_field(account, "lamports")?,
-            owner: pubkey(string_field(account, "owner")?)?,
-            executable: account
-                .get("executable")
-                .and_then(Value::as_bool)
-                .ok_or_else(|| Error::new("account omitted executable"))?,
-            rent_epoch: u64_field(account, "rentEpoch")?,
-            data,
-        }))
+        parse_account_info_result_v1(value, self.read_floor)
     }
 
     pub(crate) fn required_account(&mut self, address: Pubkey, label: &str) -> Result<RpcAccount> {
@@ -381,30 +562,7 @@ impl Rpc {
                 "minContextSlot":minimum_slot
             }]),
         )?;
-        let slot = value
-            .get("context")
-            .and_then(|context| context.get("slot"))
-            .and_then(Value::as_u64)
-            .ok_or_else(|| Error::new("getMultipleAccounts omitted context slot"))?;
-        if slot < minimum_slot {
-            return Err(Error::new(
-                "getMultipleAccounts returned a snapshot before the required transaction",
-            ));
-        }
-        let values = value
-            .get("value")
-            .and_then(Value::as_array)
-            .ok_or_else(|| Error::new("getMultipleAccounts omitted values"))?;
-        if values.len() != addresses.len() {
-            return Err(Error::new(
-                "getMultipleAccounts response width differed from request",
-            ));
-        }
-        let accounts = values
-            .iter()
-            .map(parse_optional_account)
-            .collect::<Result<Vec<_>>>()?;
-        Ok((slot, accounts))
+        parse_multiple_accounts_result_v1(value, addresses.len(), minimum_slot)
     }
 
     /// Reacquire one finalized account as an exact routing observation.
@@ -1135,29 +1293,66 @@ pub(crate) fn bounded_instructions(
     Ok(bounded)
 }
 
-fn parse_optional_account(value: &Value) -> Result<Option<RpcAccount>> {
-    if value.is_null() {
-        return Ok(None);
+fn parse_account_info_result_v1(value: Value, minimum_slot: u64) -> Result<Option<RpcAccount>> {
+    let result: RpcContextValueV1<Option<RpcAccountWireV1>> = serde_json::from_value(value)
+        .map_err(|error| Error::new(format!("getAccountInfo result shape: {error}")))?;
+    require_rpc_context_v1("getAccountInfo", &result.context, minimum_slot)?;
+    result.value.map(parse_account_wire_v1).transpose()
+}
+
+fn parse_multiple_accounts_result_v1(
+    value: Value,
+    expected_width: usize,
+    minimum_slot: u64,
+) -> Result<(u64, Vec<Option<RpcAccount>>)> {
+    let result: RpcContextValueV1<Vec<Option<RpcAccountWireV1>>> = serde_json::from_value(value)
+        .map_err(|error| Error::new(format!("getMultipleAccounts result shape: {error}")))?;
+    require_rpc_context_v1("getMultipleAccounts", &result.context, minimum_slot)?;
+    if result.value.len() != expected_width {
+        return Err(Error::new(
+            "getMultipleAccounts response width differed from request",
+        ));
     }
-    let encoded = value
-        .get("data")
-        .and_then(Value::as_array)
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("account omitted base64 data"))?;
+    let accounts = result
+        .value
+        .into_iter()
+        .map(|account| account.map(parse_account_wire_v1).transpose())
+        .collect::<Result<Vec<_>>>()?;
+    Ok((result.context.slot, accounts))
+}
+
+fn require_rpc_context_v1(method: &str, context: &RpcContextV1, minimum_slot: u64) -> Result<()> {
+    if context.slot < minimum_slot {
+        return Err(Error::new(format!(
+            "{method} returned a snapshot before the required transaction"
+        )));
+    }
+    if context.api_version.as_deref().is_some_and(str::is_empty) {
+        return Err(Error::new(format!("{method} returned an empty apiVersion")));
+    }
+    Ok(())
+}
+
+fn parse_account_wire_v1(value: RpcAccountWireV1) -> Result<RpcAccount> {
+    if value.data[1] != "base64" {
+        return Err(Error::new(
+            "account data must be the exact [base64, \"base64\"] tuple",
+        ));
+    }
     let data = BASE64
-        .decode(encoded)
+        .decode(&value.data[0])
         .map_err(|error| Error::new(format!("account base64: {error}")))?;
-    Ok(Some(RpcAccount {
-        lamports: u64_field(value, "lamports")?,
-        owner: pubkey(string_field(value, "owner")?)?,
-        executable: value
-            .get("executable")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| Error::new("account omitted executable"))?,
-        rent_epoch: u64_field(value, "rentEpoch")?,
+    if BASE64.encode(&data) != value.data[0] || u64::try_from(data.len()).ok() != Some(value.space)
+    {
+        return Err(Error::new("account base64 or declared space was not exact"));
+    }
+    Ok(RpcAccount {
+        lamports: value.lamports,
+        owner: pubkey(&value.owner)?,
+        executable: value.executable,
+        rent_epoch: value.rent_epoch,
         data,
-    }))
+    })
 }
 
 pub(crate) fn account_evidence(address: Pubkey, account: &RpcAccount) -> AccountEvidence {
@@ -1212,13 +1407,6 @@ pub(crate) fn validate_loopback_url(value: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn string_field<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new(format!("JSON omitted string {name}")))
-}
-
 fn u64_field(value: &Value, name: &str) -> Result<u64> {
     value
         .get(name)
@@ -1229,6 +1417,157 @@ fn u64_field(value: &Value, name: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account_value_v1() -> Value {
+        json!({
+            "lamports": 9_u64,
+            "owner": solana_sdk_ids::system_program::ID.to_string(),
+            "executable": false,
+            "rentEpoch": 4_u64,
+            "data": ["AQID", "base64"],
+            "space": 3_u64
+        })
+    }
+
+    fn account_result_v1(account: Value) -> Value {
+        json!({
+            "context": {"slot": 17_u64, "apiVersion": "2.2.7"},
+            "value": account
+        })
+    }
+
+    #[test]
+    fn rpc_json_refuses_duplicate_keys_at_every_depth_before_value_normalization() {
+        for bytes in [
+            br#"{"jsonrpc":"2.0","id":7,"id":8,"result":null}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":7,"result":{"context":{"slot":17,"slot":18}}}"#,
+            br#"{"jsonrpc":"2.0","id":7,"result":[{"owner":"a","owner":"b"}]}"#,
+        ] {
+            let error = parse_rpc_response_v1("test", 7, bytes)
+                .expect_err("duplicate JSON object key unexpectedly normalized")
+                .to_string();
+            assert!(error.contains("duplicate JSON object key"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rpc_envelope_is_exact_versioned_and_request_bound() {
+        let valid = br#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#;
+        assert_eq!(
+            parse_rpc_response_v1("test", 7, valid).expect("exact response"),
+            json!({"ok": true})
+        );
+        for bytes in [
+            br#"{"jsonrpc":"2.0","id":7,"result":null,"extra":0}"#.as_slice(),
+            br#"{"jsonrpc":"1.0","id":7,"result":null}"#,
+            br#"{"jsonrpc":"2.0","id":8,"result":null}"#,
+            br#"{"jsonrpc":"2.0","id":7,"result":null,"error":{"code":-1,"message":"x"}}"#,
+            br#"{"jsonrpc":"2.0","id":7}"#,
+            br#"[]"#,
+        ] {
+            assert!(
+                parse_rpc_response_v1("test", 7, bytes).is_err(),
+                "hostile RPC envelope unexpectedly accepted: {}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+        let error = parse_rpc_response_v1(
+            "test",
+            7,
+            br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32016,"message":"Minimum context slot has not been reached","data":{"slot":16}}}"#,
+        )
+        .expect_err("RPC error unexpectedly became a result")
+        .to_string();
+        assert!(error.contains("-32016"), "{error}");
+        assert!(
+            error.contains("Minimum context slot has not been reached"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn account_result_requires_exact_shape_base64_tuple_space_and_slot_floor() {
+        let account = parse_account_info_result_v1(account_result_v1(account_value_v1()), 17)
+            .expect("exact account result")
+            .expect("present account");
+        assert_eq!(account.lamports, 9);
+        assert_eq!(account.rent_epoch, 4);
+        assert_eq!(account.data, [1, 2, 3]);
+
+        let mut cases = Vec::new();
+        let mut unknown_account = account_value_v1();
+        unknown_account["unknown"] = json!(true);
+        cases.push(account_result_v1(unknown_account));
+        let mut unknown_context = account_result_v1(account_value_v1());
+        unknown_context["context"]["unknown"] = json!(true);
+        cases.push(unknown_context);
+        let mut unknown_result = account_result_v1(account_value_v1());
+        unknown_result["unknown"] = json!(true);
+        cases.push(unknown_result);
+        for data in [
+            json!(["AQID"]),
+            json!(["AQID", "base64", "extra"]),
+            json!(["AQID", "base58"]),
+            json!([1, "base64"]),
+            json!(["AQID", 1]),
+        ] {
+            let mut value = account_value_v1();
+            value["data"] = data;
+            cases.push(account_result_v1(value));
+        }
+        let mut wrong_space = account_value_v1();
+        wrong_space["space"] = json!(4_u64);
+        cases.push(account_result_v1(wrong_space));
+        let mut wrong_width = account_value_v1();
+        wrong_width["lamports"] = json!(-1_i64);
+        cases.push(account_result_v1(wrong_width));
+        let mut wrong_encoding = account_value_v1();
+        wrong_encoding["data"] = json!(["AQI", "base64"]);
+        wrong_encoding["space"] = json!(2_u64);
+        cases.push(account_result_v1(wrong_encoding));
+        for value in cases {
+            assert!(
+                parse_account_info_result_v1(value, 17).is_err(),
+                "hostile account result unexpectedly accepted"
+            );
+        }
+
+        assert!(
+            parse_account_info_result_v1(account_result_v1(account_value_v1()), 18).is_err(),
+            "context slot below the requested floor unexpectedly accepted"
+        );
+        assert!(
+            parse_account_info_result_v1(json!({"context":{"slot":17_u64},"value":null}), 17,)
+                .expect("exact absent account")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn multiple_accounts_preserves_width_nulls_and_the_same_exact_account_parser() {
+        let (slot, accounts) = parse_multiple_accounts_result_v1(
+            json!({
+                "context": {"slot": 19_u64},
+                "value": [account_value_v1(), null]
+            }),
+            2,
+            19,
+        )
+        .expect("exact multiple-account result");
+        assert_eq!(slot, 19);
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].as_ref().expect("present").data, [1, 2, 3]);
+        assert!(accounts[1].is_none());
+        assert!(
+            parse_multiple_accounts_result_v1(
+                json!({"context":{"slot":19_u64},"value":[account_value_v1()]}),
+                2,
+                19,
+            )
+            .is_err(),
+            "wrong response width unexpectedly accepted"
+        );
+    }
 
     #[test]
     fn only_explicit_loopback_origins_are_admitted() {

@@ -31,7 +31,7 @@ commands:
   buy                              cross a sell intent (--take, or --counter-keypair) and submit
   sell                             cross a buy intent (--take, or --counter-keypair) and submit
   spine                            is this market Direct-tradable now, and which walls stand (--market)
-  redeem                           admit replay; produce a checked wallet payout manifest
+  redeem                           resume or finalize one exact wallet payout
   found                            drive the run-spec founding producer (--spec; --demo to preview)
   walk                             the funded failure walk: commit a passed deadline, collect the bounty
   refusal <code...>                name any custom program error via the band registry
@@ -43,8 +43,16 @@ global flags:
   --json                 machine-readable output where a command supports it
   --dry-run              build and print, sign and submit nothing
   --payout-input <json>  exact Rust payout-plan input for redeem
+  --payout-evidence <json>
+                         completed campaign evidence paired with --spec
+  --payer <address>      exact Position owner and payout signer
+  --recipient <address>  exact collateral token account for redeem
   --payout-alt-plan <json>
-                         persist/resume the owner-funded ordered ALT, then emit payout
+                         persist/resume the owner-funded ordered payout ALT
+  --payout-journal <json>
+                         crash-safe unsigned/submitted payout operation journal
+  --discard-unsigned-payout
+                         archive an unsigned payout journal without signing it
   --i-mean-devnet <hash> name devnet by its full genesis hash for buy, sell, redeem, and walk
 
 program ids come from --session or explicit --core-program/--claims-program/... flags.
@@ -55,6 +63,7 @@ const FLAG_OPTIONS = {
   session: { type: 'string' },
   keypair: { type: 'string' },
   payer: { type: 'string' },
+  recipient: { type: 'string' },
   json: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
   demo: { type: 'boolean' },
@@ -63,7 +72,10 @@ const FLAG_OPTIONS = {
   'session-out': { type: 'string' },
   'bootstrap-bin': { type: 'string' },
   'payout-input': { type: 'string' },
+  'payout-evidence': { type: 'string' },
   'payout-alt-plan': { type: 'string' },
+  'payout-journal': { type: 'string' },
+  'discard-unsigned-payout': { type: 'boolean' },
   'i-mean-devnet': { type: 'string' },
   'registry-program': { type: 'string' },
   'core-program': { type: 'string' },

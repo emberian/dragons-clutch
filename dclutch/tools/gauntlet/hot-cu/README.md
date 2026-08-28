@@ -60,7 +60,7 @@ So the script prints, itself, at the end of every run:
 
 ```
 PASS 20/20
-MEAN 1,3xx,xxx CU   (over the 20 seeds that completed, of 1,400,000)
+MEAN 1,3xx,xxx CU   (over all 20 requested seeds, of 1,400,000)
 MIN  …
 MAX  …
 SPREAD …  ~ n bump-search iterations at 1,500 CU each
@@ -90,9 +90,12 @@ without the digest it was drawn against does not mean anything, and M-61 asks
 for the digest beside any margin precisely because the pairing is what makes the
 number checkable.
 
-`MEAN`, `MIN` and `MAX` are over the seeds that **completed**. A seed that
-exhausts the meter has no figure to average — the pass count is what carries it.
-That split is the other half of why the rule asks for two numbers.
+`MEAN`, `MIN` and `MAX` exist only when **every requested seed completed**. A
+failed seed has no figure, and averaging only the survivors changes the sample:
+`PASS 19/20` therefore prints no mean and writes JSON `null` for all three
+statistics. The pass count carries a partial run; its individual completed
+figures remain in the logs for diagnosis. This prevents a 19-seed survivor
+average from being quoted as the required 20-seed mean.
 
 Pinning `waist::fixture_keypair` to the seed makes a single figure
 **reproducible**. It does not make it **meaningful**: on a real chain the makers
@@ -391,7 +394,7 @@ under the shared `target/`: parallel lanes share this working tree.
 | `logs/build-*.log` | per-program build logs, where the frame-diagnostic count is read |
 | `sweep/<substrate>/seed<N>.log` | the full `--nocapture` log for one seed |
 | `sweep/<substrate>/observed-cu.txt` | one CU figure per completed seed |
-| `summary-<substrate>.json` | `dclutch-hot-cu-sweep-v1`: pass/fail, mean/min/max, the ELF digest, the substrate |
+| `summary-<substrate>.json` | `dclutch-hot-cu-sweep-v2`: pass/fail, all-seeds-completed, nullable mean/min/max, the ELF digest, the substrate |
 
 Logs and summaries are keyed by substrate because comparing arms means holding
 three sweeps at once, and a shared directory would blend them — the `rm -f` that
