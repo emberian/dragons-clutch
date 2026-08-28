@@ -1,5 +1,6 @@
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
+import { fileURLToPath } from 'node:url';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
 import hostingConfig from './.openai/hosting.json';
@@ -46,6 +47,22 @@ export default defineConfig(async () => {
 
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
+    // @solana/web3.js loads rpc-websockets through its package root even in a
+    // browser bundle. rpc-websockets 9 has explicit `browser` and `node`
+    // exports but no `workerd` export, so the Cloudflare environment must be
+    // pointed at the browser implementation instead of failing resolution.
+    resolve: {
+      // npm installs the local SDK as a symlink. Keep the symlink path during
+      // resolution so SDK dependencies are found in this app's clean install,
+      // rather than by walking from the monorepo package's real path.
+      preserveSymlinks: true,
+      alias: {
+        'rpc-websockets': fileURLToPath(new URL(
+          './node_modules/rpc-websockets/dist/index.browser.mjs',
+          import.meta.url,
+        )),
+      },
+    },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
