@@ -267,5 +267,26 @@ class DedupeRowsTests(unittest.TestCase):
         self.assertEqual(len(sc.dedupe_rows(rows)), 2)
 
 
+class ReportShapeTests(unittest.TestCase):
+    def test_report_owns_the_discovered_manifest_set_without_a_fixed_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "SBOM.md"
+            content = sc.write_sbom(
+                report,
+                [make_row()],
+                [("Cargo.toml", 1), ("app/package.json", 1)],
+                [],
+                [],
+            )
+
+            self.assertIn(
+                "every tracked Cargo workspace and npm package tree discovered",
+                content,
+            )
+            self.assertIn("**2 manifests,", content)
+            self.assertIn("## npm dependencies (tracked package trees)", content)
+            self.assertNotIn("independent lockfiles", content)
+
+
 if __name__ == "__main__":
     unittest.main()

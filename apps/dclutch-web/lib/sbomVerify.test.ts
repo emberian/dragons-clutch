@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, it } from 'vitest';
 
 /**
  * GITSCAN-2's G-4: gen-1 had a real dependency/license SBOM
@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
  * file closes is a script that exists but is not part of the gate anyone
  * actually runs. Wiring it into this suite means VITEST GREEN IMPLIES THE
  * COMMITTED SBOM IS CURRENT — a dependency added anywhere in this
- * repository's 38 independent Cargo workspaces or this app's npm tree
+ * repository's discovered Cargo workspaces or tracked npm package trees
  * without regenerating `tools/sbom/SBOM.md`/`NOTICES.md` turns this test
  * red, naming the drift rather than leaving it unnoticed.
  *

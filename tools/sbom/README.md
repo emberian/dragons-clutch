@@ -2,8 +2,10 @@
 
 `SBOM.md` in this directory is generated, not hand-written: every dependency
 this repository actually resolves, with its license, source, and how that
-license was determined, across the whole tree (there is no single Cargo
-workspace — 38 independent ones — plus the web app's npm tree).
+license was determined, across every tracked Cargo workspace and npm package
+tree discovered from the repository manifests. The generated Coverage section
+is the authority for the current set; no separate workspace count is maintained
+here.
 
 ```sh
 tools/sbom/sbom_check.py            # regenerate SBOM.md
@@ -26,16 +28,17 @@ docstring for the full classification and flagging rules.
 
 ## What it checks
 
-- Every `[workspace]`-bearing `Cargo.toml` (the repository root plus 37
-  self-contained test-program/tool mini-workspaces), resolved with
+- Every tracked `[workspace]`-bearing `Cargo.toml`, resolved with
   `cargo metadata --locked --offline` against its own committed `Cargo.lock`.
   A tracked `Cargo.toml` without `[workspace]` is a *member*, adopted by the
   nearest ancestor workspace regardless of whether it is literally named in
   that ancestor's `members` (Cargo's own directory-walk rule) — checking
   members individually would recompute the same closure repeatedly and
-  misattribute its rows, so only the 38 workspace roots are queried directly.
-- Every tracked `package.json` with its `package-lock.json` (today:
-  `apps/dclutch-web`; new ones are picked up automatically).
+  misattribute its rows, so only discovered workspace roots are queried
+  directly.
+- Every tracked `package.json`; dependency-bearing package trees resolve from
+  their adjacent `package-lock.json`. New package trees are picked up
+  automatically.
 
 Three things it reports without failing the gate over them (each gets its
 own section in `SBOM.md`, so none of this is swept away):
