@@ -139,22 +139,22 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (sixth attempt, the first with the
-resubmit-on-drop fix — the fifth reached DCLTGMF1 and lost its hostile probe
-to a devnet transaction drop; §7 tells the whole story of the three
-execution-found issues; the earlier attempts' addresses are superseded — §7 tells the whole story; the earlier
-attempts' derived addresses are superseded and their small strands are named
-there). The addresses below are the fifth attempt's derived targets and are
-updated if the lineage moves again.**
+**Status: founding IN PROGRESS on devnet (sixth attempt). The addresses below
+are DERIVED TARGETS — the coordinates this input's founding will land at,
+computed off-chain and detector-confirmed absent before execution — NOT yet a
+live Open Market; the "Open Market" row becomes a live, verified account only
+when this section's transcript line says so. The earlier attempts' addresses
+are superseded and their small strands are named in §7 (three execution-found
+issues, all fixed); this lineage is updated if it moves again.**
 
 The story: protection against SOL/USD leaving the 120.00–180.00 band at a
 real terminal window, resolved by the real devnet Pyth receiver. Founded
 under kappa as a founder-side discipline (the on-chain cap is the
 RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
-| fact | value |
+| fact | derived target (pending founding completion) |
 |---|---|
-| **Open Market** | `EZqnVKwJ8TpvhPEsJqBGXMvaHb8sYSomi1LuAPyNbetP` |
+| **Open Market** (not yet live) | `EZqnVKwJ8TpvhPEsJqBGXMvaHb8sYSomi1LuAPyNbetP` |
 | Found31 Market (generation 1) | `3Dhpq9tufPuBMroMfUNaWhfZMPfLFh6MG7vwhJFfqjMm` |
 | abort-lane Market (generation 3, staged and unwound) | `J538ytiecEVETqrvF2dBzW1S2PZKH2EiESoWbQfwCVxb` |
 | collateral mint (Token-2022, 6 decimals) | `DrePPA8suSQ6A2aBGoywg9GFsQFnaP531dzsKJajdSrs` |
