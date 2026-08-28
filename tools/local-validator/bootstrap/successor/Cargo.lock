@@ -1033,6 +1033,7 @@ dependencies = [
  "dclutch-shadow-accelerator-auth-v4",
  "dclutch-token-svm",
  "dclutch-transition-vm",
+ "dclutch-user-position-admission-contract",
  "solana-instructions-sysvar",
  "solana-program",
  "solana-sdk-ids",
@@ -1044,6 +1045,13 @@ name = "dclutch-transition-vm"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-seal-contract",
+]
+
+[[package]]
+name = "dclutch-user-position-admission-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
 ]
 
 [[package]]
