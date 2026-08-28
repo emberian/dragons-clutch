@@ -57,6 +57,7 @@ function meta(signature: string, overrides: Partial<TransactionMetaObservation>)
     postBalances: Object.freeze(addresses.map((_, index) => (index === 0 ? '994995' : '1000005'))),
     logMessages: Object.freeze([]),
     innerInstructions: Object.freeze([]),
+    returnData: null,
     transactionBytes,
     ...overrides,
   });

@@ -850,6 +850,50 @@ fn validate_manifest(manifest: &CapabilityManifestV1<'_>) -> Result<()> {
     validate_acyclic(manifest)
 }
 
+/// Return the exact transitive dependency closure for one selected entry.
+///
+/// The selected entry itself is always present. Every dependency edge is
+/// followed to a fixed point, and the returned bitset remains bounded by the
+/// manifest's sixteen-entry physical ABI.
+pub fn capability_dependency_closure_mask_v1(
+    manifest: CapabilityManifestV1<'_>,
+    selected_entry_index: u16,
+) -> Result<u16> {
+    if selected_entry_index >= manifest.entry_count() {
+        return Err(Error::InvalidDependency);
+    }
+    let selected_bit = 1_u16
+        .checked_shl(u32::from(selected_entry_index))
+        .ok_or(Error::InvalidDependency)?;
+    let mut closure = selected_bit;
+    loop {
+        let before = closure;
+        let mut entry_index = 0_u16;
+        while entry_index < manifest.entry_count() {
+            let entry_bit = 1_u16
+                .checked_shl(u32::from(entry_index))
+                .ok_or(Error::InvalidDependency)?;
+            if closure & entry_bit != 0 {
+                let entry = manifest.entry(entry_index)?;
+                let mut position = 0_usize;
+                while position < usize::from(entry.dependency_count()) {
+                    let dependency = entry.dependency(position)?;
+                    closure |= 1_u16
+                        .checked_shl(u32::from(dependency))
+                        .ok_or(Error::InvalidDependency)?;
+                    position = position.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+                }
+            }
+            entry_index = entry_index
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
+        }
+        if closure == before {
+            return Ok(closure);
+        }
+    }
+}
+
 fn validate_entry_slice(entries: &[CapabilityEntryV1]) -> Result<()> {
     let count = entries.len();
     let mut prior_kind: Option<[u8; 32]> = None;

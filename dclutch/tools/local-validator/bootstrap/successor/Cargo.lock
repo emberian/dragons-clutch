@@ -637,6 +637,7 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
+ "dclutch-relay-contract",
  "dclutch-release-set-contract",
  "dclutch-release-tool",
  "dclutch-rent-contract",
@@ -645,6 +646,7 @@ dependencies = [
  "dclutch-series-v3-kernel",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
+ "dclutch-user-position-admission-contract",
  "dclutch-versioned-message-operator",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
@@ -652,6 +654,7 @@ dependencies = [
  "solana-message",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface",
  "spl-token-2022-interface",
 ]
 

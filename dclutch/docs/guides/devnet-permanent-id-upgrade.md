@@ -152,6 +152,98 @@ did not move. Wallet activity outside this exact transaction is irrelevant to
 the arithmetic. Finally, the operator dumps the deployed bytes and verifies the
 dump against the raw or exact zero-padded live image.
 
+## 6. Audit the ordered seven-role cycle
+
+Use `devnet-upgrade-set-journal-v1` to see which one role is next. This command
+is key-free and read-only. It has no `--execute`, keypair, signing, loop, or
+receipt-writing mode. It never replaces `devnet-upgrade-v1`: you still preflight
+and update exactly one role with that command.
+
+The set journal is an immutable reference manifest, not Upgrade acceptance. You
+may write it yourself because none of its fields can make a role complete. It
+contains no copied Loader poststate and no success boolean. A completed role is
+recognized only when its pinned one-role receipt and dump both rehash exactly,
+the receipt passes the normal checked-gate binding, and a fresh finalized read
+matches its exact Program, ProgramData, payload, authority, slot, transaction,
+arithmetic, and dump.
+
+The manifest has this shape:
+
+```json
+{
+  "schema": "dclutch-devnet-upgrade-set-journal-v1",
+  "checked_release_gate": {
+    "canonical_path": "/absolute/release/CHECKED_UPGRADE_GATE.json",
+    "sha256": "64_lowercase_hex"
+  },
+  "source_revision": "40_lowercase_hex",
+  "source_tree_sha256": "64_lowercase_hex",
+  "devnet_genesis_hash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "solana_cli_version": "exact output of solana --version",
+  "retained_upgrade_authority": "PUBLIC_KEY",
+  "fee_payer": "PUBLIC_KEY",
+  "roles": [
+    {
+      "role": "registry",
+      "program_id": "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",
+      "programdata_id": "ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz",
+      "baseline": {
+        "canonical_path": "/absolute/evidence/registry-baseline.json",
+        "sha256": "64_lowercase_hex"
+      },
+      "receipt": {
+        "canonical_path": "/absolute/evidence/registry-receipt.json",
+        "sha256": null
+      },
+      "dump": {
+        "canonical_path": "/absolute/evidence/registry-dump.so",
+        "sha256": null
+      }
+    }
+  ]
+}
+```
+
+The example shows one role only so you can see each field. Your manifest must
+contain all seven entries in this exact order and with these permanent pairs:
+
+| order | role | Program | ProgramData |
+|---:|---|---|---|
+| 0 | registry | `Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj` | `ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz` |
+| 1 | rent | `DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3` | `78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy` |
+| 2 | custody | `34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH` | `EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf` |
+| 3 | resolution | `2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd` | `2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f` |
+| 4 | claims | `85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN` | `4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j` |
+| 5 | trading | `5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk` | `AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn` |
+| 6 | core | `HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N` | `AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN` |
+
+Use canonical absolute paths, as printed by `realpath`; a symlink in any path is
+refused. Pin each baseline's raw file SHA-256. For an unstarted role, keep the
+receipt and dump digests `null` and make sure neither target exists. After the
+one-role receipt is complete, pin the raw receipt and dump SHA-256 values. A
+later role may not pin either file before every earlier receipt is complete.
+
+Run the audit with:
+
+```text
+dclutch-local-successor-bootstrap devnet-upgrade-set-journal-v1 \
+  --rpc-url https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --journal /absolute/evidence/upgrade-set-journal.json \
+  --solana-cli /absolute/pinned/solana
+```
+
+Before the set is complete, the report contains exactly one `next_role` and no
+`final_set_sha256`. A prepared or submitted receipt names the same role with a
+resume action; it never authorizes a replay. If the next baseline says capacity
+must grow, the action tells you to extend and capture a fresh baseline. The old
+baseline will fail after extension because the ProgramData slot, width,
+lamports, and account digest moved. Only seven freshly valid complete receipts
+produce the final set digest. That digest binds the one gate/source/tree/devnet/
+CLI identity and every ordered Program, ProgramData, baseline, receipt, and dump
+path plus file hash; the one-role receipts remain the only owners of detailed
+poststate.
+
 ## Resume rules
 
 Receipts move through `prepared`, `submitted`, and `complete` phases and are

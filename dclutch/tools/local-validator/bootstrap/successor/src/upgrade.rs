@@ -41,6 +41,8 @@ const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v1
 const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
 const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v2";
+const SET_JOURNAL_SCHEMA: &str = "dclutch-devnet-upgrade-set-journal-v1";
+const SET_AUDIT_SCHEMA: &str = "dclutch-devnet-upgrade-set-audit-v1";
 const TARGET_ACK_FLAG: &str = "--i-accept-upgrade";
 const EXTENSION_ACK_FLAG: &str = "--i-accept-extension";
 /// A provisional operator reserve above the exact rent top-up. The receipt
@@ -61,6 +63,46 @@ const ROLES: &[&str] = &[
     "claims",
     "trading",
     "core",
+];
+/// Decision-0012's permanent devnet Loader pairs. This is the operational
+/// identity owner for the seven-role set auditor; a journal can pin evidence
+/// for these accounts, never nominate a replacement set.
+const PERMANENT_DEVNET_UPGRADE_TARGETS_V1: &[(&str, &str, &str)] = &[
+    (
+        "registry",
+        "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",
+        "ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz",
+    ),
+    (
+        "rent",
+        "DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3",
+        "78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy",
+    ),
+    (
+        "custody",
+        "34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH",
+        "EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf",
+    ),
+    (
+        "resolution",
+        "2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd",
+        "2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f",
+    ),
+    (
+        "claims",
+        "85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN",
+        "4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j",
+    ),
+    (
+        "trading",
+        "5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk",
+        "AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn",
+    ),
+    (
+        "core",
+        "HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N",
+        "AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN",
+    ),
 ];
 const SHIPPED_LINKS: &[(&str, &str, bool)] = &[
     ("claims", "dclutch-claims-sbf", true),
@@ -138,6 +180,115 @@ struct ExtensionArgsV1 {
     expected_solana_cli_version: String,
     target_acknowledgment: String,
     execute: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UpgradeSetArgsV1 {
+    origin: ClusterOriginV1,
+    journal_path: PathBuf,
+    solana_cli: PathBuf,
+}
+
+/// A path and its exact raw-file digest. The journal deliberately does not
+/// copy any fact owned by the referenced evidence document.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SetPinnedFileV1 {
+    canonical_path: String,
+    sha256: String,
+}
+
+/// A receipt or dump reference. `sha256: null` means the evidence must not yet
+/// exist. Progress is therefore never conferred by a boolean or a copied
+/// poststate: the referenced one-role receipt remains the sole semantic owner.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SetOptionalFileV1 {
+    canonical_path: String,
+    sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct UpgradeSetRoleV1 {
+    role: String,
+    program_id: String,
+    programdata_id: String,
+    baseline: SetPinnedFileV1,
+    receipt: SetOptionalFileV1,
+    dump: SetOptionalFileV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct UpgradeSetJournalV1 {
+    schema: String,
+    checked_release_gate: SetPinnedFileV1,
+    source_revision: String,
+    source_tree_sha256: String,
+    devnet_genesis_hash: String,
+    solana_cli_version: String,
+    retained_upgrade_authority: String,
+    fee_payer: String,
+    roles: Vec<UpgradeSetRoleV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SetRoleStatusV1 {
+    Complete,
+    Prepared,
+    Submitted,
+    AwaitingExtensionAndFreshBaseline,
+    ReadyForUpgrade,
+    WaitingForEarlierRole,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SetRoleAuditV1 {
+    role: String,
+    program_id: String,
+    programdata_id: String,
+    baseline: SetPinnedFileV1,
+    receipt: SetOptionalFileV1,
+    dump: SetOptionalFileV1,
+    status: SetRoleStatusV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SetNextRoleV1 {
+    ordinal: u8,
+    role: String,
+    program_id: String,
+    programdata_id: String,
+    action: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct UpgradeSetAuditV1 {
+    schema: String,
+    journal_sha256: String,
+    checked_release_gate: SetPinnedFileV1,
+    source_revision: String,
+    source_tree_sha256: String,
+    devnet_genesis_hash: String,
+    solana_cli_version: String,
+    retained_upgrade_authority: String,
+    fee_payer: String,
+    roles: Vec<SetRoleAuditV1>,
+    completed_role_count: u8,
+    next_role: Option<SetNextRoleV1>,
+    final_set_sha256: Option<String>,
+    mutation_permitted: bool,
+}
+
+struct SetLocalRoleV1 {
+    args: UpgradeArgsV1,
+    admission: UpgradeAdmissionV1,
+    receipt_phase: Option<ReceiptPhaseV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -634,6 +785,20 @@ pub(crate) fn run_extension(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// Audit the ordered seven-program Upgrade set without opening a keypair,
+/// submitting a transaction, or writing an evidence file.
+pub(crate) fn run_set_journal(arguments: Vec<String>) -> Result<()> {
+    let args = parse_set_args(arguments)?;
+    let mut runner = SystemCliRunner {
+        executable: args.solana_cli.clone(),
+    };
+    let report = audit_set_journal_with_runner(&args, &mut runner)?;
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, &report)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
 pub(crate) fn usage() -> &'static str {
     "\n  dclutch-local-successor-bootstrap devnet-upgrade-baseline-v1 --rpc-url HTTPS_URL \\
      --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
@@ -692,7 +857,540 @@ pub(crate) fn usage() -> &'static str {
      receipt. Every complete resume freshly rechecks CLI identity, devnet, current Loader state, \
      transaction, payload, authority, deployment slot, and dump. There is no force, recycle, \
      close, set-upgrade-authority, mainnet, testnet, unknown cluster, multi-role, or \
-     implicit-wallet path."
+     implicit-wallet path.\n\n\
+  dclutch-local-successor-bootstrap devnet-upgrade-set-journal-v1 \
+     --rpc-url HTTPS_URL \
+     --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+     --journal ABSOLUTE_JSON --solana-cli ABSOLUTE_EXECUTABLE\n\n\
+     This key-free command audits, but never performs, the canonical seven-role Upgrade cycle. \
+     Its immutable journal pins one checked gate, source commit/tree, exact devnet genesis, CLI \
+     identity, retained authority, fee payer, and seven ordered Program/ProgramData plus \
+     baseline/receipt/dump references. It rehashes every reference and freshly validates every \
+     completed one-role receipt against finalized chain state and its exact transaction. Gaps, \
+     mixed evidence, changed earlier roles, and stale pre-extension baselines refuse. Until the \
+     set is complete it reports exactly one next role; only seven fresh complete receipts produce \
+     a final set digest. It has no loop, signing, write, execute, or keypair mode."
+}
+
+fn parse_set_args(arguments: Vec<String>) -> Result<UpgradeSetArgsV1> {
+    let mut values = std::collections::BTreeMap::<String, String>::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if !matches!(
+            argument.as_str(),
+            "--rpc-url" | DEVNET_ACKNOWLEDGMENT_FLAG | "--journal" | "--solana-cli"
+        ) {
+            return Err(Error::new(format!(
+                "unknown devnet-upgrade-set-journal-v1 argument: {argument}"
+            )));
+        }
+        if values.insert(argument.clone(), value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let take = |label: &str| {
+        values
+            .get(label)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("{label} is required")))
+    };
+    let rpc_url = take("--rpc-url")?;
+    let acknowledgment = take(DEVNET_ACKNOWLEDGMENT_FLAG)?;
+    let origin = ClusterOriginV1::parse(&rpc_url, Some(&acknowledgment))?;
+    if !matches!(origin, ClusterOriginV1::AcknowledgedDevnet { .. }) {
+        return Err(Error::new(
+            "devnet-upgrade-set-journal-v1 admits exact public devnet only",
+        ));
+    }
+    Ok(UpgradeSetArgsV1 {
+        origin,
+        journal_path: absolute(&take("--journal")?, "--journal")?,
+        solana_cli: absolute(&take("--solana-cli")?, "--solana-cli")?,
+    })
+}
+
+fn audit_set_journal_with_runner(
+    args: &UpgradeSetArgsV1,
+    runner: &mut impl CliRunner,
+) -> Result<UpgradeSetAuditV1> {
+    let (journal, journal_sha256) = load_set_journal(args)?;
+    let authority = parse_pubkey(
+        &journal.retained_upgrade_authority,
+        "set journal retained authority",
+    )?;
+    let payer = parse_pubkey(&journal.fee_payer, "set journal fee payer")?;
+    let gate_path = PathBuf::from(&journal.checked_release_gate.canonical_path);
+    let mut local_roles = Vec::with_capacity(ROLES.len());
+
+    if let Some(first_unpinned) = journal
+        .roles
+        .iter()
+        .position(|role| role.receipt.sha256.is_none())
+    {
+        if let Some(later) = journal
+            .roles
+            .iter()
+            .skip(first_unpinned + 1)
+            .find(|role| role.receipt.sha256.is_some() || role.dump.sha256.is_some())
+        {
+            return Err(Error::new(format!(
+                "set Upgrade gap: role {} pins evidence after unstarted role {}",
+                later.role, journal.roles[first_unpinned].role
+            )));
+        }
+    }
+
+    // Authenticate every local evidence reference before a network read. This
+    // catches gaps and substitutions without producing a misleading partial
+    // live audit of an invalid set.
+    for role in &journal.roles {
+        let elf_path = set_role_elf_path(&gate_path, &role.role)?;
+        let role_args = UpgradeArgsV1 {
+            origin: args.origin.clone(),
+            role: role.role.clone(),
+            program_id: parse_pubkey(&role.program_id, "set journal Program")?,
+            programdata_id: parse_pubkey(&role.programdata_id, "set journal ProgramData")?,
+            expected_upgrade_authority: authority,
+            // Preflight is structurally key-free. These sentinel paths make a
+            // future accidental key read fail rather than select a real file.
+            authority_keypair: PathBuf::from("/dclutch-set-journal-never-reads-authority"),
+            fee_payer: payer,
+            fee_payer_keypair: PathBuf::from("/dclutch-set-journal-never-reads-payer"),
+            elf_path,
+            checked_release_gate_path: gate_path.clone(),
+            expected_checked_release_gate_sha256: journal.checked_release_gate.sha256.clone(),
+            expected_source_revision: journal.source_revision.clone(),
+            expected_source_tree_sha256: journal.source_tree_sha256.clone(),
+            baseline_path: PathBuf::from(&role.baseline.canonical_path),
+            receipt_path: PathBuf::from(&role.receipt.canonical_path),
+            dump_path: PathBuf::from(&role.dump.canonical_path),
+            solana_cli: args.solana_cli.clone(),
+            target_acknowledgment: format!("{}:{}", role.role, role.program_id),
+            execute: false,
+            preflight: true,
+        };
+        let admission = admit_upgrade(&role_args)?;
+        if admission.gate.solana_cli_version != journal.solana_cli_version {
+            return Err(Error::new(format!(
+                "set journal CLI identity {:?} differs from checked gate {:?}",
+                journal.solana_cli_version, admission.gate.solana_cli_version
+            )));
+        }
+        let receipt_phase = match &role.receipt.sha256 {
+            Some(_) => Some(
+                load_receipt(&role_args.receipt_path)?
+                    .ok_or_else(|| Error::new("pinned set receipt disappeared"))?
+                    .phase,
+            ),
+            None => None,
+        };
+        match (&receipt_phase, &role.dump.sha256) {
+            (Some(ReceiptPhaseV1::Complete), Some(_)) => {}
+            (Some(ReceiptPhaseV1::Complete), None) => {
+                return Err(Error::new(format!(
+                    "completed set role {} omitted its pinned dump digest",
+                    role.role
+                )));
+            }
+            (Some(_), Some(_)) => {
+                return Err(Error::new(format!(
+                    "incomplete set role {} claims a dump before its receipt is complete",
+                    role.role
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(Error::new(format!(
+                    "set role {} claims a dump without a receipt",
+                    role.role
+                )));
+            }
+            _ => {}
+        }
+        local_roles.push(SetLocalRoleV1 {
+            args: role_args,
+            admission,
+            receipt_phase,
+        });
+    }
+
+    let first_incomplete = local_roles
+        .iter()
+        .position(|role| role.receipt_phase != Some(ReceiptPhaseV1::Complete));
+    if let Some(first) = first_incomplete {
+        for later in local_roles.iter().skip(first + 1) {
+            if later.receipt_phase.is_some() {
+                return Err(Error::new(format!(
+                    "set Upgrade gap: role {} has a receipt after incomplete role {}",
+                    later.args.role, local_roles[first].args.role
+                )));
+            }
+        }
+    }
+
+    // Every completed prefix role gets the exact same fresh live admission as
+    // the one-role preflight. The first incomplete role is also checked so the
+    // reported next action is current, not a projection from old files.
+    let completed = first_incomplete.unwrap_or(local_roles.len());
+    for role in local_roles.iter().take(completed) {
+        let report = preflight_with_runner(&role.args, runner)?;
+        if report.receipt_phase != Some(ReceiptPhaseV1::Complete) {
+            return Err(Error::new(
+                "set journal completed prefix did not yield a complete one-role preflight",
+            ));
+        }
+    }
+    if let Some(index) = first_incomplete {
+        let role = &local_roles[index];
+        if role.receipt_phase.is_none() && role.admission.baseline.extension_additional_bytes != 0 {
+            audit_extension_pending_role(role, &journal.solana_cli_version, runner)?;
+        } else {
+            let report = preflight_with_runner(&role.args, runner)?;
+            if report.receipt_phase != role.receipt_phase {
+                return Err(Error::new(
+                    "set journal receipt phase changed during read-only audit",
+                ));
+            }
+        }
+    }
+
+    let mut role_reports = Vec::with_capacity(ROLES.len());
+    for (index, (role, local)) in journal.roles.iter().zip(&local_roles).enumerate() {
+        let status = if index < completed {
+            SetRoleStatusV1::Complete
+        } else if Some(index) != first_incomplete {
+            SetRoleStatusV1::WaitingForEarlierRole
+        } else {
+            match local.receipt_phase {
+                Some(ReceiptPhaseV1::Prepared) => SetRoleStatusV1::Prepared,
+                Some(ReceiptPhaseV1::Submitted) => SetRoleStatusV1::Submitted,
+                Some(ReceiptPhaseV1::Complete) => {
+                    return Err(Error::new("complete next role escaped completed prefix"));
+                }
+                None if local.admission.baseline.extension_additional_bytes != 0 => {
+                    SetRoleStatusV1::AwaitingExtensionAndFreshBaseline
+                }
+                None => SetRoleStatusV1::ReadyForUpgrade,
+            }
+        };
+        role_reports.push(SetRoleAuditV1 {
+            role: role.role.clone(),
+            program_id: role.program_id.clone(),
+            programdata_id: role.programdata_id.clone(),
+            baseline: role.baseline.clone(),
+            receipt: role.receipt.clone(),
+            dump: role.dump.clone(),
+            status,
+        });
+    }
+    let next_role = first_incomplete
+        .map(|index| {
+            let role = &journal.roles[index];
+            let local = &local_roles[index];
+            let action = match local.receipt_phase {
+                Some(ReceiptPhaseV1::Prepared | ReceiptPhaseV1::Submitted) => {
+                    "resume_exact_one_role_upgrade"
+                }
+                Some(ReceiptPhaseV1::Complete) => {
+                    return Err(Error::new("complete role cannot be next"));
+                }
+                None if local.admission.baseline.extension_additional_bytes != 0 => {
+                    "extend_then_capture_fresh_baseline"
+                }
+                None => "run_exact_one_role_upgrade",
+            };
+            Ok(SetNextRoleV1 {
+                ordinal: u8::try_from(index).expect("seven roles fit u8"),
+                role: role.role.clone(),
+                program_id: role.program_id.clone(),
+                programdata_id: role.programdata_id.clone(),
+                action: action.into(),
+            })
+        })
+        .transpose()?;
+    let final_set_sha256 = if first_incomplete.is_none() {
+        Some(final_set_digest(&journal)?)
+    } else {
+        None
+    };
+    Ok(UpgradeSetAuditV1 {
+        schema: SET_AUDIT_SCHEMA.into(),
+        journal_sha256,
+        checked_release_gate: journal.checked_release_gate,
+        source_revision: journal.source_revision,
+        source_tree_sha256: journal.source_tree_sha256,
+        devnet_genesis_hash: journal.devnet_genesis_hash,
+        solana_cli_version: journal.solana_cli_version,
+        retained_upgrade_authority: journal.retained_upgrade_authority,
+        fee_payer: journal.fee_payer,
+        roles: role_reports,
+        completed_role_count: u8::try_from(completed).expect("seven roles fit u8"),
+        next_role,
+        final_set_sha256,
+        mutation_permitted: false,
+    })
+}
+
+fn audit_extension_pending_role(
+    role: &SetLocalRoleV1,
+    expected_cli_version: &str,
+    runner: &mut impl CliRunner,
+) -> Result<()> {
+    if role.receipt_phase.is_some()
+        || role.admission.baseline.extension_additional_bytes == 0
+        || role.args.receipt_path.exists()
+        || role.args.dump_path.exists()
+    {
+        return Err(Error::new(
+            "extension-pending set role has contradictory receipt, dump, or width state",
+        ));
+    }
+    let cli_version = invoke(runner, &role.args, &["--version".into()])?;
+    if cli_version.stdout.trim() != expected_cli_version {
+        return Err(Error::new(format!(
+            "Solana CLI version is {:?}; set journal pins {:?}",
+            cli_version.stdout.trim(),
+            expected_cli_version
+        )));
+    }
+    authenticate_devnet(runner, &role.args)?;
+    let observation = read_snapshot(runner, &role.args, role.admission.baseline.context_slot)?;
+    require_baseline_prestate(&role.admission.baseline, &observation.loader)?;
+    Ok(())
+}
+
+fn load_set_journal(args: &UpgradeSetArgsV1) -> Result<(UpgradeSetJournalV1, String)> {
+    let journal_path = exact_reference_path(
+        args.journal_path
+            .to_str()
+            .ok_or_else(|| Error::new("--journal path is not UTF-8"))?,
+        "set journal",
+    )?;
+    let journal_bytes = read_regular_reference(&journal_path, "set journal")?;
+    let journal_sha256 = digest(&journal_bytes);
+    let journal: UpgradeSetJournalV1 = serde_json::from_slice(&journal_bytes).map_err(|error| {
+        Error::new(format!(
+            "set journal is not canonical {SET_JOURNAL_SCHEMA} JSON: {error}"
+        ))
+    })?;
+    if journal.schema != SET_JOURNAL_SCHEMA
+        || journal.devnet_genesis_hash != DEVNET_GENESIS_HASH
+        || journal.solana_cli_version.trim().is_empty()
+        || journal.solana_cli_version != journal.solana_cli_version.trim()
+    {
+        return Err(Error::new(
+            "set journal schema, exact devnet genesis, or CLI identity is invalid",
+        ));
+    }
+    require_lower_hex(&journal.source_revision, "set source revision", 40, 40)?;
+    require_digest(&journal.source_tree_sha256, "set source tree SHA-256")?;
+    let _ = parse_pubkey(
+        &journal.retained_upgrade_authority,
+        "set retained authority",
+    )?;
+    let _ = parse_pubkey(&journal.fee_payer, "set fee payer")?;
+    if journal.roles.len() != PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len() {
+        return Err(Error::new(format!(
+            "set journal must carry exactly {} ordered roles",
+            PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len()
+        )));
+    }
+    let mut identities = BTreeSet::new();
+    for (index, (role, (expected_role, expected_program, expected_programdata))) in journal
+        .roles
+        .iter()
+        .zip(PERMANENT_DEVNET_UPGRADE_TARGETS_V1)
+        .enumerate()
+    {
+        let program = parse_pubkey(&role.program_id, "set Program")?;
+        let programdata = parse_pubkey(&role.programdata_id, "set ProgramData")?;
+        if role.role != *expected_role
+            || role_ordinal(&role.role)? != index as u8
+            || program != parse_pubkey(expected_program, "permanent set Program")?
+            || programdata != parse_pubkey(expected_programdata, "permanent set ProgramData")?
+        {
+            return Err(Error::new(format!(
+                "set journal target at index {index} is not exact permanent devnet \
+                 {expected_role}:{expected_program}:{expected_programdata}"
+            )));
+        }
+        if !identities.insert(program) || !identities.insert(programdata) {
+            return Err(Error::new(
+                "set journal Program/ProgramData identities are not fourteen unique accounts",
+            ));
+        }
+    }
+    // No referenced evidence is opened until all fourteen account identities
+    // have matched the permanent table above.
+    read_pinned_reference(&journal.checked_release_gate, "set checked-release gate")?;
+    for role in &journal.roles {
+        read_pinned_reference(&role.baseline, &format!("{} baseline", role.role))?;
+        read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+        read_optional_reference(&role.dump, &format!("{} dump", role.role))?;
+    }
+    Ok((journal, journal_sha256))
+}
+
+fn read_pinned_reference(reference: &SetPinnedFileV1, label: &str) -> Result<Vec<u8>> {
+    require_digest(&reference.sha256, &format!("{label} SHA-256"))?;
+    let path = exact_reference_path(&reference.canonical_path, label)?;
+    let bytes = read_regular_reference(&path, label)?;
+    let observed = digest(&bytes);
+    if observed != reference.sha256 {
+        return Err(Error::new(format!(
+            "{label} SHA-256 is {observed}, pinned {}",
+            reference.sha256
+        )));
+    }
+    Ok(bytes)
+}
+
+fn read_optional_reference(reference: &SetOptionalFileV1, label: &str) -> Result<Option<Vec<u8>>> {
+    let path = exact_reference_path(&reference.canonical_path, label)?;
+    match &reference.sha256 {
+        Some(expected) => {
+            require_digest(expected, &format!("{label} SHA-256"))?;
+            let bytes = read_regular_reference(&path, label)?;
+            let observed = digest(&bytes);
+            if &observed != expected {
+                return Err(Error::new(format!(
+                    "{label} SHA-256 is {observed}, pinned {expected}"
+                )));
+            }
+            Ok(Some(bytes))
+        }
+        None => {
+            match fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+                Ok(_) => {
+                    return Err(Error::new(format!(
+                        "{label} exists but the set journal pins no digest"
+                    )));
+                }
+            }
+            let parent = path
+                .parent()
+                .ok_or_else(|| Error::new(format!("{label} omitted a parent")))?;
+            if fs::canonicalize(parent)? != parent {
+                return Err(Error::new(format!(
+                    "{label} parent is not an exact canonical directory"
+                )));
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn exact_reference_path(value: &str, label: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+    {
+        return Err(Error::new(format!(
+            "{label} path must be absolute, normalized, and contain no escape"
+        )));
+    }
+    Ok(path)
+}
+
+fn read_regular_reference(path: &Path, label: &str) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        Error::new(format!(
+            "{label} {} cannot be inspected: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(Error::new(format!(
+            "{label} must be one regular non-symlink file"
+        )));
+    }
+    if fs::canonicalize(path)? != path {
+        return Err(Error::new(format!(
+            "{label} path is not canonical or traverses a symlink"
+        )));
+    }
+    Ok(fs::read(path)?)
+}
+
+fn set_role_elf_path(gate_path: &Path, role: &str) -> Result<PathBuf> {
+    let bytes = read_regular_reference(gate_path, "set checked-release gate")?;
+    let gate: CheckedUpgradeGateV1 = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::new(format!(
+            "set checked-release gate is not canonical v1 JSON: {error}"
+        ))
+    })?;
+    let matches = gate
+        .links
+        .iter()
+        .filter(|link| link.label == role)
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(Error::new(format!(
+            "set checked-release gate does not contain one exact {role} link"
+        )));
+    }
+    let elf = matches[0].elf.as_ref().ok_or_else(|| {
+        Error::new(format!(
+            "set checked-release gate role {role} has no deployable ELF"
+        ))
+    })?;
+    let root = gate_path
+        .parent()
+        .ok_or_else(|| Error::new("set checked-release gate omitted evidence root"))?;
+    Ok(root.join(&elf.canonical_path))
+}
+
+fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/devnet-upgrade-set/final/v1\0");
+    hash_text(&mut hasher, &journal.schema)?;
+    hash_text(&mut hasher, &journal.checked_release_gate.canonical_path)?;
+    hash_text(&mut hasher, &journal.checked_release_gate.sha256)?;
+    hash_text(&mut hasher, &journal.source_revision)?;
+    hash_text(&mut hasher, &journal.source_tree_sha256)?;
+    hash_text(&mut hasher, &journal.devnet_genesis_hash)?;
+    hash_text(&mut hasher, &journal.solana_cli_version)?;
+    hasher.update(
+        parse_pubkey(
+            &journal.retained_upgrade_authority,
+            "set retained authority",
+        )?
+        .as_ref(),
+    );
+    hasher.update(parse_pubkey(&journal.fee_payer, "set fee payer")?.as_ref());
+    for role in &journal.roles {
+        hash_text(&mut hasher, &role.role)?;
+        hasher.update(parse_pubkey(&role.program_id, "set Program")?.as_ref());
+        hasher.update(parse_pubkey(&role.programdata_id, "set ProgramData")?.as_ref());
+        hash_text(&mut hasher, &role.baseline.canonical_path)?;
+        hash_text(&mut hasher, &role.baseline.sha256)?;
+        hash_text(&mut hasher, &role.receipt.canonical_path)?;
+        hash_text(
+            &mut hasher,
+            role.receipt
+                .sha256
+                .as_deref()
+                .ok_or_else(|| Error::new("final set omitted receipt digest"))?,
+        )?;
+        hash_text(&mut hasher, &role.dump.canonical_path)?;
+        hash_text(
+            &mut hasher,
+            role.dump
+                .sha256
+                .as_deref()
+                .ok_or_else(|| Error::new("final set omitted dump digest"))?,
+        )?;
+    }
+    Ok(hex(&hasher.finalize()))
 }
 
 fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
@@ -3643,7 +4341,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::VecDeque,
+        collections::{BTreeMap, VecDeque},
         sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -4326,6 +5024,580 @@ mod tests {
                 execute: true,
             }
         }
+    }
+
+    #[derive(Clone)]
+    struct SetRunnerState {
+        programdata: Pubkey,
+        authority: Pubkey,
+        payer: Pubkey,
+        snapshot: SnapshotV1,
+    }
+
+    struct SetAuditRunner {
+        version: String,
+        genesis: String,
+        states: BTreeMap<Pubkey, SetRunnerState>,
+        transactions: BTreeMap<String, Value>,
+        calls: Vec<Vec<String>>,
+        snapshot_programs: Vec<Pubkey>,
+        transaction_programs: Vec<Pubkey>,
+    }
+
+    impl CliRunner for SetAuditRunner {
+        fn run(&mut self, arguments: &[String]) -> Result<CliOutput> {
+            self.calls.push(arguments.to_vec());
+            let stdout = match arguments.first().map(String::as_str) {
+                Some("--version") => format!("{}\n", self.version),
+                Some("genesis-hash") => format!("{}\n", self.genesis),
+                command => panic!("set auditor attempted non-read-only CLI command {command:?}"),
+            };
+            Ok(CliOutput {
+                success: true,
+                stdout,
+                stderr: String::new(),
+            })
+        }
+
+        fn read_snapshot(&mut self, query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
+            let state = self
+                .states
+                .get(&query.program_id)
+                .ok_or_else(|| Error::new("set fake omitted Program"))?;
+            if state.programdata != query.programdata_id
+                || state.authority != query.expected_upgrade_authority
+                || state.payer != query.payer
+                || state.snapshot.context_slot < query.minimum_context_slot
+            {
+                return Err(Error::new(
+                    "set fake query identity or minContextSlot mismatch",
+                ));
+            }
+            self.snapshot_programs.push(query.program_id);
+            Ok(state.snapshot.clone())
+        }
+
+        fn resolve_upgrade_transaction(
+            &mut self,
+            query: &UpgradeTransactionQueryV1<'_>,
+        ) -> Result<UpgradeTransactionEvidenceV1> {
+            let transaction = self
+                .transactions
+                .get(query.signature)
+                .cloned()
+                .ok_or_else(|| Error::new("set fake omitted finalized transaction"))?;
+            self.transaction_programs.push(query.program_id);
+            validate_upgrade_transaction(query, transaction)
+        }
+    }
+
+    struct SetFixture {
+        _fixture: Fixture,
+        args: UpgradeSetArgsV1,
+        journal: UpgradeSetJournalV1,
+        runner: SetAuditRunner,
+    }
+
+    impl SetFixture {
+        fn new(completed_roles: usize) -> Self {
+            assert!(completed_roles <= ROLES.len());
+            let fixture = Fixture::new();
+            let root = fs::canonicalize(&fixture._directory.0).expect("canonical test root");
+            let set_root = root.join("set");
+            fs::create_dir(&set_root).expect("set evidence root");
+            let gate_sha256 = digest(
+                &fs::read(&fixture.args.checked_release_gate_path).expect("checked gate bytes"),
+            );
+            let mut roles = Vec::new();
+            let mut states = BTreeMap::new();
+            let mut transactions = BTreeMap::new();
+            for (index, (role, program, programdata)) in
+                PERMANENT_DEVNET_UPGRADE_TARGETS_V1.iter().enumerate()
+            {
+                let byte = u8::try_from(index).expect("role byte");
+                let program = parse_pubkey(program, "test permanent Program").expect("Program");
+                let programdata =
+                    parse_pubkey(programdata, "test permanent ProgramData").expect("ProgramData");
+                let link = fixture
+                    .gate
+                    .links
+                    .iter()
+                    .find(|link| link.label == *role)
+                    .expect("role link");
+                let elf = link.elf.as_ref().expect("role ELF");
+                let raw_elf = fs::read(root.join(&elf.canonical_path)).expect("role ELF bytes");
+                let mut before_live = vec![0xa0 + byte; raw_elf.len()];
+                before_live[..4].copy_from_slice(b"\x7fOLD");
+                let before_slot = 100 + u64::from(byte);
+                let after_slot = 200 + u64::from(byte);
+                let before = set_loader_observation(
+                    program,
+                    programdata,
+                    fixture.authority,
+                    &before_live,
+                    before_slot,
+                );
+                let after = set_loader_observation(
+                    program,
+                    programdata,
+                    fixture.authority,
+                    &raw_elf,
+                    after_slot,
+                );
+                let context_slot = 600_000 + u64::from(byte) * 10;
+                let mut baseline = UpgradeBaselineV1 {
+                    schema: BASELINE_SCHEMA.into(),
+                    canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
+                    role_ordinal: byte,
+                    role: (*role).into(),
+                    program_id: program.to_string(),
+                    programdata_id: programdata.to_string(),
+                    expected_upgrade_authority: fixture.authority.to_string(),
+                    rpc_origin_redacted: fixture.args.origin.redacted_url(),
+                    genesis_hash: DEVNET_GENESIS_HASH.into(),
+                    context_slot,
+                    observation: before.clone(),
+                    target_live_elf_bytes: u64::try_from(raw_elf.len()).expect("ELF width"),
+                    extension_additional_bytes: 0,
+                    current_rent_exempt_minimum_lamports: before.programdata_lamports,
+                    target_rent_exempt_minimum_lamports: before.programdata_lamports,
+                    extension_lamport_top_up: 0,
+                    baseline_sha256: String::new(),
+                };
+                baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
+                let baseline_path = set_root.join(format!("{role}-baseline.json"));
+                fs::write(
+                    &baseline_path,
+                    serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
+                )
+                .expect("write baseline");
+                let receipt_path = set_root.join(format!("{role}-receipt.json"));
+                let dump_path = set_root.join(format!("{role}-dump.so"));
+                let mut receipt_ref = SetOptionalFileV1 {
+                    canonical_path: path_argument(&receipt_path, "test receipt").expect("path"),
+                    sha256: None,
+                };
+                let mut dump_ref = SetOptionalFileV1 {
+                    canonical_path: path_argument(&dump_path, "test dump").expect("path"),
+                    sha256: None,
+                };
+                let snapshot = if index < completed_roles {
+                    let signature = Signature::from([80 + byte; 64]).to_string();
+                    let fee = 5_000 + u64::from(byte);
+                    let transaction = set_upgrade_transaction(
+                        &signature,
+                        program,
+                        programdata,
+                        fixture.authority,
+                        fixture.payer,
+                        after_slot,
+                        before.programdata_lamports,
+                        fee,
+                    );
+                    let transaction_sha256 =
+                        digest(&serde_json::to_vec(&transaction).expect("transaction JSON"));
+                    let mut receipt = UpgradeReceiptV1 {
+                        schema: SCHEMA.into(),
+                        phase: ReceiptPhaseV1::Complete,
+                        operation_id: String::new(),
+                        role: (*role).into(),
+                        program_id: program.to_string(),
+                        programdata_id: programdata.to_string(),
+                        retained_upgrade_authority: fixture.authority.to_string(),
+                        fee_payer: fixture.payer.to_string(),
+                        rpc_origin_redacted: fixture.args.origin.redacted_url(),
+                        genesis_hash: DEVNET_GENESIS_HASH.into(),
+                        source_revision: fixture.gate.source_revision.clone(),
+                        source_tree_sha256: fixture.gate.source_tree_sha256.clone(),
+                        checked_release_gate_sha256: gate_sha256.clone(),
+                        baseline_sha256: baseline.baseline_sha256.clone(),
+                        baseline_context_slot: context_slot,
+                        raw_elf_sha256: digest(&raw_elf),
+                        live_elf_sha256: digest(&raw_elf),
+                        live_elf_padding_bytes: 0,
+                        solana_cli_version: fixture.solana_cli_version.clone(),
+                        before_context_slot: context_slot,
+                        before: before.clone(),
+                        wallet_before_lamports: 1_000_000,
+                        transaction_signature: Some(signature.clone()),
+                        solana_cli_output: Some(json!({
+                            "programId": program.to_string(),
+                            "signature": signature
+                        })),
+                        finalized_transaction: Some(transaction.clone()),
+                        finalized_transaction_sha256: Some(transaction_sha256),
+                        after_context_slot: Some(context_slot + 1),
+                        after: Some(after.clone()),
+                        arithmetic: Some(UpgradeArithmeticV1 {
+                            transaction_payer_pre_lamports: 1_000_000,
+                            transaction_payer_post_lamports: 1_000_000 - fee,
+                            transaction_fee_lamports: fee,
+                            payer_fee_delta_lamports: fee,
+                            programdata_before_lamports: before.programdata_lamports,
+                            programdata_after_lamports: after.programdata_lamports,
+                            programdata_delta_lamports: 0,
+                        }),
+                        dump_sha256: Some(digest(&raw_elf)),
+                        dump_shape: Some("raw-elf".into()),
+                        receipt_sha256: String::new(),
+                    };
+                    receipt.operation_id = operation_id_from_receipt(&receipt);
+                    receipt.receipt_sha256 =
+                        digest(&serde_json::to_vec(&receipt).expect("receipt JSON"));
+                    fs::write(
+                        &receipt_path,
+                        serde_json::to_vec_pretty(&receipt).expect("receipt JSON"),
+                    )
+                    .expect("write receipt");
+                    fs::write(&dump_path, &raw_elf).expect("write dump");
+                    receipt_ref.sha256 = Some(digest(
+                        &fs::read(&receipt_path).expect("written receipt bytes"),
+                    ));
+                    dump_ref.sha256 = Some(digest(&raw_elf));
+                    transactions.insert(
+                        receipt.transaction_signature.expect("receipt signature"),
+                        transaction,
+                    );
+                    SnapshotV1 {
+                        context_slot: context_slot + 1,
+                        loader: after,
+                        wallet_lamports: 123_456,
+                        live_elf: raw_elf,
+                    }
+                } else {
+                    SnapshotV1 {
+                        context_slot,
+                        loader: before,
+                        wallet_lamports: 1_000_000,
+                        live_elf: before_live,
+                    }
+                };
+                states.insert(
+                    program,
+                    SetRunnerState {
+                        programdata,
+                        authority: fixture.authority,
+                        payer: fixture.payer,
+                        snapshot,
+                    },
+                );
+                roles.push(UpgradeSetRoleV1 {
+                    role: (*role).into(),
+                    program_id: program.to_string(),
+                    programdata_id: programdata.to_string(),
+                    baseline: SetPinnedFileV1 {
+                        canonical_path: path_argument(&baseline_path, "test baseline")
+                            .expect("path"),
+                        sha256: digest(&fs::read(&baseline_path).expect("written baseline bytes")),
+                    },
+                    receipt: receipt_ref,
+                    dump: dump_ref,
+                });
+            }
+            let journal = UpgradeSetJournalV1 {
+                schema: SET_JOURNAL_SCHEMA.into(),
+                checked_release_gate: SetPinnedFileV1 {
+                    canonical_path: path_argument(
+                        &root.join("CHECKED_UPGRADE_GATE.json"),
+                        "test gate",
+                    )
+                    .expect("path"),
+                    sha256: gate_sha256,
+                },
+                source_revision: fixture.gate.source_revision.clone(),
+                source_tree_sha256: fixture.gate.source_tree_sha256.clone(),
+                devnet_genesis_hash: DEVNET_GENESIS_HASH.into(),
+                solana_cli_version: fixture.solana_cli_version.clone(),
+                retained_upgrade_authority: fixture.authority.to_string(),
+                fee_payer: fixture.payer.to_string(),
+                roles,
+            };
+            let journal_path = set_root.join("upgrade-set-journal.json");
+            fs::write(
+                &journal_path,
+                serde_json::to_vec_pretty(&journal).expect("journal JSON"),
+            )
+            .expect("write journal");
+            let args = UpgradeSetArgsV1 {
+                origin: fixture.args.origin.clone(),
+                journal_path,
+                solana_cli: root.join("missing-set-solana-cli"),
+            };
+            let runner = SetAuditRunner {
+                version: fixture.solana_cli_version.clone(),
+                genesis: DEVNET_GENESIS_HASH.into(),
+                states,
+                transactions,
+                calls: Vec::new(),
+                snapshot_programs: Vec::new(),
+                transaction_programs: Vec::new(),
+            };
+            Self {
+                _fixture: fixture,
+                args,
+                journal,
+                runner,
+            }
+        }
+
+        fn rewrite_journal(&self) {
+            fs::write(
+                &self.args.journal_path,
+                serde_json::to_vec_pretty(&self.journal).expect("journal JSON"),
+            )
+            .expect("rewrite journal");
+        }
+    }
+
+    fn set_loader_observation(
+        program: Pubkey,
+        programdata: Pubkey,
+        authority: Pubkey,
+        live: &[u8],
+        deployment_slot: u64,
+    ) -> LoaderObservationV1 {
+        let mut program_bytes = vec![0_u8; 36];
+        program_bytes[..4].copy_from_slice(&2_u32.to_le_bytes());
+        program_bytes[4..].copy_from_slice(programdata.as_ref());
+        let mut programdata_bytes = vec![0_u8; 45];
+        programdata_bytes[..4].copy_from_slice(&3_u32.to_le_bytes());
+        programdata_bytes[4..12].copy_from_slice(&deployment_slot.to_le_bytes());
+        programdata_bytes[12] = 1;
+        programdata_bytes[13..45].copy_from_slice(authority.as_ref());
+        programdata_bytes.extend_from_slice(live);
+        loader_observation(
+            program,
+            programdata,
+            authority,
+            &RpcAccountV1 {
+                lamports: 1_140,
+                owner: bpf_loader_upgradeable::ID,
+                executable: true,
+                data: program_bytes,
+            },
+            &RpcAccountV1 {
+                lamports: 77_000,
+                owner: bpf_loader_upgradeable::ID,
+                executable: false,
+                data: programdata_bytes,
+            },
+        )
+        .expect("set Loader observation")
+    }
+
+    fn set_upgrade_transaction(
+        signature: &str,
+        program: Pubkey,
+        programdata: Pubkey,
+        authority: Pubkey,
+        payer: Pubkey,
+        slot: u64,
+        programdata_lamports: u64,
+        fee: u64,
+    ) -> Value {
+        let buffer = Pubkey::new_from_array([11; 32]);
+        let spill = Pubkey::new_from_array([12; 32]);
+        json!({
+            "slot": slot,
+            "transaction": {
+                "signatures": [signature],
+                "message": {
+                    "accountKeys": [
+                        {"pubkey": payer.to_string(), "signer": true, "writable": true},
+                        {"pubkey": programdata.to_string(), "signer": false, "writable": true},
+                        {"pubkey": program.to_string(), "signer": false, "writable": true},
+                        {"pubkey": authority.to_string(), "signer": true, "writable": false},
+                        {"pubkey": buffer.to_string(), "signer": false, "writable": true},
+                        {"pubkey": spill.to_string(), "signer": false, "writable": true},
+                        {"pubkey": sysvar::rent::ID.to_string(), "signer": false, "writable": false},
+                        {"pubkey": sysvar::clock::ID.to_string(), "signer": false, "writable": false}
+                    ],
+                    "instructions": [{
+                        "program": "bpf-upgradeable-loader",
+                        "programId": bpf_loader_upgradeable::ID.to_string(),
+                        "parsed": {
+                            "type": "upgrade",
+                            "info": {
+                                "programDataAccount": programdata.to_string(),
+                                "programAccount": program.to_string(),
+                                "bufferAccount": buffer.to_string(),
+                                "spillAccount": spill.to_string(),
+                                "rentSysvar": sysvar::rent::ID.to_string(),
+                                "clockSysvar": sysvar::clock::ID.to_string(),
+                                "authority": authority.to_string()
+                            }
+                        }
+                    }]
+                }
+            },
+            "meta": {
+                "err": null,
+                "fee": fee,
+                "preBalances": [
+                    1_000_000, programdata_lamports, 1_140, 0, 10_000, 0, 1, 1
+                ],
+                "postBalances": [
+                    1_000_000 - fee, programdata_lamports, 1_140, 0, 0, 10_000, 1, 1
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn set_journal_reports_one_fresh_next_role_without_keys_or_writes() {
+        let mut fixture = SetFixture::new(2);
+        let report =
+            audit_set_journal_with_runner(&fixture.args, &mut fixture.runner).expect("set audit");
+        assert_eq!(report.schema, SET_AUDIT_SCHEMA);
+        assert_eq!(report.completed_role_count, 2);
+        assert_eq!(
+            report.next_role,
+            Some(SetNextRoleV1 {
+                ordinal: 2,
+                role: "custody".into(),
+                program_id: fixture.journal.roles[2].program_id.clone(),
+                programdata_id: fixture.journal.roles[2].programdata_id.clone(),
+                action: "run_exact_one_role_upgrade".into(),
+            })
+        );
+        assert_eq!(report.final_set_sha256, None);
+        assert!(!report.mutation_permitted);
+        assert_eq!(fixture.runner.snapshot_programs.len(), 3);
+        assert_eq!(fixture.runner.transaction_programs.len(), 2);
+        assert!(fixture.runner.calls.iter().all(|call| matches!(
+            call.first().map(String::as_str),
+            Some("--version" | "genesis-hash")
+        )));
+    }
+
+    #[test]
+    fn final_set_digest_requires_all_seven_receipts_to_remain_fresh() {
+        let mut fixture = SetFixture::new(ROLES.len());
+        let report = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
+            .expect("complete set audit");
+        assert_eq!(report.completed_role_count, 7);
+        assert!(report.next_role.is_none());
+        assert!(report.final_set_sha256.is_some());
+
+        let registry = parse_pubkey(&fixture.journal.roles[0].program_id, "registry").expect("key");
+        fixture
+            .runner
+            .states
+            .get_mut(&registry)
+            .expect("registry state")
+            .snapshot
+            .loader
+            .deployment_slot += 1;
+        let error = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
+            .expect_err("stale earlier role must refuse");
+        assert!(error.to_string().contains("drifted from current"));
+    }
+
+    #[test]
+    fn set_journal_refuses_gaps_mixed_source_and_modified_receipt_or_dump() {
+        let mut program = SetFixture::new(0);
+        program.journal.roles[0].program_id = Pubkey::new_unique().to_string();
+        program.rewrite_journal();
+        let error = audit_set_journal_with_runner(&program.args, &mut program.runner)
+            .expect_err("substituted permanent Program must refuse");
+        assert!(error.to_string().contains("exact permanent devnet"));
+
+        let mut programdata = SetFixture::new(0);
+        programdata.journal.roles[0].programdata_id = Pubkey::new_unique().to_string();
+        programdata.rewrite_journal();
+        let error = audit_set_journal_with_runner(&programdata.args, &mut programdata.runner)
+            .expect_err("substituted permanent ProgramData must refuse");
+        assert!(error.to_string().contains("exact permanent devnet"));
+
+        let mut gap = SetFixture::new(0);
+        let later_path = PathBuf::from(&gap.journal.roles[2].receipt.canonical_path);
+        fs::write(&later_path, b"not a receipt").expect("later evidence");
+        gap.journal.roles[2].receipt.sha256 =
+            Some(digest(&fs::read(&later_path).expect("later bytes")));
+        gap.rewrite_journal();
+        let error =
+            audit_set_journal_with_runner(&gap.args, &mut gap.runner).expect_err("gap must refuse");
+        assert!(error.to_string().contains("gap"));
+
+        let mut mixed = SetFixture::new(0);
+        mixed.journal.source_revision = "f".repeat(40);
+        mixed.rewrite_journal();
+        let error = audit_set_journal_with_runner(&mixed.args, &mut mixed.runner)
+            .expect_err("mixed source must refuse");
+        assert!(error.to_string().contains("source commit/tree differs"));
+
+        let mut cli = SetFixture::new(0);
+        cli.journal.solana_cli_version = "solana-cli substituted".into();
+        cli.rewrite_journal();
+        let error = audit_set_journal_with_runner(&cli.args, &mut cli.runner)
+            .expect_err("mixed CLI must refuse");
+        assert!(error.to_string().contains("CLI identity"));
+
+        let mut genesis = SetFixture::new(0);
+        genesis.journal.devnet_genesis_hash = MAINNET_BETA_GENESIS_HASH.into();
+        genesis.rewrite_journal();
+        let error = audit_set_journal_with_runner(&genesis.args, &mut genesis.runner)
+            .expect_err("mixed genesis must refuse");
+        assert!(error.to_string().contains("exact devnet genesis"));
+
+        let mut receipt = SetFixture::new(1);
+        let receipt_path = PathBuf::from(&receipt.journal.roles[0].receipt.canonical_path);
+        let mut bytes = fs::read(&receipt_path).expect("receipt bytes");
+        bytes.push(b'\n');
+        fs::write(&receipt_path, bytes).expect("change receipt");
+        let error = audit_set_journal_with_runner(&receipt.args, &mut receipt.runner)
+            .expect_err("changed receipt must refuse");
+        assert!(error.to_string().contains("receipt SHA-256"));
+
+        let mut dump = SetFixture::new(1);
+        let dump_path = PathBuf::from(&dump.journal.roles[0].dump.canonical_path);
+        fs::write(&dump_path, b"changed dump").expect("change dump");
+        let error = audit_set_journal_with_runner(&dump.args, &mut dump.runner)
+            .expect_err("changed dump must refuse");
+        assert!(error.to_string().contains("dump SHA-256"));
+    }
+
+    #[test]
+    fn set_journal_extension_requires_a_fresh_post_extension_baseline() {
+        let mut fixture = SetFixture::new(0);
+        let baseline_path = PathBuf::from(&fixture.journal.roles[0].baseline.canonical_path);
+        let mut baseline: UpgradeBaselineV1 =
+            serde_json::from_slice(&fs::read(&baseline_path).expect("baseline bytes"))
+                .expect("baseline JSON");
+        baseline.target_live_elf_bytes += 1;
+        baseline.extension_additional_bytes = 1;
+        baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
+        fs::write(
+            &baseline_path,
+            serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
+        )
+        .expect("rewrite baseline");
+        fixture.journal.roles[0].baseline.sha256 =
+            digest(&fs::read(&baseline_path).expect("baseline bytes"));
+        fixture.rewrite_journal();
+        let report = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
+            .expect("extension-pending audit");
+        assert_eq!(
+            report.next_role.expect("next").action,
+            "extend_then_capture_fresh_baseline"
+        );
+
+        let registry = parse_pubkey(&fixture.journal.roles[0].program_id, "registry").expect("key");
+        fixture
+            .runner
+            .states
+            .get_mut(&registry)
+            .expect("registry state")
+            .snapshot
+            .loader
+            .deployment_slot += 1;
+        let error = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
+            .expect_err("pre-extension baseline is stale after extension");
+        assert!(
+            error
+                .to_string()
+                .contains("does not exactly match baseline")
+        );
     }
 
     #[test]
