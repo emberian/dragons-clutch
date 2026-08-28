@@ -2,13 +2,14 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useCallback, useState } from 'react';
 
+import PositionBars from '@/components/charts/PositionBars';
 import RedeemFlow from '@/components/RedeemFlow';
 import WalletDirectory, { useWalletDirectoryV1, type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
+import { useDeploymentV1 } from '@/lib/deploymentStore';
 import {
   enumerateCoreMarketAddressesV1,
-  parseMarketAddressListV1,
   provenanceChipV1,
   shortAddressV1,
   type MarketDiscoveryCardV1,
@@ -21,7 +22,7 @@ import {
   type PortfolioV1,
 } from '@/lib/portfolio';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
-import { DEFAULT_RPC_ENDPOINT_V1, clusterNameV1 } from '@/lib/rpcDefault';
+import { clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -66,6 +67,17 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
     {position.status === 'refused' && <p className="market-refusal">{position.reason}</p>}
     {position.status === 'held' && <>
       <h4 className="detail-subhead">Owned claim balances · ordered, raw u64</h4>
+      {/* FE-CHART mount: the same balances as bars, with the phase's own line
+          through them; the list below stays as the exact-value twin. */}
+      <PositionBars
+        balances={position.balances}
+        claim={position.claim.kind === 'mergeable'
+          ? { kind: 'mergeable', completeSetsAtoms: position.claim.completeSetsAtoms }
+          : position.claim.kind === 'redeemable'
+            ? { kind: 'redeemable', winningClaim: position.claim.winningClaim, redeemableAtoms: position.claim.redeemableAtoms }
+            : { kind: 'unavailable' }}
+        caption="Heights are owned claim atoms per claim, read finalized from this Position."
+      />
       <ol className="outcome-vector">
         {position.balances.map((amount, index) => (
           <li key={index} className={position.claim.kind === 'redeemable' && position.claim.winningClaim === index ? 'winning-outcome' : ''}>
@@ -105,115 +117,88 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
 }
 
 export default function PortfolioWorkspace() {
+  const deployment = useDeploymentV1();
   const directory = useWalletDirectoryV1();
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
-  const [coreProgram, setCoreProgram] = useState('');
-  const [claimsProgram, setClaimsProgram] = useState('');
-  const [registryProgram, setRegistryProgram] = useState('');
-  const [custodyProgram, setCustodyProgram] = useState('');
   const [owner, setOwner] = useState('');
-  const [addressList, setAddressList] = useState('');
-  const [addOne, setAddOne] = useState('');
-  const [enumerationStatus, setEnumerationStatus] = useState('No Core program enumeration has been attempted.');
-  const [state, setState] = useState<State>({ kind: 'idle', message: 'No finalized Position state has been read.' });
+  const [pasted, setPasted] = useState('');
+  const [state, setState] = useState<State>({ kind: 'idle', message: 'Connect a wallet — or paste any owner address — and this surface reads its Positions across every Market of the active deployment. Reading a derived address requires no authority at all.' });
   const portfolio = state.kind === 'ready' ? state.portfolio : null;
 
-  function append(address: string) {
-    const candidate = address.trim();
-    if (candidate === '') return;
-    setAddressList((current) => {
-      const existing = current.split(/[\s,]+/).filter((entry) => entry.length > 0);
-      return existing.includes(candidate) ? current : [...existing, candidate].join('\n');
-    });
-    setAddOne('');
-  }
-
-  async function enumerate() {
-    setEnumerationStatus('Attempting one bounded finalized getProgramAccounts scan of the selected Core program…');
+  const read = useCallback(async (ownerAddress: string) => {
+    setState({ kind: 'loading', message: 'Enumerating the deployment’s Markets, deriving one Claims aggregate and one Position address per Market for this owner, then reading every derived address behind one finalized floor…' });
     try {
-      const next = await enumerateCoreMarketAddressesV1(new SolanaRpcClient(endpoint), coreProgram);
-      setEnumerationStatus(next.note);
-      if (next.addresses.length > 0) setAddressList(next.addresses.join('\n'));
-    } catch (error) {
-      setEnumerationStatus(`Refused: ${errorMessage(error)}`);
-    }
-  }
-
-  async function read(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setState({ kind: 'loading', message: 'Deriving one Claims aggregate and one Position address per named Market, then reading every derived address behind one finalized floor…' });
-    try {
-      const client = new SolanaRpcClient(endpoint);
+      const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
+      const enumeration = await enumerateCoreMarketAddressesV1(client, deployment.programs.core);
       const next = await inspectPortfolioV1(client, {
-        coreProgramId: coreProgram,
-        claimsProgramId: claimsProgram === '' ? null : claimsProgram,
-        registryProgramId: registryProgram === '' ? null : registryProgram,
-        owner: parsePortfolioOwnerV1(owner),
-        marketAddresses: parseMarketAddressListV1(addressList),
+        coreProgramId: deployment.programs.core,
+        claimsProgramId: deployment.programs.claims,
+        registryProgramId: deployment.programs.registry,
+        owner: parsePortfolioOwnerV1(ownerAddress),
+        marketAddresses: enumeration.addresses.slice(0, PORTFOLIO_MAX_MARKETS),
       });
-      setState({ kind: 'ready', portfolio: next, facts, message: next.reason });
+      setState({ kind: 'ready', portfolio: next, facts, message: enumeration.mode === 'refused' ? `${next.reason} (${enumeration.reason})` : next.reason });
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
+  }, [deployment]);
+
+  function connected(address: string) {
+    setOwner(address);
+    // Auto-load on wallet connect: the owner was the ONLY missing input.
+    void read(address);
+  }
+
+  function readPasted(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const candidate = pasted.trim();
+    if (candidate === '') return;
+    setOwner(candidate);
+    void read(candidate);
   }
 
   return <main className="product-shell trade-v3-shell">
-    <Nav current="/portfolio" />
+    <Nav current="/portfolio" status={`${deployment.label} · finalized reads`} />
 
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">Portfolio · derived addresses, no index</p>
         <h1>Your claims, derived.<br /><em>Never looked up.</em></h1>
-        <p>dClutch runs no indexer and this browser will not pretend to be one. A Position lives at the program-derived address of the Position seed domain plus the exact Market and owner keys, so an owner plus a Market address is enough to ask the chain directly. A derived address that holds no account is reported as exactly that, which is the honest chain state.</p>
+        <p>dClutch runs no indexer and this browser will not pretend to be one. A Position lives at the program-derived address of the Position seed domain plus the exact Market and owner keys, so an owner identity is enough: the Markets come from the deployment&apos;s own Core program, and every Position address is derived from them. A derived address that holds no account is reported as exactly that, which is the honest chain state.</p>
       </div>
       <aside>
-        <span>The honest gap</span>
-        <strong>Markets you name</strong>
-        <p>Positions are derived, but Markets are not: this surface can only read Markets you already know or that one bounded finalized program scan returns. Finding every Market an owner ever touched needs an index dClutch does not publish.</p>
+        <span>The one input</span>
+        <strong>An owner identity</strong>
+        <p>Connecting a wallet reads a public address and nothing else — no signature, no approval. Pasting any address reads the same finalized state for that owner, because reading a derived address requires no authority at all.</p>
       </aside>
     </section>
 
-    <form className="trade-v3-card route-card" onSubmit={(event) => void read(event)}>
-      <header><span>01</span><div><h2>Endpoint, Core authority, owner identity, and Markets</h2><p>A browser wallet is optional here. Connecting one reads a public address and nothing else; pasting any address reads the same finalized state for that owner, because reading a derived address requires no authority at all.</p></div></header>
-      <div className="direct-form-grid">
-        <label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
-        <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
-        <label><span>Claims program</span><input required value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
-        <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
-        <label><span>Custody program · optional, required to redeem</span><input value={custodyProgram} onChange={(event) => setCustodyProgram(event.target.value.trim())} /></label>
-        <label><span>Owner address · wallet or pasted</span><input required value={owner} onChange={(event) => setOwner(event.target.value.trim())} /></label>
-      </div>
-      <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={(address) => setOwner(address)} />
-
-      <h3 className="detail-subhead">Markets to derive against</h3>
-      <p className="direct-status">One canonical base58 Market address per line, up to the explicit {PORTFOLIO_MAX_MARKETS}-Market browser bound. Enumeration uses the same bounded finalized program scan the discovery surface uses; an endpoint that refuses that scan says so rather than returning an empty list.</p>
-      <label><span>Known Market addresses</span><textarea rows={6} value={addressList} onChange={(event) => setAddressList(event.target.value)} /></label>
-      <div className="direct-form-grid">
-        <label><span>Add one Market address</span><input value={addOne} onChange={(event) => setAddOne(event.target.value.trim())} /></label>
-      </div>
-      <div className="direct-actions">
-        <button type="button" className="secondary-action" onClick={() => append(addOne)}>Add this Market</button>
-        <button type="button" onClick={() => void enumerate()}>Enumerate Markets from the Core program</button>
-        <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized Position state…' : 'Derive and read Positions'}</button>
-      </div>
-      <p className="direct-status">{enumerationStatus}</p>
+    <section className="trade-v3-card route-card">
+      <header><span>01</span><div><h2>Whose Positions?</h2><p>Everything else — endpoint, Core authority, Claims program, the Market list — comes from the active {deployment.label} deployment. This surface asks only who you are.</p></div></header>
+      <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={connected} />
+      <form className="portfolio-owner-row" onSubmit={readPasted}>
+        <label><span>Or paste any owner address</span><input value={pasted} onChange={(event) => setPasted(event.target.value.trim())} spellCheck={false} placeholder="an owner’s public address" /></label>
+        <div className="direct-actions">
+          <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Read this owner’s Positions'}</button>
+          {owner !== '' && state.kind !== 'loading' && <button type="button" className="secondary-action" onClick={() => void read(owner)}>Re-read</button>}
+        </div>
+      </form>
       <p className="direct-status" aria-live="polite">{state.message}</p>
-    </form>
+    </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Derived Positions</h2><p>One entry per named Market. Every entry states the address that was derived, whether an account exists there, and what the balances found admit under the Market&apos;s own phase and settlement.</p></div></header>
-      {portfolio === null && <p className="market-empty">No finalized Position state has been read. Until an owner and at least one Market address are supplied and an endpoint answers, this surface stays empty rather than showing placeholder holdings.</p>}
+      <header><span>02</span><div><h2>Derived Positions</h2><p>One entry per Market of the deployment. Every entry states the address that was derived, whether an account exists there, and what the balances found admit under the Market&apos;s own phase and settlement.</p></div></header>
+      {portfolio === null && <p className="market-empty">No finalized Position state has been read yet. Until an owner identity arrives and the endpoint answers, this surface stays empty rather than showing placeholder holdings.</p>}
       {portfolio !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
           <article><span>Owner</span><strong>{shortAddressV1(portfolio.owner, 6)}</strong><small>identity only; nothing is signed here</small></article>
           <article><span>Finalized floor</span><strong>{portfolio.floorSlot}</strong><small>one observation epoch for every entry</small></article>
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
-          <article><span>Derived addresses</span><strong>{portfolio.entries.length}</strong><small>one per named Market</small></article>
+          <article><span>Derived addresses</span><strong>{portfolio.entries.length}</strong><small>one per Market of the deployment</small></article>
         </div>
         {portfolio.entries.length === 0
           ? <p className="market-empty">{portfolio.reason}</p>
-          : <div className="market-card-grid">{portfolio.entries.map((entry) => <PositionEntry key={entry.marketAddress} entry={entry} redeem={{ endpoint, claimsProgramId: claimsProgram, custodyProgramId: custodyProgram, registryProgramId: registryProgram, directory }} />)}</div>}
+          : <div className="market-card-grid">{portfolio.entries.map((entry) => <PositionEntry key={entry.marketAddress} entry={entry} redeem={{ endpoint: deployment.endpoint, claimsProgramId: deployment.programs.claims, custodyProgramId: deployment.programs.custody, registryProgramId: deployment.programs.registry, directory }} />)}</div>}
       </>}
     </section>
 

@@ -17,7 +17,7 @@ import {
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { smokeStoryEnabledV1 } from '@/lib/flags';
 import { SolanaRpcClient } from '@/lib/rpc';
-import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
+import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
 type Stage = Readonly<{
   id: CapabilityStage;
@@ -40,7 +40,7 @@ function compact(value: string): string { return value.length > 22 ? `${value.sl
 
 export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ initialStage?: CapabilityStage }>) {
   const [stageId, setStageId] = useState<CapabilityStage>(initialStage);
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
   const [coordinates, setCoordinates] = useState<Record<string, string>>(() => Object.fromEntries([...OPERATOR_ROLES, 'realm', 'market'].map((role) => [role, ''])));
   const [state, setState] = useState<WorkbenchState>({ kind: 'idle', message: 'No chain authority has been selected.' });
   const stage = STAGES.find((candidate) => candidate.id === stageId) ?? STAGES[0];

@@ -3,11 +3,20 @@
 import Nav from '@/components/Nav';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
+import { deploymentProgramLabelsV1, type DeploymentV1 } from '@/lib/deployments';
+import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { inspectAccount, type ExplorerAccountResult } from '@/lib/explorer/account';
 import type { DecodedField, DecodedRecord } from '@/lib/explorer/accountRecords';
 import type { Derivation } from '@/lib/explorer/derivations';
 import { unselectedEntryRoutes } from '@/lib/explorer/instructions';
 import { inspectMarketLens, type LensNode, type MarketLens } from '@/lib/explorer/marketLens';
+import {
+  classifySearchV1,
+  inspectProtocolHomeV1,
+  type ProtocolActivityRowV1,
+  type ProtocolHomeV1,
+  type ProtocolProgramCardV1,
+} from '@/lib/explorer/protocolHome';
 import { attributionTitle, describeAttribution, hexCode } from '@/lib/explorer/refusals';
 import {
   inspectTransaction,
@@ -26,22 +35,6 @@ const VIEWS: ReadonlyArray<Readonly<{ id: View; label: string; hint: string }>> 
   { id: 'scan', label: 'Program scan', hint: 'Bounded sweep of a program’s own accounts' },
   { id: 'record', label: 'Record pair', hint: 'One finalized record and its staging cursor' },
 ]);
-
-type Chain = Readonly<{
-  endpoint: string;
-  core: string;
-  registry: string;
-  claims: string;
-  custody: string;
-}>;
-
-const EMPTY_CHAIN: Chain = Object.freeze({
-  endpoint: 'http://127.0.0.1:8899',
-  core: '',
-  registry: '',
-  claims: '',
-  custody: '',
-});
 
 type Query = Readonly<{ view: View; q: string }>;
 
@@ -81,19 +74,10 @@ function readServerSearch(): string {
   return '';
 }
 
-function parseSearch(search: string): Readonly<{ chain: Chain; query: Query }> {
+function parseSearch(search: string): Query {
   const params = new URLSearchParams(search);
   const view = params.get('view');
-  return Object.freeze({
-    chain: Object.freeze({
-      endpoint: params.get('rpc') ?? EMPTY_CHAIN.endpoint,
-      core: params.get('core') ?? '',
-      registry: params.get('registry') ?? '',
-      claims: params.get('claims') ?? '',
-      custody: params.get('custody') ?? '',
-    }),
-    query: Object.freeze({ view: isView(view) ? view : 'account', q: params.get('q') ?? '' }),
-  });
+  return Object.freeze({ view: isView(view) ? view : 'account', q: params.get('q') ?? '' });
 }
 
 // ---------------------------------------------------------------- small parts
@@ -585,9 +569,111 @@ function MarketView({ state }: Readonly<{ state: Async<MarketLens> }>) {
   );
 }
 
+// ------------------------------------------------------- the protocol, on load
+
+/** Wall-clock age of a block time, for the activity list. Client-only. */
+function ageText(blockTime: string | null): string | null {
+  if (blockTime === null) return null;
+  const seconds = Math.floor(Date.now() / 1000) - Number(blockTime);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  if (seconds < 90) return `${seconds}s ago`;
+  if (seconds < 5_400) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 129_600) return `${Math.round(seconds / 3_600)}h ago`;
+  return `${Math.round(seconds / 86_400)}d ago`;
+}
+
+function roleTitle(role: string): string {
+  return role[0].toUpperCase() + role.slice(1);
+}
+
+function ProgramCard({ card }: Readonly<{ card: ProtocolProgramCardV1 }>) {
+  return (
+    <article className="xp-node">
+      <div className="xp-node-head">
+        <strong>{roleTitle(card.role)}</strong>
+        <Chip tone={card.status === 'live' ? 'pass' : 'fail'}>
+          {card.status === 'live' ? 'live · executable' : card.status === 'absent' ? 'ABSENT' : 'NOT EXECUTABLE'}
+        </Chip>
+      </div>
+      <p>{card.meaning}</p>
+      <p className="xp-node-address"><Jump view="account" value={card.address}>{compact(card.address, 10)}</Jump></p>
+      <dl className="fact-list">
+        {card.ownerLabel === null ? null : <div><dt>Loader</dt><dd>{card.ownerLabel}</dd></div>}
+        {card.deploymentSlot === null ? null : <div><dt>Deployed at slot</dt><dd>{card.deploymentSlot}</dd></div>}
+      </dl>
+      <small className="xp-quiet"><Jump view="scan" value={card.address} title={`Scan the accounts ${roleTitle(card.role)} owns`}>scan its accounts →</Jump></small>
+    </article>
+  );
+}
+
+function ActivityRows({ rows }: Readonly<{ rows: ReadonlyArray<ProtocolActivityRowV1> }>) {
+  return (
+    <ol className="xp-accounts xp-activity">
+      {rows.map((row) => {
+        const age = ageText(row.blockTime);
+        return (
+          <li key={row.signature}>
+            <Chip tone={row.succeeded ? 'pass' : 'fail'}>{row.succeeded ? 'executed' : 'refused'}</Chip>
+            <Jump view="transaction" value={row.signature}>{compact(row.signature, 10)}</Jump>
+            <small>
+              {row.roles.map(roleTitle).join(' · ')} · slot {row.slot}{age === null ? '' : ` · ${age}`}
+            </small>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<ProtocolHomeV1>; deployment: DeploymentV1 }>) {
+  if (state.kind === 'idle' || state.kind === 'loading') {
+    return <Notice kind="loading" title={`Reading the ${deployment.label} deployment`} message="Probing the endpoint, then reading the seven role programs at one finalized observation and the node’s recent signature history for them…" />;
+  }
+  if (state.kind === 'error') {
+    return <Notice kind="error" title="The deployment read refused" message={`${state.message} — the seven baked addresses are still shown in the cluster picker’s deployment; nothing about the protocol is inferred from a failed read.`} />;
+  }
+  const home = state.value;
+  return (
+    <div className="xp-stack">
+      {home.clusterCheck !== 'mismatch' ? null : (
+        <article className="account-card refused">
+          <div className="card-topline"><p className="account-kind">Wrong chain</p><Chip tone="fail">genesis mismatch</Chip></div>
+          <h3>This endpoint serves {home.clusterName}, not the cluster this deployment’s addresses live on.</h3>
+          <p className="refusal-reason">
+            The chain’s own genesis hash is {compact(home.facts.genesisHash, 8)}; the manifest expects a different one. The
+            program cards below are reads of THIS chain and say what it holds at those addresses — which may be nothing.
+          </p>
+        </article>
+      )}
+
+      <section className="xp-panel">
+        <p className="eyebrow">
+          The seven role programs · read live at finalized slot {home.observedSlot} · {home.clusterName} · solana {home.facts.solanaCore}
+        </p>
+        <div className="xp-node-grid">
+          {home.cards.map((card) => <ProgramCard key={card.role} card={card} />)}
+        </div>
+        <Honest>{deployment.provenance}</Honest>
+      </section>
+
+      <section className="xp-panel">
+        <p className="eyebrow">Recent protocol transactions · decoded by name, newest first</p>
+        {home.activity.length === 0 ? null : <ActivityRows rows={home.activity} />}
+        <Honest>{home.activityNote}</Honest>
+      </section>
+    </div>
+  );
+}
+
 // ----------------------------------------------------------------- the shell
 
 export default function ChainExplorer() {
+  // The active deployment is the whole chain selection: endpoint and the seven
+  // program addresses come from the baked manifest (or the picker's Custom
+  // slot), so this page asks the visitor for NOTHING before showing the
+  // protocol.
+  const deployment = useDeploymentV1();
+
   // The location is an external system, so it is read through the primitive
   // React provides for reading external systems. That keeps the whole view
   // URL-addressable — a Market page can link straight into it, and a reader can
@@ -597,14 +683,12 @@ export default function ChainExplorer() {
   const fromUrl = useMemo(() => parseSearch(search), [search]);
 
   // A field the reader has edited overrides the URL until the next navigation.
-  const [chainOverride, setChainOverride] = useState<Chain | null>(null);
   const [queryOverride, setQueryOverride] = useState<Query | null>(null);
   const [inputOverride, setInputOverride] = useState<string | null>(null);
-  const chain = chainOverride ?? fromUrl.chain;
-  const query = queryOverride ?? fromUrl.query;
-  const input = inputOverride ?? fromUrl.query.q;
-  const setChain = setChainOverride;
+  const query = queryOverride ?? fromUrl;
+  const input = inputOverride ?? fromUrl.q;
 
+  const [home, setHome] = useState<Async<ProtocolHomeV1>>(IDLE);
   const [account, setAccount] = useState<Async<ExplorerAccountResult>>(IDLE);
   const [transaction, setTransaction] = useState<Async<ExplorerTransactionResult>>(IDLE);
   const [market, setMarket] = useState<Async<MarketLens>>(IDLE);
@@ -612,38 +696,29 @@ export default function ChainExplorer() {
   const [record, setRecord] = useState<Async<RecordObservation>>(IDLE);
   const [schemaReleaseId, setSchemaReleaseId] = useState('');
   const [contentDigest, setContentDigest] = useState('');
+  const [searchProblem, setSearchProblem] = useState<string | null>(null);
 
-  const labels = useMemo(() => {
-    const found: Record<string, string> = {};
-    if (chain.core !== '') found[chain.core] = 'Core (selected)';
-    if (chain.registry !== '') found[chain.registry] = 'Registry (selected)';
-    if (chain.claims !== '') found[chain.claims] = 'Claims (selected)';
-    if (chain.custody !== '') found[chain.custody] = 'Custody (selected)';
-    return found;
-  }, [chain]);
+  const labels = useMemo(() => deploymentProgramLabelsV1(deployment), [deployment]);
 
-  const syncUrl = useCallback((next: Query, nextChain: Chain) => {
+  const syncUrl = useCallback((next: Query) => {
     const params = new URLSearchParams();
     params.set('view', next.view);
     if (next.q !== '') params.set('q', next.q);
-    if (nextChain.endpoint !== '') params.set('rpc', nextChain.endpoint);
-    for (const key of ['core', 'registry', 'claims', 'custody'] as const) {
-      if (nextChain[key] !== '') params.set(key, nextChain[key]);
-    }
     window.history.replaceState(null, '', `?${params.toString()}`);
   }, []);
 
   const run = useCallback(
-    async (next: Query, nextChain: Chain) => {
-      if (next.q === '' && next.view !== 'scan' && next.view !== 'record') return;
+    async (next: Query) => {
+      if (next.q === '' || next.view === 'record') return;
       let client: SolanaRpcClient;
       try {
-        client = new SolanaRpcClient(nextChain.endpoint);
+        client = new SolanaRpcClient(deployment.endpoint);
       } catch (error) {
         const message = errorMessage(error);
         setAccount({ kind: 'error', message });
         setTransaction({ kind: 'error', message });
         setMarket({ kind: 'error', message });
+        setScan({ kind: 'error', message });
         return;
       }
       if (next.view === 'account') {
@@ -664,20 +739,27 @@ export default function ChainExplorer() {
         }
         return;
       }
-      if (next.view === 'market') {
-        if (nextChain.core === '') {
-          setMarket({ kind: 'error', message: 'The Market lens needs a Core program: the Market account is Core-owned, and this client will not guess which deployment you mean.' });
-          return;
+      if (next.view === 'scan') {
+        setScan({ kind: 'loading', message: 'Probing RPC identity, then reading finalized program-account headers…' });
+        try {
+          const facts = await client.probe();
+          const snapshot = await scanProgram(client, next.q);
+          setScan({ kind: 'ready', value: { facts, snapshot } });
+        } catch (error) {
+          setScan({ kind: 'error', message: errorMessage(error) });
         }
+        return;
+      }
+      if (next.view === 'market') {
         setMarket({ kind: 'loading', message: 'Joining Core state, Realm, Claims aggregate, Hoard and capability manifest at one floor…' });
         try {
           setMarket({
             kind: 'ready',
             value: await inspectMarketLens(client, {
-              coreProgramId: nextChain.core,
-              registryProgramId: nextChain.registry === '' ? null : nextChain.registry,
-              claimsProgramId: nextChain.claims === '' ? null : nextChain.claims,
-              custodyProgramId: nextChain.custody === '' ? null : nextChain.custody,
+              coreProgramId: deployment.programs.core,
+              registryProgramId: deployment.programs.registry,
+              claimsProgramId: deployment.programs.claims,
+              custodyProgramId: deployment.programs.custody,
               address: next.q,
             }),
           });
@@ -686,18 +768,40 @@ export default function ChainExplorer() {
         }
       }
     },
-    [labels],
+    [deployment, labels],
   );
+
+  // THE PROTOCOL, on load: no typing, no submit. Re-read when the picker
+  // changes the deployment (its snapshot identity is stable otherwise).
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setHome({ kind: 'loading', message: 'Reading the seven role programs…' });
+      void (async () => {
+        try {
+          const client = new SolanaRpcClient(deployment.endpoint);
+          const value = await inspectProtocolHomeV1(client, deployment);
+          if (!cancelled) setHome({ kind: 'ready', value });
+        } catch (error) {
+          if (!cancelled) setHome({ kind: 'error', message: errorMessage(error) });
+        }
+      })();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [deployment]);
 
   const goto = useCallback(
     (view: View, q: string) => {
       const next: Query = Object.freeze({ view, q });
       setQueryOverride(next);
       setInputOverride(q);
-      syncUrl(next, chain);
-      void run(next, chain);
+      syncUrl(next);
+      void run(next);
     },
-    [chain, run, syncUrl],
+    [run, syncUrl],
   );
 
   // One delegated handler for every in-page jump, so each link keeps a real,
@@ -716,47 +820,53 @@ export default function ChainExplorer() {
   );
 
   // A link into this page carries its own query, so opening one resolves it
-  // rather than showing an empty form. The read is started on a microtask so
+  // rather than showing an empty search. The read is started on a microtask so
   // nothing is set during the effect's synchronous phase, and `startedRef`
   // keeps a re-render from re-reading the same query.
   const startedRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = `${query.view}\0${query.q}\0${chain.endpoint}`;
+    const key = `${query.view}\0${query.q}\0${deployment.endpoint}`;
     if (query.q === '' || startedRef.current === key) return;
     startedRef.current = key;
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void run(query, chain);
+      if (!cancelled) void run(query);
     });
     return () => {
       cancelled = true;
     };
-  }, [chain, query, run]);
+  }, [deployment.endpoint, query, run]);
 
-  function submitQuery(event: FormEvent<HTMLFormElement>) {
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    goto(query.view, input.trim());
+    const classified = classifySearchV1(input);
+    if (classified.kind === 'refused') {
+      setSearchProblem(classified.reason);
+      return;
+    }
+    setSearchProblem(null);
+    if (classified.kind === 'transaction') {
+      goto('transaction', classified.signature);
+      return;
+    }
+    // An address keeps an address-shaped view the reader chose; otherwise the
+    // account view decodes anything by its own magic.
+    goto(query.view === 'market' || query.view === 'scan' ? query.view : 'account', classified.address);
   }
 
-  async function runScan(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setScan({ kind: 'loading', message: 'Probing RPC identity…' });
-    try {
-      const client = new SolanaRpcClient(chain.endpoint);
-      const facts = await client.probe();
-      setScan({ kind: 'loading', message: 'Reading finalized program-account headers…' });
-      const snapshot = await scanProgram(client, input.trim());
-      setScan({ kind: 'ready', value: { facts, snapshot } });
-    } catch (error) {
-      setScan({ kind: 'error', message: errorMessage(error) });
-    }
+  function clearSearch() {
+    setSearchProblem(null);
+    setInputOverride('');
+    const next: Query = Object.freeze({ view: 'account', q: '' });
+    setQueryOverride(next);
+    syncUrl(next);
   }
 
   async function runRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setRecord({ kind: 'loading', message: 'Acquiring the record and its staging cursor at one finalized floor…' });
     try {
-      const client = new SolanaRpcClient(chain.endpoint);
+      const client = new SolanaRpcClient(deployment.endpoint);
       setRecord({ kind: 'ready', value: await inspectFinalizedRecord(client, input.trim(), schemaReleaseId, contentDigest) });
     } catch (error) {
       setRecord({ kind: 'error', message: errorMessage(error) });
@@ -764,36 +874,41 @@ export default function ChainExplorer() {
   }
 
   const placeholder =
-    query.view === 'transaction' ? 'Transaction signature (base58)'
-      : query.view === 'scan' || query.view === 'record' ? 'Program ID'
-        : query.view === 'market' ? 'Market address' : 'Account address';
+    query.view === 'scan' || query.view === 'record' ? 'Program ID'
+      : query.view === 'market' ? 'Market address'
+        : 'Search — an address or a transaction signature';
+
+  const atHome = query.q === '' && query.view !== 'scan' && query.view !== 'record';
 
   return (
     <main className="shell xp" onClick={onJump}>
       <Nav current="/explorer" status="read-only projection" />
 
       <section className="xp-hero">
-        <p className="eyebrow">Real infrastructure · no wallet required</p>
+        <p className="eyebrow">The protocol, live · no wallet, no setup</p>
         <h1>Every record the protocol writes, decoded by its own schema.</h1>
         <p className="lede">
-          Layouts come from <code>lib/generated/</code> — the byte-gated modules the protocol emits from its Lean
-          schemas, its Rust contracts and its route census. Nothing here is a second copy of an offset. What the
-          emission does not say, this page does not say either.
+          The app knows its own deployment: the seven role programs below are the baked {deployment.label} manifest, read
+          live. Layouts come from <code>lib/generated/</code> — the byte-gated modules the protocol emits from its Lean
+          schemas, its Rust contracts and its route census. What the emission does not say, this page does not say either.
         </p>
       </section>
 
-      <form className="xp-chain" onSubmit={submitQuery}>
-        <div className="xp-chain-row">
-          <label><span>JSON-RPC endpoint</span><input type="url" required value={chain.endpoint} onChange={(event) => setChain({ ...chain, endpoint: event.target.value })} spellCheck={false} /></label>
-          <label><span>Core program</span><input value={chain.core} onChange={(event) => setChain({ ...chain, core: event.target.value.trim() })} placeholder="required for the Market lens" spellCheck={false} /></label>
-          <label><span>Registry program</span><input value={chain.registry} onChange={(event) => setChain({ ...chain, registry: event.target.value.trim() })} placeholder="makes identities openable" spellCheck={false} /></label>
-          <label><span>Claims program</span><input value={chain.claims} onChange={(event) => setChain({ ...chain, claims: event.target.value.trim() })} spellCheck={false} /></label>
-          <label><span>Custody program</span><input value={chain.custody} onChange={(event) => setChain({ ...chain, custody: event.target.value.trim() })} spellCheck={false} /></label>
+      <form className="xp-chain" onSubmit={query.view === 'record' ? (event) => void runRecord(event) : submitSearch}>
+        <div className="xp-query">
+          <input
+            value={input}
+            onChange={(event) => setInputOverride(event.target.value)}
+            placeholder={placeholder}
+            spellCheck={false}
+            aria-label="Search the chain"
+          />
+          <button type="submit">{query.view === 'record' ? 'Inspect the finalized pair' : query.view === 'scan' ? 'Scan program accounts' : 'Search'}</button>
+          {atHome ? null : (
+            <button type="button" className="xp-clear" onClick={clearSearch}>← the protocol</button>
+          )}
         </div>
-        <p className="boundary">
-          Programs you name here are labelled <em>(selected)</em> wherever they appear — the reader&rsquo;s assertion, not a
-          protocol fact. dClutch programs have no fixed addresses, so nothing is named for you.
-        </p>
+        {searchProblem === null ? null : <p className="xp-problem">{searchProblem}</p>}
 
         <div className="xp-tabs" role="tablist">
           {VIEWS.map((view) => (
@@ -803,7 +918,7 @@ export default function ChainExplorer() {
               role="tab"
               aria-selected={query.view === view.id}
               className={query.view === view.id ? 'active' : ''}
-              onClick={() => { const next = Object.freeze({ view: view.id, q: input.trim() }); setQueryOverride(next); syncUrl(next, chain); }}
+              onClick={() => { const next = Object.freeze({ view: view.id, q: input.trim() }); setQueryOverride(next); syncUrl(next); }}
               title={view.hint}
             >
               {view.label}
@@ -811,35 +926,28 @@ export default function ChainExplorer() {
           ))}
         </div>
 
-        {query.view === 'scan' ? (
-          <div className="xp-query"><input value={input} onChange={(event) => setInputOverride(event.target.value)} placeholder={placeholder} spellCheck={false} /><button type="button" onClick={(event) => void runScan(event as unknown as FormEvent<HTMLFormElement>)}>Scan program accounts</button></div>
-        ) : query.view === 'record' ? (
-          <>
-            <div className="xp-query"><input value={input} onChange={(event) => setInputOverride(event.target.value)} placeholder={placeholder} spellCheck={false} /></div>
-            <div className="xp-chain-row">
-              <label><span>Schema / release ID · 32-byte lowercase hex</span><input pattern="[0-9a-f]{64}" minLength={64} maxLength={64} value={schemaReleaseId} onChange={(event) => setSchemaReleaseId(event.target.value.trim())} /></label>
-              <label><span>Content digest · SHA-256 lowercase hex</span><input pattern="[0-9a-f]{64}" minLength={64} maxLength={64} value={contentDigest} onChange={(event) => setContentDigest(event.target.value.trim())} /></label>
-            </div>
-            <div className="xp-query"><button type="button" onClick={(event) => void runRecord(event as unknown as FormEvent<HTMLFormElement>)}>Inspect the finalized pair</button></div>
-          </>
-        ) : (
-          <div className="xp-query">
-            <input value={input} onChange={(event) => setInputOverride(event.target.value)} placeholder={placeholder} spellCheck={false} />
-            <button type="submit">Read</button>
+        {query.view === 'record' ? (
+          <div className="xp-chain-row">
+            <label><span>Schema / release ID · 32-byte lowercase hex</span><input pattern="[0-9a-f]{64}" minLength={64} maxLength={64} value={schemaReleaseId} onChange={(event) => setSchemaReleaseId(event.target.value.trim())} /></label>
+            <label><span>Content digest · SHA-256 lowercase hex</span><input pattern="[0-9a-f]{64}" minLength={64} maxLength={64} value={contentDigest} onChange={(event) => setContentDigest(event.target.value.trim())} /></label>
           </div>
-        )}
+        ) : null}
       </form>
 
       <section className="xp-output" aria-live="polite">
-        {query.view === 'account' ? <AccountView state={account} /> : null}
-        {query.view === 'transaction' ? <TransactionView state={transaction} /> : null}
-        {query.view === 'market' ? <MarketView state={market} /> : null}
-        {query.view === 'scan' ? <ScanView state={scan} /> : null}
-        {query.view === 'record' ? <RecordView state={record} /> : null}
+        {atHome ? <ProtocolHomeView state={home} deployment={deployment} /> : (
+          <>
+            {query.view === 'account' ? <AccountView state={account} /> : null}
+            {query.view === 'transaction' ? <TransactionView state={transaction} /> : null}
+            {query.view === 'market' ? <MarketView state={market} /> : null}
+            {query.view === 'scan' ? <ScanView state={scan} /> : null}
+            {query.view === 'record' ? <RecordView state={record} /> : null}
+          </>
+        )}
       </section>
 
-      <section className="xp-panel">
-        <p className="eyebrow">What this page cannot name</p>
+      <details className="xp-panel xp-census">
+        <summary>Developer note · the routes no leading magic selects</summary>
         <p className="xp-quiet">
           Seven entry routes are selected by a predicate, a decoded action tag, or an exact instruction length rather
           than by a leading magic. An instruction to one of them is shown with its bytes and its program, and no route
@@ -850,10 +958,10 @@ export default function ChainExplorer() {
             <li key={route.routeId}><code>{route.routeId}</code><small>{route.selectors.join(' · ') || 'no selector the census could classify'}</small></li>
           ))}
         </ul>
-      </section>
+      </details>
 
       <footer>
-        <p>Untrusted static projection of user-selected infrastructure.</p>
+        <p>Untrusted static projection of the active deployment&rsquo;s infrastructure.</p>
         <p>No wallet adapter. No transaction construction, signing, or submission.</p>
       </footer>
     </main>

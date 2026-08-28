@@ -20,7 +20,7 @@ import {
 } from '@/lib/walletHandoff';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
-import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
+import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
 const FIXED_ROLES = Object.freeze([
   'Market', 'Dealer root', 'Manifest raw', 'Manifest staging', 'ProgramSet raw', 'ProgramSet staging',
@@ -94,7 +94,7 @@ function short(value: string): string {
 }
 
 export default function DealerLiquidityWorkspace() {
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
   const [routeText, setRouteText] = useState(scaffold);
   const [requestText, setRequestText] = useState('');
   const [infrastructureText, setInfrastructureText] = useState('');

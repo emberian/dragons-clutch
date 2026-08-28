@@ -13,7 +13,7 @@ import { type RationalOpenActionV3 } from '@/lib/rationalOpenHotV3';
 import { SolanaRpcClient } from '@/lib/rpc';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
-import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
+import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
 type State = Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; inspection: RationalOpenChainInspectionV4 }>;
@@ -50,7 +50,7 @@ function base64(bytes: Uint8Array): string {
 }
 
 export default function RationalOpenPanel() {
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
   const [payer, setPayer] = useState('');
   const [actor, setActor] = useState('');
   const [descriptor, setDescriptor] = useState('');

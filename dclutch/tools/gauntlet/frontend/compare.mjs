@@ -66,13 +66,42 @@ function checkText(surface, fact, chainValue, needle = null) {
   record(surface, fact, chainValue, body.includes(target) ? target : '(absent from the page)', body.includes(target));
 }
 
+
+/**
+ * Like `check`, but for a surface that renders MANY entries with the same
+ * label (the portfolio derives one entry per Market the deployment's Core
+ * program enumerates): pass when any entry carries the expected value.
+ */
+function checkAny(surface, fact, label, chainValue, mode = 'exact') {
+  const page = rendered[SURFACES[surface] ?? surface];
+  const hits = [];
+  for (const source of [page?.facts ?? [], page?.tiles ?? [], page?.outcomeVector ?? []]) {
+    for (const entry of source) if (entry.label === label) hits.push(entry.value);
+  }
+  if (hits.length === 0) {
+    record(surface, fact, chainValue, '(label not rendered)', false, `no rendered field labelled "${label}"`);
+    return;
+  }
+  const ok = hits.some((value) => (mode === 'exact' ? value === String(chainValue) : value.includes(String(chainValue))));
+  record(surface, fact, chainValue, ok ? String(chainValue) : hits.join(' / ').slice(0, 68), ok);
+}
+
+/** The Hoard is not derivable from the Market root; both surfaces must refuse it by name, never invent it. */
+function checkHoardRefused(surface) {
+  const body = rendered[SURFACES[surface] ?? surface]?.bodyText ?? '';
+  const refusal = /Hoard (unread|refused|underivable)/.exec(body);
+  record(surface, 'the Hoard is refused by name, never invented', 'Hoard unread/refused', refusal === null ? '(no named hoard refusal)' : refusal[0], refusal !== null);
+}
+
 const market = expected.market;
 const liability = expected.economics;
 const position = expected.founderPosition;
 
 // ------------------------------------------------------------- /markets
 {
-  const note = rendered.enumeration?.status?.[0] ?? '';
+  // The auto-loading list renders its read status and the enumeration note as
+  // separate live regions; find the note wherever it stands.
+  const note = (rendered.enumeration?.status ?? []).find((line) => line.includes('Market header')) ?? '';
   const claimed = /(\d+) carry the DCLTCOR2 Market header/.exec(note);
   const found = claimed === null ? null : Number(claimed[1]);
   record('/markets', 'Markets found by the Core program scan', String(expected.scan.coreMarketAddresses.length), String(found), found === expected.scan.coreMarketAddresses.length);
@@ -80,7 +109,7 @@ const position = expected.founderPosition;
   checkText('/markets', 'phase chip', 'Open', 'Open');
   checkText('/markets', 'per-claim supply vector', liability.supplyAtoms.join(' · '));
   checkText('/markets', 'exact required backing', liability.requiredBackingAtoms);
-  checkText('/markets', 'the Hoard is refused, not shown', 'namespaced by the founding action context');
+  checkHoardRefused('/markets');
 }
 
 // ----------------------------------------------------- /markets/:address
@@ -120,22 +149,26 @@ const position = expected.founderPosition;
   const vector = rendered.detail;
   const claims = (vector.outcomeVector ?? []).map((entry) => entry.value);
   record('/markets/:address', 'per-claim supply vector', liability.supplyAtoms.join(' · '), claims.join(' · '), claims.join(' · ') === liability.supplyAtoms.join(' · '));
-  checkText('/markets/:address', 'the Hoard is refused, not shown', 'namespaced by the founding action context');
+  checkHoardRefused('/markets/:address');
 }
 
 // ----------------------------------------------------------- /portfolio
 {
-  check('/portfolio', 'derived Claims aggregate', 'Derived Claims aggregate', expected.claimsAggregate.address.slice(0, 8), 'contains');
-  check('/portfolio', 'derived Position address', 'Derived Position address', position.address.slice(0, 8), 'contains');
-  check('/portfolio', 'Position revision', 'Position revision', position.revision);
-  check('/portfolio', 'claim width', 'Claim width', String(position.claimCount));
-  check('/portfolio', 'Market generation', 'Market generation', market.generation);
+  checkAny('/portfolio', 'derived Claims aggregate', 'Derived Claims aggregate', expected.claimsAggregate.address.slice(0, 8), 'contains');
+  checkAny('/portfolio', 'derived Position address', 'Derived Position address', position.address.slice(0, 8), 'contains');
+  checkAny('/portfolio', 'Position revision', 'Position revision', position.revision);
+  checkAny('/portfolio', 'claim width', 'Claim width', String(position.claimCount));
+  checkAny('/portfolio', 'Market generation', 'Market generation', market.generation);
   const page = rendered.portfolio;
+  // The founder's held vector must appear contiguously among the rendered
+  // entries (other enumerated Markets may render their own vectors around it).
   const balances = (page.outcomeVector ?? []).map((entry) => entry.value);
-  record('/portfolio', 'owned claim balances', position.balances.join(' · '), balances.join(' · '), balances.join(' · ') === position.balances.join(' · '));
-  const merge = (page.tiles ?? []).find((tile) => tile.label === 'Complete sets mergeable');
-  record('/portfolio', 'complete sets mergeable', liability.completeSetsAtoms, merge?.value ?? '(not rendered)', merge?.value === liability.completeSetsAtoms);
-  checkText('/portfolio', 'one Position holds state', '1 of 1 derived Claims Position hold state');
+  record('/portfolio', 'owned claim balances', position.balances.join(' · '), balances.join(' · ').slice(0, 68), balances.join(' · ').includes(position.balances.join(' · ')));
+  const merge = (page.tiles ?? []).find((tile) => tile.label === 'Complete sets mergeable' && tile.value === liability.completeSetsAtoms);
+  record('/portfolio', 'complete sets mergeable', liability.completeSetsAtoms, merge?.value ?? '(not rendered)', merge !== undefined);
+  // One entry per enumerated Market; exactly the founder's holds state.
+  const holds = /(\d+) of (\d+) derived Claims Positions? hold state/.exec(page.bodyText ?? '');
+  record('/portfolio', 'exactly one derived Position holds state', '1 of N', holds === null ? '(absent from the page)' : holds[0], holds !== null && holds[1] === '1');
 }
 
 // ------------------------------------------------------------------ report

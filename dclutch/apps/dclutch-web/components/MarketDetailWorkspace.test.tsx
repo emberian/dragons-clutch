@@ -14,9 +14,13 @@ describe('Market detail route', () => {
     expect(html).toContain('Realm');
     expect(html).toContain('Capabilities');
     expect(html).toContain(ADDRESS);
-    expect(html).toContain('Read this Market');
-    expect(html).toContain('Registry program · optional');
-    expect(html).toContain('Claims program · optional');
+    // The read starts on its own: the address is in the URL and the programs
+    // come from the baked deployment, so nothing is asked for first.
+    expect(html).toContain('>Reading…</button>');
+    expect(html).toContain('come from the active Devnet deployment');
+    expect(html).not.toContain('Finalized RPC endpoint');
+    expect(html).not.toContain('Registry program · optional');
+    expect(html).not.toContain('<input');
   });
 
   it('carries a provenance chip and an explicit refusal on every section before any read', () => {
@@ -26,7 +30,7 @@ describe('Market detail route', () => {
     expect(html).toContain('No decoded Market root');
     expect(html).toContain('No Realm was reacquired, because no Market root has been decoded.');
     expect(html).toContain('No capability manifest identity exists to authenticate');
-    expect(html).toContain('No finalized state has been read for this Market address.');
+    expect(html).toContain('Reading this Market at the finalized floor…');
   });
 
   it('states the Hoard and capability funding contracts it is held to', () => {

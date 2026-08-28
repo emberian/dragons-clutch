@@ -18,6 +18,7 @@ use dclutch_capability_seal_contract::{
 };
 use dclutch_custody_contract::CustodyReplayV1;
 use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
+use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_direct_codec::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
 use dclutch_registry_sbf::RegistryError;
 use dclutch_token_svm::TokenAccount;
@@ -37,8 +38,9 @@ use solana_sdk_ids::system_program;
 use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, DirectCase, Elves, RefusedExecution,
     Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses,
-    direct_case, direct_case_v2, direct_registry_instructions, elves,
-    legacy_registry_hot_instruction, program_test, registry_hot_instruction, submit_v0,
+    direct_case, direct_case_v2, direct_case_v4, direct_registry_instructions, elves,
+    fixture_substrate, legacy_registry_hot_instruction, program_test, registry_hot_instruction,
+    submit_v0,
 };
 
 // --- Named refusals ----------------------------------------------------------
@@ -507,6 +509,224 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     assert_ne!(
         after, before,
         "successful Direct Hot left no material state change"
+    );
+}
+
+/// The journey's SHAPE wall, executed: a four-outcome market trades.
+///
+/// JRNY-2 named this as an independent wall -- "the shipped Direct profile is
+/// emitted for the canonical geometry, this market is another one" -- on the
+/// premise that a non-canonical market would need its own artifact emission.
+/// It does not. Product Runtime V2 pins `outcome_count = cut_count + 2`, so
+/// this market is four outcomes and two cuts, and it selects the SAME
+/// descriptor, the SAME ProgramSet, the SAME validated-artifact seal and the
+/// SAME six artifacts the canonical three-outcome market does -- proven byte
+/// for byte in `the_artifacts_are_the_same_bytes_at_every_geometry`. What
+/// changes is the market: a wider result domain, a wider portfolio, wider
+/// Claims aggregate and Position records, and a Product tail of four that the
+/// executor resolves every runtime-width rule against.
+///
+/// This is the whole claim under real ELFs at the real ceiling. The economics
+/// are the canonical ones -- the same fill at the same price for the same
+/// collateral -- because the geometry must not move them: the traded outcome
+/// is one coordinate of the tail either way, and the other coordinates carry
+/// a Claims quantity of zero that the transition's epilogue requires to sum
+/// away.
+#[tokio::test]
+async fn a_four_outcome_market_trades_on_the_canonical_artifacts() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v4(
+        &mut test,
+        releases,
+        &artifacts,
+        false,
+        false,
+        fixture_substrate(),
+        DirectOrdinaryGeometryV3::from_outcome_count(4).expect("four-outcome geometry"),
+    );
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    let units = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect("Registry-authenticated Direct Hot execution at four outcomes");
+    assert!(units > 0 && units <= COMPUTE_LIMIT);
+    println!("four-outcome Direct Hot: consumed {units} compute units");
+
+    let root = account(&mut context, direct.chain.root).await;
+    assert_eq!(root.owner, TRADING_PROGRAM_ID);
+    assert!(!root.data.is_empty());
+    let replay = account(&mut context, direct.chain.custody_replay).await;
+    let replay = CustodyReplayV1::decode(&replay.data).expect("post-Custody replay");
+    assert_eq!(replay.next_revision, 8);
+    // The identical collateral movement as the canonical geometry: a fill of
+    // ten at fifty against a scale of a hundred, at a zero venue rate.
+    let source = account(&mut context, direct.chain.collateral_accounts[0]).await;
+    let destination = account(&mut context, direct.chain.collateral_accounts[1]).await;
+    assert_eq!(
+        TokenAccount::parse(&source.data)
+            .expect("source token")
+            .amount,
+        95
+    );
+    assert_eq!(
+        TokenAccount::parse(&destination.data)
+            .expect("destination token")
+            .amount,
+        35
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_ne!(
+        after, before,
+        "successful Direct Hot left no material state change"
+    );
+}
+
+/// Trade one market at one geometry, or report why it did not.
+async fn trade_at_geometry(artifacts: &Elves, outcomes: u32) -> Result<u64, RefusedExecution> {
+    let mut test = program_test(artifacts);
+    let releases = add_release_waist(&mut test, artifacts);
+    let direct = direct_case_v4(
+        &mut test,
+        releases,
+        artifacts,
+        false,
+        false,
+        fixture_substrate(),
+        DirectOrdinaryGeometryV3::from_outcome_count(outcomes).expect("geometry"),
+    );
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+    submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+}
+
+/// A market too wide to fit must run out of COMPUTE, never be refused its shape.
+///
+/// This is the invariant the lane's whole finding rests on, stated where it can
+/// fail. A geometry refusal at any width would mean a market's own dimensions
+/// had reached an artifact after all -- that some coordinate resolved a width
+/// instead of stating an affine rule -- which is precisely what
+/// `the_artifacts_are_the_same_bytes_at_every_geometry` says is not so. The
+/// widest geometry that actually fits is a measured-profile bound and lives in
+/// `the_widest_geometry_the_shipped_hot_path_can_trade`, not here: pinning a
+/// compute figure in a gate turns every unrelated improvement into a red test.
+fn a_geometry_that_does_not_fit_ran_out_of_compute(outcomes: u32, refusal: &RefusedExecution) {
+    let exceeded = refusal.logs.iter().any(|line| {
+        line.contains("exceeded CUs meter")
+            || line.contains("exceeded maximum number of instructions")
+    });
+    assert!(
+        exceeded,
+        "a {outcomes}-outcome market was refused for something other than compute: {:#?}",
+        refusal.logs
+    );
+}
+
+/// Nine consecutive geometries trade on one artifact set, and none is refused
+/// its shape.
+///
+/// The routine gate. Every market from two outcomes (zero cuts, the protocol
+/// floor) to ten trades on the same descriptor, seal and six artifacts, at the
+/// real ceiling under real ELFs, with no re-emission of anything between them.
+#[tokio::test]
+async fn the_family_trades_every_geometry_it_is_given() {
+    let artifacts = elves();
+    for outcomes in 2..=10_u32 {
+        match trade_at_geometry(&artifacts, outcomes).await {
+            Ok(units) => {
+                println!(
+                    "geometry: {outcomes} outcomes ({} cuts) traded at {units} CU",
+                    outcomes - 2
+                );
+                assert!(units > 0 && units <= COMPUTE_LIMIT);
+            }
+            Err(refusal) => {
+                a_geometry_that_does_not_fit_ran_out_of_compute(outcomes, &refusal);
+                panic!(
+                    "a {outcomes}-outcome market ran out of compute; the measured wall was 31 \
+                     outcomes and something has made the hot path much more expensive"
+                );
+            }
+        }
+    }
+}
+
+/// The widest market the shipped Hot path can trade, measured on demand.
+///
+/// MEASURED-PROFILE BOUND, 2026-08-27, `main` at the commit that added this
+/// test, against the prebuilt role ELFs: **thirty outcomes, twenty-eight
+/// cuts**. Thirty-one does not fit, and it does not fit because it exhausts
+/// the 1.4M compute ceiling -- asserted, not assumed.
+///
+/// The striking part is that compute is nearly FLAT in the geometry across
+/// that whole range: 1,333,997 CU at eight outcomes and 1,390,325 at nine, with
+/// the ordering non-monotone throughout. The per-outcome cost -- three folded
+/// TransitionVM instructions, two projected scalar registers, one row in each
+/// runtime-width record -- is smaller than the run-to-run variation in PDA
+/// bump-seed searching, which moves with the market's content-addressed
+/// identities and therefore with the geometry. Thirty is where the accumulated
+/// tail finally overruns a hot path that already sits at ~96% of the ceiling
+/// for its own reasons; it is not a Direct-family width limit, and it will move
+/// with every hot-path compute change in either direction.
+///
+/// Ignored by default: it is a minute of real-ELF execution, and the number it
+/// produces is a measurement, not a gate. Re-measure with
+///
+/// ```text
+/// SBF_OUT_DIR=target/deploy cargo test \
+///     --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
+///     --test registry_hot_continuation -- --ignored --nocapture \
+///     the_widest_geometry_the_shipped_hot_path_can_trade
+/// ```
+#[tokio::test]
+#[ignore = "one minute of real-ELF execution; produces a measured bound, not a verdict"]
+async fn the_widest_geometry_the_shipped_hot_path_can_trade() {
+    let artifacts = elves();
+    let mut widest = 0_u32;
+    for outcomes in 2..=96_u32 {
+        match trade_at_geometry(&artifacts, outcomes).await {
+            Ok(units) => {
+                println!(
+                    "geometry sweep: {outcomes} outcomes ({} cuts) traded at {units} CU",
+                    outcomes - 2
+                );
+                widest = outcomes;
+            }
+            Err(refusal) => {
+                println!(
+                    "geometry sweep: {outcomes} outcomes ({} cuts) did not fit at \
+                     {} CU; the widest market that traded was {widest} outcomes ({} cuts)",
+                    outcomes - 2,
+                    refusal.compute_units_consumed,
+                    widest - 2,
+                );
+                a_geometry_that_does_not_fit_ran_out_of_compute(outcomes, &refusal);
+                break;
+            }
+        }
+    }
+    assert!(
+        widest >= 4,
+        "the journey's four-outcome market must trade; widest was {widest}"
     );
 }
 

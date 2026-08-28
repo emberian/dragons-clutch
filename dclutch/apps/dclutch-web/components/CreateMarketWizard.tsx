@@ -51,7 +51,7 @@ import { planLookupTableV1, lookupTableAccountV1, type LookupTablePlanV1 } from 
 import { SolanaRpcClient } from '@/lib/rpc';
 import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@/lib/walletHandoff';
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
-import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
+import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 
 type StepId = 'product' | 'window' | 'funding' | 'review' | 'submit';
 
@@ -139,10 +139,17 @@ export default function CreateMarketWizard() {
     Rent: '1', Creation: '1', Work: '0', Provider: '0', Bounty: '1', Liquidity: '0', Service: '0',
   }));
 
-  // 04/05 — chain
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
+  // 04/05 — chain. The endpoint and the deployment-derivable coordinates
+  // arrive filled from the active deployment; the author's edits override.
+  const deployment = useDeploymentV1();
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
   const [generation, setGeneration] = useState('2');
   const [addresses, setAddresses] = useState<AddressValues>(() => Object.fromEntries(ADDRESS_FIELDS.map(({ field }) => [field, ''])) as AddressValues);
+  const effectiveAddresses: AddressValues = {
+    ...addresses,
+    registryProgram: addresses.registryProgram !== '' ? addresses.registryProgram : deployment.programs.registry,
+    activationCache: addresses.activationCache !== '' ? addresses.activationCache : deployment.activationCache ?? '',
+  };
   const [plan, setPlan] = useState<CoreFoundPlanV2 | null>(null);
   const [planStatus, setPlanStatus] = useState('No transaction has been constructed. The ladder below is the plan, not a promise.');
   const [stages, setStages] = useState<ReadonlyArray<SubmitStage>>([]);
@@ -267,7 +274,7 @@ export default function CreateMarketWizard() {
     try {
       const generationValue = bigintOrNull(generation);
       if (generationValue === null || generationValue <= 0n) throw new Error('generation must be a positive integer');
-      const next = await prepareCoreFoundV2(new SolanaRpcClient(endpoint), { ...addresses, generation: generationValue });
+      const next = await prepareCoreFoundV2(new SolanaRpcClient(endpoint), { ...effectiveAddresses, generation: generationValue });
       setPlan(next);
       setTable(null);
       setStages([
@@ -389,7 +396,7 @@ export default function CreateMarketWizard() {
       // scratch: the chain has moved since the plan was built, and a stale
       // blockhash or a changed record is a refusal rather than a surprise.
       const generationValue = BigInt(generation);
-      const routed = await prepareCoreFoundV2(client, { ...addresses, generation: generationValue, lookupTable: table });
+      const routed = await prepareCoreFoundV2(client, { ...effectiveAddresses, generation: generationValue, lookupTable: table });
       if (routed.transaction === null) throw new Error(routed.foundRefusal ?? 'Found31 could not be compiled');
       if (routed.market !== plan.market) throw new Error('the Market address changed between planning and submission');
       const signature = await signAndSubmitOne(routed.transaction, client);
@@ -641,7 +648,7 @@ export default function CreateMarketWizard() {
         <div className="direct-form-grid wizard-address-grid">
           {ADDRESS_FIELDS.map(({ field, label }) => <label key={field}>
             <span>{label}</span>
-            <input required spellCheck={false} value={addresses[field]} onChange={(event) => setAddresses((current) => ({ ...current, [field]: event.target.value.trim() }))} />
+            <input required spellCheck={false} value={effectiveAddresses[field]} onChange={(event) => setAddresses((current) => ({ ...current, [field]: event.target.value.trim() }))} />
           </label>)}
         </div>
         <button type="submit">Construct the unsigned lifecycle + Found31 pair</button>

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import Anchor from '@/components/Anchor';
+import ClusterPicker from '@/components/ClusterPicker';
 import { docsIndexHrefV1 } from '@/lib/flags';
 
 /**
@@ -66,6 +67,9 @@ export default function Nav({
       <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
       <Anchor className={consoleActive ? 'active' : undefined} href="/console">Console</Anchor>
     </nav>
-    <span className="preview-control"><i className="preview-dot" />{status}</span>
+    <span className="nav-side">
+      <ClusterPicker />
+      <span className="preview-control"><i className="preview-dot" />{status}</span>
+    </span>
   </header>;
 }

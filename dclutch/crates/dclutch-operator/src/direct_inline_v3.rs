@@ -1360,14 +1360,12 @@ mod tests {
         ordinary_effect_artifacts_v3::{
             DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
         },
+        ordinary_geometry_v3::DirectOrdinaryGeometryV3,
         registered_requests_v4::encode_direct_registration_request_v3_atomic,
         successor::{
             DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_MAKER_REPLAY_BYTES_V1,
             DIRECT_ROOT_SCHEMA_ID_V1, DirectExecutionConfigV1, DirectRootStateV1,
         },
-    };
-    use dclutch_product_runtime_v2::{
-        DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
     };
     use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
     use dclutch_realm_contract::REALM_BYTES;
@@ -1551,9 +1549,12 @@ mod tests {
                 .expect("config width");
         *output.get_mut(2).expect("Product") =
             u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width");
+        // One geometry, derived rather than restated: `DirectOrdinaryGeometryV3`
+        // owns what each runtime-width record measures at a given market
+        // width, and the profile cross-checks all five against ONE of them.
+        let geometry = DirectOrdinaryGeometryV3::CANONICAL;
         *output.get_mut(3).expect("portfolio") =
-            u32::try_from(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES)
-                .expect("portfolio width");
+            geometry.portfolio_record_bytes().expect("portfolio width");
         *output.get_mut(4).expect("basis") = 24;
         for coordinate in [5_usize, 8] {
             *output.get_mut(coordinate).expect("maker") =
@@ -1564,13 +1565,15 @@ mod tests {
         *output.get_mut(10).expect("Rent program") =
             u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
                 .expect("Rent program width");
-        *output.get_mut(13).expect("Claims aggregate") = 256 + 3 * 8;
+        *output.get_mut(13).expect("Claims aggregate") = geometry
+            .claims_aggregate_record_bytes()
+            .expect("Claims aggregate width");
         *output.get_mut(14).expect("basis alias") = *output.get(4).expect("basis");
         *output.get_mut(16).expect("Product alias") =
             u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width");
-        *output.get_mut(18).expect("domain") =
-            u32::try_from(DOMAIN_HEADER_BYTES - 2 * DOMAIN_CUT_BYTES + 3 * DOMAIN_CUT_BYTES)
-                .expect("domain width");
+        *output.get_mut(18).expect("domain") = geometry
+            .result_domain_record_bytes()
+            .expect("result domain width");
         *output.get_mut(20).expect("portfolio alias") = *output.get(3).expect("portfolio");
         *output.get_mut(22).expect("Registry") = 17;
         *output.get_mut(23).expect("Core") =
@@ -1593,7 +1596,9 @@ mod tests {
             u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
                 .expect("Core program width");
         *output.get_mut(31).expect("destination staging") = 1_024;
-        let position = 128 + 3 * 8;
+        let position = geometry
+            .claims_position_record_bytes()
+            .expect("Claims Position width");
         *output.get_mut(32).expect("source Position") = position;
         *output.get_mut(33).expect("destination Position") = position;
         *output.get_mut(35).expect("Core alias") = *output.get(23).expect("Core");

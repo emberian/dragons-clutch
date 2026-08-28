@@ -1,0 +1,72 @@
+/*
+ * Chart styles (FE-CHART lane). Own file on purpose: globals.css belongs to
+ * the surface lanes and appending here keeps chart chrome disjoint from it.
+ *
+ * The site commits to a single dark look, so these tokens are the dark set,
+ * validated against the effective card surface (#0b1511) with the dataviz
+ * skill's six-checks validator on 2026-08-27:
+ *   --viz-mark     #35a97f  site signal teal stepped into the dark lightness
+ *                           band (OKLCH L in band, C >= 0.10) · 6.31:1 on surface
+ *   --viz-accent   #b9ff64  the site acid, used ONLY as the emphasis/winner
+ *                           accent, never as a co-equal series hue · 15.5:1;
+ *                           mark<->accent Delta E 27.1 CVD / 29.0 normal
+ *   --viz-deemph   #5a6b62  de-emphasis for losing/zero marks · 3.29:1
+ * No chart in this app carries two co-equal categorical series, so the
+ * categorical slot machinery stays unused; every form here is one hue plus
+ * emphasis, which is the skill's recommended default.
+ */
+
+.viz-figure {
+  --viz-mark: #35a97f;
+  --viz-mark-wash: rgba(53, 169, 127, 0.1);
+  --viz-accent: #b9ff64;
+  --viz-deemph: #5a6b62;
+  --viz-ink: #e9eee9;
+  --viz-muted: #9ba79d;
+  --viz-grid: rgba(201, 226, 205, 0.16);
+  --viz-baseline: rgba(201, 226, 205, 0.34);
+  --viz-law: rgba(233, 238, 233, 0.55);
+  --viz-surface: #0b1511;
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+
+.viz-figure svg { display: block; width: 100%; height: auto; }
+/* Many-celled strips scroll inside their own container on narrow screens —
+   the page body never scrolls horizontally, and slots keep a usable width. */
+.viz-scroll { overflow-x: auto; }
+.viz-figure text { font-family: var(--font-geist-mono), monospace; }
+
+.viz-caption { margin: 0; color: #75837a; font: 9px/1.55 var(--font-geist-mono); max-width: 900px; }
+
+/* The one-line readout the hover/focus layer writes into. Values lead. */
+.viz-readout { margin: 0; min-height: 15px; color: var(--viz-muted); font: 10px/1.5 var(--font-geist-mono); }
+.viz-readout strong { color: var(--viz-ink); font-weight: 500; }
+.viz-readout .viz-key { display: inline-block; width: 12px; height: 3px; margin: 0 6px 2px 0; vertical-align: middle; border-radius: 2px; }
+
+/* Bars respond to hover/focus by lifting slightly; the hit rect is invisible. */
+.viz-hit { fill: transparent; cursor: default; outline: none; }
+.viz-bar { fill-opacity: 0.9; transition: fill-opacity 120ms ease; }
+.viz-hit:hover + .viz-bar, .viz-hit:focus-visible + .viz-bar { fill-opacity: 1; }
+.viz-hit:focus-visible { stroke: var(--viz-law); stroke-width: 1; }
+
+/* The exact-values table twin every chart carries. */
+.viz-table summary { color: #708077; font: 9px var(--font-geist-mono); cursor: pointer; }
+.viz-table table { margin-top: 8px; border-collapse: collapse; }
+.viz-table th, .viz-table td { padding: 3px 14px 3px 0; color: #b8c5bb; font: 10px/1.5 var(--font-geist-mono); font-variant-numeric: tabular-nums; text-align: left; vertical-align: top; }
+.viz-table th { color: #6f8075; font-size: 9px; text-transform: uppercase; }
+.viz-table-scroll { overflow-x: auto; }
+
+/* Landing number strip: stat tiles, matching the evidence-grid chrome. */
+.viz-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--line); }
+.viz-strip article { min-width: 0; padding: 15px; background: rgba(5, 12, 8, 0.97); }
+.viz-strip span, .viz-strip strong, .viz-strip small { display: block; }
+.viz-strip span { color: #67766d; font: 8px var(--font-geist-mono); text-transform: uppercase; letter-spacing: 0.06em; }
+.viz-strip strong { margin-top: 8px; color: var(--viz-ink); font: 500 21px var(--font-geist-mono); overflow-wrap: anywhere; }
+.viz-strip small { margin-top: 5px; color: #68766d; font: 8px/1.45 var(--font-geist-mono); }
+.viz-strip-note { margin: 7px 0 0; color: #75837a; font: 9px/1.55 var(--font-geist-mono); max-width: 900px; }
+
+@media (max-width: 760px) {
+  .viz-strip { grid-template-columns: 1fr; }
+}

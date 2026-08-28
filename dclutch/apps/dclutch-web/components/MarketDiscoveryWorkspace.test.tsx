@@ -3,43 +3,45 @@ import { describe, expect, it } from 'vitest';
 
 import MarketDiscoveryWorkspace from './MarketDiscoveryWorkspace';
 
+/**
+ * The product inversion this surface carries: /markets lands on CONTENT. The
+ * deployment manifest supplies the endpoint and the Core authority, the list
+ * auto-loads, and there is no infrastructure form anywhere on the page. These
+ * tests pin the inversion so the ask-the-visitor pattern cannot creep back.
+ */
 describe('Market discovery route', () => {
   const html = renderToStaticMarkup(<MarketDiscoveryWorkspace />);
 
-  it('offers known-address and program-scan discovery against a local finalized endpoint', () => {
-    expect(html).toContain('Market discovery · finalized reads only');
-    expect(html).toContain('https://api.devnet.solana.com');
-    expect(html).toContain('Known Market addresses');
-    expect(html).toContain('Enumerate Markets from the Core program');
-    expect(html).toContain('Read finalized Market discovery');
-    expect(html).toContain('Registry program · optional');
-    expect(html).toContain('Claims program · optional');
-    expect(html).toContain('dClutch publishes no index');
+  it('lands on the market list of the baked deployment, loading with zero typing', () => {
+    expect(html).toContain('Markets on Devnet');
+    expect(html).toContain('Reading the finalized market list…');
+    expect(html).toContain('enumerated from the Core program itself');
+    // The one button is a refresh, disabled while the auto-load is in flight.
+    expect(html).toContain('>Reading…</button>');
+  });
+
+  it('asks the visitor for NO endpoint and NO program address', () => {
+    expect(html).not.toContain('Finalized RPC endpoint');
+    expect(html).not.toContain('Core program</span>');
+    expect(html).not.toContain('Registry program · optional');
+    expect(html).not.toContain('Known Market addresses');
+    expect(html).not.toContain('<textarea');
+    expect(html).not.toContain('<input');
   });
 
   it('states the provenance and refusal contract every card is held to', () => {
     expect(html).toContain('CHAIN · finalized slot');
     expect(html).toContain('REFUSED');
-    expect(html).toContain('every undecoded surface names its reason');
-    expect(html).toContain('no capability is asserted from the root alone');
-    expect(html).toContain('manifest-only');
-  });
-
-  it('keeps the honest empty state instead of showing placeholder Markets', () => {
-    expect(html).toContain('No finalized Market discovery has been read.');
-    expect(html).toContain('this surface stays empty rather than showing placeholder Markets');
-    expect(html).toContain('No Core program enumeration has been attempted.');
+    expect(html).toContain('never partially invented');
   });
 
   it('presents raw atoms and never a market-data metric', () => {
     expect(html).toContain('raw u64 atoms');
-    expect(html).toContain('supplies come from the Claims aggregate, never from the root');
     expect(html).toContain('No volume · no odds · no probability · no yield');
     // Market-data vocabulary may appear only inside the sentences that refuse it.
     const disclaimers = [
       'There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.',
-      'Claims program · optional',
-      'supplies come from the Claims aggregate, never from the root',
+      'Supplies come from the Claims aggregate, never from the root, in raw u64 atoms.',
       'No volume · no odds · no probability · no yield',
     ];
     let remainder = html;

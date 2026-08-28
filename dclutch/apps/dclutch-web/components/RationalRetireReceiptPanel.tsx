@@ -12,7 +12,7 @@ import {
 import { SolanaRpcClient } from '@/lib/rpc';
 
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
-import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
+import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
 type State = Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; inspection: RationalRetireReceiptInspectionV4 }>;
@@ -36,7 +36,7 @@ function fixedAddresses(text: string): string[] {
 }
 
 export default function RationalRetireReceiptPanel() {
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
   const [payer, setPayer] = useState('');
   const [lookupTable, setLookupTable] = useState('');
   const [fixed, setFixed] = useState('');

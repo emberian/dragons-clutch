@@ -135,6 +135,24 @@ const browser = await chromium
   .launch()
   .catch(() => chromium.launch({ channel: argument('channel', 'chrome') }));
 
+// The app knows its own deployment (lib/deployments.ts) and every product
+// surface reads the chain ON LOAD — so a crawl that opens every route, plus a
+// fresh page per link click, fires hundreds of real RPC requests at the baked
+// public endpoint from one IP. Measured 2026-08-27: api.devnet.solana.com
+// answered 429 mid-crawl, the /markets auto-load never completed on the
+// clicker page, and its market-card links "timed out" — a rate limiter's
+// verdict, not the artifact's. This check is about NAVIGATION, so every
+// non-local request is aborted: each surface then renders its honest
+// loading/refused state deterministically, and every link that exists in
+// that state is still a real click against the real bundle.
+const context = await browser.newContext();
+await context.route('**/*', (route) => {
+  const host = new URL(route.request().url()).hostname;
+  if (host === '127.0.0.1' || host === 'localhost') return route.continue();
+  return route.abort();
+});
+const newPage = () => context.newPage();
+
 let failures = 0;
 const fail = (line) => {
   failures++;
@@ -147,7 +165,7 @@ console.log(`pages-nav-check: ${routes.length} routes\n`);
 // ------------------------------------------------------ 1. does it navigate
 
 for (const route of routes) {
-  const page = await browser.newPage();
+  const page = await newPage();
   const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(300);
   const hrefs = (
@@ -161,7 +179,7 @@ for (const route of routes) {
   for (const href of hrefs) {
     // A fresh page per click: a click that DID navigate must not change what
     // the next click starts from.
-    const clicker = await browser.newPage();
+    const clicker = await newPage();
     await clicker.goto(`${baseUrl}${route}`, { waitUntil: 'networkidle' });
     await clicker.waitForTimeout(250);
     let landed = new URL(clicker.url()).pathname;
@@ -188,13 +206,12 @@ for (const route of routes) {
 // -------------------------------------------- 2. does 404.html carry the app
 
 console.log('');
-const perma = await browser.newPage();
+const perma = await newPage();
 const permaResponse = await perma.goto(`${baseUrl}/markets/${FAKE_MARKET}`, {
   waitUntil: 'networkidle',
 });
 await perma.waitForTimeout(1500);
 const permaMain = (await perma.textContent('main').catch(() => null)) ?? '';
-const permaForms = (await perma.$$('form')).length;
 console.log(`/markets/<address> hard load: HTTP ${permaResponse?.status()}`);
 // The host says 404 -- correct, it has no file -- and the document renders the
 // Market detail surface anyway. Both halves are the fix.
@@ -204,15 +221,19 @@ if (permaResponse?.status() !== 404) {
 if (!permaMain.includes(FAKE_MARKET.slice(0, 8))) {
   fail('the Market detail surface did not render its own address');
 }
-if (permaForms === 0) {
-  fail('the Market detail surface rendered no read form');
+// The surface reads on its own — the address is in the URL and the programs
+// are the baked deployment's — so the marker of a live detail page is its
+// read control, not a form. (It rendered a five-field form until 2026-08-27;
+// FE-PRODUCT inverted that, and this assertion moved with the product.)
+if (!permaMain.includes('Re-read this Market') && !permaMain.includes('Reading')) {
+  fail('the Market detail surface did not begin its own read');
 }
 if (/could not be found/i.test(permaMain)) {
   fail('the permalink still lands on a dead not-found page');
 }
 await perma.close();
 
-const bogus = await browser.newPage();
+const bogus = await newPage();
 const bogusResponse = await bogus.goto(`${baseUrl}${UNKNOWN_PATH}`, { waitUntil: 'networkidle' });
 await bogus.waitForTimeout(1500);
 const bogusMain = (await bogus.textContent('main').catch(() => null)) ?? '';
