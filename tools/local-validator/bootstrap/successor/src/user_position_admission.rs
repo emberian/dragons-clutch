@@ -232,6 +232,13 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     if arguments.output.exists() {
         let mut report: ReportV1 = serde_json::from_slice(&fs::read(&arguments.output)?)?;
         authenticate_existing_report(&report, &arguments, &plan_sha256, &evidence_sha256)?;
+        if arguments.execute && !report.authorized_mutation {
+            // A read-only planning invocation may be resumed later under a
+            // fresh explicit --execute authorization. Record that expansion
+            // durably before the first key-file read.
+            report.authorized_mutation = true;
+            write_report_atomically(&arguments.output, &report, false)?;
+        }
         resume(&mut rpc, &arguments, &mut report)?;
         return print_report(&report);
     }
@@ -264,6 +271,14 @@ fn build_report(
 ) -> Result<ReportV1> {
     if unsigned.required_signer != arguments.position_owner {
         return Err(Error::new("operator selected a substituted Position owner"));
+    }
+    if snapshot.fee_payer.owner != system_program::ID
+        || snapshot.fee_payer.executable
+        || !snapshot.fee_payer.data.is_empty()
+    {
+        return Err(Error::new(
+            "fee payer must be one existing System-owned, nonexecutable, data-empty wallet",
+        ));
     }
     let (recent_blockhash, last_valid_block_height) = latest_blockhash(rpc)?;
     let compiled = compile_v0_message_with_optional_tables(
@@ -720,6 +735,13 @@ fn verify_wallet_debits(report: &ReportV1, post: &BTreeMap<String, AccountStateV
     let payer_before = &report.intent.prestate["fee_payer"];
     let owner_after = &post["position_owner"];
     let payer_after = &post["fee_payer"];
+    if !same_wallet_except_lamports(owner_before, owner_after)
+        || !same_wallet_except_lamports(payer_before, payer_after)
+    {
+        return Err(Error::new(
+            "Position owner or fee payer changed owner, privilege, rent epoch, width, or data during admission",
+        ));
+    }
     if report.intent.position_owner == report.intent.fee_payer {
         let expected = owner_before
             .lamports
@@ -746,6 +768,15 @@ fn verify_wallet_debits(report: &ReportV1, post: &BTreeMap<String, AccountStateV
         }
     }
     Ok(())
+}
+
+fn same_wallet_except_lamports(before: &AccountStateV1, after: &AccountStateV1) -> bool {
+    before.address == after.address
+        && before.owner == after.owner
+        && before.executable == after.executable
+        && before.rent_epoch == after.rent_epoch
+        && before.data_len == after.data_len
+        && before.data_sha256 == after.data_sha256
 }
 
 fn probe_expected_poststate(rpc: &mut Rpc, report: &ReportV1, floor: u64) -> Result<bool> {
@@ -926,10 +957,6 @@ fn acquire_snapshot(
     };
     let position_account = observed(position, true)?;
     let admission_account = observed(admission, true)?;
-    if position_account.lamports != 0 || admission_account.lamports != 0 {
-        // Dust is valid and the operator can top it up, but an existing data
-        // account is not. The operator below remains the authority.
-    }
     let operator = UserPositionAdmissionSnapshotV1 {
         genesis_hash: SOLANA_DEVNET_GENESIS_HASH_V1,
         claims_market: observed(coordinates.claims_market, false)?,
