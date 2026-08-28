@@ -222,8 +222,17 @@ ELF SHA-256; do not report one draw or an observed minimum as a margin.
   `/tank/dregg-build/dclutch-resolution-cu.LKt6s0/frame-target/sbpf-solana-solana/release/deps/dclutch_resolution_proof_sbf.o`
   (SHA-256 `b7c44d70507446bd9079c29255afe346fb6455d3eef2eefd204b85069edd65dc`):
   all 133 frames were below 4,096 bytes and the deepest pre-Market frame was
-  1,920 bytes. A fresh exact-descendant private run still owns the production
-  before/after CU comparison.
+  1,920 bytes. The exact-source one-seed private run then failed the honest
+  founding transaction before participant admission with the same 56-CU tail:
+  Resolution consumed 564,899 of 564,955 CU, outer Trading consumed 1,399,494
+  of 1,399,550 CU, and simulation reported 1,400,000 units consumed. Its
+  summary is
+  `/tank/dregg-build/dclutch-private-participant-cb4e-run1/SUMMARY.json`
+  (SHA-256
+  `cfdd565d27d4e3909ddba0d2a6a15bc8511afc3149b95ef32faf0ca19144c6d9`).
+  Preserve the strict gate and focused 4,987-CU draw as forensic evidence only;
+  the combined Trading duplicate-preplan repair, fresh gate, and production
+  runtime comparison remain required.
 
 ## Public delivery checkpoint
 
