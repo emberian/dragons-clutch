@@ -1,5 +1,5 @@
 import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import Nav from '@/components/Nav';
 
 import { SMOKE_MARKETS_V1, smokeIsLiveV1 } from '@/lib/smokeMarkets';
 
@@ -21,18 +21,7 @@ export default function SmokeStory() {
       </div>
     );
   return <main className="product-shell trade-v3-shell">
-    <header className="product-nav">
-      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-      <nav>
-        <Anchor href="/markets">Markets</Anchor>
-        <Anchor href="/portfolio">Portfolio</Anchor>
-        <Anchor href="/activity">Activity</Anchor>
-        <Anchor className="active" href="/smoke">The smoke</Anchor>
-        <Anchor href="/bounty">Bounty</Anchor>
-        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-      </nav>
-      <span className="preview-control"><i className="preview-dot" />{live ? 'live on devnet' : 'not live yet'}</span>
-    </header>
+    <Nav current="/smoke" status={live ? 'live on devnet' : 'not live yet'} />
 
     <section className="trade-v3-hero">
       <div>

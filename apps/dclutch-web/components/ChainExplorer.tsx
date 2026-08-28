@@ -1,7 +1,6 @@
 'use client';
 
-import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import Nav from '@/components/Nav';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { inspectAccount, type ExplorerAccountResult } from '@/lib/explorer/account';
@@ -771,19 +770,7 @@ export default function ChainExplorer() {
 
   return (
     <main className="shell xp" onClick={onJump}>
-      <header className="masthead">
-        <Anchor className="brand" href="/"><span className="brand-mark" aria-hidden="true">dC</span><span>dClutch</span></Anchor>
-        <nav className="xp-nav">
-          <Anchor href="/markets">Markets</Anchor>
-          <Anchor href="/portfolio">Portfolio</Anchor>
-          <Anchor href="/activity">Activity</Anchor>
-          <Anchor className="active" href="/explorer">Explorer</Anchor>
-          <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-        </nav>
-        <div className="header-boundaries">
-          <p className="read-only-pill"><span aria-hidden="true" /> Read-only projection</p>
-        </div>
-      </header>
+      <Nav current="/explorer" status="read-only projection" />
 
       <section className="xp-hero">
         <p className="eyebrow">Real infrastructure · no wallet required</p>

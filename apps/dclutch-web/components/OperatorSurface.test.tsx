@@ -6,7 +6,7 @@ import OperatorSurface from './OperatorSurface';
 describe('operator surface presentation', () => {
   it('shows executable breadth and exact refusal boundaries without invented state', () => {
     const html = renderToStaticMarkup(<OperatorSurface />);
-    expect(html).toContain('Operate what exists.');
+    expect(html).toContain('Operations.');
     expect(html).toContain('Reacquire the multiprogram deployment');
     expect(html).toContain('Create registered order');
     expect(html).toContain('Initialize / collect / materialize / distribute');

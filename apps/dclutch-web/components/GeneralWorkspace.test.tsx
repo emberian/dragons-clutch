@@ -6,7 +6,8 @@ import GeneralWorkspace from './GeneralWorkspace';
 describe('General successor workspace presentation', () => {
   it('renders the transaction-complete seven-action plan, status, and receipt workflow', () => {
     const html = renderToStaticMarkup(<GeneralWorkspace />);
-    expect(html).toContain('General clearing, from candidate selection through terminal close.');
+    expect(html).toContain('General clearing.');
+    expect(html).toContain('produced by the operator program');
     expect(html).toContain('No RPC request has been made.');
     expect(html).toContain('Consider, Freeze, Initialize, Collect, Materialize, Distribute, or Close');
     expect(html).toContain('Inspect one chain-derived operator plan');

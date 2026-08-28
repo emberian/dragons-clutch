@@ -1,7 +1,7 @@
 'use client';
 
 import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import Nav from '@/components/Nav';
 import { FormEvent, useState } from 'react';
 
 import RedeemFlow from '@/components/RedeemFlow';
@@ -159,22 +159,7 @@ export default function PortfolioWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <header className="product-nav">
-      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-      <nav>
-        <Anchor href="/markets">Markets</Anchor>
-        <Anchor className="active" href="/portfolio">Portfolio</Anchor>
-        <Anchor href="/activity">Activity</Anchor>
-        <Anchor href="/create">Create</Anchor>
-        <Anchor href="/trade">Trade</Anchor>
-        <Anchor href="/liquidity">Liquidity</Anchor>
-        <Anchor href="/redeem">Represent</Anchor>
-        <Anchor href="/release">Release</Anchor>
-        <Anchor href="/explorer">Explorer</Anchor>
-        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-      </nav>
-      <span className="preview-control"><i className="preview-dot" />raw-u64 economics</span>
-    </header>
+    <Nav current="/portfolio" />
 
     <section className="trade-v3-hero">
       <div>

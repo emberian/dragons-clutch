@@ -1,6 +1,7 @@
 import Anchor from '@/components/Anchor';
+import Nav from '@/components/Nav';
 
-import { docsHrefV1, docsIndexHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
+import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 
 /**
  * The front door.
@@ -18,19 +19,7 @@ import { docsHrefV1, docsIndexHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } fr
  */
 export default function SiteLanding() {
   return <main className="product-shell trade-v3-shell">
-    <header className="product-nav">
-      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-      <nav>
-        <Anchor href="/markets">Markets</Anchor>
-        <Anchor href="/create">Create</Anchor>
-        <Anchor href="/trade">Trade</Anchor>
-        <Anchor href="/portfolio">Portfolio</Anchor>
-        <Anchor href="/explorer">Explorer</Anchor>
-        <Anchor href="/workbench">Workbench</Anchor>
-        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-      </nav>
-      <span className="preview-control"><i className="preview-dot" />not live yet</span>
-    </header>
+    <Nav current="/" />
 
     <section className="trade-v3-hero">
       <div>
@@ -59,10 +48,9 @@ export default function SiteLanding() {
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
         <Anchor className="secondary-action" href="/create">Create a market →</Anchor>
-        <Anchor className="secondary-action" href="/trade">Trade →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
         <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
-        <Anchor className="secondary-action" href="/workbench">Lifecycle workbench →</Anchor>
+        <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
       </div>
     </section>
 

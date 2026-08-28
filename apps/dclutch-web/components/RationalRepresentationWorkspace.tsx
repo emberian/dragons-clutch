@@ -1,7 +1,6 @@
 'use client';
 
-import Anchor from '@/components/Anchor';
-import { docsIndexHrefV1 } from '@/lib/flags';
+import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
 import {
@@ -131,9 +130,9 @@ export default function RationalRepresentationWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor href="/create">Create</Anchor><Anchor href="/trade">Trade</Anchor><Anchor href="/liquidity">Liquidity</Anchor><Anchor className="active" href="/redeem">Represent</Anchor><Anchor href="/release">Release</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />raw-u64 economics</span></header>
+    <ConsoleHeader path="/redeem" title="Representation" purpose="A claim holder transfers claim tokens, or prepares the open and retirement steps of redemption from live market state." />
 
-    <section className="trade-v3-hero"><div><p className="eyebrow">Bearer · Rational · Structured successor boundary</p><h1>Decimals are a label.<br /><em>Atoms are the economics.</em></h1><p>The executable path below is an ordinary Token-2022 transfer selected by immutable Market Realm and release state. Rational open, terminal, and compact receipt retirement consume finalized CapabilityV4 and Product semantics without making static clients an authority.</p></div><aside><span>Executable now</span><strong>Bearer transfer</strong><p>Open and retirement expose bounded unsigned candidates. Terminal redemption is real and SBF-tested, while this browser remains read-only until it consumes the canonical Rust SignedDelta/Custody emitter.</p></aside></section>
+    <section className="trade-v3-hero"><div><h1>Claims &amp;<br /><em>redemption.</em></h1><p>Claim tokens are ordinary tokens: you can transfer them today, and the transfer route is selected from the market&apos;s own on-chain state. Opening a representation and retiring a receipt produce unsigned candidates below; where a step is not executable yet, the console says exactly what is missing.</p></div><aside><span>Executable now</span><strong>Bearer transfer</strong><p>Open and retirement expose bounded unsigned candidates. Terminal redemption is real and SBF-tested, while this browser remains read-only until it consumes the canonical Rust SignedDelta/Custody emitter.</p></aside></section>
 
     <section className="trade-v3-card">
       <header><span>00</span><div><h2>Successor route truth, without pretending incomplete Hot paths execute</h2><p>Transfer is the normal Token-2022 instruction. Wrap/open/redeem/retire are distinct privileged lifecycle actions; this interface will expose them only from their finalized SetV2/CapabilityV4 operators.</p></div></header>
