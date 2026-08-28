@@ -4,10 +4,15 @@ You can update one of the seven permanent devnet program ids without closing or
 recycling it. The operator makes every write one role at a time. The tool accepts
 only Solana devnet, requires the cluster's exact genesis hash, and requires a
 second acknowledgement naming the role and program id you will change.
+Mutation also requires an exact acknowledgement that you kept the named fee
+payer exclusive from the first finalized wallet snapshot through the final
+poststate.
 
-The tool never discovers a wallet. You pass keypair paths to the Solana CLI, and
-the operator does not open those files itself. It checks the public addresses
-the CLI derives from the paths before any write.
+The tool never discovers a wallet. You give it exact authority, fee-payer, and
+persistent-Buffer keypair paths. It journals the action before any key access,
+checks each public address, and opens the authority and payer files itself only
+after the exact final Loader message is durable. The Solana CLI receives the
+Buffer keypair only for the separately armed Buffer upload.
 
 ## 1. Build and check the candidate
 
@@ -68,8 +73,17 @@ ROLE:PROGRAM_ID:+ADDITIONAL_BYTES
 ```
 
 The command refuses a zero extension and requires the payer to cover the exact
-rent top-up plus a provisional 1,000,000-lamport fee reserve. It invokes one
-checked `solana program extend`, then requires all of these postconditions:
+rent top-up plus a provisional 1,000,000-lamport fee reserve. It also requires
+the exact deployment-set journal. That journal must name this permanent pair as
+the first incomplete Upgrade in the fixed Custody, Resolution, Claims, Trading,
+Core order. Registry and Rent are CarryForward and cannot enter this mutation
+path.
+
+The operator constructs one canonical Loader-v3 checked-extension message. It
+fsyncs the unsigned message and last valid block height before reading either
+signing key, verifies and fsyncs the signed packet, writes `submitted` before
+one `sendTransaction` call with `maxRetries=0`, and then requires all of these
+postconditions:
 
 - ProgramData space increased by exactly the acknowledged byte count;
 - the old payload is unchanged and only zero capacity was appended;
@@ -82,13 +96,13 @@ checked `solana program extend`, then requires all of these postconditions:
 - that transaction's balance vectors prove payer spend equals ProgramData rent
   delta plus the transaction fee.
 
-The Solana CLI's extension message does not contain a transaction signature.
-The receipt therefore never extracts one from prose. The operator pages
-finalized ProgramData signatures, 1,000 rows at a time, until history crosses
-below the new deployment slot. It refuses nonmonotonic pages, repeated rows,
-more than one successful same-slot candidate, or a history that does not cross
-the target within the explicit sixteen-page operational bound. It then verifies
-the selected full transaction and metadata before recording it.
+The receipt owns the signature of the exact packet it sent. A restart with an
+unexpired submitted packet only polls that signature and never sends again. If
+the packet expires at finalized block height while Program, ProgramData, payer,
+and the deployment-set journal are still exact, the receipt archives the old
+message, packet, signature, and observed expiry height before preparing a new
+blockhash. The operator resolves only the journaled finalized transaction and
+verifies its instruction and balances before completing.
 
 After extension, discard the old baseline and capture a new one. Extension
 advances the Loader deployment slot. Upgrade advances it again. You mint and
@@ -107,28 +121,46 @@ and exact devnet genesis, validate the source and baseline, derive the only
 admitted live image, and read Program, ProgramData, and payer in one finalized
 context. Its JSON report always carries `mutation_permitted: false`.
 
-If a receipt already exists, preflight validates its canonical phase digest. A
-prepared receipt must still match its complete prestate. A submitted receipt
-must already have the exact payload, authority, rent, slot advance, and
-finalized Upgrade transaction. A complete receipt must also match the current
-Loader accounts, stored transaction, and existing dump. Preflight never resumes
-or writes any phase.
+If a receipt already exists, preflight validates its canonical phase digest. An
+intermediate receipt must carry exactly the fields allowed for its phase. A
+complete receipt must also match the current Loader accounts, exact journaled
+transaction, arithmetic, and existing dump. Preflight never resumes or writes
+any phase.
 
 ## 5. Upgrade the existing id
 
 Run `devnet-upgrade-v1` with the new baseline, generated checked-release gate,
 its separately recorded digest, the exact source commit/tree, the gate's role
-ELF, output dump, receipt, fee payer, and retained authority. Your second
+ELF, output dump, receipt, fee payer, retained authority, deployment-set
+journal, and a dedicated persistent Buffer keypair plus its explicit public
+key. The Buffer public key must be non-default. A Buffer account that already
+exists without this operation's receipt is ambiguous and refused. Your second
 acknowledgement has this exact value:
 
 ```text
 ROLE:PROGRAM_ID
 ```
 
-After the preflight passes, repeat the exact command with `--execute`. The
-mutation mode additionally verifies both keypair public addresses immediately
-before it calls `solana program deploy` for the existing id. Pass these source
-admissions exactly as printed by the release runner:
+Your execute-only payer acknowledgement has this exact value:
+
+```text
+--i-kept-fee-payer-exclusive ROLE:PROGRAM_ID:FEE_PAYER
+```
+
+From the finalized pre-observation until the finalized post-observation, do not
+use that payer for any unrelated transaction. This is an operator-stated
+exclusive window, not a fact the chain can prove after the fact.
+
+After the preflight passes, repeat the exact command with `--execute`. Include
+these durable-action inputs:
+
+```text
+--buffer-pubkey PERSISTENT_BUFFER_PUBLIC_KEY
+--buffer-keypair /absolute/evidence/persistent-buffer-keypair.json
+--deployment-set-journal /absolute/evidence/deployment-set-journal.json
+```
+
+Pass these source admissions exactly as printed by the release runner:
 
 ```text
 --checked-release-gate ABSOLUTE_WORK_ROOT/CHECKED_UPGRADE_GATE.json
@@ -137,41 +169,95 @@ admissions exactly as printed by the release runner:
 --expected-source-tree-sha256 64_LOWERCASE_HEX
 ```
 
-After the CLI returns a JSON program id and signature, the command rechecks the
-cluster and reads Program, ProgramData, and payer in one finalized context. It
-requires the deployment slot to advance, the live payload to equal the checked
-raw ELF plus zero padding, and parked ProgramData rent to remain unchanged.
+Before any key access, the new receipt binds the exact deployment-set journal
+digest, Buffer public key and keypair path, raw ELF digest and length, authority,
+expected rent, finalized Program/ProgramData/payer prestate, and conservative
+Buffer-upload expiry height. It then runs only this CLI mutation, once per armed
+window:
 
-The CLI-returned signature is authority for transaction lookup, not prose. The
-operator fetches that exact finalized transaction and requires one parsed
-Loader-v3 Upgrade instruction for the exact Program, ProgramData, retained
-authority, buffer, spill, rent sysvar, and clock sysvar. Its account keys and
-balance vectors must prove the explicit payer is signer/writable account zero,
-the payer delta equals the finalized transaction fee, and ProgramData lamports
-did not move. Wallet activity outside this exact transaction is irrelevant to
-the arithmetic. Finally, the operator dumps the deployed bytes and verifies the
-dump against the raw or exact zero-padded live image.
+```text
+solana program write-buffer EXACT_ELF \
+  --buffer EXACT_PERSISTENT_BUFFER_KEYPAIR \
+  --buffer-authority EXACT_AUTHORITY_KEYPAIR \
+  --fee-payer EXACT_PAYER_KEYPAIR \
+  --max-len EXACT_RAW_ELF_LENGTH \
+  --max-sign-attempts 1 --output json --url EXACT_DEVNET_URL
+```
 
-## 6. Audit the ordered seven-role cycle
+That phase cannot invoke Upgrade or Extend. If CLI output is lost, recovery
+uses the same Buffer identity. A complete Buffer can attach only after its
+Loader owner, metadata authority, byte width, rent, and full payload digest are
+exact. The operator walks bounded finalized signature history back across the
+prestate and authenticates every transaction: exact payer and signatures, one
+exact create plus initialize, only idempotent writes whose offsets and bytes
+slice the checked ELF, no unrelated program, exact rent, and every successful
+or failed transaction fee. The payer delta must equal Buffer rent plus all
+those fees. A missing or partial Buffer cannot start a second writer until the
+conservative finalized-height window expires and the previous child is gone.
 
-Use `devnet-upgrade-set-journal-v1` to see which one role is next. This command
-is key-free and read-only. It has no `--execute`, keypair, signing, loop, or
-receipt-writing mode. It never replaces `devnet-upgrade-v1`: you still preflight
-and update exactly one role with that command.
+After the Buffer is authenticated, the operator constructs the canonical
+Loader-v3 Upgrade message consuming that exact Buffer and spilling its rent to
+the explicit payer. It fsyncs the message before reading authority or payer
+keys, verifies and fsyncs the signed transaction packet, writes `submitted`,
+and calls `sendTransaction` once with `maxRetries=0`. An unexpired restart only
+polls the exact journaled signature. A finalized expired packet can be archived
+and replaced only while the full prestate, authenticated Buffer, and journal
+remain exact.
 
-The set journal is an immutable reference manifest, not Upgrade acceptance. You
+After finalization, the command rechecks the cluster and reads Program,
+ProgramData, and payer in one finalized context. It requires the deployment
+slot to advance, the live payload to equal the checked raw ELF plus zero
+padding, and parked ProgramData rent to remain unchanged. The exact finalized
+transaction must contain one Loader-v3 Upgrade for the journaled Program,
+ProgramData, authority, Buffer, payer spill, rent sysvar, and clock sysvar. Its
+balances must prove:
+
+```text
+transaction_payer_post = transaction_payer_pre + buffer_rent - final_upgrade_fee
+operation_observed_net_spend = buffer_upload_fees + final_upgrade_fee
+unattributed_cli_net_cost_lamports = buffer_upload_fees
+```
+
+`unattributed_cli_net_cost_lamports` is a legacy field name. Its value is now
+exactly attributed by the authenticated Buffer history; Buffer rent is funded
+during upload and refunded by the final Upgrade. ProgramData lamports do not
+move. The receipt bridges the payer's post-upload balance to the final
+transaction prebalance and the final transaction postbalance to the finalized
+wallet observation.
+
+Finally, the operator dumps to an operation-owned temporary file, validates the
+raw or exact zero-padded bytes, fsyncs it, and publishes the final dump without
+clobbering an existing path. A partial temporary is never final evidence and is
+safely recreated on resume.
+
+## 6. Audit the mixed deployment set
+
+Use `devnet-deployment-set-journal-v2` to see which execution role is next.
+This command is key-free and read-only. It has no `--execute`, keypair,
+signing, loop, or receipt-writing mode. It never replaces
+`devnet-upgrade-v1`: you still preflight and update exactly one role with that
+command. Registry and Rent are not Upgrade targets in this iteration. They are
+explicit `carry-forward` rows authenticated from the existing DEPLOY-1 state.
+
+The deployment-set journal is an immutable reference manifest, not Upgrade
+acceptance. You
 may write it yourself because none of its fields can make a role complete. It
 contains no copied Loader poststate and no success boolean. A completed role is
 recognized only when its pinned one-role receipt and dump both rehash exactly,
 the receipt passes the normal checked-gate binding, and a fresh finalized read
 matches its exact Program, ProgramData, payload, authority, slot, transaction,
-arithmetic, and dump.
+arithmetic, and dump. Registry and Rent are recognized only when one pinned
+`getMultipleAccounts` snapshot rehashes and a fresh one-request finalized read
+matches all nine accounts: both Loader pairs, both artifact raw records, both
+absent staging accounts, and the singleton infrastructure profile. A staging
+account must be RPC `null`; a fabricated System-owned empty account is not
+absence.
 
 The manifest has this shape:
 
 ```json
 {
-  "schema": "dclutch-devnet-upgrade-set-journal-v1",
+  "schema": "dclutch-devnet-deployment-set-journal-v2",
   "checked_release_gate": {
     "canonical_path": "/absolute/release/CHECKED_UPGRADE_GATE.json",
     "sha256": "64_lowercase_hex"
@@ -182,91 +268,154 @@ The manifest has this shape:
   "solana_cli_version": "exact output of solana --version",
   "retained_upgrade_authority": "PUBLIC_KEY",
   "fee_payer": "PUBLIC_KEY",
+  "infrastructure_carry_forward": {
+    "canonical_path": "/absolute/evidence/carry-forward-snapshot.json",
+    "sha256": "64_lowercase_hex"
+  },
   "roles": [
     {
       "role": "registry",
+      "disposition": "carry-forward",
       "program_id": "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",
       "programdata_id": "ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz",
-      "baseline": {
-        "canonical_path": "/absolute/evidence/registry-baseline.json",
-        "sha256": "64_lowercase_hex"
-      },
+      "baseline": null,
       "receipt": {
         "canonical_path": "/absolute/evidence/registry-receipt.json",
         "sha256": null
       },
       "dump": {
-        "canonical_path": "/absolute/evidence/registry-dump.so",
-        "sha256": null
+        "canonical_path": "/absolute/evidence/live-registry.so",
+        "sha256": "e1f4a20f0fefb60ad8f809f153c4403363d298d5eb11b88e29abe404048ac6e1"
       }
     }
   ]
 }
 ```
 
-The example shows one role only so you can see each field. Your manifest must
-contain all seven entries in this exact order and with these permanent pairs:
+The example shows one CarryForward role only. Your manifest must contain all
+seven entries in this exact order and with these permanent pairs and tags:
 
-| order | role | Program | ProgramData |
-|---:|---|---|---|
-| 0 | registry | `Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj` | `ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz` |
-| 1 | rent | `DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3` | `78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy` |
-| 2 | custody | `34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH` | `EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf` |
-| 3 | resolution | `2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd` | `2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f` |
-| 4 | claims | `85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN` | `4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j` |
-| 5 | trading | `5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk` | `AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn` |
-| 6 | core | `HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N` | `AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN` |
+| order | role | tag | Program | ProgramData |
+|---:|---|---|---|---|
+| 0 | registry | `carry-forward` | `Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj` | `ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz` |
+| 1 | rent | `carry-forward` | `DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3` | `78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy` |
+| 2 | custody | `upgrade` | `34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH` | `EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf` |
+| 3 | resolution | `upgrade` | `2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd` | `2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f` |
+| 4 | claims | `upgrade` | `85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN` | `4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j` |
+| 5 | trading | `upgrade` | `5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk` | `AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn` |
+| 6 | core | `upgrade` | `HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N` | `AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN` |
 
 Use canonical absolute paths, as printed by `realpath`; a symlink in any path is
-refused. Pin each baseline's raw file SHA-256. For an unstarted role, keep the
-receipt and dump digests `null` and make sure neither target exists. After the
-one-role receipt is complete, pin the raw receipt and dump SHA-256 values. A
-later role may not pin either file before every earlier receipt is complete.
+refused. Registry and Rent have no baseline or receipt and pin their exact live
+DEPLOY-1 ELF dumps. Each Upgrade role pins a baseline. For an unstarted Upgrade,
+keep the receipt and dump digests `null` and make sure neither target exists.
+After its one-role receipt is complete, pin the raw receipt and dump SHA-256
+values. A later Upgrade may not pin either file before every earlier Upgrade
+receipt is complete.
 
 Run the audit with:
 
 ```text
-dclutch-local-successor-bootstrap devnet-upgrade-set-journal-v1 \
+dclutch-local-successor-bootstrap devnet-deployment-set-journal-v2 \
   --rpc-url https://api.devnet.solana.com \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
-  --journal /absolute/evidence/upgrade-set-journal.json \
+  --journal /absolute/evidence/deployment-set-journal.json \
   --solana-cli /absolute/pinned/solana
 ```
 
 Before the set is complete, the report contains exactly one `next_role` and no
-`final_set_sha256`. A prepared or submitted receipt names the same role with a
-resume action; it never authorizes a replay. If the next baseline says capacity
+`final_set_sha256`. Any incomplete receipt names the same role with a resume
+action; it never authorizes a replay. If the next baseline says capacity
 must grow, the action tells you to extend and capture a fresh baseline. The old
 baseline will fail after extension because the ProgramData slot, width,
-lamports, and account digest moved. Only seven freshly valid complete receipts
-produce the final set digest. That digest binds the one gate/source/tree/devnet/
-CLI identity and every ordered Program, ProgramData, baseline, receipt, and dump
-path plus file hash; the one-role receipts remain the only owners of detailed
-poststate.
+lamports, and account digest moved. Only the fresh two-role CarryForward
+admission plus five freshly valid complete receipts produce the final set
+digest. The v2 digest binds every disposition, the one-context infrastructure
+snapshot, gate/source/tree/devnet/CLI identity, and every ordered Program,
+ProgramData, baseline, receipt, and dump reference. CarryForward can never
+masquerade as an Upgrade receipt.
+
+## 7. Prepare the mixed release plan
+
+Do not upgrade Registry or Rent. Even a byte-identical Upgrade advances the
+Loader slot and supersedes the ArtifactRelease binding stored in the immutable
+singleton `ProtocolInfrastructureProfileV1`. Core cannot overwrite that
+account, and Found reauthenticates its stored bindings against the current
+deployments.
+
+Checked `prepare --deployment-set-journal` rehashes the journal, snapshot, gate,
+five baselines and receipts, all seven dumps, and five canonical candidate ELFs
+again. It forbids every raw program, ELF, semantic, live-hash, authority, slot,
+and publication override. You supply current ProgramData bodies only for the
+five receipt-backed Upgrade roles. Registry and Rent ProgramData bytes come
+only from the authenticated CarryForward snapshot; their public observed-body
+flags are refused.
+
+Prepare derives Registry and Rent semantic IDs only by hostile-decoding their
+existing finalized `ArtifactReleaseV1` bodies. It must reproduce both artifact
+bodies, IDs, raw/staging PDAs, and the singleton profile address and body
+byte-for-byte. The execution release set contains only the five newly upgraded
+roles. Any Registry/Rent receipt, moved slot, substituted semantic, non-null
+staging account, or changed profile stops before plan emission.
+
+Treat the saved plan as an untrusted projection when you start the external
+campaign. Before it reads any keypair file, the campaign rehashes the complete
+mixed deployment-set evidence and binds every saved mutable program pin and
+artifact body back to it. It then reads all seven Program/ProgramData pairs in
+one finalized `getMultipleAccounts` context and requires exact Loader owner and
+privilege shape, Program-to-ProgramData linkage, full ProgramData digest,
+deployment slot, retained authority, live payload digest, and checked-candidate
+plus zero-padding geometry. A mutable saved plan with no checked set, or any
+edited pin, body, link, slot, authority, or payload, stops before key loading.
+
+The campaign's wallet budget is state-aware. Each record is priced by the same
+chain-derived publication planner the executor uses: an exact finalized record
+or valid in-flight cursor is not charged twice, a vacant coordinate is charged
+its exact remaining sponsor debit, and a conflict refuses. The carried
+Registry/Rent records and exact singleton profile therefore cost zero. A
+missing activation cache is charged at
+`ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1`; an exact rent-exempt partial or
+complete cache costs zero, while an underfunded or substituted cache refuses.
+
+Before activation, run the hybrid real-ELF gate with the exact authenticated
+live Registry/Rent dumps beside the five new checked ELFs. It must publish and
+activate the new five-role set, authenticate the unchanged profile, create
+RentCredit, and run DCLTGMF2 through Open. The founding census remains exactly
+59 unique keys and one signature; run every shipped-link frame diagnostic and
+report M-61 only as 20/20 plus its true 20-seed mean. A host-only plan test is
+not a substitute for that gate.
 
 ## Resume rules
 
-Receipts move through `prepared`, `submitted`, and `complete` phases and are
-written atomically. Every phase has a canonical SHA-256 over its complete
-contents. Prepared and submitted receipts must have every later-only field
-absent; a complete digest covers the CLI signature/output, finalized
-transaction and its digest, poststate/context slot, exact arithmetic, and dump
-digest/shape.
+Extension receipts move through `Prepared`, `MessagePrepared`,
+`SignedNotSubmitted`, `Submitted`, and `Complete`. Upgrade receipts add
+`BufferWriteArmed` and `BufferReady` before message preparation. Every phase is
+published with no-clobber creation or compare-and-swap replacement, parent
+directory fsync, and a canonical SHA-256 over all fields. Every later-only field
+must be absent until its phase. A complete Upgrade digest covers the Buffer
+upload history, expired packet archive, exact message and packet, submitted
+signature, finalized transaction and digest, poststate/context slot, arithmetic,
+and dump digest/shape.
 
 - A complete receipt is idempotent with respect to writes, not history. Every
   rerun freshly checks the exact CLI version, devnet genesis, Program,
   ProgramData, payload, authority, deployment slot, finalized transaction, and
   dump. Drift is reported and no write is attempted.
-- A submitted receipt resumes only poststate and transaction verification. It
-  never submits the write again.
-- A prepared receipt resumes only while the complete account and wallet
-  prestate remains exact.
-- If chain state moved behind a prepared receipt, the previous submission
-  outcome is ambiguous. The tool stops and tells you not to replay it.
+- `BufferWriteArmed` may attach an exact completed Buffer without a second CLI
+  writer. A missing or partial Buffer stays poll-only through its conservative
+  expiry window. After exact expiry it can re-arm only the same Buffer identity.
+- `MessagePrepared` can read keys and sign only the already journaled message.
+  `SignedNotSubmitted` can submit only the already verified packet and cannot
+  sign again.
+- `Submitted` is poll-only while its packet is unexpired. Exact expiry with
+  unchanged prestate archives that packet before a new blockhash is prepared.
+  If the Loader state or Buffer moved ambiguously, the tool stops.
+- `Prepared` resumes only while the complete account, wallet, journal, and
+  Buffer prestate remain exact.
 - A changed role, program id, ProgramData id, authority, payer, genesis,
-  baseline, artifact, payload, canonical operation id, receipt digest,
-  signature, transaction, poststate, arithmetic, or dump is a substitution and
-  is refused.
+  deployment-set journal, Buffer identity, baseline, artifact, payload,
+  canonical operation id, receipt digest, message, packet, signature,
+  transaction, poststate, arithmetic, or dump is a substitution and is refused.
 
 There is no force flag, multi-role mode, program close, recycle, authority
 change, implicit extension, mainnet mode, testnet mode, or unknown-cluster mode.

@@ -3,14 +3,15 @@
 //! Decision 0012 keeps the seven durable devnet program ids mutable.  That is
 //! intentionally different from `campaign.rs`: a campaign publishes and
 //! activates facts *after* deployment, while this module is the narrow seam
-//! allowed to invoke `solana program deploy` against one existing Loader-v3
-//! Program/ProgramData pair.
+//! allowed to update one existing Loader-v3 Program/ProgramData pair.
 //!
 //! The Solana CLI is behind [`CliRunner`].  Tests therefore exercise every
 //! destructive boundary with a fake; they never open a keypair file, contact a
-//! cluster, or spawn `solana`.  Production passes keypair paths to the CLI as
-//! opaque arguments.  This module itself reads only the candidate ELF, its
-//! checked evidence, the deployed-byte dump, and its resumable receipt.
+//! cluster, or spawn `solana`. Production uses the CLI only for a separately
+//! journaled, persistent Buffer upload. It constructs the final Upgrade or
+//! Extend message itself, fsyncs that message before reading signing keys,
+//! fsyncs the verified signed packet before one `sendTransaction` attempt, and
+//! resumes by signature polling without resending an unexpired packet.
 
 use std::{
     collections::BTreeSet,
@@ -21,30 +22,74 @@ use std::{
     str::FromStr as _,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1;
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_contract::{
+    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
+    require_slot_pinned_release_v1,
+};
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_release_set_contract::{
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
+    SourceSemanticRoleV1, source_semantic_release_preimage_v1,
+};
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use solana_sdk::{pubkey::Pubkey, signature::Signature};
+use solana_loader_v3_interface::instruction::{
+    UpgradeableLoaderInstruction, extend_program_checked, upgrade,
+};
+use solana_program::rent::Rent;
+use solana_sdk::{
+    hash::Hash,
+    message::Message,
+    pubkey::Pubkey,
+    signature::{Keypair, Signature, Signer as _, read_keypair_file},
+    transaction::Transaction,
+};
 use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
+use solana_system_interface::instruction::SystemInstruction;
 
 use crate::{
     Error, Result,
     cluster::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, MAINNET_BETA_GENESIS_HASH,
     },
+    model::{
+        CheckedDeploymentDispositionV1, CheckedInfrastructureCarryForwardPinV1,
+        CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
+    },
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
 
-const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v3";
+const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v5";
 const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v1";
 const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
-const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v2";
-const SET_JOURNAL_SCHEMA: &str = "dclutch-devnet-upgrade-set-journal-v1";
-const SET_AUDIT_SCHEMA: &str = "dclutch-devnet-upgrade-set-audit-v1";
+const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v3";
+const SET_JOURNAL_SCHEMA: &str = "dclutch-devnet-deployment-set-journal-v2";
+const SET_AUDIT_SCHEMA: &str = "dclutch-devnet-deployment-set-audit-v2";
+const CARRY_FORWARD_SNAPSHOT_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v1";
+pub(crate) const CHECKED_SET_PREPARE_SCHEMA: &str = "dclutch-checked-deployment-set-release-pin-v2";
+pub(crate) const SEMANTIC_DERIVATION_V1: &str =
+    "source-semantic-release-v1+compiled-direct-release-v1+resolution-controller-release-v5";
 const TARGET_ACK_FLAG: &str = "--i-accept-upgrade";
+const EXCLUSIVE_PAYER_ACK_FLAG: &str = "--i-kept-fee-payer-exclusive";
+const OPERATION_ACCOUNTING_SCOPE_V1: &str = "exclusive-payer-window-observed-net-v1";
+const OPERATION_COST_ATTRIBUTION_V1: &str =
+    "buffer-upload-transactions-and-fees-exact;final-upgrade-transaction-fee-exact";
 const EXTENSION_ACK_FLAG: &str = "--i-accept-extension";
+const DEPLOYMENT_SET_JOURNAL_FLAG: &str = "--deployment-set-journal";
+const BUFFER_PUBKEY_FLAG: &str = "--buffer-pubkey";
+const BUFFER_KEYPAIR_FLAG: &str = "--buffer-keypair";
+const BUFFER_METADATA_BYTES: usize = 37;
+/// A conservative finalized-height horizon for the one-attempt
+/// `write-buffer` subprocess. Agave's recent blockhash lifetime is shorter
+/// than this bound. A retry is still refused unless bounded Buffer history and
+/// the exact account body prove that no prior child can remain pending.
+const BUFFER_WRITE_EXPIRY_BLOCKS: u64 = 512;
 /// A provisional operator reserve above the exact rent top-up. The receipt
 /// records the actual fee separately; this bound is lifted by measured devnet
 /// extension receipts rather than guessed downward during an operation.
@@ -104,6 +149,16 @@ const PERMANENT_DEVNET_UPGRADE_TARGETS_V1: &[(&str, &str, &str)] = &[
         "AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN",
     ),
 ];
+
+pub(crate) fn is_permanent_devnet_program_set(programs: &[Pubkey; 7]) -> bool {
+    programs
+        .iter()
+        .zip(PERMANENT_DEVNET_UPGRADE_TARGETS_V1)
+        .all(|(observed, (_, expected_program, _))| {
+            parse_pubkey(expected_program, "permanent set Program")
+                .is_ok_and(|expected| *observed == expected)
+        })
+}
 const SHIPPED_LINKS: &[(&str, &str, bool)] = &[
     ("claims", "dclutch-claims-sbf", true),
     ("core", "dclutch-core-sbf", true),
@@ -138,6 +193,9 @@ struct UpgradeArgsV1 {
     authority_keypair: PathBuf,
     fee_payer: Pubkey,
     fee_payer_keypair: PathBuf,
+    buffer_pubkey: Pubkey,
+    buffer_keypair: PathBuf,
+    deployment_set_journal_path: PathBuf,
     elf_path: PathBuf,
     checked_release_gate_path: PathBuf,
     expected_checked_release_gate_sha256: String,
@@ -148,6 +206,7 @@ struct UpgradeArgsV1 {
     dump_path: PathBuf,
     solana_cli: PathBuf,
     target_acknowledgment: String,
+    exclusive_payer_window_acknowledgment: Option<String>,
     execute: bool,
     preflight: bool,
 }
@@ -174,6 +233,7 @@ struct ExtensionArgsV1 {
     authority_keypair: PathBuf,
     fee_payer: Pubkey,
     fee_payer_keypair: PathBuf,
+    deployment_set_journal_path: PathBuf,
     baseline_path: PathBuf,
     receipt_path: PathBuf,
     solana_cli: PathBuf,
@@ -212,9 +272,10 @@ struct SetOptionalFileV1 {
 #[serde(deny_unknown_fields)]
 struct UpgradeSetRoleV1 {
     role: String,
+    disposition: CheckedDeploymentDispositionV1,
     program_id: String,
     programdata_id: String,
-    baseline: SetPinnedFileV1,
+    baseline: Option<SetPinnedFileV1>,
     receipt: SetOptionalFileV1,
     dump: SetOptionalFileV1,
 }
@@ -230,12 +291,58 @@ struct UpgradeSetJournalV1 {
     solana_cli_version: String,
     retained_upgrade_authority: String,
     fee_payer: String,
+    infrastructure_carry_forward: SetPinnedFileV1,
     roles: Vec<UpgradeSetRoleV1>,
+}
+
+/// One account in the externally captured, single-finalized-context
+/// infrastructure snapshot. `account: null` is authoritative absence and is
+/// admitted only for the two derived staging PDAs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CarryForwardSnapshotAccountV1 {
+    role: String,
+    address: String,
+    account: Option<CarryForwardAccountV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CarryForwardAccountV1 {
+    lamports: u64,
+    owner: String,
+    executable: bool,
+    rent_epoch: u64,
+    data_encoding: String,
+    data_len: usize,
+    data_base64: String,
+    data_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CarryForwardSnapshotV1 {
+    schema: String,
+    endpoint: String,
+    commitment: String,
+    rpc_method: String,
+    context_slot: u64,
+    accounts: Vec<CarryForwardSnapshotAccountV1>,
+}
+
+#[derive(Clone, Debug)]
+struct AuthenticatedCarryForwardV1 {
+    pin: CheckedInfrastructureCarryForwardPinV1,
+    registry: CheckedUpgradeRolePinV1,
+    rent: CheckedUpgradeRolePinV1,
+    addresses: Vec<Pubkey>,
+    accounts: Vec<Option<RpcAccountV1>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SetRoleStatusV1 {
+    CarriedForward,
     Complete,
     Prepared,
     Submitted,
@@ -248,9 +355,10 @@ enum SetRoleStatusV1 {
 #[serde(deny_unknown_fields)]
 struct SetRoleAuditV1 {
     role: String,
+    disposition: CheckedDeploymentDispositionV1,
     program_id: String,
     programdata_id: String,
-    baseline: SetPinnedFileV1,
+    baseline: Option<SetPinnedFileV1>,
     receipt: SetOptionalFileV1,
     dump: SetOptionalFileV1,
     status: SetRoleStatusV1,
@@ -278,6 +386,7 @@ struct UpgradeSetAuditV1 {
     solana_cli_version: String,
     retained_upgrade_authority: String,
     fee_payer: String,
+    infrastructure_carry_forward: SetPinnedFileV1,
     roles: Vec<SetRoleAuditV1>,
     completed_role_count: u8,
     next_role: Option<SetNextRoleV1>,
@@ -356,6 +465,10 @@ struct UpgradeAdmissionV1 {
 #[serde(rename_all = "snake_case")]
 enum ReceiptPhaseV1 {
     Prepared,
+    BufferWriteArmed,
+    BufferReady,
+    MessagePrepared,
+    SignedNotSubmitted,
     Submitted,
     Complete,
 }
@@ -411,6 +524,12 @@ struct UpgradeArithmeticV1 {
     programdata_before_lamports: u64,
     programdata_after_lamports: u64,
     programdata_delta_lamports: i128,
+    operation_wallet_before_lamports: u64,
+    operation_wallet_after_lamports: u64,
+    operation_observed_net_spend_lamports: u64,
+    unattributed_cli_net_cost_lamports: u64,
+    accounting_scope: String,
+    cost_attribution: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -431,6 +550,19 @@ struct ExtensionArithmeticV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct ExpiredLoaderPacketV1 {
+    unsigned_message_base64: String,
+    unsigned_message_sha256: String,
+    recent_blockhash: String,
+    last_valid_block_height: u64,
+    signed_packet_base64: String,
+    signed_packet_sha256: String,
+    transaction_signature: String,
+    expiry_observed_finalized_block_height: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ExtensionReceiptV1 {
     schema: String,
     phase: ReceiptPhaseV1,
@@ -442,6 +574,7 @@ struct ExtensionReceiptV1 {
     fee_payer: String,
     rpc_origin_redacted: String,
     genesis_hash: String,
+    deployment_set_journal_sha256: String,
     baseline_sha256: String,
     baseline_context_slot: u64,
     solana_cli_version: String,
@@ -451,6 +584,13 @@ struct ExtensionReceiptV1 {
     before_context_slot: u64,
     before: LoaderObservationV1,
     wallet_before_lamports: u64,
+    expired_packets: Vec<ExpiredLoaderPacketV1>,
+    unsigned_message_base64: Option<String>,
+    unsigned_message_sha256: Option<String>,
+    recent_blockhash: Option<String>,
+    last_valid_block_height: Option<u64>,
+    signed_packet_base64: Option<String>,
+    signed_packet_sha256: Option<String>,
     transaction_signature: Option<String>,
     solana_cli_output: Option<Value>,
     finalized_transaction: Option<Value>,
@@ -474,6 +614,7 @@ struct UpgradeReceiptV1 {
     fee_payer: String,
     rpc_origin_redacted: String,
     genesis_hash: String,
+    deployment_set_journal_sha256: String,
     source_revision: String,
     source_tree_sha256: String,
     checked_release_gate_sha256: String,
@@ -486,6 +627,28 @@ struct UpgradeReceiptV1 {
     before_context_slot: u64,
     before: LoaderObservationV1,
     wallet_before_lamports: u64,
+    exclusive_payer_window_acknowledgment: String,
+    buffer_pubkey: String,
+    buffer_keypair_path: String,
+    buffer_data_bytes: u64,
+    buffer_rent_exempt_lamports: u64,
+    buffer_write_armed_block_height: Option<u64>,
+    buffer_write_expiry_block_height: Option<u64>,
+    buffer_write_cli_output: Option<Value>,
+    buffer_ready_context_slot: Option<u64>,
+    buffer_ready_account_sha256: Option<String>,
+    buffer_ready_lamports: Option<u64>,
+    buffer_upload_fee_lamports: Option<u64>,
+    buffer_upload_transactions: Option<Vec<Value>>,
+    buffer_upload_transactions_sha256: Option<String>,
+    buffer_upload_wallet_after_lamports: Option<u64>,
+    expired_packets: Vec<ExpiredLoaderPacketV1>,
+    unsigned_message_base64: Option<String>,
+    unsigned_message_sha256: Option<String>,
+    recent_blockhash: Option<String>,
+    last_valid_block_height: Option<u64>,
+    signed_packet_base64: Option<String>,
+    signed_packet_sha256: Option<String>,
     transaction_signature: Option<String>,
     solana_cli_output: Option<Value>,
     finalized_transaction: Option<Value>,
@@ -529,6 +692,7 @@ struct RpcAccountV1 {
     lamports: u64,
     owner: Pubkey,
     executable: bool,
+    rent_epoch: u64,
     data: Vec<u8>,
 }
 
@@ -538,6 +702,7 @@ impl From<RpcAccount> for RpcAccountV1 {
             lamports: account.lamports,
             owner: account.owner,
             executable: account.executable,
+            rent_epoch: account.rent_epoch,
             data: account.data,
         }
     }
@@ -560,6 +725,12 @@ struct SnapshotQueryV1<'a> {
     minimum_context_slot: u64,
 }
 
+struct CarryForwardQueryV1<'a> {
+    origin: &'a ClusterOriginV1,
+    addresses: &'a [Pubkey],
+    minimum_context_slot: u64,
+}
+
 struct UpgradeTransactionQueryV1<'a> {
     origin: &'a ClusterOriginV1,
     signature: &'a str,
@@ -567,6 +738,8 @@ struct UpgradeTransactionQueryV1<'a> {
     programdata_id: Pubkey,
     authority: Pubkey,
     payer: Pubkey,
+    buffer: Pubkey,
+    buffer_lamports: u64,
     deployment_slot: u64,
     programdata_before_lamports: u64,
     programdata_after_lamports: u64,
@@ -592,6 +765,7 @@ struct CliOutput {
 
 struct ExtensionTransactionQueryV1<'a> {
     origin: &'a ClusterOriginV1,
+    signature: &'a str,
     program_id: Pubkey,
     programdata_id: Pubkey,
     authority: Pubkey,
@@ -613,12 +787,83 @@ struct ExtensionTransactionEvidenceV1 {
     programdata_delta_lamports: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LoaderActionV1 {
+    Extend { additional_bytes: u32 },
+    Upgrade { buffer: Pubkey },
+}
+
+struct LoaderActionQueryV1<'a> {
+    origin: &'a ClusterOriginV1,
+    program_id: Pubkey,
+    programdata_id: Pubkey,
+    authority: Pubkey,
+    payer: Pubkey,
+    authority_keypair: &'a Path,
+    payer_keypair: &'a Path,
+    action: LoaderActionV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UnsignedLoaderActionV1 {
+    message_base64: String,
+    message_sha256: String,
+    recent_blockhash: String,
+    last_valid_block_height: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SignedLoaderActionV1 {
+    packet_base64: String,
+    packet_sha256: String,
+    signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BufferObservationV1 {
+    context_slot: u64,
+    lamports: u64,
+    data_bytes: u64,
+    account_sha256: String,
+    authority: String,
+    payload_sha256: String,
+}
+
+#[derive(Clone, Copy)]
+struct BufferUploadQueryV1<'a> {
+    origin: &'a ClusterOriginV1,
+    buffer: Pubkey,
+    authority: Pubkey,
+    payer: Pubkey,
+    raw_elf: &'a [u8],
+    minimum_slot: u64,
+    expected_rent_lamports: u64,
+    wallet_before_lamports: u64,
+    wallet_after_lamports: u64,
+}
+
+#[derive(Clone, Debug)]
+struct BufferUploadEvidenceV1 {
+    transactions: Vec<Value>,
+    transactions_sha256: String,
+    fee_lamports: u64,
+}
+
 trait CliRunner {
     fn run(&mut self, arguments: &[String]) -> Result<CliOutput>;
 
     fn read_snapshot(&mut self, _query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
         Err(Error::new(
             "CLI runner does not provide one-context finalized account observation",
+        ))
+    }
+
+    fn read_carry_forward_accounts(
+        &mut self,
+        _query: &CarryForwardQueryV1<'_>,
+    ) -> Result<(u64, Vec<Option<RpcAccountV1>>)> {
+        Err(Error::new(
+            "CLI runner does not provide one-context carry-forward account observation",
         ))
     }
 
@@ -637,6 +882,72 @@ trait CliRunner {
     ) -> Result<ExtensionTransactionEvidenceV1> {
         Err(Error::new(
             "CLI runner does not provide finalized extension transaction resolution",
+        ))
+    }
+
+    fn prepare_loader_action(
+        &mut self,
+        _query: &LoaderActionQueryV1<'_>,
+    ) -> Result<UnsignedLoaderActionV1> {
+        Err(Error::new(
+            "CLI runner does not provide canonical Loader transaction planning",
+        ))
+    }
+
+    fn sign_loader_action(
+        &mut self,
+        _query: &LoaderActionQueryV1<'_>,
+        _unsigned: &UnsignedLoaderActionV1,
+    ) -> Result<SignedLoaderActionV1> {
+        Err(Error::new(
+            "CLI runner does not provide canonical Loader packet signing",
+        ))
+    }
+
+    fn send_loader_action(
+        &mut self,
+        _origin: &ClusterOriginV1,
+        _signed: &SignedLoaderActionV1,
+    ) -> Result<String> {
+        Err(Error::new(
+            "CLI runner does not provide one-shot Loader packet submission",
+        ))
+    }
+
+    fn finalized_block_height(&mut self, _origin: &ClusterOriginV1) -> Result<u64> {
+        Err(Error::new(
+            "CLI runner does not provide finalized block height",
+        ))
+    }
+
+    fn read_buffer(
+        &mut self,
+        _origin: &ClusterOriginV1,
+        _buffer: Pubkey,
+        _authority: Pubkey,
+        _minimum_context_slot: u64,
+    ) -> Result<Option<BufferObservationV1>> {
+        Err(Error::new(
+            "CLI runner does not provide finalized Buffer observation",
+        ))
+    }
+
+    fn minimum_balance_for_rent_exemption(
+        &mut self,
+        _origin: &ClusterOriginV1,
+        _data_bytes: u64,
+    ) -> Result<u64> {
+        Err(Error::new(
+            "CLI runner does not provide finalized rent-exemption quote",
+        ))
+    }
+
+    fn authenticate_buffer_upload(
+        &mut self,
+        _query: &BufferUploadQueryV1<'_>,
+    ) -> Result<BufferUploadEvidenceV1> {
+        Err(Error::new(
+            "CLI runner does not provide bounded Buffer upload attribution",
         ))
     }
 }
@@ -659,6 +970,22 @@ impl CliRunner for SystemCliRunner {
         read_snapshot_via_rpc(query)
     }
 
+    fn read_carry_forward_accounts(
+        &mut self,
+        query: &CarryForwardQueryV1<'_>,
+    ) -> Result<(u64, Vec<Option<RpcAccountV1>>)> {
+        let mut rpc = Rpc::connect_cluster(query.origin, WritePolicyV1::ReadsOnly)?;
+        let (slot, accounts) =
+            rpc.finalized_accounts(query.addresses, query.minimum_context_slot)?;
+        Ok((
+            slot,
+            accounts
+                .into_iter()
+                .map(|account| account.map(RpcAccountV1::from))
+                .collect(),
+        ))
+    }
+
     fn resolve_upgrade_transaction(
         &mut self,
         query: &UpgradeTransactionQueryV1<'_>,
@@ -671,6 +998,70 @@ impl CliRunner for SystemCliRunner {
         query: &ExtensionTransactionQueryV1<'_>,
     ) -> Result<ExtensionTransactionEvidenceV1> {
         resolve_extension_transaction_via_rpc(query)
+    }
+
+    fn prepare_loader_action(
+        &mut self,
+        query: &LoaderActionQueryV1<'_>,
+    ) -> Result<UnsignedLoaderActionV1> {
+        prepare_loader_action_via_rpc(query)
+    }
+
+    fn sign_loader_action(
+        &mut self,
+        query: &LoaderActionQueryV1<'_>,
+        unsigned: &UnsignedLoaderActionV1,
+    ) -> Result<SignedLoaderActionV1> {
+        sign_loader_action_from_paths(query, unsigned)
+    }
+
+    fn send_loader_action(
+        &mut self,
+        origin: &ClusterOriginV1,
+        signed: &SignedLoaderActionV1,
+    ) -> Result<String> {
+        send_loader_action_via_rpc(origin, signed)
+    }
+
+    fn finalized_block_height(&mut self, origin: &ClusterOriginV1) -> Result<u64> {
+        let mut rpc = Rpc::connect_cluster(origin, WritePolicyV1::ReadsOnly)?;
+        rpc.call(
+            "getBlockHeight",
+            &serde_json::json!([{"commitment":"finalized"}]),
+        )?
+        .as_u64()
+        .ok_or_else(|| Error::new("getBlockHeight result was not u64"))
+    }
+
+    fn read_buffer(
+        &mut self,
+        origin: &ClusterOriginV1,
+        buffer: Pubkey,
+        authority: Pubkey,
+        minimum_context_slot: u64,
+    ) -> Result<Option<BufferObservationV1>> {
+        read_buffer_via_rpc(origin, buffer, authority, minimum_context_slot)
+    }
+
+    fn minimum_balance_for_rent_exemption(
+        &mut self,
+        origin: &ClusterOriginV1,
+        data_bytes: u64,
+    ) -> Result<u64> {
+        let mut rpc = Rpc::connect_cluster(origin, WritePolicyV1::ReadsOnly)?;
+        rpc.call(
+            "getMinimumBalanceForRentExemption",
+            &serde_json::json!([data_bytes, {"commitment":"finalized"}]),
+        )?
+        .as_u64()
+        .ok_or_else(|| Error::new("rent-exemption quote was not u64"))
+    }
+
+    fn authenticate_buffer_upload(
+        &mut self,
+        query: &BufferUploadQueryV1<'_>,
+    ) -> Result<BufferUploadEvidenceV1> {
+        authenticate_buffer_upload_via_rpc(query)
     }
 }
 
@@ -816,6 +1207,7 @@ pub(crate) fn usage() -> &'static str {
      --role ROLE --program-id PUBKEY --programdata-id PUBKEY \\
      --expected-upgrade-authority PUBKEY --authority-keypair ABSOLUTE_JSON \\
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_JSON --baseline ABSOLUTE_JSON \\
+     --deployment-set-journal ABSOLUTE_JSON \\
      --receipt ABSOLUTE_JSON --solana-cli ABSOLUTE_EXECUTABLE \\
      --expected-solana-cli-version EXACT_STRING \\
      --i-accept-extension ROLE:PUBKEY:+ADDITIONAL_BYTES --execute\n\n\
@@ -830,46 +1222,57 @@ pub(crate) fn usage() -> &'static str {
      --role ROLE --program-id PUBKEY --programdata-id PUBKEY \\
      --expected-upgrade-authority PUBKEY --authority-keypair ABSOLUTE_JSON \\
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_JSON --elf ABSOLUTE_SO \\
+     --buffer-pubkey PUBKEY --buffer-keypair ABSOLUTE_JSON \\
+     --deployment-set-journal ABSOLUTE_JSON \\
      --checked-release-gate ABSOLUTE_JSON \\
      --expected-checked-release-gate-sha256 SHA256 \\
      --expected-source-revision GIT_COMMIT --expected-source-tree-sha256 SHA256 \\
      --baseline ABSOLUTE_JSON \\
      --receipt ABSOLUTE_JSON --dump ABSOLUTE_SO \\
      --solana-cli ABSOLUTE_EXECUTABLE --i-accept-upgrade ROLE:PUBKEY \
-     (--preflight | --execute)\n\n\
+     (--preflight | --i-kept-fee-payer-exclusive ROLE:PUBKEY:PAYER --execute)\n\n\
      With --preflight, you run the complete gate, source, baseline, CLI-version, devnet-genesis, \
      and one-context Program/ProgramData/payer admission without opening either keypair path, \
      writing a receipt or dump, or invoking a program command. With --execute, you update exactly \
-     one existing decision-0012 devnet program. Both acknowledgements are \
-     mandatory: the exact devnet genesis hash names the cluster, and ROLE:PUBKEY names the \
-     permanent program you accept updating. The command checks the Loader-v3 Program link, the \
+     one existing decision-0012 devnet program. Execute also requires the exact \
+     ROLE:PUBKEY:PAYER exclusive-window acknowledgment. The genesis hash names the cluster, \
+     ROLE:PUBKEY names the permanent program you accept updating, and the payer acknowledgment \
+     says no unrelated transaction may spend that wallet until the finalized post-observation. \
+     The command checks the Loader-v3 Program link, the \
      non-executable ProgramData account, every fact in the canonical baseline, the retained \
-     authority and both keypair addresses immediately before \
-     it invokes `solana program deploy`. The generated checked-release gate binds the exact source \
+     authority and persistent Buffer identity. The generated checked-release gate binds the exact source \
      commit/tree, all thirteen fresh compile logs, all thirteen zero frame reports, and every \
      release ELF. The selected ELF must be the gate's canonical regular file. The command refuses \
      handwritten acceptance, path escape, symlinks, missing links, and changed evidence. It pads \
-     the checked raw ELF with zeros only to the separately captured baseline width. After the CLI \
-     returns, the command \
-     re-checks devnet, requires the deployment slot to advance, resolves the exact CLI-returned \
-     finalized transaction, proves its payer delta equals its fee and ProgramData rent is \
-     unchanged, dumps the deployed bytes, verifies them, and completes an atomic digest-bound \
+     the checked raw ELF with zeros only to the separately captured baseline width. Execute first \
+     uploads the exact ELF to the journaled Buffer with one CLI signing attempt, then authenticates \
+     every bounded Buffer-history transaction, fee, payer delta, rent movement, offset, and byte \
+     range. It constructs and journals the exact Upgrade message and signed packet before one \
+     `sendTransaction` call with `maxRetries=0`. Restarts poll that signature; only a finalized \
+     expiry with unchanged prestate can prepare a different blockhash and packet. The command \
+     requires the deployment slot to advance, resolves the exact journaled finalized transaction, \
+     proves the Buffer-rent refund, final fee, unchanged ProgramData rent, and operation-wide wallet \
+     bridge. The legacy `unattributed_cli_net_cost_lamports` receipt field contains the exactly \
+     attributed Buffer-upload fees. It dumps the deployed bytes, verifies \
+     them, and completes an atomic digest-bound \
      receipt. Every complete resume freshly rechecks CLI identity, devnet, current Loader state, \
      transaction, payload, authority, deployment slot, and dump. There is no force, recycle, \
      close, set-upgrade-authority, mainnet, testnet, unknown cluster, multi-role, or \
      implicit-wallet path.\n\n\
-  dclutch-local-successor-bootstrap devnet-upgrade-set-journal-v1 \
+  dclutch-local-successor-bootstrap devnet-deployment-set-journal-v2 \
      --rpc-url HTTPS_URL \
      --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
      --journal ABSOLUTE_JSON --solana-cli ABSOLUTE_EXECUTABLE\n\n\
-     This key-free command audits, but never performs, the canonical seven-role Upgrade cycle. \
-     Its immutable journal pins one checked gate, source commit/tree, exact devnet genesis, CLI \
-     identity, retained authority, fee payer, and seven ordered Program/ProgramData plus \
-     baseline/receipt/dump references. It rehashes every reference and freshly validates every \
-     completed one-role receipt against finalized chain state and its exact transaction. Gaps, \
-     mixed evidence, changed earlier roles, and stale pre-extension baselines refuse. Until the \
-     set is complete it reports exactly one next role; only seven fresh complete receipts produce \
-     a final set digest. It has no loop, signing, write, execute, or keypair mode."
+     This key-free command audits, but never performs, the canonical mixed deployment set. Its \
+     immutable journal pins one checked gate, source commit/tree, exact devnet genesis, CLI \
+     identity, retained authority, fee payer, and seven ordered tagged Program/ProgramData rows. \
+     Registry and Rent must be CarryForward under one exact finalized nine-account snapshot and \
+     exact live dumps; Custody, Resolution, Claims, Trading, and Core must be receipt-backed \
+     Upgrades. Every invocation freshly revalidates the complete CarryForward closure and each \
+     completed one-role receipt. Gaps, tag swaps, changed earlier roles, and stale extension \
+     baselines refuse. Until complete it reports exactly one next Upgrade role; only two fresh \
+     carries plus five fresh receipts produce the v2 final digest. It has no loop, signing, write, \
+     execute, or keypair mode."
 }
 
 fn parse_set_args(arguments: Vec<String>) -> Result<UpgradeSetArgsV1> {
@@ -884,7 +1287,7 @@ fn parse_set_args(arguments: Vec<String>) -> Result<UpgradeSetArgsV1> {
             "--rpc-url" | DEVNET_ACKNOWLEDGMENT_FLAG | "--journal" | "--solana-cli"
         ) {
             return Err(Error::new(format!(
-                "unknown devnet-upgrade-set-journal-v1 argument: {argument}"
+                "unknown devnet-deployment-set-journal-v2 argument: {argument}"
             )));
         }
         if values.insert(argument.clone(), value).is_some() {
@@ -902,7 +1305,7 @@ fn parse_set_args(arguments: Vec<String>) -> Result<UpgradeSetArgsV1> {
     let origin = ClusterOriginV1::parse(&rpc_url, Some(&acknowledgment))?;
     if !matches!(origin, ClusterOriginV1::AcknowledgedDevnet { .. }) {
         return Err(Error::new(
-            "devnet-upgrade-set-journal-v1 admits exact public devnet only",
+            "devnet-deployment-set-journal-v2 admits exact public devnet only",
         ));
     }
     Ok(UpgradeSetArgsV1 {
@@ -917,72 +1320,73 @@ fn audit_set_journal_with_runner(
     runner: &mut impl CliRunner,
 ) -> Result<UpgradeSetAuditV1> {
     let (journal, journal_sha256) = load_set_journal(args)?;
+    let carry = authenticate_carry_forward(&journal)?;
     let authority = parse_pubkey(
         &journal.retained_upgrade_authority,
-        "set journal retained authority",
+        "deployment-set retained authority",
     )?;
-    let payer = parse_pubkey(&journal.fee_payer, "set journal fee payer")?;
+    let payer = parse_pubkey(&journal.fee_payer, "deployment-set fee payer")?;
     let gate_path = PathBuf::from(&journal.checked_release_gate.canonical_path);
-    let mut local_roles = Vec::with_capacity(ROLES.len());
+    let upgrade_rows = &journal.roles[2..];
 
-    if let Some(first_unpinned) = journal
-        .roles
+    if let Some(first_unpinned) = upgrade_rows
         .iter()
         .position(|role| role.receipt.sha256.is_none())
-    {
-        if let Some(later) = journal
-            .roles
+        && let Some(later) = upgrade_rows
             .iter()
             .skip(first_unpinned + 1)
             .find(|role| role.receipt.sha256.is_some() || role.dump.sha256.is_some())
-        {
-            return Err(Error::new(format!(
-                "set Upgrade gap: role {} pins evidence after unstarted role {}",
-                later.role, journal.roles[first_unpinned].role
-            )));
-        }
+    {
+        return Err(Error::new(format!(
+            "deployment-set Upgrade gap: role {} pins evidence after unstarted role {}",
+            later.role, upgrade_rows[first_unpinned].role
+        )));
     }
 
-    // Authenticate every local evidence reference before a network read. This
-    // catches gaps and substitutions without producing a misleading partial
-    // live audit of an invalid set.
-    for role in &journal.roles {
+    let mut local_roles = Vec::with_capacity(upgrade_rows.len());
+    for role in upgrade_rows {
+        let baseline = role.baseline.as_ref().expect("mixed closure checked");
         let elf_path = set_role_elf_path(&gate_path, &role.role)?;
         let role_args = UpgradeArgsV1 {
             origin: args.origin.clone(),
             role: role.role.clone(),
-            program_id: parse_pubkey(&role.program_id, "set journal Program")?,
-            programdata_id: parse_pubkey(&role.programdata_id, "set journal ProgramData")?,
+            program_id: parse_pubkey(&role.program_id, "deployment-set Program")?,
+            programdata_id: parse_pubkey(&role.programdata_id, "deployment-set ProgramData")?,
             expected_upgrade_authority: authority,
-            // Preflight is structurally key-free. These sentinel paths make a
-            // future accidental key read fail rather than select a real file.
             authority_keypair: PathBuf::from("/dclutch-set-journal-never-reads-authority"),
             fee_payer: payer,
             fee_payer_keypair: PathBuf::from("/dclutch-set-journal-never-reads-payer"),
+            buffer_pubkey: Pubkey::default(),
+            buffer_keypair: PathBuf::from("/dclutch-set-journal-never-reads-buffer"),
+            deployment_set_journal_path: args.journal_path.clone(),
             elf_path,
             checked_release_gate_path: gate_path.clone(),
             expected_checked_release_gate_sha256: journal.checked_release_gate.sha256.clone(),
             expected_source_revision: journal.source_revision.clone(),
             expected_source_tree_sha256: journal.source_tree_sha256.clone(),
-            baseline_path: PathBuf::from(&role.baseline.canonical_path),
+            baseline_path: PathBuf::from(&baseline.canonical_path),
             receipt_path: PathBuf::from(&role.receipt.canonical_path),
             dump_path: PathBuf::from(&role.dump.canonical_path),
             solana_cli: args.solana_cli.clone(),
             target_acknowledgment: format!("{}:{}", role.role, role.program_id),
+            exclusive_payer_window_acknowledgment: Some(format!(
+                "{}:{}:{}",
+                role.role, role.program_id, journal.fee_payer
+            )),
             execute: false,
             preflight: true,
         };
         let admission = admit_upgrade(&role_args)?;
         if admission.gate.solana_cli_version != journal.solana_cli_version {
             return Err(Error::new(format!(
-                "set journal CLI identity {:?} differs from checked gate {:?}",
+                "deployment-set CLI identity {:?} differs from checked gate {:?}",
                 journal.solana_cli_version, admission.gate.solana_cli_version
             )));
         }
         let receipt_phase = match &role.receipt.sha256 {
             Some(_) => Some(
                 load_receipt(&role_args.receipt_path)?
-                    .ok_or_else(|| Error::new("pinned set receipt disappeared"))?
+                    .ok_or_else(|| Error::new("pinned deployment-set receipt disappeared"))?
                     .phase,
             ),
             None => None,
@@ -991,19 +1395,19 @@ fn audit_set_journal_with_runner(
             (Some(ReceiptPhaseV1::Complete), Some(_)) => {}
             (Some(ReceiptPhaseV1::Complete), None) => {
                 return Err(Error::new(format!(
-                    "completed set role {} omitted its pinned dump digest",
+                    "completed deployment-set role {} omitted its dump digest",
                     role.role
                 )));
             }
             (Some(_), Some(_)) => {
                 return Err(Error::new(format!(
-                    "incomplete set role {} claims a dump before its receipt is complete",
+                    "incomplete deployment-set role {} claims a dump",
                     role.role
                 )));
             }
             (None, Some(_)) => {
                 return Err(Error::new(format!(
-                    "set role {} claims a dump without a receipt",
+                    "deployment-set role {} claims a dump without a receipt",
                     role.role
                 )));
             }
@@ -1023,22 +1427,29 @@ fn audit_set_journal_with_runner(
         for later in local_roles.iter().skip(first + 1) {
             if later.receipt_phase.is_some() {
                 return Err(Error::new(format!(
-                    "set Upgrade gap: role {} has a receipt after incomplete role {}",
+                    "deployment-set Upgrade gap: role {} has a receipt after incomplete role {}",
                     later.args.role, local_roles[first].args.role
                 )));
             }
         }
     }
 
-    // Every completed prefix role gets the exact same fresh live admission as
-    // the one-role preflight. The first incomplete role is also checked so the
-    // reported next action is current, not a projection from old files.
-    let completed = first_incomplete.unwrap_or(local_roles.len());
-    for role in local_roles.iter().take(completed) {
+    // Pin CLI identity and exact devnet genesis before the CarryForward network
+    // read. There are always five Upgrade rows under the mixed closure.
+    let cli_version = invoke(runner, &local_roles[0].args, &["--version".into()])?;
+    if cli_version.stdout.trim() != journal.solana_cli_version {
+        return Err(Error::new("deployment-set Solana CLI identity drifted"));
+    }
+    authenticate_devnet(runner, &local_roles[0].args)?;
+    // CarryForward is one atomic finalized observation. Revalidate all nine
+    // accounts on every invocation before reporting progress for any Upgrade.
+    require_fresh_carry_forward(&carry, args, runner)?;
+    let completed_upgrades = first_incomplete.unwrap_or(local_roles.len());
+    for role in local_roles.iter().take(completed_upgrades) {
         let report = preflight_with_runner(&role.args, runner)?;
         if report.receipt_phase != Some(ReceiptPhaseV1::Complete) {
             return Err(Error::new(
-                "set journal completed prefix did not yield a complete one-role preflight",
+                "deployment-set completed prefix did not yield a complete one-role preflight",
             ));
         }
     }
@@ -1050,22 +1461,40 @@ fn audit_set_journal_with_runner(
             let report = preflight_with_runner(&role.args, runner)?;
             if report.receipt_phase != role.receipt_phase {
                 return Err(Error::new(
-                    "set journal receipt phase changed during read-only audit",
+                    "deployment-set receipt phase changed during read-only audit",
                 ));
             }
         }
     }
 
-    let mut role_reports = Vec::with_capacity(ROLES.len());
-    for (index, (role, local)) in journal.roles.iter().zip(&local_roles).enumerate() {
-        let status = if index < completed {
+    let mut role_reports = Vec::with_capacity(journal.roles.len());
+    for role in &journal.roles[..2] {
+        role_reports.push(SetRoleAuditV1 {
+            role: role.role.clone(),
+            disposition: role.disposition,
+            program_id: role.program_id.clone(),
+            programdata_id: role.programdata_id.clone(),
+            baseline: None,
+            receipt: role.receipt.clone(),
+            dump: role.dump.clone(),
+            status: SetRoleStatusV1::CarriedForward,
+        });
+    }
+    for (relative, (role, local)) in upgrade_rows.iter().zip(&local_roles).enumerate() {
+        let status = if relative < completed_upgrades {
             SetRoleStatusV1::Complete
-        } else if Some(index) != first_incomplete {
+        } else if Some(relative) != first_incomplete {
             SetRoleStatusV1::WaitingForEarlierRole
         } else {
             match local.receipt_phase {
                 Some(ReceiptPhaseV1::Prepared) => SetRoleStatusV1::Prepared,
-                Some(ReceiptPhaseV1::Submitted) => SetRoleStatusV1::Submitted,
+                Some(
+                    ReceiptPhaseV1::BufferWriteArmed
+                    | ReceiptPhaseV1::BufferReady
+                    | ReceiptPhaseV1::MessagePrepared
+                    | ReceiptPhaseV1::SignedNotSubmitted
+                    | ReceiptPhaseV1::Submitted,
+                ) => SetRoleStatusV1::Submitted,
                 Some(ReceiptPhaseV1::Complete) => {
                     return Err(Error::new("complete next role escaped completed prefix"));
                 }
@@ -1077,6 +1506,7 @@ fn audit_set_journal_with_runner(
         };
         role_reports.push(SetRoleAuditV1 {
             role: role.role.clone(),
+            disposition: role.disposition,
             program_id: role.program_id.clone(),
             programdata_id: role.programdata_id.clone(),
             baseline: role.baseline.clone(),
@@ -1086,13 +1516,19 @@ fn audit_set_journal_with_runner(
         });
     }
     let next_role = first_incomplete
-        .map(|index| {
-            let role = &journal.roles[index];
-            let local = &local_roles[index];
+        .map(|relative| {
+            let absolute = relative + 2;
+            let role = &journal.roles[absolute];
+            let local = &local_roles[relative];
             let action = match local.receipt_phase {
-                Some(ReceiptPhaseV1::Prepared | ReceiptPhaseV1::Submitted) => {
-                    "resume_exact_one_role_upgrade"
-                }
+                Some(
+                    ReceiptPhaseV1::Prepared
+                    | ReceiptPhaseV1::BufferWriteArmed
+                    | ReceiptPhaseV1::BufferReady
+                    | ReceiptPhaseV1::MessagePrepared
+                    | ReceiptPhaseV1::SignedNotSubmitted
+                    | ReceiptPhaseV1::Submitted,
+                ) => "resume_exact_one_role_upgrade",
                 Some(ReceiptPhaseV1::Complete) => {
                     return Err(Error::new("complete role cannot be next"));
                 }
@@ -1102,7 +1538,7 @@ fn audit_set_journal_with_runner(
                 None => "run_exact_one_role_upgrade",
             };
             Ok(SetNextRoleV1 {
-                ordinal: u8::try_from(index).expect("seven roles fit u8"),
+                ordinal: u8::try_from(absolute).expect("seven roles fit u8"),
                 role: role.role.clone(),
                 program_id: role.program_id.clone(),
                 programdata_id: role.programdata_id.clone(),
@@ -1125,8 +1561,9 @@ fn audit_set_journal_with_runner(
         solana_cli_version: journal.solana_cli_version,
         retained_upgrade_authority: journal.retained_upgrade_authority,
         fee_payer: journal.fee_payer,
+        infrastructure_carry_forward: journal.infrastructure_carry_forward,
         roles: role_reports,
-        completed_role_count: u8::try_from(completed).expect("seven roles fit u8"),
+        completed_role_count: u8::try_from(completed_upgrades + 2).expect("seven roles fit u8"),
         next_role,
         final_set_sha256,
         mutation_permitted: false,
@@ -1162,8 +1599,12 @@ fn audit_extension_pending_role(
 }
 
 fn load_set_journal(args: &UpgradeSetArgsV1) -> Result<(UpgradeSetJournalV1, String)> {
+    load_set_journal_path(&args.journal_path)
+}
+
+fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, String)> {
     let journal_path = exact_reference_path(
-        args.journal_path
+        journal_path
             .to_str()
             .ok_or_else(|| Error::new("--journal path is not UTF-8"))?,
         "set journal",
@@ -1213,7 +1654,17 @@ fn load_set_journal(args: &UpgradeSetArgsV1) -> Result<(UpgradeSetJournalV1, Str
         {
             return Err(Error::new(format!(
                 "set journal target at index {index} is not exact permanent devnet \
-                 {expected_role}:{expected_program}:{expected_programdata}"
+                {expected_role}:{expected_program}:{expected_programdata}"
+            )));
+        }
+        let expected_disposition = if index < 2 {
+            CheckedDeploymentDispositionV1::CarryForward
+        } else {
+            CheckedDeploymentDispositionV1::Upgrade
+        };
+        if role.disposition != expected_disposition {
+            return Err(Error::new(format!(
+                "set journal {expected_role} disposition is not the canonical mixed deployment-set choice"
             )));
         }
         if !identities.insert(program) || !identities.insert(programdata) {
@@ -1225,12 +1676,158 @@ fn load_set_journal(args: &UpgradeSetArgsV1) -> Result<(UpgradeSetJournalV1, Str
     // No referenced evidence is opened until all fourteen account identities
     // have matched the permanent table above.
     read_pinned_reference(&journal.checked_release_gate, "set checked-release gate")?;
+    read_pinned_reference(
+        &journal.infrastructure_carry_forward,
+        "infrastructure carry-forward snapshot",
+    )?;
     for role in &journal.roles {
-        read_pinned_reference(&role.baseline, &format!("{} baseline", role.role))?;
-        read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+        match role.disposition {
+            CheckedDeploymentDispositionV1::CarryForward => {
+                if role.baseline.is_some()
+                    || role.receipt.sha256.is_some()
+                    || role.dump.sha256.is_none()
+                {
+                    return Err(Error::new(format!(
+                        "carry-forward role {} must contain one live dump and no Upgrade baseline or receipt evidence",
+                        role.role
+                    )));
+                }
+                read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+            }
+            CheckedDeploymentDispositionV1::Upgrade => {
+                let baseline = role.baseline.as_ref().ok_or_else(|| {
+                    Error::new(format!("Upgrade role {} omitted its baseline", role.role))
+                })?;
+                read_pinned_reference(baseline, &format!("{} baseline", role.role))?;
+                read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+            }
+        }
         read_optional_reference(&role.dump, &format!("{} dump", role.role))?;
     }
     Ok((journal, journal_sha256))
+}
+
+fn require_mutation_permit(
+    args: &UpgradeArgsV1,
+    expected_journal_sha256: Option<&str>,
+    require_upgrade_receipt_path: bool,
+) -> Result<String> {
+    if matches!(args.role.as_str(), "registry" | "rent") {
+        return Err(Error::new(
+            "Registry and Rent are CarryForward and can never enter an Upgrade/Extend mutation path",
+        ));
+    }
+    let path = exact_reference_path(
+        args.deployment_set_journal_path
+            .to_str()
+            .ok_or_else(|| Error::new("deployment-set journal path is not UTF-8"))?,
+        "deployment-set mutation journal",
+    )?;
+    let bytes = read_regular_reference(&path, "deployment-set mutation journal")?;
+    let journal_sha256 = digest(&bytes);
+    if expected_journal_sha256.is_some_and(|expected| expected != journal_sha256) {
+        return Err(Error::new(
+            "deployment-set journal changed after the mutation plan was fsynced",
+        ));
+    }
+    let journal: UpgradeSetJournalV1 = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::new(format!(
+            "deployment-set mutation journal is not canonical {SET_JOURNAL_SCHEMA} JSON: {error}"
+        ))
+    })?;
+    if journal.schema != SET_JOURNAL_SCHEMA
+        || journal.devnet_genesis_hash != DEVNET_GENESIS_HASH
+        || (require_upgrade_receipt_path
+            && (journal.source_revision != args.expected_source_revision
+                || journal.source_tree_sha256 != args.expected_source_tree_sha256
+                || journal.checked_release_gate.sha256
+                    != args.expected_checked_release_gate_sha256))
+        || journal.solana_cli_version.trim().is_empty()
+        || journal.retained_upgrade_authority != args.expected_upgrade_authority.to_string()
+        || journal.fee_payer != args.fee_payer.to_string()
+        || journal.roles.len() != PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len()
+    {
+        return Err(Error::new(
+            "deployment-set mutation journal differs from the exact devnet source, gate, authority, payer, or seven-role closure",
+        ));
+    }
+    let mut first_incomplete = None;
+    for (index, (role, (expected_role, expected_program, expected_programdata))) in journal
+        .roles
+        .iter()
+        .zip(PERMANENT_DEVNET_UPGRADE_TARGETS_V1)
+        .enumerate()
+    {
+        let expected_disposition = if index < 2 {
+            CheckedDeploymentDispositionV1::CarryForward
+        } else {
+            CheckedDeploymentDispositionV1::Upgrade
+        };
+        if role.role != *expected_role
+            || role.program_id != *expected_program
+            || role.programdata_id != *expected_programdata
+            || role.disposition != expected_disposition
+        {
+            return Err(Error::new(format!(
+                "deployment-set mutation row {index} is not exact permanent {expected_role} with its canonical disposition"
+            )));
+        }
+        if index < 2 {
+            if role.receipt.sha256.is_some() || role.baseline.is_some() {
+                return Err(Error::new(
+                    "Registry and Rent are CarryForward and can never enter an Upgrade/Extend mutation path",
+                ));
+            }
+            continue;
+        }
+        match &role.receipt.sha256 {
+            Some(expected) if first_incomplete.is_none() => {
+                let receipt_bytes = read_optional_reference(
+                    &role.receipt,
+                    &format!("{} prior Upgrade receipt", role.role),
+                )?
+                .ok_or_else(|| Error::new("pinned prior Upgrade receipt disappeared"))?;
+                if digest(&receipt_bytes) != *expected {
+                    return Err(Error::new("prior Upgrade receipt digest drifted"));
+                }
+                let receipt: UpgradeReceiptV1 = serde_json::from_slice(&receipt_bytes)?;
+                if receipt.phase != ReceiptPhaseV1::Complete {
+                    first_incomplete = Some(index);
+                }
+            }
+            Some(_) => {
+                return Err(Error::new(
+                    "deployment-set journal pins a later Upgrade after an incomplete role",
+                ));
+            }
+            None => {
+                if first_incomplete.is_none() {
+                    first_incomplete = Some(index);
+                }
+            }
+        }
+    }
+    let index = first_incomplete.ok_or_else(|| {
+        Error::new("deployment-set is already complete; no mutation is permitted")
+    })?;
+    let target = &journal.roles[index];
+    if target.role != args.role
+        || target.program_id != args.program_id.to_string()
+        || target.programdata_id != args.programdata_id.to_string()
+        || target.disposition != CheckedDeploymentDispositionV1::Upgrade
+        || target
+            .baseline
+            .as_ref()
+            .is_none_or(|baseline| Path::new(&baseline.canonical_path) != args.baseline_path)
+        || (require_upgrade_receipt_path
+            && Path::new(&target.receipt.canonical_path) != args.receipt_path)
+    {
+        return Err(Error::new(format!(
+            "deployment-set next role is {} at ordinal {index}, not exact requested {}:{}:{}",
+            target.role, args.role, args.program_id, args.programdata_id
+        )));
+    }
+    Ok(journal_sha256)
 }
 
 fn read_pinned_reference(reference: &SetPinnedFileV1, label: &str) -> Result<Vec<u8>> {
@@ -1321,6 +1918,430 @@ fn read_regular_reference(path: &Path, label: &str) -> Result<Vec<u8>> {
     Ok(fs::read(path)?)
 }
 
+fn exact_account_sha256(account: &RpcAccountV1) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(account.owner.as_ref());
+    hasher.update(account.lamports.to_le_bytes());
+    hasher.update([u8::from(account.executable)]);
+    hasher.update(account.rent_epoch.to_le_bytes());
+    hasher.update(
+        u64::try_from(account.data.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(&account.data);
+    hex(&hasher.finalize())
+}
+
+fn decode_snapshot_account(row: &CarryForwardSnapshotAccountV1) -> Result<Option<RpcAccountV1>> {
+    let Some(account) = &row.account else {
+        return Ok(None);
+    };
+    if account.data_encoding != "base64" {
+        return Err(Error::new(format!(
+            "carry-forward {} account data is not canonical base64",
+            row.role
+        )));
+    }
+    let data = BASE64.decode(&account.data_base64).map_err(|_| {
+        Error::new(format!(
+            "carry-forward {} account data is invalid base64",
+            row.role
+        ))
+    })?;
+    if data.len() != account.data_len || digest(&data) != account.data_sha256 {
+        return Err(Error::new(format!(
+            "carry-forward {} account data length or digest mismatch",
+            row.role
+        )));
+    }
+    let decoded = RpcAccountV1 {
+        lamports: account.lamports,
+        owner: parse_pubkey(&account.owner, "carry-forward account owner")?,
+        executable: account.executable,
+        rent_epoch: account.rent_epoch,
+        data,
+    };
+    if decoded.lamports < Rent::default().minimum_balance(decoded.data.len()) {
+        return Err(Error::new(format!(
+            "carry-forward {} account is not rent exempt",
+            row.role
+        )));
+    }
+    Ok(Some(decoded))
+}
+
+fn require_account_shape(
+    role: &str,
+    account: &RpcAccountV1,
+    owner: Pubkey,
+    executable: bool,
+    data_len: Option<usize>,
+) -> Result<()> {
+    if account.owner != owner
+        || account.executable != executable
+        || data_len.is_some_and(|len| account.data.len() != len)
+    {
+        return Err(Error::new(format!(
+            "carry-forward {role} owner/executable/length shape is invalid"
+        )));
+    }
+    Ok(())
+}
+
+fn authenticate_carry_forward(
+    journal: &UpgradeSetJournalV1,
+) -> Result<AuthenticatedCarryForwardV1> {
+    let snapshot_bytes = read_pinned_reference(
+        &journal.infrastructure_carry_forward,
+        "infrastructure carry-forward snapshot",
+    )?;
+    let snapshot: CarryForwardSnapshotV1 =
+        serde_json::from_slice(&snapshot_bytes).map_err(|error| {
+            Error::new(format!(
+                "infrastructure carry-forward snapshot is not canonical v1 JSON: {error}"
+            ))
+        })?;
+    if snapshot.schema != CARRY_FORWARD_SNAPSHOT_SCHEMA
+        || snapshot.endpoint != "https://api.devnet.solana.com"
+        || snapshot.commitment != "finalized"
+        || snapshot.rpc_method != "getMultipleAccounts"
+        || snapshot.context_slot == 0
+    {
+        return Err(Error::new(
+            "carry-forward snapshot schema, endpoint, finality, RPC method, or context slot is invalid",
+        ));
+    }
+    let expected_labels = [
+        "registry_program",
+        "registry_programdata",
+        "rent_program",
+        "rent_programdata",
+        "registry_raw",
+        "registry_staging",
+        "rent_raw",
+        "rent_staging",
+        "infrastructure_profile",
+    ];
+    if snapshot.accounts.len() != expected_labels.len()
+        || snapshot
+            .accounts
+            .iter()
+            .zip(expected_labels)
+            .any(|(row, expected)| row.role != expected)
+    {
+        return Err(Error::new(
+            "carry-forward snapshot does not contain the exact ordered nine-account closure",
+        ));
+    }
+    if snapshot.accounts[5].account.is_some() || snapshot.accounts[7].account.is_some() {
+        return Err(Error::new(
+            "carry-forward staging must be finalized account absence, not a fabricated empty account",
+        ));
+    }
+    let addresses = snapshot
+        .accounts
+        .iter()
+        .map(|row| parse_pubkey(&row.address, "carry-forward account address"))
+        .collect::<Result<Vec<_>>>()?;
+    let accounts = snapshot
+        .accounts
+        .iter()
+        .map(decode_snapshot_account)
+        .collect::<Result<Vec<_>>>()?;
+    let required = |index: usize, label: &str| {
+        accounts[index]
+            .as_ref()
+            .ok_or_else(|| Error::new(format!("carry-forward snapshot omitted {label}")))
+    };
+    let registry_program = parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[0].1, "Registry")?;
+    let registry_programdata = parse_pubkey(
+        PERMANENT_DEVNET_UPGRADE_TARGETS_V1[0].2,
+        "Registry ProgramData",
+    )?;
+    let rent_program = parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[1].1, "Rent")?;
+    let rent_programdata =
+        parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[1].2, "Rent ProgramData")?;
+    let core_program = parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[6].1, "Core")?;
+    if addresses[..4]
+        != [
+            registry_program,
+            registry_programdata,
+            rent_program,
+            rent_programdata,
+        ]
+    {
+        return Err(Error::new(
+            "carry-forward snapshot substituted a permanent Program or ProgramData",
+        ));
+    }
+    let profile_address = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &core_program,
+    )
+    .0;
+    if addresses[8] != profile_address {
+        return Err(Error::new(
+            "carry-forward snapshot substituted the singleton infrastructure profile PDA",
+        ));
+    }
+    require_account_shape(
+        "Registry Program",
+        required(0, "Registry Program")?,
+        bpf_loader_upgradeable::ID,
+        true,
+        Some(36),
+    )?;
+    require_account_shape(
+        "Registry ProgramData",
+        required(1, "Registry ProgramData")?,
+        bpf_loader_upgradeable::ID,
+        false,
+        None,
+    )?;
+    require_account_shape(
+        "Rent Program",
+        required(2, "Rent Program")?,
+        bpf_loader_upgradeable::ID,
+        true,
+        Some(36),
+    )?;
+    require_account_shape(
+        "Rent ProgramData",
+        required(3, "Rent ProgramData")?,
+        bpf_loader_upgradeable::ID,
+        false,
+        None,
+    )?;
+    require_account_shape(
+        "infrastructure profile",
+        required(8, "infrastructure profile")?,
+        core_program,
+        false,
+        Some(144),
+    )?;
+    let profile_account = required(8, "infrastructure profile")?;
+    let profile = ProtocolInfrastructureProfileV1::decode(&profile_account.data)
+        .map_err(|error| Error::new(format!("carry-forward profile decode: {error:?}")))?;
+    let profile_registry_program = Pubkey::new_from_array(profile.registry().program().to_bytes());
+    let profile_rent_program = Pubkey::new_from_array(profile.rent().program().to_bytes());
+    if profile_registry_program != registry_program || profile_rent_program != rent_program {
+        return Err(Error::new(
+            "carry-forward profile substituted the permanent Registry or Rent program",
+        ));
+    }
+    let registry_artifact_id = profile.registry().artifact_release().to_bytes();
+    let rent_artifact_id = profile.rent().artifact_release().to_bytes();
+    let registry_raw = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &registry_artifact_id,
+        ],
+        &registry_program,
+    )
+    .0;
+    let registry_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &registry_artifact_id,
+        ],
+        &registry_program,
+    )
+    .0;
+    let rent_raw = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &rent_artifact_id,
+        ],
+        &registry_program,
+    )
+    .0;
+    let rent_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &rent_artifact_id,
+        ],
+        &registry_program,
+    )
+    .0;
+    if addresses[4..8] != [registry_raw, registry_staging, rent_raw, rent_staging] {
+        return Err(Error::new(
+            "carry-forward snapshot substituted a derived artifact raw or staging PDA",
+        ));
+    }
+    if accounts[5].is_some() || accounts[7].is_some() {
+        return Err(Error::new(
+            "carry-forward staging must be finalized account absence, not a fabricated empty account",
+        ));
+    }
+    let authority = parse_pubkey(
+        &journal.retained_upgrade_authority,
+        "carry-forward retained authority",
+    )?;
+    let mut role_pins = Vec::new();
+    for (role, program, programdata, program_index, programdata_index, raw_index, artifact_id) in [
+        (
+            "registry",
+            registry_program,
+            registry_programdata,
+            0_usize,
+            1_usize,
+            4_usize,
+            registry_artifact_id,
+        ),
+        (
+            "rent",
+            rent_program,
+            rent_programdata,
+            2,
+            3,
+            6,
+            rent_artifact_id,
+        ),
+    ] {
+        let program_account = required(program_index, &format!("{role} Program"))?;
+        let programdata_account = required(programdata_index, &format!("{role} ProgramData"))?;
+        let raw_account = required(raw_index, &format!("{role} artifact raw"))?;
+        require_account_shape(
+            &format!("{role} artifact raw"),
+            raw_account,
+            registry_program,
+            false,
+            Some(216),
+        )?;
+        if digest(&raw_account.data) != hex(&artifact_id) {
+            return Err(Error::new(format!(
+                "carry-forward {role} raw body does not match the profile artifact ID"
+            )));
+        }
+        let release = ArtifactReleaseV1::decode(&raw_account.data)
+            .map_err(|error| Error::new(format!("carry-forward {role} artifact: {error:?}")))?;
+        require_slot_pinned_release_v1(release).map_err(|error| {
+            Error::new(format!(
+                "carry-forward {role} artifact admission: {error:?}"
+            ))
+        })?;
+        let program_view = ProgramV3View::parse(&program_account.data)
+            .map_err(|error| Error::new(format!("carry-forward {role} Program: {error:?}")))?;
+        let programdata_view = ProgramDataV3View::parse(&programdata_account.data)
+            .map_err(|error| Error::new(format!("carry-forward {role} ProgramData: {error:?}")))?;
+        if program_view.programdata() != programdata.to_bytes()
+            || programdata_view.upgrade_authority() != Some(authority.to_bytes())
+        {
+            return Err(Error::new(format!(
+                "carry-forward {role} Loader link or retained authority mismatch"
+            )));
+        }
+        let live_sha: [u8; 32] = Sha256::digest(programdata_view.elf()).into();
+        let observation = DeploymentObservationV1::new(
+            program.to_bytes(),
+            program_account.owner.to_bytes(),
+            program_account.executable,
+            programdata.to_bytes(),
+            programdata_account.owner.to_bytes(),
+            programdata_account.executable,
+            program_view.programdata(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            programdata_view.deployment_slot(),
+            live_sha,
+            programdata_view.upgrade_authority(),
+        )
+        .map_err(|error| Error::new(format!("carry-forward {role} observation: {error:?}")))?;
+        release
+            .authenticate_deployment(observation)
+            .map_err(|error| Error::new(format!("carry-forward {role} deployment: {error:?}")))?;
+        let journal_role = journal
+            .roles
+            .iter()
+            .find(|candidate| candidate.role == role)
+            .expect("journal role closure already checked");
+        let dump_bytes = read_optional_reference(&journal_role.dump, &format!("{role} live ELF"))?
+            .ok_or_else(|| Error::new(format!("carry-forward {role} omitted live ELF dump")))?;
+        if dump_bytes != programdata_view.elf() {
+            return Err(Error::new(format!(
+                "carry-forward {role} live ELF dump differs from the finalized ProgramData tail"
+            )));
+        }
+        role_pins.push(CheckedUpgradeRolePinV1 {
+            role: role.into(),
+            disposition: CheckedDeploymentDispositionV1::CarryForward,
+            program_id: program.to_string(),
+            programdata_id: programdata.to_string(),
+            baseline_path: None,
+            baseline_sha256: None,
+            receipt_path: None,
+            receipt_sha256: None,
+            dump_path: journal_role.dump.canonical_path.clone(),
+            dump_sha256: journal_role
+                .dump
+                .sha256
+                .clone()
+                .expect("carry-forward dump closure checked"),
+            checked_candidate_elf_path: journal_role.dump.canonical_path.clone(),
+            checked_candidate_elf_sha256: journal_role
+                .dump
+                .sha256
+                .clone()
+                .expect("carry-forward dump closure checked"),
+            live_elf_sha256: hex(&live_sha),
+            deployment_slot: programdata_view.deployment_slot(),
+            programdata_account_sha256: digest(&programdata_account.data),
+            semantic_release_id: hex(release.semantic_release_id().as_bytes()),
+            artifact_release_body_hex: Some(hex(&raw_account.data)),
+            artifact_release_id: Some(hex(&artifact_id)),
+            carried_programdata_base64: Some(BASE64.encode(&programdata_account.data)),
+        });
+    }
+    let snapshot_path = journal.infrastructure_carry_forward.canonical_path.clone();
+    let snapshot_sha256 = journal.infrastructure_carry_forward.sha256.clone();
+    Ok(AuthenticatedCarryForwardV1 {
+        pin: CheckedInfrastructureCarryForwardPinV1 {
+            snapshot_path,
+            snapshot_sha256,
+            context_slot: snapshot.context_slot,
+            profile_address: profile_address.to_string(),
+            profile_account_sha256: exact_account_sha256(profile_account),
+            profile_body_sha256: digest(&profile_account.data),
+            profile_body_hex: hex(&profile_account.data),
+            registry_raw_address: registry_raw.to_string(),
+            registry_staging_address: registry_staging.to_string(),
+            registry_programdata_account_sha256: exact_account_sha256(required(
+                1,
+                "Registry ProgramData",
+            )?),
+            rent_raw_address: rent_raw.to_string(),
+            rent_staging_address: rent_staging.to_string(),
+            rent_programdata_account_sha256: exact_account_sha256(required(3, "Rent ProgramData")?),
+        },
+        registry: role_pins.remove(0),
+        rent: role_pins.remove(0),
+        addresses,
+        accounts,
+    })
+}
+
+fn require_fresh_carry_forward(
+    carry: &AuthenticatedCarryForwardV1,
+    args: &UpgradeSetArgsV1,
+    runner: &mut impl CliRunner,
+) -> Result<()> {
+    let (slot, observed) = runner.read_carry_forward_accounts(&CarryForwardQueryV1 {
+        origin: &args.origin,
+        addresses: &carry.addresses,
+        minimum_context_slot: carry.pin.context_slot,
+    })?;
+    if slot < carry.pin.context_slot || observed != carry.accounts {
+        return Err(Error::new(
+            "live finalized infrastructure differs from the admitted one-context carry-forward snapshot",
+        ));
+    }
+    Ok(())
+}
+
 fn set_role_elf_path(gate_path: &Path, role: &str) -> Result<PathBuf> {
     let bytes = read_regular_reference(gate_path, "set checked-release gate")?;
     let gate: CheckedUpgradeGateV1 = serde_json::from_slice(&bytes).map_err(|error| {
@@ -1351,7 +2372,7 @@ fn set_role_elf_path(gate_path: &Path, role: &str) -> Result<PathBuf> {
 
 fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/devnet-upgrade-set/final/v1\0");
+    hasher.update(b"dclutch/devnet-deployment-set/final/v2\0");
     hash_text(&mut hasher, &journal.schema)?;
     hash_text(&mut hasher, &journal.checked_release_gate.canonical_path)?;
     hash_text(&mut hasher, &journal.checked_release_gate.sha256)?;
@@ -1367,30 +2388,289 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
         .as_ref(),
     );
     hasher.update(parse_pubkey(&journal.fee_payer, "set fee payer")?.as_ref());
+    hash_text(
+        &mut hasher,
+        &journal.infrastructure_carry_forward.canonical_path,
+    )?;
+    hash_text(&mut hasher, &journal.infrastructure_carry_forward.sha256)?;
     for role in &journal.roles {
         hash_text(&mut hasher, &role.role)?;
+        hasher.update([match role.disposition {
+            CheckedDeploymentDispositionV1::CarryForward => 0,
+            CheckedDeploymentDispositionV1::Upgrade => 1,
+        }]);
         hasher.update(parse_pubkey(&role.program_id, "set Program")?.as_ref());
         hasher.update(parse_pubkey(&role.programdata_id, "set ProgramData")?.as_ref());
-        hash_text(&mut hasher, &role.baseline.canonical_path)?;
-        hash_text(&mut hasher, &role.baseline.sha256)?;
+        match &role.baseline {
+            Some(baseline) => {
+                hasher.update([1]);
+                hash_text(&mut hasher, &baseline.canonical_path)?;
+                hash_text(&mut hasher, &baseline.sha256)?;
+            }
+            None => hasher.update([0]),
+        }
         hash_text(&mut hasher, &role.receipt.canonical_path)?;
-        hash_text(
-            &mut hasher,
-            role.receipt
-                .sha256
-                .as_deref()
-                .ok_or_else(|| Error::new("final set omitted receipt digest"))?,
-        )?;
+        match &role.receipt.sha256 {
+            Some(receipt) => {
+                hasher.update([1]);
+                hash_text(&mut hasher, receipt)?;
+            }
+            None => hasher.update([0]),
+        }
         hash_text(&mut hasher, &role.dump.canonical_path)?;
         hash_text(
             &mut hasher,
             role.dump
                 .sha256
                 .as_deref()
-                .ok_or_else(|| Error::new("final set omitted dump digest"))?,
+                .ok_or_else(|| Error::new("final deployment set omitted dump digest"))?,
         )?;
     }
     Ok(hex(&hasher.finalize()))
+}
+
+fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
+    let fixed = match role {
+        "trading" => Some(COMPILED_DIRECT_RELEASE_ID_V1),
+        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
+        _ => None,
+    };
+    if let Some(release_id) = fixed {
+        return Ok(hex(&release_id));
+    }
+    let source_role = match role {
+        "registry" => SourceSemanticRoleV1::Registry,
+        "core" => SourceSemanticRoleV1::Core,
+        "claims" => SourceSemanticRoleV1::Claims,
+        "custody" => SourceSemanticRoleV1::Custody,
+        "rent" => SourceSemanticRoleV1::RentCredit,
+        _ => {
+            return Err(Error::new(format!(
+                "role {role:?} has no protocol-owned semantic release identity"
+            )));
+        }
+    };
+    let preimage = source_semantic_release_preimage_v1(source_role, source_revision.as_bytes())
+        .map_err(|_| Error::new("source semantic release revision is not canonical"))?;
+    Ok(digest(&preimage))
+}
+
+/// Authenticate the canonical mixed deployment set for checked prepare. The
+/// two infrastructure roles are admitted only from the exact one-context
+/// CarryForward snapshot; the five execution roles remain exact complete
+/// one-role Upgrade receipts.
+pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
+    journal_path: &Path,
+) -> Result<CheckedUpgradeSetPinV1> {
+    let (journal, journal_sha256) = load_set_journal_path(journal_path)?;
+    let journal_canonical = exact_reference_path(
+        journal_path
+            .to_str()
+            .ok_or_else(|| Error::new("--deployment-set-journal path is not UTF-8"))?,
+        "deployment-set journal",
+    )?;
+    let carry = authenticate_carry_forward(&journal)?;
+    let gate_path = PathBuf::from(&journal.checked_release_gate.canonical_path);
+    let authority = parse_pubkey(
+        &journal.retained_upgrade_authority,
+        "deployment-set retained authority",
+    )?;
+    let payer = parse_pubkey(&journal.fee_payer, "deployment-set fee payer")?;
+    let offline_origin =
+        ClusterOriginV1::parse("https://api.devnet.solana.com", Some(DEVNET_GENESIS_HASH))?;
+    let mut roles = vec![carry.registry.clone(), carry.rent.clone()];
+    for role in &journal.roles[2..] {
+        let baseline = role.baseline.as_ref().expect("mixed closure checked");
+        let receipt_bytes =
+            read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?
+                .ok_or_else(|| Error::new(format!("{} receipt is not complete", role.role)))?;
+        let dump_bytes = read_optional_reference(&role.dump, &format!("{} dump", role.role))?
+            .ok_or_else(|| Error::new(format!("{} dump is not complete", role.role)))?;
+        let receipt: UpgradeReceiptV1 =
+            serde_json::from_slice(&receipt_bytes).map_err(|error| {
+                Error::new(format!(
+                    "{} receipt is not canonical {SCHEMA} JSON: {error}",
+                    role.role
+                ))
+            })?;
+        let elf_path = set_role_elf_path(&gate_path, &role.role)?;
+        let role_args = UpgradeArgsV1 {
+            origin: offline_origin.clone(),
+            role: role.role.clone(),
+            program_id: parse_pubkey(&role.program_id, "deployment-set Program")?,
+            programdata_id: parse_pubkey(&role.programdata_id, "deployment-set ProgramData")?,
+            expected_upgrade_authority: authority,
+            authority_keypair: PathBuf::from("/offline-upgrade-authority-not-read"),
+            fee_payer: payer,
+            fee_payer_keypair: PathBuf::from("/offline-fee-payer-not-read"),
+            buffer_pubkey: Pubkey::default(),
+            buffer_keypair: PathBuf::from("/offline-buffer-not-read"),
+            deployment_set_journal_path: journal_path.to_path_buf(),
+            elf_path: elf_path.clone(),
+            checked_release_gate_path: gate_path.clone(),
+            expected_checked_release_gate_sha256: journal.checked_release_gate.sha256.clone(),
+            expected_source_revision: journal.source_revision.clone(),
+            expected_source_tree_sha256: journal.source_tree_sha256.clone(),
+            baseline_path: PathBuf::from(&baseline.canonical_path),
+            receipt_path: PathBuf::from(&role.receipt.canonical_path),
+            dump_path: PathBuf::from(&role.dump.canonical_path),
+            solana_cli: PathBuf::from("/offline-solana-not-run"),
+            target_acknowledgment: format!("{}:{}", role.role, role.program_id),
+            exclusive_payer_window_acknowledgment: Some(format!(
+                "{}:{}:{}",
+                role.role, role.program_id, journal.fee_payer
+            )),
+            execute: false,
+            preflight: false,
+        };
+        let admission = admit_upgrade(&role_args)?;
+        if admission.gate.solana_cli_version != journal.solana_cli_version {
+            return Err(Error::new(format!(
+                "{} gate CLI identity differs from the deployment-set journal",
+                role.role
+            )));
+        }
+        validate_receipt_binding(
+            &role_args,
+            &admission.gate,
+            &admission.baseline,
+            &admission.live_elf_sha256,
+            admission.live_elf_padding_bytes,
+            &receipt,
+            false,
+        )?;
+        if receipt.phase != ReceiptPhaseV1::Complete {
+            return Err(Error::new(format!(
+                "{} Upgrade receipt is not complete",
+                role.role
+            )));
+        }
+        let after = receipt.after.as_ref().expect("validated complete receipt");
+        if after.program_lamports != receipt.before.program_lamports
+            || after.program_owner != receipt.before.program_owner
+            || after.program_executable != receipt.before.program_executable
+            || after.program_data_bytes != receipt.before.program_data_bytes
+            || after.program_account_sha256 != receipt.before.program_account_sha256
+            || after.programdata_owner != receipt.before.programdata_owner
+            || after.programdata_executable != receipt.before.programdata_executable
+            || after.programdata_data_bytes
+                != u64::try_from(admission.candidate_live.len())
+                    .map_err(|_| Error::new("checked live payload width does not fit u64"))?
+                    .checked_add(45)
+                    .ok_or_else(|| Error::new("checked ProgramData width overflow"))?
+            || after.live_elf_bytes
+                != u64::try_from(admission.candidate_live.len())
+                    .map_err(|_| Error::new("checked live payload width does not fit u64"))?
+        {
+            return Err(Error::new(format!(
+                "{} receipt does not preserve exact Program linkage and Loader shape",
+                role.role
+            )));
+        }
+        let (dump_sha256, dump_shape) = classify_dump(
+            &dump_bytes,
+            &admission.gate.raw_elf,
+            &admission.candidate_live,
+        )?;
+        if receipt.dump_sha256.as_deref() != Some(dump_sha256.as_str())
+            || receipt.dump_shape.as_deref() != Some(dump_shape.as_str())
+            || role.dump.sha256.as_deref() != Some(dump_sha256.as_str())
+        {
+            return Err(Error::new(format!(
+                "{} dump digest/shape differs from its complete receipt",
+                role.role
+            )));
+        }
+        roles.push(CheckedUpgradeRolePinV1 {
+            role: role.role.clone(),
+            disposition: CheckedDeploymentDispositionV1::Upgrade,
+            program_id: role.program_id.clone(),
+            programdata_id: role.programdata_id.clone(),
+            baseline_path: Some(baseline.canonical_path.clone()),
+            baseline_sha256: Some(baseline.sha256.clone()),
+            receipt_path: Some(role.receipt.canonical_path.clone()),
+            receipt_sha256: Some(role.receipt.sha256.clone().expect("checked receipt digest")),
+            dump_path: role.dump.canonical_path.clone(),
+            dump_sha256,
+            checked_candidate_elf_path: fs::canonicalize(&elf_path)?.display().to_string(),
+            checked_candidate_elf_sha256: admission.gate.raw_elf_sha256,
+            live_elf_sha256: admission.live_elf_sha256,
+            deployment_slot: after.deployment_slot,
+            programdata_account_sha256: after.programdata_account_sha256.clone(),
+            semantic_release_id: checked_semantic_release_id(&role.role, &journal.source_revision)?,
+            artifact_release_body_hex: None,
+            artifact_release_id: None,
+            carried_programdata_base64: None,
+        });
+    }
+    Ok(CheckedUpgradeSetPinV1 {
+        schema: CHECKED_SET_PREPARE_SCHEMA.into(),
+        journal_path: journal_canonical.display().to_string(),
+        journal_sha256,
+        final_set_sha256: final_set_digest(&journal)?,
+        checked_release_gate_path: journal.checked_release_gate.canonical_path,
+        checked_release_gate_sha256: journal.checked_release_gate.sha256,
+        source_revision: journal.source_revision,
+        source_tree_sha256: journal.source_tree_sha256,
+        devnet_genesis_hash: journal.devnet_genesis_hash,
+        solana_cli_version: journal.solana_cli_version,
+        retained_upgrade_authority: journal.retained_upgrade_authority,
+        fee_payer: journal.fee_payer,
+        semantic_derivation: SEMANTIC_DERIVATION_V1.into(),
+        infrastructure_carry_forward: carry.pin,
+        roles,
+    })
+}
+
+/// Fresh network admission for checked prepare. This is still key-free and
+/// read-only: it runs the v2 set auditor first, requires a fresh final digest,
+/// then returns the locally rehashed projection of the same journal.
+pub(crate) fn authenticate_complete_deployment_set_for_prepare_live(
+    journal_path: &Path,
+    rpc_url: &str,
+    devnet_acknowledgment: &str,
+    solana_cli: &Path,
+) -> Result<CheckedUpgradeSetPinV1> {
+    let origin = ClusterOriginV1::parse(rpc_url, Some(devnet_acknowledgment))?;
+    if !matches!(origin, ClusterOriginV1::AcknowledgedDevnet { .. }) {
+        return Err(Error::new(
+            "checked deployment-set prepare admits exact public devnet only",
+        ));
+    }
+    let args = UpgradeSetArgsV1 {
+        origin,
+        journal_path: journal_path.to_path_buf(),
+        solana_cli: solana_cli.to_path_buf(),
+    };
+    let mut runner = SystemCliRunner {
+        executable: solana_cli.to_path_buf(),
+    };
+    let audit = audit_set_journal_with_runner(&args, &mut runner)?;
+    let audit_digest = audit
+        .final_set_sha256
+        .ok_or_else(|| Error::new("checked deployment set is not complete"))?;
+    let pin = authenticate_complete_upgrade_set_for_prepare(journal_path)?;
+    if pin.final_set_sha256 != audit_digest {
+        return Err(Error::new(
+            "fresh deployment-set audit digest differs from the prepare projection",
+        ));
+    }
+    Ok(pin)
+}
+
+/// Rehash a persisted checked pin immediately before plan derivation. No
+/// caller-authored projection, including a semantic ID, may survive this
+/// equality against the canonical evidence owners.
+pub(crate) fn reauthenticate_checked_deployment_set_pin(
+    set: &CheckedUpgradeSetPinV1,
+) -> Result<()> {
+    let fresh = authenticate_complete_upgrade_set_for_prepare(Path::new(&set.journal_path))?;
+    if &fresh != set {
+        return Err(Error::new(
+            "checked deployment-set evidence changed or a caller projection was substituted",
+        ));
+    }
+    Ok(())
 }
 
 fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
@@ -1425,6 +2705,9 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
                 | "--authority-keypair"
                 | "--fee-payer"
                 | "--fee-payer-keypair"
+                | BUFFER_PUBKEY_FLAG
+                | BUFFER_KEYPAIR_FLAG
+                | DEPLOYMENT_SET_JOURNAL_FLAG
                 | "--elf"
                 | "--checked-release-gate"
                 | "--expected-checked-release-gate-sha256"
@@ -1435,6 +2718,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
                 | "--dump"
                 | "--solana-cli"
                 | TARGET_ACK_FLAG
+                | EXCLUSIVE_PAYER_ACK_FLAG
         ) {
             return Err(Error::new(format!(
                 "unknown devnet-upgrade-v1 argument: {argument}"
@@ -1466,6 +2750,12 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
     }
     let role = take("--role")?;
     require_role(&role)?;
+    let buffer_pubkey = parse_pubkey(&take(BUFFER_PUBKEY_FLAG)?, BUFFER_PUBKEY_FLAG)?;
+    if buffer_pubkey == Pubkey::default() {
+        return Err(Error::new(
+            "--buffer-pubkey must name a non-default persistent Buffer account",
+        ));
+    }
     Ok(UpgradeArgsV1 {
         origin,
         role,
@@ -1478,6 +2768,12 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         authority_keypair: absolute(&take("--authority-keypair")?, "--authority-keypair")?,
         fee_payer: parse_pubkey(&take("--fee-payer")?, "--fee-payer")?,
         fee_payer_keypair: absolute(&take("--fee-payer-keypair")?, "--fee-payer-keypair")?,
+        buffer_pubkey,
+        buffer_keypair: absolute(&take(BUFFER_KEYPAIR_FLAG)?, BUFFER_KEYPAIR_FLAG)?,
+        deployment_set_journal_path: absolute(
+            &take(DEPLOYMENT_SET_JOURNAL_FLAG)?,
+            DEPLOYMENT_SET_JOURNAL_FLAG,
+        )?,
         elf_path: absolute(&take("--elf")?, "--elf")?,
         checked_release_gate_path: absolute(
             &take("--checked-release-gate")?,
@@ -1491,6 +2787,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         dump_path: absolute(&take("--dump")?, "--dump")?,
         solana_cli: absolute(&take("--solana-cli")?, "--solana-cli")?,
         target_acknowledgment: take(TARGET_ACK_FLAG)?,
+        exclusive_payer_window_acknowledgment: values.get(EXCLUSIVE_PAYER_ACK_FLAG).cloned(),
         execute,
         preflight,
     })
@@ -1592,6 +2889,7 @@ fn parse_extension_args(arguments: Vec<String>) -> Result<ExtensionArgsV1> {
                 | "--authority-keypair"
                 | "--fee-payer"
                 | "--fee-payer-keypair"
+                | DEPLOYMENT_SET_JOURNAL_FLAG
                 | "--baseline"
                 | "--receipt"
                 | "--solana-cli"
@@ -1640,6 +2938,10 @@ fn parse_extension_args(arguments: Vec<String>) -> Result<ExtensionArgsV1> {
         authority_keypair: absolute(&take("--authority-keypair")?, "--authority-keypair")?,
         fee_payer: parse_pubkey(&take("--fee-payer")?, "--fee-payer")?,
         fee_payer_keypair: absolute(&take("--fee-payer-keypair")?, "--fee-payer-keypair")?,
+        deployment_set_journal_path: absolute(
+            &take(DEPLOYMENT_SET_JOURNAL_FLAG)?,
+            DEPLOYMENT_SET_JOURNAL_FLAG,
+        )?,
         baseline_path: absolute(&take("--baseline")?, "--baseline")?,
         receipt_path: absolute(&take("--receipt")?, "--receipt")?,
         solana_cli: absolute(&take("--solana-cli")?, "--solana-cli")?,
@@ -1659,6 +2961,9 @@ fn extension_shadow_args(args: &ExtensionArgsV1) -> UpgradeArgsV1 {
         authority_keypair: args.authority_keypair.clone(),
         fee_payer: args.fee_payer,
         fee_payer_keypair: args.fee_payer_keypair.clone(),
+        buffer_pubkey: Pubkey::default(),
+        buffer_keypair: PathBuf::from("/extension-has-no-buffer"),
+        deployment_set_journal_path: args.deployment_set_journal_path.clone(),
         elf_path: PathBuf::from("/extension-has-no-elf"),
         checked_release_gate_path: PathBuf::from("/extension-has-no-checked-release-gate"),
         expected_checked_release_gate_sha256: "0".repeat(64),
@@ -1669,6 +2974,7 @@ fn extension_shadow_args(args: &ExtensionArgsV1) -> UpgradeArgsV1 {
         dump_path: PathBuf::from("/extension-has-no-dump"),
         solana_cli: args.solana_cli.clone(),
         target_acknowledgment: String::new(),
+        exclusive_payer_window_acknowledgment: None,
         execute: args.execute,
         preflight: false,
     }
@@ -1680,6 +2986,12 @@ fn execute_with_runner(
 ) -> Result<UpgradeReceiptV1> {
     if !args.execute || args.preflight {
         return Err(Error::new("Upgrade runner reached without --execute"));
+    }
+    let exclusive_payer_ack = format!("{}:{}:{}", args.role, args.program_id, args.fee_payer);
+    if args.exclusive_payer_window_acknowledgment.as_deref() != Some(exclusive_payer_ack.as_str()) {
+        return Err(Error::new(format!(
+            "{EXCLUSIVE_PAYER_ACK_FLAG} must be the exact exclusive window {exclusive_payer_ack}; the observed operation-wide wallet delta cannot be attributed otherwise"
+        )));
     }
     let admission = admit_upgrade(args)?;
     let gate = &admission.gate;
@@ -1697,6 +3009,7 @@ fn execute_with_runner(
             live_elf_sha256,
             live_elf_padding_bytes,
             receipt,
+            true,
         )?;
     } else if args.dump_path.exists() {
         return Err(Error::new(format!(
@@ -1727,23 +3040,9 @@ fn execute_with_runner(
             existing.as_ref().expect("checked complete receipt"),
         );
     }
-    authenticate_keypair(
-        runner,
-        args,
-        &args.authority_keypair,
-        args.expected_upgrade_authority,
-        "upgrade authority",
-    )?;
-    authenticate_keypair(
-        runner,
-        args,
-        &args.fee_payer_keypair,
-        args.fee_payer,
-        "fee payer",
-    )?;
-
     match existing {
         None => {
+            let deployment_set_journal_sha256 = require_mutation_permit(args, None, true)?;
             let before = read_snapshot(runner, args, baseline.context_slot)?;
             require_baseline_prestate(baseline, &before.loader)?;
             require_candidate_fits(&before, candidate_live)?;
@@ -1753,7 +3052,24 @@ fn execute_with_runner(
                      an Upgrade; refusing replay ambiguity",
                 ));
             }
+            if runner
+                .read_buffer(
+                    &args.origin,
+                    args.buffer_pubkey,
+                    args.expected_upgrade_authority,
+                    before.context_slot,
+                )?
+                .is_some()
+            {
+                return Err(Error::new(
+                    "persistent Buffer already exists without this operation receipt; provenance is ambiguous",
+                ));
+            }
             let operation_id = operation_id(args, &gate.gate_sha256, &before);
+            let buffer_data_bytes = u64::try_from(BUFFER_METADATA_BYTES + gate.raw_elf.len())
+                .map_err(|_| Error::new("Buffer width does not fit u64"))?;
+            let buffer_rent_exempt_lamports =
+                runner.minimum_balance_for_rent_exemption(&args.origin, buffer_data_bytes)?;
             let mut receipt = UpgradeReceiptV1 {
                 schema: SCHEMA.into(),
                 phase: ReceiptPhaseV1::Prepared,
@@ -1765,6 +3081,7 @@ fn execute_with_runner(
                 fee_payer: args.fee_payer.to_string(),
                 rpc_origin_redacted: args.origin.redacted_url(),
                 genesis_hash: DEVNET_GENESIS_HASH.into(),
+                deployment_set_journal_sha256,
                 source_revision: gate.source_revision.clone(),
                 source_tree_sha256: gate.source_tree_sha256.clone(),
                 checked_release_gate_sha256: gate.gate_sha256.clone(),
@@ -1777,6 +3094,28 @@ fn execute_with_runner(
                 before_context_slot: before.context_slot,
                 before: before.loader.clone(),
                 wallet_before_lamports: before.wallet_lamports,
+                exclusive_payer_window_acknowledgment: exclusive_payer_ack,
+                buffer_pubkey: args.buffer_pubkey.to_string(),
+                buffer_keypair_path: path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?,
+                buffer_data_bytes,
+                buffer_rent_exempt_lamports,
+                buffer_write_armed_block_height: None,
+                buffer_write_expiry_block_height: None,
+                buffer_write_cli_output: None,
+                buffer_ready_context_slot: None,
+                buffer_ready_account_sha256: None,
+                buffer_ready_lamports: None,
+                buffer_upload_fee_lamports: None,
+                buffer_upload_transactions: None,
+                buffer_upload_transactions_sha256: None,
+                buffer_upload_wallet_after_lamports: None,
+                expired_packets: Vec::new(),
+                unsigned_message_base64: None,
+                unsigned_message_sha256: None,
+                recent_blockhash: None,
+                last_valid_block_height: None,
+                signed_packet_base64: None,
+                signed_packet_sha256: None,
                 transaction_signature: None,
                 solana_cli_output: None,
                 finalized_transaction: None,
@@ -1789,25 +3128,36 @@ fn execute_with_runner(
                 receipt_sha256: String::new(),
             };
             write_receipt(&args.receipt_path, &mut receipt)?;
-            submit_and_finish(runner, args, gate, candidate_live, &mut receipt)
+            continue_upgrade(runner, args, gate, candidate_live, &mut receipt)
         }
-        Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Prepared => {
+        Some(mut receipt)
+            if matches!(
+                receipt.phase,
+                ReceiptPhaseV1::Prepared
+                    | ReceiptPhaseV1::BufferWriteArmed
+                    | ReceiptPhaseV1::BufferReady
+                    | ReceiptPhaseV1::MessagePrepared
+                    | ReceiptPhaseV1::SignedNotSubmitted
+                    | ReceiptPhaseV1::Submitted
+            ) =>
+        {
+            require_mutation_permit(args, Some(&receipt.deployment_set_journal_sha256), true)?;
             let current = read_snapshot(runner, args, receipt.before_context_slot)?;
-            if current.loader != receipt.before
-                || current.wallet_lamports != receipt.wallet_before_lamports
-            {
+            if receipt.phase != ReceiptPhaseV1::Submitted && current.loader != receipt.before {
                 return Err(Error::new(
-                    "a prepared Upgrade receipt exists but the Loader or wallet prestate moved. \
-                     The prior submission outcome is ambiguous; do not replay the deploy. Recover \
-                     and attach the original CLI output, or start a separately reviewed operation.",
+                    "Upgrade action has not been submitted but the exact Loader prestate moved",
                 ));
             }
-            require_baseline_prestate(baseline, &current.loader)?;
-            require_candidate_fits(&current, candidate_live)?;
-            submit_and_finish(runner, args, gate, candidate_live, &mut receipt)
-        }
-        Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Submitted => {
-            finish_submitted(runner, args, gate, candidate_live, &mut receipt)
+            if matches!(
+                receipt.phase,
+                ReceiptPhaseV1::Prepared | ReceiptPhaseV1::BufferWriteArmed
+            ) && current.wallet_lamports > receipt.wallet_before_lamports
+            {
+                return Err(Error::new(
+                    "Upgrade payer wallet increased during Buffer upload",
+                ));
+            }
+            continue_upgrade(runner, args, gate, candidate_live, &mut receipt)
         }
         Some(_) => Err(Error::new("unknown Upgrade receipt phase")),
     }
@@ -1863,6 +3213,7 @@ fn preflight_with_runner(
             &admission.live_elf_sha256,
             admission.live_elf_padding_bytes,
             receipt,
+            true,
         )?;
     } else if args.dump_path.exists() {
         return Err(Error::new(
@@ -1980,6 +3331,8 @@ fn verify_submitted_observation_read_only(
         programdata_id: args.programdata_id,
         authority: args.expected_upgrade_authority,
         payer: args.fee_payer,
+        buffer: parse_pubkey(&receipt.buffer_pubkey, "receipt Buffer")?,
+        buffer_lamports: receipt.buffer_rent_exempt_lamports,
         deployment_slot: observation.loader.deployment_slot,
         programdata_before_lamports: receipt.before.programdata_lamports,
         programdata_after_lamports: observation.loader.programdata_lamports,
@@ -2040,23 +3393,10 @@ fn execute_extension_with_runner(
             existing.as_ref().expect("checked complete extension"),
         );
     }
-    authenticate_keypair(
-        runner,
-        &shadow,
-        &args.authority_keypair,
-        args.expected_upgrade_authority,
-        "upgrade authority",
-    )?;
-    authenticate_keypair(
-        runner,
-        &shadow,
-        &args.fee_payer_keypair,
-        args.fee_payer,
-        "fee payer",
-    )?;
 
     match existing {
         None => {
+            let deployment_set_journal_sha256 = require_mutation_permit(&shadow, None, false)?;
             let before = read_snapshot(runner, &shadow, baseline.context_slot)?;
             require_baseline_prestate(&baseline, &before.loader)?;
             let required = baseline
@@ -2083,6 +3423,7 @@ fn execute_extension_with_runner(
                 fee_payer: args.fee_payer.to_string(),
                 rpc_origin_redacted: args.origin.redacted_url(),
                 genesis_hash: DEVNET_GENESIS_HASH.into(),
+                deployment_set_journal_sha256,
                 baseline_sha256: baseline.baseline_sha256.clone(),
                 baseline_context_slot: baseline.context_slot,
                 solana_cli_version: args.expected_solana_cli_version.clone(),
@@ -2092,6 +3433,13 @@ fn execute_extension_with_runner(
                 before_context_slot: before.context_slot,
                 before: before.loader,
                 wallet_before_lamports: before.wallet_lamports,
+                expired_packets: Vec::new(),
+                unsigned_message_base64: None,
+                unsigned_message_sha256: None,
+                recent_blockhash: None,
+                last_valid_block_height: None,
+                signed_packet_base64: None,
+                signed_packet_sha256: None,
                 transaction_signature: None,
                 solana_cli_output: None,
                 finalized_transaction: None,
@@ -2102,21 +3450,31 @@ fn execute_extension_with_runner(
                 receipt_sha256: String::new(),
             };
             write_extension_receipt(&args.receipt_path, &mut receipt)?;
-            submit_extension_and_finish(runner, args, &shadow, &baseline, &mut receipt)
+            continue_extension(runner, args, &shadow, &baseline, &mut receipt)
         }
-        Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Prepared => {
+        Some(mut receipt)
+            if matches!(
+                receipt.phase,
+                ReceiptPhaseV1::Prepared
+                    | ReceiptPhaseV1::MessagePrepared
+                    | ReceiptPhaseV1::SignedNotSubmitted
+                    | ReceiptPhaseV1::Submitted
+            ) =>
+        {
+            require_mutation_permit(&shadow, Some(&receipt.deployment_set_journal_sha256), false)?;
             let current = read_snapshot(runner, &shadow, receipt.before_context_slot)?;
-            require_baseline_prestate(&baseline, &current.loader)?;
-            if current.wallet_lamports != receipt.wallet_before_lamports {
+            if receipt.phase != ReceiptPhaseV1::Submitted {
+                require_baseline_prestate(&baseline, &current.loader)?;
+            }
+            if receipt.phase != ReceiptPhaseV1::Submitted
+                && current.wallet_lamports != receipt.wallet_before_lamports
+            {
                 return Err(Error::new(
-                    "prepared extension receipt exists but its payer balance moved; prior \
-                     submission outcome is ambiguous and the extension will not replay",
+                    "extension plan exists before submission but its payer balance moved; the \
+                     exact journaled action is refused",
                 ));
             }
-            submit_extension_and_finish(runner, args, &shadow, &baseline, &mut receipt)
-        }
-        Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Submitted => {
-            finish_submitted_extension(runner, args, &shadow, &baseline, &mut receipt)
+            continue_extension(runner, args, &shadow, &baseline, &mut receipt)
         }
         Some(_) => Err(Error::new("unknown extension receipt phase")),
     }
@@ -2141,6 +3499,10 @@ fn verify_complete_extension_live(
     }
     let transaction = runner.resolve_extension_transaction(&ExtensionTransactionQueryV1 {
         origin: &args.origin,
+        signature: receipt
+            .transaction_signature
+            .as_deref()
+            .ok_or_else(|| Error::new("complete extension omitted signature"))?,
         program_id: args.program_id,
         programdata_id: args.programdata_id,
         authority: args.expected_upgrade_authority,
@@ -2168,54 +3530,116 @@ fn verify_complete_extension_live(
     Ok(receipt.clone())
 }
 
-fn submit_extension_and_finish(
+fn continue_extension(
     runner: &mut impl CliRunner,
     args: &ExtensionArgsV1,
     shadow: &UpgradeArgsV1,
     baseline: &UpgradeBaselineV1,
     receipt: &mut ExtensionReceiptV1,
 ) -> Result<ExtensionReceiptV1> {
-    let output = invoke(
-        runner,
-        shadow,
-        &[
-            "program".into(),
-            "extend".into(),
-            args.program_id.to_string(),
-            baseline.extension_additional_bytes.to_string(),
-            "--url".into(),
-            args.origin.url().into(),
-            "--keypair".into(),
-            path_argument(&args.fee_payer_keypair, "--fee-payer-keypair")?,
-            "--authority".into(),
-            path_argument(&args.authority_keypair, "--authority-keypair")?,
-            "--output".into(),
-            "json".into(),
-        ],
-    )?;
-    let parsed: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
-        Error::new(format!(
-            "solana program extend did not return one JSON object: {error}"
-        ))
-    })?;
-    let returned_program = parsed
-        .get("programId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("extension output omitted string programId"))?;
-    if returned_program != args.program_id.to_string() {
-        return Err(Error::new("extension output substituted the Program id"));
+    let additional_bytes = u32::try_from(baseline.extension_additional_bytes)
+        .map_err(|_| Error::new("extension byte count exceeds Loader u32"))?;
+    let query = LoaderActionQueryV1 {
+        origin: &args.origin,
+        program_id: args.program_id,
+        programdata_id: args.programdata_id,
+        authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        authority_keypair: &args.authority_keypair,
+        payer_keypair: &args.fee_payer_keypair,
+        action: LoaderActionV1::Extend { additional_bytes },
+    };
+    loop {
+        require_mutation_permit(shadow, Some(&receipt.deployment_set_journal_sha256), false)?;
+        match receipt.phase {
+            ReceiptPhaseV1::Prepared => {
+                let unsigned = runner.prepare_loader_action(&query)?;
+                authenticate_unsigned_loader_action(&query, &unsigned)?;
+                receipt.phase = ReceiptPhaseV1::MessagePrepared;
+                receipt.unsigned_message_base64 = Some(unsigned.message_base64);
+                receipt.unsigned_message_sha256 = Some(unsigned.message_sha256);
+                receipt.recent_blockhash = Some(unsigned.recent_blockhash);
+                receipt.last_valid_block_height = Some(unsigned.last_valid_block_height);
+                write_extension_receipt(&args.receipt_path, receipt)?;
+            }
+            ReceiptPhaseV1::MessagePrepared => {
+                let unsigned = extension_unsigned(receipt)?;
+                let signed = runner.sign_loader_action(&query, &unsigned)?;
+                authenticate_signed_loader_action(&query, &unsigned, &signed)?;
+                receipt.phase = ReceiptPhaseV1::SignedNotSubmitted;
+                receipt.signed_packet_base64 = Some(signed.packet_base64);
+                receipt.signed_packet_sha256 = Some(signed.packet_sha256);
+                receipt.transaction_signature = Some(signed.signature);
+                write_extension_receipt(&args.receipt_path, receipt)?;
+            }
+            ReceiptPhaseV1::SignedNotSubmitted => {
+                let unsigned = extension_unsigned(receipt)?;
+                let signed = extension_signed(receipt)?;
+                authenticate_signed_loader_action(&query, &unsigned, &signed)?;
+                // Submitted is durable before the one allowed send. A crash
+                // before or after send therefore always resumes poll-only.
+                receipt.phase = ReceiptPhaseV1::Submitted;
+                receipt.solana_cli_output = Some(serde_json::json!({
+                    "transport": "sendTransaction",
+                    "maxRetries": 0,
+                    "signature": signed.signature,
+                }));
+                write_extension_receipt(&args.receipt_path, receipt)?;
+                let returned = runner.send_loader_action(&args.origin, &signed)?;
+                if returned != signed.signature {
+                    return Err(Error::new(
+                        "extension send returned a signature different from the fsynced packet",
+                    ));
+                }
+            }
+            ReceiptPhaseV1::Submitted => {
+                return finish_submitted_extension(runner, args, shadow, baseline, receipt);
+            }
+            ReceiptPhaseV1::Complete => return Ok(receipt.clone()),
+            ReceiptPhaseV1::BufferWriteArmed | ReceiptPhaseV1::BufferReady => {
+                return Err(Error::new(
+                    "extension receipt entered an Upgrade-only phase",
+                ));
+            }
+        }
     }
-    if parsed.get("additionalBytes").and_then(Value::as_u64)
-        != Some(baseline.extension_additional_bytes)
-    {
-        return Err(Error::new(
-            "extension output substituted the additional-byte count",
-        ));
-    }
-    receipt.phase = ReceiptPhaseV1::Submitted;
-    receipt.solana_cli_output = Some(parsed);
-    write_extension_receipt(&args.receipt_path, receipt)?;
-    finish_submitted_extension(runner, args, shadow, baseline, receipt)
+}
+
+fn extension_unsigned(receipt: &ExtensionReceiptV1) -> Result<UnsignedLoaderActionV1> {
+    Ok(UnsignedLoaderActionV1 {
+        message_base64: receipt
+            .unsigned_message_base64
+            .clone()
+            .ok_or_else(|| Error::new("extension receipt omitted unsigned message"))?,
+        message_sha256: receipt
+            .unsigned_message_sha256
+            .clone()
+            .ok_or_else(|| Error::new("extension receipt omitted unsigned message digest"))?,
+        recent_blockhash: receipt
+            .recent_blockhash
+            .clone()
+            .ok_or_else(|| Error::new("extension receipt omitted recent blockhash"))?,
+        last_valid_block_height: receipt
+            .last_valid_block_height
+            .ok_or_else(|| Error::new("extension receipt omitted expiry height"))?,
+    })
+}
+
+fn extension_signed(receipt: &ExtensionReceiptV1) -> Result<SignedLoaderActionV1> {
+    Ok(SignedLoaderActionV1 {
+        packet_base64: receipt
+            .signed_packet_base64
+            .clone()
+            .ok_or_else(|| Error::new("extension receipt omitted signed packet"))?,
+        packet_sha256: receipt
+            .signed_packet_sha256
+            .clone()
+            .ok_or_else(|| Error::new("extension receipt omitted signed packet digest"))?,
+        signature: receipt
+            .transaction_signature
+            .clone()
+            .ok_or_else(|| Error::new("extension receipt omitted packet signature"))?,
+    })
 }
 
 fn finish_submitted_extension(
@@ -2228,12 +3652,24 @@ fn finish_submitted_extension(
     authenticate_devnet(runner, shadow)?;
     let after = read_snapshot(runner, shadow, receipt.before_context_slot)?;
     if after.loader.deployment_slot <= receipt.before.deployment_slot {
-        return Err(Error::new(format!(
-            "extension deployment slot did not advance: before {}, after {}. Agave 4.0.2 \
-             ExtendProgram advances this slot; unchanged state is partial or substituted and \
-             cannot be replayed.",
-            receipt.before.deployment_slot, after.loader.deployment_slot
-        )));
+        if after.loader != receipt.before || after.wallet_lamports != receipt.wallet_before_lamports
+        {
+            return Err(Error::new(
+                "extension deployment slot did not advance and its exact prestate moved; recovery is ambiguous",
+            ));
+        }
+        let finalized_height = runner.finalized_block_height(&args.origin)?;
+        let last_valid = receipt
+            .last_valid_block_height
+            .ok_or_else(|| Error::new("submitted extension omitted expiry height"))?;
+        if finalized_height <= last_valid {
+            return Err(Error::new(format!(
+                "journaled extension signature remains pending through finalized block height {finalized_height}; poll-only recovery refuses a second send before expiry {last_valid}"
+            )));
+        }
+        archive_expired_extension_packet(receipt, finalized_height)?;
+        write_extension_receipt(&args.receipt_path, receipt)?;
+        return continue_extension(runner, args, shadow, _baseline, receipt);
     }
     if after.loader.program_lamports != receipt.before.program_lamports
         || after.loader.program_owner != receipt.before.program_owner
@@ -2304,6 +3740,10 @@ fn finish_submitted_extension(
         .ok_or_else(|| Error::new("ProgramData lamports decreased during extension"))?;
     let transaction = runner.resolve_extension_transaction(&ExtensionTransactionQueryV1 {
         origin: &args.origin,
+        signature: receipt
+            .transaction_signature
+            .as_deref()
+            .ok_or_else(|| Error::new("submitted extension omitted signature"))?,
         program_id: args.program_id,
         programdata_id: args.programdata_id,
         authority: args.expected_upgrade_authority,
@@ -2347,58 +3787,325 @@ fn finish_submitted_extension(
     Ok(receipt.clone())
 }
 
-fn submit_and_finish(
+fn archive_expired_extension_packet(
+    receipt: &mut ExtensionReceiptV1,
+    finalized_height: u64,
+) -> Result<()> {
+    let unsigned = extension_unsigned(receipt)?;
+    let signed = extension_signed(receipt)?;
+    if finalized_height <= unsigned.last_valid_block_height {
+        return Err(Error::new("cannot archive an unexpired extension packet"));
+    }
+    receipt.expired_packets.push(ExpiredLoaderPacketV1 {
+        unsigned_message_base64: unsigned.message_base64,
+        unsigned_message_sha256: unsigned.message_sha256,
+        recent_blockhash: unsigned.recent_blockhash,
+        last_valid_block_height: unsigned.last_valid_block_height,
+        signed_packet_base64: signed.packet_base64,
+        signed_packet_sha256: signed.packet_sha256,
+        transaction_signature: signed.signature,
+        expiry_observed_finalized_block_height: finalized_height,
+    });
+    receipt.phase = ReceiptPhaseV1::Prepared;
+    receipt.unsigned_message_base64 = None;
+    receipt.unsigned_message_sha256 = None;
+    receipt.recent_blockhash = None;
+    receipt.last_valid_block_height = None;
+    receipt.signed_packet_base64 = None;
+    receipt.signed_packet_sha256 = None;
+    receipt.transaction_signature = None;
+    receipt.solana_cli_output = None;
+    Ok(())
+}
+
+fn continue_upgrade(
     runner: &mut impl CliRunner,
     args: &UpgradeArgsV1,
     gate: &ValidatedUpgradeGateV1,
     candidate_live: &[u8],
     receipt: &mut UpgradeReceiptV1,
 ) -> Result<UpgradeReceiptV1> {
-    let output = invoke(
-        runner,
-        args,
-        &[
-            "program".into(),
-            "deploy".into(),
-            path_argument(&args.elf_path, "--elf")?,
-            "--url".into(),
-            args.origin.url().into(),
-            "--keypair".into(),
-            path_argument(&args.fee_payer_keypair, "--fee-payer-keypair")?,
-            "--upgrade-authority".into(),
-            path_argument(&args.authority_keypair, "--authority-keypair")?,
-            "--program-id".into(),
-            args.program_id.to_string(),
-            "--output".into(),
-            "json".into(),
-        ],
-    )?;
-    let parsed: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
-        Error::new(format!(
-            "solana program deploy did not return one JSON object: {error}"
-        ))
-    })?;
-    let returned_program = parsed
-        .get("programId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("deploy output omitted string programId"))?;
-    if returned_program != args.program_id.to_string() {
-        return Err(Error::new(format!(
-            "deploy output substituted program {returned_program}; expected {}",
-            args.program_id
-        )));
+    let query = LoaderActionQueryV1 {
+        origin: &args.origin,
+        program_id: args.program_id,
+        programdata_id: args.programdata_id,
+        authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        authority_keypair: &args.authority_keypair,
+        payer_keypair: &args.fee_payer_keypair,
+        action: LoaderActionV1::Upgrade {
+            buffer: args.buffer_pubkey,
+        },
+    };
+    let mut newly_armed = false;
+    loop {
+        require_mutation_permit(args, Some(&receipt.deployment_set_journal_sha256), true)?;
+        match receipt.phase {
+            ReceiptPhaseV1::Prepared => {
+                if runner
+                    .read_buffer(
+                        &args.origin,
+                        args.buffer_pubkey,
+                        args.expected_upgrade_authority,
+                        receipt.before_context_slot,
+                    )?
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        "Buffer appeared before its upload boundary was armed",
+                    ));
+                }
+                let armed_height = runner.finalized_block_height(&args.origin)?;
+                receipt.phase = ReceiptPhaseV1::BufferWriteArmed;
+                receipt.buffer_write_armed_block_height = Some(armed_height);
+                receipt.buffer_write_expiry_block_height = Some(
+                    armed_height
+                        .checked_add(BUFFER_WRITE_EXPIRY_BLOCKS)
+                        .ok_or_else(|| Error::new("Buffer expiry height overflow"))?,
+                );
+                write_receipt(&args.receipt_path, receipt)?;
+                newly_armed = true;
+            }
+            ReceiptPhaseV1::BufferWriteArmed => {
+                if authenticate_ready_buffer(runner, args, gate, receipt)? {
+                    newly_armed = false;
+                    continue;
+                }
+                let height = runner.finalized_block_height(&args.origin)?;
+                let expiry = receipt
+                    .buffer_write_expiry_block_height
+                    .ok_or_else(|| Error::new("armed Buffer receipt omitted expiry height"))?;
+                if !newly_armed && height <= expiry {
+                    return Err(Error::new(format!(
+                        "persistent Buffer upload remains pending through finalized height {height}; no second writer is allowed before conservative expiry {expiry}"
+                    )));
+                }
+                if !newly_armed {
+                    receipt.buffer_write_armed_block_height = Some(height);
+                    receipt.buffer_write_expiry_block_height = Some(
+                        height
+                            .checked_add(BUFFER_WRITE_EXPIRY_BLOCKS)
+                            .ok_or_else(|| Error::new("Buffer re-arm expiry overflow"))?,
+                    );
+                    receipt.buffer_write_cli_output = None;
+                    write_receipt(&args.receipt_path, receipt)?;
+                }
+                // The exact Buffer identity, ELF, rent, authority, payer and
+                // retry horizon are fsynced before any of these key reads.
+                authenticate_keypair(
+                    runner,
+                    args,
+                    &args.buffer_keypair,
+                    args.buffer_pubkey,
+                    "persistent Buffer",
+                )?;
+                authenticate_keypair(
+                    runner,
+                    args,
+                    &args.authority_keypair,
+                    args.expected_upgrade_authority,
+                    "Buffer authority",
+                )?;
+                authenticate_keypair(
+                    runner,
+                    args,
+                    &args.fee_payer_keypair,
+                    args.fee_payer,
+                    "Buffer fee payer",
+                )?;
+                let output = invoke(
+                    runner,
+                    args,
+                    &[
+                        "program".into(),
+                        "write-buffer".into(),
+                        path_argument(&args.elf_path, "--elf")?,
+                        "--url".into(),
+                        args.origin.url().into(),
+                        "--buffer".into(),
+                        path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?,
+                        "--buffer-authority".into(),
+                        path_argument(&args.authority_keypair, "--buffer-authority")?,
+                        "--fee-payer".into(),
+                        path_argument(&args.fee_payer_keypair, "--fee-payer")?,
+                        "--max-len".into(),
+                        gate.raw_elf.len().to_string(),
+                        "--max-sign-attempts".into(),
+                        "1".into(),
+                        "--output".into(),
+                        "json".into(),
+                    ],
+                )?;
+                let parsed: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
+                    Error::new(format!(
+                        "write-buffer output was lost or invalid after its one attempt: {error}; receipt remains armed and recovery is read-only"
+                    ))
+                })?;
+                let returned = parsed
+                    .get("buffer")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::new("write-buffer output omitted exact buffer"))?;
+                if returned != args.buffer_pubkey.to_string() {
+                    return Err(Error::new(
+                        "write-buffer output substituted Buffer identity",
+                    ));
+                }
+                receipt.buffer_write_cli_output = Some(parsed);
+                write_receipt(&args.receipt_path, receipt)?;
+                newly_armed = false;
+                if !authenticate_ready_buffer(runner, args, gate, receipt)? {
+                    return Err(Error::new(
+                        "one-attempt Buffer writer returned before exact payload finalized; recovery is poll-only until expiry",
+                    ));
+                }
+            }
+            ReceiptPhaseV1::BufferReady => {
+                let unsigned = runner.prepare_loader_action(&query)?;
+                authenticate_unsigned_loader_action(&query, &unsigned)?;
+                receipt.phase = ReceiptPhaseV1::MessagePrepared;
+                receipt.unsigned_message_base64 = Some(unsigned.message_base64);
+                receipt.unsigned_message_sha256 = Some(unsigned.message_sha256);
+                receipt.recent_blockhash = Some(unsigned.recent_blockhash);
+                receipt.last_valid_block_height = Some(unsigned.last_valid_block_height);
+                write_receipt(&args.receipt_path, receipt)?;
+            }
+            ReceiptPhaseV1::MessagePrepared => {
+                let unsigned = upgrade_unsigned(receipt)?;
+                let signed = runner.sign_loader_action(&query, &unsigned)?;
+                authenticate_signed_loader_action(&query, &unsigned, &signed)?;
+                receipt.phase = ReceiptPhaseV1::SignedNotSubmitted;
+                receipt.signed_packet_base64 = Some(signed.packet_base64);
+                receipt.signed_packet_sha256 = Some(signed.packet_sha256);
+                receipt.transaction_signature = Some(signed.signature);
+                write_receipt(&args.receipt_path, receipt)?;
+            }
+            ReceiptPhaseV1::SignedNotSubmitted => {
+                let unsigned = upgrade_unsigned(receipt)?;
+                let signed = upgrade_signed(receipt)?;
+                authenticate_signed_loader_action(&query, &unsigned, &signed)?;
+                receipt.phase = ReceiptPhaseV1::Submitted;
+                receipt.solana_cli_output = Some(serde_json::json!({
+                    "transport": "sendTransaction",
+                    "maxRetries": 0,
+                    "signature": signed.signature,
+                    "buffer": args.buffer_pubkey.to_string(),
+                    "spill": args.fee_payer.to_string(),
+                }));
+                write_receipt(&args.receipt_path, receipt)?;
+                let returned = runner.send_loader_action(&args.origin, &signed)?;
+                if returned != signed.signature {
+                    return Err(Error::new(
+                        "Upgrade send returned a signature different from the fsynced packet",
+                    ));
+                }
+            }
+            ReceiptPhaseV1::Submitted => {
+                return finish_submitted(runner, args, gate, candidate_live, receipt);
+            }
+            ReceiptPhaseV1::Complete => return Ok(receipt.clone()),
+        }
     }
-    let signature = parsed
-        .get("signature")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("deploy output omitted string signature"))?;
-    Signature::from_str(signature)
-        .map_err(|_| Error::new("deploy output signature is not a Solana signature"))?;
-    receipt.phase = ReceiptPhaseV1::Submitted;
-    receipt.transaction_signature = Some(signature.into());
-    receipt.solana_cli_output = Some(parsed);
+}
+
+fn authenticate_ready_buffer(
+    runner: &mut impl CliRunner,
+    args: &UpgradeArgsV1,
+    gate: &ValidatedUpgradeGateV1,
+    receipt: &mut UpgradeReceiptV1,
+) -> Result<bool> {
+    let Some(buffer) = runner.read_buffer(
+        &args.origin,
+        args.buffer_pubkey,
+        args.expected_upgrade_authority,
+        receipt.before_context_slot,
+    )?
+    else {
+        return Ok(false);
+    };
+    if buffer.data_bytes != receipt.buffer_data_bytes
+        || buffer.lamports != receipt.buffer_rent_exempt_lamports
+        || buffer.authority != args.expected_upgrade_authority.to_string()
+    {
+        return Err(Error::new(
+            "persistent Buffer width, rent, or authority differs from the fsynced plan",
+        ));
+    }
+    if buffer.payload_sha256 != gate.raw_elf_sha256 {
+        return Ok(false);
+    }
+    let current = read_snapshot(runner, args, receipt.before_context_slot)?;
+    if current.loader != receipt.before {
+        return Err(Error::new(
+            "Program/ProgramData moved before final Upgrade packet preparation",
+        ));
+    }
+    let upload = runner.authenticate_buffer_upload(&BufferUploadQueryV1 {
+        origin: &args.origin,
+        buffer: parse_pubkey(&receipt.buffer_pubkey, "receipt Buffer")?,
+        authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        raw_elf: &gate.raw_elf,
+        minimum_slot: receipt.before_context_slot,
+        expected_rent_lamports: receipt.buffer_rent_exempt_lamports,
+        wallet_before_lamports: receipt.wallet_before_lamports,
+        wallet_after_lamports: current.wallet_lamports,
+    })?;
+    require_digest(
+        &upload.transactions_sha256,
+        "Buffer upload transaction evidence SHA-256",
+    )?;
+    if upload.transactions_sha256 != digest(&serde_json::to_vec(&upload.transactions)?) {
+        return Err(Error::new(
+            "Buffer upload transaction evidence digest drifted",
+        ));
+    }
+    receipt.phase = ReceiptPhaseV1::BufferReady;
+    receipt.buffer_ready_context_slot = Some(buffer.context_slot);
+    receipt.buffer_ready_account_sha256 = Some(buffer.account_sha256);
+    receipt.buffer_ready_lamports = Some(buffer.lamports);
+    receipt.buffer_upload_fee_lamports = Some(upload.fee_lamports);
+    receipt.buffer_upload_transactions = Some(upload.transactions);
+    receipt.buffer_upload_transactions_sha256 = Some(upload.transactions_sha256);
+    receipt.buffer_upload_wallet_after_lamports = Some(current.wallet_lamports);
     write_receipt(&args.receipt_path, receipt)?;
-    finish_submitted(runner, args, gate, candidate_live, receipt)
+    Ok(true)
+}
+
+fn upgrade_unsigned(receipt: &UpgradeReceiptV1) -> Result<UnsignedLoaderActionV1> {
+    Ok(UnsignedLoaderActionV1 {
+        message_base64: receipt
+            .unsigned_message_base64
+            .clone()
+            .ok_or_else(|| Error::new("Upgrade receipt omitted unsigned message"))?,
+        message_sha256: receipt
+            .unsigned_message_sha256
+            .clone()
+            .ok_or_else(|| Error::new("Upgrade receipt omitted unsigned message digest"))?,
+        recent_blockhash: receipt
+            .recent_blockhash
+            .clone()
+            .ok_or_else(|| Error::new("Upgrade receipt omitted blockhash"))?,
+        last_valid_block_height: receipt
+            .last_valid_block_height
+            .ok_or_else(|| Error::new("Upgrade receipt omitted expiry height"))?,
+    })
+}
+
+fn upgrade_signed(receipt: &UpgradeReceiptV1) -> Result<SignedLoaderActionV1> {
+    Ok(SignedLoaderActionV1 {
+        packet_base64: receipt
+            .signed_packet_base64
+            .clone()
+            .ok_or_else(|| Error::new("Upgrade receipt omitted signed packet"))?,
+        packet_sha256: receipt
+            .signed_packet_sha256
+            .clone()
+            .ok_or_else(|| Error::new("Upgrade receipt omitted signed packet digest"))?,
+        signature: receipt
+            .transaction_signature
+            .clone()
+            .ok_or_else(|| Error::new("Upgrade receipt omitted packet signature"))?,
+    })
 }
 
 fn finish_submitted(
@@ -2411,11 +4118,38 @@ fn finish_submitted(
     authenticate_devnet(runner, args)?;
     let after = read_snapshot(runner, args, receipt.before_context_slot)?;
     if after.loader.deployment_slot <= receipt.before.deployment_slot {
-        return Err(Error::new(format!(
-            "deployment slot did not advance: before {}, after {}. The CLI returned a signature, \
-             so replay is refused; inspect that transaction instead.",
-            receipt.before.deployment_slot, after.loader.deployment_slot
-        )));
+        let buffer = runner.read_buffer(
+            &args.origin,
+            args.buffer_pubkey,
+            args.expected_upgrade_authority,
+            receipt.before_context_slot,
+        )?;
+        if after.loader != receipt.before
+            || buffer.as_ref().is_none_or(|buffer| {
+                buffer.payload_sha256 != receipt.raw_elf_sha256
+                    || buffer.account_sha256
+                        != receipt
+                            .buffer_ready_account_sha256
+                            .as_deref()
+                            .unwrap_or_default()
+            })
+        {
+            return Err(Error::new(
+                "Upgrade deployment slot has no slot advance and its ProgramData or authenticated Buffer moved; recovery is ambiguous",
+            ));
+        }
+        let finalized_height = runner.finalized_block_height(&args.origin)?;
+        let last_valid = receipt
+            .last_valid_block_height
+            .ok_or_else(|| Error::new("submitted Upgrade omitted expiry height"))?;
+        if finalized_height <= last_valid {
+            return Err(Error::new(format!(
+                "journaled Upgrade signature remains pending through finalized block height {finalized_height}; poll-only recovery refuses a second send before expiry {last_valid}"
+            )));
+        }
+        archive_expired_upgrade_packet(receipt, finalized_height)?;
+        write_receipt(&args.receipt_path, receipt)?;
+        return continue_upgrade(runner, args, gate, candidate_live, receipt);
     }
     if after.live_elf != candidate_live || after.loader.live_elf_sha256 != receipt.live_elf_sha256 {
         return Err(Error::new(
@@ -2444,6 +4178,8 @@ fn finish_submitted(
         programdata_id: args.programdata_id,
         authority: args.expected_upgrade_authority,
         payer: args.fee_payer,
+        buffer: parse_pubkey(&receipt.buffer_pubkey, "receipt Buffer")?,
+        buffer_lamports: receipt.buffer_rent_exempt_lamports,
         deployment_slot: after.loader.deployment_slot,
         programdata_before_lamports: receipt.before.programdata_lamports,
         programdata_after_lamports: after.loader.programdata_lamports,
@@ -2451,8 +4187,39 @@ fn finish_submitted(
     let programdata_delta = i128::from(after.loader.programdata_lamports)
         .checked_sub(i128::from(receipt.before.programdata_lamports))
         .ok_or_else(|| Error::new("ProgramData lamport delta overflow"))?;
+    let operation_observed_net_spend_lamports = receipt
+        .wallet_before_lamports
+        .checked_sub(after.wallet_lamports)
+        .ok_or_else(|| Error::new("exclusive payer wallet increased across the deploy window"))?;
+    let unattributed_cli_net_cost_lamports = operation_observed_net_spend_lamports
+        .checked_sub(transaction.fee_lamports)
+        .ok_or_else(|| {
+            Error::new(
+                "operation-wide observed payer spend is smaller than the final Upgrade transaction fee",
+            )
+        })?;
+    if transaction.payer_pre_lamports
+        != receipt
+            .buffer_upload_wallet_after_lamports
+            .ok_or_else(|| Error::new("Buffer-ready receipt omitted payer post-upload balance"))?
+        || transaction.payer_post_lamports != after.wallet_lamports
+        || unattributed_cli_net_cost_lamports
+            != receipt
+                .buffer_upload_fee_lamports
+                .ok_or_else(|| Error::new("Buffer-ready receipt omitted upload fees"))?
+    {
+        return Err(Error::new(
+            "final Upgrade transaction does not bridge the exact Buffer-upload and operation wallet balances",
+        ));
+    }
 
-    let (dump_sha256, dump_shape) = verify_dump(runner, args, &gate.raw_elf, candidate_live)?;
+    let (dump_sha256, dump_shape) = verify_dump(
+        runner,
+        args,
+        &receipt.operation_id,
+        &gate.raw_elf,
+        candidate_live,
+    )?;
     receipt.phase = ReceiptPhaseV1::Complete;
     receipt.finalized_transaction = Some(transaction.transaction);
     receipt.finalized_transaction_sha256 = Some(transaction.transaction_sha256);
@@ -2462,18 +4229,52 @@ fn finish_submitted(
         transaction_payer_pre_lamports: transaction.payer_pre_lamports,
         transaction_payer_post_lamports: transaction.payer_post_lamports,
         transaction_fee_lamports: transaction.fee_lamports,
-        payer_fee_delta_lamports: transaction
-            .payer_pre_lamports
-            .checked_sub(transaction.payer_post_lamports)
-            .ok_or_else(|| Error::new("validated Upgrade payer delta underflow"))?,
+        payer_fee_delta_lamports: transaction.fee_lamports,
         programdata_before_lamports: transaction.programdata_pre_lamports,
         programdata_after_lamports: transaction.programdata_post_lamports,
         programdata_delta_lamports: programdata_delta,
+        operation_wallet_before_lamports: receipt.wallet_before_lamports,
+        operation_wallet_after_lamports: after.wallet_lamports,
+        operation_observed_net_spend_lamports,
+        unattributed_cli_net_cost_lamports,
+        accounting_scope: OPERATION_ACCOUNTING_SCOPE_V1.into(),
+        cost_attribution: OPERATION_COST_ATTRIBUTION_V1.into(),
     });
     receipt.dump_sha256 = Some(dump_sha256);
     receipt.dump_shape = Some(dump_shape);
     write_receipt(&args.receipt_path, receipt)?;
     Ok(receipt.clone())
+}
+
+fn archive_expired_upgrade_packet(
+    receipt: &mut UpgradeReceiptV1,
+    finalized_height: u64,
+) -> Result<()> {
+    let unsigned = upgrade_unsigned(receipt)?;
+    let signed = upgrade_signed(receipt)?;
+    if finalized_height <= unsigned.last_valid_block_height {
+        return Err(Error::new("cannot archive an unexpired Upgrade packet"));
+    }
+    receipt.expired_packets.push(ExpiredLoaderPacketV1 {
+        unsigned_message_base64: unsigned.message_base64,
+        unsigned_message_sha256: unsigned.message_sha256,
+        recent_blockhash: unsigned.recent_blockhash,
+        last_valid_block_height: unsigned.last_valid_block_height,
+        signed_packet_base64: signed.packet_base64,
+        signed_packet_sha256: signed.packet_sha256,
+        transaction_signature: signed.signature,
+        expiry_observed_finalized_block_height: finalized_height,
+    });
+    receipt.phase = ReceiptPhaseV1::BufferReady;
+    receipt.unsigned_message_base64 = None;
+    receipt.unsigned_message_sha256 = None;
+    receipt.recent_blockhash = None;
+    receipt.last_valid_block_height = None;
+    receipt.signed_packet_base64 = None;
+    receipt.signed_packet_sha256 = None;
+    receipt.transaction_signature = None;
+    receipt.solana_cli_output = None;
+    Ok(())
 }
 
 fn verify_complete_receipt_live(
@@ -2509,6 +4310,8 @@ fn verify_recorded_upgrade_transaction(
         programdata_id: args.programdata_id,
         authority: args.expected_upgrade_authority,
         payer: args.fee_payer,
+        buffer: parse_pubkey(&receipt.buffer_pubkey, "receipt Buffer")?,
+        buffer_lamports: receipt.buffer_rent_exempt_lamports,
         deployment_slot: observation.loader.deployment_slot,
         programdata_before_lamports: receipt.before.programdata_lamports,
         programdata_after_lamports: observation.loader.programdata_lamports,
@@ -3284,12 +5087,43 @@ fn require_candidate_fits(before: &SnapshotV1, candidate_live: &[u8]) -> Result<
 fn verify_dump(
     runner: &mut impl CliRunner,
     args: &UpgradeArgsV1,
+    operation_id: &str,
     raw_elf: &[u8],
     candidate_live: &[u8],
 ) -> Result<(String, String)> {
-    let dump = if args.dump_path.exists() {
-        read_dump_regular(&args.dump_path)?
-    } else {
+    require_lower_hex(operation_id, "Upgrade operation id", 64, 64)?;
+    if args.dump_path.exists() {
+        let dump = read_dump_regular(&args.dump_path)?;
+        return classify_dump(&dump, raw_elf, candidate_live);
+    }
+    let parent = args
+        .dump_path
+        .parent()
+        .ok_or_else(|| Error::new("dump path omitted a parent"))?;
+    if !parent.is_dir() {
+        return Err(Error::new("dump parent does not exist"));
+    }
+    let file_name = args
+        .dump_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::new("dump file name is not UTF-8"))?;
+    let temporary = parent.join(format!(".{file_name}.{operation_id}.dump-pending"));
+
+    let mut recovered = false;
+    if temporary.exists() {
+        let bytes = read_dump_regular(&temporary)?;
+        if classify_dump(&bytes, raw_elf, candidate_live).is_ok() {
+            recovered = true;
+        } else {
+            // A CLI crash may leave a truncated operation-owned temporary.
+            // It is never interpreted as the final dump and the read-only
+            // command may safely recreate it on the next attempt.
+            fs::remove_file(&temporary)?;
+            sync_parent_directory(parent)?;
+        }
+    }
+    if !recovered {
         invoke(
             runner,
             args,
@@ -3297,19 +5131,30 @@ fn verify_dump(
                 "program".into(),
                 "dump".into(),
                 args.program_id.to_string(),
-                path_argument(&args.dump_path, "--dump")?,
+                path_argument(&temporary, "--dump-temporary")?,
                 "--url".into(),
                 args.origin.url().into(),
             ],
         )?;
-        read_dump_regular(&args.dump_path).map_err(|error| {
-            Error::new(format!(
-                "Solana CLI reported a successful dump but {} could not be read: {error}",
-                args.dump_path.display()
-            ))
-        })?
-    };
-    classify_dump(&dump, raw_elf, candidate_live)
+    }
+    let dump = read_dump_regular(&temporary).map_err(|error| {
+        Error::new(format!(
+            "Solana CLI dump temporary {} could not be read: {error}",
+            temporary.display()
+        ))
+    })?;
+    let classified = classify_dump(&dump, raw_elf, candidate_live)?;
+    fs::File::open(&temporary)?.sync_all()?;
+    fs::hard_link(&temporary, &args.dump_path).map_err(|error| {
+        Error::new(format!(
+            "no-clobber dump publish {} failed: {error}",
+            args.dump_path.display()
+        ))
+    })?;
+    sync_parent_directory(parent)?;
+    fs::remove_file(&temporary)?;
+    sync_parent_directory(parent)?;
+    Ok(classified)
 }
 
 fn read_dump_regular(path: &Path) -> Result<Vec<u8>> {
@@ -3351,6 +5196,566 @@ fn invoke(
         )));
     }
     Ok(output)
+}
+
+fn loader_action_message(query: &LoaderActionQueryV1<'_>, blockhash: Hash) -> Result<Message> {
+    let instruction = match query.action {
+        LoaderActionV1::Extend { additional_bytes } => extend_program_checked(
+            &query.program_id,
+            &query.authority,
+            Some(&query.payer),
+            additional_bytes,
+        ),
+        LoaderActionV1::Upgrade { buffer } => {
+            upgrade(&query.program_id, &buffer, &query.authority, &query.payer)
+        }
+    };
+    if instruction
+        .accounts
+        .first()
+        .is_none_or(|meta| meta.pubkey != query.programdata_id)
+    {
+        return Err(Error::new(
+            "canonical Loader instruction derived a different ProgramData account",
+        ));
+    }
+    Ok(Message::new_with_blockhash(
+        &[instruction],
+        Some(&query.payer),
+        &blockhash,
+    ))
+}
+
+fn prepare_loader_action_via_rpc(
+    query: &LoaderActionQueryV1<'_>,
+) -> Result<UnsignedLoaderActionV1> {
+    let mut rpc = Rpc::connect_cluster(query.origin, WritePolicyV1::ReadsOnly)?;
+    let value = rpc.call(
+        "getLatestBlockhash",
+        &serde_json::json!([{"commitment":"finalized"}]),
+    )?;
+    let inner = value
+        .get("value")
+        .ok_or_else(|| Error::new("getLatestBlockhash omitted value"))?;
+    let blockhash_text = inner
+        .get("blockhash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("getLatestBlockhash omitted blockhash"))?;
+    let blockhash = blockhash_text
+        .parse::<Hash>()
+        .map_err(|error| Error::new(format!("recent blockhash: {error}")))?;
+    let last_valid_block_height = inner
+        .get("lastValidBlockHeight")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new("getLatestBlockhash omitted lastValidBlockHeight"))?;
+    let message = loader_action_message(query, blockhash)?;
+    let message_bytes = bincode::serialize(&message)
+        .map_err(|error| Error::new(format!("serialize Loader message: {error}")))?;
+    Ok(UnsignedLoaderActionV1 {
+        message_base64: BASE64.encode(&message_bytes),
+        message_sha256: digest(&message_bytes),
+        recent_blockhash: blockhash_text.into(),
+        last_valid_block_height,
+    })
+}
+
+fn authenticate_unsigned_loader_action(
+    query: &LoaderActionQueryV1<'_>,
+    unsigned: &UnsignedLoaderActionV1,
+) -> Result<Message> {
+    require_digest(&unsigned.message_sha256, "unsigned Loader message SHA-256")?;
+    let bytes = BASE64
+        .decode(&unsigned.message_base64)
+        .map_err(|_| Error::new("unsigned Loader message is not canonical base64"))?;
+    if digest(&bytes) != unsigned.message_sha256 {
+        return Err(Error::new(
+            "unsigned Loader message bytes differ from their SHA-256",
+        ));
+    }
+    let message: Message = bincode::deserialize(&bytes)
+        .map_err(|error| Error::new(format!("decode unsigned Loader message: {error}")))?;
+    let blockhash = unsigned
+        .recent_blockhash
+        .parse::<Hash>()
+        .map_err(|error| Error::new(format!("journaled blockhash: {error}")))?;
+    if message != loader_action_message(query, blockhash)?
+        || bincode::serialize(&message)
+            .map_err(|error| Error::new(format!("re-serialize Loader message: {error}")))?
+            != bytes
+    {
+        return Err(Error::new(
+            "unsigned Loader message is not the canonical exact action",
+        ));
+    }
+    Ok(message)
+}
+
+fn read_expected_keypair(path: &Path, expected: Pubkey, label: &str) -> Result<Keypair> {
+    let keypair = read_keypair_file(path)
+        .map_err(|error| Error::new(format!("read {label} keypair: {error}")))?;
+    if keypair.pubkey() != expected {
+        return Err(Error::new(format!(
+            "{label} keypair path resolves to {}, expected {expected}",
+            keypair.pubkey()
+        )));
+    }
+    Ok(keypair)
+}
+
+fn sign_loader_action_from_paths(
+    query: &LoaderActionQueryV1<'_>,
+    unsigned: &UnsignedLoaderActionV1,
+) -> Result<SignedLoaderActionV1> {
+    let message = authenticate_unsigned_loader_action(query, unsigned)?;
+    // The receipt containing `unsigned` is fsynced before this function is
+    // reachable. These are the first private-key reads in the canonical path.
+    let payer = read_expected_keypair(query.payer_keypair, query.payer, "fee payer")?;
+    let authority = read_expected_keypair(
+        query.authority_keypair,
+        query.authority,
+        "upgrade authority",
+    )?;
+    let mut transaction = Transaction::new_unsigned(message);
+    transaction
+        .try_sign(&[&payer, &authority], transaction.message.recent_blockhash)
+        .map_err(|error| Error::new(format!("sign canonical Loader transaction: {error}")))?;
+    let signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .ok_or_else(|| Error::new("signed Loader transaction omitted payer signature"))?;
+    let packet = bincode::serialize(&transaction)
+        .map_err(|error| Error::new(format!("serialize signed Loader packet: {error}")))?;
+    Ok(SignedLoaderActionV1 {
+        packet_base64: BASE64.encode(&packet),
+        packet_sha256: digest(&packet),
+        signature: signature.to_string(),
+    })
+}
+
+fn authenticate_signed_loader_action(
+    query: &LoaderActionQueryV1<'_>,
+    unsigned: &UnsignedLoaderActionV1,
+    signed: &SignedLoaderActionV1,
+) -> Result<Transaction> {
+    require_digest(&signed.packet_sha256, "signed Loader packet SHA-256")?;
+    let packet = BASE64
+        .decode(&signed.packet_base64)
+        .map_err(|_| Error::new("signed Loader packet is not canonical base64"))?;
+    if digest(&packet) != signed.packet_sha256 {
+        return Err(Error::new(
+            "signed Loader packet bytes differ from their SHA-256",
+        ));
+    }
+    let transaction: Transaction = bincode::deserialize(&packet)
+        .map_err(|error| Error::new(format!("decode signed Loader packet: {error}")))?;
+    if transaction.message != authenticate_unsigned_loader_action(query, unsigned)?
+        || bincode::serialize(&transaction)
+            .map_err(|error| Error::new(format!("re-serialize Loader packet: {error}")))?
+            != packet
+        || transaction
+            .signatures
+            .first()
+            .map(ToString::to_string)
+            .as_deref()
+            != Some(signed.signature.as_str())
+    {
+        return Err(Error::new(
+            "signed Loader packet does not bind its exact unsigned message and signature",
+        ));
+    }
+    transaction
+        .verify()
+        .map_err(|error| Error::new(format!("verify signed Loader packet: {error}")))?;
+    Ok(transaction)
+}
+
+fn send_loader_action_via_rpc(
+    origin: &ClusterOriginV1,
+    signed: &SignedLoaderActionV1,
+) -> Result<String> {
+    let _ = Signature::from_str(&signed.signature)
+        .map_err(|_| Error::new("journaled Loader signature is invalid"))?;
+    let mut rpc = Rpc::connect_cluster(origin, WritePolicyV1::Writes)?;
+    let returned = rpc
+        .call(
+            "sendTransaction",
+            &serde_json::json!([signed.packet_base64, {
+                "encoding":"base64",
+                "skipPreflight":false,
+                "preflightCommitment":"confirmed",
+                "maxRetries":0
+            }]),
+        )?
+        .as_str()
+        .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
+        .to_owned();
+    if returned != signed.signature {
+        return Err(Error::new(
+            "sendTransaction returned a signature different from the journaled packet",
+        ));
+    }
+    Ok(returned)
+}
+
+fn read_buffer_via_rpc(
+    origin: &ClusterOriginV1,
+    buffer: Pubkey,
+    authority: Pubkey,
+    minimum_context_slot: u64,
+) -> Result<Option<BufferObservationV1>> {
+    let mut rpc = Rpc::connect_cluster(origin, WritePolicyV1::ReadsOnly)?;
+    let (context_slot, accounts) = rpc.finalized_accounts(&[buffer], minimum_context_slot)?;
+    let Some(account) = accounts.into_iter().next().flatten() else {
+        return Ok(None);
+    };
+    let account = RpcAccountV1::from(account);
+    if account.owner != bpf_loader_upgradeable::ID || account.executable {
+        return Err(Error::new(
+            "persistent Buffer is not a non-executable Loader-v3 account",
+        ));
+    }
+    if account.data.len() < BUFFER_METADATA_BYTES
+        || account.data.get(..4) != Some(&1_u32.to_le_bytes())
+        || account.data.get(4) != Some(&1)
+        || account.data.get(5..BUFFER_METADATA_BYTES) != Some(authority.as_ref())
+    {
+        return Err(Error::new(
+            "persistent Buffer metadata or authority is not canonical",
+        ));
+    }
+    Ok(Some(BufferObservationV1 {
+        context_slot,
+        lamports: account.lamports,
+        data_bytes: u64::try_from(account.data.len())
+            .map_err(|_| Error::new("Buffer width does not fit u64"))?,
+        account_sha256: digest(&account.data),
+        authority: authority.to_string(),
+        payload_sha256: digest(&account.data[BUFFER_METADATA_BYTES..]),
+    }))
+}
+
+fn authenticate_buffer_upload_via_rpc(
+    query: &BufferUploadQueryV1<'_>,
+) -> Result<BufferUploadEvidenceV1> {
+    let mut rpc = Rpc::connect_cluster(query.origin, WritePolicyV1::ReadsOnly)?;
+    let mut before = None::<String>;
+    let mut previous_slot = None::<u64>;
+    let mut crossed_prestate = false;
+    let mut transactions = Vec::new();
+    let mut total_fee = 0_u64;
+    let mut successful_creates = 0_u64;
+    let mut seen = BTreeSet::new();
+    for _ in 0..SIGNATURE_HISTORY_MAX_PAGES {
+        let mut options = serde_json::Map::new();
+        options.insert("commitment".into(), Value::String("finalized".into()));
+        options.insert(
+            "limit".into(),
+            Value::Number(SIGNATURE_HISTORY_PAGE_ROWS.into()),
+        );
+        if let Some(cursor) = &before {
+            options.insert("before".into(), Value::String(cursor.clone()));
+        }
+        let rows = rpc.call(
+            "getSignaturesForAddress",
+            &Value::Array(vec![
+                Value::String(query.buffer.to_string()),
+                Value::Object(options),
+            ]),
+        )?;
+        let rows = rows
+            .as_array()
+            .ok_or_else(|| Error::new("Buffer signature history was not an array"))?;
+        if rows.is_empty() {
+            crossed_prestate = true;
+            break;
+        }
+        for row in rows {
+            let slot = row
+                .get("slot")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| Error::new("Buffer signature row omitted slot"))?;
+            if previous_slot.is_some_and(|previous| slot > previous) {
+                return Err(Error::new(
+                    "Buffer signature history is not newest-to-oldest",
+                ));
+            }
+            previous_slot = Some(slot);
+            if slot < query.minimum_slot {
+                crossed_prestate = true;
+                continue;
+            }
+            let signature = row
+                .get("signature")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::new("Buffer signature row omitted signature"))?;
+            Signature::from_str(signature)
+                .map_err(|_| Error::new("Buffer history signature is invalid"))?;
+            if !seen.insert(signature.to_owned()) {
+                return Err(Error::new("Buffer signature history repeated a row"));
+            }
+            let transaction = rpc.call(
+                "getTransaction",
+                &serde_json::json!([signature, {
+                    "encoding":"base64",
+                    "commitment":"finalized",
+                    "maxSupportedTransactionVersion":0
+                }]),
+            )?;
+            let (fee, successful_create) =
+                validate_buffer_upload_transaction(query, signature, slot, &transaction)?;
+            total_fee = total_fee
+                .checked_add(fee)
+                .ok_or_else(|| Error::new("Buffer upload fee total overflow"))?;
+            successful_creates = successful_creates
+                .checked_add(u64::from(successful_create))
+                .ok_or_else(|| Error::new("Buffer create count overflow"))?;
+            transactions.push(serde_json::json!({
+                "signature_row": row,
+                "transaction": transaction,
+            }));
+        }
+        before = rows
+            .last()
+            .and_then(|row| row.get("signature"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if crossed_prestate {
+            break;
+        }
+    }
+    if !crossed_prestate {
+        return Err(Error::new(format!(
+            "Buffer upload history did not cross prestate slot {} within the bounded history window",
+            query.minimum_slot
+        )));
+    }
+    if successful_creates != 1 || transactions.is_empty() {
+        return Err(Error::new(format!(
+            "Buffer upload history contains {successful_creates} successful exact creates; expected one"
+        )));
+    }
+    let observed_spend = query
+        .wallet_before_lamports
+        .checked_sub(query.wallet_after_lamports)
+        .ok_or_else(|| Error::new("Buffer upload payer wallet increased"))?;
+    let expected_spend = query
+        .expected_rent_lamports
+        .checked_add(total_fee)
+        .ok_or_else(|| Error::new("Buffer rent plus fee total overflow"))?;
+    if observed_spend != expected_spend {
+        return Err(Error::new(format!(
+            "Buffer upload wallet delta is {observed_spend}; exact rent plus all attributable fees is {expected_spend}"
+        )));
+    }
+    let transactions_sha256 = digest(&serde_json::to_vec(&transactions)?);
+    Ok(BufferUploadEvidenceV1 {
+        transactions,
+        transactions_sha256,
+        fee_lamports: total_fee,
+    })
+}
+
+fn validate_buffer_upload_transaction(
+    query: &BufferUploadQueryV1<'_>,
+    signature: &str,
+    slot: u64,
+    evidence: &Value,
+) -> Result<(u64, bool)> {
+    if evidence.get("slot").and_then(Value::as_u64) != Some(slot) {
+        return Err(Error::new(
+            "Buffer transaction slot differs from history row",
+        ));
+    }
+    let transaction_field = evidence
+        .get("transaction")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("base64 Buffer transaction omitted transaction tuple"))?;
+    if transaction_field.get(1).and_then(Value::as_str) != Some("base64") {
+        return Err(Error::new("Buffer transaction is not canonical base64"));
+    }
+    let packet = BASE64
+        .decode(
+            transaction_field
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::new("Buffer transaction omitted base64 packet"))?,
+        )
+        .map_err(|_| Error::new("Buffer transaction packet is invalid base64"))?;
+    let transaction: Transaction = bincode::deserialize(&packet)
+        .map_err(|error| Error::new(format!("decode Buffer transaction: {error}")))?;
+    transaction
+        .verify()
+        .map_err(|error| Error::new(format!("verify Buffer transaction: {error}")))?;
+    if transaction
+        .signatures
+        .first()
+        .map(ToString::to_string)
+        .as_deref()
+        != Some(signature)
+        || transaction.message.account_keys.first() != Some(&query.payer)
+    {
+        return Err(Error::new(
+            "Buffer transaction signature or fee payer differs from the journal",
+        ));
+    }
+    let keys = &transaction.message.account_keys;
+    let unique_index = |wanted: Pubkey| -> Result<u8> {
+        let matches = keys
+            .iter()
+            .enumerate()
+            .filter(|(_, key)| **key == wanted)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(Error::new(format!(
+                "Buffer transaction does not carry one exact account {wanted}"
+            )));
+        }
+        u8::try_from(matches[0]).map_err(|_| Error::new("account index exceeds u8"))
+    };
+    let payer_index = unique_index(query.payer)?;
+    let buffer_index = unique_index(query.buffer)?;
+    let authority_index = unique_index(query.authority)?;
+    if payer_index != 0 || !transaction.message.is_signer(usize::from(payer_index)) {
+        return Err(Error::new(
+            "Buffer transaction payer is not the exact signer at key zero",
+        ));
+    }
+    let mut create = false;
+    let mut initialize = false;
+    let mut writes = 0_u64;
+    for instruction in &transaction.message.instructions {
+        let program = keys
+            .get(usize::from(instruction.program_id_index))
+            .ok_or_else(|| Error::new("Buffer instruction program index is out of range"))?;
+        if *program == solana_sdk_ids::system_program::ID {
+            let decoded: SystemInstruction = bincode::deserialize(&instruction.data)
+                .map_err(|_| Error::new("Buffer system instruction is not canonical bincode"))?;
+            if decoded
+                != (SystemInstruction::CreateAccount {
+                    lamports: query.expected_rent_lamports,
+                    space: u64::try_from(BUFFER_METADATA_BYTES + query.raw_elf.len())
+                        .map_err(|_| Error::new("Buffer width does not fit u64"))?,
+                    owner: bpf_loader_upgradeable::ID,
+                })
+                || instruction.accounts.as_slice() != [payer_index, buffer_index]
+                || !transaction.message.is_signer(usize::from(buffer_index))
+            {
+                return Err(Error::new(
+                    "Buffer transaction contains a substituted system instruction",
+                ));
+            }
+            create = true;
+        } else if *program == bpf_loader_upgradeable::ID {
+            let decoded: UpgradeableLoaderInstruction = bincode::deserialize(&instruction.data)
+                .map_err(|_| Error::new("Buffer Loader instruction is not canonical bincode"))?;
+            match decoded {
+                UpgradeableLoaderInstruction::InitializeBuffer => {
+                    if instruction.accounts.as_slice() != [buffer_index, authority_index] {
+                        return Err(Error::new(
+                            "InitializeBuffer substituted buffer or authority",
+                        ));
+                    }
+                    initialize = true;
+                }
+                UpgradeableLoaderInstruction::Write { offset, bytes } => {
+                    if instruction.accounts.as_slice() != [buffer_index, authority_index] {
+                        return Err(Error::new("Buffer Write substituted its accounts"));
+                    }
+                    if !transaction.message.is_signer(usize::from(authority_index)) {
+                        return Err(Error::new("Buffer Write authority is not a signer"));
+                    }
+                    let start = usize::try_from(offset)
+                        .map_err(|_| Error::new("Buffer Write offset does not fit host"))?;
+                    let end = start
+                        .checked_add(bytes.len())
+                        .ok_or_else(|| Error::new("Buffer Write range overflow"))?;
+                    if query.raw_elf.get(start..end) != Some(bytes.as_slice()) {
+                        return Err(Error::new(
+                            "Buffer Write bytes are not an idempotent slice of the exact ELF",
+                        ));
+                    }
+                    writes = writes
+                        .checked_add(1)
+                        .ok_or_else(|| Error::new("Buffer Write count overflow"))?;
+                }
+                _ => {
+                    return Err(Error::new(
+                        "Buffer upload transaction contains a non-upload Loader instruction",
+                    ));
+                }
+            }
+        } else {
+            return Err(Error::new(
+                "Buffer upload transaction invokes an unrelated program",
+            ));
+        }
+    }
+    if create != initialize || (!create && writes == 0) {
+        return Err(Error::new(
+            "Buffer transaction is neither exact create+initialize nor one-or-more exact writes",
+        ));
+    }
+    let meta = evidence
+        .get("meta")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new("Buffer transaction omitted meta"))?;
+    let fee = meta
+        .get("fee")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new("Buffer transaction fee is not u64"))?;
+    if fee == 0 {
+        return Err(Error::new("Buffer transaction recorded a zero fee"));
+    }
+    let successful = meta.get("err").is_some_and(Value::is_null);
+    let balances = |name: &str| -> Result<&Vec<Value>> {
+        meta.get(name)
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new(format!("Buffer transaction omitted {name}")))
+    };
+    let pre = balances("preBalances")?;
+    let post = balances("postBalances")?;
+    if pre.len() != keys.len() || post.len() != keys.len() {
+        return Err(Error::new(
+            "Buffer transaction balance vector width drifted",
+        ));
+    }
+    let payer_delta = pre[usize::from(payer_index)]
+        .as_u64()
+        .and_then(|before| {
+            post[usize::from(payer_index)]
+                .as_u64()
+                .and_then(|after| before.checked_sub(after))
+        })
+        .ok_or_else(|| Error::new("Buffer transaction payer balance delta is invalid"))?;
+    let expected_delta = if successful && create {
+        fee.checked_add(query.expected_rent_lamports)
+            .ok_or_else(|| Error::new("Buffer create payer delta overflow"))?
+    } else {
+        fee
+    };
+    if payer_delta != expected_delta {
+        return Err(Error::new(
+            "Buffer transaction payer delta is not exact fee plus successful create rent",
+        ));
+    }
+    let buffer_pre = pre[usize::from(buffer_index)]
+        .as_u64()
+        .ok_or_else(|| Error::new("Buffer prebalance is not u64"))?;
+    let buffer_post = post[usize::from(buffer_index)]
+        .as_u64()
+        .ok_or_else(|| Error::new("Buffer postbalance is not u64"))?;
+    if successful && create {
+        if buffer_pre != 0 || buffer_post != query.expected_rent_lamports {
+            return Err(Error::new("Buffer create did not land exact rent"));
+        }
+    } else if buffer_pre != buffer_post {
+        return Err(Error::new(
+            "non-create Buffer upload transaction changed Buffer lamports",
+        ));
+    }
+    Ok((fee, successful && create))
 }
 
 fn resolve_upgrade_transaction_via_rpc(
@@ -3396,7 +5801,7 @@ fn validate_upgrade_transaction(
         .ok_or_else(|| Error::new("Upgrade transaction omitted signatures"))?;
     if signatures.first().and_then(Value::as_str) != Some(query.signature) {
         return Err(Error::new(
-            "CLI-returned Upgrade signature is not the transaction fee-payer signature",
+            "journaled Upgrade signature is not the transaction fee-payer signature",
         ));
     }
     let account_keys = message
@@ -3476,14 +5881,15 @@ fn validate_upgrade_transaction(
             "Loader-v3 Upgrade instruction substituted Program, ProgramData, authority, or sysvars",
         ));
     }
-    for label in ["bufferAccount", "spillAccount"] {
-        let key = info
-            .get(label)
-            .and_then(Value::as_str)
-            .ok_or_else(|| Error::new(format!("Loader-v3 Upgrade omitted {label}")))?;
-        let key = parse_pubkey(key, label)?;
-        let _ = key_index(key, false, true)?;
+    if info.get("bufferAccount").and_then(Value::as_str) != Some(query.buffer.to_string().as_str())
+        || info.get("spillAccount").and_then(Value::as_str)
+            != Some(query.payer.to_string().as_str())
+    {
+        return Err(Error::new(
+            "Loader-v3 Upgrade did not consume the authenticated Buffer into the exact payer spill account",
+        ));
     }
+    let buffer_index = key_index(query.buffer, false, true)?;
 
     let balances = |field: &str| -> Result<&Vec<Value>> {
         meta.get(field)
@@ -3506,6 +5912,8 @@ fn validate_upgrade_transaction(
     let payer_post = balance(post, payer_index, "post payer")?;
     let programdata_pre = balance(pre, programdata_index, "pre ProgramData")?;
     let programdata_post = balance(post, programdata_index, "post ProgramData")?;
+    let buffer_pre = balance(pre, buffer_index, "pre Buffer")?;
+    let buffer_post = balance(post, buffer_index, "post Buffer")?;
     if programdata_pre != query.programdata_before_lamports
         || programdata_post != query.programdata_after_lamports
         || programdata_pre != programdata_post
@@ -3514,17 +5922,23 @@ fn validate_upgrade_transaction(
             "Upgrade transaction did not preserve and bridge exact ProgramData rent",
         ));
     }
+    if buffer_pre != query.buffer_lamports || buffer_post != 0 {
+        return Err(Error::new(
+            "Upgrade transaction did not consume the authenticated Buffer's exact rent",
+        ));
+    }
     let fee = meta
         .get("fee")
         .and_then(Value::as_u64)
         .filter(|fee| *fee != 0)
         .ok_or_else(|| Error::new("Upgrade transaction omitted a nonzero fee"))?;
-    let payer_delta = payer_pre
-        .checked_sub(payer_post)
-        .ok_or_else(|| Error::new("Upgrade transaction payer increased"))?;
-    if payer_delta != fee {
+    let expected_payer_post = payer_pre
+        .checked_add(buffer_pre)
+        .and_then(|with_refund| with_refund.checked_sub(fee))
+        .ok_or_else(|| Error::new("Upgrade payer refund arithmetic overflow"))?;
+    if payer_post != expected_payer_post {
         return Err(Error::new(
-            "Upgrade transaction payer delta is not exactly its finalized fee",
+            "Upgrade payer postbalance is not exact prebalance plus Buffer refund minus finalized fee",
         ));
     }
     let transaction_sha256 = digest(&serde_json::to_vec(&transaction)?);
@@ -3543,113 +5957,17 @@ fn resolve_extension_transaction_via_rpc(
     query: &ExtensionTransactionQueryV1<'_>,
 ) -> Result<ExtensionTransactionEvidenceV1> {
     let mut rpc = Rpc::connect_cluster(query.origin, WritePolicyV1::ReadsOnly)?;
-    let signature = find_extension_signature(query.deployment_slot, |before| {
-        let mut options = serde_json::Map::new();
-        options.insert("commitment".into(), Value::String("finalized".into()));
-        options.insert(
-            "limit".into(),
-            Value::Number(SIGNATURE_HISTORY_PAGE_ROWS.into()),
-        );
-        if let Some(before) = before {
-            options.insert("before".into(), Value::String(before.into()));
-        }
-        let rows = rpc.call(
-            "getSignaturesForAddress",
-            &Value::Array(vec![
-                Value::String(query.programdata_id.to_string()),
-                Value::Object(options),
-            ]),
-        )?;
-        rows.as_array()
-            .cloned()
-            .ok_or_else(|| Error::new("getSignaturesForAddress did not return an array"))
-    })?;
+    Signature::from_str(query.signature)
+        .map_err(|_| Error::new("journaled extension signature is invalid"))?;
     let transaction = rpc.call(
         "getTransaction",
-        &serde_json::json!([&signature, {
+        &serde_json::json!([query.signature, {
             "encoding": "jsonParsed",
             "commitment": "finalized",
             "maxSupportedTransactionVersion": 0
         }]),
     )?;
-    validate_extension_transaction(query, &signature, transaction)
-}
-
-fn find_extension_signature(
-    target_slot: u64,
-    mut fetch_page: impl FnMut(Option<&str>) -> Result<Vec<Value>>,
-) -> Result<String> {
-    let mut before = None::<String>;
-    let mut previous_slot = None::<u64>;
-    let mut seen = BTreeSet::<String>::new();
-    let mut candidates = Vec::<String>::new();
-    let mut crossed_target = false;
-    for _ in 0..SIGNATURE_HISTORY_MAX_PAGES {
-        let rows = fetch_page(before.as_deref())?;
-        if rows.len() > usize::try_from(SIGNATURE_HISTORY_PAGE_ROWS).expect("page bound") {
-            return Err(Error::new(
-                "ProgramData signature page exceeded the requested bounded width",
-            ));
-        }
-        if rows.is_empty() {
-            crossed_target = true;
-            break;
-        }
-        for row in &rows {
-            let slot = row
-                .get("slot")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| Error::new("extension signature row omitted u64 slot"))?;
-            if previous_slot.is_some_and(|previous| slot > previous) {
-                return Err(Error::new(
-                    "ProgramData signature history is not monotonically newest-to-oldest",
-                ));
-            }
-            previous_slot = Some(slot);
-            let signature = row
-                .get("signature")
-                .and_then(Value::as_str)
-                .ok_or_else(|| Error::new("extension signature row omitted signature"))?;
-            Signature::from_str(signature)
-                .map_err(|_| Error::new("extension history returned an invalid signature"))?;
-            if !seen.insert(signature.into()) {
-                return Err(Error::new(
-                    "ProgramData signature history repeated a cursor row",
-                ));
-            }
-            let row_error = row
-                .get("err")
-                .ok_or_else(|| Error::new("extension signature row omitted err status"))?;
-            if slot == target_slot && row_error.is_null() {
-                candidates.push(signature.into());
-            }
-            if slot < target_slot {
-                crossed_target = true;
-            }
-        }
-        before = rows
-            .last()
-            .and_then(|row| row.get("signature"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        if crossed_target {
-            break;
-        }
-    }
-    if !crossed_target {
-        return Err(Error::new(format!(
-            "ProgramData signature history did not cross target slot {target_slot} within the \
-             provisional {SIGNATURE_HISTORY_MAX_PAGES}-page bound"
-        )));
-    }
-    if candidates.len() != 1 {
-        return Err(Error::new(format!(
-            "expected one successful ProgramData signature at extension slot {target_slot}, \
-             observed {}; signature attribution is ambiguous",
-            candidates.len()
-        )));
-    }
-    Ok(candidates.remove(0))
+    validate_extension_transaction(query, query.signature, transaction)
 }
 
 fn validate_extension_transaction(
@@ -3838,6 +6156,7 @@ fn validate_receipt_binding(
     live_elf_sha256: &str,
     live_elf_padding_bytes: u64,
     receipt: &UpgradeReceiptV1,
+    require_exact_rpc_origin: bool,
 ) -> Result<()> {
     require_digest(&receipt.receipt_sha256, "Upgrade receipt SHA-256")?;
     let mut canonical_receipt = receipt.clone();
@@ -3853,8 +6172,13 @@ fn validate_receipt_binding(
         || receipt.programdata_id != args.programdata_id.to_string()
         || receipt.retained_upgrade_authority != args.expected_upgrade_authority.to_string()
         || receipt.fee_payer != args.fee_payer.to_string()
-        || receipt.rpc_origin_redacted != args.origin.redacted_url()
+        || (require_exact_rpc_origin && receipt.rpc_origin_redacted != args.origin.redacted_url())
         || receipt.genesis_hash != DEVNET_GENESIS_HASH
+        || require_digest(
+            &receipt.deployment_set_journal_sha256,
+            "Upgrade deployment-set journal SHA-256",
+        )
+        .is_err()
         || receipt.source_revision != gate.source_revision
         || receipt.source_tree_sha256 != gate.source_tree_sha256
         || receipt.checked_release_gate_sha256 != gate.gate_sha256
@@ -3864,6 +6188,16 @@ fn validate_receipt_binding(
         || receipt.live_elf_sha256 != live_elf_sha256
         || receipt.live_elf_padding_bytes != live_elf_padding_bytes
         || receipt.solana_cli_version != gate.solana_cli_version
+        || receipt.exclusive_payer_window_acknowledgment
+            != format!("{}:{}:{}", args.role, args.program_id, args.fee_payer)
+        || (args.buffer_pubkey != Pubkey::default()
+            && (receipt.buffer_pubkey != args.buffer_pubkey.to_string()
+                || receipt.buffer_keypair_path
+                    != path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?))
+        || receipt.buffer_data_bytes
+            != u64::try_from(BUFFER_METADATA_BYTES + gate.raw_elf.len())
+                .map_err(|_| Error::new("Buffer width does not fit u64"))?
+        || receipt.buffer_rent_exempt_lamports == 0
         || receipt.before_context_slot < baseline.context_slot
         || receipt.before != baseline.observation
     {
@@ -3873,13 +6207,64 @@ fn validate_receipt_binding(
              refused",
         ));
     }
+    validate_expired_packets(&receipt.expired_packets)?;
     let expected_operation = operation_id_from_receipt(receipt);
     if receipt.operation_id != expected_operation {
         return Err(Error::new("Upgrade receipt operation_id is not canonical"));
     }
+    let no_buffer_ready = receipt.buffer_ready_context_slot.is_none()
+        && receipt.buffer_ready_account_sha256.is_none()
+        && receipt.buffer_ready_lamports.is_none()
+        && receipt.buffer_upload_fee_lamports.is_none()
+        && receipt.buffer_upload_transactions.is_none()
+        && receipt.buffer_upload_transactions_sha256.is_none()
+        && receipt.buffer_upload_wallet_after_lamports.is_none();
+    let has_buffer_ready = receipt.buffer_ready_context_slot.is_some()
+        && receipt.buffer_ready_account_sha256.is_some()
+        && receipt.buffer_ready_lamports == Some(receipt.buffer_rent_exempt_lamports)
+        && receipt.buffer_upload_fee_lamports.is_some()
+        && receipt.buffer_upload_transactions.is_some()
+        && receipt.buffer_upload_transactions_sha256.is_some()
+        && receipt.buffer_upload_wallet_after_lamports.is_some();
+    if has_buffer_ready {
+        let transactions = receipt
+            .buffer_upload_transactions
+            .as_ref()
+            .expect("checked Buffer transaction evidence");
+        if receipt.buffer_upload_transactions_sha256.as_deref()
+            != Some(digest(&serde_json::to_vec(transactions)?).as_str())
+            || receipt
+                .buffer_ready_account_sha256
+                .as_deref()
+                .is_none_or(|value| require_digest(value, "Buffer account SHA-256").is_err())
+        {
+            return Err(Error::new(
+                "Buffer-ready transaction or account digest drifted",
+            ));
+        }
+    }
+    let has_unsigned = receipt.unsigned_message_base64.is_some()
+        && receipt.unsigned_message_sha256.is_some()
+        && receipt.recent_blockhash.is_some()
+        && receipt.last_valid_block_height.is_some();
+    let no_unsigned = receipt.unsigned_message_base64.is_none()
+        && receipt.unsigned_message_sha256.is_none()
+        && receipt.recent_blockhash.is_none()
+        && receipt.last_valid_block_height.is_none();
+    let has_signed = receipt.signed_packet_base64.is_some()
+        && receipt.signed_packet_sha256.is_some()
+        && receipt.transaction_signature.is_some();
+    let no_signed = receipt.signed_packet_base64.is_none()
+        && receipt.signed_packet_sha256.is_none()
+        && receipt.transaction_signature.is_none();
     match receipt.phase {
         ReceiptPhaseV1::Prepared => {
-            if receipt.transaction_signature.is_some()
+            if receipt.buffer_write_armed_block_height.is_some()
+                || receipt.buffer_write_expiry_block_height.is_some()
+                || receipt.buffer_write_cli_output.is_some()
+                || !no_buffer_ready
+                || !no_unsigned
+                || !no_signed
                 || receipt.solana_cli_output.is_some()
                 || receipt.finalized_transaction.is_some()
                 || receipt.finalized_transaction_sha256.is_some()
@@ -3894,8 +6279,76 @@ fn validate_receipt_binding(
                 ));
             }
         }
+        ReceiptPhaseV1::BufferWriteArmed => {
+            if receipt.buffer_write_armed_block_height.is_none()
+                || receipt.buffer_write_expiry_block_height.is_none()
+                || !no_buffer_ready
+                || !no_unsigned
+                || !no_signed
+                || receipt.solana_cli_output.is_some()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
+                || receipt.after.is_some()
+                || receipt.arithmetic.is_some()
+                || receipt.dump_sha256.is_some()
+                || receipt.dump_shape.is_some()
+            {
+                return Err(Error::new("armed Buffer receipt is incomplete"));
+            }
+        }
+        ReceiptPhaseV1::BufferReady => {
+            if !has_buffer_ready
+                || !no_unsigned
+                || !no_signed
+                || receipt.solana_cli_output.is_some()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
+                || receipt.after.is_some()
+                || receipt.arithmetic.is_some()
+                || receipt.dump_sha256.is_some()
+                || receipt.dump_shape.is_some()
+            {
+                return Err(Error::new("Buffer-ready Upgrade receipt is incomplete"));
+            }
+        }
+        ReceiptPhaseV1::MessagePrepared => {
+            if !has_buffer_ready
+                || !has_unsigned
+                || !no_signed
+                || receipt.solana_cli_output.is_some()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
+                || receipt.after.is_some()
+                || receipt.arithmetic.is_some()
+                || receipt.dump_sha256.is_some()
+                || receipt.dump_shape.is_some()
+            {
+                return Err(Error::new("message-prepared Upgrade receipt is incomplete"));
+            }
+        }
+        ReceiptPhaseV1::SignedNotSubmitted => {
+            if !has_buffer_ready
+                || !has_unsigned
+                || !has_signed
+                || receipt.solana_cli_output.is_some()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
+                || receipt.after.is_some()
+                || receipt.arithmetic.is_some()
+                || receipt.dump_sha256.is_some()
+                || receipt.dump_shape.is_some()
+            {
+                return Err(Error::new("signed Upgrade receipt is incomplete"));
+            }
+        }
         ReceiptPhaseV1::Submitted => {
-            if receipt.transaction_signature.is_none()
+            if !has_buffer_ready
+                || !has_unsigned
+                || !has_signed
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_some()
                 || receipt.finalized_transaction_sha256.is_some()
@@ -3910,7 +6363,9 @@ fn validate_receipt_binding(
             validate_recorded_deploy_output(receipt)?;
         }
         ReceiptPhaseV1::Complete => {
-            if receipt.transaction_signature.is_none()
+            if !has_buffer_ready
+                || !has_unsigned
+                || !has_signed
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_none()
                 || receipt.finalized_transaction_sha256.is_none()
@@ -3949,20 +6404,58 @@ fn validate_complete_receipt_shape(receipt: &UpgradeReceiptV1) -> Result<()> {
         .arithmetic
         .as_ref()
         .expect("checked complete arithmetic");
-    let payer_delta = arithmetic
+    let buffer_fee = receipt
+        .buffer_upload_fee_lamports
+        .ok_or_else(|| Error::new("complete Upgrade receipt omitted Buffer upload fee"))?;
+    let upload_wallet_after = receipt
+        .buffer_upload_wallet_after_lamports
+        .ok_or_else(|| Error::new("complete Upgrade receipt omitted upload wallet balance"))?;
+    let operation_spend = arithmetic
+        .operation_wallet_before_lamports
+        .checked_sub(arithmetic.operation_wallet_after_lamports)
+        .ok_or_else(|| Error::new("complete Upgrade operation wallet increased"))?;
+    let unattributed = operation_spend
+        .checked_sub(arithmetic.transaction_fee_lamports)
+        .ok_or_else(|| {
+            Error::new("complete Upgrade operation spend is smaller than final transaction fee")
+        })?;
+    let expected_upload_spend = receipt
+        .buffer_rent_exempt_lamports
+        .checked_add(buffer_fee)
+        .ok_or_else(|| Error::new("complete Buffer upload spend overflow"))?;
+    let upload_spend = receipt
+        .wallet_before_lamports
+        .checked_sub(upload_wallet_after)
+        .ok_or_else(|| Error::new("complete Buffer upload wallet increased"))?;
+    let expected_transaction_post = arithmetic
         .transaction_payer_pre_lamports
-        .checked_sub(arithmetic.transaction_payer_post_lamports)
-        .ok_or_else(|| Error::new("complete Upgrade receipt payer increased"))?;
+        .checked_add(receipt.buffer_rent_exempt_lamports)
+        .and_then(|with_refund| with_refund.checked_sub(arithmetic.transaction_fee_lamports))
+        .ok_or_else(|| Error::new("complete Upgrade refund arithmetic overflow"))?;
     if after.deployment_slot <= receipt.before.deployment_slot
         || after.upgrade_authority != receipt.retained_upgrade_authority
         || after.live_elf_sha256 != receipt.live_elf_sha256
         || after.programdata_lamports != receipt.before.programdata_lamports
         || arithmetic.transaction_fee_lamports == 0
-        || arithmetic.payer_fee_delta_lamports != payer_delta
-        || payer_delta != arithmetic.transaction_fee_lamports
+        || arithmetic.payer_fee_delta_lamports != arithmetic.transaction_fee_lamports
+        || arithmetic.transaction_payer_pre_lamports != upload_wallet_after
+        || arithmetic.transaction_payer_post_lamports != expected_transaction_post
+        || arithmetic.transaction_payer_post_lamports != arithmetic.operation_wallet_after_lamports
         || arithmetic.programdata_before_lamports != receipt.before.programdata_lamports
         || arithmetic.programdata_after_lamports != after.programdata_lamports
         || arithmetic.programdata_delta_lamports != 0
+        || arithmetic.operation_wallet_before_lamports != receipt.wallet_before_lamports
+        || upload_spend != expected_upload_spend
+        || arithmetic.operation_observed_net_spend_lamports != operation_spend
+        || arithmetic.unattributed_cli_net_cost_lamports != unattributed
+        || unattributed != buffer_fee
+        || arithmetic.accounting_scope != OPERATION_ACCOUNTING_SCOPE_V1
+        || arithmetic.cost_attribution != OPERATION_COST_ATTRIBUTION_V1
+        || receipt.exclusive_payer_window_acknowledgment
+            != format!(
+                "{}:{}:{}",
+                receipt.role, receipt.program_id, receipt.fee_payer
+            )
         || receipt
             .dump_sha256
             .as_deref()
@@ -3991,11 +6484,15 @@ fn validate_recorded_deploy_output(receipt: &UpgradeReceiptV1) -> Result<()> {
         .as_ref()
         .and_then(Value::as_object)
         .ok_or_else(|| Error::new("Upgrade receipt omitted CLI JSON object"))?;
-    if output.get("programId").and_then(Value::as_str) != Some(receipt.program_id.as_str())
+    if output.len() != 5
+        || output.get("transport").and_then(Value::as_str) != Some("sendTransaction")
+        || output.get("maxRetries").and_then(Value::as_u64) != Some(0)
         || output.get("signature").and_then(Value::as_str) != Some(signature)
+        || output.get("buffer").and_then(Value::as_str) != Some(receipt.buffer_pubkey.as_str())
+        || output.get("spill").and_then(Value::as_str) != Some(receipt.fee_payer.as_str())
     {
         return Err(Error::new(
-            "Upgrade receipt CLI output does not bind its exact Program and signature",
+            "Upgrade receipt send evidence does not bind its exact packet, Buffer, spill, and maxRetries=0",
         ));
     }
     Ok(())
@@ -4003,7 +6500,7 @@ fn validate_recorded_deploy_output(receipt: &UpgradeReceiptV1) -> Result<()> {
 
 fn operation_id(args: &UpgradeArgsV1, gate_sha256: &str, before: &SnapshotV1) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v3\0");
+    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v4\0");
     hasher.update(args.role.as_bytes());
     hasher.update([0]);
     hasher.update(args.program_id.as_ref());
@@ -4015,6 +6512,13 @@ fn operation_id(args: &UpgradeArgsV1, gate_sha256: &str, before: &SnapshotV1) ->
     hasher.update(before.loader.deployment_slot.to_le_bytes());
     hasher.update(before.loader.programdata_account_sha256.as_bytes());
     hasher.update(before.wallet_lamports.to_le_bytes());
+    hash_text(
+        &mut hasher,
+        args.exclusive_payer_window_acknowledgment
+            .as_deref()
+            .expect("execute validated exclusive payer acknowledgment"),
+    )
+    .expect("bounded acknowledgment hashes");
     hex(&hasher.finalize())
 }
 
@@ -4027,7 +6531,7 @@ fn operation_id_from_receipt(receipt: &UpgradeReceiptV1) -> String {
         Pubkey::from_str(&receipt.retained_upgrade_authority).expect("validated receipt authority");
     let payer = Pubkey::from_str(&receipt.fee_payer).expect("validated receipt payer");
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v3\0");
+    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v4\0");
     hasher.update(role);
     hasher.update([0]);
     hasher.update(program.as_ref());
@@ -4039,6 +6543,8 @@ fn operation_id_from_receipt(receipt: &UpgradeReceiptV1) -> String {
     hasher.update(receipt.before.deployment_slot.to_le_bytes());
     hasher.update(receipt.before.programdata_account_sha256.as_bytes());
     hasher.update(receipt.wallet_before_lamports.to_le_bytes());
+    hash_text(&mut hasher, &receipt.exclusive_payer_window_acknowledgment)
+        .expect("bounded acknowledgment hashes");
     hex(&hasher.finalize())
 }
 
@@ -4107,6 +6613,11 @@ fn validate_extension_receipt_binding(
         || receipt.fee_payer != args.fee_payer.to_string()
         || receipt.rpc_origin_redacted != args.origin.redacted_url()
         || receipt.genesis_hash != DEVNET_GENESIS_HASH
+        || require_digest(
+            &receipt.deployment_set_journal_sha256,
+            "extension deployment-set journal SHA-256",
+        )
+        .is_err()
         || receipt.baseline_sha256 != baseline.baseline_sha256
         || receipt.baseline_context_slot != baseline.context_slot
         || receipt.solana_cli_version != args.expected_solana_cli_version
@@ -4123,9 +6634,30 @@ fn validate_extension_receipt_binding(
              payer, devnet baseline, rent quote, or prestate",
         ));
     }
+    validate_expired_packets(&receipt.expired_packets)?;
+    let has_unsigned = receipt.unsigned_message_base64.is_some()
+        && receipt.unsigned_message_sha256.is_some()
+        && receipt.recent_blockhash.is_some()
+        && receipt.last_valid_block_height.is_some();
+    let no_unsigned = receipt.unsigned_message_base64.is_none()
+        && receipt.unsigned_message_sha256.is_none()
+        && receipt.recent_blockhash.is_none()
+        && receipt.last_valid_block_height.is_none();
+    let has_signed = receipt.signed_packet_base64.is_some()
+        && receipt.signed_packet_sha256.is_some()
+        && receipt.transaction_signature.is_some();
+    let no_signed = receipt.signed_packet_base64.is_none()
+        && receipt.signed_packet_sha256.is_none()
+        && receipt.transaction_signature.is_none();
     match receipt.phase {
+        ReceiptPhaseV1::BufferWriteArmed | ReceiptPhaseV1::BufferReady => {
+            return Err(Error::new(
+                "extension receipt entered an Upgrade-only phase",
+            ));
+        }
         ReceiptPhaseV1::Prepared => {
-            if receipt.transaction_signature.is_some()
+            if !no_unsigned
+                || !no_signed
                 || receipt.solana_cli_output.is_some()
                 || receipt.finalized_transaction.is_some()
                 || receipt.finalized_transaction_sha256.is_some()
@@ -4138,8 +6670,37 @@ fn validate_extension_receipt_binding(
                 ));
             }
         }
+        ReceiptPhaseV1::MessagePrepared => {
+            if !has_unsigned
+                || !no_signed
+                || receipt.solana_cli_output.is_some()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
+                || receipt.after.is_some()
+                || receipt.arithmetic.is_some()
+            {
+                return Err(Error::new(
+                    "message-prepared extension receipt is incomplete",
+                ));
+            }
+        }
+        ReceiptPhaseV1::SignedNotSubmitted => {
+            if !has_unsigned
+                || !has_signed
+                || receipt.solana_cli_output.is_some()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
+                || receipt.after.is_some()
+                || receipt.arithmetic.is_some()
+            {
+                return Err(Error::new("signed extension receipt is incomplete"));
+            }
+        }
         ReceiptPhaseV1::Submitted => {
-            if receipt.transaction_signature.is_some()
+            if !has_unsigned
+                || !has_signed
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_some()
                 || receipt.finalized_transaction_sha256.is_some()
@@ -4151,7 +6712,8 @@ fn validate_extension_receipt_binding(
             }
         }
         ReceiptPhaseV1::Complete => {
-            if receipt.transaction_signature.is_none()
+            if !has_unsigned
+                || !has_signed
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_none()
                 || receipt.finalized_transaction_sha256.is_none()
@@ -4175,6 +6737,42 @@ fn validate_extension_receipt_binding(
                     "complete extension receipt transaction hash or context-slot order is invalid",
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_expired_packets(packets: &[ExpiredLoaderPacketV1]) -> Result<()> {
+    let mut signatures = BTreeSet::new();
+    for packet in packets {
+        require_digest(
+            &packet.unsigned_message_sha256,
+            "expired unsigned message SHA-256",
+        )?;
+        require_digest(
+            &packet.signed_packet_sha256,
+            "expired signed packet SHA-256",
+        )?;
+        let message = BASE64
+            .decode(&packet.unsigned_message_base64)
+            .map_err(|_| Error::new("expired unsigned message is not base64"))?;
+        let signed = BASE64
+            .decode(&packet.signed_packet_base64)
+            .map_err(|_| Error::new("expired signed packet is not base64"))?;
+        Signature::from_str(&packet.transaction_signature)
+            .map_err(|_| Error::new("expired packet signature is invalid"))?;
+        packet
+            .recent_blockhash
+            .parse::<Hash>()
+            .map_err(|_| Error::new("expired packet blockhash is invalid"))?;
+        if digest(&message) != packet.unsigned_message_sha256
+            || digest(&signed) != packet.signed_packet_sha256
+            || packet.expiry_observed_finalized_block_height <= packet.last_valid_block_height
+            || !signatures.insert(packet.transaction_signature.as_str())
+        {
+            return Err(Error::new(
+                "expired packet history has substituted bytes, duplicate signatures, or a non-expired height",
+            ));
         }
     }
     Ok(())
@@ -4207,15 +6805,17 @@ fn load_extension_receipt(path: &Path) -> Result<Option<ExtensionReceiptV1>> {
 }
 
 fn write_receipt(path: &Path, receipt: &mut UpgradeReceiptV1) -> Result<()> {
+    let expected = (!receipt.receipt_sha256.is_empty()).then(|| receipt.receipt_sha256.clone());
     receipt.receipt_sha256.clear();
     receipt.receipt_sha256 = digest(&serde_json::to_vec(receipt)?);
-    write_json_atomic_replace(path, receipt)
+    write_json_atomic_receipt_cas(path, receipt, expected.as_deref())
 }
 
 fn write_extension_receipt(path: &Path, receipt: &mut ExtensionReceiptV1) -> Result<()> {
+    let expected = (!receipt.receipt_sha256.is_empty()).then(|| receipt.receipt_sha256.clone());
     receipt.receipt_sha256.clear();
     receipt.receipt_sha256 = digest(&serde_json::to_vec(receipt)?);
-    write_json_atomic_replace(path, receipt)
+    write_json_atomic_receipt_cas(path, receipt, expected.as_deref())
 }
 
 fn write_json_atomic_new<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -4267,6 +6867,140 @@ fn write_json_atomic_replace<T: Serialize>(path: &Path, value: &T) -> Result<()>
         let _ = fs::remove_file(&temporary);
         return Err(error.into());
     }
+    sync_parent_directory(parent)?;
+    Ok(())
+}
+
+/// Publishes one receipt transition under a fail-closed, operation-local CAS.
+///
+/// `expected_receipt_sha256 == None` is creation and therefore uses a hard
+/// link as an atomic no-clobber publish. Updates compare the exact prior
+/// receipt digest while holding the lock. The lock file and every published
+/// directory entry are fsynced before the next destructive boundary can be
+/// reached. A process crash may leave the lock behind; that is deliberately a
+/// manual-recovery refusal, never permission for a second operator to guess.
+fn write_json_atomic_receipt_cas<T: Serialize>(
+    path: &Path,
+    value: &T,
+    expected_receipt_sha256: Option<&str>,
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("receipt path omitted a parent"))?;
+    if !parent.is_dir() {
+        return Err(Error::new(format!(
+            "receipt parent {} does not exist",
+            parent.display()
+        )));
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::new("receipt file name is not UTF-8"))?;
+    let lock_path = parent.join(format!(".{file_name}.lock"));
+    let temporary = parent.join(format!(
+        ".{file_name}.{}.receipt-pending",
+        std::process::id()
+    ));
+    let lock = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| {
+            Error::new(format!(
+                "receipt transition lock {} is unavailable; another operator or an unreviewed crashed transition owns it: {error}",
+                lock_path.display()
+            ))
+        })?;
+    lock.sync_all()?;
+    sync_parent_directory(parent)?;
+
+    let transition = (|| -> Result<()> {
+        match expected_receipt_sha256 {
+            None => match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(Error::new(format!(
+                        "receipt {} already exists; creation is no-clobber",
+                        path.display()
+                    )));
+                }
+                Err(error) => return Err(error.into()),
+            },
+            Some(expected) => {
+                require_digest(expected, "prior receipt SHA-256")?;
+                let metadata = fs::symlink_metadata(path).map_err(|error| {
+                    Error::new(format!(
+                        "prior receipt {} cannot be inspected for CAS: {error}",
+                        path.display()
+                    ))
+                })?;
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    return Err(Error::new(
+                        "prior receipt is not one regular non-symlink file",
+                    ));
+                }
+                let current: Value = serde_json::from_slice(&fs::read(path)?).map_err(|error| {
+                    Error::new(format!("prior receipt is invalid during CAS: {error}"))
+                })?;
+                if current.get("receipt_sha256").and_then(Value::as_str) != Some(expected) {
+                    return Err(Error::new(
+                        "receipt changed since this transition loaded it; concurrent or stale writer refused",
+                    ));
+                }
+            }
+        }
+
+        let bytes = serde_json::to_vec_pretty(value)?;
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| {
+                Error::new(format!(
+                    "could not create receipt temporary {}: {error}",
+                    temporary.display()
+                ))
+            })?;
+        file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        drop(file);
+
+        if expected_receipt_sha256.is_none() {
+            fs::hard_link(&temporary, path).map_err(|error| {
+                Error::new(format!(
+                    "no-clobber receipt publish {} failed: {error}",
+                    path.display()
+                ))
+            })?;
+        } else {
+            fs::rename(&temporary, path)?;
+        }
+        sync_parent_directory(parent)?;
+        if temporary.exists() {
+            fs::remove_file(&temporary)?;
+            sync_parent_directory(parent)?;
+        }
+        Ok(())
+    })();
+
+    if transition.is_err() && temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    drop(lock);
+    fs::remove_file(&lock_path).map_err(|error| {
+        Error::new(format!(
+            "receipt transition completed but lock {} could not be removed: {error}",
+            lock_path.display()
+        ))
+    })?;
+    sync_parent_directory(parent)?;
+    transition
+}
+
+fn sync_parent_directory(parent: &Path) -> Result<()> {
+    fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -4376,6 +7110,7 @@ mod tests {
         programdata: Pubkey,
         linked_programdata: Pubkey,
         authority: Pubkey,
+        reported_authority: Pubkey,
         payer: Pubkey,
         version: String,
         genesis: String,
@@ -4391,12 +7126,26 @@ mod tests {
         after_programdata_lamports: u64,
         deployed: bool,
         deploy_success: bool,
+        send_success: bool,
+        send_lands_then_errors: bool,
+        sign_success: bool,
         deploy_program: Pubkey,
         dump: Vec<u8>,
         upgrade_fee_lamports: u64,
         upgrade_transaction_override: Option<Value>,
+        preserve_upgrade_override_signature: bool,
         extension_fee_lamports: u64,
         extension_instruction_bytes: Option<u64>,
+        buffer_pubkey: Pubkey,
+        buffer_written: bool,
+        buffer_payload: Vec<u8>,
+        buffer_rent_lamports: u64,
+        buffer_upload_fee_lamports: u64,
+        finalized_height: u64,
+        authority_signer: Keypair,
+        payer_signer: Keypair,
+        send_count: u64,
+        sign_count: u64,
         calls: Vec<Vec<String>>,
         snapshot_minimum_slots: Vec<u64>,
         forced: VecDeque<CliOutput>,
@@ -4409,6 +7158,7 @@ mod tests {
                 programdata: fixture.programdata,
                 linked_programdata: fixture.programdata,
                 authority: fixture.authority,
+                reported_authority: fixture.authority,
                 payer: fixture.payer,
                 version: fixture.solana_cli_version.clone(),
                 genesis: DEVNET_GENESIS_HASH.into(),
@@ -4424,12 +7174,26 @@ mod tests {
                 after_programdata_lamports: 77_000,
                 deployed: false,
                 deploy_success: true,
-                deploy_program: fixture.program,
+                send_success: true,
+                send_lands_then_errors: false,
+                sign_success: true,
+                deploy_program: fixture.args.buffer_pubkey,
                 dump: fixture.raw_elf.clone(),
                 upgrade_fee_lamports: 15_000,
                 upgrade_transaction_override: None,
+                preserve_upgrade_override_signature: false,
                 extension_fee_lamports: 5_000,
                 extension_instruction_bytes: None,
+                buffer_pubkey: fixture.args.buffer_pubkey,
+                buffer_written: false,
+                buffer_payload: fixture.raw_elf.clone(),
+                buffer_rent_lamports: 100_000,
+                buffer_upload_fee_lamports: 0,
+                finalized_height: 1_000,
+                authority_signer: fixture.authority_signer.insecure_clone(),
+                payer_signer: fixture.payer_signer.insecure_clone(),
+                send_count: 0,
+                sign_count: 0,
                 calls: Vec::new(),
                 snapshot_minimum_slots: Vec::new(),
                 forced: VecDeque::new(),
@@ -4467,6 +7231,10 @@ mod tests {
                 (
                     if self.deployed {
                         self.after_wallet
+                    } else if self.buffer_written {
+                        self.before_wallet
+                            - self.buffer_rent_lamports
+                            - self.buffer_upload_fee_lamports
                     } else {
                         self.before_wallet
                     },
@@ -4481,6 +7249,7 @@ mod tests {
                 lamports,
                 owner,
                 executable,
+                rent_epoch: u64::MAX,
                 data,
             }
         }
@@ -4502,26 +7271,27 @@ mod tests {
                 Some("genesis-hash") => Ok(success(format!("{}\n", self.genesis))),
                 Some("address") => {
                     let path = arguments.get(2).expect("keypair path");
-                    let address = if path.contains("authority") {
-                        self.authority
+                    let address = if path.contains("buffer") {
+                        self.buffer_pubkey
+                    } else if path.contains("authority") {
+                        self.reported_authority
                     } else {
                         self.payer
                     };
                     Ok(success(format!("{address}\n")))
                 }
-                Some("program") if arguments.get(1).map(String::as_str) == Some("deploy") => {
+                Some("program") if arguments.get(1).map(String::as_str) == Some("write-buffer") => {
                     if !self.deploy_success {
                         return Ok(CliOutput {
                             success: false,
                             stdout: String::new(),
-                            stderr: "synthetic deploy interruption".into(),
+                            stderr: "synthetic write-buffer interruption".into(),
                         });
                     }
-                    self.deployed = true;
+                    self.buffer_written = true;
                     Ok(success(
                         json!({
-                            "programId": self.deploy_program.to_string(),
-                            "signature": Signature::from([7_u8; 64]).to_string()
+                            "buffer": self.deploy_program.to_string()
                         })
                         .to_string(),
                     ))
@@ -4595,9 +7365,9 @@ mod tests {
             &mut self,
             query: &UpgradeTransactionQueryV1<'_>,
         ) -> Result<UpgradeTransactionEvidenceV1> {
-            let buffer = Pubkey::new_from_array([11; 32]);
-            let spill = Pubkey::new_from_array([12; 32]);
-            let transaction = self.upgrade_transaction_override.clone().unwrap_or_else(|| {
+            let buffer = query.buffer;
+            let spill = query.payer;
+            let mut transaction = self.upgrade_transaction_override.clone().unwrap_or_else(|| {
                 json!({
                     "slot": query.deployment_slot,
                     "transaction": {
@@ -4609,7 +7379,6 @@ mod tests {
                                 {"pubkey": query.program_id.to_string(), "signer": false, "writable": true},
                                 {"pubkey": query.authority.to_string(), "signer": true, "writable": false},
                                 {"pubkey": buffer.to_string(), "signer": false, "writable": true},
-                                {"pubkey": spill.to_string(), "signer": false, "writable": true},
                                 {"pubkey": sysvar::rent::ID.to_string(), "signer": false, "writable": false},
                                 {"pubkey": sysvar::clock::ID.to_string(), "signer": false, "writable": false}
                             ],
@@ -4635,28 +7404,33 @@ mod tests {
                         "err": null,
                         "fee": self.upgrade_fee_lamports,
                         "preBalances": [
-                            self.before_wallet,
+                            self.before_wallet
+                                - self.buffer_rent_lamports
+                                - self.buffer_upload_fee_lamports,
                             query.programdata_before_lamports,
                             1_140,
                             0,
-                            10_000,
-                            0,
+                            self.buffer_rent_lamports,
                             1,
                             1
                         ],
                         "postBalances": [
-                            self.before_wallet - self.upgrade_fee_lamports,
+                            self.after_wallet,
                             query.programdata_after_lamports,
                             1_140,
                             0,
                             0,
-                            10_000,
                             1,
                             1
                         ]
                     }
                 })
             });
+            if self.upgrade_transaction_override.is_some()
+                && !self.preserve_upgrade_override_signature
+            {
+                transaction["transaction"]["signatures"][0] = json!(query.signature);
+            }
             validate_upgrade_transaction(query, transaction)
         }
 
@@ -4664,7 +7438,7 @@ mod tests {
             &mut self,
             query: &ExtensionTransactionQueryV1<'_>,
         ) -> Result<ExtensionTransactionEvidenceV1> {
-            let signature = Signature::from([8_u8; 64]).to_string();
+            let signature = query.signature.to_owned();
             let additional = self
                 .extension_instruction_bytes
                 .unwrap_or(query.additional_bytes);
@@ -4714,6 +7488,124 @@ mod tests {
             });
             validate_extension_transaction(query, &signature, transaction)
         }
+
+        fn prepare_loader_action(
+            &mut self,
+            query: &LoaderActionQueryV1<'_>,
+        ) -> Result<UnsignedLoaderActionV1> {
+            let mut blockhash_bytes = [44; 32];
+            blockhash_bytes[0] = u8::try_from(self.finalized_height % 251).expect("height byte");
+            let blockhash = Hash::new_from_array(blockhash_bytes);
+            let message = loader_action_message(query, blockhash)?;
+            let bytes = bincode::serialize(&message)
+                .map_err(|error| Error::new(format!("fake message: {error}")))?;
+            Ok(UnsignedLoaderActionV1 {
+                message_base64: BASE64.encode(&bytes),
+                message_sha256: digest(&bytes),
+                recent_blockhash: blockhash.to_string(),
+                last_valid_block_height: self.finalized_height + 150,
+            })
+        }
+
+        fn sign_loader_action(
+            &mut self,
+            query: &LoaderActionQueryV1<'_>,
+            unsigned: &UnsignedLoaderActionV1,
+        ) -> Result<SignedLoaderActionV1> {
+            if !self.sign_success {
+                return Err(Error::new("synthetic crash before packet signing"));
+            }
+            self.sign_count += 1;
+            let message = authenticate_unsigned_loader_action(query, unsigned)?;
+            let mut transaction = Transaction::new_unsigned(message);
+            transaction
+                .try_sign(
+                    &[&self.payer_signer, &self.authority_signer],
+                    transaction.message.recent_blockhash,
+                )
+                .map_err(|error| Error::new(format!("fake sign: {error}")))?;
+            let packet = bincode::serialize(&transaction)
+                .map_err(|error| Error::new(format!("fake packet: {error}")))?;
+            Ok(SignedLoaderActionV1 {
+                packet_base64: BASE64.encode(&packet),
+                packet_sha256: digest(&packet),
+                signature: transaction.signatures[0].to_string(),
+            })
+        }
+
+        fn send_loader_action(
+            &mut self,
+            _origin: &ClusterOriginV1,
+            signed: &SignedLoaderActionV1,
+        ) -> Result<String> {
+            if !self.send_success {
+                return Err(Error::new("synthetic packet send interruption"));
+            }
+            self.send_count += 1;
+            self.deployed = true;
+            if self.send_lands_then_errors {
+                return Err(Error::new("synthetic lost send response after landing"));
+            }
+            Ok(signed.signature.clone())
+        }
+
+        fn finalized_block_height(&mut self, _origin: &ClusterOriginV1) -> Result<u64> {
+            Ok(self.finalized_height)
+        }
+
+        fn read_buffer(
+            &mut self,
+            _origin: &ClusterOriginV1,
+            buffer: Pubkey,
+            authority: Pubkey,
+            _minimum_context_slot: u64,
+        ) -> Result<Option<BufferObservationV1>> {
+            assert_eq!(buffer, self.buffer_pubkey);
+            assert_eq!(authority, self.authority);
+            if !self.buffer_written {
+                return Ok(None);
+            }
+            let mut data = vec![0_u8; BUFFER_METADATA_BYTES];
+            data[..4].copy_from_slice(&1_u32.to_le_bytes());
+            data[4] = 1;
+            data[5..BUFFER_METADATA_BYTES].copy_from_slice(authority.as_ref());
+            data.extend_from_slice(&self.buffer_payload);
+            Ok(Some(BufferObservationV1 {
+                context_slot: self.before_context_slot + 1,
+                lamports: self.buffer_rent_lamports,
+                data_bytes: u64::try_from(data.len()).expect("fake Buffer width"),
+                account_sha256: digest(&data),
+                authority: authority.to_string(),
+                payload_sha256: digest(&data[BUFFER_METADATA_BYTES..]),
+            }))
+        }
+
+        fn minimum_balance_for_rent_exemption(
+            &mut self,
+            _origin: &ClusterOriginV1,
+            _data_bytes: u64,
+        ) -> Result<u64> {
+            Ok(self.buffer_rent_lamports)
+        }
+
+        fn authenticate_buffer_upload(
+            &mut self,
+            query: &BufferUploadQueryV1<'_>,
+        ) -> Result<BufferUploadEvidenceV1> {
+            assert_eq!(query.buffer, self.buffer_pubkey);
+            assert_eq!(query.authority, self.authority);
+            assert_eq!(query.payer, self.payer);
+            assert_eq!(query.raw_elf, self.buffer_payload.as_slice());
+            assert_eq!(query.expected_rent_lamports, self.buffer_rent_lamports);
+            let transactions = vec![json!({"fixture": "exact-buffer-upload"})];
+            Ok(BufferUploadEvidenceV1 {
+                transactions_sha256: digest(
+                    &serde_json::to_vec(&transactions).expect("fake upload JSON"),
+                ),
+                transactions,
+                fee_lamports: self.buffer_upload_fee_lamports,
+            })
+        }
     }
 
     struct Fixture {
@@ -4725,6 +7617,8 @@ mod tests {
         programdata: Pubkey,
         authority: Pubkey,
         payer: Pubkey,
+        authority_signer: Keypair,
+        payer_signer: Keypair,
         raw_elf: Vec<u8>,
         candidate_live: Vec<u8>,
         before_live: Vec<u8>,
@@ -4799,7 +7693,7 @@ mod tests {
                     frame_report_text.as_bytes(),
                 );
                 let (elf, checked_manifest) = if *produces_artifact {
-                    let bytes = if *label == "trading" {
+                    let bytes = if *label == "custody" {
                         raw_elf.to_vec()
                     } else {
                         format!("\x7fELF{label}").into_bytes()
@@ -4855,17 +7749,27 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let directory = TestDirectory::new();
-            let program = Pubkey::new_from_array([1; 32]);
-            let programdata = Pubkey::new_from_array([2; 32]);
-            let authority = Pubkey::new_from_array([3; 32]);
-            let payer = Pubkey::new_from_array([4; 32]);
+            let program = parse_pubkey(
+                PERMANENT_DEVNET_UPGRADE_TARGETS_V1[2].1,
+                "fixture Custody Program",
+            )
+            .expect("Custody Program");
+            let programdata = parse_pubkey(
+                PERMANENT_DEVNET_UPGRADE_TARGETS_V1[2].2,
+                "fixture Custody ProgramData",
+            )
+            .expect("Custody ProgramData");
+            let authority_signer = Keypair::new();
+            let payer_signer = Keypair::new();
+            let authority = authority_signer.pubkey();
+            let payer = payer_signer.pubkey();
             let raw_elf = b"\x7fELFnew!".to_vec();
             let mut candidate_live = raw_elf.clone();
             candidate_live.extend_from_slice(&[0; 4]);
             let before_live = b"\x7fELFold!\0\0\0\0".to_vec();
             let solana_cli_version = "solana-cli 4.0.2 (test fixture)".to_owned();
             let gate = checked_gate(&directory.0, &raw_elf, &solana_cli_version);
-            let elf_path = directory.0.join("elf/trading.so");
+            let elf_path = directory.0.join("elf/custody.so");
             let gate_path = directory.0.join("CHECKED_UPGRADE_GATE.json");
             fs::write(
                 &gate_path,
@@ -4902,8 +7806,8 @@ mod tests {
             let mut baseline = UpgradeBaselineV1 {
                 schema: BASELINE_SCHEMA.into(),
                 canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
-                role_ordinal: role_ordinal("trading").expect("role"),
-                role: "trading".into(),
+                role_ordinal: role_ordinal("custody").expect("role"),
+                role: "custody".into(),
                 program_id: program.to_string(),
                 programdata_id: programdata.to_string(),
                 expected_upgrade_authority: authority.to_string(),
@@ -4926,13 +7830,13 @@ mod tests {
                 serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
             )
             .expect("write baseline");
-            let args = UpgradeArgsV1 {
+            let mut args = UpgradeArgsV1 {
                 origin: ClusterOriginV1::parse(
                     "https://api.devnet.solana.com",
                     Some(DEVNET_GENESIS_HASH),
                 )
                 .expect("devnet origin"),
-                role: "trading".into(),
+                role: "custody".into(),
                 program_id: program,
                 programdata_id: programdata,
                 expected_upgrade_authority: authority,
@@ -4941,6 +7845,9 @@ mod tests {
                 authority_keypair: directory.0.join("missing-authority-keypair.json"),
                 fee_payer: payer,
                 fee_payer_keypair: directory.0.join("missing-payer-keypair.json"),
+                buffer_pubkey: Pubkey::new_from_array([11; 32]),
+                buffer_keypair: directory.0.join("missing-buffer-keypair.json"),
+                deployment_set_journal_path: directory.0.join("deployment-set.json"),
                 elf_path,
                 checked_release_gate_path: gate_path,
                 expected_checked_release_gate_sha256: gate_sha256,
@@ -4950,10 +7857,96 @@ mod tests {
                 receipt_path: directory.0.join("receipt.json"),
                 dump_path: directory.0.join("dump.so"),
                 solana_cli: directory.0.join("missing-solana-cli"),
-                target_acknowledgment: format!("trading:{program}"),
+                target_acknowledgment: format!("custody:{program}"),
+                exclusive_payer_window_acknowledgment: Some(format!("custody:{program}:{payer}")),
                 execute: true,
                 preflight: false,
             };
+            let carry_path = directory.0.join("carry-forward.json");
+            fs::write(&carry_path, b"{}\n").expect("write carry placeholder");
+            let roles = PERMANENT_DEVNET_UPGRADE_TARGETS_V1
+                .iter()
+                .enumerate()
+                .map(|(index, (role, program_id, programdata_id))| {
+                    let future_baseline_path =
+                        directory.0.join(format!("future-{role}-baseline.json"));
+                    let role_receipt_path = if index == 2 {
+                        args.receipt_path.clone()
+                    } else {
+                        directory.0.join(format!("{role}-receipt.json"))
+                    };
+                    let role_dump_path = if index == 2 {
+                        args.dump_path.clone()
+                    } else {
+                        directory.0.join(format!("{role}-dump.so"))
+                    };
+                    let baseline = (index >= 2).then(|| {
+                        if index == 2 {
+                            SetPinnedFileV1 {
+                                canonical_path: path_argument(&args.baseline_path, "baseline")
+                                    .expect("baseline path"),
+                                sha256: baseline.baseline_sha256.clone(),
+                            }
+                        } else {
+                            SetPinnedFileV1 {
+                                canonical_path: path_argument(
+                                    &future_baseline_path,
+                                    "future baseline",
+                                )
+                                .expect("future baseline path"),
+                                sha256: digest(format!("future-{role}").as_bytes()),
+                            }
+                        }
+                    });
+                    UpgradeSetRoleV1 {
+                        role: (*role).into(),
+                        disposition: if index < 2 {
+                            CheckedDeploymentDispositionV1::CarryForward
+                        } else {
+                            CheckedDeploymentDispositionV1::Upgrade
+                        },
+                        program_id: (*program_id).into(),
+                        programdata_id: (*programdata_id).into(),
+                        baseline,
+                        receipt: SetOptionalFileV1 {
+                            canonical_path: path_argument(&role_receipt_path, "role receipt")
+                                .expect("receipt path"),
+                            sha256: None,
+                        },
+                        dump: SetOptionalFileV1 {
+                            canonical_path: path_argument(&role_dump_path, "role dump")
+                                .expect("dump path"),
+                            sha256: None,
+                        },
+                    }
+                })
+                .collect();
+            let journal = UpgradeSetJournalV1 {
+                schema: SET_JOURNAL_SCHEMA.into(),
+                checked_release_gate: SetPinnedFileV1 {
+                    canonical_path: path_argument(&args.checked_release_gate_path, "gate")
+                        .expect("gate path"),
+                    sha256: args.expected_checked_release_gate_sha256.clone(),
+                },
+                source_revision: args.expected_source_revision.clone(),
+                source_tree_sha256: args.expected_source_tree_sha256.clone(),
+                devnet_genesis_hash: DEVNET_GENESIS_HASH.into(),
+                solana_cli_version: solana_cli_version.clone(),
+                retained_upgrade_authority: authority.to_string(),
+                fee_payer: payer.to_string(),
+                infrastructure_carry_forward: SetPinnedFileV1 {
+                    canonical_path: path_argument(&carry_path, "carry").expect("carry path"),
+                    sha256: digest(&fs::read(&carry_path).expect("carry bytes")),
+                },
+                roles,
+            };
+            fs::write(
+                &args.deployment_set_journal_path,
+                serde_json::to_vec_pretty(&journal).expect("journal JSON"),
+            )
+            .expect("write journal");
+            args.deployment_set_journal_path =
+                fs::canonicalize(&args.deployment_set_journal_path).expect("canonical journal");
             Self {
                 _directory: directory,
                 args,
@@ -4963,6 +7956,8 @@ mod tests {
                 programdata,
                 authority,
                 payer,
+                authority_signer,
+                payer_signer,
                 raw_elf,
                 candidate_live,
                 before_live,
@@ -5016,336 +8011,14 @@ mod tests {
                 authority_keypair: self.args.authority_keypair.clone(),
                 fee_payer: self.payer,
                 fee_payer_keypair: self.args.fee_payer_keypair.clone(),
+                deployment_set_journal_path: self.args.deployment_set_journal_path.clone(),
                 baseline_path: self.args.baseline_path.clone(),
                 receipt_path: self._directory.0.join("extension-receipt.json"),
                 solana_cli: self.args.solana_cli.clone(),
                 expected_solana_cli_version: self.solana_cli_version.clone(),
-                target_acknowledgment: format!("trading:{}:+{additional_bytes}", self.program),
+                target_acknowledgment: format!("custody:{}:+{additional_bytes}", self.program),
                 execute: true,
             }
-        }
-    }
-
-    #[derive(Clone)]
-    struct SetRunnerState {
-        programdata: Pubkey,
-        authority: Pubkey,
-        payer: Pubkey,
-        snapshot: SnapshotV1,
-    }
-
-    struct SetAuditRunner {
-        version: String,
-        genesis: String,
-        states: BTreeMap<Pubkey, SetRunnerState>,
-        transactions: BTreeMap<String, Value>,
-        calls: Vec<Vec<String>>,
-        snapshot_programs: Vec<Pubkey>,
-        transaction_programs: Vec<Pubkey>,
-    }
-
-    impl CliRunner for SetAuditRunner {
-        fn run(&mut self, arguments: &[String]) -> Result<CliOutput> {
-            self.calls.push(arguments.to_vec());
-            let stdout = match arguments.first().map(String::as_str) {
-                Some("--version") => format!("{}\n", self.version),
-                Some("genesis-hash") => format!("{}\n", self.genesis),
-                command => panic!("set auditor attempted non-read-only CLI command {command:?}"),
-            };
-            Ok(CliOutput {
-                success: true,
-                stdout,
-                stderr: String::new(),
-            })
-        }
-
-        fn read_snapshot(&mut self, query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
-            let state = self
-                .states
-                .get(&query.program_id)
-                .ok_or_else(|| Error::new("set fake omitted Program"))?;
-            if state.programdata != query.programdata_id
-                || state.authority != query.expected_upgrade_authority
-                || state.payer != query.payer
-                || state.snapshot.context_slot < query.minimum_context_slot
-            {
-                return Err(Error::new(
-                    "set fake query identity or minContextSlot mismatch",
-                ));
-            }
-            self.snapshot_programs.push(query.program_id);
-            Ok(state.snapshot.clone())
-        }
-
-        fn resolve_upgrade_transaction(
-            &mut self,
-            query: &UpgradeTransactionQueryV1<'_>,
-        ) -> Result<UpgradeTransactionEvidenceV1> {
-            let transaction = self
-                .transactions
-                .get(query.signature)
-                .cloned()
-                .ok_or_else(|| Error::new("set fake omitted finalized transaction"))?;
-            self.transaction_programs.push(query.program_id);
-            validate_upgrade_transaction(query, transaction)
-        }
-    }
-
-    struct SetFixture {
-        _fixture: Fixture,
-        args: UpgradeSetArgsV1,
-        journal: UpgradeSetJournalV1,
-        runner: SetAuditRunner,
-    }
-
-    impl SetFixture {
-        fn new(completed_roles: usize) -> Self {
-            assert!(completed_roles <= ROLES.len());
-            let fixture = Fixture::new();
-            let root = fs::canonicalize(&fixture._directory.0).expect("canonical test root");
-            let set_root = root.join("set");
-            fs::create_dir(&set_root).expect("set evidence root");
-            let gate_sha256 = digest(
-                &fs::read(&fixture.args.checked_release_gate_path).expect("checked gate bytes"),
-            );
-            let mut roles = Vec::new();
-            let mut states = BTreeMap::new();
-            let mut transactions = BTreeMap::new();
-            for (index, (role, program, programdata)) in
-                PERMANENT_DEVNET_UPGRADE_TARGETS_V1.iter().enumerate()
-            {
-                let byte = u8::try_from(index).expect("role byte");
-                let program = parse_pubkey(program, "test permanent Program").expect("Program");
-                let programdata =
-                    parse_pubkey(programdata, "test permanent ProgramData").expect("ProgramData");
-                let link = fixture
-                    .gate
-                    .links
-                    .iter()
-                    .find(|link| link.label == *role)
-                    .expect("role link");
-                let elf = link.elf.as_ref().expect("role ELF");
-                let raw_elf = fs::read(root.join(&elf.canonical_path)).expect("role ELF bytes");
-                let mut before_live = vec![0xa0 + byte; raw_elf.len()];
-                before_live[..4].copy_from_slice(b"\x7fOLD");
-                let before_slot = 100 + u64::from(byte);
-                let after_slot = 200 + u64::from(byte);
-                let before = set_loader_observation(
-                    program,
-                    programdata,
-                    fixture.authority,
-                    &before_live,
-                    before_slot,
-                );
-                let after = set_loader_observation(
-                    program,
-                    programdata,
-                    fixture.authority,
-                    &raw_elf,
-                    after_slot,
-                );
-                let context_slot = 600_000 + u64::from(byte) * 10;
-                let mut baseline = UpgradeBaselineV1 {
-                    schema: BASELINE_SCHEMA.into(),
-                    canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
-                    role_ordinal: byte,
-                    role: (*role).into(),
-                    program_id: program.to_string(),
-                    programdata_id: programdata.to_string(),
-                    expected_upgrade_authority: fixture.authority.to_string(),
-                    rpc_origin_redacted: fixture.args.origin.redacted_url(),
-                    genesis_hash: DEVNET_GENESIS_HASH.into(),
-                    context_slot,
-                    observation: before.clone(),
-                    target_live_elf_bytes: u64::try_from(raw_elf.len()).expect("ELF width"),
-                    extension_additional_bytes: 0,
-                    current_rent_exempt_minimum_lamports: before.programdata_lamports,
-                    target_rent_exempt_minimum_lamports: before.programdata_lamports,
-                    extension_lamport_top_up: 0,
-                    baseline_sha256: String::new(),
-                };
-                baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
-                let baseline_path = set_root.join(format!("{role}-baseline.json"));
-                fs::write(
-                    &baseline_path,
-                    serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
-                )
-                .expect("write baseline");
-                let receipt_path = set_root.join(format!("{role}-receipt.json"));
-                let dump_path = set_root.join(format!("{role}-dump.so"));
-                let mut receipt_ref = SetOptionalFileV1 {
-                    canonical_path: path_argument(&receipt_path, "test receipt").expect("path"),
-                    sha256: None,
-                };
-                let mut dump_ref = SetOptionalFileV1 {
-                    canonical_path: path_argument(&dump_path, "test dump").expect("path"),
-                    sha256: None,
-                };
-                let snapshot = if index < completed_roles {
-                    let signature = Signature::from([80 + byte; 64]).to_string();
-                    let fee = 5_000 + u64::from(byte);
-                    let transaction = set_upgrade_transaction(
-                        &signature,
-                        program,
-                        programdata,
-                        fixture.authority,
-                        fixture.payer,
-                        after_slot,
-                        before.programdata_lamports,
-                        fee,
-                    );
-                    let transaction_sha256 =
-                        digest(&serde_json::to_vec(&transaction).expect("transaction JSON"));
-                    let mut receipt = UpgradeReceiptV1 {
-                        schema: SCHEMA.into(),
-                        phase: ReceiptPhaseV1::Complete,
-                        operation_id: String::new(),
-                        role: (*role).into(),
-                        program_id: program.to_string(),
-                        programdata_id: programdata.to_string(),
-                        retained_upgrade_authority: fixture.authority.to_string(),
-                        fee_payer: fixture.payer.to_string(),
-                        rpc_origin_redacted: fixture.args.origin.redacted_url(),
-                        genesis_hash: DEVNET_GENESIS_HASH.into(),
-                        source_revision: fixture.gate.source_revision.clone(),
-                        source_tree_sha256: fixture.gate.source_tree_sha256.clone(),
-                        checked_release_gate_sha256: gate_sha256.clone(),
-                        baseline_sha256: baseline.baseline_sha256.clone(),
-                        baseline_context_slot: context_slot,
-                        raw_elf_sha256: digest(&raw_elf),
-                        live_elf_sha256: digest(&raw_elf),
-                        live_elf_padding_bytes: 0,
-                        solana_cli_version: fixture.solana_cli_version.clone(),
-                        before_context_slot: context_slot,
-                        before: before.clone(),
-                        wallet_before_lamports: 1_000_000,
-                        transaction_signature: Some(signature.clone()),
-                        solana_cli_output: Some(json!({
-                            "programId": program.to_string(),
-                            "signature": signature
-                        })),
-                        finalized_transaction: Some(transaction.clone()),
-                        finalized_transaction_sha256: Some(transaction_sha256),
-                        after_context_slot: Some(context_slot + 1),
-                        after: Some(after.clone()),
-                        arithmetic: Some(UpgradeArithmeticV1 {
-                            transaction_payer_pre_lamports: 1_000_000,
-                            transaction_payer_post_lamports: 1_000_000 - fee,
-                            transaction_fee_lamports: fee,
-                            payer_fee_delta_lamports: fee,
-                            programdata_before_lamports: before.programdata_lamports,
-                            programdata_after_lamports: after.programdata_lamports,
-                            programdata_delta_lamports: 0,
-                        }),
-                        dump_sha256: Some(digest(&raw_elf)),
-                        dump_shape: Some("raw-elf".into()),
-                        receipt_sha256: String::new(),
-                    };
-                    receipt.operation_id = operation_id_from_receipt(&receipt);
-                    receipt.receipt_sha256 =
-                        digest(&serde_json::to_vec(&receipt).expect("receipt JSON"));
-                    fs::write(
-                        &receipt_path,
-                        serde_json::to_vec_pretty(&receipt).expect("receipt JSON"),
-                    )
-                    .expect("write receipt");
-                    fs::write(&dump_path, &raw_elf).expect("write dump");
-                    receipt_ref.sha256 = Some(digest(
-                        &fs::read(&receipt_path).expect("written receipt bytes"),
-                    ));
-                    dump_ref.sha256 = Some(digest(&raw_elf));
-                    transactions.insert(
-                        receipt.transaction_signature.expect("receipt signature"),
-                        transaction,
-                    );
-                    SnapshotV1 {
-                        context_slot: context_slot + 1,
-                        loader: after,
-                        wallet_lamports: 123_456,
-                        live_elf: raw_elf,
-                    }
-                } else {
-                    SnapshotV1 {
-                        context_slot,
-                        loader: before,
-                        wallet_lamports: 1_000_000,
-                        live_elf: before_live,
-                    }
-                };
-                states.insert(
-                    program,
-                    SetRunnerState {
-                        programdata,
-                        authority: fixture.authority,
-                        payer: fixture.payer,
-                        snapshot,
-                    },
-                );
-                roles.push(UpgradeSetRoleV1 {
-                    role: (*role).into(),
-                    program_id: program.to_string(),
-                    programdata_id: programdata.to_string(),
-                    baseline: SetPinnedFileV1 {
-                        canonical_path: path_argument(&baseline_path, "test baseline")
-                            .expect("path"),
-                        sha256: digest(&fs::read(&baseline_path).expect("written baseline bytes")),
-                    },
-                    receipt: receipt_ref,
-                    dump: dump_ref,
-                });
-            }
-            let journal = UpgradeSetJournalV1 {
-                schema: SET_JOURNAL_SCHEMA.into(),
-                checked_release_gate: SetPinnedFileV1 {
-                    canonical_path: path_argument(
-                        &root.join("CHECKED_UPGRADE_GATE.json"),
-                        "test gate",
-                    )
-                    .expect("path"),
-                    sha256: gate_sha256,
-                },
-                source_revision: fixture.gate.source_revision.clone(),
-                source_tree_sha256: fixture.gate.source_tree_sha256.clone(),
-                devnet_genesis_hash: DEVNET_GENESIS_HASH.into(),
-                solana_cli_version: fixture.solana_cli_version.clone(),
-                retained_upgrade_authority: fixture.authority.to_string(),
-                fee_payer: fixture.payer.to_string(),
-                roles,
-            };
-            let journal_path = set_root.join("upgrade-set-journal.json");
-            fs::write(
-                &journal_path,
-                serde_json::to_vec_pretty(&journal).expect("journal JSON"),
-            )
-            .expect("write journal");
-            let args = UpgradeSetArgsV1 {
-                origin: fixture.args.origin.clone(),
-                journal_path,
-                solana_cli: root.join("missing-set-solana-cli"),
-            };
-            let runner = SetAuditRunner {
-                version: fixture.solana_cli_version.clone(),
-                genesis: DEVNET_GENESIS_HASH.into(),
-                states,
-                transactions,
-                calls: Vec::new(),
-                snapshot_programs: Vec::new(),
-                transaction_programs: Vec::new(),
-            };
-            Self {
-                _fixture: fixture,
-                args,
-                journal,
-                runner,
-            }
-        }
-
-        fn rewrite_journal(&self) {
-            fs::write(
-                &self.args.journal_path,
-                serde_json::to_vec_pretty(&self.journal).expect("journal JSON"),
-            )
-            .expect("rewrite journal");
         }
     }
 
@@ -5373,12 +8046,14 @@ mod tests {
                 lamports: 1_140,
                 owner: bpf_loader_upgradeable::ID,
                 executable: true,
+                rent_epoch: u64::MAX,
                 data: program_bytes,
             },
             &RpcAccountV1 {
                 lamports: 77_000,
                 owner: bpf_loader_upgradeable::ID,
                 executable: false,
+                rent_epoch: u64::MAX,
                 data: programdata_bytes,
             },
         )
@@ -5391,12 +8066,11 @@ mod tests {
         programdata: Pubkey,
         authority: Pubkey,
         payer: Pubkey,
+        buffer: Pubkey,
         slot: u64,
         programdata_lamports: u64,
         fee: u64,
     ) -> Value {
-        let buffer = Pubkey::new_from_array([11; 32]);
-        let spill = Pubkey::new_from_array([12; 32]);
         json!({
             "slot": slot,
             "transaction": {
@@ -5408,7 +8082,6 @@ mod tests {
                         {"pubkey": program.to_string(), "signer": false, "writable": true},
                         {"pubkey": authority.to_string(), "signer": true, "writable": false},
                         {"pubkey": buffer.to_string(), "signer": false, "writable": true},
-                        {"pubkey": spill.to_string(), "signer": false, "writable": true},
                         {"pubkey": sysvar::rent::ID.to_string(), "signer": false, "writable": false},
                         {"pubkey": sysvar::clock::ID.to_string(), "signer": false, "writable": false}
                     ],
@@ -5421,7 +8094,7 @@ mod tests {
                                 "programDataAccount": programdata.to_string(),
                                 "programAccount": program.to_string(),
                                 "bufferAccount": buffer.to_string(),
-                                "spillAccount": spill.to_string(),
+                                "spillAccount": payer.to_string(),
                                 "rentSysvar": sysvar::rent::ID.to_string(),
                                 "clockSysvar": sysvar::clock::ID.to_string(),
                                 "authority": authority.to_string()
@@ -5434,36 +8107,657 @@ mod tests {
                 "err": null,
                 "fee": fee,
                 "preBalances": [
-                    1_000_000, programdata_lamports, 1_140, 0, 10_000, 0, 1, 1
+                    999_999, programdata_lamports, 1_140, 0, 1, 1, 1
                 ],
                 "postBalances": [
-                    1_000_000 - fee, programdata_lamports, 1_140, 0, 0, 10_000, 1, 1
+                    1_000_000 - fee, programdata_lamports, 1_140, 0, 0, 1, 1
                 ]
             }
         })
     }
 
+    fn mixed_account(owner: Pubkey, executable: bool, data: Vec<u8>) -> RpcAccountV1 {
+        RpcAccountV1 {
+            lamports: Rent::default().minimum_balance(data.len()),
+            owner,
+            executable,
+            rent_epoch: u64::MAX,
+            data,
+        }
+    }
+
+    fn mixed_loader_accounts(
+        programdata: Pubkey,
+        authority: Pubkey,
+        slot: u64,
+        elf: &[u8],
+    ) -> (RpcAccountV1, RpcAccountV1) {
+        let mut program = vec![0_u8; 36];
+        program[..4].copy_from_slice(&2_u32.to_le_bytes());
+        program[4..].copy_from_slice(programdata.as_ref());
+        let mut data = vec![0_u8; 45];
+        data[..4].copy_from_slice(&3_u32.to_le_bytes());
+        data[4..12].copy_from_slice(&slot.to_le_bytes());
+        data[12] = 1;
+        data[13..45].copy_from_slice(authority.as_ref());
+        data.extend_from_slice(elf);
+        (
+            mixed_account(bpf_loader_upgradeable::ID, true, program),
+            mixed_account(bpf_loader_upgradeable::ID, false, data),
+        )
+    }
+
+    fn mixed_snapshot_row(
+        role: &str,
+        address: Pubkey,
+        account: Option<&RpcAccountV1>,
+    ) -> CarryForwardSnapshotAccountV1 {
+        CarryForwardSnapshotAccountV1 {
+            role: role.into(),
+            address: address.to_string(),
+            account: account.map(|account| CarryForwardAccountV1 {
+                lamports: account.lamports,
+                owner: account.owner.to_string(),
+                executable: account.executable,
+                rent_epoch: account.rent_epoch,
+                data_encoding: "base64".into(),
+                data_len: account.data.len(),
+                data_base64: BASE64.encode(&account.data),
+                data_sha256: digest(&account.data),
+            }),
+        }
+    }
+
+    struct MixedSetAuditRunner {
+        version: String,
+        genesis: String,
+        states: BTreeMap<Pubkey, SetRunnerStateV2>,
+        transactions: BTreeMap<String, Value>,
+        carry_context_slot: u64,
+        carry_addresses: Vec<Pubkey>,
+        carry_accounts: Vec<Option<RpcAccountV1>>,
+        calls: Vec<Vec<String>>,
+    }
+
+    #[derive(Clone)]
+    struct SetRunnerStateV2 {
+        programdata: Pubkey,
+        authority: Pubkey,
+        payer: Pubkey,
+        snapshot: SnapshotV1,
+    }
+
+    impl CliRunner for MixedSetAuditRunner {
+        fn run(&mut self, arguments: &[String]) -> Result<CliOutput> {
+            self.calls.push(arguments.to_vec());
+            let stdout = match arguments.first().map(String::as_str) {
+                Some("--version") => format!("{}\n", self.version),
+                Some("genesis-hash") => format!("{}\n", self.genesis),
+                command => panic!("mixed set auditor attempted mutation {command:?}"),
+            };
+            Ok(CliOutput {
+                success: true,
+                stdout,
+                stderr: String::new(),
+            })
+        }
+
+        fn read_snapshot(&mut self, query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
+            let state = self
+                .states
+                .get(&query.program_id)
+                .ok_or_else(|| Error::new("mixed set fake omitted Program"))?;
+            if state.programdata != query.programdata_id
+                || state.authority != query.expected_upgrade_authority
+                || state.payer != query.payer
+                || state.snapshot.context_slot < query.minimum_context_slot
+            {
+                return Err(Error::new("mixed set fake snapshot query mismatch"));
+            }
+            Ok(state.snapshot.clone())
+        }
+
+        fn read_carry_forward_accounts(
+            &mut self,
+            query: &CarryForwardQueryV1<'_>,
+        ) -> Result<(u64, Vec<Option<RpcAccountV1>>)> {
+            if query.addresses != self.carry_addresses
+                || self.carry_context_slot < query.minimum_context_slot
+            {
+                return Err(Error::new("mixed set fake carry query mismatch"));
+            }
+            Ok((self.carry_context_slot, self.carry_accounts.clone()))
+        }
+
+        fn resolve_upgrade_transaction(
+            &mut self,
+            query: &UpgradeTransactionQueryV1<'_>,
+        ) -> Result<UpgradeTransactionEvidenceV1> {
+            validate_upgrade_transaction(
+                query,
+                self.transactions
+                    .get(query.signature)
+                    .cloned()
+                    .ok_or_else(|| Error::new("mixed set fake omitted transaction"))?,
+            )
+        }
+    }
+
+    struct MixedSetFixture {
+        _fixture: Fixture,
+        args: UpgradeSetArgsV1,
+        journal: UpgradeSetJournalV1,
+        snapshot_path: PathBuf,
+        snapshot: CarryForwardSnapshotV1,
+        runner: MixedSetAuditRunner,
+    }
+
+    impl MixedSetFixture {
+        fn new(completed_upgrades: usize) -> Self {
+            assert!(completed_upgrades <= 5);
+            let fixture = Fixture::new();
+            let root = fs::canonicalize(&fixture._directory.0).expect("canonical fixture");
+            let set_root = root.join("mixed-set");
+            fs::create_dir(&set_root).expect("mixed set root");
+            let gate_sha256 =
+                digest(&fs::read(&fixture.args.checked_release_gate_path).expect("gate bytes"));
+            let authority = fixture.authority;
+            let payer = fixture.payer;
+            let carry_slot = 700_000;
+            let mut roles = Vec::new();
+            let mut states = BTreeMap::new();
+            let mut transactions = BTreeMap::new();
+            let mut carry = Vec::new();
+            for (index, (role, program_text, programdata_text)) in
+                PERMANENT_DEVNET_UPGRADE_TARGETS_V1.iter().enumerate()
+            {
+                let byte = u8::try_from(index).expect("role byte");
+                let program = parse_pubkey(program_text, "mixed Program").expect("Program");
+                let programdata =
+                    parse_pubkey(programdata_text, "mixed ProgramData").expect("ProgramData");
+                let link = fixture
+                    .gate
+                    .links
+                    .iter()
+                    .find(|link| link.label == *role)
+                    .expect("gate role");
+                let elf = link.elf.as_ref().expect("gate ELF");
+                let raw_elf = fs::read(root.join(&elf.canonical_path)).expect("ELF bytes");
+                let receipt_path = set_root.join(format!("{role}-receipt.json"));
+                let dump_path = set_root.join(format!("{role}-dump.so"));
+                let mut receipt_ref = SetOptionalFileV1 {
+                    canonical_path: path_argument(&receipt_path, "mixed receipt").expect("path"),
+                    sha256: None,
+                };
+                let mut dump_ref = SetOptionalFileV1 {
+                    canonical_path: path_argument(&dump_path, "mixed dump").expect("path"),
+                    sha256: None,
+                };
+                if index < 2 {
+                    let slot = 200 + u64::from(byte);
+                    let (program_account, programdata_account) =
+                        mixed_loader_accounts(programdata, authority, slot, &raw_elf);
+                    let release = ArtifactReleaseV1::new(
+                        dclutch_release_set_contract::ProgramIdentityV1::new(program.to_bytes())
+                            .expect("program identity"),
+                        dclutch_release_set_contract::ProgramIdentityV1::new(
+                            bpf_loader_upgradeable::ID.to_bytes(),
+                        )
+                        .expect("loader identity"),
+                        programdata.to_bytes(),
+                        dclutch_core_contract::ContentId::new([30 + byte; 32]).expect("semantic"),
+                        Sha256::digest(&raw_elf).into(),
+                        slot,
+                        dclutch_registry_contract::ArtifactUpgradePolicyV1::ExactAuthority,
+                        Some(authority.to_bytes()),
+                    )
+                    .expect("carry artifact");
+                    let body = release.to_bytes().to_vec();
+                    let id: [u8; 32] = Sha256::digest(&body).into();
+                    fs::write(&dump_path, &raw_elf).expect("carry dump");
+                    dump_ref.sha256 = Some(digest(&raw_elf));
+                    carry.push((
+                        program,
+                        programdata,
+                        program_account,
+                        programdata_account,
+                        raw_elf,
+                        body,
+                        id,
+                    ));
+                    roles.push(UpgradeSetRoleV1 {
+                        role: (*role).into(),
+                        disposition: CheckedDeploymentDispositionV1::CarryForward,
+                        program_id: program.to_string(),
+                        programdata_id: programdata.to_string(),
+                        baseline: None,
+                        receipt: receipt_ref,
+                        dump: dump_ref,
+                    });
+                    continue;
+                }
+
+                let mut old_elf = vec![0xa0 + byte; raw_elf.len()];
+                old_elf[..4].copy_from_slice(b"\x7fOLD");
+                let before_slot = 100 + u64::from(byte);
+                let after_slot = 200 + u64::from(byte);
+                let before =
+                    set_loader_observation(program, programdata, authority, &old_elf, before_slot);
+                let after =
+                    set_loader_observation(program, programdata, authority, &raw_elf, after_slot);
+                let context_slot = 600_000 + u64::from(byte) * 10;
+                let mut baseline = UpgradeBaselineV1 {
+                    schema: BASELINE_SCHEMA.into(),
+                    canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
+                    role_ordinal: byte,
+                    role: (*role).into(),
+                    program_id: program.to_string(),
+                    programdata_id: programdata.to_string(),
+                    expected_upgrade_authority: authority.to_string(),
+                    rpc_origin_redacted: fixture.args.origin.redacted_url(),
+                    genesis_hash: DEVNET_GENESIS_HASH.into(),
+                    context_slot,
+                    observation: before.clone(),
+                    target_live_elf_bytes: u64::try_from(raw_elf.len()).expect("ELF width"),
+                    extension_additional_bytes: 0,
+                    current_rent_exempt_minimum_lamports: before.programdata_lamports,
+                    target_rent_exempt_minimum_lamports: before.programdata_lamports,
+                    extension_lamport_top_up: 0,
+                    baseline_sha256: String::new(),
+                };
+                baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
+                let baseline_path = set_root.join(format!("{role}-baseline.json"));
+                fs::write(
+                    &baseline_path,
+                    serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
+                )
+                .expect("baseline write");
+                let completed = index - 2 < completed_upgrades;
+                let snapshot = if completed {
+                    let signature = Signature::from([80 + byte; 64]).to_string();
+                    let fee = 5_000 + u64::from(byte);
+                    let receipt_buffer = Pubkey::new_from_array([90 + byte; 32]);
+                    let transaction = set_upgrade_transaction(
+                        &signature,
+                        program,
+                        programdata,
+                        authority,
+                        payer,
+                        receipt_buffer,
+                        after_slot,
+                        before.programdata_lamports,
+                        fee,
+                    );
+                    let mut receipt = UpgradeReceiptV1 {
+                        schema: SCHEMA.into(),
+                        phase: ReceiptPhaseV1::Complete,
+                        operation_id: String::new(),
+                        role: (*role).into(),
+                        program_id: program.to_string(),
+                        programdata_id: programdata.to_string(),
+                        retained_upgrade_authority: authority.to_string(),
+                        fee_payer: payer.to_string(),
+                        rpc_origin_redacted: fixture.args.origin.redacted_url(),
+                        genesis_hash: DEVNET_GENESIS_HASH.into(),
+                        deployment_set_journal_sha256: digest(b"mixed-set-journal"),
+                        source_revision: fixture.gate.source_revision.clone(),
+                        source_tree_sha256: fixture.gate.source_tree_sha256.clone(),
+                        checked_release_gate_sha256: gate_sha256.clone(),
+                        baseline_sha256: baseline.baseline_sha256.clone(),
+                        baseline_context_slot: context_slot,
+                        raw_elf_sha256: digest(&raw_elf),
+                        live_elf_sha256: digest(&raw_elf),
+                        live_elf_padding_bytes: 0,
+                        solana_cli_version: fixture.solana_cli_version.clone(),
+                        before_context_slot: context_slot,
+                        before: before.clone(),
+                        wallet_before_lamports: 1_000_000,
+                        exclusive_payer_window_acknowledgment: format!("{role}:{program}:{payer}"),
+                        buffer_pubkey: receipt_buffer.to_string(),
+                        buffer_keypair_path: format!("mixed-set/{role}-buffer-keypair.json"),
+                        buffer_data_bytes: u64::try_from(BUFFER_METADATA_BYTES + raw_elf.len())
+                            .expect("buffer width"),
+                        buffer_rent_exempt_lamports: 1,
+                        buffer_write_armed_block_height: Some(context_slot),
+                        buffer_write_expiry_block_height: Some(context_slot + 512),
+                        buffer_write_cli_output: Some(json!({"status": "fixture"})),
+                        buffer_ready_context_slot: Some(context_slot),
+                        buffer_ready_account_sha256: Some(digest(&raw_elf)),
+                        buffer_ready_lamports: Some(1),
+                        buffer_upload_fee_lamports: Some(0),
+                        buffer_upload_transactions: Some(Vec::new()),
+                        buffer_upload_transactions_sha256: Some(digest(b"[]")),
+                        buffer_upload_wallet_after_lamports: Some(999_999),
+                        expired_packets: Vec::new(),
+                        unsigned_message_base64: Some(BASE64.encode(b"fixture-message")),
+                        unsigned_message_sha256: Some(digest(b"fixture-message")),
+                        recent_blockhash: Some(Hash::new_from_array([91 + byte; 32]).to_string()),
+                        last_valid_block_height: Some(context_slot + 150),
+                        signed_packet_base64: Some(BASE64.encode(b"fixture-packet")),
+                        signed_packet_sha256: Some(digest(b"fixture-packet")),
+                        transaction_signature: Some(signature.clone()),
+                        solana_cli_output: Some(json!({
+                            "transport": "sendTransaction",
+                            "maxRetries": 0,
+                            "signature": signature,
+                            "buffer": receipt_buffer.to_string(),
+                            "spill": payer.to_string(),
+                        })),
+                        finalized_transaction: Some(transaction.clone()),
+                        finalized_transaction_sha256: Some(digest(
+                            &serde_json::to_vec(&transaction).expect("transaction JSON"),
+                        )),
+                        after_context_slot: Some(context_slot + 1),
+                        after: Some(after.clone()),
+                        arithmetic: Some(UpgradeArithmeticV1 {
+                            transaction_payer_pre_lamports: 999_999,
+                            transaction_payer_post_lamports: 1_000_000 - fee,
+                            transaction_fee_lamports: fee,
+                            payer_fee_delta_lamports: fee,
+                            programdata_before_lamports: before.programdata_lamports,
+                            programdata_after_lamports: after.programdata_lamports,
+                            programdata_delta_lamports: 0,
+                            operation_wallet_before_lamports: 1_000_000,
+                            operation_wallet_after_lamports: 1_000_000 - fee,
+                            operation_observed_net_spend_lamports: fee,
+                            unattributed_cli_net_cost_lamports: 0,
+                            accounting_scope: OPERATION_ACCOUNTING_SCOPE_V1.into(),
+                            cost_attribution: OPERATION_COST_ATTRIBUTION_V1.into(),
+                        }),
+                        dump_sha256: Some(digest(&raw_elf)),
+                        dump_shape: Some("raw-elf".into()),
+                        receipt_sha256: String::new(),
+                    };
+                    receipt.operation_id = operation_id_from_receipt(&receipt);
+                    receipt.receipt_sha256 =
+                        digest(&serde_json::to_vec(&receipt).expect("receipt JSON"));
+                    fs::write(
+                        &receipt_path,
+                        serde_json::to_vec_pretty(&receipt).expect("receipt JSON"),
+                    )
+                    .expect("receipt write");
+                    fs::write(&dump_path, &raw_elf).expect("dump write");
+                    receipt_ref.sha256 =
+                        Some(digest(&fs::read(&receipt_path).expect("receipt bytes")));
+                    dump_ref.sha256 = Some(digest(&raw_elf));
+                    transactions.insert(
+                        receipt.transaction_signature.expect("signature"),
+                        transaction,
+                    );
+                    SnapshotV1 {
+                        context_slot: context_slot + 1,
+                        loader: after,
+                        wallet_lamports: 1_000_000 - fee,
+                        live_elf: raw_elf,
+                    }
+                } else {
+                    SnapshotV1 {
+                        context_slot,
+                        loader: before,
+                        wallet_lamports: 1_000_000,
+                        live_elf: old_elf,
+                    }
+                };
+                states.insert(
+                    program,
+                    SetRunnerStateV2 {
+                        programdata,
+                        authority,
+                        payer,
+                        snapshot,
+                    },
+                );
+                roles.push(UpgradeSetRoleV1 {
+                    role: (*role).into(),
+                    disposition: CheckedDeploymentDispositionV1::Upgrade,
+                    program_id: program.to_string(),
+                    programdata_id: programdata.to_string(),
+                    baseline: Some(SetPinnedFileV1 {
+                        canonical_path: path_argument(&baseline_path, "mixed baseline")
+                            .expect("path"),
+                        sha256: digest(&fs::read(&baseline_path).expect("baseline bytes")),
+                    }),
+                    receipt: receipt_ref,
+                    dump: dump_ref,
+                });
+            }
+
+            let registry = &carry[0];
+            let rent = &carry[1];
+            let registry_raw = Pubkey::find_program_address(
+                &[
+                    RAW_RECORD_PDA_SEED_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &registry.6,
+                ],
+                &registry.0,
+            )
+            .0;
+            let registry_staging = Pubkey::find_program_address(
+                &[
+                    STAGING_CURSOR_PDA_SEED_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &registry.6,
+                ],
+                &registry.0,
+            )
+            .0;
+            let rent_raw = Pubkey::find_program_address(
+                &[
+                    RAW_RECORD_PDA_SEED_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &rent.6,
+                ],
+                &registry.0,
+            )
+            .0;
+            let rent_staging = Pubkey::find_program_address(
+                &[
+                    STAGING_CURSOR_PDA_SEED_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &rent.6,
+                ],
+                &registry.0,
+            )
+            .0;
+            let registry_raw_account = mixed_account(registry.0, false, registry.5.clone());
+            let rent_raw_account = mixed_account(registry.0, false, rent.5.clone());
+            let registry_binding = dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+                dclutch_release_set_contract::ProgramIdentityV1::new(registry.0.to_bytes())
+                    .expect("registry identity"),
+                dclutch_release_set_contract::ArtifactReleaseIdV1::decode(&registry.6)
+                    .expect("registry artifact ID"),
+            );
+            let rent_binding = dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+                dclutch_release_set_contract::ProgramIdentityV1::new(rent.0.to_bytes())
+                    .expect("rent identity"),
+                dclutch_release_set_contract::ArtifactReleaseIdV1::decode(&rent.6)
+                    .expect("rent artifact ID"),
+            );
+            let profile = ProtocolInfrastructureProfileV1::new(registry_binding, rent_binding)
+                .expect("profile")
+                .to_bytes()
+                .to_vec();
+            let core =
+                parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[6].1, "Core").expect("Core");
+            let profile_address = Pubkey::find_program_address(
+                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+                &core,
+            )
+            .0;
+            let profile_account = mixed_account(core, false, profile);
+            let carry_addresses = vec![
+                registry.0,
+                registry.1,
+                rent.0,
+                rent.1,
+                registry_raw,
+                registry_staging,
+                rent_raw,
+                rent_staging,
+                profile_address,
+            ];
+            let carry_accounts = vec![
+                Some(registry.2.clone()),
+                Some(registry.3.clone()),
+                Some(rent.2.clone()),
+                Some(rent.3.clone()),
+                Some(registry_raw_account.clone()),
+                None,
+                Some(rent_raw_account.clone()),
+                None,
+                Some(profile_account.clone()),
+            ];
+            let snapshot = CarryForwardSnapshotV1 {
+                schema: CARRY_FORWARD_SNAPSHOT_SCHEMA.into(),
+                endpoint: "https://api.devnet.solana.com".into(),
+                commitment: "finalized".into(),
+                rpc_method: "getMultipleAccounts".into(),
+                context_slot: carry_slot,
+                accounts: [
+                    ("registry_program", registry.0, Some(&registry.2)),
+                    ("registry_programdata", registry.1, Some(&registry.3)),
+                    ("rent_program", rent.0, Some(&rent.2)),
+                    ("rent_programdata", rent.1, Some(&rent.3)),
+                    ("registry_raw", registry_raw, Some(&registry_raw_account)),
+                    ("registry_staging", registry_staging, None),
+                    ("rent_raw", rent_raw, Some(&rent_raw_account)),
+                    ("rent_staging", rent_staging, None),
+                    (
+                        "infrastructure_profile",
+                        profile_address,
+                        Some(&profile_account),
+                    ),
+                ]
+                .into_iter()
+                .map(|(role, address, account)| mixed_snapshot_row(role, address, account))
+                .collect(),
+            };
+            let snapshot_path = set_root.join("carry-forward-snapshot.json");
+            fs::write(
+                &snapshot_path,
+                serde_json::to_vec_pretty(&snapshot).expect("snapshot JSON"),
+            )
+            .expect("snapshot write");
+            let journal = UpgradeSetJournalV1 {
+                schema: SET_JOURNAL_SCHEMA.into(),
+                checked_release_gate: SetPinnedFileV1 {
+                    canonical_path: path_argument(
+                        &root.join("CHECKED_UPGRADE_GATE.json"),
+                        "mixed gate",
+                    )
+                    .expect("path"),
+                    sha256: gate_sha256,
+                },
+                source_revision: fixture.gate.source_revision.clone(),
+                source_tree_sha256: fixture.gate.source_tree_sha256.clone(),
+                devnet_genesis_hash: DEVNET_GENESIS_HASH.into(),
+                solana_cli_version: fixture.solana_cli_version.clone(),
+                retained_upgrade_authority: authority.to_string(),
+                fee_payer: payer.to_string(),
+                infrastructure_carry_forward: SetPinnedFileV1 {
+                    canonical_path: path_argument(&snapshot_path, "mixed snapshot").expect("path"),
+                    sha256: digest(&fs::read(&snapshot_path).expect("snapshot bytes")),
+                },
+                roles,
+            };
+            let journal_path = set_root.join("deployment-set-journal.json");
+            fs::write(
+                &journal_path,
+                serde_json::to_vec_pretty(&journal).expect("journal JSON"),
+            )
+            .expect("journal write");
+            let args = UpgradeSetArgsV1 {
+                origin: fixture.args.origin.clone(),
+                journal_path,
+                solana_cli: root.join("missing-solana-cli"),
+            };
+            let runner = MixedSetAuditRunner {
+                version: fixture.solana_cli_version.clone(),
+                genesis: DEVNET_GENESIS_HASH.into(),
+                states,
+                transactions,
+                carry_context_slot: carry_slot,
+                carry_addresses,
+                carry_accounts,
+                calls: Vec::new(),
+            };
+            Self {
+                _fixture: fixture,
+                args,
+                journal,
+                snapshot_path,
+                snapshot,
+                runner,
+            }
+        }
+
+        fn rewrite_journal(&self) {
+            fs::write(
+                &self.args.journal_path,
+                serde_json::to_vec_pretty(&self.journal).expect("journal JSON"),
+            )
+            .expect("journal rewrite");
+        }
+
+        fn rewrite_snapshot(&mut self) {
+            fs::write(
+                &self.snapshot_path,
+                serde_json::to_vec_pretty(&self.snapshot).expect("snapshot JSON"),
+            )
+            .expect("snapshot rewrite");
+            self.journal.infrastructure_carry_forward.sha256 =
+                digest(&fs::read(&self.snapshot_path).expect("snapshot bytes"));
+            self.rewrite_journal();
+        }
+
+        fn rewrite_snapshot_data(&mut self, index: usize, bytes: &[u8]) {
+            let account = self.snapshot.accounts[index]
+                .account
+                .as_mut()
+                .expect("snapshot account");
+            account.data_base64 = BASE64.encode(bytes);
+            account.data_len = bytes.len();
+            account.data_sha256 = digest(bytes);
+            self.rewrite_snapshot();
+        }
+    }
+
     #[test]
-    fn set_journal_reports_one_fresh_next_role_without_keys_or_writes() {
-        let mut fixture = SetFixture::new(2);
-        let report =
-            audit_set_journal_with_runner(&fixture.args, &mut fixture.runner).expect("set audit");
+    fn mixed_deployment_set_reports_only_the_next_execution_upgrade() {
+        let mut fixture = MixedSetFixture::new(2);
+        let report = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
+            .expect("mixed deployment-set audit");
         assert_eq!(report.schema, SET_AUDIT_SCHEMA);
-        assert_eq!(report.completed_role_count, 2);
+        assert_eq!(report.completed_role_count, 4);
+        assert_eq!(
+            report.roles[..2]
+                .iter()
+                .map(|role| (&role.disposition, &role.status))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    &CheckedDeploymentDispositionV1::CarryForward,
+                    &SetRoleStatusV1::CarriedForward
+                ),
+                (
+                    &CheckedDeploymentDispositionV1::CarryForward,
+                    &SetRoleStatusV1::CarriedForward
+                )
+            ]
+        );
         assert_eq!(
             report.next_role,
             Some(SetNextRoleV1 {
-                ordinal: 2,
-                role: "custody".into(),
-                program_id: fixture.journal.roles[2].program_id.clone(),
-                programdata_id: fixture.journal.roles[2].programdata_id.clone(),
+                ordinal: 4,
+                role: "claims".into(),
+                program_id: fixture.journal.roles[4].program_id.clone(),
+                programdata_id: fixture.journal.roles[4].programdata_id.clone(),
                 action: "run_exact_one_role_upgrade".into(),
             })
         );
-        assert_eq!(report.final_set_sha256, None);
+        assert!(report.final_set_sha256.is_none());
         assert!(!report.mutation_permitted);
-        assert_eq!(fixture.runner.snapshot_programs.len(), 3);
-        assert_eq!(fixture.runner.transaction_programs.len(), 2);
         assert!(fixture.runner.calls.iter().all(|call| matches!(
             call.first().map(String::as_str),
             Some("--version" | "genesis-hash")
@@ -5471,132 +8765,303 @@ mod tests {
     }
 
     #[test]
-    fn final_set_digest_requires_all_seven_receipts_to_remain_fresh() {
-        let mut fixture = SetFixture::new(ROLES.len());
+    fn complete_mixed_set_projects_carry_semantics_only_from_existing_artifacts() {
+        let mut fixture = MixedSetFixture::new(5);
         let report = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
-            .expect("complete set audit");
+            .expect("complete mixed audit");
         assert_eq!(report.completed_role_count, 7);
         assert!(report.next_role.is_none());
-        assert!(report.final_set_sha256.is_some());
-
-        let registry = parse_pubkey(&fixture.journal.roles[0].program_id, "registry").expect("key");
-        fixture
-            .runner
-            .states
-            .get_mut(&registry)
-            .expect("registry state")
-            .snapshot
-            .loader
-            .deployment_slot += 1;
-        let error = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
-            .expect_err("stale earlier role must refuse");
-        assert!(error.to_string().contains("drifted from current"));
-    }
-
-    #[test]
-    fn set_journal_refuses_gaps_mixed_source_and_modified_receipt_or_dump() {
-        let mut program = SetFixture::new(0);
-        program.journal.roles[0].program_id = Pubkey::new_unique().to_string();
-        program.rewrite_journal();
-        let error = audit_set_journal_with_runner(&program.args, &mut program.runner)
-            .expect_err("substituted permanent Program must refuse");
-        assert!(error.to_string().contains("exact permanent devnet"));
-
-        let mut programdata = SetFixture::new(0);
-        programdata.journal.roles[0].programdata_id = Pubkey::new_unique().to_string();
-        programdata.rewrite_journal();
-        let error = audit_set_journal_with_runner(&programdata.args, &mut programdata.runner)
-            .expect_err("substituted permanent ProgramData must refuse");
-        assert!(error.to_string().contains("exact permanent devnet"));
-
-        let mut gap = SetFixture::new(0);
-        let later_path = PathBuf::from(&gap.journal.roles[2].receipt.canonical_path);
-        fs::write(&later_path, b"not a receipt").expect("later evidence");
-        gap.journal.roles[2].receipt.sha256 =
-            Some(digest(&fs::read(&later_path).expect("later bytes")));
-        gap.rewrite_journal();
-        let error =
-            audit_set_journal_with_runner(&gap.args, &mut gap.runner).expect_err("gap must refuse");
-        assert!(error.to_string().contains("gap"));
-
-        let mut mixed = SetFixture::new(0);
-        mixed.journal.source_revision = "f".repeat(40);
-        mixed.rewrite_journal();
-        let error = audit_set_journal_with_runner(&mixed.args, &mut mixed.runner)
-            .expect_err("mixed source must refuse");
-        assert!(error.to_string().contains("source commit/tree differs"));
-
-        let mut cli = SetFixture::new(0);
-        cli.journal.solana_cli_version = "solana-cli substituted".into();
-        cli.rewrite_journal();
-        let error = audit_set_journal_with_runner(&cli.args, &mut cli.runner)
-            .expect_err("mixed CLI must refuse");
-        assert!(error.to_string().contains("CLI identity"));
-
-        let mut genesis = SetFixture::new(0);
-        genesis.journal.devnet_genesis_hash = MAINNET_BETA_GENESIS_HASH.into();
-        genesis.rewrite_journal();
-        let error = audit_set_journal_with_runner(&genesis.args, &mut genesis.runner)
-            .expect_err("mixed genesis must refuse");
-        assert!(error.to_string().contains("exact devnet genesis"));
-
-        let mut receipt = SetFixture::new(1);
-        let receipt_path = PathBuf::from(&receipt.journal.roles[0].receipt.canonical_path);
-        let mut bytes = fs::read(&receipt_path).expect("receipt bytes");
-        bytes.push(b'\n');
-        fs::write(&receipt_path, bytes).expect("change receipt");
-        let error = audit_set_journal_with_runner(&receipt.args, &mut receipt.runner)
-            .expect_err("changed receipt must refuse");
-        assert!(error.to_string().contains("receipt SHA-256"));
-
-        let mut dump = SetFixture::new(1);
-        let dump_path = PathBuf::from(&dump.journal.roles[0].dump.canonical_path);
-        fs::write(&dump_path, b"changed dump").expect("change dump");
-        let error = audit_set_journal_with_runner(&dump.args, &mut dump.runner)
-            .expect_err("changed dump must refuse");
-        assert!(error.to_string().contains("dump SHA-256"));
-    }
-
-    #[test]
-    fn set_journal_extension_requires_a_fresh_post_extension_baseline() {
-        let mut fixture = SetFixture::new(0);
-        let baseline_path = PathBuf::from(&fixture.journal.roles[0].baseline.canonical_path);
-        let mut baseline: UpgradeBaselineV1 =
-            serde_json::from_slice(&fs::read(&baseline_path).expect("baseline bytes"))
-                .expect("baseline JSON");
-        baseline.target_live_elf_bytes += 1;
-        baseline.extension_additional_bytes = 1;
-        baseline.baseline_sha256 = baseline_digest(&baseline).expect("baseline digest");
-        fs::write(
-            &baseline_path,
-            serde_json::to_vec_pretty(&baseline).expect("baseline JSON"),
-        )
-        .expect("rewrite baseline");
-        fixture.journal.roles[0].baseline.sha256 =
-            digest(&fs::read(&baseline_path).expect("baseline bytes"));
-        fixture.rewrite_journal();
-        let report = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
-            .expect("extension-pending audit");
         assert_eq!(
-            report.next_role.expect("next").action,
-            "extend_then_capture_fresh_baseline"
+            report.final_set_sha256,
+            Some(final_set_digest(&fixture.journal).expect("final digest"))
+        );
+        let pin = authenticate_complete_upgrade_set_for_prepare(&fixture.args.journal_path)
+            .expect("checked mixed prepare pin");
+        assert_eq!(pin.roles.len(), 7);
+        assert_eq!(
+            pin.roles
+                .iter()
+                .map(|role| role.disposition)
+                .collect::<Vec<_>>(),
+            vec![
+                CheckedDeploymentDispositionV1::CarryForward,
+                CheckedDeploymentDispositionV1::CarryForward,
+                CheckedDeploymentDispositionV1::Upgrade,
+                CheckedDeploymentDispositionV1::Upgrade,
+                CheckedDeploymentDispositionV1::Upgrade,
+                CheckedDeploymentDispositionV1::Upgrade,
+                CheckedDeploymentDispositionV1::Upgrade,
+            ]
+        );
+        for role in &pin.roles[..2] {
+            let release = ArtifactReleaseV1::decode(
+                &crate::runtime::decode_hex(
+                    role.artifact_release_body_hex
+                        .as_deref()
+                        .expect("carried artifact body"),
+                )
+                .expect("artifact hex"),
+            )
+            .expect("artifact decode");
+            assert_eq!(
+                role.semantic_release_id,
+                hex(release.semantic_release_id().as_bytes())
+            );
+        }
+        assert_eq!(
+            pin.roles[5].semantic_release_id,
+            hex(&COMPILED_DIRECT_RELEASE_ID_V1)
+        );
+        assert_eq!(
+            pin.roles[3].semantic_release_id,
+            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V5)
+        );
+        let mut substituted = pin;
+        substituted.roles[0].semantic_release_id = "11".repeat(32);
+        assert!(
+            reauthenticate_checked_deployment_set_pin(&substituted)
+                .expect_err("caller-authored carry semantic")
+                .to_string()
+                .contains("caller projection was substituted")
+        );
+    }
+
+    #[test]
+    fn mixed_set_refuses_every_disposition_and_role_closure_substitution() {
+        let mut tag = MixedSetFixture::new(0);
+        tag.journal.roles[0].disposition = CheckedDeploymentDispositionV1::Upgrade;
+        tag.rewrite_journal();
+        assert!(
+            load_set_journal_path(&tag.args.journal_path)
+                .expect_err("Registry Upgrade tag")
+                .to_string()
+                .contains("canonical mixed")
         );
 
-        let registry = parse_pubkey(&fixture.journal.roles[0].program_id, "registry").expect("key");
-        fixture
-            .runner
-            .states
-            .get_mut(&registry)
-            .expect("registry state")
-            .snapshot
-            .loader
-            .deployment_slot += 1;
-        let error = audit_set_journal_with_runner(&fixture.args, &mut fixture.runner)
-            .expect_err("pre-extension baseline is stale after extension");
+        let mut five_carry = MixedSetFixture::new(0);
+        five_carry.journal.roles[2].disposition = CheckedDeploymentDispositionV1::CarryForward;
+        five_carry.rewrite_journal();
         assert!(
-            error
+            load_set_journal_path(&five_carry.args.journal_path)
+                .expect_err("execution carry tag")
                 .to_string()
-                .contains("does not exactly match baseline")
+                .contains("canonical mixed")
+        );
+
+        let mut receipt = MixedSetFixture::new(0);
+        let path = PathBuf::from(&receipt.journal.roles[0].receipt.canonical_path);
+        fs::write(&path, b"not an Upgrade receipt").expect("receipt fixture");
+        receipt.journal.roles[0].receipt.sha256 =
+            Some(digest(&fs::read(&path).expect("receipt fixture bytes")));
+        receipt.rewrite_journal();
+        assert!(
+            load_set_journal_path(&receipt.args.journal_path)
+                .expect_err("carry receipt")
+                .to_string()
+                .contains("must contain one live dump and no Upgrade")
+        );
+
+        let mut reordered = MixedSetFixture::new(0);
+        reordered.journal.roles.swap(0, 1);
+        reordered.rewrite_journal();
+        assert!(
+            load_set_journal_path(&reordered.args.journal_path)
+                .expect_err("reordered roles")
+                .to_string()
+                .contains("exact permanent")
+        );
+        let mut missing = MixedSetFixture::new(0);
+        missing.journal.roles.pop();
+        missing.rewrite_journal();
+        assert!(
+            load_set_journal_path(&missing.args.journal_path)
+                .expect_err("missing role")
+                .to_string()
+                .contains("exactly 7")
+        );
+        let mut extra = MixedSetFixture::new(0);
+        extra.journal.roles.push(extra.journal.roles[6].clone());
+        extra.rewrite_journal();
+        assert!(
+            load_set_journal_path(&extra.args.journal_path)
+                .expect_err("extra role")
+                .to_string()
+                .contains("exactly 7")
+        );
+    }
+
+    #[test]
+    fn carry_snapshot_refuses_transport_and_freshness_substitutions() {
+        for field in ["endpoint", "commitment", "method"] {
+            let mut fixture = MixedSetFixture::new(0);
+            match field {
+                "endpoint" => fixture.snapshot.endpoint = "https://example.invalid".into(),
+                "commitment" => fixture.snapshot.commitment = "confirmed".into(),
+                "method" => fixture.snapshot.rpc_method = "getAccountInfo".into(),
+                _ => unreachable!(),
+            }
+            fixture.rewrite_snapshot();
+            assert!(
+                authenticate_carry_forward(&fixture.journal)
+                    .expect_err("hostile snapshot transport")
+                    .to_string()
+                    .contains("schema, endpoint, finality, RPC method")
+            );
+        }
+        let mut stale = MixedSetFixture::new(0);
+        stale.snapshot.context_slot += 1;
+        stale.rewrite_snapshot();
+        assert!(
+            audit_set_journal_with_runner(&stale.args, &mut stale.runner)
+                .expect_err("stale context")
+                .to_string()
+                .contains("carry query mismatch")
+        );
+
+        let mut slot = MixedSetFixture::new(0);
+        let mut bytes = BASE64
+            .decode(
+                slot.snapshot.accounts[1]
+                    .account
+                    .as_ref()
+                    .expect("ProgramData")
+                    .data_base64
+                    .as_bytes(),
+            )
+            .expect("base64");
+        bytes[4..12].copy_from_slice(&999_u64.to_le_bytes());
+        slot.rewrite_snapshot_data(1, &bytes);
+        assert!(
+            authenticate_carry_forward(&slot.journal)
+                .expect_err("stale slot")
+                .to_string()
+                .contains("deployment")
+        );
+
+        let mut authority = MixedSetFixture::new(0);
+        let mut bytes = BASE64
+            .decode(
+                authority.snapshot.accounts[1]
+                    .account
+                    .as_ref()
+                    .expect("ProgramData")
+                    .data_base64
+                    .as_bytes(),
+            )
+            .expect("base64");
+        bytes[13..45].copy_from_slice(Pubkey::new_unique().as_ref());
+        authority.rewrite_snapshot_data(1, &bytes);
+        assert!(
+            authenticate_carry_forward(&authority.journal)
+                .expect_err("stale authority")
+                .to_string()
+                .contains("retained authority")
+        );
+
+        let mut live = MixedSetFixture::new(0);
+        let mut bytes = BASE64
+            .decode(
+                live.snapshot.accounts[1]
+                    .account
+                    .as_ref()
+                    .expect("ProgramData")
+                    .data_base64
+                    .as_bytes(),
+            )
+            .expect("base64");
+        *bytes.last_mut().expect("ELF tail") ^= 1;
+        live.rewrite_snapshot_data(1, &bytes);
+        let error = authenticate_carry_forward(&live.journal).expect_err("stale live tail");
+        assert!(error.to_string().contains("ElfDigestMismatch"), "{error}");
+    }
+
+    #[test]
+    fn carry_snapshot_refuses_record_profile_and_staging_substitutions() {
+        let mut raw_pda = MixedSetFixture::new(0);
+        raw_pda.snapshot.accounts[4].address = Pubkey::new_unique().to_string();
+        raw_pda.rewrite_snapshot();
+        assert!(
+            authenticate_carry_forward(&raw_pda.journal)
+                .expect_err("raw PDA")
+                .to_string()
+                .contains("raw or staging PDA")
+        );
+
+        let mut profile_pda = MixedSetFixture::new(0);
+        profile_pda.snapshot.accounts[8].address = Pubkey::new_unique().to_string();
+        profile_pda.rewrite_snapshot();
+        assert!(
+            authenticate_carry_forward(&profile_pda.journal)
+                .expect_err("profile PDA")
+                .to_string()
+                .contains("singleton infrastructure profile PDA")
+        );
+
+        let mut raw_body = MixedSetFixture::new(0);
+        let mut bytes = BASE64
+            .decode(
+                raw_body.snapshot.accounts[4]
+                    .account
+                    .as_ref()
+                    .expect("raw")
+                    .data_base64
+                    .as_bytes(),
+            )
+            .expect("base64");
+        bytes[112] ^= 1;
+        raw_body.rewrite_snapshot_data(4, &bytes);
+        assert!(
+            authenticate_carry_forward(&raw_body.journal)
+                .expect_err("raw body")
+                .to_string()
+                .contains("profile artifact ID")
+        );
+
+        let mut owner = MixedSetFixture::new(0);
+        owner.snapshot.accounts[4]
+            .account
+            .as_mut()
+            .expect("raw")
+            .owner = Pubkey::new_unique().to_string();
+        owner.rewrite_snapshot();
+        assert!(
+            authenticate_carry_forward(&owner.journal)
+                .expect_err("raw owner")
+                .to_string()
+                .contains("owner/executable/length")
+        );
+
+        let mut rent = MixedSetFixture::new(0);
+        rent.snapshot.accounts[4]
+            .account
+            .as_mut()
+            .expect("raw")
+            .lamports = 0;
+        rent.rewrite_snapshot();
+        assert!(
+            authenticate_carry_forward(&rent.journal)
+                .expect_err("raw rent")
+                .to_string()
+                .contains("not rent exempt")
+        );
+
+        let mut staging = MixedSetFixture::new(0);
+        staging.snapshot.accounts[5].account = Some(CarryForwardAccountV1 {
+            lamports: 0,
+            owner: solana_sdk_ids::system_program::ID.to_string(),
+            executable: false,
+            rent_epoch: u64::MAX,
+            data_encoding: "base64".into(),
+            data_len: 0,
+            data_base64: String::new(),
+            data_sha256: digest(&[]),
+        });
+        staging.rewrite_snapshot();
+        let error =
+            authenticate_carry_forward(&staging.journal).expect_err("fabricated empty staging");
+        assert!(
+            error.to_string().contains("finalized account absence"),
+            "{error}"
         );
     }
 
@@ -5607,7 +9072,7 @@ mod tests {
         let receipt =
             execute_with_runner(&fixture.args, &mut runner).expect("checked Upgrade completes");
         assert_eq!(receipt.phase, ReceiptPhaseV1::Complete);
-        assert_eq!(receipt.role, "trading");
+        assert_eq!(receipt.role, "custody");
         assert_eq!(receipt.program_id, fixture.program.to_string());
         assert_eq!(
             receipt.checked_release_gate_sha256,
@@ -5617,34 +9082,71 @@ mod tests {
             receipt.source_tree_sha256,
             fixture.args.expected_source_tree_sha256
         );
-        assert_eq!(
-            receipt.transaction_signature,
-            Some(Signature::from([7_u8; 64]).to_string())
-        );
+        Signature::from_str(
+            receipt
+                .transaction_signature
+                .as_deref()
+                .expect("journaled Upgrade signature"),
+        )
+        .expect("valid Upgrade signature");
         assert_eq!(receipt.after.as_ref().expect("after").deployment_slot, 92);
         assert_eq!(
             receipt.arithmetic,
             Some(UpgradeArithmeticV1 {
-                transaction_payer_pre_lamports: 1_000_000,
+                transaction_payer_pre_lamports: 900_000,
                 transaction_payer_post_lamports: 985_000,
                 transaction_fee_lamports: 15_000,
                 payer_fee_delta_lamports: 15_000,
                 programdata_before_lamports: 77_000,
                 programdata_after_lamports: 77_000,
                 programdata_delta_lamports: 0,
+                operation_wallet_before_lamports: 1_000_000,
+                operation_wallet_after_lamports: 985_000,
+                operation_observed_net_spend_lamports: 15_000,
+                unattributed_cli_net_cost_lamports: 0,
+                accounting_scope: OPERATION_ACCOUNTING_SCOPE_V1.into(),
+                cost_attribution: OPERATION_COST_ATTRIBUTION_V1.into(),
             })
         );
         assert_eq!(receipt.dump_shape.as_deref(), Some("raw-elf"));
         assert!(fixture.args.receipt_path.is_file());
         assert!(runner.calls.iter().any(|call| {
             call.first().map(String::as_str) == Some("program")
-                && call.get(1).map(String::as_str) == Some("deploy")
-                && call.contains(&fixture.program.to_string())
+                && call.get(1).map(String::as_str) == Some("write-buffer")
+                && call.contains(&"--max-sign-attempts".to_owned())
+                && call.contains(&"1".to_owned())
         }));
-        assert_eq!(
-            runner.snapshot_minimum_slots,
-            vec![489_212_834, 489_212_834]
+        assert!(
+            runner
+                .snapshot_minimum_slots
+                .iter()
+                .all(|slot| *slot >= 489_212_834)
         );
+    }
+
+    #[test]
+    fn execute_refuses_without_exact_exclusive_payer_window_acknowledgment() {
+        let mut fixture = Fixture::new();
+        fixture.args.exclusive_payer_window_acknowledgment = None;
+        let mut runner = FakeRunner::new(&fixture);
+        let error = execute_with_runner(&fixture.args, &mut runner).expect_err("must refuse");
+        assert!(error.to_string().contains(EXCLUSIVE_PAYER_ACK_FLAG));
+        assert!(runner.calls.is_empty());
+    }
+
+    #[test]
+    fn operation_accounting_attributes_legacy_net_cost_field_to_buffer_fees() {
+        let fixture = Fixture::new();
+        let mut runner = FakeRunner::new(&fixture);
+        runner.after_wallet = 980_000;
+        runner.buffer_upload_fee_lamports = 5_000;
+        let receipt = execute_with_runner(&fixture.args, &mut runner).expect("checked Upgrade");
+        let arithmetic = receipt.arithmetic.expect("complete arithmetic");
+        assert_eq!(arithmetic.transaction_fee_lamports, 15_000);
+        assert_eq!(arithmetic.operation_observed_net_spend_lamports, 20_000);
+        assert_eq!(arithmetic.unattributed_cli_net_cost_lamports, 5_000);
+        assert_eq!(arithmetic.accounting_scope, OPERATION_ACCOUNTING_SCOPE_V1);
+        assert_eq!(arithmetic.cost_attribution, OPERATION_COST_ATTRIBUTION_V1);
     }
 
     #[test]
@@ -5681,6 +9183,8 @@ mod tests {
                 programdata_id: fixture.programdata,
                 authority: fixture.authority,
                 payer: fixture.payer,
+                buffer: fixture.args.buffer_pubkey,
+                buffer_lamports: runner.buffer_rent_lamports,
                 deployment_slot: runner.after_slot,
                 programdata_before_lamports: runner.before_programdata_lamports,
                 programdata_after_lamports: runner.after_programdata_lamports,
@@ -5698,7 +9202,12 @@ mod tests {
         fee_runner.upgrade_transaction_override = Some(fee_transaction);
         let error = execute_with_runner(&fee.args, &mut fee_runner)
             .expect_err("payer delta must equal finalized fee");
-        assert!(error.to_string().contains("payer delta is not exactly"));
+        assert!(
+            error
+                .to_string()
+                .contains("Buffer refund minus finalized fee"),
+            "{error}"
+        );
 
         let signature = Fixture::new();
         let mut signature_runner = FakeRunner::new(&signature);
@@ -5706,6 +9215,7 @@ mod tests {
         signature_transaction["transaction"]["signatures"][0] =
             json!(Signature::from([9_u8; 64]).to_string());
         signature_runner.upgrade_transaction_override = Some(signature_transaction);
+        signature_runner.preserve_upgrade_override_signature = true;
         let error = execute_with_runner(&signature.args, &mut signature_runner)
             .expect_err("CLI signature substitution must refuse");
         assert!(error.to_string().contains("fee-payer signature"));
@@ -5767,7 +9277,10 @@ mod tests {
         let mut resume = FakeRunner::new(&prepared);
         let error = execute_with_runner(&prepared.args, &mut resume)
             .expect_err("prepared receipt cannot carry dump evidence");
-        assert!(error.to_string().contains("later-phase fields"));
+        assert!(
+            error.to_string().contains("armed Buffer receipt"),
+            "{error}"
+        );
         assert!(resume.calls.is_empty());
 
         let late = Fixture::new();
@@ -5784,7 +9297,12 @@ mod tests {
         replay.deployed = true;
         let error = execute_with_runner(&late.args, &mut replay)
             .expect_err("rehashed self-declared arithmetic cannot replace transaction truth");
-        assert!(error.to_string().contains("transaction arithmetic"));
+        assert!(
+            error
+                .to_string()
+                .contains("operation spend is smaller than final transaction fee"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -5824,59 +9342,6 @@ mod tests {
         replay.after_context_slot = 489_212_834;
         let error = execute_with_runner(&context.args, &mut replay).expect_err("stale context");
         assert!(error.to_string().contains("below minContextSlot"));
-    }
-
-    #[test]
-    fn extension_signature_history_paginates_until_below_target_and_refuses_ambiguity() {
-        let signature = |byte| Signature::from([byte; 64]).to_string();
-        let mut pages = VecDeque::from([
-            vec![
-                json!({"signature": signature(1), "slot": 100, "err": null}),
-                json!({"signature": signature(2), "slot": 99, "err": null}),
-            ],
-            vec![
-                json!({"signature": signature(3), "slot": 92, "err": null}),
-                json!({"signature": signature(4), "slot": 91, "err": null}),
-            ],
-        ]);
-        let mut cursors = Vec::new();
-        let selected = find_extension_signature(92, |before| {
-            cursors.push(before.map(str::to_owned));
-            Ok(pages.pop_front().expect("bounded page"))
-        })
-        .expect("second page target");
-        assert_eq!(selected, signature(3));
-        assert_eq!(cursors, vec![None, Some(signature(2))]);
-
-        let ambiguous = vec![
-            json!({"signature": signature(5), "slot": 92, "err": null}),
-            json!({"signature": signature(6), "slot": 92, "err": null}),
-            json!({"signature": signature(7), "slot": 91, "err": null}),
-        ];
-        let error = find_extension_signature(92, |_| Ok(ambiguous.clone()))
-            .expect_err("two same-slot candidates must refuse");
-        assert!(error.to_string().contains("observed 2"));
-
-        let nonmonotonic = vec![
-            json!({"signature": signature(8), "slot": 91, "err": null}),
-            json!({"signature": signature(9), "slot": 93, "err": null}),
-        ];
-        let error = find_extension_signature(92, |_| Ok(nonmonotonic.clone()))
-            .expect_err("nonmonotonic provider history must refuse");
-        assert!(error.to_string().contains("not monotonically"));
-
-        let mut page = 0_u8;
-        let error = find_extension_signature(92, |_| {
-            page = page.checked_add(1).expect("bounded test page");
-            Ok(vec![json!({
-                "signature": signature(page.checked_add(20).expect("signature byte")),
-                "slot": 200_u64.checked_sub(u64::from(page)).expect("slot"),
-                "err": null
-            })])
-        })
-        .expect_err("history that never crosses target must stop at page bound");
-        assert!(error.to_string().contains("16-page bound"));
-        assert_eq!(usize::from(page), SIGNATURE_HISTORY_MAX_PAGES);
     }
 
     #[test]
@@ -5950,7 +9415,7 @@ mod tests {
         let mut runner = FakeRunner::new(&fixture);
         let error = execute_with_runner(&fixture.args, &mut runner)
             .expect_err("substituted target must refuse");
-        assert!(error.to_string().contains("exact target trading:"));
+        assert!(error.to_string().contains("exact target custody:"));
         assert!(runner.calls.is_empty());
     }
 
@@ -6045,7 +9510,7 @@ mod tests {
             .gate
             .links
             .iter_mut()
-            .find(|link| link.label == "trading")
+            .find(|link| link.label == "custody")
             .expect("trading link")
             .elf = Some(core);
         fixture.rewrite_gate();
@@ -6099,7 +9564,7 @@ mod tests {
             .gate
             .links
             .iter_mut()
-            .find(|link| link.label == "trading")
+            .find(|link| link.label == "custody")
             .and_then(|link| link.elf.as_mut())
             .expect("trading ELF")
             .canonical_path = "../outside.so".into();
@@ -6219,7 +9684,7 @@ mod tests {
     fn retained_authority_and_keypair_identity_are_both_authenticated() {
         let fixture = Fixture::new();
         let mut runner = FakeRunner::new(&fixture);
-        runner.authority = Pubkey::new_unique();
+        runner.reported_authority = Pubkey::new_unique();
         let error = execute_with_runner(&fixture.args, &mut runner)
             .expect_err("wrong authority keypair must refuse");
         assert!(error.to_string().contains("keypair path resolves"));
@@ -6232,7 +9697,7 @@ mod tests {
     }
 
     #[test]
-    fn deploy_output_cannot_substitute_the_program() {
+    fn lost_or_substituted_buffer_output_recovers_exact_buffer_without_second_writer() {
         let fixture = Fixture::new();
         let mut runner = FakeRunner::new(&fixture);
         runner.deploy_program = Pubkey::new_unique();
@@ -6241,12 +9706,25 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("deploy output substituted program")
+                .contains("write-buffer output substituted Buffer identity")
         );
         let receipt = load_receipt(&fixture.args.receipt_path)
             .expect("receipt read")
-            .expect("prepared receipt");
-        assert_eq!(receipt.phase, ReceiptPhaseV1::Prepared);
+            .expect("armed receipt");
+        assert_eq!(receipt.phase, ReceiptPhaseV1::BufferWriteArmed);
+        assert!(runner.buffer_written);
+
+        let mut resume = FakeRunner::new(&fixture);
+        resume.buffer_written = true;
+        let complete = execute_with_runner(&fixture.args, &mut resume)
+            .expect("exact persistent Buffer recovers without CLI output");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert!(
+            resume
+                .calls
+                .iter()
+                .all(|call| { call.get(1).map(String::as_str) != Some("write-buffer") })
+        );
     }
 
     #[test]
@@ -6256,17 +9734,8 @@ mod tests {
         runner.after_slot = runner.before_slot;
         let error = execute_with_runner(&fixture.args, &mut runner)
             .expect_err("stationary slot must refuse");
-        assert!(
-            error
-                .to_string()
-                .contains("deployment slot did not advance")
-        );
-        let deploy_calls = runner
-            .calls
-            .iter()
-            .filter(|call| call.get(1).map(String::as_str) == Some("deploy"))
-            .count();
-        assert_eq!(deploy_calls, 1);
+        assert!(error.to_string().contains("no slot advance"));
+        assert_eq!(runner.send_count, 1);
 
         let mut resume = FakeRunner::new(&fixture);
         resume.deployed = true;
@@ -6313,21 +9782,21 @@ mod tests {
         interrupted.deploy_success = false;
         let first = execute_with_runner(&fixture.args, &mut interrupted)
             .expect_err("synthetic deploy interruption");
-        assert!(first.to_string().contains("synthetic deploy interruption"));
+        assert!(
+            first
+                .to_string()
+                .contains("synthetic write-buffer interruption")
+        );
         let receipt = load_receipt(&fixture.args.receipt_path)
             .expect("receipt read")
             .expect("prepared receipt");
-        assert_eq!(receipt.phase, ReceiptPhaseV1::Prepared);
+        assert_eq!(receipt.phase, ReceiptPhaseV1::BufferWriteArmed);
 
         let mut ambiguous = FakeRunner::new(&fixture);
         ambiguous.deployed = true;
         let second = execute_with_runner(&fixture.args, &mut ambiguous)
             .expect_err("moved chain behind prepared receipt must stop");
-        assert!(
-            second
-                .to_string()
-                .contains("submission outcome is ambiguous")
-        );
+        assert!(second.to_string().contains("Loader prestate moved"));
         assert!(
             ambiguous
                 .calls
@@ -6381,10 +9850,13 @@ mod tests {
         assert_eq!(receipt.phase, ReceiptPhaseV1::Complete);
         assert_eq!(receipt.before.deployment_slot, 91);
         assert_eq!(receipt.after.as_ref().expect("after").deployment_slot, 94);
-        assert_eq!(
-            receipt.transaction_signature,
-            Some(Signature::from([8_u8; 64]).to_string())
-        );
+        Signature::from_str(
+            receipt
+                .transaction_signature
+                .as_deref()
+                .expect("journaled extension signature"),
+        )
+        .expect("valid extension signature");
         assert!(receipt.finalized_transaction.is_some());
         assert_eq!(
             receipt.arithmetic,
@@ -6402,9 +9874,9 @@ mod tests {
                 extension_additional_bytes: 128,
             })
         );
-        assert!(runner.calls.iter().any(|call| {
-            call.first().map(String::as_str) == Some("program")
-                && call.get(1).map(String::as_str) == Some("extend")
+        assert!(runner.calls.iter().all(|call| {
+            !(call.first().map(String::as_str) == Some("program")
+                && call.get(1).map(String::as_str) == Some("extend"))
         }));
     }
 
@@ -6535,6 +10007,564 @@ mod tests {
             .expect_err("complete receipt without transaction must refuse");
         assert!(error.to_string().contains("receipt SHA-256"));
         assert!(hostile_runner.calls.is_empty());
+    }
+
+    #[test]
+    fn submitted_upgrade_restart_is_poll_only_then_reprepares_after_exact_expiry() {
+        let fixture = Fixture::new();
+        let mut crashed = FakeRunner::new(&fixture);
+        crashed.send_success = false;
+        let error = execute_with_runner(&fixture.args, &mut crashed)
+            .expect_err("synthetic crash at the send boundary");
+        assert!(
+            error
+                .to_string()
+                .contains("synthetic packet send interruption")
+        );
+        let submitted = load_receipt(&fixture.args.receipt_path)
+            .expect("submitted receipt read")
+            .expect("submitted receipt");
+        assert_eq!(submitted.phase, ReceiptPhaseV1::Submitted);
+        assert!(submitted.transaction_signature.is_some());
+        assert_eq!(crashed.send_count, 0);
+
+        let mut pending = FakeRunner::new(&fixture);
+        pending.buffer_written = true;
+        let error = execute_with_runner(&fixture.args, &mut pending)
+            .expect_err("unexpired exact packet must remain poll-only");
+        assert!(error.to_string().contains("poll-only recovery"));
+        assert_eq!(pending.send_count, 0);
+        assert!(pending.calls.iter().all(|call| {
+            call.get(1).map(String::as_str) != Some("write-buffer")
+                && call.get(1).map(String::as_str) != Some("deploy")
+        }));
+
+        let mut expired = FakeRunner::new(&fixture);
+        expired.buffer_written = true;
+        expired.finalized_height = submitted.last_valid_block_height.expect("submitted expiry") + 1;
+        let complete = execute_with_runner(&fixture.args, &mut expired)
+            .expect("expired packet safely reprepares once");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(complete.expired_packets.len(), 1);
+        assert_eq!(expired.send_count, 1);
+        assert_ne!(
+            complete.expired_packets[0].transaction_signature,
+            complete
+                .transaction_signature
+                .expect("replacement signature")
+        );
+    }
+
+    #[test]
+    fn crash_after_send_before_response_attaches_exact_upgrade_without_resend() {
+        let fixture = Fixture::new();
+        let mut runner = FakeRunner::new(&fixture);
+        runner.send_lands_then_errors = true;
+        let error = execute_with_runner(&fixture.args, &mut runner)
+            .expect_err("send response is lost after landing");
+        assert!(
+            error
+                .to_string()
+                .contains("lost send response after landing")
+        );
+        assert_eq!(runner.send_count, 1);
+        assert_eq!(
+            load_receipt(&fixture.args.receipt_path)
+                .expect("receipt read")
+                .expect("receipt")
+                .phase,
+            ReceiptPhaseV1::Submitted
+        );
+
+        runner.send_lands_then_errors = false;
+        let complete = execute_with_runner(&fixture.args, &mut runner)
+            .expect("exact landed signature attaches from poststate");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(runner.send_count, 1);
+    }
+
+    #[test]
+    fn message_and_signed_boundaries_resume_exactly_and_journal_drift_refuses_keys() {
+        let fixture = Fixture::new();
+        let mut before_sign = FakeRunner::new(&fixture);
+        before_sign.sign_success = false;
+        let error = execute_with_runner(&fixture.args, &mut before_sign)
+            .expect_err("synthetic crash after message fsync");
+        assert!(error.to_string().contains("before packet signing"));
+        let mut receipt = load_receipt(&fixture.args.receipt_path)
+            .expect("message receipt read")
+            .expect("message receipt");
+        assert_eq!(receipt.phase, ReceiptPhaseV1::MessagePrepared);
+
+        let mut signer = FakeRunner::new(&fixture);
+        signer.buffer_written = true;
+        let query = LoaderActionQueryV1 {
+            origin: &fixture.args.origin,
+            program_id: fixture.program,
+            programdata_id: fixture.programdata,
+            authority: fixture.authority,
+            payer: fixture.payer,
+            authority_keypair: &fixture.args.authority_keypair,
+            payer_keypair: &fixture.args.fee_payer_keypair,
+            action: LoaderActionV1::Upgrade {
+                buffer: fixture.args.buffer_pubkey,
+            },
+        };
+        let unsigned = upgrade_unsigned(&receipt).expect("fsynced message");
+        let signed = signer
+            .sign_loader_action(&query, &unsigned)
+            .expect("synthetic exact signature");
+        receipt.phase = ReceiptPhaseV1::SignedNotSubmitted;
+        receipt.signed_packet_base64 = Some(signed.packet_base64);
+        receipt.signed_packet_sha256 = Some(signed.packet_sha256);
+        receipt.transaction_signature = Some(signed.signature);
+        write_receipt(&fixture.args.receipt_path, &mut receipt)
+            .expect("signed-not-submitted boundary");
+
+        let mut resume = FakeRunner::new(&fixture);
+        resume.buffer_written = true;
+        let complete = execute_with_runner(&fixture.args, &mut resume)
+            .expect("signed packet resumes without resigning");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(resume.sign_count, 0);
+        assert_eq!(resume.send_count, 1);
+
+        let drift = Fixture::new();
+        let mut before_sign = FakeRunner::new(&drift);
+        before_sign.sign_success = false;
+        let _ = execute_with_runner(&drift.args, &mut before_sign)
+            .expect_err("message boundary for journal drift");
+        OpenOptions::new()
+            .append(true)
+            .open(&drift.args.deployment_set_journal_path)
+            .expect("journal append")
+            .write_all(b"\n")
+            .expect("journal drift");
+        let mut refused = FakeRunner::new(&drift);
+        refused.buffer_written = true;
+        let error = execute_with_runner(&drift.args, &mut refused)
+            .expect_err("journal digest drift must refuse before signing");
+        assert!(error.to_string().contains("journal changed"));
+        assert_eq!(refused.sign_count, 0);
+        assert_eq!(refused.send_count, 0);
+    }
+
+    #[test]
+    fn submitted_extension_restart_never_applies_double_extend() {
+        let fixture = Fixture::new();
+        let args = fixture.extension_args(128);
+        let mut crashed = FakeRunner::new(&fixture);
+        configure_extension_runner(&fixture, &mut crashed, 128);
+        crashed.send_success = false;
+        let error = execute_extension_with_runner(&args, &mut crashed)
+            .expect_err("synthetic extension send crash");
+        assert!(
+            error
+                .to_string()
+                .contains("synthetic packet send interruption")
+        );
+        let submitted = load_extension_receipt(&args.receipt_path)
+            .expect("extension receipt read")
+            .expect("extension receipt");
+        assert_eq!(submitted.phase, ReceiptPhaseV1::Submitted);
+
+        let mut pending = FakeRunner::new(&fixture);
+        configure_extension_runner(&fixture, &mut pending, 128);
+        let error = execute_extension_with_runner(&args, &mut pending)
+            .expect_err("unexpired extension remains pending");
+        assert!(error.to_string().contains("poll-only recovery"));
+        assert_eq!(pending.send_count, 0);
+
+        let mut expired = FakeRunner::new(&fixture);
+        configure_extension_runner(&fixture, &mut expired, 128);
+        expired.finalized_height = submitted.last_valid_block_height.expect("extension expiry") + 1;
+        let complete = execute_extension_with_runner(&args, &mut expired)
+            .expect("expired extension packet safely reprepares");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(complete.expired_packets.len(), 1);
+        assert_eq!(expired.send_count, 1);
+        assert_eq!(
+            complete
+                .after
+                .expect("extension poststate")
+                .programdata_data_bytes,
+            submitted.before.programdata_data_bytes + 128
+        );
+    }
+
+    #[test]
+    fn receipt_publish_is_no_clobber_and_cas_refuses_concurrent_writer() {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("cas-receipt.json");
+        let initial_digest = "a".repeat(64);
+        write_json_atomic_receipt_cas(
+            &path,
+            &json!({"receipt_sha256": initial_digest, "writer": 0}),
+            None,
+        )
+        .expect("initial no-clobber receipt");
+        assert!(
+            write_json_atomic_receipt_cas(
+                &path,
+                &json!({"receipt_sha256": "b".repeat(64), "writer": 9}),
+                None,
+            )
+            .expect_err("second creator must not clobber")
+            .to_string()
+            .contains("already exists")
+        );
+
+        write_json_atomic_receipt_cas(
+            &path,
+            &json!({"receipt_sha256": "b".repeat(64), "writer": 1}),
+            Some(&initial_digest),
+        )
+        .expect("first loaded writer wins CAS");
+        let error = write_json_atomic_receipt_cas(
+            &path,
+            &json!({"receipt_sha256": "c".repeat(64), "writer": 2}),
+            Some(&initial_digest),
+        )
+        .expect_err("stale concurrent writer must refuse");
+        assert!(error.to_string().contains("concurrent or stale writer"));
+        let value: Value = serde_json::from_slice(&fs::read(path).expect("CAS receipt bytes"))
+            .expect("CAS receipt JSON");
+        assert_eq!(value.get("writer").and_then(Value::as_u64), Some(1));
+    }
+
+    #[test]
+    fn partial_dump_temporary_is_never_published_and_is_recovered() {
+        let fixture = Fixture::new();
+        let mut runner = FakeRunner::new(&fixture);
+        let operation_id = "a".repeat(64);
+        let file_name = fixture
+            .args
+            .dump_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("dump name");
+        let temporary = fixture
+            .args
+            .dump_path
+            .parent()
+            .expect("dump parent")
+            .join(format!(".{file_name}.{operation_id}.dump-pending"));
+        fs::write(&temporary, b"partial").expect("partial dump temporary");
+        let (sha256, shape) = verify_dump(
+            &mut runner,
+            &fixture.args,
+            &operation_id,
+            &fixture.raw_elf,
+            &fixture.candidate_live,
+        )
+        .expect("partial temporary recovered");
+        assert_eq!(sha256, digest(&fixture.raw_elf));
+        assert_eq!(shape, "raw-elf");
+        assert_eq!(
+            fs::read(&fixture.args.dump_path).expect("published dump"),
+            fixture.raw_elf
+        );
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn mutation_permit_refuses_carry_forward_and_out_of_order_roles() {
+        let fixture = Fixture::new();
+        let mut registry = fixture.args.clone();
+        registry.role = "registry".into();
+        registry.program_id =
+            parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[0].1, "Registry").expect("Registry");
+        registry.programdata_id = parse_pubkey(
+            PERMANENT_DEVNET_UPGRADE_TARGETS_V1[0].2,
+            "Registry ProgramData",
+        )
+        .expect("Registry ProgramData");
+        let error = require_mutation_permit(&registry, None, true)
+            .expect_err("CarryForward Registry mutation must refuse");
+        assert!(error.to_string().contains("CarryForward"));
+
+        let mut core = fixture.args.clone();
+        core.role = "core".into();
+        core.program_id =
+            parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[6].1, "Core").expect("Core");
+        core.programdata_id =
+            parse_pubkey(PERMANENT_DEVNET_UPGRADE_TARGETS_V1[6].2, "Core ProgramData")
+                .expect("Core ProgramData");
+        let error = require_mutation_permit(&core, None, true)
+            .expect_err("Core before Custody must refuse");
+        assert!(error.to_string().contains("next role is custody"));
+    }
+
+    fn signed_buffer_transaction(
+        instructions: &[solana_program::instruction::Instruction],
+        payer: &Keypair,
+        second_signer: &Keypair,
+    ) -> Transaction {
+        let message = Message::new(instructions, Some(&payer.pubkey()));
+        let mut transaction = Transaction::new_unsigned(message);
+        transaction
+            .try_sign(&[payer, second_signer], Hash::new_from_array([73_u8; 32]))
+            .expect("sign Buffer transaction");
+        transaction
+    }
+
+    fn buffer_transaction_evidence(
+        transaction: &Transaction,
+        slot: u64,
+        fee: u64,
+        payer_before: u64,
+        payer_after: u64,
+        buffer: Pubkey,
+        buffer_before: u64,
+        buffer_after: u64,
+        successful: bool,
+    ) -> (String, Value) {
+        let mut pre = vec![0_u64; transaction.message.account_keys.len()];
+        let mut post = vec![0_u64; transaction.message.account_keys.len()];
+        let payer_index = transaction
+            .message
+            .account_keys
+            .iter()
+            .position(|key| *key == transaction.message.account_keys[0])
+            .expect("payer key index");
+        let buffer_index = transaction
+            .message
+            .account_keys
+            .iter()
+            .position(|key| *key == buffer)
+            .expect("Buffer key index");
+        pre[payer_index] = payer_before;
+        post[payer_index] = payer_after;
+        pre[buffer_index] = buffer_before;
+        post[buffer_index] = buffer_after;
+        let packet = bincode::serialize(transaction).expect("serialize Buffer transaction");
+        let signature = transaction.signatures[0].to_string();
+        (
+            signature,
+            json!({
+                "slot": slot,
+                "transaction": [BASE64.encode(packet), "base64"],
+                "meta": {
+                    "err": if successful { Value::Null } else { json!({"InstructionError":[0,"Synthetic"]}) },
+                    "fee": fee,
+                    "preBalances": pre,
+                    "postBalances": post
+                }
+            }),
+        )
+    }
+
+    #[test]
+    fn buffer_history_accepts_only_exact_idempotent_upload_transactions() {
+        let fixture = Fixture::new();
+        let payer = Keypair::new();
+        let buffer = Keypair::new();
+        let authority = Keypair::new();
+        let raw_elf = b"\x7fELFexact-buffer-payload".to_vec();
+        let rent = 123_456_u64;
+        let fee = 5_000_u64;
+        let slot = 777_u64;
+        let query = BufferUploadQueryV1 {
+            origin: &fixture.args.origin,
+            buffer: buffer.pubkey(),
+            authority: authority.pubkey(),
+            payer: payer.pubkey(),
+            raw_elf: &raw_elf,
+            minimum_slot: slot,
+            expected_rent_lamports: rent,
+            wallet_before_lamports: 1_000_000,
+            wallet_after_lamports: 1_000_000 - rent - fee,
+        };
+
+        let create_instructions = solana_loader_v3_interface::instruction::create_buffer(
+            &payer.pubkey(),
+            &buffer.pubkey(),
+            &authority.pubkey(),
+            rent,
+            raw_elf.len(),
+        )
+        .expect("canonical Buffer create");
+        let create = signed_buffer_transaction(&create_instructions, &payer, &buffer);
+        let (create_signature, create_evidence) = buffer_transaction_evidence(
+            &create,
+            slot,
+            fee,
+            1_000_000,
+            1_000_000 - rent - fee,
+            buffer.pubkey(),
+            0,
+            rent,
+            true,
+        );
+        assert_eq!(
+            validate_buffer_upload_transaction(&query, &create_signature, slot, &create_evidence,)
+                .expect("exact create+initialize"),
+            (fee, true)
+        );
+
+        let write_instruction = solana_loader_v3_interface::instruction::write(
+            &buffer.pubkey(),
+            &authority.pubkey(),
+            0,
+            raw_elf[..8].to_vec(),
+        );
+        let write = signed_buffer_transaction(&[write_instruction], &payer, &authority);
+        let (write_signature, write_evidence) = buffer_transaction_evidence(
+            &write,
+            slot + 1,
+            fee,
+            1_000_000,
+            1_000_000 - fee,
+            buffer.pubkey(),
+            rent,
+            rent,
+            true,
+        );
+        assert_eq!(
+            validate_buffer_upload_transaction(
+                &query,
+                &write_signature,
+                slot + 1,
+                &write_evidence,
+            )
+            .expect("exact idempotent write"),
+            (fee, false)
+        );
+        assert_eq!(
+            validate_buffer_upload_transaction(
+                &query,
+                &write_signature,
+                slot + 1,
+                &write_evidence,
+            )
+            .expect("an exact repeated write remains byte-idempotent"),
+            (fee, false)
+        );
+
+        let wrong_offset_instruction = solana_loader_v3_interface::instruction::write(
+            &buffer.pubkey(),
+            &authority.pubkey(),
+            1,
+            raw_elf[..8].to_vec(),
+        );
+        let wrong_offset =
+            signed_buffer_transaction(&[wrong_offset_instruction], &payer, &authority);
+        let (signature, evidence) = buffer_transaction_evidence(
+            &wrong_offset,
+            slot + 2,
+            fee,
+            1_000_000,
+            1_000_000 - fee,
+            buffer.pubkey(),
+            rent,
+            rent,
+            true,
+        );
+        assert!(
+            validate_buffer_upload_transaction(&query, &signature, slot + 2, &evidence)
+                .expect_err("wrong offset bytes must refuse")
+                .to_string()
+                .contains("idempotent slice")
+        );
+
+        let unrelated = solana_program::instruction::Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: Vec::new(),
+            data: vec![1],
+        };
+        let unrelated_write = signed_buffer_transaction(
+            &[
+                solana_loader_v3_interface::instruction::write(
+                    &buffer.pubkey(),
+                    &authority.pubkey(),
+                    0,
+                    raw_elf[..8].to_vec(),
+                ),
+                unrelated,
+            ],
+            &payer,
+            &authority,
+        );
+        let (signature, evidence) = buffer_transaction_evidence(
+            &unrelated_write,
+            slot + 3,
+            fee,
+            1_000_000,
+            1_000_000 - fee,
+            buffer.pubkey(),
+            rent,
+            rent,
+            true,
+        );
+        assert!(
+            validate_buffer_upload_transaction(&query, &signature, slot + 3, &evidence)
+                .expect_err("unrelated program must refuse")
+                .to_string()
+                .contains("unrelated program")
+        );
+
+        let wrong_payer_query = BufferUploadQueryV1 {
+            payer: Pubkey::new_unique(),
+            ..query
+        };
+        assert!(
+            validate_buffer_upload_transaction(
+                &wrong_payer_query,
+                &write_signature,
+                slot + 1,
+                &write_evidence,
+            )
+            .expect_err("wrong payer must refuse")
+            .to_string()
+            .contains("fee payer")
+        );
+        let wrong_authority_query = BufferUploadQueryV1 {
+            authority: Pubkey::new_unique(),
+            ..query
+        };
+        assert!(
+            validate_buffer_upload_transaction(
+                &wrong_authority_query,
+                &write_signature,
+                slot + 1,
+                &write_evidence,
+            )
+            .expect_err("wrong authority must refuse")
+            .to_string()
+            .contains("one exact account")
+        );
+        let wrong_rent_query = BufferUploadQueryV1 {
+            expected_rent_lamports: rent + 1,
+            ..query
+        };
+        assert!(
+            validate_buffer_upload_transaction(
+                &wrong_rent_query,
+                &create_signature,
+                slot,
+                &create_evidence,
+            )
+            .expect_err("wrong rent must refuse")
+            .to_string()
+            .contains("substituted system instruction")
+        );
+
+        let (failed_signature, failed_evidence) = buffer_transaction_evidence(
+            &create,
+            slot,
+            fee,
+            1_000_000,
+            1_000_000 - fee,
+            buffer.pubkey(),
+            0,
+            0,
+            false,
+        );
+        assert_eq!(
+            validate_buffer_upload_transaction(&query, &failed_signature, slot, &failed_evidence,)
+                .expect("failed exact create records only its fee"),
+            (fee, false)
+        );
     }
 
     #[test]
