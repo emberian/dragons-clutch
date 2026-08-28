@@ -36,6 +36,8 @@ use crate::{
 };
 
 const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context/v1";
+pub(crate) const OWNED_LOOPBACK_WALLET_TERMINAL_INPUT_COMMAND_V1: &str =
+    "local-private-validator-wallet-terminal-payout-input-v1";
 const TERMINAL_COMPOSITION_LABELS_V1: [&str; 4] = [
     "terminal_composition_descriptor_record",
     "terminal_composition_graph_record",
@@ -85,6 +87,10 @@ pub(crate) fn produce_wallet_terminal_input_owned_loopback_v1(
     arguments: Vec<String>,
 ) -> Result<PlanInputV1> {
     produce_wallet_terminal_input_v1(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+pub(crate) fn run_wallet_terminal_input_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    stdout_json(&produce_wallet_terminal_input_owned_loopback_v1(arguments)?)
 }
 
 fn produce_wallet_terminal_input_v1(
@@ -591,6 +597,17 @@ pub(crate) fn usage() -> &'static str {
      graded-success payout remains refused until the Claims terminal ABI consumes it directly. \
      Missing canonical native-composition publication evidence is a hard lifecycle blocker. \
      Mainnet-beta is refused unconditionally."
+}
+
+pub(crate) fn owned_loopback_usage() -> &'static str {
+    "\n  dclutch-local-successor-bootstrap \
+     local-private-validator-wallet-terminal-payout-input-v1 \
+     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \
+     --evidence ABSOLUTE_JSON --market PUBKEY --owner PUBKEY --recipient PUBKEY \
+     --claim-index U32 [--quantity U64]\n\nThis read-only command derives the same exact \
+     wallet payout input from finalized protocol state, but accepts only a validator launched and \
+     owned by the private lifecycle runner. It refuses devnet, mainnet-beta, and every non-loopback \
+     origin."
 }
 
 #[cfg(test)]

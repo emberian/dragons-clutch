@@ -94,6 +94,11 @@ fn run() -> Result<()> {
         Some("wallet-terminal-payout-input") => {
             terminal_lifecycle::run_wallet_terminal_input(arguments.collect())
         }
+        Some(command)
+            if command == terminal_lifecycle::OWNED_LOOPBACK_WALLET_TERMINAL_INPUT_COMMAND_V1 =>
+        {
+            terminal_lifecycle::run_wallet_terminal_input_owned_loopback_v1(arguments.collect())
+        }
         Some(command) if command == PUBLIC_TERMINAL_COMMANDS_V1[0] => {
             terminal_sequence::run_terminal_sequence(arguments.collect())
         }
@@ -1278,6 +1283,7 @@ fn usage() {
     println!("{}", release_capture::usage());
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
+    println!("{}", terminal_lifecycle::owned_loopback_usage());
     println!("{}", terminal_sequence::usage());
     println!("{}", terminal_sequence::owned_loopback_usage());
     println!("{}", user_position_admission::usage());
@@ -1440,6 +1446,20 @@ mod tests {
         assert!(terminal.contains("refuses every external origin"));
         assert!(!flagship_resolution::usage().contains(OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[0]));
         assert!(!terminal_sequence::usage().contains(OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[1]));
+    }
+
+    #[test]
+    fn owned_loopback_wallet_payout_input_is_visible_and_disjoint() {
+        let local = terminal_lifecycle::owned_loopback_usage();
+        assert!(
+            local.contains(terminal_lifecycle::OWNED_LOOPBACK_WALLET_TERMINAL_INPUT_COMMAND_V1)
+        );
+        assert!(local.contains("refuses devnet, mainnet-beta"));
+        assert!(!local.contains("--i-mean-devnet"));
+        assert!(
+            !terminal_lifecycle::usage()
+                .contains(terminal_lifecycle::OWNED_LOOPBACK_WALLET_TERMINAL_INPUT_COMMAND_V1)
+        );
     }
 
     #[test]
