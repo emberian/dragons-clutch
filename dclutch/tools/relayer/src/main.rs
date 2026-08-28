@@ -17,7 +17,10 @@ use dclutch_relay_contract::record::{RelayedObservationRecordViewV1, RelayedReco
 use dclutch_relayer::artifacts::ArtifactWriter;
 use dclutch_relayer::config::{Config, endpoint_host_for_display};
 use dclutch_relayer::error::{RelayerError, Result};
-use dclutch_relayer::id32::{ID_BYTES, base58, to_hex};
+use dclutch_relayer::id32::{ID_BYTES, base58, parse_id32, to_hex};
+use dclutch_relayer::keeper::{
+    CreateRecordKeeperRequest, RecordResumeV1, inspect_record_resume_v1, run_create_record_keeper,
+};
 use dclutch_relayer::keys::{AttestationSigner, generate_keypair_file};
 use dclutch_relayer::observe::{ObservationCycle, SetWatcher};
 use dclutch_relayer::publog::{MessageKind, PublicationLog, RpcReadLog};
@@ -65,6 +68,13 @@ enum Command {
     /// bytes.  Re-submitting the recorded observation is the §4.11 rule
     /// applied across processes: re-sign, never re-observe.
     SubmitArtifacts(SubmitArtifactsArgs),
+    /// Plan or execute creation of the slot-seeded observation record on devnet.
+    ///
+    /// The default is read-only: the command authenticates one finalized
+    /// 21-account frame and persists an unsigned plan without opening a key.
+    /// `--execute` loads only the configured fee payer after that plan exists,
+    /// then reauthenticates the unchanged prestate before signing.
+    CreateRecord(CreateRecordArgs),
     /// Push the publication log to a local public-serve directory.
     ///
     /// This is the file-target half of §4.11's publication requirement: it
@@ -129,6 +139,22 @@ struct SubmitArtifactsArgs {
     /// One dry-run slot directory: `<output_dir>/artifacts/<set>/slot-<N>/`.
     #[arg(long)]
     slot_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct CreateRecordArgs {
+    /// Path to the TOML configuration naming exact Solana devnet genesis.
+    #[arg(long)]
+    config: PathBuf,
+    /// One dry-run slot directory: `<output_dir>/artifacts/<set>/slot-<N>/`.
+    #[arg(long)]
+    slot_dir: PathBuf,
+    /// Explicit worker/fee-payer public key in base58 or 64 lowercase hex.
+    #[arg(long)]
+    worker: String,
+    /// Load the configured fee payer and submit after persisting the plan.
+    #[arg(long, default_value_t = false)]
+    execute: bool,
 }
 
 #[derive(Args)]
@@ -198,10 +224,31 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Command::ShowConfig(args) => show_config(&args),
         Command::Run(args) => run(&args).await,
         Command::SubmitArtifacts(args) => submit_artifacts(&args).await,
+        Command::CreateRecord(args) => create_record(&args).await,
         Command::PublishLog(args) => publish_log(&args),
         Command::VerifyLog(args) => verify_log(&args),
         Command::MeasureSkew(args) => skew(&args).await,
     }
+}
+
+async fn create_record(args: &CreateRecordArgs) -> Result<()> {
+    let home = home();
+    let config = Config::load(&args.config, home.as_deref())?;
+    let worker = parse_id32("--worker", &args.worker)?;
+    let report = run_create_record_keeper(CreateRecordKeeperRequest {
+        config: &config,
+        slot_dir: &args.slot_dir,
+        worker,
+        execute: args.execute,
+        home: home.as_deref(),
+    })
+    .await?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report)
+            .map_err(|error| RelayerError::Serialization(format!("keeper report: {error}")))?
+    );
+    Ok(())
 }
 
 fn home() -> Option<PathBuf> {
@@ -592,7 +639,27 @@ impl Submitter {
             relayer_key_set_staging_vacancy: self.relayer_key_set_staging_vacancy,
         };
 
+        let resume = self.inspect_record_resume(record, set).await?;
+        let first_unpersisted = match resume {
+            RecordResumeV1::Complete => {
+                println!(
+                    "  record is already the exact signed artifact in phase Sealed at finalized commitment; submitting nothing"
+                );
+                return Ok(());
+            }
+            RecordResumeV1::AppendFrom(index) => index,
+        };
+        if first_unpersisted > 0 {
+            println!(
+                "  finalized record already carries the exact signed prefix through position {}; resuming at position {first_unpersisted}",
+                first_unpersisted.saturating_sub(1)
+            );
+        }
+
         for (set_index, message_bytes, signature) in &set.attestations {
+            if *set_index < first_unpersisted {
+                continue;
+            }
             let plan = append_observation_instruction(
                 self.relay_program_id,
                 &addresses,
@@ -631,6 +698,43 @@ impl Submitter {
         // returns success must find it Sealed rather than race the bank.
         self.await_sealed(record).await?;
         Ok(())
+    }
+
+    async fn inspect_record_resume(
+        &self,
+        record: [u8; ID_BYTES],
+        set: &SignedObservationSet,
+    ) -> Result<RecordResumeV1> {
+        let read = self
+            .rpc
+            .get_multiple_accounts(&[record], u16::MAX, None)
+            .await?;
+        let account = read
+            .accounts
+            .first()
+            .and_then(Option::as_ref)
+            .ok_or_else(|| {
+                RelayerError::MissingCapability(
+                    "the slot-seeded observation record is absent; run create-record first"
+                        .to_owned(),
+                )
+            })?;
+        let messages: Vec<&[u8]> = set
+            .attestations
+            .iter()
+            .map(|(_, bytes, _)| bytes.as_slice())
+            .collect();
+        inspect_record_resume_v1(
+            self.relay_program_id,
+            record,
+            self.market,
+            self.generation,
+            set.account_set_id,
+            set.observed_slot,
+            account,
+            &messages,
+            &set.seal_bytes,
+        )
     }
 
     /// Poll the record at finalized commitment until `expected` positions are
