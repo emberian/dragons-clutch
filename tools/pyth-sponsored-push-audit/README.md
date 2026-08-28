@@ -111,14 +111,20 @@ source commits:
 - <https://github.com/pyth-network/governance/blob/main/docs/pips/operational/op-pip-5.md>
 - <https://github.com/pyth-network/pyth-crosschain/commit/f79f205895de61ddec69ae3ed6d4bd1ca1c6542f>
 - <https://github.com/pyth-network/pyth-crosschain/commit/1e5df8537adbecf300fa51a8b9330db754950a05>
+- <https://github.com/pyth-network/pyth-crosschain/commit/a607335>
+- <https://raw.githubusercontent.com/pyth-network/pyth-crosschain/4c6bac1/target_chains/solana/programs/pyth-push-oracle/src/lib.rs>
 
 They are provenance leads, not a deployed-ELF semantic proof. The generic rec5
 Receiver source assigns an authenticated message into the account; the strict
-increase property relevant to this fixed self/PDA-writer account must come from
-the separately pinned push Program. The new release therefore must bind both
-Programs, both ProgramData accounts, deployment slots, authorities and accepted
-ELF digests. Slot drift is `ReleaseSuperseded`, never an implicit downgrade or
-fallback to the upgraded sponsored account.
+increase property relevant to this fixed self/PDA-writer account comes from the
+separately pinned push Program. Official push source at `a607335` introduced the
+idempotent condition `next_timestamp > current_timestamp`; the inspected
+`4c6bac1` tree retains it and skips Receiver CPI for equal or older input. That
+source check is necessary but not sufficient. The new release still must bind
+both Programs, both ProgramData accounts, deployment slots, authorities and
+accepted ELF digests, and the exact deployed ELF must pass the rewind hostile.
+Slot drift is `ReleaseSuperseded`, never an implicit downgrade or fallback to
+the upgraded sponsored account.
 
 ## Run
 
