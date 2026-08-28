@@ -9,6 +9,7 @@ import {
   type ClientOperationJournalV1,
   type ClientOperationScopeV1,
 } from './clientOperationJournal';
+import { submittedClientOperationWireV1 } from './clientOperationJournal';
 import {
   buildWalletTerminalPayoutV3,
   parseWalletTerminalPayoutManifestV3,
@@ -230,6 +231,13 @@ export async function restoreTerminalPayoutJournalV1(
   });
   if (walletTerminalPayoutSummaryV3(report).requestDigest !== journal.operationDigest) {
     throw new Error('saved payout verifier plan substitutes the operation digest');
+  }
+  if (journal.phase === 'submitted') {
+    const signed = VersionedTransaction.deserialize(submittedClientOperationWireV1(journal));
+    if (base64(signed.message.serialize()) !== base64(transaction.message.serialize())
+        || signed.signatures.length !== requiredSigners.length) {
+      throw new Error('saved signed payout packet substitutes its exact unsigned message or signer set');
+    }
   }
   return Object.freeze({
     manifest,

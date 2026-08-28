@@ -1,7 +1,9 @@
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import LandingPulse from '@/components/charts/LandingPulse';
 
+import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 
 /**
@@ -60,6 +62,8 @@ export default function SiteLanding() {
         <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
       </div>
+      <p className="direct-status">You can open the human-readable deployment record or download the exact seven program addresses, ProgramData addresses, and observed deployment slots in one click.</p>
+      <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />
     </section>
 
     {smokeStoryEnabledV1() && <section className="trade-v3-card">

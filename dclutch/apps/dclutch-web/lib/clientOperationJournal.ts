@@ -1,4 +1,4 @@
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 
 import { hex, sha256 } from './bytes';
 import { decodeBase58 } from './explorer/base58';
@@ -38,6 +38,7 @@ export type ClientOperationJournalV1 = ClientOperationScopeV1 & Readonly<{
   plan: string;
   phase: ClientOperationJournalPhaseV1;
   signature: string | null;
+  signedWireBase64: string | null;
 }>;
 
 export type ClientOperationJournalStorageV1 = Readonly<{
@@ -56,8 +57,28 @@ const MAX_RECORD_CHARACTERS = 786_432;
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const EXACT_FIELDS = Object.freeze([
   'clusterGenesis', 'format', 'intent', 'intentDigest', 'market', 'operation', 'operationDigest',
-  'owner', 'phase', 'plan', 'planDigest', 'signature',
+  'owner', 'phase', 'plan', 'planDigest', 'signature', 'signedWireBase64',
 ]);
+
+function base64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 8_192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8_192));
+  }
+  return btoa(binary);
+}
+
+function base64Bytes(value: unknown, field: string): Uint8Array {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2_000 || value.length % 4 !== 0
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error(`${field} is not bounded canonical base64`);
+  }
+  let binary: string;
+  try { binary = atob(value); } catch { throw new Error(`${field} is not bounded canonical base64`); }
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  if (base64(bytes) !== value) throw new Error(`${field} is not bounded canonical base64`);
+  return bytes;
+}
 
 function exactAddress(value: string, field: string): string {
   let parsed: PublicKey;
@@ -123,8 +144,10 @@ function parseJournal(source: string): ClientOperationJournalV1 {
   const phase = value.phase;
   if (phase !== 'unsigned' && phase !== 'submitted') throw new Error('operation journal has an unsupported phase');
   const signature = value.signature;
-  if ((phase === 'unsigned' && signature !== null) || (phase === 'submitted' && typeof signature !== 'string')) {
-    throw new Error('operation journal phase and signature disagree');
+  const signedWireBase64 = value.signedWireBase64;
+  if ((phase === 'unsigned' && (signature !== null || signedWireBase64 !== null))
+      || (phase === 'submitted' && (typeof signature !== 'string' || typeof signedWireBase64 !== 'string'))) {
+    throw new Error('operation journal phase, signature, and signed packet disagree');
   }
   if (typeof value.clusterGenesis !== 'string' || typeof value.market !== 'string' || typeof value.owner !== 'string'
       || typeof value.operationDigest !== 'string' || typeof value.intentDigest !== 'string' || typeof value.planDigest !== 'string') {
@@ -142,7 +165,9 @@ function parseJournal(source: string): ClientOperationJournalV1 {
     plan: exactText(value.plan, 'journal plan', MAX_PLAN_CHARACTERS),
     phase,
     signature: signature === null ? null : exactTransactionSignatureV1(signature),
+    signedWireBase64: signedWireBase64 === null ? null : signedWireBase64 as string,
   });
+  if (journal.signedWireBase64 !== null) submittedClientOperationWireV1(journal);
   return journal;
 }
 
@@ -266,6 +291,7 @@ export async function writeUnsignedClientOperationJournalV1(
     plan,
     phase: 'unsigned',
     signature: null,
+    signedWireBase64: null,
   });
   storage.setItem(journalKeyUnchecked(journal), JSON.stringify(journal));
   return journal;
@@ -276,17 +302,49 @@ export async function markClientOperationSubmittedV1(
   storage: ClientOperationJournalStorageV1,
   journal: ClientOperationJournalV1,
   signature: string,
+  signedWireBytes: Uint8Array,
 ): Promise<ClientOperationJournalV1> {
   const current = await findClientOperationJournalV1(storage, journal, journal.operation);
   if (current === null || current.operationDigest !== journal.operationDigest) throw new Error('unsigned operation journal disappeared before submission');
   const exactSignature = exactTransactionSignatureV1(signature);
+  const signedWireBase64 = base64(signedWireBytes);
+  const candidate = Object.freeze({
+    ...current,
+    phase: 'submitted' as const,
+    signature: exactSignature,
+    signedWireBase64,
+  });
+  submittedClientOperationWireV1(candidate);
   if (current.phase === 'submitted') {
-    if (current.signature !== exactSignature) throw new Error('submitted operation journal already names another transaction');
+    if (current.signature !== exactSignature || current.signedWireBase64 !== signedWireBase64) {
+      throw new Error('submitted operation journal already names another transaction packet');
+    }
     return current;
   }
-  const submitted = Object.freeze({ ...current, phase: 'submitted' as const, signature: exactSignature });
+  const submitted = candidate;
   storage.setItem(journalKeyUnchecked(submitted), JSON.stringify(submitted));
   return submitted;
+}
+
+/** Recover the exact signed bytes that were persisted before the only send. */
+export function submittedClientOperationWireV1(journal: ClientOperationJournalV1): Uint8Array {
+  if (journal.phase !== 'submitted' || journal.signature === null || journal.signedWireBase64 === null) {
+    throw new Error('operation journal does not contain one persisted signed packet');
+  }
+  const bytes = base64Bytes(journal.signedWireBase64, 'operation journal signed packet');
+  let transaction: VersionedTransaction;
+  try { transaction = VersionedTransaction.deserialize(bytes); } catch {
+    throw new Error('operation journal signed packet is not one Solana transaction');
+  }
+  if (base64(transaction.serialize()) !== journal.signedWireBase64
+      || transaction.signatures.length === 0
+      || transaction.signatures.some((signature) => signature.every((byte) => byte === 0))) {
+    throw new Error('operation journal signed packet is not canonical and completely signed');
+  }
+  if (transactionSignatureV1(transaction.signatures[0]!) !== journal.signature) {
+    throw new Error('operation journal signature differs from its exact signed packet');
+  }
+  return bytes;
 }
 
 export async function discardUnsignedClientOperationJournalV1(

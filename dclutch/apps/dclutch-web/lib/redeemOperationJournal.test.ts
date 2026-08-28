@@ -30,7 +30,7 @@ const replayPlan = Object.freeze({
 function journal(input: ReturnType<typeof claimsReplayJournalInputV1>): ClientOperationJournalV1 {
   return Object.freeze({
     format: CLIENT_OPERATION_JOURNAL_FORMAT_V1, ...input, intentDigest: digest(20), planDigest: digest(21),
-    phase: 'unsigned', signature: null,
+    phase: 'unsigned', signature: null, signedWireBase64: null,
   });
 }
 
@@ -62,7 +62,7 @@ describe('redeem operation recovery decisions', () => {
     const saved = Object.freeze({
       format: CLIENT_OPERATION_JOURNAL_FORMAT_V1, operation: 'wallet-terminal-payout-v3', clusterGenesis: address(9),
       market: expected.market, owner: expected.owner, operationDigest: digest(1), intentDigest: digest(2), planDigest: digest(3),
-      intent: '{}', plan: '{}', phase: 'unsigned', signature: null,
+      intent: '{}', plan: '{}', phase: 'unsigned', signature: null, signedWireBase64: null,
     }) as ClientOperationJournalV1;
     const manifest = { request: expected } as unknown as WalletTerminalPayoutManifestV3;
     expect(() => requireTerminalPayoutRouteScopeV1(saved, manifest, expected)).not.toThrow();
