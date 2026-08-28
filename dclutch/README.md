@@ -11,13 +11,12 @@ Every claim is backed by collateral locked in the market's vault (its
 liquidation, no margin call, and no way for a market to owe more than it
 holds. The most you can ever lose is what you paid.
 
-**dClutch is not live yet.** There is nothing to buy and no value at
-risk anywhere. As of August 27, 2026 the seven programs are deployed to
-Solana's devnet — a public test network whose tokens are worthless by
-construction — each verified byte-for-byte against its source build
-([the deployment record](docs/evidence/DEPLOY_1.md)). The first devnet
-markets are being set up now; everything below also runs on a local test
-chain you can run yourself.
+The seven programs are live on Solana devnet, but there is no current open
+Market, nothing to buy, and no value at risk. Devnet is a public test network
+whose tokens have no real value. The current Upgrade and opening cycle is still
+in progress; the original deployment is recorded byte-for-byte in
+[the deployment record](docs/evidence/DEPLOY_1.md). Everything below also runs
+on a local test chain you can run yourself.
 
 ## What works today
 
@@ -32,22 +31,23 @@ chain you can run yourself.
   harness, at the real compute and memory limits. None of the three has
   been driven on a validator yet, and winding a market all the way down
   to retired has not run anywhere yet.
-- Opening a market is all-or-nothing: one atomic transaction locks the
-  collateral, creates the market, and opens trading — or rolls the whole
+- After the required prestates finalize, one compact atomic transaction locks
+  the collateral, creates the market, and opens trading — or rolls the whole
   thing back.
 - Range and tail protection ("pays out if SOL ends below X") is just a
   bundle of cell claims, so its price is exactly the sum of the cell
   prices. No extra machinery, nothing to liquidate.
-- The web app ([`apps/dclutch-web`](apps/dclutch-web)) connects a wallet,
-  lists markets, shows a market's cells and prices, and reads your
-  portfolio straight from the chain — no indexer.
+- The web app ([`apps/dclutch-web`](apps/dclutch-web)) performs a bounded scan
+  for compatible Markets and reads claim supplies and portfolios from the
+  chain when they exist. It does not publish authoritative prices or enable
+  devnet trading today; there is no independent indexer.
 - A TypeScript SDK ([`packages/dclutch-sdk`](packages/dclutch-sdk)) and a
   command-line client ([`packages/dclutch-cli`](packages/dclutch-cli))
   drive the same flows from code and from a terminal.
 
 Not done yet: the Structured product family is still being built, the
 General and Dealer trading paths have not run their first live trades, and
-there is no market discovery index. Trading is also expensive — it runs
+there is no independent market discovery index. Trading is also expensive — it runs
 close to Solana's per-transaction compute limit, and cutting that cost is
 active work.
 
@@ -122,7 +122,7 @@ has exactly one producer:
 | Checked release (per program + the multiprogram evidence) | `tools/release` (the checked-release pipeline) | `release/` build output | the deploy runbook; the web Console's activation page |
 | Deployment plan (`plan.json` + genesis accounts) | the bootstrap producer (`tools/local-validator/bootstrap/successor`) | your work directory | the campaign driver; validator launch |
 | Finalized records (products, sources, configs) | published on chain by the campaign driver | **on the chain** — fetch by address, never paste | every program; the web app reads them live |
-| Market spec (`run-spec`) | you, via the create wizard or a spec file | your work directory | founding |
+| Market spec (`run-spec`) | you, via the operator/spec producer | your work directory | founding; `/create` is a read-only preview |
 | Keypairs | `solana-keygen` (or the driver's per-role forge) | files you keep | signing; the address a keypair file prints is the one you fund |
 | Relay publication log | the relay daemon | [publication_log.jsonl](https://portal.dregg.studio/relay/publication_log.jsonl) | anyone checking the operator is alive |
 | Evidence documents | each campaign, as it runs | [`docs/evidence/`](docs/evidence) | humans; the reference site |
@@ -152,8 +152,8 @@ repository runs on.
 
 ## Where this is going
 
-The next milestone is the protocol live on Solana devnet, resolving
-markets about the state of Solana mainnet: Pyth's devnet feeds carry the
+The next milestone is the first current-compatible open devnet Market and its
+exterior lifecycle, resolving markets about the state of Solana mainnet. Pyth's devnet feeds carry the
 major prices directly, and a disclosed relayer carries everything else.
 dClutch grew out of Dragon's Clutch; the first generation lives in the
 neighboring `dragons-clutch` repository as an archive.

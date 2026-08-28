@@ -49,33 +49,34 @@ A card decodes fully or comes back as `refused` with a reason. A refusal
 here means the account did not match the layout exactly — treat it as "not
 a market I can use", not as an error to retry.
 
-All reads happen at one finalized slot, so the numbers you show a user are
-from a single consistent snapshot. `inspectMarketDetailV1`
+Each read starts from a finalized floor. A multi-account response is
+internally consistent at its returned slot, which may be later than that
+floor. A longer workflow is not one atomic snapshot: carry the returned
+slot forward as the minimum for the next dependent read, and recheck mutable
+facts before you ask for a signature. `inspectMarketDetailV1`
 (`@dclutch/sdk/marketDetail`) gives you one market in full;
 `inspectPortfolioV1` (`@dclutch/sdk/portfolio`) derives a user's positions
 directly from market addresses — no indexer involved.
 
-## Buying and selling
+## Reviewing a Direct trade
 
-A Direct trade settles between two signed **intents**: one seller, one
-buyer, crossed at one execution price. Your client plays one side and needs
-the other side's signed intent (or plays both sides, in a bench).
+A Direct trade settles between two signed **intents**: one seller and one
+buyer, crossed at one execution price. The public SDK currently lets you
+authenticate a route and preview that arithmetic. It deliberately does not
+offer a safe signing or submission workflow yet.
 
 ```ts
 import {
-  compileDirectInlineTransactionV3,
-  encodeCompactIntentSigningMessageV2,
+  previewDirectInlineV3,
 } from '@dclutch/sdk/directInlineV3';
 import { inspectDirectHotRouteV3 } from '@dclutch/sdk/directHotChain';
-import nacl from 'tweetnacl';
 
 // 1. Acquire the route: the market's fixed trading accounts, read back and
 //    checked at one finalized slot.
 const inspection = await inspectDirectHotRouteV3(client, routeManifest);
 
-// 2. Build and sign your intent (here: buying outcome 1, up to 5 units,
-//    limit price in the market's own scale).
-const intent = {
+// 2. Describe unsigned terms. Do not ask either maker for a signature.
+const buyerIntent = {
   side: 1, lifecycle: 0, outcome: 1,
   market: inspection.route.market,
   generation: inspection.route.generation,
@@ -86,35 +87,35 @@ const intent = {
   feeBasisPoints: inspection.route.feeBasisPoints,
   collateralAccount: MY_COLLATERAL_ACCOUNT,
 } as const;
-const signature = nacl.sign.detached(
-  encodeCompactIntentSigningMessageV2(intent), myKeypair.secretKey);
 
-// 3. Cross it with the counterparty's signed intent and submit.
-const plan = compileDirectInlineTransactionV3({
-  route: inspection.route,
-  seller: theirSignedIntent,
-  buyer: { maker: myKeypair.publicKey.toBase58(), signature, intent },
-  fill: 5n, executionPrice: 400_000n,
-  clockSlot: BigInt(inspection.observedSlot),
-});
-plan.transaction.sign([payerKeypair]);
-await client.sendRawTransaction(plan.transaction.serialize());
+// 3. Review exact integer arithmetic only.
+const preview = previewDirectInlineV3(
+  inspection.route,
+  { intent: sellerIntent },
+  { intent: buyerIntent },
+  5n,
+  400_000n,
+  BigInt(inspection.observedSlot),
+);
 ```
 
-`plan.preview` tells you the exact collateral debit, credit, and fees
-before anything is signed — show it to your user. The compiler refuses
-anything the chain would refuse (an intent that does not admit the fill, a
-price outside either limit, a stale slot), so a transaction that compiles
-is one the program will actually consider.
-
-The CLI's `intent` / `buy` / `sell` commands are this exact code plus a
-JSON file format for handing intents between machines.
+`preview` tells you the exact collateral debit, credit, and fees at the
+chosen integer rounding boundary. It is not a transaction and does not prove
+that a fill landed. The CLI can still create an authenticated off-chain intent
+file, but `buy` and `sell` refuse before session, key, transaction, or RPC
+access. They reopen only after one caller owns a durable exact-packet journal,
+the authenticated Trading acknowledgement, and all ten ordered writable
+poststates from finalized history.
 
 ## Redeeming
 
-Redemption has two steps, and today your client can perform one of them.
-The step you can build: create the market's Claims-role Custody replay,
-which every payout needs to exist first.
+The payout constructor and finalizer have local execution evidence. There is
+no current devnet Market that can use this route, so the example below is for
+a local validator or a compatible custom deployment. The full flow has three
+separately finalized parts: create the market's
+payment record if it does not exist, publish and freeze the payout lookup
+table, then sign the payout itself. Do not combine those steps into one
+optimistic submit loop.
 
 ```ts
 import { inspectClaimsCustodyReplayV1 } from '@dclutch/sdk/claimsCustodyReplay';
@@ -125,15 +126,60 @@ const state = await inspectClaimsCustodyReplayV1(client, {
 });
 if (state.status === 'creatable') {
   state.plan.transaction.sign([myKeypair]);
-  await client.sendRawTransaction(state.plan.transaction.serialize());
+  await client.sendRawTransaction(state.plan.transaction.serialize(), { maxRetries: 0 });
 }
 ```
 
-The payout instruction itself is not yet callable from a wallet: the
-program only accepts it from Core or Trading
-([decision 0008](../decisions/0008-custody-namespace-owner.md)). Say that
-to your user rather than looping on a transaction that cannot land;
-`PLAIN_POSITION_PAYOUT_BLOCK_V1` in the same module is ready-made copy.
+After that payment record and the lookup table are finalized, prepare the
+payout from the current accounts. Save the unsigned plan before opening a
+wallet. After the wallet signs, save both the complete signed bytes and the
+transaction id before the only submission. If the RPC response is lost,
+poll that saved id; never rebuild, resign, or resend the payout.
+
+```ts
+import {
+  requestWalletTransactionSignatureV1,
+  requireSubmittedSignatureMatchV1,
+  submitSignedTransactionV1,
+  transactionSignatureV1,
+} from '@dclutch/sdk/walletHandoff';
+import {
+  finalizeWalletTerminalPayoutV3,
+  prepareWalletTerminalPayoutV3,
+} from '@dclutch/sdk/walletTerminalPayoutV3';
+
+const plan = await prepareWalletTerminalPayoutV3(client, manifest, owner);
+await saveUnsignedPlan(plan); // durable before the wallet opens
+
+const signed = await requestWalletTransactionSignatureV1(
+  client,
+  connectedWallet,
+  plan.transaction,
+  owner,
+);
+if (!signed.complete) throw new Error('the payout is not completely signed');
+const transactionId = transactionSignatureV1(signed.transaction.signatures[0]!);
+await saveSignedPacket(transactionId, signed.wireBytes); // durable before send
+
+const returned = await submitSignedTransactionV1(client, signed.wireBytes);
+requireSubmittedSignatureMatchV1(transactionId, returned);
+const completed = await finalizeWalletTerminalPayoutV3(
+  client,
+  transactionId,
+  plan,
+  signed.wireBytes,
+);
+```
+
+Your completion check must read the exact finalized transaction bytes,
+message, signatures, fee payer and lamport changes, Claims return receipt,
+and the five changed accounts. It starts its account read at a finalized
+floor at or above the transaction slot; the response may be at a later
+slot. The SDK finalizer performs those checks and refuses altered wire
+bytes, signatures, fees, return data, account order, or payout poststate.
+The `dclutch redeem` command adds a durable filesystem journal and is the
+reference for local/custom-deployment crash recovery. Its presence does not
+mean a devnet payout is currently available.
 
 ## Founding a market
 

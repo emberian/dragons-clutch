@@ -58,8 +58,8 @@ export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ 
 
   const snapshot = state.kind === 'ready' ? state.snapshot : null;
   return <main className="product-shell workbench-shell">
-    <ConsoleHeader path="/workbench" title="Lifecycle workbench" purpose="An operator walks one market's whole life — author, fund, trade, resolve, claim — against the chain they point it at." />
-    <section className="workbench-heading"><div><h1>The market<br />lifecycle.</h1></div><p>Each stage below is a real workspace: it reads the chain you point it at and must prove what it finds before it will build anything. No sample market, price, pool, balance, or wallet authority appears here.</p></section>
+    <ConsoleHeader path="/workbench" title="Lifecycle readiness" purpose="Read which lifecycle routes can begin preflight against the chain you choose." />
+    <section className="workbench-heading"><div><h1>The market<br />lifecycle.</h1></div><p>This is a read-only lifecycle readiness map. It observes the chain and names missing seams; it does not create, trade, resolve, or redeem. No sample market, price, pool, balance, or wallet authority appears here.</p></section>
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
       <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
       <div className="direct-actions">

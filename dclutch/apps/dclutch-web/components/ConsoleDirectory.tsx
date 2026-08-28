@@ -6,9 +6,9 @@ import { docsHrefV1 } from '@/lib/flags';
  * `/console` — the directory of the operator consoles.
  *
  * The product pages (Markets, Create, Portfolio, Explorer) are for anyone.
- * Everything listed here is a working tool for someone operating or building
- * on the protocol: each console reads real chain state, refuses by name, and
- * mostly hands you unsigned bytes to sign elsewhere. This page exists so those
+ * Everything listed here is an operator surface for someone operating or
+ * building on the protocol. Some entries are read-only readiness views; a
+ * route may construct bytes only when its own preflight says so. This page exists so those
  * tools stop masquerading as product pages — one entry per console, one plain
  * sentence per entry saying who it is for and what it does.
  */
@@ -20,13 +20,13 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/workbench',
     name: 'Lifecycle workbench',
     blurb:
-      'Walk a market’s whole life — author, fund, trade, resolve, claim — against whatever chain you point it at. Start here if you are new to operating dClutch.',
+      'Read a market lifecycle readiness map against the chain you choose. It does not create, trade, resolve, or redeem.',
   },
   {
     href: '/found',
     name: 'Founding',
     blurb:
-      'For market authors: derive a new market’s accounts from the Registry and download the two unsigned transactions that found it.',
+      'Inspect the older partial founding packet pair. It cannot open a current devnet market.',
   },
   {
     href: '/product-v2',
@@ -38,7 +38,7 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/trade',
     name: 'Direct trade',
     blurb:
-      'For traders testing routes: check one trade against live chain state and build its unsigned transaction pair.',
+      'Inspect one Direct route and preview its exact integer arithmetic. Browser signing and submission are unavailable.',
   },
   {
     href: '/liquidity',
@@ -50,13 +50,13 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/redeem',
     name: 'Representation',
     blurb:
-      'For claim holders: transfer claim tokens, and prepare the open and retirement steps of redemption from live market state.',
+      'Inspect claim transfer and redemption constructors for local or compatible custom chains. No current devnet market can use them.',
   },
   {
     href: '/resolution',
     name: 'Resolution',
     blurb:
-      'The lifecycle workbench opened at the resolve stage — for settling a market whose terminal window has arrived.',
+      'The read-only lifecycle readiness map opened at resolution. The accepted source implementation is not installed on devnet yet.',
   },
   {
     href: '/general',
@@ -68,7 +68,7 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/release',
     name: 'Release activation',
     blurb:
-      'For operators deploying the protocol: paste a checked release — the evidence bundle the build pipeline produces to prove exactly which code a deployment runs — and activate it against a Registry.',
+      'Activate already-installed checked artifacts against a Registry. This does not update programs and is not the current devnet Upgrade workflow.',
   },
   {
     href: '/operate',
@@ -92,10 +92,10 @@ export default function ConsoleDirectory() {
       <div>
         <p className="eyebrow">The toolbox behind the product</p>
         <h1>Operator<br /><em>consoles.</em></h1>
-        <p>These are working tools for people operating or building on the
-        protocol, not product pages. Each one reads real state from the chain
-        you point it at, refuses by name when that state disagrees, and in most
-        cases hands you unsigned bytes to sign somewhere you trust. If you are
+        <p>These are operator surfaces for people operating or building on the
+        protocol, not product pages. Each one states its own readiness boundary,
+        and chain-backed routes refuse by name when observed state disagrees.
+        A page being listed here does not mean its mutation route is live. If you are
         here to browse or trade, start at <Anchor href="/markets">Markets</Anchor> instead.</p>
         <p>Every file a console asks for has exactly one producer, and the
         console says which, right on the input. The answer key is the
