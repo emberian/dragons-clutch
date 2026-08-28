@@ -58,6 +58,22 @@ const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
 /// ComputeBudget program instruction discriminant for `SetComputeUnitLimit(u32)`.
 const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT: u8 = 2;
 
+/// ComputeBudget discriminant for `SetComputeUnitPrice(u64)` (microlamports
+/// per compute unit).
+const SET_COMPUTE_UNIT_PRICE_DISCRIMINANT: u8 = 3;
+
+/// The priority fee every campaign transaction now carries, in microlamports
+/// per compute unit.
+///
+/// Measured on devnet 2026-08-28: every small transaction of a founding landed
+/// in seconds while the 1.4M-CU DCLTGMF1-route transactions were left behind
+/// by leaders for a full blockhash lifetime, repeatedly, at priority zero —
+/// block packing prefers paid-per-CU, and a zero-fee compute-heavy transaction
+/// is the first thing a leader drops. 50,000 µlam/CU prices a 1.4M-CU
+/// transaction's priority at 70,000 lamports (0.00007 SOL) — decisive on
+/// devnet's shallow fee market, negligible in the wallet ledger.
+const COMPUTE_UNIT_PRICE_MICROLAMPORTS: u64 = 50_000;
+
 /// How many times a send rebuilds a dropped transaction with a fresh blockhash
 /// before giving up. Each attempt gets a full blockhash lifetime, so this is a
 /// bound on total patience against a genuinely wedged cluster, not a retry of a
@@ -853,6 +869,7 @@ impl Rpc {
         // patience. Loopback keeps its 60 seconds exactly; devnet gets the five
         // minutes its profile names.
         let deadline = Instant::now() + self.pacing.confirm_timeout;
+        let submitted_at = Instant::now();
         let mut status = None;
         // Devnet drops transactions: a valid blockhash can expire before the
         // transaction lands, and then no status ever appears (measured
@@ -892,11 +909,22 @@ impl Rpc {
                 // Definitive-drop check: once the chain's block height passes
                 // the blockhash's last valid height with still no status, these
                 // bytes can never land — resubmitting them is futile and the
-                // caller must rebuild with a fresh blockhash. This is the wall
-                // attempt 5/6 hit at the DCLTGMF1 hostile probe on congested
-                // devnet; resubmit alone could not clear it because the
-                // blockhash had expired.
-                if self.block_height()? > last_valid_block_height {
+                // caller must rebuild with a fresh blockhash.
+                //
+                // TWO guards against a false verdict, both measured on devnet
+                // 2026-08-28: the height comparison alone declared "expired"
+                // ~20 seconds after a finalized blockhash whose real margin was
+                // 148 blocks (~60 s), because a load-balanced endpoint served
+                // the blockhash from one replica and the height from a fresher
+                // one. So expiry is only believed when (a) at least a full
+                // blockhash lifetime of WALL CLOCK — this process's own clock,
+                // no replica's — has passed since submit, and (b) the height
+                // exceeds the bound by a finalization-depth margin.
+                let aged = submitted_at.elapsed() >= Duration::from_secs(75);
+                if aged
+                    && self.block_height()?
+                        > last_valid_block_height.saturating_add(32)
+                {
                     return Ok(ConfirmOutcomeV1::Dropped);
                 }
             }
@@ -1078,7 +1106,7 @@ fn bounded_instructions(
             ));
         }
     }
-    let mut bounded = Vec::with_capacity(instructions.len().saturating_add(2));
+    let mut bounded = Vec::with_capacity(instructions.len().saturating_add(3));
     let mut compute_limit_data = Vec::with_capacity(5);
     compute_limit_data.push(SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT);
     compute_limit_data.extend_from_slice(&LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT.to_le_bytes());
@@ -1086,6 +1114,14 @@ fn bounded_instructions(
         program_id: solana_sdk_ids::compute_budget::ID,
         accounts: Vec::new(),
         data: compute_limit_data,
+    });
+    let mut compute_price_data = Vec::with_capacity(9);
+    compute_price_data.push(SET_COMPUTE_UNIT_PRICE_DISCRIMINANT);
+    compute_price_data.extend_from_slice(&COMPUTE_UNIT_PRICE_MICROLAMPORTS.to_le_bytes());
+    bounded.push(Instruction {
+        program_id: solana_sdk_ids::compute_budget::ID,
+        accounts: Vec::new(),
+        data: compute_price_data,
     });
     if let Some(bytes) = heap_frame_bytes {
         let mut heap_frame_data = Vec::with_capacity(5);
