@@ -2052,6 +2052,10 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         &execute_intent,
     )
     .expect("chain-derived Core provider execution");
+    assert!(
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
+        "before ExecuteProvider the Market is Open but Source is Primary and the standalone terminal-admission family must refuse"
+    );
 
     let before_late_substitution =
         provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
@@ -2112,6 +2116,10 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     .expect("provider lifecycle");
     assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Consumed);
     assert_eq!(lifecycle.terminal_sequence, TERMINAL_SEQUENCE);
+    assert!(
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
+        "after ExecuteProvider the Source and certificate are terminal but Core is already Terminal, so a second admission must refuse"
+    );
     assert_eq!(
         observed(&mut context, provider_submit.lifecycle)
             .await
