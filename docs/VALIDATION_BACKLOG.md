@@ -153,7 +153,13 @@ Run these rows at the same combined freeze as the private-validator checkpoint:
    pinned Cargo cache without a network fetch, and their focused checks passed;
    Journey and Relayed-vertical then passed focused locked/offline checks at
    `d2724c2f` and `b18ac2da`. Those focused results are not a 45/45
-   source-bound census; rerun the enumerator once at the combined freeze.
+   source-bound census. The exact archived `2b0e6c29` checkpoint later passed
+   45/45 with all 60 locks immutable; its summary is
+   `/tank/dregg-build/dclutch-all-workspaces-2b0e6c29-run1/SUMMARY.txt`
+   (SHA-256
+   `5f790218ff76ae514dab2efe62c072697c4a9e5cb19adb59bb29e93e25f60b2f`).
+   That source failed the real founding runtime below, so rerun the enumerator
+   if the next accepted CU repair changes any workspace or lock graph.
 3. Run `tools/release/checked-release-candidate.sh` from that same commit in a
    new work root. Require all 13 shipped links freshly compiled, zero SBF frame
    diagnostics, every measured frame below 4,096 bytes, and an emitted checked
@@ -187,7 +193,7 @@ The final M-61 sweep must use the Trading ELF after Direct `InitializeReplay`
 and its caller freeze. Report pass count and the 20-seed mean beside the exact
 ELF SHA-256; do not report one draw or an observed minimum as a margin.
 
-## Current integrated candidate evidence
+## Current integrated build evidence
 
 - Source `2b0e6c29b9adea55b979585e20cfc024ea07816c` includes the Resolution
   duplicate-work repair and Trading's authenticated duplicate-preplan removal.
@@ -206,8 +212,20 @@ ELF SHA-256; do not report one draw or an observed minimum as a margin.
   `/tank/dregg-build/dclutch-m61-2b0e6c29-run1/summary-immutable.json`
   (SHA-256
   `af21319eb4a06af7371ae9b9b0eccc0ac013979da436145407c234ab1746dc70`).
-  This is compute evidence, not a private-validator lifecycle acceptance. The
-  exact one-seed participant-through runtime remains the next acceptance gate.
+  This is compute evidence, not a private-validator lifecycle acceptance.
+- The exact one-seed participant-through runtime rejected this candidate during
+  honest founding: three Custody calls consumed 355,209, 98,172, and 113,313
+  CU, Core consumed 258,805 CU, Resolution exhausted at 623,608 of 623,664 CU,
+  and outer Trading exhausted at 1,399,494 of 1,399,550 CU. The transaction
+  consumed the 1,400,000-CU maximum and admitted no participant. Its summary is
+  `/tank/dregg-build/dclutch-private-participant-2b0e-run1/SUMMARY.json`
+  (SHA-256
+  `229cc903f1e99f83b0c2e272c72b3755cdc707540e9d89e631c682965c3e14ab`).
+  The Trading preplan removal still increased the allowance before the
+  Resolution child by an observed 58,709 CU, but post-child Trading work was
+  never reached. Preserve the gate, workspace census, and M-61 result as build
+  evidence only; a larger onchain CU repair and a fresh runtime candidate are
+  required.
 
 ## Other preserved intermediate evidence
 
