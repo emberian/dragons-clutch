@@ -834,6 +834,30 @@ mod tests {
                 .contains("exact founding campaign evidence")
         );
 
+        let mut local: serde_json::Value =
+            serde_json::from_slice(&exact).expect("local campaign projection");
+        local["cluster"] = serde_json::json!("loopback");
+        crate::campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
+            &serde_json::to_vec(&local).expect("local campaign bytes"),
+            crate::cluster::ExpectedClusterV1::OwnedLoopback,
+        )
+        .expect("typed owned-loopback campaign evidence");
+        assert!(
+            parse_campaign_terminal_evidence_v1(
+                &serde_json::to_vec(&local).expect("hostile local campaign bytes")
+            )
+            .is_err(),
+            "public parser must continue refusing loopback evidence"
+        );
+        assert!(
+            crate::campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
+                &exact,
+                crate::cluster::ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_err(),
+            "private parser must refuse external devnet evidence"
+        );
+
         for hostile in [
             serde_json::json!({
                 "schema": "dclutch-successor-campaign-report-v1",

@@ -104,8 +104,13 @@ use solana_sdk::{
 
 use crate::{
     Error, Result,
-    campaign::{self, CampaignTerminalEvidenceV1, parse_campaign_terminal_evidence_v1},
-    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
+    campaign::{
+        self, CampaignTerminalEvidenceV1, parse_campaign_terminal_evidence_v1,
+        parse_campaign_terminal_evidence_with_expected_cluster_v1,
+    },
+    cluster::{
+        ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
+    },
     model::{MarketRunInput, SuccessorPlan},
     plan::{hex32, pubkey},
     rpc::{Rpc, RpcAccount, WritePolicyV1},
@@ -123,13 +128,66 @@ const ALT_ADDRESS_BYTES: usize = 32;
 const ALT_GEOMETRY_BLOCKHASH: [u8; 32] = [0x5a; 32];
 const TERMINAL_JOURNAL_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-journal-v1";
 const TERMINAL_SESSION_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-session-v1";
+const OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1: &str =
+    "dclutch-owned-loopback-terminal-sequence-journal-v1";
+const OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1: &str =
+    "dclutch-owned-loopback-terminal-sequence-session-v1";
 const TERMINAL_FINALITY_WAIT: Duration = Duration::from_secs(300);
+
+const fn terminal_journal_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => TERMINAL_JOURNAL_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback => OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1,
+    }
+}
+
+const fn terminal_session_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => TERMINAL_SESSION_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback => OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1,
+    }
+}
+
+fn terminal_journal_cluster_v1(journal: &DurableTerminalJournalV1) -> Result<ExpectedClusterV1> {
+    match (journal.schema.as_str(), journal.cluster.as_str()) {
+        (TERMINAL_JOURNAL_SCHEMA_V1, "devnet") => Ok(ExpectedClusterV1::Devnet),
+        (OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1, "owned-loopback") => {
+            Ok(ExpectedClusterV1::OwnedLoopback)
+        }
+        _ => Err(refusal(
+            "terminal journal schema and cluster provenance were not one exact admitted pair",
+        )),
+    }
+}
+
+fn terminal_session_cluster_v1(session: &TerminalSequenceSessionV1) -> Result<ExpectedClusterV1> {
+    match (
+        session.schema.as_str(),
+        session.devnet_genesis_hash.as_deref(),
+        session.owned_loopback_genesis_hash.as_deref(),
+    ) {
+        (TERMINAL_SESSION_SCHEMA_V1, Some(DEVNET_GENESIS_HASH), None) => {
+            Ok(ExpectedClusterV1::Devnet)
+        }
+        (OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1, None, Some(genesis))
+            if !genesis.is_empty() && genesis != Hash::default().to_string() =>
+        {
+            Ok(ExpectedClusterV1::OwnedLoopback)
+        }
+        _ => Err(refusal(
+            "terminal session schema and cluster-genesis provenance were not one exact admitted pair",
+        )),
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TerminalSequenceSessionV1 {
     schema: String,
-    devnet_genesis_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    devnet_genesis_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owned_loopback_genesis_hash: Option<String>,
     rpc_url: String,
     plan_sha256: String,
     market_input_sha256: String,
@@ -148,6 +206,7 @@ struct TerminalSequenceSessionV1 {
 }
 
 struct TerminalSequenceArgumentsV1 {
+    expected_cluster: ExpectedClusterV1,
     origin: ClusterOriginV1,
     plan: PathBuf,
     market_input: PathBuf,
@@ -982,6 +1041,7 @@ impl AuthenticatedPlannedTerminalIntentV1 {
 pub(crate) fn build_protocol_stage_journal_v1(
     rpc: &mut Rpc,
     origin: &ClusterOriginV1,
+    expected_cluster: ExpectedClusterV1,
     payer: Pubkey,
     mutation: &TerminalSemanticMutationV1,
     fresh_closure: &TerminalMetaClosureV1,
@@ -991,9 +1051,10 @@ pub(crate) fn build_protocol_stage_journal_v1(
     prestate: &[ObservedAccount],
     authorized_mutation: bool,
 ) -> Result<DurableTerminalJournalV1> {
-    if origin.label() != "devnet" || mutation.observation.finality != Finality::Finalized {
+    expected_cluster.authenticate(origin)?;
+    if mutation.observation.finality != Finality::Finalized {
         return Err(refusal(
-            "terminal execution only admits one exact finalized devnet observation",
+            "terminal execution only admits one exact finalized observation on its typed cluster",
         ));
     }
     if checked_terminal_delta_sum_v1(mutation.protocol_lamport_deltas.values().copied())? != 0 {
@@ -1242,8 +1303,8 @@ pub(crate) fn build_protocol_stage_journal_v1(
     };
     let intent_sha256 = sha256_hex(&serde_json::to_vec(&intent)?);
     let mut journal = DurableTerminalJournalV1 {
-        schema: TERMINAL_JOURNAL_SCHEMA_V1.into(),
-        cluster: "devnet".into(),
+        schema: terminal_journal_schema_v1(expected_cluster).into(),
+        cluster: expected_cluster.evidence_label().into(),
         rpc_url: origin.redacted_url(),
         authorized_mutation,
         state_sha256: String::new(),
@@ -1265,6 +1326,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
 pub(crate) fn build_resolution_receipt_prepay_journal_v1(
     rpc: &mut Rpc,
     origin: &ClusterOriginV1,
+    expected_cluster: ExpectedClusterV1,
     payer: &ObservedAccount,
     receipt: &ObservedAccount,
     exact_receipt_rent: u64,
@@ -1333,6 +1395,7 @@ pub(crate) fn build_resolution_receipt_prepay_journal_v1(
     let mut journal = build_protocol_stage_journal_v1(
         rpc,
         origin,
+        expected_cluster,
         payer.key,
         &mutation,
         &closure,
@@ -1777,6 +1840,7 @@ impl<'de> Visitor<'de> for UniqueJsonVisitorV1 {
 pub(crate) fn resume_terminal_journal_v1(
     rpc: &mut Rpc,
     origin: &ClusterOriginV1,
+    expected_cluster: ExpectedClusterV1,
     journal_path: &Path,
     payer_keypair_path: &Path,
     execute: bool,
@@ -1784,12 +1848,17 @@ pub(crate) fn resume_terminal_journal_v1(
     planned_authorization: Option<&AuthenticatedPlannedTerminalIntentV1>,
 ) -> Result<()> {
     authenticate_terminal_journal_v1(journal)?;
+    if terminal_journal_cluster_v1(journal)? != expected_cluster {
+        return Err(refusal(
+            "terminal journal cluster provenance differed from the typed executor policy",
+        ));
+    }
     if journal.rpc_url != origin.redacted_url() {
         return Err(refusal(
             "terminal journal RPC origin differed from the currently admitted redacted origin",
         ));
     }
-    authenticate_terminal_devnet_v1(rpc, origin)?;
+    authenticate_terminal_cluster_v1(rpc, origin, expected_cluster)?;
     if execute && !journal.authorized_mutation {
         journal.authorized_mutation = true;
         write_terminal_journal_v1(journal_path, journal, false)?;
@@ -1818,7 +1887,7 @@ pub(crate) fn resume_terminal_journal_v1(
                     "terminal journal blockhash expired before key load; preserve it and construct a fresh plan",
                 ));
             }
-            authenticate_terminal_devnet_v1(rpc, origin)?;
+            authenticate_terminal_cluster_v1(rpc, origin, expected_cluster)?;
             let payer = Keypair::new_from_array(campaign::read_keypair_file(
                 payer_keypair_path,
                 "terminal-fee-payer",
@@ -1856,7 +1925,7 @@ pub(crate) fn resume_terminal_journal_v1(
             journal.phase = StageJournalPhaseV1::SignedNotSubmitted;
             write_terminal_journal_v1(journal_path, journal, false)?;
 
-            authenticate_terminal_devnet_v1(rpc, origin)?;
+            authenticate_terminal_cluster_v1(rpc, origin, expected_cluster)?;
             require_terminal_prestate_unchanged_v1(rpc, journal)?;
             let returned = rpc
                 .call(
@@ -1887,9 +1956,8 @@ pub(crate) fn resume_terminal_journal_v1(
 }
 
 fn authenticate_terminal_journal_v1(journal: &DurableTerminalJournalV1) -> Result<()> {
-    if journal.schema != TERMINAL_JOURNAL_SCHEMA_V1
-        || journal.cluster != "devnet"
-        || sha256_hex(&serde_json::to_vec(&journal.intent)?) != journal.intent_sha256
+    terminal_journal_cluster_v1(journal)?;
+    if sha256_hex(&serde_json::to_vec(&journal.intent)?) != journal.intent_sha256
         || terminal_journal_state_digest_v1(journal)? != journal.state_sha256
     {
         return Err(refusal(
@@ -2941,18 +3009,24 @@ fn terminal_fee_for_message(rpc: &mut Rpc, message_base64: &str) -> Result<u64> 
     .ok_or_else(|| Error::new("getFeeForMessage omitted exact terminal fee"))
 }
 
-fn authenticate_terminal_devnet_v1(rpc: &mut Rpc, origin: &ClusterOriginV1) -> Result<()> {
+fn authenticate_terminal_cluster_v1(
+    rpc: &mut Rpc,
+    origin: &ClusterOriginV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<String> {
+    expected_cluster.authenticate(origin)?;
     let genesis = rpc
         .call("getGenesisHash", &json!([]))?
         .as_str()
         .ok_or_else(|| Error::new("getGenesisHash result was not a string"))?
         .to_owned();
-    if genesis != DEVNET_GENESIS_HASH {
+    if expected_cluster == ExpectedClusterV1::Devnet && genesis != DEVNET_GENESIS_HASH {
         return Err(refusal(
             "terminal executor observed another genesis than exact Solana devnet",
         ));
     }
-    origin.authenticate_genesis(&genesis)
+    origin.authenticate_genesis(&genesis)?;
+    Ok(genesis)
 }
 
 fn durable_observed_state(account: &ObservedAccount) -> DurableAccountStateV1 {
@@ -5573,6 +5647,7 @@ pub(crate) fn route_terminal_lookup_table_v1(
 pub(crate) fn build_lookup_infrastructure_journal_v1(
     rpc: &mut Rpc,
     origin: &ClusterOriginV1,
+    expected_cluster: ExpectedClusterV1,
     plan: &TerminalLookupTablePlanV1,
     route: &TerminalLookupTableRouteV1,
     payer: &ObservedAccount,
@@ -5581,8 +5656,8 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
     prestate: &[ObservedAccount],
     authorized_mutation: bool,
 ) -> Result<DurableTerminalJournalV1> {
-    if origin.label() != "devnet"
-        || payer.key != plan.payer
+    expected_cluster.authenticate(origin)?;
+    if payer.key != plan.payer
         || plan.authority != plan.payer
         || table.key != plan.lookup_table
         || payer.observation != table.observation
@@ -5857,8 +5932,8 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
     };
     let intent_sha256 = sha256_hex(&serde_json::to_vec(&intent)?);
     let mut journal = DurableTerminalJournalV1 {
-        schema: TERMINAL_JOURNAL_SCHEMA_V1.into(),
-        cluster: "devnet".into(),
+        schema: terminal_journal_schema_v1(expected_cluster).into(),
+        cluster: expected_cluster.evidence_label().into(),
         rpc_url: origin.redacted_url(),
         authorized_mutation,
         state_sha256: String::new(),
@@ -6542,7 +6617,19 @@ pub(crate) fn authenticate_journal_route_v1(
 }
 
 pub(crate) fn run_terminal_sequence(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_terminal_sequence_arguments_v1(arguments)?;
+    run_terminal_sequence_with_expected_cluster_v1(arguments, ExpectedClusterV1::Devnet)
+}
+
+pub(crate) fn run_terminal_sequence_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    run_terminal_sequence_with_expected_cluster_v1(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run_terminal_sequence_with_expected_cluster_v1(
+    arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    let arguments = parse_terminal_sequence_arguments_v1(arguments, expected_cluster)?;
+    expected_cluster.authenticate(&arguments.origin)?;
     if !arguments.journal_dir.is_dir() {
         return Err(refusal(
             "--journal-dir must be an existing absolute directory",
@@ -6553,7 +6640,14 @@ pub(crate) fn run_terminal_sequence(arguments: Vec<String>) -> Result<()> {
     let evidence_source = fs::read(&arguments.evidence)?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
     let market_input: MarketRunInput = serde_json::from_slice(&market_source)?;
-    let evidence = parse_campaign_terminal_evidence_v1(&evidence_source)?;
+    let evidence = if expected_cluster == ExpectedClusterV1::Devnet {
+        parse_campaign_terminal_evidence_v1(&evidence_source)?
+    } else {
+        parse_campaign_terminal_evidence_with_expected_cluster_v1(
+            &evidence_source,
+            expected_cluster,
+        )?
+    };
     authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
     require_direct_retirement_evidence(&evidence)?;
     authenticate_campaign_market_v1(&evidence, arguments.market)?;
@@ -6565,7 +6659,7 @@ pub(crate) fn run_terminal_sequence(arguments: Vec<String>) -> Result<()> {
             WritePolicyV1::ReadsOnly
         },
     )?;
-    authenticate_terminal_devnet_v1(&mut rpc, &arguments.origin)?;
+    authenticate_terminal_cluster_v1(&mut rpc, &arguments.origin, expected_cluster)?;
     let input_digests = (
         sha256_hex(&plan_source),
         sha256_hex(&market_source),
@@ -6640,6 +6734,8 @@ fn load_or_create_terminal_session_v1(
         authenticate_terminal_session_inputs_v1(&session, arguments, input_digests)?;
         return Ok(session);
     }
+    let observed_genesis =
+        authenticate_terminal_cluster_v1(rpc, &arguments.origin, arguments.expected_cluster)?;
     let (closures, source_receipt) = project_terminal_lookup_closures_from_chain_v1(
         rpc,
         plan,
@@ -6687,8 +6783,12 @@ fn load_or_create_terminal_session_v1(
             }
         };
     let mut session = TerminalSequenceSessionV1 {
-        schema: TERMINAL_SESSION_SCHEMA_V1.into(),
-        devnet_genesis_hash: DEVNET_GENESIS_HASH.into(),
+        schema: terminal_session_schema_v1(arguments.expected_cluster).into(),
+        devnet_genesis_hash: (arguments.expected_cluster == ExpectedClusterV1::Devnet)
+            .then(|| DEVNET_GENESIS_HASH.into()),
+        owned_loopback_genesis_hash: (arguments.expected_cluster
+            == ExpectedClusterV1::OwnedLoopback)
+            .then_some(observed_genesis),
         rpc_url: arguments.origin.redacted_url(),
         plan_sha256: input_digests.0.clone(),
         market_input_sha256: input_digests.1.clone(),
@@ -6716,7 +6816,8 @@ fn authenticate_terminal_session_inputs_v1(
     input_digests: &(String, String, String),
 ) -> Result<()> {
     authenticate_terminal_session_v1(session)?;
-    if session.rpc_url != arguments.origin.redacted_url()
+    if terminal_session_cluster_v1(session)? != arguments.expected_cluster
+        || session.rpc_url != arguments.origin.redacted_url()
         || session.plan_sha256 != input_digests.0
         || session.market_input_sha256 != input_digests.1
         || session.evidence_sha256 != input_digests.2
@@ -7052,6 +7153,7 @@ fn refresh_terminal_session_digest_v1(session: &mut TerminalSequenceSessionV1) -
 }
 
 fn authenticate_terminal_session_v1(session: &TerminalSequenceSessionV1) -> Result<()> {
+    terminal_session_cluster_v1(session)?;
     let mut material = session.clone();
     let digest = material.session_sha256.clone();
     material.session_sha256.clear();
@@ -7063,9 +7165,7 @@ fn authenticate_terminal_session_v1(session: &TerminalSequenceSessionV1) -> Resu
                 .map_err(|error| Error::new(format!("terminal session ALT address: {error}")))
         })
         .collect::<Result<Vec<_>>>()?;
-    if session.schema != TERMINAL_SESSION_SCHEMA_V1
-        || session.devnet_genesis_hash != DEVNET_GENESIS_HASH
-        || session.rpc_url.is_empty()
+    if session.rpc_url.is_empty()
         || digest != sha256_hex(&serde_json::to_vec(&material)?)
         || addresses != canonical_union_addresses(&addresses)?
         || session.lookup_addresses_sha256 != pubkey_vector_sha256(&addresses)
@@ -7201,6 +7301,7 @@ fn operate_terminal_lookup_preflight_v1(
             resume_terminal_journal_v1(
                 rpc,
                 &arguments.origin,
+                arguments.expected_cluster,
                 path,
                 &arguments.payer_keypair,
                 false,
@@ -7233,6 +7334,7 @@ fn operate_terminal_lookup_preflight_v1(
         resume_terminal_journal_v1(
             rpc,
             &arguments.origin,
+            arguments.expected_cluster,
             path,
             &arguments.payer_keypair,
             arguments.execute,
@@ -7272,6 +7374,7 @@ fn operate_terminal_lookup_preflight_v1(
     let mut journal = build_lookup_infrastructure_journal_v1(
         rpc,
         &arguments.origin,
+        arguments.expected_cluster,
         &plan,
         &route,
         &payer,
@@ -7293,6 +7396,7 @@ fn operate_terminal_lookup_preflight_v1(
     resume_terminal_journal_v1(
         rpc,
         &arguments.origin,
+        arguments.expected_cluster,
         &path,
         &arguments.payer_keypair,
         arguments.execute,
@@ -7447,6 +7551,7 @@ fn operate_terminal_protocol_journals_v1(
                 resume_terminal_journal_v1(
                     rpc,
                     &arguments.origin,
+                    arguments.expected_cluster,
                     &path,
                     &arguments.payer_keypair,
                     false,
@@ -7476,6 +7581,7 @@ fn operate_terminal_protocol_journals_v1(
             resume_terminal_journal_v1(
                 rpc,
                 &arguments.origin,
+                arguments.expected_cluster,
                 &path,
                 &arguments.payer_keypair,
                 arguments.execute,
@@ -7521,6 +7627,7 @@ fn operate_terminal_protocol_journals_v1(
         let mut journal = build_protocol_stage_journal_v1(
             rpc,
             &arguments.origin,
+            arguments.expected_cluster,
             arguments.payer,
             &fresh.mutation,
             &fresh.closure,
@@ -7535,6 +7642,7 @@ fn operate_terminal_protocol_journals_v1(
         resume_terminal_journal_v1(
             rpc,
             &arguments.origin,
+            arguments.expected_cluster,
             &path,
             &arguments.payer_keypair,
             arguments.execute,
@@ -7613,6 +7721,7 @@ fn operate_resolution_prepay_journal_v1(
             resume_terminal_journal_v1(
                 rpc,
                 &arguments.origin,
+                arguments.expected_cluster,
                 path,
                 &arguments.payer_keypair,
                 false,
@@ -7655,6 +7764,7 @@ fn operate_resolution_prepay_journal_v1(
         resume_terminal_journal_v1(
             rpc,
             &arguments.origin,
+            arguments.expected_cluster,
             path,
             &arguments.payer_keypair,
             arguments.execute,
@@ -7696,6 +7806,7 @@ fn operate_resolution_prepay_journal_v1(
     let mut journal = build_resolution_receipt_prepay_journal_v1(
         rpc,
         &arguments.origin,
+        arguments.expected_cluster,
         &payer,
         &receipt,
         exact_receipt_rent,
@@ -7716,6 +7827,7 @@ fn operate_resolution_prepay_journal_v1(
     resume_terminal_journal_v1(
         rpc,
         &arguments.origin,
+        arguments.expected_cluster,
         path,
         &arguments.payer_keypair,
         arguments.execute,
@@ -7745,6 +7857,7 @@ fn stage_journal_name_v1(stage: TerminalStageV1) -> &'static str {
 
 fn parse_terminal_sequence_arguments_v1(
     arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<TerminalSequenceArgumentsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
@@ -7804,6 +7917,7 @@ fn parse_terminal_sequence_arguments_v1(
         Ok(path)
     };
     Ok(TerminalSequenceArgumentsV1 {
+        expected_cluster,
         origin: ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?,
         plan: absolute(plan, "--plan")?,
         market_input: absolute(market_input, "--market-input")?,
@@ -8077,7 +8191,8 @@ mod tests {
     fn test_session(addresses: &[Pubkey]) -> TerminalSequenceSessionV1 {
         let mut session = TerminalSequenceSessionV1 {
             schema: TERMINAL_SESSION_SCHEMA_V1.into(),
-            devnet_genesis_hash: DEVNET_GENESIS_HASH.into(),
+            devnet_genesis_hash: Some(DEVNET_GENESIS_HASH.into()),
+            owned_loopback_genesis_hash: None,
             rpc_url: "https://example.invalid/".into(),
             plan_sha256: "11".repeat(32),
             market_input_sha256: "22".repeat(32),
@@ -8773,28 +8888,86 @@ mod tests {
     }
 
     #[test]
+    fn terminal_cluster_provenance_is_disjoint_without_changing_devnet_shape() {
+        let devnet = test_session(&[key(10), key(11)]);
+        let devnet_json = serde_json::to_value(&devnet).expect("devnet session JSON");
+        assert_eq!(
+            devnet_json.get("schema").and_then(Value::as_str),
+            Some(TERMINAL_SESSION_SCHEMA_V1)
+        );
+        assert_eq!(
+            devnet_json.get("devnetGenesisHash").and_then(Value::as_str),
+            Some(DEVNET_GENESIS_HASH)
+        );
+        assert!(devnet_json.get("ownedLoopbackGenesisHash").is_none());
+        assert_eq!(
+            terminal_session_cluster_v1(&devnet).expect("devnet provenance"),
+            ExpectedClusterV1::Devnet
+        );
+
+        let mut local = devnet.clone();
+        local.schema = OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1.into();
+        local.devnet_genesis_hash = None;
+        local.owned_loopback_genesis_hash = Some(key(88).to_string());
+        refresh_terminal_session_digest_v1(&mut local).expect("local session digest");
+        authenticate_terminal_session_v1(&local).expect("local session provenance");
+        let local_json = serde_json::to_value(&local).expect("local session JSON");
+        assert!(local_json.get("devnetGenesisHash").is_none());
+        assert_eq!(
+            local_json
+                .get("ownedLoopbackGenesisHash")
+                .and_then(Value::as_str),
+            local.owned_loopback_genesis_hash.as_deref()
+        );
+        assert_eq!(
+            terminal_session_cluster_v1(&local).expect("loopback provenance"),
+            ExpectedClusterV1::OwnedLoopback
+        );
+
+        local.schema = TERMINAL_SESSION_SCHEMA_V1.into();
+        refresh_terminal_session_digest_v1(&mut local).expect("hostile digest");
+        assert!(authenticate_terminal_session_v1(&local).is_err());
+
+        let (mut journal, _, _, _) = synthetic_system_transfer_journal();
+        journal.schema = OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1.into();
+        refresh_terminal_journal_digest_v1(&mut journal).expect("hostile journal digest");
+        assert!(authenticate_terminal_journal_v1(&journal).is_err());
+        journal.cluster = "owned-loopback".into();
+        refresh_terminal_journal_digest_v1(&mut journal).expect("local journal digest");
+        authenticate_terminal_journal_v1(&journal).expect("local journal provenance");
+        assert_eq!(
+            terminal_journal_cluster_v1(&journal).expect("loopback journal"),
+            ExpectedClusterV1::OwnedLoopback
+        );
+    }
+
+    #[test]
     fn terminal_cli_is_read_only_by_default_and_refuses_ambiguous_shape() {
         let arguments = terminal_cli_arguments();
-        let parsed = parse_terminal_sequence_arguments_v1(arguments.clone()).expect("read plan");
+        let parsed =
+            parse_terminal_sequence_arguments_v1(arguments.clone(), ExpectedClusterV1::Devnet)
+                .expect("read plan");
         assert!(!parsed.execute);
 
         let mut execute = arguments.clone();
         execute.push("--execute".into());
         assert!(
-            parse_terminal_sequence_arguments_v1(execute)
+            parse_terminal_sequence_arguments_v1(execute, ExpectedClusterV1::Devnet)
                 .expect("execute")
                 .execute
         );
         let mut duplicate = arguments.clone();
         duplicate.extend(["--execute".into(), "--execute".into()]);
-        assert!(parse_terminal_sequence_arguments_v1(duplicate).is_err());
+        assert!(
+            parse_terminal_sequence_arguments_v1(duplicate, ExpectedClusterV1::Devnet).is_err()
+        );
         let mut unknown = arguments.clone();
         unknown.extend(["--unknown".into(), "value".into()]);
-        assert!(parse_terminal_sequence_arguments_v1(unknown).is_err());
+        assert!(parse_terminal_sequence_arguments_v1(unknown, ExpectedClusterV1::Devnet).is_err());
         let mut relative = arguments;
         let plan_index = relative.iter().position(|value| value == "--plan").unwrap() + 1;
         relative[plan_index] = "relative.json".into();
-        assert!(parse_terminal_sequence_arguments_v1(relative).is_err());
+        assert!(parse_terminal_sequence_arguments_v1(relative, ExpectedClusterV1::Devnet).is_err());
     }
 
     #[test]
