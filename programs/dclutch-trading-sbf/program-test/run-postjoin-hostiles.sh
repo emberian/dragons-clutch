@@ -27,7 +27,7 @@ build_sbf() {
   output="$2"
   label="$(basename "$(dirname "$manifest")")"
   log="$work/build-$label.log"
-  "${cargo_command[@]}" build-sbf --manifest-path "$manifest" --sbf-out-dir "$output" \
+  "${cargo_command[@]}" build-sbf --locked --manifest-path "$manifest" --sbf-out-dir "$output" \
     >"$log" 2>&1 || { tail -n 60 "$log" >&2; exit 1; }
   count="$(grep -c 'overwrites values in the frame' "$log" || true)"
   printf '  built %-74s %s frame diagnostics\n' "$manifest" "${count:-0}"
@@ -61,7 +61,7 @@ run_case() {
   SBF_OUT_DIR="$real_out" \
   POSTJOIN_SBF_OUT_DIR="$hostile_out" \
   DCLUTCH_FIXTURE_SUBSTRATE=slot-pinned \
-    "${cargo_command[@]}" test \
+    "${cargo_command[@]}" test --locked \
       --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
       --test registry_hot_continuation "$name" -- --exact --nocapture
 }
