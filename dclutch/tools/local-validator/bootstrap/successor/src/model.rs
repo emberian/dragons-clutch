@@ -16,6 +16,12 @@ pub(crate) struct RunProgramInput {
     /// deploy-day shape.
     #[serde(default)]
     pub(crate) observed_programdata: Option<String>,
+    /// SHA-256 of the complete live ELF tail inside `observed_programdata`,
+    /// including any Loader allocation padding. Required exactly when an
+    /// observed ProgramData account is supplied. `elf_sha256` remains the
+    /// checked raw build-candidate digest.
+    #[serde(default)]
+    pub(crate) observed_elf_sha256: Option<String>,
     /// Additive and optional, and **local rehearsal only**. The slot written
     /// into the genesis install this plan materializes, so a local campaign can
     /// exercise a nonzero deployment slot end to end instead of the zero a
@@ -99,8 +105,22 @@ pub(crate) struct MarketRunInput {
 pub(crate) struct ProgramPin {
     pub(crate) program_id: String,
     pub(crate) programdata_id: String,
+    /// Compatibility alias for `checked_candidate_elf_path`; always exact.
     pub(crate) elf_path: String,
+    /// Compatibility alias for `checked_candidate_elf_sha256`; never the live
+    /// padded payload digest.
     pub(crate) elf_sha256: String,
+    /// Checked raw build output used for deployment.
+    pub(crate) checked_candidate_elf_path: String,
+    /// SHA-256 of the exact raw build candidate.
+    pub(crate) checked_candidate_elf_sha256: String,
+    /// SHA-256 of the complete live ProgramData ELF tail. This is the digest
+    /// bound by `ArtifactReleaseV1` and may differ from the raw candidate only
+    /// because of an all-zero allocation suffix.
+    pub(crate) live_elf_sha256: String,
+    /// Number of proven all-zero bytes after the checked candidate in the live
+    /// ProgramData ELF tail.
+    pub(crate) live_elf_padding_bytes: usize,
     pub(crate) semantic_release_id: String,
     pub(crate) artifact_release_id: String,
     pub(crate) upgrade_authority: Option<String>,

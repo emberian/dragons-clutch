@@ -513,8 +513,11 @@ fn offline_loader_construction_feeds_the_checked_release_path_exactly() -> Resul
         build_checked_release(hostile),
         Err(Error::ProgramDataLinkMismatch)
     );
-    let upgradeable =
-        loader_v3_programdata_account_data_v1(&elf, 5, LoaderV3AuthorityStateV1::Upgradeable([2; 32]))?;
+    let upgradeable = loader_v3_programdata_account_data_v1(
+        &elf,
+        5,
+        LoaderV3AuthorityStateV1::Upgradeable([2; 32]),
+    )?;
     let mutable = ReleaseEvidenceV1 {
         programdata_account_data: &upgradeable,
         ..evidence
@@ -539,10 +542,16 @@ fn a_revoked_program_keeps_its_former_authority_and_the_release_path_takes_it() 
         531,
         LoaderV3AuthorityStateV1::Revoked(former),
     )?;
-    let never =
-        loader_v3_programdata_account_data_v1(&elf, 531, LoaderV3AuthorityStateV1::NeverAuthorized)?;
-    let upgradeable =
-        loader_v3_programdata_account_data_v1(&elf, 531, LoaderV3AuthorityStateV1::Upgradeable(former))?;
+    let never = loader_v3_programdata_account_data_v1(
+        &elf,
+        531,
+        LoaderV3AuthorityStateV1::NeverAuthorized,
+    )?;
+    let upgradeable = loader_v3_programdata_account_data_v1(
+        &elf,
+        531,
+        LoaderV3AuthorityStateV1::Upgradeable(former),
+    )?;
 
     // The bytes, exactly. Byte 12 is the Option tag; [13..45] is the key;
     // the ELF starts at 45 in all three states, which is why the loader can

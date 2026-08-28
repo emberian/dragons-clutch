@@ -688,9 +688,8 @@ mod tests {
             (3, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
             (4, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
         ] {
-            *prefix.get_mut(fixed).expect("Hot prefix slot exists") = *logical
-                .get(runtime)
-                .expect("logical account slot exists");
+            *prefix.get_mut(fixed).expect("Hot prefix slot exists") =
+                *logical.get(runtime).expect("logical account slot exists");
         }
         prefix
             .get_mut(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3)

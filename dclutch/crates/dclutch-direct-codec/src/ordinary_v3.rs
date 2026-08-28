@@ -14,8 +14,8 @@
 //! authenticated request into that bank and republishes the emitted program
 //! after hostile decoding; it holds no admission relation of its own.
 
-use dclutch_transition_vm::v3::ProgramV3;
 use dclutch_sha256_adapter::digest;
+use dclutch_transition_vm::v3::ProgramV3;
 
 pub use crate::generated_ordinary_v3::*;
 use crate::{execution_v3::DirectInlineOrdinaryRequestV3, successor::DirectExecutionConfigV1};

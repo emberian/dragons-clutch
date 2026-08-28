@@ -557,7 +557,11 @@ pub fn build_resolution_create_fund_v3(
         caller_authority,
         role_request_digest,
         role_bytes,
-        create_accounts(snapshot, caller_authority, material.recovery_policy().is_some()),
+        create_accounts(
+            snapshot,
+            caller_authority,
+            material.recovery_policy().is_some(),
+        ),
     )?;
     validate_funding_frame(
         &instruction,
@@ -1167,7 +1171,11 @@ pub fn build_resolution_close_fund_v3(
             .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
     );
     data.extend_from_slice(&role_bytes);
-    let accounts = close_accounts(snapshot, caller_authority, material.recovery_policy().is_some());
+    let accounts = close_accounts(
+        snapshot,
+        caller_authority,
+        material.recovery_policy().is_some(),
+    );
     if !exact_close_frame(&accounts, snapshot, caller_authority) {
         return Err(ResolutionCoreOperatorErrorV3::Frame);
     }
@@ -1777,7 +1785,10 @@ fn create_accounts(
     // positions: the short frame IS the statement that no policy record
     // exists, and the program checks that statement against the material.
     if has_recovery_policy {
-        accounts.push(AccountMeta::new_readonly(snapshot.recovery_policy.key, false));
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy.key,
+            false,
+        ));
         accounts.push(AccountMeta::new_readonly(
             snapshot.recovery_policy_staging.key,
             false,
@@ -1813,7 +1824,10 @@ fn verify_accounts(
         AccountMeta::new_readonly(snapshot.rent_sysvar.key, false),
     ];
     if has_recovery_policy {
-        accounts.push(AccountMeta::new_readonly(snapshot.recovery_policy.key, false));
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy.key,
+            false,
+        ));
         accounts.push(AccountMeta::new_readonly(
             snapshot.recovery_policy_staging.key,
             false,
@@ -2608,7 +2622,10 @@ fn close_accounts(
         AccountMeta::new_readonly(snapshot.system_program.key, false),
     ];
     if has_recovery_policy {
-        accounts.push(AccountMeta::new_readonly(snapshot.recovery_policy.key, false));
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy.key,
+            false,
+        ));
         accounts.push(AccountMeta::new_readonly(
             snapshot.recovery_policy_staging.key,
             false,

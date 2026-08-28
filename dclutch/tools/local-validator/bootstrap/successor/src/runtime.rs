@@ -12,6 +12,7 @@ use std::{
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use dclutch_core_contract::ContentId;
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2,
     publication::{
@@ -22,15 +23,20 @@ use dclutch_product_runtime_v2_operator::{
     },
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry_contract::{
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetV1, ActivationCacheProgressV1,
+    ArtifactActivationInputV1, ArtifactReleaseV1, DeploymentObservationV1,
+    ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
+    activation_cache_progress_v1,
+};
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View,
     REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionRoleV1, InitializeProtocolInfrastructureV1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
-    ProtocolInfrastructureProfileV1,
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleV1,
+    InitializeProtocolInfrastructureV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, ProtocolInfrastructureProfileV1,
 };
 use sha2::Digest as _;
 use solana_loader_v3_interface::instruction::set_upgrade_authority;
@@ -639,6 +645,7 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
 fn role_deployment_input(input: &RunProgramInput) -> RoleDeploymentInputV1 {
     RoleDeploymentInputV1 {
         observed_programdata: input.observed_programdata.as_deref().map(PathBuf::from),
+        expected_live_elf_sha256: input.observed_elf_sha256.clone(),
         genesis_deployment_slot: input.genesis_deployment_slot.unwrap_or(0),
         // The supervised `run` substrate is the genesis install this campaign
         // materializes and then revokes, so there is no mutable deployment for
@@ -687,6 +694,9 @@ const ACTIVATION_ROLES_V1: [ExecutionRoleV1; 5] = [
     ExecutionRoleV1::Resolution,
     ExecutionRoleV1::Custody,
 ];
+
+/// Number of exact roles in the profile-1 activation walk-up.
+pub(crate) const ACTIVATION_ROLE_COUNT_V1: usize = ACTIVATION_ROLES_V1.len();
 
 /// Exact ten-account frame admitting one role into the shared activation cache.
 ///
@@ -754,6 +764,35 @@ pub(crate) fn activation_instructions(
     Ok(ordered)
 }
 
+/// Ordered instructions for roles that the exact observed activation cache has
+/// not admitted yet. A missing cache starts all five; an exact partial starts
+/// only its zero role slots; a mismatched cache refuses before any send.
+pub(crate) fn pending_activation_instructions(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+) -> Result<Vec<(&'static str, Instruction)>> {
+    let progress = activation_progress(rpc, plan)?;
+    activation_instructions(plan, payer).map(|instructions| {
+        instructions
+            .into_iter()
+            .zip(ACTIVATION_ROLES_V1)
+            .filter_map(|((label, instruction), role)| {
+                activation_role_is_pending(progress, role).then_some((label, instruction))
+            })
+            .collect()
+    })
+}
+
+fn activation_role_is_pending(
+    progress: Option<ActivationCacheProgressV1>,
+    role: ExecutionRoleV1,
+) -> bool {
+    !progress
+        .map(|progress| progress.is_written(role))
+        .unwrap_or(false)
+}
+
 /// Replace the role ProgramData coordinate of one ten-account activation.
 fn substitute_role_programdata(instruction: &mut Instruction, replacement: Pubkey) -> Result<()> {
     if instruction.accounts.len() != REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1 {
@@ -817,14 +856,30 @@ pub(crate) fn publish_infrastructure_records(
     let registry = pubkey(&plan.registry.program_id)?;
     let mut published = 0_usize;
     for (label, pair) in &plan.records {
-        let expected_raw = pubkey(&pair.raw)?;
-        if rpc.account(expected_raw)?.is_some() {
-            return Err(Error::new(format!(
-                "record {label} already existed before its publication transaction"
-            )));
-        }
+        let (expected_raw, expected_staging) = record(plan, label)?;
         let schema = hex32(&pair.schema_id)?;
         let body = decode_hex(&pair.body_hex)?;
+        if hex(&sha2::Sha256::digest(&body)) != pair.content_sha256 {
+            return Err(Error::new(format!(
+                "record {label} body does not match its content coordinate"
+            )));
+        }
+        let minimum_balance = rpc.minimum_balance(body.len())?;
+        let raw_account = rpc.account(expected_raw)?;
+        let staging_account = rpc.account(expected_staging)?;
+        if existing_finalized_record_is_exact(
+            registry,
+            raw_account.as_ref(),
+            staging_account.as_ref(),
+            &body,
+            minimum_balance,
+        )? {
+            continue;
+        }
+        // Raw absent includes both a vacant pair and an in-flight staging
+        // cursor. `publish_record` snapshots both accounts and asks the shared
+        // publication contract for Begin/Append/Finalize/Complete, so an exact
+        // partial resumes and any substituted cursor refuses.
         let record = publish_record(rpc, registry, sponsor, schema, &body, None, transactions)?;
         if record.raw != expected_raw || hex(&record.digest) != pair.content_sha256 {
             return Err(Error::new(format!(
@@ -834,6 +889,39 @@ pub(crate) fn publish_infrastructure_records(
         published += 1;
     }
     Ok(published)
+}
+
+/// Admit an already-finalized record only when its full poststate is exact.
+/// Raw absence is not itself an error: a staging cursor may hold a legitimate
+/// partial, and the chain-derived publication state machine decides that case.
+pub(crate) fn existing_finalized_record_is_exact(
+    registry: Pubkey,
+    raw: Option<&crate::rpc::RpcAccount>,
+    staging: Option<&crate::rpc::RpcAccount>,
+    content: &[u8],
+    minimum_balance: u64,
+) -> Result<bool> {
+    // A live staging cursor means publication has not finalized yet, even if
+    // every raw byte has already been appended. Route the pair through the
+    // contract state machine: it will select Append or Finalize for an exact
+    // cursor and refuse any substituted owner, coordinate, sponsor, length,
+    // page index, offset, or already-written prefix.
+    if staging.is_some() {
+        return Ok(false);
+    }
+    let Some(raw) = raw else {
+        return Ok(false);
+    };
+    if raw.owner != registry
+        || raw.executable
+        || raw.data != content
+        || raw.lamports < minimum_balance
+    {
+        return Err(Error::new(
+            "existing finalized Registry record did not match exact plan poststate",
+        ));
+    }
+    Ok(true)
 }
 
 pub(crate) fn publish_record(
@@ -1095,6 +1183,153 @@ pub(crate) fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> 
     Ok(())
 }
 
+fn activation_artifact(
+    plan: &SuccessorPlan,
+    label: &str,
+) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1)> {
+    let pin = match label {
+        "core_artifact_release" => &plan.core,
+        "claims_artifact_release" => &plan.claims,
+        "trading_artifact_release" => &plan.trading,
+        "resolution_artifact_release" => &plan.resolution,
+        "custody_artifact_release" => &plan.custody,
+        _ => return Err(Error::new(format!("no execution-role pin for {label}"))),
+    };
+    let pair = plan
+        .records
+        .get(label)
+        .ok_or_else(|| Error::new(format!("plan omitted record {label}")))?;
+    let body = decode_hex(&pair.body_hex)?;
+    let digest: [u8; 32] = sha2::Sha256::digest(&body).into();
+    if hex(&digest) != pair.content_sha256 {
+        return Err(Error::new(format!(
+            "activation record {label} body digest does not match its plan coordinate"
+        )));
+    }
+    let release = ArtifactReleaseV1::decode(&body)
+        .map_err(|error| Error::new(format!("decode {label}: {error:?}")))?;
+    let release_id = ArtifactReleaseIdV1::new(digest)
+        .map_err(|error| Error::new(format!("decode {label} content ID: {error:?}")))?;
+    let expected_authority = pin
+        .upgrade_authority
+        .as_deref()
+        .map(pubkey)
+        .transpose()?
+        .map(|authority| authority.to_bytes());
+    if hex(&digest) != pin.artifact_release_id
+        || release.program().to_bytes() != pubkey(&pin.program_id)?.to_bytes()
+        || release.programdata() != pubkey(&pin.programdata_id)?.to_bytes()
+        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.elf_digest() != hex32(&pin.live_elf_sha256)?
+        || release.deployment_slot() != pin.deployment_slot
+        || release.upgrade_authority() != expected_authority
+    {
+        return Err(Error::new(format!(
+            "activation record {label} does not match its exact serialized deployment pin"
+        )));
+    }
+    Ok((release_id, release))
+}
+
+fn activation_input(plan: &SuccessorPlan, label: &str) -> Result<ArtifactActivationInputV1> {
+    let (release_id, release) = activation_artifact(plan, label)?;
+    let loader = release.loader_program().to_bytes();
+    let programdata = release.programdata();
+    let deployment = DeploymentObservationV1::new(
+        release.program().to_bytes(),
+        loader,
+        true,
+        programdata,
+        loader,
+        false,
+        programdata,
+        loader,
+        release.deployment_slot(),
+        release.elf_digest(),
+        release.upgrade_authority(),
+    )
+    .map_err(|error| Error::new(format!("construct {label} projection: {error:?}")))?;
+    Ok(ArtifactActivationInputV1::new(
+        release_id, release, deployment,
+    ))
+}
+
+/// Reconstruct the one complete activation cache this plan authorizes from its
+/// finalized record bodies. This is a projection builder, not a deployment
+/// authenticator: live ProgramData is admitted separately by substrate
+/// preflight and again by Registry while each role transaction executes.
+fn expected_activation(plan: &SuccessorPlan) -> Result<ActivatedExecutionReleaseSetV1> {
+    let release_set_pair = plan
+        .records
+        .get("execution_release_set")
+        .ok_or_else(|| Error::new("plan omitted execution_release_set record"))?;
+    let release_set_body = decode_hex(&release_set_pair.body_hex)?;
+    let release_set_digest: [u8; 32] = sha2::Sha256::digest(&release_set_body).into();
+    if hex(&release_set_digest) != release_set_pair.content_sha256
+        || hex(&release_set_digest) != plan.release_set_id
+    {
+        return Err(Error::new(
+            "execution release-set body digest does not match the plan coordinate",
+        ));
+    }
+    let release_set = ExecutionReleaseSetV1::decode(&release_set_body)
+        .map_err(|error| Error::new(format!("decode execution release set: {error:?}")))?;
+    let inputs = ExecutionReleaseActivationInputsV1::new(
+        activation_input(plan, "core_artifact_release")?,
+        activation_input(plan, "claims_artifact_release")?,
+        activation_input(plan, "trading_artifact_release")?,
+        activation_input(plan, "resolution_artifact_release")?,
+        activation_input(plan, "custody_artifact_release")?,
+    );
+    let release_set_id = ContentId::new(release_set_digest)
+        .map_err(|error| Error::new(format!("execution release-set ID: {error:?}")))?;
+    activate_execution_release_set_v1(release_set_id, &release_set, &inputs)
+        .map_err(|error| Error::new(format!("construct expected activation: {error:?}")))
+}
+
+fn checked_activation_progress(
+    registry: Pubkey,
+    account: &crate::rpc::RpcAccount,
+    expected: ActivatedExecutionReleaseSetV1,
+) -> Result<ActivationCacheProgressV1> {
+    if account.owner != registry || account.executable {
+        return Err(Error::new(
+            "activation cache did not have exact Registry-owned non-executable shape",
+        ));
+    }
+    activation_cache_progress_v1(&account.data, expected)
+        .map_err(|error| Error::new(format!("activation cache progress: {error:?}")))
+}
+
+/// Read and authenticate zero through five exact role activations. A partial
+/// cache is an inert, resumable state; nonzero bytes that differ from the plan
+/// are a conflict.
+pub(crate) fn activation_progress(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+) -> Result<Option<ActivationCacheProgressV1>> {
+    let expected = expected_activation(plan)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let address = pubkey(&plan.activation)?;
+    let derived = Pubkey::find_program_address(
+        &[
+            ACTIVATION_PDA_DOMAIN_V1,
+            expected.execution_release_set_id().as_bytes(),
+        ],
+        &registry,
+    )
+    .0;
+    if address != derived {
+        return Err(Error::new(
+            "activation address was not derived from the exact release-set body",
+        ));
+    }
+    let Some(account) = rpc.account(address)? else {
+        return Ok(None);
+    };
+    checked_activation_progress(registry, &account, expected).map(Some)
+}
+
 fn verify_core_programdata(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
     let address = pubkey(&plan.core.programdata_id)?;
     let account = rpc.required_account(address, "Core ProgramData")?;
@@ -1115,22 +1350,15 @@ fn verify_core_programdata(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
 }
 
 pub(crate) fn verify_activation(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
-    let address = pubkey(&plan.activation)?;
-    let account = rpc.required_account(address, "release activation")?;
-    let view = ActivatedExecutionReleaseSetViewV1::decode(&account.data)
-        .map_err(|error| Error::new(format!("decode release activation: {error:?}")))?;
-    let release_set_id = view
-        .execution_release_set_id()
-        .map_err(|error| Error::new(format!("activation release-set ID: {error:?}")))?;
-    if account.owner != pubkey(&plan.registry.program_id)?
-        || account.executable
-        || hex(release_set_id.as_bytes()) != plan.release_set_id
-    {
-        return Err(Error::new(
-            "Registry activation poststate did not match the exact release set",
-        ));
+    match activation_progress(rpc, plan)? {
+        Some(progress) if progress.is_complete() => Ok(()),
+        Some(progress) => Err(Error::new(format!(
+            "Registry activation poststate had only {} of {} exact roles",
+            progress.written_count(),
+            ACTIVATION_ROLE_COUNT_V1
+        ))),
+        None => Err(Error::new("Registry activation poststate was absent")),
     }
-    Ok(())
 }
 
 fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
@@ -1152,6 +1380,25 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
         let _ = pubkey(&input.program_id)?;
         let _ = hex32(&input.elf_sha256)?;
         let _ = hex32(&input.semantic_release_id)?;
+        match (
+            input.observed_programdata.as_deref(),
+            input.observed_elf_sha256.as_deref(),
+        ) {
+            (Some(_), Some(digest)) => {
+                let _ = hex32(digest)?;
+            }
+            (Some(_), None) => {
+                return Err(Error::new(format!(
+                    "{label} observed ProgramData omitted its complete live ELF SHA-256"
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(Error::new(format!(
+                    "{label} live ELF SHA-256 was supplied without observed ProgramData"
+                )));
+            }
+            (None, None) => {}
+        }
         validate_existing_canonical_file(Path::new(&input.elf_path), &format!("{label} ELF"))?;
         validate_existing_canonical_file(
             Path::new(&input.attestation),
@@ -1379,18 +1626,44 @@ fn validate_program_pin(
         Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
     if pubkey(&pin.programdata_id)? != expected_programdata
         || pin.upgrade_authority.is_some()
-        || !PathBuf::from(&pin.elf_path).is_absolute()
+        || pin.elf_path != pin.checked_candidate_elf_path
+        || pin.elf_sha256 != pin.checked_candidate_elf_sha256
+        || !PathBuf::from(&pin.checked_candidate_elf_path).is_absolute()
     {
         return Err(Error::new(
             "program pin is not an immutable canonical Loader-v3 binding",
         ));
     }
-    let expected_elf = hex32(&pin.elf_sha256)?;
+    let expected_candidate = hex32(&pin.checked_candidate_elf_sha256)?;
+    let expected_live = hex32(&pin.live_elf_sha256)?;
     let _ = hex32(&pin.semantic_release_id)?;
     let _ = artifact_id(&pin.artifact_release_id)?;
-    let elf = fs::read(&pin.elf_path)?;
-    if sha2::Sha256::digest(&elf).as_slice() != expected_elf {
-        return Err(Error::new(format!("{label} ELF digest mismatch")));
+    let elf = fs::read(&pin.checked_candidate_elf_path)?;
+    if sha2::Sha256::digest(&elf).as_slice() != expected_candidate {
+        return Err(Error::new(format!(
+            "{label} checked candidate ELF digest mismatch"
+        )));
+    }
+    let record_label = match label {
+        "rent-credit" => "rent_artifact_release".to_owned(),
+        other => format!("{other}_artifact_release"),
+    };
+    let pair = plan
+        .records
+        .get(&record_label)
+        .ok_or_else(|| Error::new(format!("missing {record_label}")))?;
+    let release = ArtifactReleaseV1::decode(&decode_hex(&pair.body_hex)?)
+        .map_err(|error| Error::new(format!("decode {record_label}: {error:?}")))?;
+    if release.program().to_bytes() != program.to_bytes()
+        || release.programdata() != expected_programdata.to_bytes()
+        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.elf_digest() != expected_live
+        || release.deployment_slot() != pin.deployment_slot
+        || release.upgrade_authority().is_some()
+    {
+        return Err(Error::new(format!(
+            "{label} artifact release did not match its serialized dual-digest deployment pin"
+        )));
     }
     let genesis = plan
         .genesis_accounts
@@ -1416,6 +1689,11 @@ fn validate_program_pin(
     // is carried by digest instead of rebuilt.
     match pin.deployment_source.as_str() {
         "genesis-install" => {
+            if expected_live != expected_candidate || pin.live_elf_padding_bytes != 0 {
+                return Err(Error::new(format!(
+                    "{label} genesis install did not preserve one exact unpadded ELF identity"
+                )));
+            }
             let expected = loader_programdata_bytes(&elf, pin.deployment_slot, bootstrap_authority);
             if genesis.data_sha256 != hex(&sha2::Sha256::digest(&expected)) {
                 return Err(Error::new(format!(
@@ -1682,6 +1960,218 @@ mod tests {
     #[test]
     fn zero_artifact_identity_refuses() {
         assert!(artifact_id(&"00".repeat(32)).is_err());
+    }
+
+    fn rpc_account(
+        owner: Pubkey,
+        executable: bool,
+        lamports: u64,
+        data: &[u8],
+    ) -> crate::rpc::RpcAccount {
+        crate::rpc::RpcAccount {
+            lamports,
+            owner,
+            executable,
+            rent_epoch: 0,
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn infrastructure_publication_reuses_only_exact_finalized_records_and_routes_partials() {
+        let registry = Pubkey::new_unique();
+        let body = b"one exact infrastructure record";
+        let minimum = 90;
+        let finalized = rpc_account(registry, false, minimum, body);
+        assert!(
+            existing_finalized_record_is_exact(registry, Some(&finalized), None, body, minimum)
+                .expect("exact finalized record")
+        );
+
+        // Raw absence is the gate to the chain-derived state machine. Both a
+        // vacant pair and an in-flight cursor must reach it; the cursor's own
+        // bytes, address, sponsor, offsets, and owner are authenticated there.
+        let cursor = rpc_account(registry, false, 123, &[0x55; 32]);
+        assert!(
+            !existing_finalized_record_is_exact(registry, None, None, body, minimum)
+                .expect("vacant pair")
+        );
+        assert!(
+            !existing_finalized_record_is_exact(registry, None, Some(&cursor), body, minimum)
+                .expect("partial pair is routed to publication state machine")
+        );
+        let partially_written = rpc_account(registry, false, minimum, &[0; 31]);
+        assert!(
+            !existing_finalized_record_is_exact(
+                registry,
+                Some(&partially_written),
+                Some(&cursor),
+                body,
+                minimum,
+            )
+            .expect("Begin/Append partial is routed to publication state machine")
+        );
+
+        let mut wrong = finalized.clone();
+        wrong.owner = Pubkey::new_unique();
+        assert!(
+            existing_finalized_record_is_exact(registry, Some(&wrong), None, body, minimum)
+                .is_err()
+        );
+        let mut wrong = finalized.clone();
+        wrong.executable = true;
+        assert!(
+            existing_finalized_record_is_exact(registry, Some(&wrong), None, body, minimum)
+                .is_err()
+        );
+        let mut wrong = finalized.clone();
+        wrong.data[0] ^= 1;
+        assert!(
+            existing_finalized_record_is_exact(registry, Some(&wrong), None, body, minimum)
+                .is_err()
+        );
+        let mut wrong = finalized.clone();
+        wrong.lamports = minimum - 1;
+        assert!(
+            existing_finalized_record_is_exact(registry, Some(&wrong), None, body, minimum)
+                .is_err()
+        );
+        assert!(
+            !existing_finalized_record_is_exact(
+                registry,
+                Some(&finalized),
+                Some(&cursor),
+                body,
+                minimum,
+            )
+            .expect("a complete raw body with a cursor still needs Finalize"),
+            "the publication state machine must authenticate and finalize the live cursor"
+        );
+    }
+
+    fn activation_role(
+        tag: u8,
+        loader: dclutch_release_set_contract::ProgramIdentityV1,
+    ) -> (
+        dclutch_release_set_contract::ExecutionRoleBindingV1,
+        ArtifactActivationInputV1,
+    ) {
+        use dclutch_registry_contract::ArtifactUpgradePolicyV1;
+        use dclutch_release_set_contract::{ExecutionRoleBindingV1, ProgramIdentityV1};
+
+        let program = ProgramIdentityV1::new([tag; 32]).expect("program");
+        let programdata = [tag.saturating_add(20); 32];
+        let release_id =
+            ArtifactReleaseIdV1::new([tag.saturating_add(40); 32]).expect("release ID");
+        let authority = [tag.saturating_add(60); 32];
+        let release = ArtifactReleaseV1::new(
+            program,
+            loader,
+            programdata,
+            ContentId::new([tag.saturating_add(80); 32]).expect("semantic release"),
+            [tag.saturating_add(100); 32],
+            1_000 + u64::from(tag),
+            ArtifactUpgradePolicyV1::ExactAuthority,
+            Some(authority),
+        )
+        .expect("artifact release");
+        let observation = DeploymentObservationV1::new(
+            program.to_bytes(),
+            loader.to_bytes(),
+            true,
+            programdata,
+            loader.to_bytes(),
+            false,
+            programdata,
+            loader.to_bytes(),
+            release.deployment_slot(),
+            release.elf_digest(),
+            Some(authority),
+        )
+        .expect("deployment observation");
+        (
+            ExecutionRoleBindingV1::new(program, release_id),
+            ArtifactActivationInputV1::new(release_id, release, observation),
+        )
+    }
+
+    fn expected_activation_fixture() -> ActivatedExecutionReleaseSetV1 {
+        use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProgramIdentityV1};
+
+        let loader = ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader");
+        let (core_binding, core) = activation_role(1, loader);
+        let (claims_binding, claims) = activation_role(2, loader);
+        let (trading_binding, trading) = activation_role(3, loader);
+        let (resolution_binding, resolution) = activation_role(4, loader);
+        let (custody_binding, custody) = activation_role(5, loader);
+        let release_set = ExecutionReleaseSetV1::new(
+            core_binding,
+            claims_binding,
+            trading_binding,
+            resolution_binding,
+            custody_binding,
+        )
+        .expect("release set");
+        let inputs =
+            ExecutionReleaseActivationInputsV1::new(core, claims, trading, resolution, custody);
+        activate_execution_release_set_v1(
+            ContentId::new([0xf0; 32]).expect("release-set ID"),
+            &release_set,
+            &inputs,
+        )
+        .expect("activation")
+    }
+
+    #[test]
+    fn activation_progress_resumes_every_exact_partial_and_refuses_mismatches() {
+        use dclutch_registry_contract::ACTIVATED_ROLE_BYTES_V1;
+
+        let registry = Pubkey::new_unique();
+        let expected = expected_activation_fixture();
+        let complete = expected.to_bytes();
+        let roles_offset = complete.len() - ACTIVATION_ROLE_COUNT_V1 * ACTIVATED_ROLE_BYTES_V1;
+
+        for written_count in 1..ACTIVATION_ROLE_COUNT_V1 {
+            let mut partial = complete;
+            partial[roles_offset + written_count * ACTIVATED_ROLE_BYTES_V1..].fill(0);
+            let account = rpc_account(registry, false, 1, &partial);
+            let progress = checked_activation_progress(registry, &account, expected)
+                .expect("exact partial is resumable");
+            assert_eq!(progress.written_count(), written_count);
+            for (index, role) in ACTIVATION_ROLES_V1.into_iter().enumerate() {
+                assert_eq!(progress.is_written(role), index < written_count);
+                assert_eq!(
+                    activation_role_is_pending(Some(progress), role),
+                    index >= written_count
+                );
+            }
+        }
+
+        let complete_account = rpc_account(registry, false, 1, &complete);
+        let complete_progress = checked_activation_progress(registry, &complete_account, expected)
+            .expect("exact retry is idempotent");
+        assert!(complete_progress.is_complete());
+        assert!(
+            ACTIVATION_ROLES_V1
+                .into_iter()
+                .all(|role| !activation_role_is_pending(Some(complete_progress), role))
+        );
+
+        let mut substituted = complete;
+        substituted[roles_offset + 3] ^= 1;
+        let substituted = rpc_account(registry, false, 1, &substituted);
+        assert!(checked_activation_progress(registry, &substituted, expected).is_err());
+
+        let mut junk_in_unwritten = complete;
+        junk_in_unwritten[roles_offset + ACTIVATED_ROLE_BYTES_V1..].fill(0);
+        junk_in_unwritten[roles_offset + ACTIVATED_ROLE_BYTES_V1] = 1;
+        let junk_in_unwritten = rpc_account(registry, false, 1, &junk_in_unwritten);
+        assert!(checked_activation_progress(registry, &junk_in_unwritten, expected).is_err());
+
+        let wrong_owner = rpc_account(Pubkey::new_unique(), false, 1, &complete);
+        assert!(checked_activation_progress(registry, &wrong_owner, expected).is_err());
+        let executable = rpc_account(registry, true, 1, &complete);
+        assert!(checked_activation_progress(registry, &executable, expected).is_err());
     }
 
     #[test]

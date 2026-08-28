@@ -38,7 +38,7 @@ use dclutch_rent_contract::{
     },
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
+    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SourceMaterialV3,
 };
 use solana_program::sysvar::SysvarSerialize;
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
@@ -322,7 +322,7 @@ impl Fixture {
         })
         .expect("Realm");
         let realm = RecordBacking::new(REALM_SCHEMA_RELEASE_ID_V1, realm.to_bytes().to_vec());
-        let source = SourceMaterialV2::new(
+        let source = SourceMaterialV3::explicitly_unbounded(
             SourceContentId::new(graph.product.digest).expect("Product record digest"),
             source_id(0xd1),
             source_id(0xd2),
@@ -331,7 +331,7 @@ impl Fixture {
             source_id(0xd4),
         );
         let source = RecordBacking::new(
-            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
             source.to_bytes().to_vec(),
         );
         let manifest = RecordBacking::new(
@@ -957,7 +957,7 @@ fn stale_registry_elf_refuses_before_transaction_export() {
 #[test]
 fn wrong_source_product_and_late_payer_failure_refuse() {
     let fixture = Fixture::new();
-    let hostile_source = SourceMaterialV2::new(
+    let hostile_source = SourceMaterialV3::explicitly_unbounded(
         source_id(0xe1),
         source_id(0xd1),
         source_id(0xd2),
@@ -966,7 +966,7 @@ fn wrong_source_product_and_late_payer_failure_refuse() {
         source_id(0xd4),
     );
     let hostile_source = RecordBacking::new(
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         hostile_source.to_bytes().to_vec(),
     );
     assert_eq!(

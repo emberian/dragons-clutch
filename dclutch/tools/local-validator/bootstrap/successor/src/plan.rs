@@ -115,6 +115,10 @@ pub(crate) struct RoleDeploymentInputV1 {
     /// its Loader metadata and ELF tail. Present means the role's release is
     /// minted from an observation.
     pub(crate) observed_programdata: Option<PathBuf>,
+    /// Declared SHA-256 of the complete live ELF tail inside the observed
+    /// ProgramData account, including Loader allocation padding. Required
+    /// exactly when `observed_programdata` is present.
+    pub(crate) expected_live_elf_sha256: Option<String>,
     /// The slot written into the genesis install this plan materializes, for a
     /// local rehearsal that wants a nonzero slot exercised end to end. It is
     /// refused together with `observed_programdata`: an observation is not
@@ -151,12 +155,38 @@ pub(crate) struct RoleDeploymentsV1 {
 struct RoleDeployment {
     image: Vec<u8>,
     deployment_slot: u64,
+    live_elf_sha256: [u8; 32],
+    live_elf_padding_bytes: usize,
     /// The upgrade authority the image actually carries, hostile-decoded by
     /// the same reader the on-chain authenticator runs. Never a caller's
     /// number — a declaration only gets to be checked against this, and the
     /// release's policy is minted from it.
     upgrade_authority: Option<[u8; 32]>,
     source: DeploymentSourceV1,
+}
+
+/// Validate the relationship Loader V3 may create between a checked build
+/// candidate and the live ProgramData ELF tail: the candidate is an exact
+/// prefix and every remaining allocated byte is zero.
+///
+/// This deliberately does not claim the two byte strings have one digest. A
+/// release authenticates the complete live tail, while a checked-release
+/// manifest normally authenticates the raw build output. Callers that want to
+/// bridge those identities must record both digests rather than silently
+/// replacing either one.
+pub(crate) fn checked_candidate_padding_v1(candidate: &[u8], deployed: &[u8]) -> Result<usize> {
+    if candidate.get(..4) != Some(b"\x7fELF") {
+        return Err(Error::new("checked candidate is not an ELF"));
+    }
+    let suffix = deployed
+        .strip_prefix(candidate)
+        .ok_or_else(|| Error::new("deployed ProgramData ELF does not begin with the candidate"))?;
+    if suffix.iter().any(|byte| *byte != 0) {
+        return Err(Error::new(
+            "deployed ProgramData ELF has nonzero bytes after the candidate",
+        ));
+    }
+    Ok(suffix.len())
 }
 
 /// Read one role's `ProgramData` image and hostile-decode its deployment facts.
@@ -226,9 +256,40 @@ fn role_deployment(
             "{label} ProgramData is not a Loader-v3 account: {error:?}"
         ))
     })?;
-    if view.elf() != elf {
+    let live_elf_padding_bytes =
+        checked_candidate_padding_v1(elf, view.elf()).map_err(|error| {
+            Error::new(format!(
+                "{label} live ProgramData ELF is not the checked raw candidate plus zero padding: \
+             {error}"
+            ))
+        })?;
+    let live_elf_sha256 = sha256_bytes(view.elf());
+    let expected_live = match source {
+        DeploymentSourceV1::ObservedAccount => input
+            .expected_live_elf_sha256
+            .as_deref()
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "{label} observed ProgramData requires an explicit live ELF SHA-256; the raw \
+                     candidate digest does not authenticate Loader allocation padding"
+                ))
+            })
+            .and_then(hex32)?,
+        DeploymentSourceV1::GenesisInstall => {
+            if input.expected_live_elf_sha256.is_some() {
+                return Err(Error::new(format!(
+                    "{label} live ELF SHA-256 describes an observed ProgramData account and is \
+                     refused for a genesis install"
+                )));
+            }
+            sha256_bytes(elf)
+        }
+    };
+    if live_elf_sha256 != expected_live {
         return Err(Error::new(format!(
-            "{label} ProgramData account carries a different ELF than the pinned artifact"
+            "{label} complete live ProgramData ELF SHA-256 is {}, expected {}",
+            hex(&live_elf_sha256),
+            hex(&expected_live)
         )));
     }
     if view.upgrade_authority() != expected_upgrade_authority.map(|value| value.to_bytes()) {
@@ -241,6 +302,8 @@ fn role_deployment(
     Ok(RoleDeployment {
         image,
         deployment_slot,
+        live_elf_sha256,
+        live_elf_padding_bytes,
         upgrade_authority,
         source,
     })
@@ -551,28 +614,28 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     let registry = release_facts(
         args.registry_program,
         hex32(&args.registry_semantic_release_id)?,
-        hex32(&args.registry_sha256)?,
+        registry_deployment.live_elf_sha256,
         registry_deployment.deployment_slot,
         registry_deployment.upgrade_authority,
     )?;
     let core = release_facts(
         args.core_program,
         hex32(&args.core_semantic_release_id)?,
-        hex32(&args.core_sha256)?,
+        core_deployment.live_elf_sha256,
         core_deployment.deployment_slot,
         core_activation_upgrade_authority,
     )?;
     let claims = release_facts(
         args.claims_program,
         hex32(&args.claims_semantic_release_id)?,
-        hex32(&args.claims_sha256)?,
+        claims_deployment.live_elf_sha256,
         claims_deployment.deployment_slot,
         claims_deployment.upgrade_authority,
     )?;
     let trading = release_facts(
         args.trading_program,
         hex32(&args.trading_semantic_release_id)?,
-        hex32(&args.trading_sha256)?,
+        trading_deployment.live_elf_sha256,
         trading_deployment.deployment_slot,
         trading_deployment.upgrade_authority,
     )?;
@@ -585,21 +648,21 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     let resolution = release_facts(
         args.resolution_program,
         resolution_semantic,
-        hex32(&args.resolution_sha256)?,
+        resolution_deployment.live_elf_sha256,
         resolution_deployment.deployment_slot,
         resolution_deployment.upgrade_authority,
     )?;
     let custody = release_facts(
         args.custody_program,
         hex32(&args.custody_semantic_release_id)?,
-        hex32(&args.custody_sha256)?,
+        custody_deployment.live_elf_sha256,
         custody_deployment.deployment_slot,
         custody_deployment.upgrade_authority,
     )?;
     let rent = release_facts(
         args.rent_credit_program,
         hex32(&args.rent_credit_semantic_release_id)?,
-        hex32(&args.rent_credit_sha256)?,
+        rent_deployment.live_elf_sha256,
         rent_deployment.deployment_slot,
         rent_deployment.upgrade_authority,
     )?;
@@ -835,6 +898,10 @@ fn pin(
         programdata_id: programdata(program).to_string(),
         elf_path: elf.display().to_string(),
         elf_sha256: elf_sha.clone(),
+        checked_candidate_elf_path: elf.display().to_string(),
+        checked_candidate_elf_sha256: elf_sha.clone(),
+        live_elf_sha256: hex(&deployment.live_elf_sha256),
+        live_elf_padding_bytes: deployment.live_elf_padding_bytes,
         semantic_release_id: semantic.clone(),
         artifact_release_id: hex(facts.id.as_bytes()),
         // The authority the RELEASE binds, which for a revoked or genesis role
@@ -986,6 +1053,29 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
                 "{label} observed ProgramData must be an existing absolute regular file"
             )));
         }
+        match (
+            input.observed_programdata.is_some(),
+            input.expected_live_elf_sha256.as_deref(),
+        ) {
+            (true, Some(digest)) => {
+                hex32(digest).map_err(|_| {
+                    Error::new(format!(
+                        "{label} live ELF SHA-256 must be 64 lowercase hexadecimal characters"
+                    ))
+                })?;
+            }
+            (true, None) => {
+                return Err(Error::new(format!(
+                    "{label} observed ProgramData requires its complete live ELF SHA-256"
+                )));
+            }
+            (false, Some(_)) => {
+                return Err(Error::new(format!(
+                    "{label} live ELF SHA-256 is only valid with observed ProgramData"
+                )));
+            }
+            (false, None) => {}
+        }
     }
     Ok(())
 }
@@ -1131,6 +1221,139 @@ mod tests {
     }
 
     #[test]
+    fn checked_candidate_padding_accepts_only_an_exact_prefix_and_zero_suffix() {
+        let candidate = b"\x7fELFchecked";
+        assert_eq!(
+            checked_candidate_padding_v1(candidate, candidate).expect("exact live tail"),
+            0
+        );
+        let mut padded = candidate.to_vec();
+        padded.extend_from_slice(&[0; 19]);
+        assert_eq!(
+            checked_candidate_padding_v1(candidate, &padded).expect("zero-padded live tail"),
+            19
+        );
+
+        let mut nonzero_suffix = padded.clone();
+        *nonzero_suffix.last_mut().expect("suffix") = 1;
+        assert!(checked_candidate_padding_v1(candidate, &nonzero_suffix).is_err());
+
+        let mut substituted_prefix = padded;
+        substituted_prefix[4] ^= 1;
+        assert!(checked_candidate_padding_v1(candidate, &substituted_prefix).is_err());
+        assert!(
+            checked_candidate_padding_v1(candidate, &candidate[..candidate.len() - 1]).is_err()
+        );
+        let mut candidate_and_padding_swapped = candidate.to_vec();
+        candidate_and_padding_swapped.extend_from_slice(&[0; 8]);
+        assert!(
+            checked_candidate_padding_v1(&candidate_and_padding_swapped, candidate).is_err(),
+            "the padded live payload cannot masquerade as the raw candidate"
+        );
+        assert!(checked_candidate_padding_v1(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn observed_payload_keeps_both_digests_and_binds_the_complete_live_tail() {
+        let observations =
+            std::env::temp_dir().join(format!("dclutch-successor-pad-{}", Pubkey::new_unique()));
+        let former = Pubkey::new_unique();
+        let raw = test_elf(1);
+        let mut live = raw.to_vec();
+        live.extend_from_slice(&[0; 23]);
+        let image = revoked_account_image(&live, 808, former);
+        let mut deployments = RoleDeploymentsV1::default();
+        observe(
+            &mut deployments.registry,
+            &observations,
+            "registry-padded.bin",
+            &image,
+        );
+
+        let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, deployments);
+        let plan = plan.expect("zero-padded observed payload prepares");
+        assert_eq!(
+            plan.schema,
+            "dclutch-local-successor-infrastructure-plan-v2"
+        );
+        assert_eq!(
+            plan.registry.checked_candidate_elf_sha256,
+            hex(&sha256_bytes(&raw))
+        );
+        assert_eq!(plan.registry.live_elf_sha256, hex(&sha256_bytes(&live)));
+        assert_eq!(plan.registry.live_elf_padding_bytes, 23);
+        assert_ne!(
+            plan.registry.checked_candidate_elf_sha256,
+            plan.registry.live_elf_sha256
+        );
+        let release = ArtifactReleaseV1::decode(
+            &hex32_bytes(&plan.records["registry_artifact_release"].body_hex)
+                .expect("artifact body"),
+        )
+        .expect("artifact release");
+        assert_eq!(release.elf_digest(), sha256_bytes(&live));
+        let serialized: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("plan.json")).expect("serialized infrastructure plan"),
+        )
+        .expect("plan JSON");
+        assert_eq!(
+            serialized["registry"]["checked_candidate_elf_sha256"],
+            plan.registry.checked_candidate_elf_sha256
+        );
+        assert_eq!(
+            serialized["registry"]["live_elf_sha256"],
+            plan.registry.live_elf_sha256
+        );
+        assert_eq!(serialized["registry"]["live_elf_padding_bytes"], 23);
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&observations);
+    }
+
+    #[test]
+    fn observed_payload_refuses_single_digest_ambiguity_and_wrong_live_digest() {
+        let observations = std::env::temp_dir().join(format!(
+            "dclutch-successor-pad-refuse-{}",
+            Pubkey::new_unique()
+        ));
+        let former = Pubkey::new_unique();
+        let raw = test_elf(1);
+        let mut live = raw.to_vec();
+        live.extend_from_slice(&[0; 11]);
+        let image = revoked_account_image(&live, 809, former);
+
+        let mut ambiguous = RoleDeploymentsV1::default();
+        ambiguous.registry.observed_programdata = Some(write_observed(
+            &observations,
+            "registry-ambiguous.bin",
+            &image,
+        ));
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, ambiguous);
+        let refusal = result.expect_err("old single-digest observation must refuse");
+        assert!(refusal.to_string().contains("live ELF SHA-256"));
+        let _ = fs::remove_dir_all(&root);
+
+        let mut raw_digest_reused = RoleDeploymentsV1::default();
+        raw_digest_reused.registry.observed_programdata = Some(write_observed(
+            &observations,
+            "registry-wrong-live-digest.bin",
+            &image,
+        ));
+        raw_digest_reused.registry.expected_live_elf_sha256 = Some(hex(&sha256_bytes(&raw)));
+        let (result, root) =
+            prepared_plan_with(RecordPublicationV1::Transaction, raw_digest_reused);
+        let refusal = result.expect_err("raw digest cannot stand in for padded live digest");
+        assert!(
+            refusal
+                .to_string()
+                .contains("complete live ProgramData ELF")
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        let _ = fs::remove_dir_all(&observations);
+    }
+
+    #[test]
     fn pre_init_core_and_real_loader_revoke_differ_only_in_authority_tag() {
         let authority = Pubkey::new_unique();
         let initial = loader_programdata_bytes(b"\x7fELFbody", 0, Some(authority));
@@ -1262,6 +1485,14 @@ mod tests {
         path
     }
 
+    fn observe(input: &mut RoleDeploymentInputV1, root: &Path, name: &str, programdata: &[u8]) {
+        input.observed_programdata = Some(write_observed(root, name, programdata));
+        let live = programdata
+            .get(dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES..)
+            .unwrap_or(&[]);
+        input.expected_live_elf_sha256 = Some(hex(&sha256_bytes(live)));
+    }
+
     fn test_elf(tag: u8) -> [u8; 5] {
         [0x7f, b'E', b'L', b'F', tag]
     }
@@ -1275,16 +1506,18 @@ mod tests {
             std::env::temp_dir().join(format!("dclutch-successor-obs-{}", Pubkey::new_unique()));
         let former = Pubkey::new_unique();
         let mut deployments = RoleDeploymentsV1::default();
-        deployments.registry.observed_programdata = Some(write_observed(
+        observe(
+            &mut deployments.registry,
             &observations,
             "registry.bin",
             &revoked_account_image(&test_elf(1), 488_712_345, former),
-        ));
-        deployments.claims.observed_programdata = Some(write_observed(
+        );
+        observe(
+            &mut deployments.claims,
             &observations,
             "claims.bin",
             &revoked_account_image(&test_elf(3), 488_712_401, former),
-        ));
+        );
         let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, deployments);
         let plan = plan.expect("observed deployments prepare");
 
@@ -1294,6 +1527,11 @@ mod tests {
             "observed-programdata-account"
         );
         assert_eq!(plan.claims.deployment_slot, 488_712_401);
+        assert_eq!(plan.registry.live_elf_padding_bytes, 0);
+        assert_eq!(
+            plan.registry.checked_candidate_elf_sha256, plan.registry.live_elf_sha256,
+            "an explicit no-padding observation keeps equal but separately named digests"
+        );
         // Roles nobody observed keep the genesis-install shape, and say so.
         assert_eq!(plan.trading.deployment_slot, 0);
         assert_eq!(plan.trading.deployment_source, "genesis-install");
@@ -1367,41 +1605,48 @@ mod tests {
         // Still mutable: the release claims Immutable/None and activation
         // would refuse it on chain.
         let mut live_authority = RoleDeploymentsV1::default();
-        live_authority.registry.observed_programdata = Some(write_observed(
+        observe(
+            &mut live_authority.registry,
             &observations,
             "live.bin",
             &loader_programdata_bytes(&test_elf(1), 400, Some(former)),
-        ));
+        );
         let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, live_authority);
         assert!(result.is_err(), "a live upgrade authority must refuse");
         let _ = fs::remove_dir_all(&root);
 
         // A different program's ELF under this role's name.
         let mut wrong_elf = RoleDeploymentsV1::default();
-        wrong_elf.registry.observed_programdata = Some(write_observed(
+        observe(
+            &mut wrong_elf.registry,
             &observations,
             "wrong.bin",
             &revoked_account_image(&test_elf(9), 400, former),
-        ));
+        );
         let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, wrong_elf);
         assert!(result.is_err(), "a substituted ELF must refuse");
         let _ = fs::remove_dir_all(&root);
 
         // Not Loader-v3 shaped at all.
         let mut garbage = RoleDeploymentsV1::default();
-        garbage.registry.observed_programdata =
-            Some(write_observed(&observations, "garbage.bin", &[0_u8; 64]));
+        observe(
+            &mut garbage.registry,
+            &observations,
+            "garbage.bin",
+            &[0_u8; 64],
+        );
         let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, garbage);
         assert!(result.is_err(), "a non-Loader account must refuse");
         let _ = fs::remove_dir_all(&root);
 
         // An observation is not something a caller gets to overwrite.
         let mut both = RoleDeploymentsV1::default();
-        both.registry.observed_programdata = Some(write_observed(
+        observe(
+            &mut both.registry,
             &observations,
             "both.bin",
             &revoked_account_image(&test_elf(1), 400, former),
-        ));
+        );
         both.registry.genesis_deployment_slot = 7;
         let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, both);
         assert!(
@@ -1425,17 +1670,19 @@ mod tests {
         let authority = Pubkey::new_unique();
         let former = Pubkey::new_unique();
         let mut deployments = RoleDeploymentsV1::default();
-        deployments.registry.observed_programdata = Some(write_observed(
+        observe(
+            &mut deployments.registry,
             &observations,
             "registry-mutable.bin",
             &loader_programdata_bytes(&test_elf(1), 488_712_345, Some(authority)),
-        ));
+        );
         deployments.registry.expected_upgrade_authority = Some(authority);
-        deployments.claims.observed_programdata = Some(write_observed(
+        observe(
+            &mut deployments.claims,
             &observations,
             "claims-revoked.bin",
             &revoked_account_image(&test_elf(3), 488_712_401, former),
-        ));
+        );
         let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, deployments);
         let plan = plan.expect("a declared mutable observation prepares");
 
@@ -1472,11 +1719,12 @@ mod tests {
 
         // Undeclared and mutable: exactly SMOKE-0's live devnet refusal.
         let mut undeclared = RoleDeploymentsV1::default();
-        undeclared.trading.observed_programdata = Some(write_observed(
+        observe(
+            &mut undeclared.trading,
             &observations,
             "trading-undeclared.bin",
             &loader_programdata_bytes(&test_elf(4), 400, Some(authority)),
-        ));
+        );
         let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, undeclared);
         let message = result
             .expect_err("an undeclared authority refuses")
@@ -1489,11 +1737,12 @@ mod tests {
 
         // Declared, but not the key the account actually carries.
         let mut mismatched = RoleDeploymentsV1::default();
-        mismatched.trading.observed_programdata = Some(write_observed(
+        observe(
+            &mut mismatched.trading,
             &observations,
             "trading-mismatched.bin",
             &loader_programdata_bytes(&test_elf(4), 400, Some(authority)),
-        ));
+        );
         mismatched.trading.expected_upgrade_authority = Some(other);
         let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, mismatched);
         let message = result.expect_err("a wrong declaration refuses").to_string();
@@ -1518,11 +1767,12 @@ mod tests {
 
         // Core's authority is fixed by the rest of the plan.
         let mut core_contradiction = RoleDeploymentsV1::default();
-        core_contradiction.core.observed_programdata = Some(write_observed(
+        observe(
+            &mut core_contradiction.core,
             &observations,
             "core-contradiction.bin",
             &loader_programdata_bytes(&test_elf(2), 400, Some(other)),
-        ));
+        );
         core_contradiction.core.expected_upgrade_authority = Some(other);
         let (result, root) =
             prepared_plan_with(RecordPublicationV1::Transaction, core_contradiction);
@@ -1553,11 +1803,12 @@ mod tests {
         let bootstrap = Pubkey::new_from_array([8; 32]);
 
         let mut observed = RoleDeploymentsV1::default();
-        observed.core.observed_programdata = Some(write_observed(
+        observe(
+            &mut observed.core,
             &observations,
             "core-mutable.bin",
             &loader_programdata_bytes(&test_elf(2), 900, Some(bootstrap)),
-        ));
+        );
         let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, observed);
         let plan = plan.expect("an observed Core prepares");
         assert_eq!(

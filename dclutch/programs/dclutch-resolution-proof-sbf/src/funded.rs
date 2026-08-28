@@ -45,8 +45,8 @@
 //! returns a plan.
 
 use dclutch_capability_contract::{
-    CapabilityManifestV1, ContentId as CapabilityContentId, FundingAssetClassV1, FundingCompartment,
-    FundingCustodyObservationV1, FundingStateV1, FundingStatus,
+    CapabilityManifestV1, ContentId as CapabilityContentId, FundingAssetClassV1,
+    FundingCompartment, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
 };
 use dclutch_product_runtime_v2::ResultDomainV2;
 use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;

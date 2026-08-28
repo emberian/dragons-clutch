@@ -65,6 +65,8 @@ pub mod resolution_core_v3 {
 pub mod series_hot_v3;
 /// Compact projected-Market Series Consume instruction-data construction.
 pub mod series_projected_v2;
+/// Wallet-authorized Claims terminal payout and exact v0 routing construction.
+pub mod wallet_terminal_payout_v3;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned {
     pub use dclutch_versioned_message_operator::*;

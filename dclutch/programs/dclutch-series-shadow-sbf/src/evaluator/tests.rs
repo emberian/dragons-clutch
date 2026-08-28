@@ -197,11 +197,18 @@ impl SemanticFixture {
         ticket: &'a [u8],
         root_key: &'a [u8; 32],
     ) -> Vec<AccountObservationV1<'a>> {
-        let mut observations =
-            vec![
-                AccountObservationV1::new(&[200_u8; 32], &[201_u8; 32], 1, &[], false, false, false);
-                SERIES_CLOCK_COORDINATE_V4 + 1
-            ];
+        let mut observations = vec![
+            AccountObservationV1::new(
+                &[200_u8; 32],
+                &[201_u8; 32],
+                1,
+                &[],
+                false,
+                false,
+                false
+            );
+            SERIES_CLOCK_COORDINATE_V4 + 1
+        ];
         let mut set = |coordinate, value| {
             *observations
                 .get_mut(coordinate)
@@ -297,7 +304,15 @@ impl SemanticFixture {
         );
         set(
             SERIES_OCCURRENCE_RAW_COORDINATE_V4,
-            AccountObservationV1::new(&[73_u8; 32], &[201_u8; 32], 1, &self.occurrence, false, false, false),
+            AccountObservationV1::new(
+                &[73_u8; 32],
+                &[201_u8; 32],
+                1,
+                &self.occurrence,
+                false,
+                false,
+                false,
+            ),
         );
         set(
             SERIES_TICKET_RAW_COORDINATE_V4,
@@ -305,7 +320,15 @@ impl SemanticFixture {
         );
         set(
             SERIES_CLOCK_COORDINATE_V4,
-            AccountObservationV1::new(&[75_u8; 32], &[202_u8; 32], 1, &self.clock, false, false, false),
+            AccountObservationV1::new(
+                &[75_u8; 32],
+                &[202_u8; 32],
+                1,
+                &self.clock,
+                false,
+                false,
+                false,
+            ),
         );
         observations
     }

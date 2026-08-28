@@ -20,8 +20,8 @@
 mod support;
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    ACTION_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES,
-    SEED_BYTES,
+    ACTION_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES, PROTECTED_OUTPUT_BYTES,
+    RECIPE_BYTES, SEED_BYTES,
     encode::{
         LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
         LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
@@ -29,8 +29,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     },
 };
 use dclutch_bearer_v2_operator::{
-    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3,
-    RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3, RationalOpenStructuredHotBundleInputV3,
     build_rational_open_structured_hot_bundle_v3,
@@ -193,8 +192,8 @@ fn the_derived_descriptor_builds_both_structured_action_bundles() {
         RepresentationActionV2::IssueStructured,
         RepresentationActionV2::UnwrapStructured,
     ] {
-        let bundle = build_rational_open_structured_hot_bundle_v3(
-            RationalOpenStructuredHotBundleInputV3 {
+        let bundle =
+            build_rational_open_structured_hot_bundle_v3(RationalOpenStructuredHotBundleInputV3 {
                 action,
                 fixed_data_lengths: &lengths,
                 item_data_lengths: [64, 82, 165, 165],
@@ -206,9 +205,8 @@ fn the_derived_descriptor_builds_both_structured_action_bundles() {
                 lifecycle_policy: &policy,
                 capacity_profile: identity(0x13),
                 root_state_bytes: 8,
-            },
-        )
-        .expect("structured bundle from a derived descriptor");
+            })
+            .expect("structured bundle from a derived descriptor");
 
         // The two joins the builder's own crate runs on its fixture, now run on
         // a descriptor whose id is the digest of its bytes.
@@ -343,9 +341,7 @@ fn records_migrate_cliff_a_fourth_coordinate_costs_1496_bytes_against_1312() {
 
     // And the derivation refuses it upstream, so a Product too wide to execute
     // never acquires a descriptor to found in the first place.
-    assert!(
-        u32::try_from(COEFFICIENTS.len()).expect("K") <= STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2
-    );
+    assert!(u32::try_from(COEFFICIENTS.len()).expect("K") <= STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2);
 }
 
 /// Guard the premise of every number above: the derived descriptor really is

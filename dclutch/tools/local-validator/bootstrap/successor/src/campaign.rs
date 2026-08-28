@@ -45,9 +45,9 @@
 //! *mutable* deploy that is then iterated by `Upgrade`. What the driver owes
 //! that decision is the other half: [`substrate_state`] reads each role's
 //! observed deployment slot and upgrade authority and compares them to what the
-//! plan pinned, so **slot drift is detected and named** — under 0012 a moved
-//! slot is not a deploy error, it is the fail-closed condition every open market
-//! is already in.
+//! plan pinned, and requires Loader ownership and non-executable ProgramData
+//! shape. Under 0012 a moved slot is not a deploy error; any mismatch is the
+//! fail-closed condition every open market is already in.
 //!
 //! # Transport, and where SMOKE-0's 100× actually applies
 //!
@@ -71,12 +71,15 @@ use std::{
 };
 
 use dclutch_pyth_svm::devnet_release_v1;
-use dclutch_registry_svm::{LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View};
+use dclutch_registry_svm::{
+    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
+};
 use serde_json::json;
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
+use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::{
     Error, Result,
@@ -229,20 +232,79 @@ pub(crate) struct ObservedRoleV1 {
     /// ceremony produces.
     pub(crate) observed_authority: Option<String>,
     pub(crate) pinned_authority: Option<String>,
+    /// Account owner observed at the ProgramData coordinate. An existing
+    /// ProgramData image is authoritative only under Loader V3 ownership.
+    pub(crate) observed_owner: Option<String>,
+    /// ProgramData must remain non-executable; the linked Program account is
+    /// the executable half of the Loader V3 pair.
+    pub(crate) observed_executable: Option<bool>,
+    pub(crate) observed_live_elf_sha256: Option<String>,
+    pub(crate) pinned_live_elf_sha256: String,
+    pub(crate) checked_candidate_elf_sha256: String,
+    pub(crate) live_elf_padding_bytes: usize,
     pub(crate) observed_data_len: Option<usize>,
 }
 
 impl ObservedRoleV1 {
-    /// The 0012 question: are the deployed bytes still the bytes the release
-    /// bound?
-    ///
-    /// Under decision 0012 the answer is carried entirely by the slot: the
-    /// Loader writes the current slot on every `Upgrade`, and there is no path
-    /// to different bytes at one program id that does not go through `Upgrade`.
-    /// So an equal slot means the deployment has not moved since the release
-    /// observed it, whether or not an upgrade authority still exists.
+    /// Whether the observed deployment slot is still the release's slot pin.
     pub(crate) fn slot_pin_holds(&self) -> bool {
         self.observed_slot == Some(self.pinned_slot)
+    }
+
+    fn authority_pin_holds(&self) -> bool {
+        self.observed_authority == self.pinned_authority
+    }
+
+    fn loader_owner_holds(&self) -> bool {
+        self.observed_owner.as_deref() == Some(bpf_loader_upgradeable::ID.to_string().as_str())
+    }
+
+    /// Exact 0012 substrate pins that an existing ProgramData account must
+    /// retain before the driver may write any release-generation state.
+    fn pin_conflicts(&self) -> Vec<String> {
+        let mut conflicts = Vec::new();
+        if !self.slot_pin_holds() {
+            conflicts.push(format!(
+                "{} observed slot {} but the release binds {}",
+                self.role,
+                self.observed_slot
+                    .map(|slot| slot.to_string())
+                    .unwrap_or_else(|| "none".into()),
+                self.pinned_slot
+            ));
+        }
+        let loader = bpf_loader_upgradeable::ID.to_string();
+        if !self.loader_owner_holds() {
+            conflicts.push(format!(
+                "{} ProgramData owner is {} but Loader V3 is {}",
+                self.role,
+                self.observed_owner.as_deref().unwrap_or("none"),
+                loader
+            ));
+        }
+        if self.observed_executable != Some(false) {
+            conflicts.push(format!(
+                "{} ProgramData executable flag is {:?}, expected false",
+                self.role, self.observed_executable
+            ));
+        }
+        if !self.authority_pin_holds() {
+            conflicts.push(format!(
+                "{} observed upgrade authority {} but the release binds {}",
+                self.role,
+                self.observed_authority.as_deref().unwrap_or("none"),
+                self.pinned_authority.as_deref().unwrap_or("none")
+            ));
+        }
+        if self.observed_live_elf_sha256.as_deref() != Some(self.pinned_live_elf_sha256.as_str()) {
+            conflicts.push(format!(
+                "{} observed complete live ELF SHA-256 {} but the release binds {}",
+                self.role,
+                self.observed_live_elf_sha256.as_deref().unwrap_or("none"),
+                self.pinned_live_elf_sha256
+            ));
+        }
+        conflicts
     }
 }
 
@@ -327,10 +389,10 @@ pub(crate) fn substrate_state(
     for (role, pin) in runtime::role_pins(plan) {
         let programdata = pubkey(&pin.programdata_id)?;
         let account = rpc.account(programdata)?;
-        let (slot, authority, data_len) = match &account {
-            None => (None, None, None),
+        let (slot, authority, owner, executable, live_elf_sha256, data_len) = match &account {
+            None => (None, None, None, None, None, None),
             Some(account) => {
-                let view = ProgramDataMetadataV3View::parse(&account.data).map_err(|error| {
+                let view = ProgramDataV3View::parse(&account.data).map_err(|error| {
                     Error::new(format!(
                         "{role} ProgramData at {programdata} does not parse as a Loader V3 \
                          ProgramData account: {error:?}"
@@ -340,6 +402,9 @@ pub(crate) fn substrate_state(
                     Some(view.deployment_slot()),
                     view.upgrade_authority()
                         .map(|key| Pubkey::from(key).to_string()),
+                    Some(account.owner.to_string()),
+                    Some(account.executable),
+                    Some(hex(&<sha2::Sha256 as sha2::Digest>::digest(view.elf()))),
                     Some(account.data.len()),
                 )
             }
@@ -352,19 +417,18 @@ pub(crate) fn substrate_state(
             pinned_slot: pin.deployment_slot,
             observed_authority: authority,
             pinned_authority: pin.upgrade_authority.clone(),
+            observed_owner: owner,
+            observed_executable: executable,
+            observed_live_elf_sha256: live_elf_sha256,
+            pinned_live_elf_sha256: pin.live_elf_sha256.clone(),
+            checked_candidate_elf_sha256: pin.checked_candidate_elf_sha256.clone(),
+            live_elf_padding_bytes: pin.live_elf_padding_bytes,
             observed_data_len: data_len,
         };
         if account.is_none() {
             absent.push(row.role.clone());
-        } else if !row.slot_pin_holds() {
-            drifted.push(format!(
-                "{} observed slot {} but the release binds {}",
-                row.role,
-                row.observed_slot
-                    .map(|slot| slot.to_string())
-                    .unwrap_or_else(|| "none".into()),
-                row.pinned_slot
-            ));
+        } else {
+            drifted.extend(row.pin_conflicts());
         }
         observed.push(row);
     }
@@ -373,16 +437,13 @@ pub(crate) fn substrate_state(
     } else if !absent.is_empty() {
         StageStateV1::Partial(format!("not deployed: {}", absent.join(", ")))
     } else if !drifted.is_empty() {
-        // Decision 0012's fail-closed condition, stated as itself. A moved slot
-        // is not a broken deploy; it is a substrate that was upgraded, and
-        // every open market on it is already refusing with
-        // `DeploymentSlotMismatch` until a new release generation is published,
-        // activated, and new markets are founded on it.
+        // Decision 0012's fail-closed conditions, stated as themselves. Slot,
+        // authority, owner, and executable shape are all authenticated by the
+        // artifact release; no one coordinate substitutes for the others.
         StageStateV1::Conflict(format!(
-            "SLOT DRIFT (decision 0012 fail-closed): {}. The substrate was upgraded after this \
-             plan observed it. Every market founded on the old generation is refusing right now, \
-             which is the designed behaviour. Re-mint this plan's release bodies from the CURRENT \
-             observed ProgramData before publishing anything.",
+            "SUBSTRATE DRIFT (decision 0012 fail-closed): {}. The current Loader deployment no \
+             longer matches every fact this plan observed. Re-mint this plan's release bodies \
+             from the CURRENT observed ProgramData before publishing anything.",
             drifted.join("; ")
         ))
     } else {
@@ -396,19 +457,24 @@ pub(crate) fn publication_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<S
     let registry = pubkey(&plan.registry.program_id)?;
     let mut present = Vec::new();
     let mut missing = Vec::new();
+    let mut partial = Vec::new();
     let mut wrong = Vec::new();
     for (label, pair) in &plan.records {
-        let raw = pubkey(&pair.raw)?;
-        match rpc.account(raw)? {
-            None => missing.push(label.clone()),
-            Some(account) => {
-                let body = runtime::decode_hex(&pair.body_hex)?;
-                if account.owner != registry || account.executable || account.data != body {
-                    wrong.push(label.clone());
-                } else {
-                    present.push(label.clone());
-                }
-            }
+        let (raw, staging) = runtime::record(plan, label)?;
+        let body = runtime::decode_hex(&pair.body_hex)?;
+        let raw_account = rpc.account(raw)?;
+        let staging_account = rpc.account(staging)?;
+        match runtime::existing_finalized_record_is_exact(
+            registry,
+            raw_account.as_ref(),
+            staging_account.as_ref(),
+            &body,
+            rpc.minimum_balance(body.len())?,
+        ) {
+            Ok(true) => present.push(label.clone()),
+            Ok(false) if staging_account.is_some() => partial.push(label.clone()),
+            Ok(false) => missing.push(label.clone()),
+            Err(_) => wrong.push(label.clone()),
         }
     }
     Ok(if !wrong.is_empty() {
@@ -416,16 +482,18 @@ pub(crate) fn publication_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<S
             "records exist at their derived addresses with bytes that are not this plan's: {}",
             wrong.join(", ")
         ))
-    } else if missing.is_empty() {
+    } else if missing.is_empty() && partial.is_empty() {
         StageStateV1::Complete
-    } else if present.is_empty() {
+    } else if present.is_empty() && partial.is_empty() {
         StageStateV1::Absent
     } else {
+        let mut remaining = missing;
+        remaining.extend(partial.iter().map(|label| format!("{label} (in flight)")));
         StageStateV1::Partial(format!(
-            "{} of {} finalized; still missing: {}",
+            "{} of {} finalized; still missing or in flight: {}",
             present.len(),
             plan.records.len(),
-            missing.join(", ")
+            remaining.join(", ")
         ))
     })
 }
@@ -504,20 +572,23 @@ pub(crate) fn founding_state(
 
 /// Does the release activation cache exist?
 ///
-/// Existence is the detector; the supervisor's own `verify_activation` is the
-/// verifier and runs on the executing path. A cache account at the plan's
-/// derived address that fails verification is a conflict, not a resume point.
+/// Exact cache progress is the detector. One through four byte-identical role
+/// slots are an inert resume point; a complete cache is done; any mismatched
+/// header, role, owner, privilege, or width is a conflict.
 pub(crate) fn activation_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<StageStateV1> {
     let address = pubkey(&plan.activation)?;
-    Ok(match rpc.account(address)? {
-        None => StageStateV1::Absent,
-        Some(_) => match runtime::verify_activation(rpc, plan) {
-            Ok(()) => StageStateV1::Complete,
-            Err(error) => StageStateV1::Conflict(format!(
-                "a release activation cache exists at {address} that this plan does not \
-                 authenticate: {error}"
-            )),
-        },
+    Ok(match runtime::activation_progress(rpc, plan) {
+        Ok(None) => StageStateV1::Absent,
+        Ok(Some(progress)) if progress.is_complete() => StageStateV1::Complete,
+        Ok(Some(progress)) => StageStateV1::Partial(format!(
+            "{} of {} exact release roles activated; resume the missing roles",
+            progress.written_count(),
+            runtime::ACTIVATION_ROLE_COUNT_V1
+        )),
+        Err(error) => StageStateV1::Conflict(format!(
+            "a release activation cache exists at {address} that this plan does not \
+             authenticate: {error}"
+        )),
     })
 }
 
@@ -728,7 +799,7 @@ pub(crate) fn deploy_ladder(plan: &SuccessorPlan, origin: &ClusterOriginV1) -> V
              # {role}, pins slot {}",
             origin.redacted_url(),
             role.to_uppercase(),
-            pin.elf_path,
+            pin.checked_candidate_elf_path,
             pin.deployment_slot
         ));
     }
@@ -830,6 +901,14 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
             "slot_pin_holds": row.slot_pin_holds(),
             "observed_upgrade_authority": row.observed_authority,
             "plan_upgrade_authority": row.pinned_authority,
+            "upgrade_authority_pin_holds": row.authority_pin_holds(),
+            "observed_programdata_owner": row.observed_owner,
+            "loader_owner_holds": row.loader_owner_holds(),
+            "observed_programdata_executable": row.observed_executable,
+            "observed_live_elf_sha256": row.observed_live_elf_sha256,
+            "release_binds_live_elf_sha256": row.pinned_live_elf_sha256,
+            "checked_candidate_elf_sha256": row.checked_candidate_elf_sha256,
+            "live_elf_padding_bytes": row.live_elf_padding_bytes,
             "observed_programdata_bytes": row.observed_data_len,
             "loader_metadata_bytes": LOADER_V3_PROGRAMDATA_METADATA_BYTES,
         })).collect::<Vec<_>>(),
@@ -964,7 +1043,7 @@ fn execute_stages(
             }
             StageV1::Activation => {
                 for (label, instruction) in
-                    runtime::activation_instructions(plan, authority.pubkey())?
+                    runtime::pending_activation_instructions(rpc, plan, authority.pubkey())?
                 {
                     transactions.push(rpc.send(label, &[instruction], authority)?);
                 }
@@ -1043,6 +1122,76 @@ pub(crate) fn acknowledgment_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn observed_role() -> ObservedRoleV1 {
+        ObservedRoleV1 {
+            role: "Trading".into(),
+            program_id: Pubkey::new_unique().to_string(),
+            programdata_id: Pubkey::new_unique().to_string(),
+            observed_slot: Some(700),
+            pinned_slot: 700,
+            observed_authority: Some(Pubkey::new_from_array([9; 32]).to_string()),
+            pinned_authority: Some(Pubkey::new_from_array([9; 32]).to_string()),
+            observed_owner: Some(bpf_loader_upgradeable::ID.to_string()),
+            observed_executable: Some(false),
+            observed_live_elf_sha256: Some("ab".repeat(32)),
+            pinned_live_elf_sha256: "ab".repeat(32),
+            checked_candidate_elf_sha256: "cd".repeat(32),
+            live_elf_padding_bytes: 17,
+            observed_data_len: Some(45),
+        }
+    }
+
+    #[test]
+    fn substrate_pin_requires_slot_authority_loader_owner_and_data_shape() {
+        let exact = observed_role();
+        assert!(exact.pin_conflicts().is_empty());
+
+        let mut stale_slot = exact.clone();
+        stale_slot.observed_slot = Some(701);
+        assert!(
+            stale_slot
+                .pin_conflicts()
+                .iter()
+                .any(|detail| detail.contains("observed slot"))
+        );
+
+        let mut changed_authority = exact.clone();
+        changed_authority.observed_authority = Some(Pubkey::new_unique().to_string());
+        assert!(
+            changed_authority
+                .pin_conflicts()
+                .iter()
+                .any(|detail| detail.contains("upgrade authority"))
+        );
+
+        let mut wrong_owner = exact.clone();
+        wrong_owner.observed_owner = Some(Pubkey::new_unique().to_string());
+        assert!(
+            wrong_owner
+                .pin_conflicts()
+                .iter()
+                .any(|detail| detail.contains("ProgramData owner"))
+        );
+
+        let mut executable = exact;
+        executable.observed_executable = Some(true);
+        assert!(
+            executable
+                .pin_conflicts()
+                .iter()
+                .any(|detail| detail.contains("executable flag"))
+        );
+
+        let mut changed_live_payload = observed_role();
+        changed_live_payload.observed_live_elf_sha256 = Some("ef".repeat(32));
+        assert!(
+            changed_live_payload
+                .pin_conflicts()
+                .iter()
+                .any(|detail| detail.contains("complete live ELF SHA-256"))
+        );
+    }
 
     #[test]
     fn the_stage_order_is_the_only_order_a_chain_accepts() {
@@ -1193,6 +1342,10 @@ mod tests {
             programdata_id: String::new(),
             elf_path: "/dev/null".into(),
             elf_sha256: String::new(),
+            checked_candidate_elf_path: "/dev/null".into(),
+            checked_candidate_elf_sha256: String::new(),
+            live_elf_sha256: String::new(),
+            live_elf_padding_bytes: 0,
             semantic_release_id: String::new(),
             artifact_release_id: String::new(),
             upgrade_authority: None,

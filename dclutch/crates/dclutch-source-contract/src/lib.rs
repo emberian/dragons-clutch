@@ -31,6 +31,8 @@ mod generated_scheduled_median_v1;
 #[allow(missing_docs)]
 mod generated_source_material_v2;
 #[allow(missing_docs)]
+mod generated_source_material_v3;
+#[allow(missing_docs)]
 mod generated_source_recovery_policy_v2;
 #[allow(missing_docs)]
 mod generated_source_resolution_state_v2;
@@ -38,6 +40,7 @@ mod principal_capacity_v1;
 mod provider_join_v2;
 mod scheduled_median_v1;
 mod source_material_v2;
+mod source_material_v3;
 mod source_recovery_policy_v2;
 mod source_resolution_v2;
 
@@ -49,9 +52,11 @@ pub use principal_capacity_v1::{
     MANIPULATION_FLOOR_V1_MAGIC, MANIPULATION_FLOOR_V1_MAGIC_OFFSET,
     MANIPULATION_FLOOR_V1_SCHEMA_VERSION, MANIPULATION_FLOOR_V1_VERSION_OFFSET,
     MARKET_PRINCIPAL_CAP_BYTES_V1, MARKET_PRINCIPAL_CAP_UNBOUNDED_V1, ManipulationFloorBasis,
-    ManipulationFloorV1, MarketPrincipalCapV1, PRINCIPAL_ADMISSION_CASES_V1,
+    MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1, ManipulationFloorV1, MarketPrincipalCapSetsV1,
+    MarketPrincipalCapV1, PRINCIPAL_ADMISSION_CASES_V1,
     PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1,
-    PRINCIPAL_CARRIED_CAPS_V1, PrincipalAdmissionCaseV1, PrincipalCapacityV1,
+    PRINCIPAL_CAP_PROJECTION_CASES_V1, PRINCIPAL_CARRIED_CAPS_V1, PrincipalAdmissionCaseV1,
+    PrincipalCapProjectionCaseV1, PrincipalCapacityV1,
     SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1, SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_BYTES_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_OFFSET_V1, admit_founding_principal,
@@ -71,6 +76,11 @@ pub use generated_source_material_v2::{
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V2,
     SOURCE_MATERIAL_V2_BYTES, SOURCE_MATERIAL_V2_MAGIC, SOURCE_MATERIAL_V2_SCHEMA_VERSION,
 };
+pub use generated_source_material_v3::{
+    SOURCE_MATERIAL_DERIVATION_RELEASE_ID_V3, SOURCE_MATERIAL_DERIVATION_RELEASE_PREIMAGE_V3,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3,
+    SOURCE_MATERIAL_V3_BYTES, SOURCE_MATERIAL_V3_MAGIC, SOURCE_MATERIAL_V3_SCHEMA_VERSION,
+};
 pub use generated_source_recovery_policy_v2::{
     RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAGIC_V2,
     RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -79,11 +89,13 @@ pub use generated_source_recovery_policy_v2::{
 pub use provider_join_v2::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1,
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
-    PythProviderAdapterObligationV2, SOURCE_SPEC_SCHEMA_ID_V1, SOURCE_SPEC_SCHEMA_PREIMAGE_V1,
-    STATISTIC_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1, WINDOW_SPEC_SCHEMA_ID_V1,
-    WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
+    PythProviderAdapterObligationV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+    SOURCE_CAPACITY_PROFILE_SCHEMA_PREIMAGE_V1, SOURCE_SPEC_SCHEMA_ID_V1,
+    SOURCE_SPEC_SCHEMA_PREIMAGE_V1, STATISTIC_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1,
+    WINDOW_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
 };
 pub use source_material_v2::SourceMaterialV2;
+pub use source_material_v3::{SourceMaterialV3, SourcePrincipalPolicyV1};
 pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
 pub use source_resolution_v2::{
     SourceResolutionCreationPlanV2, SourceResolutionDecisionV2, SourceResolutionPdaSeedsV2,
@@ -7169,6 +7181,10 @@ mod tests {
             (
                 REOPEN_LINK_SCHEMA_RELEASE_PREIMAGE_V1,
                 REOPEN_LINK_SCHEMA_RELEASE_ID_V1,
+            ),
+            (
+                SOURCE_CAPACITY_PROFILE_SCHEMA_PREIMAGE_V1,
+                SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
             ),
             (
                 RECOVERY_POLICY_SCHEMA_PREIMAGE_V2,
