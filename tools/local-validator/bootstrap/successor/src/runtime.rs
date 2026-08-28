@@ -2477,10 +2477,12 @@ mod tests {
         );
         assert!(publication_transactions.len() >= 4);
 
-        let market_input = crate::market::demo_market_input(
-            pubkey(&plan.registry.program_id).expect("Registry program"),
-        )
-        .expect("canonical demo market input");
+        let registry = pubkey(&plan.registry.program_id).expect("Registry program");
+        let direct =
+            crate::direct_market::DirectMarketCompilerOwnedV1::for_test_plan(registry, &plan)
+                .expect("test Direct compiler");
+        let market_input = crate::market::demo_market_input(registry, direct.compiler())
+            .expect("canonical demo market input");
         let market_evidence = crate::market::execute_found_market(
             &mut rpc,
             &plan,

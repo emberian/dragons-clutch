@@ -59,6 +59,7 @@ use dclutch_source_contract::{
 };
 use solana_sdk_ids::sysvar;
 
+use crate::direct_market::{DirectMarketCompilerInputV1, attach_direct_market_capability_v1};
 use crate::market::{
     compile_linked_basis_v3, demo_id, record_identity, semantic_basis_identity_v3,
 };
@@ -212,6 +213,7 @@ pub(crate) fn relayed_market_input(
     relayer_pubkey: [u8; 32],
     window_choice: &WindowChoiceV1,
     venue: &RelayedVenueFactsV1,
+    direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<RelayedMarketFactsV1> {
     let set_id = account_set_id(venue)?;
 
@@ -520,7 +522,7 @@ pub(crate) fn relayed_market_input(
     CapabilityManifestV1::encode_into(&entries, &mut manifest)
         .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
 
-    let input = MarketRunInput {
+    let mut input = MarketRunInput {
         generation: 1,
         collateral_display_decimals: 6,
         initial_collateral_atoms: 1_000_000_000,
@@ -552,8 +554,10 @@ pub(crate) fn relayed_market_input(
         pyth_adapter_config_hex: hex(&venue_release_bytes),
         recovery_policy_hex: String::new(),
         capability_manifest_hex: hex(&manifest),
+        direct_capability: None,
         linked_basis_hex: hex(&linked_basis),
     };
+    attach_direct_market_capability_v1(&mut input, direct)?;
     crate::market::validate_market_input(&input)?;
 
     // The market founds UNDER the capacity predicate, host-side (the on-chain

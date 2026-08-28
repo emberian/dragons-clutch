@@ -98,6 +98,10 @@ use dclutch_versioned_message_operator::{
 
 use crate::{
     Error, Result,
+    direct_market::{
+        DirectMarketCompilerInputV1, attach_direct_market_capability_v1,
+        validate_direct_market_capability_v1,
+    },
     model::{AccountEvidence, MarketRunInput, SuccessorPlan, TransactionEvidence},
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, RpcAccount, account_evidence, bounded_instructions},
@@ -248,11 +252,12 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
     let manifest = decode_hex(&input.capability_manifest_hex)?;
     let manifest = CapabilityManifestV1::decode(&manifest)
         .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
-    if manifest.entry_count() < 3 {
+    if manifest.entry_count() != 4 {
         return Err(Error::new(
-            "capability manifest omitted the three Resolution funding entries",
+            "capability manifest must contain one Direct entry and three Resolution companions",
         ));
     }
+    validate_direct_market_capability_v1(input)?;
     // The Product's `liability_basis_id` is the semantic identity of a real
     // published `ProductBasisV3`. Founding reads that record and refuses any
     // Product whose declared liability basis is not the one it links, so the
@@ -4710,7 +4715,10 @@ pub(crate) struct PythMarketParamsV1<'a> {
 /// projection documented in `docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md`; it is
 /// not a production provider release, and this Market is not a mainnet or
 /// devnet product.
-pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
+pub(crate) fn demo_market_input(
+    registry: Pubkey,
+    direct: DirectMarketCompilerInputV1<'_>,
+) -> Result<MarketRunInput> {
     use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
 
     // The release this Market resolves against is the LOCAL-VALIDATOR
@@ -4729,31 +4737,34 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     // publication (TWIN's finding: a window forced to one instant is a market
     // nobody can resolve), and `max_age_seconds` is the fixture's declared
     // shelf life, not a market parameter — see the shared core for both.
-    pyth_market_input(PythMarketParamsV1 {
-        registry,
-        release: fixture.release(),
-        label: fixture.local_label(),
-        product_name: "product/sol-usd-range-protection",
-        coordinate_domain_name: "coordinate-domain/usd-cents-per-sol",
-        feed_label: b"sol-usd",
-        price_update: FIXTURE_PRICE_UPDATE,
-        window_start: update
-            .publish_time()
-            .checked_sub(TERMINAL_WINDOW_WIDTH_SECONDS)
-            .ok_or_else(|| Error::new("terminal window start underflowed"))?,
-        window_end: update.publish_time(),
-        max_age_seconds: FIXTURE_SHELF_LIFE_SECONDS,
-        // The adapter's ceiling — the widest the type admits. A LAB setting:
-        // this Market resolves against a single captured publication whose
-        // confidence is whatever it was on the day it was captured, and
-        // refusing it on confidence would be refusing the fixture rather than
-        // testing the adapter. The devnet flagship states a real bound.
-        max_confidence_bps: 10_000,
-        cut_denominator: 100,
-        cuts: vec![12_000, 18_000],
-        coefficients: vec![1, 0, 1, 0],
-        generation: 1,
-    })
+    pyth_market_input(
+        PythMarketParamsV1 {
+            registry,
+            release: fixture.release(),
+            label: fixture.local_label(),
+            product_name: "product/sol-usd-range-protection",
+            coordinate_domain_name: "coordinate-domain/usd-cents-per-sol",
+            feed_label: b"sol-usd",
+            price_update: FIXTURE_PRICE_UPDATE,
+            window_start: update
+                .publish_time()
+                .checked_sub(TERMINAL_WINDOW_WIDTH_SECONDS)
+                .ok_or_else(|| Error::new("terminal window start underflowed"))?,
+            window_end: update.publish_time(),
+            max_age_seconds: FIXTURE_SHELF_LIFE_SECONDS,
+            // The adapter's ceiling — the widest the type admits. A LAB setting:
+            // this Market resolves against a single captured publication whose
+            // confidence is whatever it was on the day it was captured, and
+            // refusing it on confidence would be refusing the fixture rather than
+            // testing the adapter. The devnet flagship states a real bound.
+            max_confidence_bps: 10_000,
+            cut_denominator: 100,
+            cuts: vec![12_000, 18_000],
+            coefficients: vec![1, 0, 1, 0],
+            generation: 1,
+        },
+        direct,
+    )
 }
 
 /// The devnet flagship's input: SOL/USD (or any Pyth feed) range protection,
@@ -4784,7 +4795,10 @@ pub(crate) struct DevnetPythMarketSpecV1<'a> {
 /// Four measured 313-second cadences, the §12.3 guidance floor.
 pub(crate) const DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS: u32 = 1_252;
 
-pub(crate) fn devnet_market_input(spec: DevnetPythMarketSpecV1<'_>) -> Result<MarketRunInput> {
+pub(crate) fn devnet_market_input(
+    spec: DevnetPythMarketSpecV1<'_>,
+    direct: DirectMarketCompilerInputV1<'_>,
+) -> Result<MarketRunInput> {
     if spec.window_width_seconds < DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS {
         return Err(Error::new(format!(
             "devnet terminal window width {} s is below the measured floor \
@@ -4800,33 +4814,39 @@ pub(crate) fn devnet_market_input(spec: DevnetPythMarketSpecV1<'_>) -> Result<Ma
         .window_start
         .checked_add(i64::from(spec.window_width_seconds))
         .ok_or_else(|| Error::new("terminal window end overflowed"))?;
-    pyth_market_input(PythMarketParamsV1 {
-        registry: spec.registry,
-        release: &release,
-        // The cluster identity is the devnet label: a devnet market's ids can
-        // never collide with the lab's, whose label is the synthetic fixture's.
-        label: release.cluster_id(),
-        product_name: spec.product_name,
-        coordinate_domain_name: spec.coordinate_domain_name,
-        feed_label: spec.feed_label,
-        price_update: spec.price_update,
-        window_start: spec.window_start,
-        window_end,
-        max_age_seconds: spec.max_age_seconds,
-        // A real bound for a live feed: 5% of price. Pyth's stated SOL/USD
-        // confidence runs well under 0.1%, so this refuses only a genuinely
-        // degenerate publication, not an ordinary one.
-        max_confidence_bps: 500,
-        cut_denominator: spec.cut_denominator,
-        cuts: spec.cuts,
-        coefficients: spec.coefficients,
-        generation: spec.generation,
-    })
+    pyth_market_input(
+        PythMarketParamsV1 {
+            registry: spec.registry,
+            release: &release,
+            // The cluster identity is the devnet label: a devnet market's ids can
+            // never collide with the lab's, whose label is the synthetic fixture's.
+            label: release.cluster_id(),
+            product_name: spec.product_name,
+            coordinate_domain_name: spec.coordinate_domain_name,
+            feed_label: spec.feed_label,
+            price_update: spec.price_update,
+            window_start: spec.window_start,
+            window_end,
+            max_age_seconds: spec.max_age_seconds,
+            // A real bound for a live feed: 5% of price. Pyth's stated SOL/USD
+            // confidence runs well under 0.1%, so this refuses only a genuinely
+            // degenerate publication, not an ordinary one.
+            max_confidence_bps: 500,
+            cut_denominator: spec.cut_denominator,
+            cuts: spec.cuts,
+            coefficients: spec.coefficients,
+            generation: spec.generation,
+        },
+        direct,
+    )
 }
 
 /// The shared Pyth range-protection graph compiler. See the two callers for
 /// what each fact means in its context.
-fn pyth_market_input(params: PythMarketParamsV1<'_>) -> Result<MarketRunInput> {
+fn pyth_market_input(
+    params: PythMarketParamsV1<'_>,
+    direct: DirectMarketCompilerInputV1<'_>,
+) -> Result<MarketRunInput> {
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
@@ -5173,7 +5193,7 @@ fn pyth_market_input(params: PythMarketParamsV1<'_>) -> Result<MarketRunInput> {
     CapabilityManifestV1::encode_into(&entries, &mut manifest)
         .map_err(|error| Error::new(format!("demo capability manifest: {error:?}")))?;
 
-    let input = MarketRunInput {
+    let mut input = MarketRunInput {
         generation: params.generation,
         collateral_display_decimals: 6,
         initial_collateral_atoms: 1_000_000_000,
@@ -5201,8 +5221,10 @@ fn pyth_market_input(params: PythMarketParamsV1<'_>) -> Result<MarketRunInput> {
         pyth_adapter_config_hex: hex(&adapter_config_bytes),
         recovery_policy_hex: hex(&recovery_bytes),
         capability_manifest_hex: hex(&manifest),
+        direct_capability: None,
         linked_basis_hex: hex(&linked_basis),
     };
+    attach_direct_market_capability_v1(&mut input, direct)?;
     validate_market_input(&input)?;
     Ok(input)
 }
@@ -5367,7 +5389,12 @@ mod tests {
         let core = Pubkey::new_unique();
         let release_set = [7_u8; 32];
         let mint = Pubkey::new_unique();
-        let input = demo_market_input(registry).expect("demo market input");
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let input = demo_market_input(registry, direct.compiler()).expect("demo market input");
         let first = derive_founding_targets_inner(registry, core, release_set, &input, mint)
             .expect("founding targets");
         let second = derive_founding_targets_inner(registry, core, release_set, &input, mint)
