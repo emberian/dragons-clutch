@@ -48,12 +48,48 @@ metadata, were also retained in the local pre-write evidence:
 | Trading | `e9b65886b144a556bd68cf201a736d7af64c61ebcbd75a5f71f4543f7c71b5a7` |
 | Core | `b76f7a0c2886a32a21986ecf5038b51aa9b28fcf6f37f940c1a11fc35d2ea100` |
 
+### 1.1 Second pre-write admission read
+
+During the `2026-08-28T05:12Z` minute, three bounded, key-free finalized
+JSON-RPC reads rechecked the devnet genesis, all seven Program accounts, and
+all seven ProgramData headers. The account observation returned context slot
+**489,212,834**. Every permanent Program/ProgramData address, Loader owner,
+executable flag, deployment slot, ProgramData space, and upgrade authority
+still matched the table above and `DEPLOY_1`. Because Loader V3 writes the
+current slot into ProgramData on Upgrade, the unchanged seven deployment slots
+also establish that no role was upgraded between the two observations. This
+second read did not claim a new payload digest; the byte-digest baseline above
+remains the pre-write byte authority.
+
+A separate two-call genesis-and-balance read returned finalized context slot
+**489,213,774** and exactly **32,185,584,146 lamports**
+(**32.185584146 SOL**) for the retained deployer. No transaction was signed or
+submitted. This is the arithmetic baseline that must be read again immediately
+before the first program-extension or Upgrade transaction.
+
 ## 2. Public-site baseline
 
 The same pre-write check requested `https://clutch.dregg.pro/` over HTTPS. It
 returned HTTP 200 from GitHub Pages. The response identified the current page
 as last modified `2026-08-28T02:30:25Z`. This establishes reachability only;
 the post-deployment cold-browser and chain-reconciliation checks remain owed.
+
+The public checkpoint was subsequently rebuilt from wrapper commit
+`e7f49c022e5913dbbc62005c3781e58752c1de34`, whose `dclutch/` subtree was
+byte-for-byte source commit `3b2c7bdd`. The intentionally manual Pages run
+`33143867158` passed the frontend export, documentation assembly, internal-link
+check, artifact upload, and deployment. An outside HTTPS read then returned
+HTTP 200 with `Last-Modified: Fri, 28 Aug 2026 05:09:20 GMT`. The app root,
+Markets, Activity, Portfolio, Smoke, Bounty, and every sampled linked guide,
+ABI, refusal, evidence, README, and notices page returned 200. The landing page
+states the current external boundary plainly: seven programs are live on
+devnet, there is no open/sample market, and there is nothing to buy or place at
+risk. This remains a reachability and reader-truth checkpoint, not the owed
+post-Market cold-browser acceptance.
+
+The wrapper source later advanced to `9b965990` with the frame and replay-safety
+checkpoint, but no Pages workflow was dispatched for that source-only sync.
+The deployed site therefore remains the exact, verified `e7f49c02` artifact.
 
 ## 3. Implementation gates already landed
 
@@ -81,10 +117,10 @@ Pending.
 
 ## 5. Program update and wallet arithmetic
 
-Pending. The opening wallet checkpoint from DEPLOY_1 is 32,185,584,146
-lamports; it must be re-read at finalized commitment immediately before the
-first signed transaction. No balance in this document is a fee, treasury,
-reserve, bounty, or protocol principal.
+Pending. The opening wallet checkpoint from DEPLOY_1 was independently re-read
+at finalized slot 489,213,774 as **32,185,584,146 lamports**; it must be read
+again immediately before the first signed transaction. No balance in this
+document is a fee, treasury, reserve, bounty, or protocol principal.
 
 ## 6. Release generation and activation
 
