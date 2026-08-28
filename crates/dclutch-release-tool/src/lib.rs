@@ -720,6 +720,11 @@ impl CheckedReleaseV1 {
         self.semantic_release_id
     }
 
+    /// Return the selected semantic-preimage classification.
+    pub const fn semantic_kind(&self) -> SemanticPreimageKindV1 {
+        self.semantic_kind
+    }
+
     /// Return the digest of the exact checked ELF bytes.
     pub const fn artifact_digest(&self) -> [u8; 32] {
         self.artifact_digest
@@ -748,6 +753,41 @@ impl CheckedReleaseV1 {
     /// Return the exact Loader V3 program identity.
     pub const fn loader_program_id(&self) -> [u8; 32] {
         self.loader_program_id
+    }
+
+    /// Return the digest of the exact Loader V3 Program account data.
+    pub const fn program_account_digest(&self) -> [u8; 32] {
+        self.program_account_digest
+    }
+
+    /// Return the digest of the exact Loader V3 ProgramData account data.
+    pub const fn programdata_account_digest(&self) -> [u8; 32] {
+        self.programdata_account_digest
+    }
+
+    /// Return the exact source-tree digest committed by build metadata.
+    pub const fn source_digest(&self) -> [u8; 32] {
+        self.source_digest
+    }
+
+    /// Return the exact source revision committed by build metadata.
+    pub fn source_revision(&self) -> &str {
+        &self.source_revision
+    }
+
+    /// Return the exact Solana toolchain identity committed by build metadata.
+    pub fn solana_version(&self) -> &str {
+        &self.solana_version
+    }
+
+    /// Return the exact SBF target triple committed by build metadata.
+    pub fn target_triple(&self) -> &str {
+        &self.target_triple
+    }
+
+    /// Return the exact SBF build command committed by build metadata.
+    pub fn build_command(&self) -> &str {
+        &self.build_command
     }
 
     fn validate(&self) -> Result<()> {
