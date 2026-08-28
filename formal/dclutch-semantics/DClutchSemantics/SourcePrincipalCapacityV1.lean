@@ -318,6 +318,83 @@ theorem carried_cap_monotone_in_principal
       simp only [if_neg positive, if_neg zeroCap, decide_eq_true_iff]
       exact Nat.le_trans le admitted
 
+/-! ## Projection to complete-set units
+
+Founding authenticates the Source graph in collateral atoms, while every later
+split already counts complete sets. `capSets` is the one named unit boundary:
+it floors the authenticated atom cap by the Market's positive basis scale.
+`cap_sets_is_the_atom_predicate` proves that this is not a second bound.
+
+The runtime wire is a `u64`. Its maximum value is the explicit unbounded
+sentinel, so any mathematical quotient at or above that value saturates to the
+sentinel. That saturation loses no refusal: every complete-set count the wire
+can express is then below the authenticated atom cap.
+-/
+
+/-- Project one authenticated collateral-atom cap into complete-set units. -/
+def capSets (capAtoms basisScale : Nat) : Nat := capAtoms / basisScale
+
+/-- Comparing complete sets against the projected cap is exactly comparing the
+corresponding collateral atoms against the atom cap. -/
+theorem cap_sets_is_the_atom_predicate
+    (capAtoms basisScale sets : Nat) (positiveScale : 0 < basisScale) :
+    sets ≤ capSets capAtoms basisScale ↔ sets * basisScale ≤ capAtoms :=
+  Nat.le_div_iff_mul_le positiveScale
+
+/-- The largest value of one `u64` wire field. This value is the explicit
+unbounded sentinel of the projected runtime cap. -/
+def capSetsUnbounded : Nat := u64Bound - 1
+
+/-- The exact projection written to the runtime wire. `none` is the explicit
+zero-scale refusal; `some 0` remains the fail-closed absent cap. -/
+def projectCapSets (capAtoms basisScale : Nat) : Option Nat :=
+  if basisScale = 0 then none
+  else some (min (capSets capAtoms basisScale) capSetsUnbounded)
+
+/-- Below the sentinel, the wire projection is the exact mathematical floor. -/
+theorem project_cap_sets_exact_below_sentinel
+    (capAtoms basisScale : Nat) (positiveScale : basisScale ≠ 0)
+    (below : capSets capAtoms basisScale ≤ capSetsUnbounded) :
+    projectCapSets capAtoms basisScale = some (capSets capAtoms basisScale) := by
+  simp [projectCapSets, positiveScale, below]
+
+/-- Saturation to the explicit unbounded sentinel is canonical. -/
+theorem project_cap_sets_saturates
+    (capAtoms basisScale : Nat) (positiveScale : basisScale ≠ 0)
+    (saturated : capSetsUnbounded ≤ capSets capAtoms basisScale) :
+    projectCapSets capAtoms basisScale = some capSetsUnbounded := by
+  simp [projectCapSets, positiveScale, Nat.min_eq_right saturated]
+
+/-- A saturated cap admits every positive complete-set count representable in
+the `u64` runtime field, and the atom predicate agrees. -/
+theorem saturated_set_cap_admits_every_representable_count
+    (capAtoms basisScale sets : Nat) (positiveScale : 0 < basisScale)
+    (saturated : capSetsUnbounded ≤ capSets capAtoms basisScale)
+    (representable : sets < u64Bound) :
+    sets * basisScale ≤ capAtoms := by
+  apply (cap_sets_is_the_atom_predicate capAtoms basisScale sets positiveScale).mp
+  exact Nat.le_trans (Nat.le_sub_one_of_lt representable) saturated
+
+/-- Lean-owned boundary cases grading the Rust projection. -/
+def capProjectionCases : List (Nat × Nat) := [
+  (0, 1),
+  (1, 1),
+  (4654518500, 1),
+  (4654518500, 1000000000),
+  (4654518500, 10000000000),
+  (u64Bound - 2, 1),
+  (u64Bound - 1, 1),
+  (u64Bound, 1),
+  (u128Bound - 1, 1),
+  (u128Bound - 1, u64Bound - 1),
+  (1, 0)
+]
+
+theorem cap_projection_cases_are_physical :
+    capProjectionCases.all fun candidate =>
+      candidate.1 < u128Bound && candidate.2 < u64Bound := by
+  native_decide
+
 /-- A carried cap at the top of its `u128` wire field admits every principal the
 wire can express.  This is why "explicitly unbounded" needs no escape hatch in
 the decision: it is an ordinary cap whose value happens to bound everything, so

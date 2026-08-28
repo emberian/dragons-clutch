@@ -279,6 +279,10 @@ name = "emit-source-material-v2-abi-rust"
 root = "EmitSourceMaterialV2AbiRust"
 
 [[lean_exe]]
+name = "emit-source-material-v3-abi-rust"
+root = "EmitSourceMaterialV3AbiRust"
+
+[[lean_exe]]
 name = "emit-source-principal-capacity-v1-rust"
 root = "EmitSourcePrincipalCapacityV1Rust"
 

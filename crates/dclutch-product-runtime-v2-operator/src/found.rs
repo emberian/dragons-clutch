@@ -28,7 +28,7 @@ use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
+    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SourceMaterialV3,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -74,7 +74,7 @@ pub struct FoundProjectionStateV2<'a> {
     pub result_domain: FinalizedRecordObservationV2<'a>,
     /// Finalized Runtime V2 portfolio raw/staging pair.
     pub portfolio: FinalizedRecordObservationV2<'a>,
-    /// Finalized SourceMaterialV2 raw/staging pair.
+    /// Finalized SourceMaterialV3 raw/staging pair.
     pub source_material: FinalizedReferenceObservationV2<'a>,
     /// Finalized capability-manifest raw/staging pair.
     pub capability_manifest: FinalizedReferenceObservationV2<'a>,
@@ -123,7 +123,7 @@ pub struct FoundStateV2<'a> {
     pub result_domain: FinalizedRecordObservationV2<'a>,
     /// Finalized Runtime V2 portfolio raw/staging pair.
     pub portfolio: FinalizedRecordObservationV2<'a>,
-    /// Finalized SourceMaterialV2 raw/staging pair.
+    /// Finalized SourceMaterialV3 raw/staging pair.
     pub source_material: FinalizedReferenceObservationV2<'a>,
     /// Finalized capability-manifest raw/staging pair.
     pub capability_manifest: FinalizedReferenceObservationV2<'a>,
@@ -325,9 +325,9 @@ pub fn project_found_v2(
     let source_digest = authenticate_reference(
         state.registry_program.key,
         state.source_material,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     )?;
-    SourceMaterialV2::decode(state.source_material.record.raw.data)
+    SourceMaterialV3::decode(state.source_material.record.raw.data)
         .and_then(|material| {
             material.authenticate_product_record(SourceContentId::new(
                 product.product_record_digest.to_bytes(),
