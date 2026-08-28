@@ -19,6 +19,7 @@ mod frame_spec_v1;
 #[allow(missing_docs)]
 mod generated;
 mod projected;
+mod retirement_replay_handoff_v1;
 mod request_layout;
 
 pub use delegated::*;
@@ -27,6 +28,7 @@ pub use generated::{
     ABI_VERSION_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1,
 };
 pub use projected::*;
+pub use retirement_replay_handoff_v1::*;
 pub use request_layout::CustodyRequestLayoutV1;
 
 use generated::*;
@@ -233,12 +235,17 @@ pub struct CustodyAuthoritySeedsV1 {
 }
 
 impl CustodyAuthoritySeedsV1 {
+    /// Construct the sole transfer-authority tuple from exact Market facts.
+    pub const fn new(market: [u8; 32], release_set: [u8; 32]) -> Self {
+        Self {
+            market,
+            release_set,
+        }
+    }
+
     /// Project the sole transfer-authority tuple from one request.
     pub const fn from_request(request: CustodyRequestV1) -> Self {
-        Self {
-            market: request.market,
-            release_set: request.release_set,
-        }
+        Self::new(request.market, request.release_set)
     }
 
     /// Borrow the exact ordered SVM seed slices, excluding the bump.
