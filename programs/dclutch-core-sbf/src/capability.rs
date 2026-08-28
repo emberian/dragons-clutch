@@ -131,7 +131,7 @@ pub(crate) fn process(
         .map_err(|_| CoreSbfError::Funding)?;
     validate_selected_entry(selection, manifest_id, manifest)?;
     let selected_mask = validate_funding_header(funding_header, selection, manifest)?;
-    let admissions = authenticate_roles(
+    let roles = authenticate_roles(
         route.cache,
         route.registry,
         state.identity.registry_program,
@@ -150,12 +150,10 @@ pub(crate) fn process(
             ),
         ],
     )?;
-    let core_admission = admissions.admission(Role::Core)?;
-    let child_admission = admissions.admission(Role::Trading)?;
-    let resolution_admission = admissions.admission(Role::Resolution)?;
-    if core_admission.receipt.observed.program.to_bytes() != program_id.to_bytes()
-        || child_admission.receipt.observed.program.to_bytes() != route.child_program.key.to_bytes()
-        || resolution_admission.receipt.observed.program.to_bytes()
+    if roles.projected_binding(Role::Core).program.to_bytes() != program_id.to_bytes()
+        || roles.projected_binding(Role::Trading).program.to_bytes()
+            != route.child_program.key.to_bytes()
+        || roles.projected_binding(Role::Resolution).program.to_bytes()
             != route.resolution_program.key.to_bytes()
     {
         return Err(CoreSbfError::Release.into());
@@ -180,7 +178,7 @@ pub(crate) fn process(
     let mut next_state = state;
     let observation = CapabilityChildObservation {
         target_role: Role::Trading,
-        admission: child_admission,
+        admission: roles.admission(Role::Trading)?,
         manifest_entry_authenticated: true,
         funding_state_authenticated: true,
         effect: complete_child_effect(),

@@ -10,7 +10,7 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_claims_svm::market_closure_v1::{
     CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
@@ -390,7 +390,7 @@ fn process_authenticated(
     close_replay_request_bytes: &[u8],
     rent: &Rent,
 ) -> ProgramResult {
-    let bundle = RetirementBundleV1::decode(bundle_bytes).map_err(|_| CoreSbfError::Instruction)?;
+    let bundle = decode_retirement_bundle(bundle_bytes)?;
     let bundle_input = bundle.input_ref();
     let state = authenticate_market(program_id, frame, request, bundle_input)?;
     let continuation_digest = ContentId::new(
@@ -435,6 +435,12 @@ fn process_authenticated(
     )
     .map_err(|_| CoreSbfError::Instruction)?;
     authenticate_rent_credit(frame, state, bundle_input.rent_credit)?;
+    let transition = plan_retired_transition(
+        request,
+        state,
+        admissions,
+        bundle_input.expected_core_lamports,
+    )?;
     let parent_digest = hash(request_bytes).to_bytes();
     let source = authenticate_source_receipt(frame, state, bundle_input, rent)?;
     let rent_before = frame.rent_credit.lamports();
@@ -465,7 +471,7 @@ fn process_authenticated(
         close_vault.join,
         continuation,
     )?;
-    let evidence = RetirementEvidence {
+    let evidence = Box::new(RetirementEvidence {
         source,
         claims_digest: claims.digest,
         close_vault_digest: close_vault.digest,
@@ -477,23 +483,24 @@ fn process_authenticated(
             .refund
             .checked_add(close_replay.refund)
             .ok_or(CoreSbfError::Arithmetic)?,
-    };
-    let transition = plan_retired_transition(
-        request,
-        state,
-        admissions,
-        bundle_input.expected_core_lamports,
-    )?;
+    });
     commit_retired(
         program_id,
         frame,
         &bundle,
         bundle_bytes,
-        evidence,
+        &evidence,
         rent_before,
         transition,
         continuation,
     )
+}
+
+#[inline(never)]
+fn decode_retirement_bundle(bundle_bytes: &[u8]) -> Result<Box<RetirementBundleV1>, CoreSbfError> {
+    RetirementBundleV1::decode(bundle_bytes)
+        .map(Box::new)
+        .map_err(|_| CoreSbfError::Instruction)
 }
 
 #[inline(never)]
@@ -1061,7 +1068,7 @@ fn commit_retired(
     frame: RetirementAccounts<'_, '_>,
     bundle: &RetirementBundleV1,
     bundle_bytes: &[u8],
-    evidence: RetirementEvidence,
+    evidence: &RetirementEvidence,
     rent_before: u64,
     transition: RetiredTransitionPlan,
     continuation: RegistryContinuationRequestV1,
