@@ -134,7 +134,7 @@ export default function CoreFoundWorkspace() {
           ? <div className="direct-refusal">
               <strong>Found37 is not downloadable from this route.</strong> {ready.plan.foundRefusal} Its {ready.plan.routableAddresses.length} routable
               addresses are derived and available; building the table and submitting through a wallet is what the
-              <Anchor href="/create"> create wizard</Anchor> does. This route emits unsigned packets only, and an unsigned
+              <Anchor href="/create"> read-only design preview</Anchor> does. This route emits unsigned packets only, and an unsigned
               packet that cannot be assembled is better said than silently truncated.
             </div>
           : <>

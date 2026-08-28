@@ -134,7 +134,7 @@ export function EmptyMarkets({
   return <div>
     <p className="market-empty">
       No current compatible market is listed on this {deployment.label.toLowerCase()} deployment at the finalized floor.{' '}
-      <Anchor href="/create">Found the first →</Anchor>
+      <Anchor href="/create">Preview a Market design →</Anchor>
     </p>
     {incompatibleDisclosure}
   </div>;
