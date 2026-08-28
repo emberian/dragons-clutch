@@ -1588,6 +1588,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1600,6 +1601,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
  "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1618,6 +1620,7 @@ name = "dclutch-direct-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -1634,6 +1637,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-sha256-adapter",
+ "dclutch-token-svm",
  "dclutch-transition-vm",
 ]
 
@@ -1766,6 +1770,7 @@ dependencies = [
  "dclutch-bearer-v2-operator",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
@@ -1788,6 +1793,7 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
+ "dclutch-relay-contract",
  "dclutch-release-set-contract",
  "dclutch-release-tool",
  "dclutch-rent-contract",
@@ -1796,6 +1802,7 @@ dependencies = [
  "dclutch-series-v3-kernel",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
+ "dclutch-user-position-admission-contract",
  "dclutch-versioned-message-operator",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
@@ -1803,6 +1810,7 @@ dependencies = [
  "solana-message 3.1.0",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
  "spl-token-2022-interface",
 ]
 
@@ -1950,6 +1958,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
  "dclutch-token-svm",
  "solana-program",
  "solana-sdk-ids",
@@ -1988,6 +1997,16 @@ name = "dclutch-registry-svm"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-relay-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
  "dclutch-release-set-contract",
 ]
 
@@ -2033,6 +2052,10 @@ dependencies = [
 [[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-resolution-core-v3-operator"
@@ -2107,6 +2130,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
+ "dclutch-direct-codec",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -2128,6 +2152,7 @@ dependencies = [
  "dclutch-shadow-accelerator-auth-v4",
  "dclutch-token-svm",
  "dclutch-transition-vm",
+ "dclutch-user-position-admission-contract",
  "solana-instructions-sysvar 3.0.1",
  "solana-program",
  "solana-sdk-ids",
@@ -2139,6 +2164,13 @@ name = "dclutch-transition-vm"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-seal-contract",
+]
+
+[[package]]
+name = "dclutch-user-position-admission-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
 ]
 
 [[package]]

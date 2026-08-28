@@ -1600,6 +1600,7 @@ dependencies = [
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
  "dclutch-token-svm",
  "solana-program",
  "solana-sdk-ids",
@@ -1618,6 +1619,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1630,6 +1632,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
  "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1814,6 +1817,14 @@ dependencies = [
 [[package]]
 name = "dclutch-representation-composition-v3-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-resolution-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-sha256-adapter"

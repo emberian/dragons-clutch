@@ -1564,6 +1564,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1576,6 +1577,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
  "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1583,6 +1585,7 @@ name = "dclutch-direct-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -1599,6 +1602,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-sha256-adapter",
+ "dclutch-token-svm",
  "dclutch-transition-vm",
 ]
 
