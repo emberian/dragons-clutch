@@ -44,6 +44,7 @@ export * from './lib/solanaLimits';
 // Redemption: the Claims-role Custody replay the chain demands, then the
 // terminal redemption wire.
 export * from './lib/claimsCustodyReplay';
+export * from './lib/walletTerminalPayoutV3';
 
 // Founding and infrastructure: the record graph a market stands on.
 export * from './lib/coreFound';
