@@ -586,8 +586,15 @@ PY
         }
 
         REGISTRY_ID="$(program_id_for registry)"
-        "$BOOTSTRAP_BIN" demo-market --registry-program-id "$REGISTRY_ID" \
-            > "$RUN/market.json"
+        DEMO_MARKET_REFUSAL="$RUN/demo-market.refusal.txt"
+        if "$BOOTSTRAP_BIN" demo-market --registry-program-id "$REGISTRY_ID" \
+            > "$RUN/market.json" 2> "$DEMO_MARKET_REFUSAL"; then
+            die "retired demo-market unexpectedly produced a market"
+        fi
+        grep -F "demo-market is a retired local-only fixture" "$DEMO_MARKET_REFUSAL" \
+            > /dev/null || die "demo-market did not emit its exact local-only refusal"
+        die "successor local campaign is parked at the retired demo-market boundary; use the \
+acknowledged devnet-market or graduation-market planner with explicit fee policy"
 
         # Assemble the run spec. Output paths must not exist yet: the runner
         # refuses to overwrite prior evidence, which is exactly right.

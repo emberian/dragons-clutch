@@ -125,10 +125,10 @@ defaulted projections, or noncanonical fields. It then reauthenticates the
 checked deployment-set journal and the exact activation projection before the
 first RPC read.
 
-The shared command dispatcher has not adopted these arguments yet. Its old
-`--direct-execution-config`, `--direct-activation-deadline-slot`, and
-`--direct-root-rent-minimum-lamports` path now refuses unconditionally; it does
-not fall back to caller-authored authority while the dispatcher is converging.
+`devnet-market` and `graduation-market` accept exactly this surface and have no
+second scalar-or-file authority path. `demo-market` is a retired local-only
+fixture: it always refuses because a local fixture cannot authenticate the
+permanent devnet Direct deployment, and it will not invent those facts.
 
 ## `--keypair-seed`: deterministic keys, loopback only
 

@@ -529,26 +529,6 @@ pub(crate) struct DirectMarketCompilerOwnedV1 {
 }
 
 impl DirectMarketCompilerOwnedV1 {
-    /// Retired unsafe constructor retained only until the shared CLI dispatch
-    /// window can delete its old call site.
-    ///
-    /// A file cannot own Direct price/fee coordinates, and caller scalars cannot
-    /// own Rent or a cluster-slot deadline. This function therefore always
-    /// refuses instead of preserving a second production authority path.
-    pub(crate) fn load(
-        _plan_path: &Path,
-        _execution_config_path: &Path,
-        _registry: Pubkey,
-        _activation_deadline_slot: u64,
-        _root_rent_minimum_lamports: u64,
-    ) -> Result<Self> {
-        Err(Error::new(
-            "caller-authored --direct-execution-config, --direct-activation-deadline-slot, and \
-             --direct-root-rent-minimum-lamports are retired; use the acknowledged devnet Direct \
-             planner with explicit --direct-fee-basis-points and --direct-fee-recipient",
-        ))
-    }
-
     /// Produce one key-free, read-only Direct compiler against the exact current
     /// permanent devnet deployment.
     ///
@@ -2157,22 +2137,6 @@ mod tests {
         let mut trailing = body;
         trailing.push(0);
         assert!(direct_root_rent_minimum_v1(&trailing).is_err());
-    }
-
-    #[test]
-    fn retired_detached_authority_refuses_before_reading_any_file() {
-        let missing = Path::new("/this/path/must/not/be/read");
-        let error = match DirectMarketCompilerOwnedV1::load(
-            missing,
-            missing,
-            Pubkey::new_from_array([0x53; 32]),
-            1,
-            1,
-        ) {
-            Ok(_) => panic!("retired detached authority was admitted"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("retired"));
     }
 
     #[test]

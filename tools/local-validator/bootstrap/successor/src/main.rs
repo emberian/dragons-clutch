@@ -233,68 +233,76 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
 #[derive(Default)]
 struct DirectCompilerArgumentsV1 {
     plan: Option<String>,
-    execution_config: Option<String>,
-    activation_deadline_slot: Option<String>,
-    root_rent_minimum_lamports: Option<String>,
+    rpc_url: Option<String>,
+    acknowledgment: Option<String>,
+    fee_basis_points: Option<String>,
+    fee_recipient: Option<String>,
 }
 
 impl DirectCompilerArgumentsV1 {
     fn slot(&mut self, argument: &str) -> Option<&mut Option<String>> {
         match argument {
             "--plan" => Some(&mut self.plan),
-            "--direct-execution-config" => Some(&mut self.execution_config),
-            "--direct-activation-deadline-slot" => Some(&mut self.activation_deadline_slot),
-            "--direct-root-rent-minimum-lamports" => Some(&mut self.root_rent_minimum_lamports),
+            "--rpc-url" => Some(&mut self.rpc_url),
+            campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME => Some(&mut self.acknowledgment),
+            "--direct-fee-basis-points" => Some(&mut self.fee_basis_points),
+            "--direct-fee-recipient" => Some(&mut self.fee_recipient),
             _ => None,
         }
     }
 
     fn load(self, registry: Pubkey) -> Result<direct_market::DirectMarketCompilerOwnedV1> {
-        let decimal = |value: Option<String>, label: &str| -> Result<u64> {
-            required(value, label)?
-                .parse::<u64>()
-                .map_err(|_| Error::new(format!("{label} must be a decimal u64")))
-        };
-        direct_market::DirectMarketCompilerOwnedV1::load(
-            &absolute(self.plan, "--plan")?,
-            &absolute(self.execution_config, "--direct-execution-config")?,
+        let fee_basis_points = self
+            .fee_basis_points
+            .map(|value| {
+                value
+                    .parse::<u16>()
+                    .map_err(|_| Error::new("--direct-fee-basis-points must be a decimal u16"))
+            })
+            .transpose()?;
+        let fee_recipient = self
+            .fee_recipient
+            .as_deref()
+            .map(plan::pubkey)
+            .transpose()?;
+        let plan = absolute(self.plan, "--plan")?;
+        let rpc_url = required(self.rpc_url, "--rpc-url")?;
+        direct_market::DirectMarketCompilerOwnedV1::load_devnet(
+            &plan,
+            &rpc_url,
+            self.acknowledgment.as_deref(),
             registry,
-            decimal(
-                self.activation_deadline_slot,
-                "--direct-activation-deadline-slot",
-            )?,
-            decimal(
-                self.root_rent_minimum_lamports,
-                "--direct-root-rent-minimum-lamports",
-            )?,
+            fee_basis_points,
+            fee_recipient,
         )
     }
 }
 
-fn run_demo_market(arguments: Vec<String>) -> Result<()> {
-    let mut registry = None;
-    let mut direct = DirectCompilerArgumentsV1::default();
-    let mut iterator = arguments.into_iter();
-    while let Some(argument) = iterator.next() {
-        let value = iterator
-            .next()
-            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
-        let slot = match argument.as_str() {
-            "--registry-program-id" => Some(&mut registry),
-            _ => direct.slot(&argument),
-        }
-        .ok_or_else(|| Error::new(format!("unknown demo-market argument: {argument}")))?;
-        if slot.replace(value).is_some() {
-            return Err(Error::new(format!("{argument} may be supplied only once")));
-        }
-    }
-    let registry = parse_pubkey(registry, "--registry-program-id")?;
-    let direct = direct.load(registry)?;
-    let input = market::demo_market_input(registry, direct.compiler())?;
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
-    stdout.write_all(b"\n")?;
-    Ok(())
+const DEMO_MARKET_REFUSAL_V1: &str = "demo-market is a retired local-only fixture: it cannot \
+authenticate the permanent devnet Direct deployment and refuses to invent Direct authority; use \
+devnet-market or graduation-market with the acknowledged devnet planner";
+
+fn direct_market_usage_v1() -> String {
+    format!(
+        "  dclutch-local-successor-bootstrap devnet-market --registry-program-id PUBKEY \
+         --plan ABSOLUTE_JSON --rpc-url URL {ack} GENESIS_HASH \
+         --direct-fee-basis-points U16 --direct-fee-recipient PUBKEY \
+         --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
+         [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
+         [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
+         dclutch-local-successor-bootstrap graduation-market --registry-program-id PUBKEY \
+         --plan ABSOLUTE_JSON --rpc-url URL {ack} GENESIS_HASH \
+         --direct-fee-basis-points U16 --direct-fee-recipient PUBKEY \
+         --relayer-attestation PUBKEY --pool PUBKEY --venue-deployment-slot U64 \
+         --venue-upgrade-authority PUBKEY --venue-elf-sha256 HEX64 --window-start I64 \
+         --window-end I64 --max-age-seconds U32 [--venue-program PUBKEY] \
+         [--venue-programdata PUBKEY]",
+        ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
+    )
+}
+
+fn run_demo_market(_arguments: Vec<String>) -> Result<()> {
+    Err(Error::new(DEMO_MARKET_REFUSAL_V1))
 }
 
 /// The devnet flagship's market input: a Pyth range-protection market bound
@@ -1276,37 +1284,30 @@ fn usage() {
         roles = campaign::KEYPAIR_ROLES.join(", "),
     );
     println!(
-        "\n  dclutch-local-successor-bootstrap devnet-market --registry-program-id PUBKEY \
-         --plan ABSOLUTE_JSON --direct-execution-config ABSOLUTE_FILE \
-         --direct-activation-deadline-slot U64 --direct-root-rent-minimum-lamports U64 \
-         --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
-         [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
-         [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
-         dclutch-local-successor-bootstrap graduation-market --registry-program-id PUBKEY \
-         --plan ABSOLUTE_JSON --direct-execution-config ABSOLUTE_FILE \
-         --direct-activation-deadline-slot U64 --direct-root-rent-minimum-lamports U64 \
-         --relayer-attestation PUBKEY --pool PUBKEY --venue-deployment-slot U64 \
-         --venue-upgrade-authority PUBKEY --venue-elf-sha256 HEX64 --window-start I64 \
-         --window-end I64 --max-age-seconds U32 [--venue-program PUBKEY] \
-         [--venue-programdata PUBKEY]\n  dclutch-local-successor-bootstrap ledger-census \
+        "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \
          --rpc-url URL [{ack} GENESIS_HASH] --mint PUBKEY --payer PUBKEY --hoard PUBKEY \
          --aggregate PUBKEY --claim-unit-atoms U64 --stage NAME --output ABSOLUTE_JSON \
          [--token LABEL=PUBKEY]... [--position LABEL=PUBKEY]... [--watch LABEL=PUBKEY]... \
          [--prior ABSOLUTE_JSON] [--declared-collateral-delta I128] [--declared-hoard-delta I128]\n\
-         \nThe market producers print a MarketRunInput document for the campaign's --market flag: \
+         \nThe market producers authenticate the permanent devnet deployment and take one bounded, \
+         read-only finalized snapshot before printing a MarketRunInput document for the \
+         campaign's --market flag. Both Direct fee flags are required and have no default: \
          devnet-market the Pyth range-protection flagship (live PriceUpdateV2 body, window width \
          refused below the measured 1,252 s cadence floor), graduation-market the relayed \
-         graduation market over venue facts read off real mainnet. ledger-census takes one \
+         graduation market over explicitly supplied venue facts. demo-market is a retired \
+         local-only fixture and always refuses rather than inventing Direct authority. \
+         ledger-census takes one \
          conservation-ledger census against a live cluster (reads only, enforced) and exits \
          nonzero on any violated law; --prior reloads a previous census so the delta laws \
          evaluate across invocations.",
         ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
+        direct_market_usage = direct_market_usage_v1(),
     );
 }
 
 fn usage_supervisor() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --deployment-set-journal ABSOLUTE_JSON --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS --solana-cli ABSOLUTE_EXECUTABLE --custody-observed-programdata ABSOLUTE_BODY --resolution-observed-programdata ABSOLUTE_BODY --claims-observed-programdata ABSOLUTE_BODY --trading-observed-programdata ABSOLUTE_BODY --core-observed-programdata ABSOLUTE_BODY\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe checked deployment-set form is the only prepare admission for the permanent devnet set. Registry and Rent are exact CarryForward rows sourced only from the authenticated one-context snapshot; their raw program, ELF, ProgramData, semantic, slot, authority, and publication flags are refused. Custody, Resolution, Claims, Trading, and Core require exact complete Upgrade receipts and hostile current ProgramData bodies. Prepare first reruns the key-free live finalized audit, then rehashes all evidence and reproduces the existing Registry/Rent ArtifactRelease records and singleton profile byte-for-byte."
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --deployment-set-journal ABSOLUTE_JSON --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS --solana-cli ABSOLUTE_EXECUTABLE --custody-observed-programdata ABSOLUTE_BODY --resolution-observed-programdata ABSOLUTE_BODY --claims-observed-programdata ABSOLUTE_BODY --trading-observed-programdata ABSOLUTE_BODY --core-observed-programdata ABSOLUTE_BODY\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market (always refuses: retired local-only fixture)\n\nThe checked deployment-set form is the only prepare admission for the permanent devnet set. Registry and Rent are exact CarryForward rows sourced only from the authenticated one-context snapshot; their raw program, ELF, ProgramData, semantic, slot, authority, and publication flags are refused. Custody, Resolution, Claims, Trading, and Core require exact complete Upgrade receipts and hostile current ProgramData bodies. Prepare first reruns the key-free live finalized audit, then rehashes all evidence and reproduces the existing Registry/Rent ArtifactRelease records and singleton profile byte-for-byte. demo-market cannot authenticate permanent-devnet Direct facts and refuses instead of inventing them."
     );
 }
 
@@ -1371,5 +1372,144 @@ mod tests {
         assert!(usage.contains("devnet-carry-forward-capture-v1"));
         assert!(usage.contains("devnet-prepare-programdata-capture-v1"));
         assert!(usage.contains("read-only and key-free"));
+    }
+
+    #[test]
+    fn direct_market_cli_surface_has_one_devnet_authority_path() {
+        let mut arguments = DirectCompilerArgumentsV1::default();
+        for flag in [
+            "--plan",
+            "--rpc-url",
+            campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
+            "--direct-fee-basis-points",
+            "--direct-fee-recipient",
+        ] {
+            assert!(arguments.slot(flag).is_some(), "missing {flag}");
+        }
+        for retired in [
+            "--direct-execution-config",
+            "--direct-activation-deadline-slot",
+            "--direct-root-rent-minimum-lamports",
+        ] {
+            assert!(arguments.slot(retired).is_none(), "admitted {retired}");
+        }
+    }
+
+    #[test]
+    fn market_commands_refuse_retired_and_duplicate_authority_flags_during_parse() {
+        let devnet_retired = run_devnet_market(vec![
+            "--direct-execution-config".to_owned(),
+            "/this/file-must-not-be-read".to_owned(),
+        ])
+        .expect_err("retired devnet-market authority must be unknown");
+        assert!(
+            devnet_retired.0.contains("unknown devnet-market argument"),
+            "{}",
+            devnet_retired.0
+        );
+
+        let graduation_retired = run_graduation_market(vec![
+            "--direct-activation-deadline-slot".to_owned(),
+            "1".to_owned(),
+        ])
+        .expect_err("retired graduation-market authority must be unknown");
+        assert!(
+            graduation_retired
+                .0
+                .contains("unknown graduation-market argument"),
+            "{}",
+            graduation_retired.0
+        );
+
+        let duplicate = run_devnet_market(vec![
+            "--rpc-url".to_owned(),
+            "https://api.devnet.solana.com".to_owned(),
+            "--rpc-url".to_owned(),
+            "https://example.invalid".to_owned(),
+        ])
+        .expect_err("duplicate authority coordinate must refuse during parse");
+        assert_eq!(duplicate.0, "--rpc-url may be supplied only once");
+    }
+
+    #[test]
+    fn direct_market_help_names_exact_surface_and_no_retired_scalar_or_file() {
+        let usage = direct_market_usage_v1();
+        for required in [
+            "--plan ABSOLUTE_JSON",
+            "--rpc-url URL",
+            "--i-mean-devnet GENESIS_HASH",
+            "--direct-fee-basis-points U16",
+            "--direct-fee-recipient PUBKEY",
+        ] {
+            assert!(usage.contains(required), "help omitted {required}");
+        }
+        for retired in [
+            "--direct-execution-config",
+            "--direct-activation-deadline-slot",
+            "--direct-root-rent-minimum-lamports",
+        ] {
+            assert!(!usage.contains(retired), "help retained {retired}");
+        }
+    }
+
+    #[test]
+    fn retired_local_demo_refuses_before_parsing_or_reading_arguments() {
+        let refusal = run_demo_market(vec![
+            "--plan".to_owned(),
+            "/this/demo-plan-must-not-be-read.json".to_owned(),
+        ])
+        .expect_err("retired local demo must refuse");
+        assert_eq!(refusal.0, DEMO_MARKET_REFUSAL_V1);
+    }
+
+    #[test]
+    fn direct_market_cli_refuses_loopback_before_plan_or_rpc_access() {
+        let refusal = DirectCompilerArgumentsV1 {
+            plan: Some("/this/direct-plan-must-not-be-read.json".to_owned()),
+            rpc_url: Some("http://127.0.0.1:8899".to_owned()),
+            acknowledgment: None,
+            fee_basis_points: Some("0".to_owned()),
+            fee_recipient: Some(Pubkey::new_unique().to_string()),
+        }
+        .load(Pubkey::new_unique())
+        .err()
+        .expect("production Direct planner must refuse loopback");
+        assert!(refusal.0.contains("devnet-only"), "{}", refusal.0);
+    }
+
+    #[test]
+    fn direct_market_cli_refuses_missing_acknowledgment_before_plan_or_rpc_access() {
+        let refusal = DirectCompilerArgumentsV1 {
+            plan: Some("/this/direct-plan-must-not-be-read.json".to_owned()),
+            rpc_url: Some("https://api.devnet.solana.com".to_owned()),
+            acknowledgment: None,
+            fee_basis_points: Some("0".to_owned()),
+            fee_recipient: Some(Pubkey::new_unique().to_string()),
+        }
+        .load(Pubkey::new_unique())
+        .err()
+        .expect("external origin without devnet acknowledgment must refuse");
+        assert!(
+            refusal
+                .0
+                .contains(campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME),
+            "{}",
+            refusal.0
+        );
+    }
+
+    #[test]
+    fn direct_market_cli_refuses_invalid_fee_before_plan_or_rpc_access() {
+        let refusal = DirectCompilerArgumentsV1 {
+            plan: Some("/this/direct-plan-must-not-be-read.json".to_owned()),
+            rpc_url: Some("https://api.devnet.solana.com".to_owned()),
+            acknowledgment: Some(cluster::DEVNET_GENESIS_HASH.to_owned()),
+            fee_basis_points: Some("not-a-u16".to_owned()),
+            fee_recipient: Some(Pubkey::new_unique().to_string()),
+        }
+        .load(Pubkey::new_unique())
+        .err()
+        .expect("malformed fee must refuse before evidence or RPC");
+        assert_eq!(refusal.0, "--direct-fee-basis-points must be a decimal u16");
     }
 }
