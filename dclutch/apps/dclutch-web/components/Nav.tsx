@@ -15,7 +15,7 @@ import { docsIndexHrefV1 } from '@/lib/flags';
  * ends that class of drift: a page states which path it is and the rest is
  * decided here.
  *
- * The canonical set is the product: Markets · Create · Portfolio · Explorer ·
+ * The canonical set is the product: Markets · Design · Portfolio · Explorer ·
  * Docs — plus one Console entry for the operator workspaces, which are indexed
  * at /console instead of competing for top-level slots. A console route lights
  * the Console entry so the reader always knows which side of the site they are
@@ -24,7 +24,7 @@ import { docsIndexHrefV1 } from '@/lib/flags';
 
 const PRODUCT_ITEMS = [
   { href: '/markets', label: 'Markets' },
-  { href: '/create', label: 'Create' },
+  { href: '/create', label: 'Design' },
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/explorer', label: 'Explorer' },
 ] as const;

@@ -108,7 +108,7 @@ function NotFoundSurface({ pathname }: Readonly<{ pathname: string }>) {
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/">The front door →</Anchor>
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
-        <Anchor className="secondary-action" href="/create">Create a market →</Anchor>
+        <Anchor className="secondary-action" href="/create">Preview a Market design →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
         <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>

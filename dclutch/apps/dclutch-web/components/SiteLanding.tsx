@@ -57,7 +57,7 @@ export default function SiteLanding() {
       <header><span>01</span><div><h2>The app</h2><p>It opens on the live devnet deployment and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are live; actions that still need an open market refuse and tell you what is missing.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
-        <Anchor className="secondary-action" href="/create">Create a market →</Anchor>
+        <Anchor className="secondary-action" href="/create">Preview a Market design →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
         <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
