@@ -21,10 +21,13 @@ import {
   type WalletTerminalPayoutPoststateV3,
 } from '@dclutch/sdk/walletTerminalPayoutV3';
 import {
+  CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1,
   encodeClaimsCustodyReplayRequestV1,
   type ClaimsCustodyReplayPlanV1,
 } from '@dclutch/sdk/claimsCustodyReplay';
 import {
+  CALLER_AUTHORITY_PDA_DOMAIN_V1,
+  CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1,
   CUSTODY_ABI_VERSION_V1,
   CUSTODY_OPERATION_INITIALIZE_REPLAY_V1,
   CUSTODY_REPLAY_BYTES_V1,
@@ -36,6 +39,7 @@ import {
   CUSTODY_REPLAY_MARKET_OFFSET_V1,
   CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1,
   CUSTODY_REPLAY_OPEN_VAULT_COUNT_OFFSET_V1,
+  CUSTODY_REPLAY_PDA_DOMAIN_V1,
   CUSTODY_REPLAY_REALM_OFFSET_V1,
   CUSTODY_REPLAY_RELEASE_SET_OFFSET_V1,
   CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1,
@@ -68,13 +72,43 @@ import {
   CLAIMS_CUSTODY_REPLAY_PARENT_DOMAIN_V1,
   CUSTODY_REQUEST_VERSION_OFFSET_V1,
   EXECUTION_ROLE_CLAIMS_V1,
+  REGISTRY_ACTIVATION_PDA_DOMAIN_V1,
+  REPLAY_ACCOUNT_ACTIVATION_CACHE_V1,
+  REPLAY_ACCOUNT_AGGREGATE_V1,
+  REPLAY_ACCOUNT_CLAIMS_PROGRAMDATA_V1,
+  REPLAY_ACCOUNT_CLAIMS_PROGRAM_V1,
+  REPLAY_ACCOUNT_CORE_MARKET_V1,
+  REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1,
+  REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1,
+  REPLAY_ACCOUNT_CUSTODY_REPLAY_V1,
+  REPLAY_ACCOUNT_PAYER_V1,
+  REPLAY_ACCOUNT_REALM_STAGING_V1,
+  REPLAY_ACCOUNT_REALM_V1,
+  REPLAY_ACCOUNT_REGISTRY_PROGRAM_V1,
+  REPLAY_ACCOUNT_RENT_SYSVAR_V1,
+  REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1,
 } from '@dclutch/sdk/generated/claimsCustodyReplayV1';
+import { REALM_SCHEMA_RELEASE_ID_V1 } from '@dclutch/sdk/generated/coreFound';
+import { deriveClaimsAggregateAddressV2 } from '@dclutch/sdk/marketCoreV2';
+import {
+  SYSTEM_PROGRAM_ID,
+  UPGRADEABLE_LOADER_ID,
+  deriveFinalizedRecordAddressesV1,
+} from '@dclutch/sdk/releaseRegistry';
 import type {
   MultipleAccountObservation,
   RpcAccount,
   TransactionMetaObservation,
 } from '@dclutch/sdk/rpc';
-import { Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js';
+import {
+  ComputeBudgetProgram,
+  Keypair,
+  PublicKey,
+  SYSVAR_RENT_PUBKEY,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js';
 
 const JOURNAL_FORMAT = 'dclutch-client-operation-journal-v1' as const;
 const JOURNAL_OPERATION = 'wallet-terminal-payout-v3' as const;
@@ -872,6 +906,91 @@ function parseReplayIntent(source: string) {
 
 function zero(bytes: Uint8Array): boolean { return bytes.every((byte) => byte === 0); }
 
+function canonicalReplayTransactionV1(
+  intent: ReturnType<typeof parseReplayIntent>,
+  custodyRequestBytes: Uint8Array,
+  instructionData: Uint8Array,
+  recentBlockhash: string,
+): VersionedTransaction {
+  const releaseSet = custodyRequestBytes.slice(
+    CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1,
+    CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1 + 32,
+  );
+  const market = custodyRequestBytes.slice(CUSTODY_REQUEST_MARKET_OFFSET_V1, CUSTODY_REQUEST_MARKET_OFFSET_V1 + 32);
+  const realm = custodyRequestBytes.slice(CUSTODY_REQUEST_REALM_OFFSET_V1, CUSTODY_REQUEST_REALM_OFFSET_V1 + 32);
+  const context = custodyRequestBytes.slice(CUSTODY_REQUEST_CONTEXT_OFFSET_V1, CUSTODY_REQUEST_CONTEXT_OFFSET_V1 + 32);
+  const requestDigest = digestBytes(custodyRequestBytes);
+  const claimsProgram = new PublicKey(intent.claimsProgram);
+  const custodyProgram = new PublicKey(intent.custodyProgram);
+  const registryProgram = new PublicKey(intent.registryProgram);
+  const owner = new PublicKey(intent.owner);
+
+  const aggregateAddress = deriveClaimsAggregateAddressV2(intent.claimsProgram, intent.market);
+  if (aggregateAddress !== intent.aggregate) {
+    throw new Error('saved Claims replay intent substitutes the canonical aggregate PDA');
+  }
+  const [replay] = PublicKey.findProgramAddressSync([
+    CUSTODY_REPLAY_PDA_DOMAIN_V1,
+    market,
+    releaseSet,
+    Uint8Array.of(EXECUTION_ROLE_CLAIMS_V1),
+    context,
+  ], custodyProgram);
+  if (replay.toBase58() !== intent.replay) {
+    throw new Error('saved Claims replay intent substitutes the canonical replay PDA');
+  }
+  const [callerAuthority] = PublicKey.findProgramAddressSync([
+    CALLER_AUTHORITY_PDA_DOMAIN_V1,
+    releaseSet,
+    market,
+    Uint8Array.of(EXECUTION_ROLE_CLAIMS_V1),
+    context,
+    requestDigest,
+  ], claimsProgram);
+  const [activationCache] = PublicKey.findProgramAddressSync([
+    REGISTRY_ACTIVATION_PDA_DOMAIN_V1,
+    releaseSet,
+  ], registryProgram);
+  const [claimsProgramData] = PublicKey.findProgramAddressSync([
+    claimsProgram.toBytes(),
+  ], new PublicKey(UPGRADEABLE_LOADER_ID));
+  const realmRecord = deriveFinalizedRecordAddressesV1(
+    intent.registryProgram,
+    REALM_SCHEMA_RELEASE_ID_V1,
+    realm,
+  );
+
+  const keys = new Array<{ pubkey: PublicKey; isSigner: boolean; isWritable: boolean }>(
+    CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1,
+  );
+  keys[REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1] = { pubkey: callerAuthority, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CORE_MARKET_V1] = { pubkey: new PublicKey(market), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_ACTIVATION_CACHE_V1] = { pubkey: activationCache, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_REGISTRY_PROGRAM_V1] = { pubkey: registryProgram, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CLAIMS_PROGRAM_V1] = { pubkey: claimsProgram, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CLAIMS_PROGRAMDATA_V1] = { pubkey: claimsProgramData, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_REALM_V1] = { pubkey: new PublicKey(realmRecord.record), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_REALM_STAGING_V1] = { pubkey: new PublicKey(realmRecord.staging), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CUSTODY_REPLAY_V1] = { pubkey: replay, isSigner: false, isWritable: true };
+  keys[REPLAY_ACCOUNT_PAYER_V1] = { pubkey: owner, isSigner: true, isWritable: true };
+  keys[REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1] = { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_RENT_SYSVAR_V1] = { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1] = { pubkey: custodyProgram, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_AGGREGATE_V1] = { pubkey: new PublicKey(aggregateAddress), isSigner: false, isWritable: false };
+
+  const instruction = new TransactionInstruction({
+    programId: claimsProgram,
+    keys,
+    data: Buffer.from(instructionData),
+  });
+  const budget = ComputeBudgetProgram.setComputeUnitLimit({ units: CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1 });
+  return new VersionedTransaction(new TransactionMessage({
+    payerKey: owner,
+    recentBlockhash,
+    instructions: [budget, instruction],
+  }).compileToLegacyMessage());
+}
+
 export function restoreReplayOperationJournalV1(journal: ReplayOperationJournalV1): RestoredReplayOperationV1 {
   if (journal.operation !== REPLAY_JOURNAL_OPERATION) throw new Error('saved operation is not one Claims replay creation');
   const intent = parseReplayIntent(journal.intent);
@@ -912,6 +1031,10 @@ export function restoreReplayOperationJournalV1(journal: ReplayOperationJournalV
       || u64(custodyRequestBytes, CUSTODY_REQUEST_RESULTING_REVISION_OFFSET_V1) !== 1n
       || u64(custodyRequestBytes, CUSTODY_REQUEST_ORDER_NONCE_OFFSET_V1) !== 0n
       || u64(custodyRequestBytes, CUSTODY_REQUEST_AMOUNT_OFFSET_V1) !== 0n
+      || zero(custodyRequestBytes.slice(CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1, CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1 + 32))
+      || zero(custodyRequestBytes.slice(CUSTODY_REQUEST_REALM_OFFSET_V1, CUSTODY_REQUEST_REALM_OFFSET_V1 + 32))
+      || zero(custodyRequestBytes.slice(CUSTODY_REQUEST_CONTEXT_OFFSET_V1, CUSTODY_REQUEST_CONTEXT_OFFSET_V1 + 32))
+      || u64(custodyRequestBytes, CUSTODY_REQUEST_GENERATION_OFFSET_V1) === 0n
       || u64(custodyRequestBytes, CUSTODY_REQUEST_RENT_LAMPORTS_OFFSET_V1).toString() !== intent.rentLamports
       || !zero(custodyRequestBytes.slice(CUSTODY_REQUEST_PAGE_INDEX_OFFSET_V1, CUSTODY_REQUEST_BYTES_V1))) {
     throw new Error('saved Claims replay Custody request substitutes its exact InitializeReplay coordinates');
@@ -944,15 +1067,15 @@ export function restoreReplayOperationJournalV1(journal: ReplayOperationJournalV
       || requiredSigners.some((signer, index) => signer !== savedSigners[index])) {
     throw new Error('saved Claims replay transaction substitutes its signer set');
   }
-  const staticAddresses = transaction.message.staticAccountKeys.map((key) => key.toBase58());
-  for (const required of [intent.replay, intent.aggregate, intent.claimsProgram, intent.custodyProgram, intent.registryProgram]) {
-    if (!staticAddresses.includes(required)) throw new Error('saved Claims replay transaction omits an exact route coordinate');
+  const canonical = canonicalReplayTransactionV1(
+    intent,
+    custodyRequestBytes,
+    instructionData,
+    transaction.message.recentBlockhash,
+  );
+  if (!same(canonical.serialize(), wireBytes)) {
+    throw new Error('saved Claims replay transaction is not the byte-identical complete canonical legacy message');
   }
-  const claimsProgramIndex = staticAddresses.indexOf(intent.claimsProgram);
-  const claimsInstructions = transaction.message.compiledInstructions.filter((instruction) => (
-    instruction.programIdIndex === claimsProgramIndex && same(instruction.data, instructionData)
-  ));
-  if (claimsInstructions.length !== 1) throw new Error('saved Claims replay transaction substitutes its exact Claims instruction');
   return Object.freeze({ ...intent, custodyRequestBytes, instructionData, transaction, wireBytes, requiredSigners: Object.freeze(requiredSigners) });
 }
 

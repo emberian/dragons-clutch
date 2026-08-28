@@ -10,11 +10,14 @@ import type {
   WalletTerminalPayoutRouteV3,
 } from '@dclutch/sdk/walletTerminalPayoutV3';
 import {
+  CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1,
   encodeClaimsCustodyReplayRequestV1,
   encodeExpectedCustodyRequestV1,
   type ClaimsCustodyReplayPlanV1,
 } from '@dclutch/sdk/claimsCustodyReplay';
 import {
+  CALLER_AUTHORITY_PDA_DOMAIN_V1,
+  CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1,
   CUSTODY_REPLAY_BYTES_V1,
   CUSTODY_REPLAY_CALLER_PROGRAM_OFFSET_V1,
   CUSTODY_REPLAY_CALLER_ROLE_OFFSET_V1,
@@ -23,16 +26,46 @@ import {
   CUSTODY_REPLAY_MAGIC_V1,
   CUSTODY_REPLAY_MARKET_OFFSET_V1,
   CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1,
+  CUSTODY_REPLAY_PDA_DOMAIN_V1,
   CUSTODY_REPLAY_REALM_OFFSET_V1,
   CUSTODY_REPLAY_RELEASE_SET_OFFSET_V1,
   CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1,
   CUSTODY_REPLAY_STATUS_OFFSET_V1,
   CUSTODY_REPLAY_VERSION_OFFSET_V1,
+  CUSTODY_REQUEST_CONTEXT_OFFSET_V1,
+  CUSTODY_REQUEST_GENERATION_OFFSET_V1,
+  CUSTODY_REQUEST_REALM_OFFSET_V1,
+  CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1,
+  EXECUTION_ROLE_CLAIMS_V1,
+  REGISTRY_ACTIVATION_PDA_DOMAIN_V1,
+  REPLAY_ACCOUNT_ACTIVATION_CACHE_V1,
+  REPLAY_ACCOUNT_AGGREGATE_V1,
+  REPLAY_ACCOUNT_CLAIMS_PROGRAMDATA_V1,
+  REPLAY_ACCOUNT_CLAIMS_PROGRAM_V1,
+  REPLAY_ACCOUNT_CORE_MARKET_V1,
+  REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1,
+  REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1,
+  REPLAY_ACCOUNT_CUSTODY_REPLAY_V1,
+  REPLAY_ACCOUNT_PAYER_V1,
+  REPLAY_ACCOUNT_REALM_STAGING_V1,
+  REPLAY_ACCOUNT_REALM_V1,
+  REPLAY_ACCOUNT_REGISTRY_PROGRAM_V1,
+  REPLAY_ACCOUNT_RENT_SYSVAR_V1,
+  REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1,
 } from '@dclutch/sdk/generated/claimsCustodyReplayV1';
+import { REALM_SCHEMA_RELEASE_ID_V1 } from '@dclutch/sdk/generated/coreFound';
+import { deriveClaimsAggregateAddressV2 } from '@dclutch/sdk/marketCoreV2';
+import {
+  SYSTEM_PROGRAM_ID,
+  UPGRADEABLE_LOADER_ID,
+  deriveFinalizedRecordAddressesV1,
+} from '@dclutch/sdk/releaseRegistry';
 import type { RpcAccount, TransactionMetaObservation } from '@dclutch/sdk/rpc';
 import {
+  ComputeBudgetProgram,
   Keypair,
   PublicKey,
+  SYSVAR_RENT_PUBKEY,
   SystemProgram,
   TransactionInstruction,
   TransactionMessage,
@@ -59,6 +92,7 @@ import {
   writeUnsignedPayoutOperationJournalV1,
   writeUnsignedReplayOperationJournalV1,
   type PayoutOperationJournalV1,
+  type ReplayOperationJournalV1,
 } from '../src/payoutCompletion';
 
 const key = (byte: number) => new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -184,7 +218,7 @@ function littleU64(value: bigint): Uint8Array {
 async function replayFixture() {
   const signer = Keypair.fromSeed(new Uint8Array(32).fill(71));
   const market = key(61); const claims = key(62); const custody = key(63); const registry = key(64);
-  const replay = key(65); const aggregate = key(66); const rent = 1_000n;
+  const rent = 1_000n;
   const release = new Uint8Array(32).fill(6); const realm = new Uint8Array(32).fill(7);
   const context = new Uint8Array(32).fill(8);
   const custodyRequestBytes = await encodeExpectedCustodyRequestV1({
@@ -193,25 +227,59 @@ async function replayFixture() {
     generation: 9n, rentLamports: rent,
   });
   const instructionData = encodeClaimsCustodyReplayRequestV1(market);
+  const requestDigest = hashBytes(custodyRequestBytes);
+  const claimsProgram = new PublicKey(claims); const custodyProgram = new PublicKey(custody);
+  const registryProgram = new PublicKey(registry);
+  const aggregate = deriveClaimsAggregateAddressV2(claims, market);
+  const [replay] = PublicKey.findProgramAddressSync([
+    CUSTODY_REPLAY_PDA_DOMAIN_V1, new PublicKey(market).toBytes(), release,
+    Uint8Array.of(EXECUTION_ROLE_CLAIMS_V1), context,
+  ], custodyProgram);
+  const [callerAuthority] = PublicKey.findProgramAddressSync([
+    CALLER_AUTHORITY_PDA_DOMAIN_V1, release, new PublicKey(market).toBytes(),
+    Uint8Array.of(EXECUTION_ROLE_CLAIMS_V1), context, requestDigest,
+  ], claimsProgram);
+  const [activationCache] = PublicKey.findProgramAddressSync([
+    REGISTRY_ACTIVATION_PDA_DOMAIN_V1, release,
+  ], registryProgram);
+  const [claimsProgramData] = PublicKey.findProgramAddressSync([
+    claimsProgram.toBytes(),
+  ], new PublicKey(UPGRADEABLE_LOADER_ID));
+  const realmRecord = deriveFinalizedRecordAddressesV1(registry, REALM_SCHEMA_RELEASE_ID_V1, realm);
+  const keys = new Array<{ pubkey: PublicKey; isSigner: boolean; isWritable: boolean }>(
+    CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1,
+  );
+  keys[REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1] = { pubkey: callerAuthority, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CORE_MARKET_V1] = { pubkey: new PublicKey(market), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_ACTIVATION_CACHE_V1] = { pubkey: activationCache, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_REGISTRY_PROGRAM_V1] = { pubkey: registryProgram, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CLAIMS_PROGRAM_V1] = { pubkey: claimsProgram, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CLAIMS_PROGRAMDATA_V1] = { pubkey: claimsProgramData, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_REALM_V1] = { pubkey: new PublicKey(realmRecord.record), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_REALM_STAGING_V1] = { pubkey: new PublicKey(realmRecord.staging), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CUSTODY_REPLAY_V1] = { pubkey: replay, isSigner: false, isWritable: true };
+  keys[REPLAY_ACCOUNT_PAYER_V1] = { pubkey: signer.publicKey, isSigner: true, isWritable: true };
+  keys[REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1] = { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_RENT_SYSVAR_V1] = { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1] = { pubkey: custodyProgram, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_AGGREGATE_V1] = { pubkey: new PublicKey(aggregate), isSigner: false, isWritable: false };
   const instruction = new TransactionInstruction({
-    programId: new PublicKey(claims),
-    keys: [
-      { pubkey: new PublicKey(replay), isSigner: false, isWritable: true },
-      { pubkey: new PublicKey(aggregate), isSigner: false, isWritable: false },
-      { pubkey: new PublicKey(custody), isSigner: false, isWritable: false },
-      { pubkey: new PublicKey(registry), isSigner: false, isWritable: false },
-    ],
+    programId: claimsProgram,
+    keys,
     data: Buffer.from(instructionData),
   });
+  const budget = ComputeBudgetProgram.setComputeUnitLimit({ units: CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1 });
+  const recentBlockhash = key(90);
   const transaction = new VersionedTransaction(new TransactionMessage({
-    payerKey: signer.publicKey, recentBlockhash: key(90), instructions: [instruction],
+    payerKey: signer.publicKey, recentBlockhash, instructions: [budget, instruction],
   }).compileToLegacyMessage());
-  const requestDigest = hashBytes(custodyRequestBytes);
   const plan = Object.freeze({
     marketAddress: market, aggregateAddress: aggregate,
-    aggregate: { registryProgram: registry }, replayAddress: replay,
-    callerAuthorityAddress: key(67), activationCacheAddress: key(68), claimsProgramDataAddress: key(69),
-    realmRecordAddress: key(70), realmStagingAddress: key(72), payer: signer.publicKey.toBase58(),
+    aggregate: { registryProgram: registry }, replayAddress: replay.toBase58(),
+    callerAuthorityAddress: callerAuthority.toBase58(), activationCacheAddress: activationCache.toBase58(),
+    claimsProgramDataAddress: claimsProgramData.toBase58(),
+    realmRecordAddress: realmRecord.record, realmStagingAddress: realmRecord.staging,
+    payer: signer.publicKey.toBase58(),
     rentLamports: rent.toString(), custodyRequestBytes,
     custodyRequestDigestHex: Buffer.from(requestDigest).toString('hex'), instructionData,
     transaction, wireBytes: transaction.serialize(), requiredSigners: Object.freeze([signer.publicKey.toBase58()]),
@@ -219,7 +287,7 @@ async function replayFixture() {
 
   const poststate = hashBytes(
     new TextEncoder().encode('dclutch:custody-poststate:v1'), requestDigest,
-    new PublicKey(replay).toBytes(), new PublicKey(replay).toBytes(),
+    replay.toBytes(), replay.toBytes(),
     littleU64(0n), littleU64(0n), littleU64(0n), littleU64(0n), littleU64(rent),
   );
   const replayBytes = new Uint8Array(CUSTODY_REPLAY_BYTES_V1);
@@ -241,11 +309,59 @@ async function replayFixture() {
   receipt.set(custodyRequestBytes.slice(304, 336), 112); receipt.set(requestDigest, 144);
   putU64(receipt, 248, 1n); putU64(receipt, 296, rent); receipt.set(poststate, 304);
   receipt.set(hashBytes(replayBytes), 336);
-  return { signer, plan, programs: { claims, custody, registry }, replayBytes, receipt, rent };
+  return {
+    signer, plan, programs: { claims, custody, registry }, replayBytes, receipt, rent,
+    canonical: { instruction, keys, recentBlockhash },
+  };
 }
 
 function material(owner: string, byte: number): RpcAccount {
   return Object.freeze({ data: new Uint8Array([byte]), executable: false, lamports: '1', owner, space: 1 });
+}
+
+function replayJournalWithTransaction(
+  journal: ReplayOperationJournalV1,
+  transaction: VersionedTransaction,
+): ReplayOperationJournalV1 {
+  const plan = JSON.parse(journal.plan) as Record<string, unknown>;
+  plan.unsignedWireBase64 = Buffer.from(transaction.serialize()).toString('base64');
+  const encoded = JSON.stringify(plan);
+  return Object.freeze({
+    ...journal,
+    plan: encoded,
+    planDigest: createHash('sha256').update(encoded).digest('hex'),
+  });
+}
+
+function replayJournalWithIntent(
+  journal: ReplayOperationJournalV1,
+  changes: Readonly<Record<string, unknown>>,
+): ReplayOperationJournalV1 {
+  const intent = { ...(JSON.parse(journal.intent) as Record<string, unknown>), ...changes };
+  const encoded = JSON.stringify(intent);
+  return Object.freeze({
+    ...journal,
+    intent: encoded,
+    intentDigest: createHash('sha256').update(encoded).digest('hex'),
+  });
+}
+
+function replayJournalWithRequest(
+  journal: ReplayOperationJournalV1,
+  request: Uint8Array,
+): ReplayOperationJournalV1 {
+  const operationDigest = createHash('sha256').update(request).digest('hex');
+  const intent = { ...(JSON.parse(journal.intent) as Record<string, unknown>), custodyRequestDigest: operationDigest };
+  const plan = { ...(JSON.parse(journal.plan) as Record<string, unknown>), custodyRequestBase64: Buffer.from(request).toString('base64') };
+  const encodedIntent = JSON.stringify(intent); const encodedPlan = JSON.stringify(plan);
+  return Object.freeze({
+    ...journal,
+    operationDigest,
+    intent: encodedIntent,
+    intentDigest: createHash('sha256').update(encodedIntent).digest('hex'),
+    plan: encodedPlan,
+    planDigest: createHash('sha256').update(encodedPlan).digest('hex'),
+  });
 }
 
 describe('CLI payout completion boundary', () => {
@@ -411,6 +527,89 @@ describe('CLI payout completion boundary', () => {
       expect(submitted.phase).toBe('submitted');
       expect(() => archiveReplayOperationJournalV1(path, submitted, 'discarded')).toThrow(/cannot be discarded/);
       expect(loadReplayOperationJournalV1(path)).toEqual(submitted);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('recompiles and byte-authenticates the complete canonical Claims replay legacy message before signing', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dclutch-replay-message-test-'));
+    const path = join(directory, 'payout.json.claims-replay.json');
+    try {
+      const fixture = await replayFixture();
+      const unsigned = writeUnsignedReplayOperationJournalV1(path, key(1), fixture.plan, fixture.programs);
+      const canonicalBudget = ComputeBudgetProgram.setComputeUnitLimit({
+        units: CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1,
+      });
+      const build = (instructions: ReadonlyArray<TransactionInstruction>) => new VersionedTransaction(
+        new TransactionMessage({
+          payerKey: fixture.signer.publicKey,
+          recentBlockhash: fixture.canonical.recentBlockhash,
+          instructions: [...instructions],
+        }).compileToLegacyMessage(),
+      );
+      const claims = (keys = fixture.canonical.keys, programId = new PublicKey(fixture.programs.claims)) => (
+        new TransactionInstruction({
+          programId,
+          keys: [...keys],
+          data: Buffer.from(fixture.plan.instructionData),
+        })
+      );
+      const extra = new TransactionInstruction({ programId: SystemProgram.programId, keys: [], data: Buffer.alloc(0) });
+      const extraAccount = [...fixture.canonical.keys, {
+        pubkey: new PublicKey(key(77)), isSigner: false, isWritable: false,
+      }];
+      const privilegeSubstitution = fixture.canonical.keys.map((meta, index) => (
+        index === REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1 ? { ...meta, isWritable: true } : { ...meta }
+      ));
+      const orderSubstitution = fixture.canonical.keys.map((meta) => ({ ...meta }));
+      [orderSubstitution[REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1], orderSubstitution[REPLAY_ACCOUNT_CORE_MARKET_V1]] = [
+        orderSubstitution[REPLAY_ACCOUNT_CORE_MARKET_V1]!, orderSubstitution[REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1]!,
+      ];
+      const replaySubstitution = fixture.canonical.keys.map((meta, index) => (
+        index === REPLAY_ACCOUNT_CUSTODY_REPLAY_V1
+          ? { ...meta, pubkey: new PublicKey(key(65)) }
+          : { ...meta }
+      ));
+      const aggregateSubstitution = fixture.canonical.keys.map((meta, index) => (
+        index === REPLAY_ACCOUNT_AGGREGATE_V1
+          ? { ...meta, pubkey: new PublicKey(key(66)) }
+          : { ...meta }
+      ));
+      const hostiles = [
+        build([canonicalBudget, claims(), extra]),
+        build([canonicalBudget, claims(), claims()]),
+        build([canonicalBudget, claims(extraAccount)]),
+        build([canonicalBudget, claims(fixture.canonical.keys, SystemProgram.programId)]),
+        build([canonicalBudget, claims(privilegeSubstitution)]),
+        build([canonicalBudget, claims(orderSubstitution)]),
+        build([ComputeBudgetProgram.setComputeUnitLimit({
+          units: CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1 - 1,
+        }), claims()]),
+        build([canonicalBudget, claims(replaySubstitution)]),
+        build([canonicalBudget, claims(aggregateSubstitution)]),
+      ];
+      for (const hostile of hostiles) {
+        expect(() => restoreReplayOperationJournalV1(replayJournalWithTransaction(unsigned, hostile)))
+          .toThrow(/byte-identical complete canonical legacy message/);
+      }
+      expect(() => restoreReplayOperationJournalV1(replayJournalWithIntent(unsigned, { replay: key(65) })))
+        .toThrow(/canonical replay PDA/);
+      expect(() => restoreReplayOperationJournalV1(replayJournalWithIntent(unsigned, { aggregate: key(66) })))
+        .toThrow(/canonical aggregate PDA/);
+      const savedPlan = JSON.parse(unsigned.plan) as Record<string, unknown>;
+      const canonicalRequest = Buffer.from(String(savedPlan.custodyRequestBase64), 'base64');
+      for (const [offset, width] of [
+        [CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1, 32],
+        [CUSTODY_REQUEST_REALM_OFFSET_V1, 32],
+        [CUSTODY_REQUEST_CONTEXT_OFFSET_V1, 32],
+        [CUSTODY_REQUEST_GENERATION_OFFSET_V1, 8],
+      ] as const) {
+        const hostileRequest = new Uint8Array(canonicalRequest);
+        hostileRequest.fill(0, offset, offset + width);
+        expect(() => restoreReplayOperationJournalV1(replayJournalWithRequest(unsigned, hostileRequest)))
+          .toThrow(/exact InitializeReplay coordinates/);
+      }
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

@@ -104,16 +104,23 @@ describe('bounded finalized RPC client', () => {
 
   it('submits only one bounded caller-signed packet with preflight enabled', async () => {
     const signature = '2'.repeat(88);
+    const expectedRetries = [3, 0] as const;
+    let submission = 0;
     const fetcher: typeof fetch = async (_input, init) => {
       const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
       if (request.method === 'getGenesisHash') return response(SOLANA_DEVNET_GENESIS_HASH_V1);
       expect(request.method).toBe('sendTransaction');
       expect(request.params).toEqual([btoa(String.fromCharCode(1, 2, 3)), {
-        encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3,
+        encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed',
+        maxRetries: expectedRetries[submission],
       }]);
+      submission += 1;
       return response(signature);
     };
-    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(Uint8Array.from([1, 2, 3]))).resolves.toBe(signature);
+    const client = new SolanaRpcClient('http://127.0.0.1:8899', fetcher);
+    await expect(client.sendRawTransaction(Uint8Array.from([1, 2, 3]))).resolves.toBe(signature);
+    await expect(client.sendRawTransaction(Uint8Array.from([1, 2, 3]), { maxRetries: 0 })).resolves.toBe(signature);
+    expect(submission).toBe(2);
     await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(new Uint8Array(1_233))).rejects.toThrow(/1..1232/);
   });
 

@@ -494,7 +494,10 @@ export class SolanaRpcClient {
    *
    * This method never signs, mutates, retries in a loop, or skips preflight.
    */
-  async sendRawTransaction(bytes: Uint8Array): Promise<string> {
+  async sendRawTransaction(
+    bytes: Uint8Array,
+    options: Readonly<{ maxRetries?: 0 | 3 }> = {},
+  ): Promise<string> {
     if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > SOLANA_PACKET_BYTES) {
       throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
     }
@@ -505,7 +508,7 @@ export class SolanaRpcClient {
       encoding: 'base64',
       skipPreflight: false,
       preflightCommitment: 'confirmed',
-      maxRetries: 3,
+      maxRetries: options.maxRetries ?? 3,
     }]), 'transaction signature', 96);
     if (result.length < 64 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(result)) {
       throw new Error('sendTransaction returned a noncanonical base58 signature');

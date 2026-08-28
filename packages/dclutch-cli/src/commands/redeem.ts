@@ -456,7 +456,7 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
     const signed = signReplayOperationV1(restored, keypair);
     const submittedJournal = markReplayOperationSubmittedV1(replayJournalPath, unsignedJournal, signed.signature);
     await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem Claims replay raw submission');
-    const submittedSignature = await client.sendRawTransaction(signed.wireBytes);
+    const submittedSignature = await client.sendRawTransaction(signed.wireBytes, { maxRetries: 0 });
     if (submittedSignature !== signed.signature) {
       throw new Error('the RPC returned another Claims replay signature; the submitted journal remains preserved and must not be replayed');
     }
