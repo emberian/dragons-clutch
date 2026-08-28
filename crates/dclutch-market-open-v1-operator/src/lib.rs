@@ -36,7 +36,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 /// Exact Registry batch and admission prefix before the nested Core frame.
 pub const REGISTRY_OPEN_MARKET_CONTINUATION_PREFIX_ACCOUNTS_V1: usize = 6;
 /// Exact Core frame width before its Registry admission for replay creation.
-pub const CORE_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize = 14;
+pub const CORE_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact Core frame width before its Registry admission for vault creation.
 pub const CORE_OPEN_VAULT_ACCOUNT_COUNT_V1: usize = 18;
 
@@ -514,6 +514,7 @@ fn authenticate_derived_keys(
             require_key(instruction, 11, Pubkey::new_from_array(request.payer))?;
             require_key(instruction, 12, system_program::ID)?;
             require_key(instruction, 13, sysvar::rent::ID)?;
+            require_key(instruction, 14, Pubkey::new_from_array(request.rent_refund))?;
         }
         OperationV1::OpenVault => {
             let vault = Pubkey::find_program_address(

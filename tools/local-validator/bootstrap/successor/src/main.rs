@@ -12,6 +12,7 @@ mod direct_trade;
 mod direct_trade_producer;
 mod direct_trade_setup;
 mod direct_trade_setup_journal;
+mod direct_trade_token_setup;
 mod flagship_resolution;
 mod local_mutable;
 // The journey campaign's conservation engine, shared textually the same way

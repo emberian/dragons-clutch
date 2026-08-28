@@ -58,6 +58,12 @@ pub mod direct;
 /// Permissionless, release-authenticated Direct Open-to-Retiring transition.
 #[cfg(feature = "families")]
 pub mod direct_begin_retiring_v1;
+/// Permissionless first-use Direct Custody replay setup.
+#[cfg(feature = "families")]
+pub mod direct_replay_setup_v1;
+/// Permissionless dust-tolerant setup of Direct's Token-2022 destinations.
+#[cfg(feature = "families")]
+pub mod direct_token_setup_v1;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
 /// V3 descriptor joins for independently finalized runtime-tail artifacts.
@@ -279,6 +285,22 @@ pub fn process_instruction(
     #[cfg(feature = "families")]
     if dclutch_direct_codec::retirement_v1::is_direct_begin_retiring_v1(instruction_data) {
         return direct_begin_retiring_v1::process_direct_begin_retiring_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
+    if dclutch_direct_codec::replay_setup_v1::is_direct_replay_setup_v1(instruction_data) {
+        return direct_replay_setup_v1::process_direct_replay_setup_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
+    if dclutch_direct_codec::token_setup_v1::is_direct_token_setup_v1(instruction_data) {
+        return direct_token_setup_v1::process_direct_token_setup_v1(
             program_id,
             accounts,
             instruction_data,

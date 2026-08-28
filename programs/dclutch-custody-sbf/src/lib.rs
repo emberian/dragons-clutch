@@ -50,7 +50,7 @@ use solana_program::{
     sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::{system_program, sysvar};
-use solana_system_interface::instruction::create_account;
+use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
 /// Exact common prefix length.
 pub const COMMON_ACCOUNT_COUNT_V1: usize =
@@ -617,10 +617,7 @@ fn authenticate_replay_identity(
     }
     match request.operation {
         OperationV1::InitializeReplay => {
-            if replay.owner != &system_program::ID
-                || replay.lamports() != 0
-                || replay.data_len() != 0
-            {
+            if replay.owner != &system_program::ID || replay.data_len() != 0 {
                 return Err(CustodySbfError::Replay.into());
             }
         }
@@ -647,9 +644,13 @@ fn initialize_replay(
     let payer = account(accounts, 9)?;
     let system = account(accounts, 10)?;
     let rent_account = account(accounts, 11)?;
+    let rent_refund = account(accounts, 12)?;
     if system.key != &system_program::ID
         || rent_account.key != &sysvar::rent::ID
         || payer.key.to_bytes() != request.payer
+        || rent_refund.key.to_bytes() != request.rent_refund
+        || rent_refund.key == payer.key
+        || rent_refund.key == replay.key
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
@@ -658,21 +659,41 @@ fn initialize_replay(
     if exact_rent != request.rent_lamports {
         return Err(CustodySbfError::Create.into());
     }
-    let instruction = create_account(
-        payer.key,
-        replay.key,
-        exact_rent,
-        u64::try_from(CUSTODY_REPLAY_BYTES_V1).map_err(|_| CustodySbfError::Create)?,
-        program_id,
-    );
     let replay_seeds = CustodyReplaySeedsV1::from_request(request);
     let bump = Pubkey::find_program_address(&replay_seeds.as_slices(), program_id).1;
     let bump_seed = [bump];
     let [domain, market, release, role, context] = replay_seeds.as_slices();
+    let signer_seeds = &[domain, market, release, role, context, &bump_seed];
+    let observed_lamports = replay.lamports();
+    let normalization =
+        replay_rent_normalization(observed_lamports, exact_rent, rent_refund.lamports())?;
+    if normalization.excess != 0 {
+        invoke_signed(
+            &transfer(replay.key, rent_refund.key, normalization.excess),
+            &[replay.clone(), rent_refund.clone(), system.clone()],
+            &[signer_seeds],
+        )
+        .map_err(|_| CustodySbfError::Create)?;
+    } else if normalization.shortfall != 0 {
+        invoke(
+            &transfer(payer.key, replay.key, normalization.shortfall),
+            &[payer.clone(), replay.clone(), system.clone()],
+        )
+        .map_err(|_| CustodySbfError::Create)?;
+    }
     invoke_signed(
-        &instruction,
-        &[payer.clone(), replay.clone(), system.clone()],
-        &[&[domain, market, release, role, context, &bump_seed]],
+        &allocate(
+            replay.key,
+            u64::try_from(CUSTODY_REPLAY_BYTES_V1).map_err(|_| CustodySbfError::Create)?,
+        ),
+        &[replay.clone(), system.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| CustodySbfError::Create)?;
+    invoke_signed(
+        &assign(replay.key, program_id),
+        &[replay.clone(), system.clone()],
+        &[signer_seeds],
     )
     .map_err(|_| CustodySbfError::Create)?;
     if replay.owner != program_id
@@ -700,6 +721,38 @@ fn initialize_replay(
         replay_state,
         zero_evidence(poststate),
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReplayRentNormalizationV1 {
+    shortfall: u64,
+    excess: u64,
+}
+
+fn replay_rent_normalization(
+    observed_lamports: u64,
+    exact_rent: u64,
+    refund_lamports: u64,
+) -> Result<ReplayRentNormalizationV1, ProgramError> {
+    if observed_lamports > exact_rent {
+        let excess = observed_lamports
+            .checked_sub(exact_rent)
+            .ok_or(CustodySbfError::Create)?;
+        refund_lamports
+            .checked_add(excess)
+            .ok_or(CustodySbfError::Create)?;
+        Ok(ReplayRentNormalizationV1 {
+            shortfall: 0,
+            excess,
+        })
+    } else {
+        Ok(ReplayRentNormalizationV1 {
+            shortfall: exact_rent
+                .checked_sub(observed_lamports)
+                .ok_or(CustodySbfError::Create)?,
+            excess: 0,
+        })
+    }
 }
 
 #[inline(never)]
@@ -1501,8 +1554,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replay_rent_normalization_is_exact_and_overflow_safe() {
+        const RENT: u64 = 1_000;
+        assert_eq!(
+            replay_rent_normalization(1, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 999,
+                excess: 0,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT - 1, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 1,
+                excess: 0,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 0,
+                excess: 0,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT + 1, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 0,
+                excess: 1,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT + 1, RENT, u64::MAX),
+            Err(CustodySbfError::Create.into())
+        );
+        assert_eq!(
+            replay_rent_normalization(u64::MAX, RENT, 0),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 0,
+                excess: u64::MAX - RENT,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(u64::MAX, RENT, RENT + 1),
+            Err(CustodySbfError::Create.into())
+        );
+    }
+
+    #[test]
     fn account_counts_are_operation_specific() {
-        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 12);
+        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 13);
         assert_eq!(OPEN_VAULT_ACCOUNT_COUNT_V1, 16);
         assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 14);

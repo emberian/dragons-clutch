@@ -549,6 +549,7 @@ fn core_instruction_with_coordinates(
             AccountMeta::new(outer_payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new(rent_refund, false),
         ]),
         OperationV1::OpenVault => accounts.extend([
             AccountMeta::new_readonly(fixture.mint, false),

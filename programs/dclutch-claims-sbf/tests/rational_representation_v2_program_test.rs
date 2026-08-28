@@ -602,6 +602,10 @@ fn semantic_identity(bytes: [u8; 32]) -> Identity {
     Identity::new(bytes).expect("nonzero semantic identity")
 }
 
+fn market_rent_credit() -> Pubkey {
+    Pubkey::new_from_array([0x65; 32])
+}
+
 fn programdata_address(program: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
 }
@@ -865,7 +869,7 @@ fn core_market(
         identity,
         outstanding_capabilities: 1,
         principal_cap_sets: u64::MAX,
-        rent_beneficiary: semantic_identity([0x65; 32]),
+        rent_beneficiary: semantic_identity(market_rent_credit().to_bytes()),
         terminal_receipt: terminal_receipt.map(semantic_identity),
     };
     (market, state.encode().expect("Core state").to_vec())
@@ -1708,6 +1712,12 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         terminal_certificate.map(|certificate| certificate.to_bytes()),
     );
     add_account(&mut test, market, CORE_PROGRAM_ID, core_data);
+    add_account(
+        &mut test,
+        market_rent_credit(),
+        system_program::ID,
+        Vec::new(),
+    );
     if let Some(certificate) = terminal_certificate {
         let bytes = ResolutionCertificateV2 {
             kind: ResolutionCertificateKindV2::ResolutionSuccess,
@@ -2672,6 +2682,7 @@ async fn submit_replay_creation(
         aggregate,
         CLAIMS_PROGRAM_ID.to_bytes(),
         fixture.actor.pubkey().to_bytes(),
+        market_rent_credit().to_bytes(),
         rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
     )
     .expect("the sole Custody request this route sends");
@@ -2727,6 +2738,7 @@ async fn submit_replay_creation(
             AccountMeta::new(fixture.actor.pubkey(), true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new(market_rent_credit(), false),
             AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
             AccountMeta::new_readonly(overrides.aggregate.unwrap_or(fixture.aggregate), false),
         ]),
@@ -4242,7 +4254,7 @@ async fn a_trading_role_replay_never_serves_a_claims_payout() {
     assert_eq!(state.next_revision, CUSTODY_EXPECTED_REVISION);
     assert_eq!(state.open_vault_count, 0);
     assert_eq!(state.context, fixture.custody_context);
-    assert_eq!(state.rent_refund, fixture.actor.pubkey().to_bytes());
+    assert_eq!(state.rent_refund, market_rent_credit().to_bytes());
 
     let mut forged = honest.clone();
     let bytes = CustodyReplayV1 {
@@ -4427,8 +4439,8 @@ async fn the_claims_role_replay_is_created_exactly_once() {
         CustodyReplayV1::decode(&created.data)
             .expect("live replay")
             .rent_refund,
-        fixture.actor.pubkey().to_bytes(),
-        "the first prepayer keeps the refund"
+        market_rent_credit().to_bytes(),
+        "the Core-selected lifecycle credit keeps the refund"
     );
 }
 
