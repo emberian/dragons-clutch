@@ -30,6 +30,11 @@ DOSSIER_SCHEMA = "dclutch-public-activity-dossier-v1"
 OWNED_LOOPBACK_MANIFEST_SCHEMA = "dclutch-owned-loopback-activity-reconcile-manifest-v1"
 OWNED_LOOPBACK_CAPTURE_SCHEMA = "dclutch-owned-loopback-captured-finalized-rpc-v1"
 OWNED_LOOPBACK_RECEIPT_SCHEMA = "dclutch-owned-loopback-reconcile-session-receipt-v1"
+OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA = (
+    "dclutch-owned-loopback-pyth-provider-closure-v1"
+)
+OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA = "dclutch-local-successor-infrastructure-plan-v2"
+OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA = "dclutch-successor-local-validator-profile-v1"
 OWNED_LOOPBACK_DOSSIER_SCHEMA = "dclutch-owned-loopback-activity-dossier-v1"
 OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA = (
     "dclutch-owned-loopback-terminal-sequence-completion-v1"
@@ -315,6 +320,25 @@ class OwnedLoopbackCapturedRpc(CapturedRpc):
     def __init__(self, value: dict[str, Any], capture_sha256: str | None = None) -> None:
         super().__init__(value, capture_sha256)
         self.finalized_slot = decimal(value.get("finalizedSlot"), "owned-loopback capture finalizedSlot")
+        if self.finalized_slot == 0:
+            refuse("owned-loopback capture finalizedSlot must be positive")
+        accounts = value.get("accounts")
+        if not isinstance(accounts, dict) or not accounts:
+            refuse("owned-loopback capture account map must be nonempty")
+        for address, raw_row in accounts.items():
+            pubkey(address, "owned-loopback capture account address")
+            row = exact_keys(
+                raw_row,
+                {"contextSlot", "value"},
+                set(),
+                f"owned-loopback capture account {address}",
+            )
+            if decimal(
+                row["contextSlot"], f"owned-loopback capture account {address} contextSlot"
+            ) != self.finalized_slot:
+                refuse(
+                    "owned-loopback capture account contextSlot differs from the singular finalizedSlot"
+                )
 
     def provenance(self) -> dict[str, str]:
         return {
@@ -332,8 +356,8 @@ class OwnedLoopbackCapturedRpc(CapturedRpc):
 
     def account(self, address: str) -> tuple[int, Any]:
         slot, value = super().account(address)
-        if slot > self.finalized_slot:
-            refuse(f"owned-loopback account {address} is not covered by the finalized capture slot")
+        if slot != self.finalized_slot:
+            refuse(f"owned-loopback account {address} is not from the singular finalized capture slot")
         return slot, value
 
 
@@ -1444,6 +1468,159 @@ def authenticate_loader_v3_program(
         refuse(f"{role} ProgramData slot, authority, genesis bytes, or exact ELF tail differs")
 
 
+def canonical_absolute_source(value: Any, label: str) -> pathlib.Path:
+    path = pathlib.Path(text(value, f"{label} path"))
+    try:
+        path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        refuse(f"{label} is absent: {error}")
+    if not path.is_absolute() or path != resolved or path.is_symlink() or not path.is_file():
+        refuse(f"{label} is not one canonical absolute regular non-symlink file")
+    return resolved
+
+
+def authenticate_provider_source_ref(
+    value: Any, expected_schema: str, label: str
+) -> dict[str, str]:
+    reference = exact_keys(value, {"path", "sha256", "schema"}, set(), label)
+    path = canonical_absolute_source(reference["path"], label)
+    raw, source = read_evidence_file(path)
+    source_sha256 = digest(reference["sha256"], f"{label} sha256")
+    if (
+        reference["schema"] != expected_schema
+        or source.get("schema") != expected_schema
+        or source_sha256 != sha256_bytes(raw)
+    ):
+        refuse(f"{label} source bytes, digest, or schema differ")
+    return {"path": str(path), "sha256": source_sha256, "schema": expected_schema}
+
+
+def authenticate_owned_loopback_provider_closure(
+    reference_value: Any,
+    evidence_root: pathlib.Path,
+    capture_path: pathlib.Path,
+    rpc_capture: OwnedLoopbackCapturedRpc,
+    genesis_hash: str,
+    programs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    reference = exact_keys(
+        reference_value,
+        {"path", "sha256", "schema"},
+        set(),
+        "owned-loopback provider closure reference",
+    )
+    closure_path, closure_relative = canonical_relative_evidence(
+        evidence_root, reference["path"], "provider closure"
+    )
+    closure_raw, closure = read_evidence_file(closure_path)
+    closure_sha256 = digest(reference["sha256"], "provider closure sha256")
+    if (
+        reference["schema"] != OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA
+        or closure_sha256 != sha256_bytes(closure_raw)
+    ):
+        refuse("owned-loopback provider closure is missing, substituted, or another schema")
+    closure = exact_keys(
+        closure,
+        {
+            "schema", "cluster", "genesisHash", "status", "finalizedObservationSlot",
+            "plan", "localValidatorProfile", "finalizedCapture", "providerPrograms",
+        },
+        set(),
+        "owned-loopback provider closure",
+    )
+    if (
+        closure["schema"] != OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA
+        or closure["cluster"] != "owned-loopback"
+        or closure["status"] != "finalized"
+        or pubkey(closure["genesisHash"], "provider closure genesisHash") != genesis_hash
+        or decimal(
+            closure["finalizedObservationSlot"], "provider closure finalizedObservationSlot"
+        ) != rpc_capture.finalized_slot
+    ):
+        refuse("owned-loopback provider closure is provisional or names another capture boundary")
+
+    plan = authenticate_provider_source_ref(
+        closure["plan"], OWNED_LOOPBACK_PROVIDER_PLAN_SCHEMA, "provider closure plan"
+    )
+    profile = authenticate_provider_source_ref(
+        closure["localValidatorProfile"],
+        OWNED_LOOPBACK_PROVIDER_PROFILE_SCHEMA,
+        "provider closure local-validator profile",
+    )
+    if plan["path"] == profile["path"]:
+        refuse("provider closure aliases its plan and local-validator profile")
+
+    capture = exact_keys(
+        closure["finalizedCapture"],
+        {"path", "sha256", "schema", "finalizedSlot"},
+        set(),
+        "provider closure finalized capture",
+    )
+    closure_capture_path = canonical_absolute_source(
+        capture["path"], "provider closure finalized capture"
+    )
+    try:
+        supplied_capture_path = capture_path.resolve(strict=True)
+    except OSError as error:
+        refuse(f"cannot resolve supplied owned-loopback capture: {error}")
+    if (
+        closure_capture_path != supplied_capture_path
+        or digest(capture["sha256"], "provider closure capture sha256")
+        != rpc_capture.capture_sha256
+        or capture["schema"] != OWNED_LOOPBACK_CAPTURE_SCHEMA
+        or decimal(capture["finalizedSlot"], "provider closure capture finalizedSlot")
+        != rpc_capture.finalized_slot
+    ):
+        refuse("provider closure substitutes the singular finalized capture")
+
+    provider_programs = closure["providerPrograms"]
+    if not isinstance(provider_programs, list) or len(provider_programs) != 2:
+        refuse("provider closure omits the exact Receiver and Router rows")
+    projected: list[dict[str, Any]] = []
+    for index, (raw_program, expected) in enumerate(
+        zip(provider_programs, programs[-2:], strict=True)
+    ):
+        row = exact_keys(
+            raw_program,
+            {
+                "role", "programId", "programDataAddress", "deploymentSlot", "elfSha256",
+                "genesisProgramDataSha256", "upgradeAuthority",
+            },
+            set(),
+            f"provider closure program {index}",
+        )
+        normalized = {
+            "role": text(row["role"], f"provider closure program {index} role"),
+            "programId": pubkey(row["programId"], f"provider closure program {index} programId"),
+            "programDataAddress": pubkey(
+                row["programDataAddress"], f"provider closure program {index} programDataAddress"
+            ),
+            "deploymentSlot": str(
+                decimal(row["deploymentSlot"], f"provider closure program {index} deploymentSlot")
+            ),
+            "elfSha256": digest(row["elfSha256"], f"provider closure program {index} elfSha256"),
+            "genesisProgramDataSha256": digest(
+                row["genesisProgramDataSha256"],
+                f"provider closure program {index} genesisProgramDataSha256",
+            ),
+            "upgradeAuthority": row["upgradeAuthority"],
+        }
+        if normalized["upgradeAuthority"] is not None or normalized != expected:
+            refuse("provider closure rows differ from the captured immutable provider programs")
+        projected.append(normalized)
+
+    return {
+        "path": closure_relative,
+        "sha256": closure_sha256,
+        "schema": OWNED_LOOPBACK_PROVIDER_CLOSURE_SCHEMA,
+        "finalizedObservationSlot": str(rpc_capture.finalized_slot),
+        "plan": plan,
+        "localValidatorProfile": profile,
+        "providerPrograms": projected,
+    }
+
+
 def authenticate_owned_loopback_session(
     receipt_path: pathlib.Path,
     expected_receipt_sha256: str,
@@ -1466,8 +1643,8 @@ def authenticate_owned_loopback_session(
         receipt,
         {
             "schema", "status", "cluster", "sourceCommit", "checkedReleaseGateSha256",
-            "programs", "manifestSha256", "capture", "journals", "journalSetSha256",
-            "privateSession",
+            "programs", "manifestSha256", "capture", "providerClosure", "journals",
+            "journalSetSha256", "privateSession",
         },
         set(),
         "owned-loopback session receipt",
@@ -1581,6 +1758,15 @@ def authenticate_owned_loopback_session(
     ):
         refuse("owned-loopback receipt substitutes or does not finalize its RPC capture")
 
+    provider_closure = authenticate_owned_loopback_provider_closure(
+        receipt["providerClosure"],
+        root,
+        capture_path,
+        rpc_capture,
+        genesis,
+        projected_programs,
+    )
+
     journals = receipt["journals"]
     if not isinstance(journals, list) or not journals or len(journals) > MAX_EVENTS + 32:
         refuse("owned-loopback receipt has no bounded canonical journal set")
@@ -1665,6 +1851,7 @@ def authenticate_owned_loopback_session(
         "checkedReleaseGateSha256": gate_sha256,
         "finalizedCaptureSlot": str(rpc_capture.finalized_slot),
         "programs": projected_programs,
+        "providerClosure": provider_closure,
         "journalSetSha256": receipt["journalSetSha256"],
         "privateSessionSha256": private_session["sha256"],
         "terminalCompletion": terminal_completion,
