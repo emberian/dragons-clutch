@@ -139,7 +139,7 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (sixth attempt). The addresses below
+**Status: founding IN PROGRESS on devnet (seventh attempt, the first with rebuild-on-drop — attempts 5 and 6 died at the DCLTGMF1 hostile probe when its blockhash expired on congested devnet). The addresses below
 are DERIVED TARGETS — the coordinates this input's founding will land at,
 computed off-chain and detector-confirmed absent before execution — NOT yet a
 live Open Market; the "Open Market" row becomes a live, verified account only
@@ -154,11 +154,11 @@ RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
 | fact | derived target (pending founding completion) |
 |---|---|
-| **Open Market** (not yet live) | `EZqnVKwJ8TpvhPEsJqBGXMvaHb8sYSomi1LuAPyNbetP` |
-| Found31 Market (generation 1) | `3Dhpq9tufPuBMroMfUNaWhfZMPfLFh6MG7vwhJFfqjMm` |
-| abort-lane Market (generation 3, staged and unwound) | `J538ytiecEVETqrvF2dBzW1S2PZKH2EiESoWbQfwCVxb` |
-| collateral mint (Token-2022, 6 decimals) | `DrePPA8suSQ6A2aBGoywg9GFsQFnaP531dzsKJajdSrs` |
-| realm record | `GDScHZhFLKfQACGhy8u31pfiNikPXLypr94PjX9PR5PZ` |
+| **Open Market** (not yet live) | `ESvferS55K4819XgcjBMrEtnBpcLnFmju8J59Q23H5iW` |
+| Found31 Market (generation 1) | `8mQmwmQMwtUeW8SyzABrgM7W8wFb2UPpQMeavgcX87z` |
+| abort-lane Market (generation 3, staged and unwound) | `BdPKaCdfTA2w54o2a1hZ5zbN8q86fAUH8joNopsf8taK` |
+| collateral mint (Token-2022, 6 decimals) | `9EA9yweEpZLxSnJddbwdiPvc4onAQtVywgReuPugjsDv` |
+| realm record | `BskQjvdbywctqnuw9ui4VKsRXjcXLzJq1S64shAfunKV` |
 | band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
 | terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
 | `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
