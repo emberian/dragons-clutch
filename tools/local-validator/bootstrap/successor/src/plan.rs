@@ -709,6 +709,52 @@ impl ReleaseFacts {
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
+    prepare_inner(args, None)
+}
+
+pub(crate) fn prepare_checked_local_mutable(
+    args: PrepareArgs,
+    gate: &crate::local_mutable::CheckedLocalMutableGateInputV1,
+) -> Result<SuccessorPlan> {
+    prepare_inner(args, Some(gate))
+}
+
+fn prepare_inner(
+    args: PrepareArgs,
+    checked_local_mutable_gate: Option<&crate::local_mutable::CheckedLocalMutableGateInputV1>,
+) -> Result<SuccessorPlan> {
+    if checked_local_mutable_gate.is_some() && args.checked_upgrade_set.is_some() {
+        return Err(Error::new(
+            "a plan cannot mix checked localhost genesis evidence with permanent-devnet Upgrade evidence",
+        ));
+    }
+    if checked_local_mutable_gate.is_some() {
+        if args.record_publication != RecordPublicationV1::Transaction {
+            return Err(Error::new(
+                "checked localhost mutable preparation requires transaction record publication",
+            ));
+        }
+        for (role, deployment) in [
+            ("registry", &args.deployments.registry),
+            ("rent", &args.deployments.rent_credit),
+            ("custody", &args.deployments.custody),
+            ("resolution", &args.deployments.resolution),
+            ("claims", &args.deployments.claims),
+            ("trading", &args.deployments.trading),
+            ("core", &args.deployments.core),
+        ] {
+            if deployment.observed_programdata.is_none()
+                || deployment.observed_programdata_bytes.is_some()
+                || deployment.expected_upgrade_authority
+                    != Some(args.core_bootstrap_upgrade_authority)
+                || deployment.genesis_deployment_slot != 0
+            {
+                return Err(Error::new(format!(
+                    "checked localhost {role} must come from one exact observed ProgramData file under the retained authority"
+                )));
+            }
+        }
+    }
     validate_prepare(&args)?;
     if !args.plan_path.is_absolute() || args.plan_path.exists() {
         return Err(Error::new(
@@ -1006,9 +1052,44 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         )?,
     );
 
+    let registry_pin = pin(&args, ProgramKind::Registry, registry, &registry_deployment);
+    let core_pin = pin(&args, ProgramKind::Core, core, &core_deployment);
+    let claims_pin = pin(&args, ProgramKind::Claims, claims, &claims_deployment);
+    let trading_pin = pin(&args, ProgramKind::Trading, trading, &trading_deployment);
+    let resolution_pin = pin(
+        &args,
+        ProgramKind::Resolution,
+        resolution,
+        &resolution_deployment,
+    );
+    let custody_pin = pin(&args, ProgramKind::Custody, custody, &custody_deployment);
+    let rent_pin = pin(&args, ProgramKind::Rent, rent, &rent_deployment);
+
+    let checked_local_mutable_set = checked_local_mutable_gate
+        .map(|gate| {
+            crate::local_mutable::build_checked_local_mutable_set_v1(
+                gate,
+                args.core_bootstrap_upgrade_authority,
+                [
+                    ("registry", &registry_pin),
+                    ("rent", &rent_pin),
+                    ("custody", &custody_pin),
+                    ("resolution", &resolution_pin),
+                    ("claims", &claims_pin),
+                    ("trading", &trading_pin),
+                    ("core", &core_pin),
+                ],
+            )
+        })
+        .transpose()?;
     let plan = SuccessorPlan {
         schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
-        genesis_boundary: match publication {
+        genesis_boundary: if checked_local_mutable_gate.is_some() {
+            vec![
+                "Genesis installs seven exact checked-release Loader-v3 Program/ProgramData pairs under one disposable retained authority at canonical local slots 1 through 7. Nothing else.".into(),
+                "Every infrastructure record body, activation, founding, participant, trade, resolution, payout, and retirement remains a real localhost transaction.".into(),
+            ]
+        } else { match publication {
             RecordPublicationV1::Genesis => vec![
                 "Genesis fixtures are six immutable Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and finalized Registry record bodies.".into(),
                 "Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution are not genesis-prepared.".into(),
@@ -1017,28 +1098,32 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
                 "Genesis fixtures are six immutable Loader-v3 programs and one authority-bearing pre-init Core Loader-v3 program with the same exact ELF. Nothing else. No protocol state exists at genesis.".into(),
                 "Every infrastructure record body, Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution is a real transaction. This is the shape a cluster can reach.".into(),
             ],
+        }},
+        bootstrap_order: if checked_local_mutable_gate.is_some() {
+            vec![
+                "Re-authenticate the exact checked-release gate and all seven mutable Loader pairs before any key read.".into(),
+                "Publish the exact seven ArtifactRelease records and singleton infrastructure profile through Registry transactions.".into(),
+                "Activate the five-role exact-authority ExecutionReleaseSet without revoking the disposable local Upgrade authority.".into(),
+                "Execute DCLTGMF2 founding, participant admission, Direct, resolution, payout, and retirement through their accepted exterior callers.".into(),
+            ]
+        } else {
+            vec![
+                "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
+                "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
+                "Revoke Core upgrade authority to None through Loader-v3 and verify the exact tag-None fixed-offset poststate, including Loader-retained inactive authority bytes, before release recognition.".into(),
+                "Activate the five-role immutable ExecutionReleaseSet through Registry, then create RentCredit and execute canonical Found31.".into(),
+                "Create and fund Source through Core effects before consuming the captured signed Pyth PriceUpdate through Resolution.".into(),
+            ]
         },
-        bootstrap_order: vec![
-            "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
-            "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
-            "Revoke Core upgrade authority to None through Loader-v3 and verify the exact tag-None fixed-offset poststate, including Loader-retained inactive authority bytes, before release recognition.".into(),
-            "Activate the five-role immutable ExecutionReleaseSet through Registry, then create RentCredit and execute canonical Found31.".into(),
-            "Create and fund Source through Core effects before consuming the captured signed Pyth PriceUpdate through Resolution.".into(),
-        ],
         execution_blocker: "Infrastructure activation is executable in one supervised process. LifecycleRentCreditV2 and Found31 remain behind an explicit market-specific input bundle: finalized Realm, ProductV3 basis/result-domain, portfolio, resolution, execution-manifest, and lifecycle-policy records plus exact generation, immutable refund wallet, initial Hoard principal, and lifecycle-rent funding.".into(),
         account_dir: args.account_dir.display().to_string(),
-        registry: pin(&args, ProgramKind::Registry, registry, &registry_deployment),
-        core: pin(&args, ProgramKind::Core, core, &core_deployment),
-        claims: pin(&args, ProgramKind::Claims, claims, &claims_deployment),
-        trading: pin(&args, ProgramKind::Trading, trading, &trading_deployment),
-        resolution: pin(
-            &args,
-            ProgramKind::Resolution,
-            resolution,
-            &resolution_deployment,
-        ),
-        custody: pin(&args, ProgramKind::Custody, custody, &custody_deployment),
-        rent_credit: pin(&args, ProgramKind::Rent, rent, &rent_deployment),
+        registry: registry_pin,
+        core: core_pin,
+        claims: claims_pin,
+        trading: trading_pin,
+        resolution: resolution_pin,
+        custody: custody_pin,
+        rent_credit: rent_pin,
         activation: activation.to_string(),
         release_set_id: hex(&release_set_id),
         core_bootstrap: CoreBootstrapPin {
@@ -1058,6 +1143,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             release_recognition_requires_revoke: core_activation_upgrade_authority.is_none(),
         },
         checked_upgrade_set: args.checked_upgrade_set,
+        checked_local_mutable_set,
         infrastructure_profile: InfrastructureProfilePin {
             address: infrastructure_address.to_string(),
             schema_id: hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1),

@@ -458,6 +458,27 @@ struct ValidatedUpgradeGateV1 {
     raw_elf_sha256: String,
 }
 
+/// Key-free projection of one checked-release role for a localhost mutable
+/// substrate.  The local launcher consumes the same gate validator as Upgrade;
+/// it does not grow a second, weaker interpretation of the thirteen-link gate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CheckedLocalGateRoleV1 {
+    pub(crate) gate_sha256: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_tree_sha256: String,
+    pub(crate) solana_cli_version: String,
+    pub(crate) raw_elf_sha256: String,
+}
+
+struct CheckedReleaseGateSelectionV1<'a> {
+    checked_release_gate_path: &'a Path,
+    expected_checked_release_gate_sha256: &'a str,
+    expected_source_revision: &'a str,
+    expected_source_tree_sha256: &'a str,
+    role: &'a str,
+    elf_path: &'a Path,
+}
+
 struct UpgradeAdmissionV1 {
     gate: ValidatedUpgradeGateV1,
     baseline: UpgradeBaselineV1,
@@ -2967,7 +2988,7 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
-fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
+pub(crate) fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
     let fixed = match role {
         "trading" => Some(COMPILED_DIRECT_RELEASE_ID_V1),
         "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
@@ -5178,18 +5199,60 @@ fn verify_complete_observation(
 }
 
 fn validate_checked_release_gate(args: &UpgradeArgsV1) -> Result<ValidatedUpgradeGateV1> {
+    validate_checked_release_gate_selection(CheckedReleaseGateSelectionV1 {
+        checked_release_gate_path: &args.checked_release_gate_path,
+        expected_checked_release_gate_sha256: &args.expected_checked_release_gate_sha256,
+        expected_source_revision: &args.expected_source_revision,
+        expected_source_tree_sha256: &args.expected_source_tree_sha256,
+        role: &args.role,
+        elf_path: &args.elf_path,
+    })
+}
+
+/// Re-authenticate one role of the exact thirteen-link checked-release gate for
+/// a localhost-only mutable substrate.  This is deliberately a projection of
+/// the Upgrade validator above: local evidence and devnet Upgrade evidence
+/// share one gate authority, while retaining different deployment journals.
+pub(crate) fn authenticate_checked_release_gate_role_for_local_v1(
+    checked_release_gate_path: &Path,
+    expected_checked_release_gate_sha256: &str,
+    expected_source_revision: &str,
+    expected_source_tree_sha256: &str,
+    role: &str,
+    elf_path: &Path,
+) -> Result<CheckedLocalGateRoleV1> {
+    let validated = validate_checked_release_gate_selection(CheckedReleaseGateSelectionV1 {
+        checked_release_gate_path,
+        expected_checked_release_gate_sha256,
+        expected_source_revision,
+        expected_source_tree_sha256,
+        role,
+        elf_path,
+    })?;
+    Ok(CheckedLocalGateRoleV1 {
+        gate_sha256: validated.gate_sha256,
+        source_revision: validated.source_revision,
+        source_tree_sha256: validated.source_tree_sha256,
+        solana_cli_version: validated.solana_cli_version,
+        raw_elf_sha256: validated.raw_elf_sha256,
+    })
+}
+
+fn validate_checked_release_gate_selection(
+    args: CheckedReleaseGateSelectionV1<'_>,
+) -> Result<ValidatedUpgradeGateV1> {
     require_digest(
-        &args.expected_checked_release_gate_sha256,
+        args.expected_checked_release_gate_sha256,
         "expected checked-release gate SHA-256",
     )?;
     require_lower_hex(
-        &args.expected_source_revision,
+        args.expected_source_revision,
         "expected source revision",
         40,
         40,
     )?;
     require_digest(
-        &args.expected_source_tree_sha256,
+        args.expected_source_tree_sha256,
         "expected source tree SHA-256",
     )?;
     let gate_metadata = fs::symlink_metadata(&args.checked_release_gate_path).map_err(|error| {
@@ -10738,6 +10801,93 @@ mod tests {
             fixture.args.expected_checked_release_gate_sha256
         );
         assert_eq!(fixture.gate.links.len(), 13);
+    }
+
+    #[test]
+    fn localhost_projection_is_the_exact_upgrade_gate_validator() {
+        let fixture = Fixture::new();
+        let upgrade = validate_checked_release_gate(&fixture.args).expect("canonical gate");
+        let local = authenticate_checked_release_gate_role_for_local_v1(
+            &fixture.args.checked_release_gate_path,
+            &fixture.args.expected_checked_release_gate_sha256,
+            &fixture.args.expected_source_revision,
+            &fixture.args.expected_source_tree_sha256,
+            &fixture.args.role,
+            &fixture.args.elf_path,
+        )
+        .expect("localhost projection");
+        assert_eq!(local.gate_sha256, upgrade.gate_sha256);
+        assert_eq!(local.source_revision, upgrade.source_revision);
+        assert_eq!(local.source_tree_sha256, upgrade.source_tree_sha256);
+        assert_eq!(local.solana_cli_version, upgrade.solana_cli_version);
+        assert_eq!(local.raw_elf_sha256, digest(&fixture.raw_elf));
+
+        let error = authenticate_checked_release_gate_role_for_local_v1(
+            &fixture.args.checked_release_gate_path,
+            &fixture.args.expected_checked_release_gate_sha256,
+            &fixture.args.expected_source_revision,
+            &fixture.args.expected_source_tree_sha256,
+            "trading",
+            &fixture.args.elf_path,
+        )
+        .expect_err("role substitution must refuse");
+        assert!(
+            error.to_string().contains("selected trading ELF path"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn checked_gate_materializes_seven_exact_mutable_local_loader_pairs() {
+        let fixture = Fixture::new();
+        let work = fixture._directory.0.join("checked-local-mutable");
+        let plan_path = work.join("plan.json");
+        let report = crate::local_mutable::prepare_local_mutable_v1(vec![
+            "--work".into(),
+            work.display().to_string(),
+            "--output".into(),
+            plan_path.display().to_string(),
+            "--checked-release-gate".into(),
+            fixture.args.checked_release_gate_path.display().to_string(),
+            "--expected-checked-release-gate-sha256".into(),
+            fixture.args.expected_checked_release_gate_sha256.clone(),
+            "--expected-source-revision".into(),
+            fixture.args.expected_source_revision.clone(),
+            "--expected-source-tree-sha256".into(),
+            fixture.args.expected_source_tree_sha256.clone(),
+            "--seed".into(),
+            "51".repeat(32),
+        ])
+        .expect("prepare checked mutable localhost substrate");
+        let plan: crate::model::SuccessorPlan = serde_json::from_slice(
+            &fs::read(&plan_path).expect("checked local mutable plan bytes"),
+        )
+        .expect("checked local mutable plan JSON");
+        crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect("reauthenticate checked local mutable plan");
+        let checked = plan
+            .checked_local_mutable_set
+            .as_ref()
+            .expect("checked local mutable set");
+        assert_eq!(report.schema, "dclutch-local-mutable-prepare-report-v1");
+        assert_eq!(checked.roles.len(), 7);
+        assert_eq!(report.programs.len(), 7);
+        assert_eq!(report.checked_local_mutable_set_sha256, checked.set_sha256);
+        assert_eq!(
+            fs::read_dir(&report.account_dir)
+                .expect("local account directory")
+                .count(),
+            14
+        );
+        for (ordinal, role) in checked.roles.iter().enumerate() {
+            assert_eq!(role.role, crate::local_mutable::ROLE_ORDER_V1[ordinal]);
+            assert_eq!(role.deployment_slot, ordinal as u64 + 1);
+            assert!(plan.genesis_accounts.values().any(|account| {
+                account.address == role.programdata_id
+                    && account.data_sha256 == role.programdata_account_sha256
+            }));
+        }
+        assert!(report.keypairs.len() >= crate::campaign::KEYPAIR_ROLES.len());
     }
 
     #[test]

@@ -308,6 +308,30 @@ fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
     Ok(())
 }
 
+fn authenticate_local_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result<u64> {
+    if plan.schema != "dclutch-local-successor-infrastructure-plan-v2"
+        || plan.record_publication != "transaction"
+        || crate::plan::pubkey(&plan.registry.program_id)? != registry
+    {
+        return Err(Error::new(
+            "Direct localhost planning requires the exact transaction-published successor plan and Registry",
+        ));
+    }
+    if decode_hex(&plan.trading.semantic_release_id)?
+        != dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1
+    {
+        return Err(Error::new(
+            "Direct compiler requires the Trading COMPILED_DIRECT_RELEASE_ID_V1 semantic owner",
+        ));
+    }
+    crate::local_mutable::authenticate_checked_local_mutable_plan_v1(plan)?;
+    crate::runtime::authenticate_checked_activation_projection(plan)?;
+    plan.checked_local_mutable_set
+        .as_ref()
+        .and_then(|checked| checked.roles.iter().map(|role| role.deployment_slot).max())
+        .ok_or_else(|| Error::new("checked local mutable set omitted every deployment slot"))
+}
+
 fn checked_plan_roles_v1(
     plan: &SuccessorPlan,
 ) -> [(&'static str, &ProgramPin, CheckedDeploymentDispositionV1); 7] {
@@ -381,6 +405,14 @@ fn observe_devnet_policy_v1<R: DirectFinalizedSnapshotV1>(
         ))
         .max()
         .ok_or_else(|| Error::new("checked deployment set omitted every observation slot"))?;
+    observe_policy_v1(rpc, plan, floor)
+}
+
+fn observe_policy_v1<R: DirectFinalizedSnapshotV1>(
+    rpc: &mut R,
+    plan: &SuccessorPlan,
+    floor: u64,
+) -> Result<DirectDevnetPolicyObservationV1> {
     let roles = checked_plan_roles_v1(plan);
     let mut addresses = Vec::with_capacity(1 + roles.len() * 2);
     addresses.push(sysvar::rent::ID);
@@ -556,6 +588,36 @@ impl DirectMarketCompilerOwnedV1 {
             &ProductionDirectPlanEvidenceV1,
             |origin| Rpc::connect_cluster(origin, WritePolicyV1::ReadsOnly),
         )
+    }
+
+    /// Produce one key-free, read-only Direct compiler against a fresh,
+    /// checked-mutable localhost deployment. The origin must be literal
+    /// loopback; no acknowledgment or external RPC URL is admitted.
+    pub(crate) fn load_local(
+        plan_path: &Path,
+        rpc_url: &str,
+        registry: Pubkey,
+        fee_basis_points: Option<u16>,
+        fee_recipient: Option<Pubkey>,
+    ) -> Result<Self> {
+        let origin = ClusterOriginV1::parse(rpc_url, None)?;
+        if !matches!(origin, ClusterOriginV1::Loopback { .. }) {
+            return Err(Error::new(
+                "the checked-mutable Direct planner is localhost-only",
+            ));
+        }
+        let plan = read_exact_json_v1::<SuccessorPlan>(plan_path, "successor plan")?;
+        let floor = authenticate_local_plan_v1(&plan, registry)?;
+        let fee = DirectFeeSelectionV1::explicit(fee_basis_points, fee_recipient)?;
+        let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+        let observation = observe_policy_v1(&mut rpc, &plan, floor)?;
+        Ok(Self {
+            deployment: observation.deployment,
+            fee,
+            activation_deadline_slot: activation_deadline_v1(observation.finalized_slot)?,
+            root_rent_minimum_lamports: observation.root_rent_minimum_lamports,
+            lifetime: (),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -9,6 +9,7 @@ mod campaign;
 mod cluster;
 mod direct_market;
 mod flagship_resolution;
+mod local_mutable;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
 // helpers stay allowed the way every #[path] include here is.
@@ -18,6 +19,7 @@ mod ledger;
 mod market;
 mod model;
 mod plan;
+mod pyth_vaa_provisioning;
 mod relayed;
 mod release_capture;
 mod rpc;
@@ -107,6 +109,12 @@ fn run() -> Result<()> {
             user_position_admission::run(arguments.collect())
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
+        Some("devnet-pyth-vaa-provision-v1") => pyth_vaa_provisioning::run(arguments.collect()),
+        Some("local-mutable-prepare-v1") => local_mutable::run_prepare(arguments.collect()),
+        Some("local-mutable-plan-authenticate-v1") => {
+            local_mutable::run_authenticate(arguments.collect())
+        }
+        Some("local-private-validator-market-v1") => local_mutable::run_market(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -177,8 +185,8 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
                         campaign::KEYPAIR_ROLES.join(", ")
                     ))
                 })?;
-            let secret = campaign::read_keypair_file(&PathBuf::from(&value), role)?;
-            if keypairs.insert(role.to_owned(), secret).is_some() {
+            let path = absolute(Some(value), &format!("--keypair-{role}"))?;
+            if keypairs.insert(role.to_owned(), path).is_some() {
                 return Err(Error::new(format!(
                     "--keypair-{role} may be supplied only once"
                 )));
@@ -1242,11 +1250,13 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     usage_supervisor();
+    println!("{}", local_mutable::usage());
     println!("{}", release_capture::usage());
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
     println!("{}", terminal_sequence::usage());
     println!("{}", user_position_admission::usage());
+    println!("{}", pyth_vaa_provisioning::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", wallet_terminal::usage());
     println!(
