@@ -1,7 +1,7 @@
 'use client';
 
 import Anchor from '@/components/Anchor';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
 import {
@@ -10,6 +10,10 @@ import {
   type SignedDirectIntentV3,
 } from '@/lib/directInlineV3';
 import { inspectDirectHotRouteV3, type DirectHotRouteManifestV3, type DirectHotRouteCoordinateV3 } from '@/lib/directHotChain';
+import {
+  inspectDirectMakerNonceV1,
+  type AuthenticatedDirectMakerNonceV1,
+} from '@/lib/directMakerReplay';
 import {
   decodeDirectIntentTicketV1,
   planDirectCrossingV1,
@@ -47,7 +51,13 @@ import { requestWalletMessageSignatureV1, requestWalletTransactionSignatureV1, s
 type TicketState =
   | Readonly<{ kind: 'none' }>
   | Readonly<{ kind: 'refused'; reason: string }>
+  | Readonly<{ kind: 'ready'; ticket: SignedDirectIntentV3 }>
   | Readonly<{ kind: 'crossed'; ticket: SignedDirectIntentV3; plan: DirectCrossingPlanV1 }>;
+
+type TakerReplayState =
+  | Readonly<{ kind: 'idle' }>
+  | Readonly<{ kind: 'working' }>
+  | Readonly<{ kind: 'ready'; observation: AuthenticatedDirectMakerNonceV1 }>;
 
 type ExecutionState =
   | Readonly<{ kind: 'idle' }>
@@ -118,6 +128,8 @@ export default function MarketTradePanel({
   const [desired, setDesired] = useState('');
   const [ticketText, setTicketText] = useState('');
   const [signature, setSignature] = useState<Uint8Array | null>(null);
+  const [takerReplay, setTakerReplay] = useState<TakerReplayState>({ kind: 'idle' });
+  const replayEpoch = useRef(0);
   const [routeText, setRouteText] = useState('');
   const [execution, setExecution] = useState<ExecutionState>({ kind: 'idle' });
 
@@ -129,6 +141,7 @@ export default function MarketTradePanel({
     if (claimsProgramId === null || claimsProgramId === '') return Object.freeze({ kind: 'refused' as const, reason: 'select the Claims program: the taker collateral account and Position derive under it' });
     try {
       const ticket = decodeDirectIntentTicketV1(ticketText.trim());
+      if (takerReplay.kind !== 'ready') return Object.freeze({ kind: 'ready' as const, ticket });
       const aggregate = deriveClaimsAggregateAddressV2(claimsProgramId, marketAddress);
       const takerPosition = deriveClaimsPositionAddressV2(claimsProgramId, aggregate, wallets.address);
       const plan = planDirectCrossingV1({
@@ -141,22 +154,31 @@ export default function MarketTradePanel({
         },
         ticket,
         takerAddress: wallets.address,
+        takerReplay: takerReplay.observation,
         // The taker's collateral coordinate on the intent wire; the executing
         // route re-authenticates it against the Realm, so a wrong account is a
         // chain refusal, never a silent substitution.
         takerCollateralAccount: takerPosition,
         desiredFill: desired.trim() === '' ? ticket.intent.maximumFill : BigInt(desired.trim()),
-        clockSlot: BigInt(inspected.observedSlot),
+        clockSlot: BigInt(takerReplay.observation.observedSlot),
       });
       return Object.freeze({ kind: 'crossed' as const, ticket, plan });
     } catch (error) {
       return Object.freeze({ kind: 'refused' as const, reason: errorMessage(error) });
     }
-  }, [inspected, ticketText, desired, wallets.address, claimsProgramId, marketAddress]);
+  }, [inspected, ticketText, desired, wallets.address, claimsProgramId, marketAddress, takerReplay]);
+
+  function invalidateTakerReplay(): void {
+    replayEpoch.current += 1;
+    setTakerReplay({ kind: 'idle' });
+    setSignature(null);
+    setExecution({ kind: 'idle' });
+  }
 
   async function inspect() {
     setSpineStatus('Reading the Market, its manifest, the Direct program set, descriptor, and config at one finalized floor…');
-    setSpine(null); setSignature(null); setExecution({ kind: 'idle' });
+    replayEpoch.current += 1;
+    setSpine(null); setTakerReplay({ kind: 'idle' }); setSignature(null); setExecution({ kind: 'idle' });
     if (registryProgramId === null || registryProgramId === '') {
       setSpine(Object.freeze({ status: 'refused' as const, reason: 'the Registry program is required: the Direct capability lives in Registry-finalized records' }));
       setSpineStatus('Refused before any read.');
@@ -175,12 +197,53 @@ export default function MarketTradePanel({
   }
 
   async function signIntent() {
-    if (ticketState.kind !== 'crossed' || wallets.address === null) return;
+    if ((ticketState.kind !== 'ready' && ticketState.kind !== 'crossed') || wallets.address === null || inspected === null) return;
+    if (tradingProgramId === null || tradingProgramId === '') {
+      setExecution({ kind: 'refused', reason: 'select the Trading program before asking the chain for your next Direct nonce' });
+      return;
+    }
+    const epoch = replayEpoch.current + 1;
+    replayEpoch.current = epoch;
+    setTakerReplay({ kind: 'working' });
+    setSignature(null);
     try {
-      const message = encodeCompactIntentSigningMessageV2(ticketState.plan.taker);
-      const signed = await requestWalletMessageSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), wallets.address, message);
+      setExecution({ kind: 'working', message: 'Reading your canonical maker replay account at one finalized floor before signing…' });
+      const client = new SolanaRpcClient(endpoint);
+      const replay = await inspectDirectMakerNonceV1(client, {
+        tradingProgram: tradingProgramId,
+        market: inspected.marketAddress,
+        generation: BigInt(inspected.generation),
+        maker: wallets.address,
+      });
+      if (replayEpoch.current !== epoch) return;
+      if (claimsProgramId === null || claimsProgramId === '') throw new Error('select the Claims program before signing');
+      const aggregate = deriveClaimsAggregateAddressV2(claimsProgramId, marketAddress);
+      const takerPosition = deriveClaimsPositionAddressV2(claimsProgramId, aggregate, wallets.address);
+      const plan = planDirectCrossingV1({
+        route: {
+          market: inspected.marketAddress,
+          generation: BigInt(inspected.generation),
+          outcomeCount: inspected.outcomeCount ?? Number.MAX_SAFE_INTEGER,
+          priceScale: inspected.priceScale,
+          feeBasisPoints: inspected.feeBasisPoints,
+        },
+        ticket: ticketState.ticket,
+        takerAddress: wallets.address,
+        takerReplay: replay,
+        takerCollateralAccount: takerPosition,
+        desiredFill: desired.trim() === '' ? ticketState.ticket.intent.maximumFill : BigInt(desired.trim()),
+        clockSlot: BigInt(replay.observedSlot),
+      });
+      setTakerReplay({ kind: 'ready', observation: replay });
+      setExecution({ kind: 'working', message: `Nonce ${replay.nextNonce} is current at finalized slot ${replay.observedSlot}; requesting your intent signature…` });
+      const message = encodeCompactIntentSigningMessageV2(plan.taker);
+      const signed = await requestWalletMessageSignatureV1(client, wallets.handoff(endpoint), wallets.address, message);
+      if (replayEpoch.current !== epoch) return;
       setSignature(signed);
+      setExecution({ kind: 'idle' });
     } catch (error) {
+      if (replayEpoch.current !== epoch) return;
+      setTakerReplay({ kind: 'idle' });
       setExecution({ kind: 'refused', reason: errorMessage(error) });
     }
   }
@@ -192,6 +255,16 @@ export default function MarketTradePanel({
       const client = new SolanaRpcClient(endpoint);
       const manifest = parseRouteManifest(routeText);
       const inspection = await inspectDirectHotRouteV3(client, manifest);
+      setExecution({ kind: 'working', message: 'Checking that your signed nonce is still the chain’s next nonce before asking for the payer signature…' });
+      const replay = await inspectDirectMakerNonceV1(client, {
+        tradingProgram: inspection.route.tradingProgram,
+        market: inspection.route.market,
+        generation: inspection.route.generation,
+        maker: wallets.address,
+      });
+      if (replay.nextNonce !== ticketState.plan.taker.nonce) {
+        throw new Error(`your signed Direct nonce ${ticketState.plan.taker.nonce} is stale; the chain now requires ${replay.nextNonce}. Read and sign again.`);
+      }
       const mine: SignedDirectIntentV3 = Object.freeze({ maker: wallets.address, signature, intent: ticketState.plan.taker });
       const seller = ticketState.ticket.intent.side === 0 ? ticketState.ticket : mine;
       const buyer = ticketState.ticket.intent.side === 1 ? ticketState.ticket : mine;
@@ -270,13 +343,23 @@ export default function MarketTradePanel({
 
       <h3 className="detail-subhead">The other side&apos;s ticket</h3>
       <p className="direct-status">A trade here is two signed halves: yours and someone else&apos;s. There is no order book to take from — the other half arrives as a small ticket (dclutch/direct-intent-ticket/v1) you can be handed any way you like. Pasting it is safe: nothing in it is believed until the chain itself checks the signature.</p>
-      <label><span>Ticket JSON</span><textarea rows={5} spellCheck={false} value={ticketText} onChange={(event) => { setTicketText(event.target.value); setSignature(null); }} /></label>
+      <label><span>Ticket JSON</span><textarea rows={5} spellCheck={false} value={ticketText} onChange={(event) => { setTicketText(event.target.value); invalidateTakerReplay(); }} /></label>
       <div className="direct-form-grid">
-        <label><span>My size · claim atoms (blank = take the ticket in full)</span><input inputMode="numeric" value={desired} onChange={(event) => { setDesired(event.target.value.trim()); setSignature(null); }} /></label>
+        <label><span>My size · claim atoms (blank = take the ticket in full)</span><input inputMode="numeric" value={desired} onChange={(event) => { setDesired(event.target.value.trim()); invalidateTakerReplay(); }} /></label>
       </div>
-      <WalletDirectory directory={wallets} purpose="taker identity, intent and payer signatures" onConnected={() => setSignature(null)} />
+      <WalletDirectory directory={wallets} purpose="taker identity, intent and payer signatures" onConnected={invalidateTakerReplay} />
 
       {ticketState.kind === 'refused' && <p className="market-refusal">Ticket refused: {ticketState.reason}</p>}
+      {(ticketState.kind === 'ready' || ticketState.kind === 'crossed') && <div className="direct-actions">
+        <button type="button" disabled={takerReplay.kind === 'working'} onClick={() => void signIntent()}>
+          {takerReplay.kind === 'working'
+            ? 'Reading my next nonce…'
+            : signature === null
+              ? 'Read my next nonce, then sign my intent'
+              : 'Intent signed · read the nonce and sign again'}
+        </button>
+      </div>}
+      {takerReplay.kind === 'ready' && <p className="direct-status">Your intent uses nonce {takerReplay.observation.nextNonce.toString()}, read at finalized slot {takerReplay.observation.observedSlot} before you signed.</p>}
       {ticketState.kind === 'crossed' && <>
         {outcome !== null && outcome !== ticketState.ticket.intent.outcome && <p className="market-refusal">The ticket is for claim {ticketState.ticket.intent.outcome}, not the selected claim {outcome}. Crossing follows the ticket; select claim {ticketState.ticket.intent.outcome} or find another ticket.</p>}
         <div className="trade-v3-preview">
@@ -285,9 +368,6 @@ export default function MarketTradePanel({
           <div><span>{ticketState.plan.takerSide === 'buy' ? 'Exact debit' : 'Exact credit'}</span><strong>{ticketState.plan.takerSide === 'buy' ? ticketState.plan.preview.buyerCollateralDebit.toString() : ticketState.plan.preview.sellerNetCollateralCredit.toString()}</strong></div>
           <div><span>Fee each side</span><strong>{ticketState.plan.preview.sellerFee.toString()}</strong></div>
           <p>{ticketState.plan.note} Preview uses the finalized observation slot; the on-chain interpreters remain authoritative.</p>
-        </div>
-        <div className="direct-actions">
-          <button type="button" onClick={() => void signIntent()}>{signature === null ? 'Sign my intent with the connected wallet' : 'Intent signed · sign again to replace'}</button>
         </div>
       </>}
 

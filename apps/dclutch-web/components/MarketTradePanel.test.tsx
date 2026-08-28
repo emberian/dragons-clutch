@@ -2,7 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import MarketTradePanel from './MarketTradePanel';
-import { DIRECT_PACKET_WALL_V1, DIRECT_PRESTATE_WALL_V1 } from '@/lib/directTradeSpine';
+import {
+  DIRECT_PACKET_BUDGET_EVIDENCE_V1,
+  DIRECT_PRESTATE_WALL_V1,
+  directPacketWallV1,
+} from '@/lib/directTradeSpine';
 
 describe('the market-detail trade panel', () => {
   const html = renderToStaticMarkup(<MarketTradePanel
@@ -20,12 +24,13 @@ describe('the market-detail trade panel', () => {
     expect(html).toContain('never a greyed-out button with no reason');
   });
 
-  it('carries the packet and prestate walls as exact named facts, never hedges', () => {
-    // The walls render after inspection; their content is pinned at the source.
-    expect(DIRECT_PACKET_WALL_V1.name).toBe('packet');
+  it('carries the measured packet margin and the remaining prestate wall as exact facts', () => {
+    expect(DIRECT_PACKET_BUDGET_EVIDENCE_V1).toEqual({
+      wireBytes: 1_204, packetLimit: 1_232, marginBytes: 28, computeUnitLimit: 1_400_000,
+    });
+    expect(directPacketWallV1(DIRECT_PACKET_BUDGET_EVIDENCE_V1.wireBytes)).toBeNull();
+    expect(directPacketWallV1(1_233)?.name).toBe('packet');
     expect(DIRECT_PRESTATE_WALL_V1.name).toBe('prestate');
-    expect(DIRECT_PACKET_WALL_V1.detail).toContain('1,268 > 1,232');
-    expect(DIRECT_PACKET_WALL_V1.detail).toContain('nothing your browser or wallet can do differently');
   });
 
   it('starts from an honest empty state and links the advanced workbench', () => {
