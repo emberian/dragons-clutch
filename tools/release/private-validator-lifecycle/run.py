@@ -73,6 +73,11 @@ PROTOCOL_CREATED_KEY_ROLES = (
     "collateral-wallet",
     "founding-source-funder",
 )
+CANONICAL_RESOLUTION_GATE_LABEL = "resolution"
+CANONICAL_RESOLUTION_PACKAGE = "dclutch-resolution-proof-sbf"
+CANONICAL_RESOLUTION_ELF_PATH = "elf/resolution.so"
+BANISHED_RESOLUTION_ELF_BASENAME = "dclutch_sbf.so"
+BANISHED_RESOLUTION_ELF_BYTES = 9_034_536
 
 
 class Refusal(RuntimeError):
@@ -145,6 +150,42 @@ def clean_commit(repo: Path) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
 
+def canonical_resolution_link(gate: dict[str, Any]) -> dict[str, Any]:
+    """Select Resolution only through the checked release's canonical role.
+
+    The private controller has no manual ELF argument.  This extra join keeps a
+    checked gate from relabelling the banished aggregate `dclutch_sbf.so` as
+    Resolution while preserving otherwise plausible frame and digest fields.
+    """
+
+    links = gate.get("links")
+    if not isinstance(links, list):
+        raise Refusal("checked release gate links are not one array")
+    rows = [row for row in links if row.get("label") == CANONICAL_RESOLUTION_GATE_LABEL]
+    if len(rows) != 1:
+        raise Refusal("checked release gate must carry one canonical Resolution role")
+    row = rows[0]
+    elf = row.get("elf")
+    marker = row.get("compile_marker")
+    if (
+        row.get("package") != CANONICAL_RESOLUTION_PACKAGE
+        or not isinstance(marker, str)
+        or CANONICAL_RESOLUTION_PACKAGE not in marker
+        or row.get("checked_manifest") is None
+        or not isinstance(elf, dict)
+        or elf.get("canonical_path") != CANONICAL_RESOLUTION_ELF_PATH
+        or Path(str(elf.get("canonical_path", ""))).name == BANISHED_RESOLUTION_ELF_BASENAME
+        or not isinstance(elf.get("bytes"), int)
+        or elf["bytes"] <= 0
+        or elf["bytes"] == BANISHED_RESOLUTION_ELF_BYTES
+    ):
+        raise Refusal(
+            "Resolution is not the checked dclutch-resolution-proof-sbf role; "
+            "aggregate dclutch_sbf.so substitution is banished"
+        )
+    return row
+
+
 def checked_gate(paths: Paths, commit: str) -> tuple[Path, dict[str, Any], str]:
     gate_path = canonical_file(paths.release_root / "CHECKED_UPGRADE_GATE.json", "checked release gate")
     gate = read_unique_json(gate_path, "checked release gate")
@@ -159,6 +200,7 @@ def checked_gate(paths: Paths, commit: str) -> tuple[Path, dict[str, Any], str]:
     labels = [link.get("label") for link in gate["links"]]
     if len(set(labels)) != 13:
         raise Refusal("checked release gate link labels are not unique")
+    canonical_resolution_link(gate)
     for link in gate["links"]:
         if (
             link.get("sbf_diagnostics_count") != 0

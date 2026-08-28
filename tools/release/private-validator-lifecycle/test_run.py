@@ -196,6 +196,30 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(MODULE.checked_mutable_slot_floor(path), 7)
 
+    def test_resolution_can_only_come_from_the_canonical_checked_role(self) -> None:
+        honest = {
+            "label": "resolution",
+            "package": "dclutch-resolution-proof-sbf",
+            "compile_marker": "Compiling dclutch-resolution-proof-sbf from pinned source",
+            "checked_manifest": {"canonical_path": "evidence/resolution/checked.bin"},
+            "elf": {
+                "canonical_path": "elf/resolution.so",
+                "bytes": 631_640,
+                "sha256": "a" * 64,
+            },
+        }
+        self.assertEqual(
+            MODULE.canonical_resolution_link({"links": [honest]}), honest
+        )
+        for substitution in (
+            {"package": "dclutch-sbf"},
+            {"elf": {**honest["elf"], "canonical_path": "elf/dclutch_sbf.so"}},
+            {"elf": {**honest["elf"], "bytes": 9_034_536}},
+        ):
+            hostile = {**honest, **substitution}
+            with self.assertRaisesRegex(MODULE.Refusal, "substitution is banished"):
+                MODULE.canonical_resolution_link({"links": [hostile]})
+
     def test_stage_receipt_preserves_failure_without_calling_it_passed(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             run = Path(root_text)
