@@ -327,7 +327,7 @@ fn authenticate_realm_and_rent_credit(
     if accounts[REALM].key != &expected_realm
         || accounts[REALM].owner != accounts[REGISTRY].key
         || accounts[REALM].data_len() != REALM_BYTES
-        || accounts[REALM].key.to_bytes() != state.identity.realm_id.to_bytes()
+        || realm_digest != state.identity.realm_id.to_bytes()
         || aggregate.realm_id != state.identity.realm_id.to_bytes()
         || accounts[REALM_STAGING].key != &expected_staging
         || accounts[REALM_STAGING].owner != &system_program::ID

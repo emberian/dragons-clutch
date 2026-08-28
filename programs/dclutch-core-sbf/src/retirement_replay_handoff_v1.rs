@@ -231,7 +231,7 @@ fn authenticate_claims_and_realm(
     if accounts[REALM].key != &expected_realm
         || accounts[REALM].owner != accounts[REGISTRY].key
         || accounts[REALM].data_len() != REALM_BYTES
-        || accounts[REALM].key.to_bytes() != state.identity.realm_id.to_bytes()
+        || realm_digest != state.identity.realm_id.to_bytes()
         || accounts[REALM_STAGING].key != &expected_staging
         || accounts[REALM_STAGING].owner != &system_program::ID
         || !accounts[REALM_STAGING].data_is_empty()
