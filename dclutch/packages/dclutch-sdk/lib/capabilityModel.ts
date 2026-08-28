@@ -3,7 +3,7 @@ import type { OperatorSurfaceSnapshotV1 } from './operatorSurface';
 export const CAPABILITY_STAGES = ['author', 'trade', 'resolve', 'claim'] as const;
 export type CapabilityStage = (typeof CAPABILITY_STAGES)[number];
 export type CapabilityFamily = 'Release' | 'Creation' | 'Direct' | 'Source' | 'Series' | 'General' | 'Dealer' | 'Claims';
-export type CapabilityImplementation = 'browser-unsigned' | 'rust-unsigned' | 'awaiting-production';
+export type CapabilityImplementation = 'browser-unsigned' | 'browser-wallet' | 'rust-unsigned' | 'awaiting-production';
 
 export type CapabilityActionV1 = Readonly<{
   id: string;
@@ -56,7 +56,7 @@ export const CAPABILITY_ACTIONS_V1: ReadonlyArray<CapabilityActionV1> = Object.f
 
   action('claims.conserve', 'claim', 'Claims', 'Split / merge conservative claims', 'awaiting-production', null, true, 'The browser workspace that claimed this action encoded the schema-1 DCLTECO1 economic projection, whose only program was banished; the live successor speaks DCLTEMK2/DCLTEPS2 through dclutch-economic-slice-kernel and has no generated browser ABI. Nothing is constructed from a wire no deployed program reads.'),
   action('claims.represent', 'claim', 'Claims', 'Materialize / dematerialize representation', 'awaiting-production', null, true, 'Representation conversion was reachable only through the same banished schema-1 projection. Native and represented supplies now live in Claims/Custody state, and no browser encoder for that route has been generated from its owning crate.'),
-  action('claims.redeem', 'claim', 'Claims', 'Redeem terminal Rational / Bearer representation', 'rust-unsigned', '/redeem', true, 'The browser authenticates CapabilityV4, ProductBasisV3, independent K/N widths, and exact zero or positive payout. Transaction construction remains Rust-only because SignedDeltaV3 and Custody authority/digests have one canonical operator emitter.'),
+  action('claims.redeem', 'claim', 'Claims', 'Redeem terminal Rational / Bearer representation', 'browser-wallet', '/redeem', true, 'The browser reacquires the terminal route, creates the wallet replay account when needed, persists each exact plan and signed packet before submission, resumes only the saved transaction id, and clears recovery state only after finalized payout poststate verifies.'),
   action('series.close', 'claim', 'Series', 'Consume / expire ticket and close occurrence', 'rust-unsigned', '/operate', true, 'The Series V3 operator owns exact transaction planning, but the browser has no current production release manifest encoder.'),
   action('general.close', 'claim', 'General', 'Close settlement / General root', 'browser-unsigned', '/general', true, 'Close derives the successor terminal coordinate from expected revision plus one and recomputes all canonical state PDAs before unsigned construction.'),
   action('dealer.close', 'claim', 'Dealer', 'Reset ladder / close LP / retire pool', 'rust-unsigned', '/liquidity', true, 'Rust successor builders exist; the browser remains unavailable until exact production artifacts and account profile are generated and selected.'),

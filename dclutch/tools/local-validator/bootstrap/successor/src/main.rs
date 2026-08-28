@@ -34,6 +34,10 @@ mod wallet_terminal;
 
 type Result<T> = core::result::Result<T, Error>;
 const PUBLIC_TERMINAL_COMMANDS_V1: [&str; 1] = ["devnet-terminal-sequence-v1"];
+const OWNED_LOOPBACK_TERMINAL_COMMANDS_V1: [&str; 2] = [
+    "local-private-validator-flagship-resolution-v1",
+    "local-private-validator-terminal-sequence-v1",
+];
 
 #[derive(Debug)]
 struct Error(String);
@@ -106,6 +110,9 @@ fn run() -> Result<()> {
         Some("devnet-prepare-programdata-capture-v1") => {
             release_capture::run_prepare_programdata(arguments.collect())
         }
+        Some("devnet-permanent-substrate-capture-v1") => {
+            release_capture::run_permanent_substrate(arguments.collect())
+        }
         Some("devnet-user-position-admission-v1") => {
             user_position_admission::run(arguments.collect())
         }
@@ -113,6 +120,9 @@ fn run() -> Result<()> {
             user_position_admission::run_owned_loopback(arguments.collect())
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
+        Some(command) if command == OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[0] => {
+            flagship_resolution::run_owned_loopback(arguments.collect())
+        }
         Some("devnet-pyth-vaa-provision-v1") => pyth_vaa_provisioning::run(arguments.collect()),
         Some("local-private-validator-pyth-vaa-provision-v1") => {
             terminal_exterior_pyth::run(arguments.collect())
@@ -122,6 +132,9 @@ fn run() -> Result<()> {
             local_mutable::run_authenticate(arguments.collect())
         }
         Some("local-private-validator-market-v1") => local_mutable::run_market(arguments.collect()),
+        Some(command) if command == OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[1] => {
+            terminal_sequence::run_terminal_sequence_owned_loopback_v1(arguments.collect())
+        }
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -1262,11 +1275,13 @@ fn usage() {
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
     println!("{}", terminal_sequence::usage());
+    println!("{}", terminal_sequence::owned_loopback_usage());
     println!("{}", user_position_admission::usage());
     println!("{}", user_position_admission::local_usage());
     println!("{}", pyth_vaa_provisioning::usage());
     println!("{}", terminal_exterior_pyth::usage());
     println!("{}", flagship_resolution::usage());
+    println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
@@ -1387,6 +1402,7 @@ mod tests {
         let usage = release_capture::usage();
         assert!(usage.contains("devnet-carry-forward-capture-v1"));
         assert!(usage.contains("devnet-prepare-programdata-capture-v1"));
+        assert!(usage.contains("devnet-permanent-substrate-capture-v1"));
         assert!(usage.contains("read-only and key-free"));
     }
 
@@ -1398,6 +1414,27 @@ mod tests {
         assert!(canonical.contains("unsigned durable next action before any key"));
         assert!(canonical.contains("persists the signed packet"));
         assert!(!terminal_lifecycle::usage().contains("terminal-lifecycle-plan"));
+    }
+
+    #[test]
+    fn owned_loopback_resolution_and_terminal_commands_are_visible_and_disjoint() {
+        assert_eq!(
+            OWNED_LOOPBACK_TERMINAL_COMMANDS_V1,
+            [
+                "local-private-validator-flagship-resolution-v1",
+                "local-private-validator-terminal-sequence-v1",
+            ]
+        );
+        let resolution = flagship_resolution::owned_loopback_usage();
+        let terminal = terminal_sequence::owned_loopback_usage();
+        assert!(resolution.contains(OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[0]));
+        assert!(terminal.contains(OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[1]));
+        assert!(!resolution.contains("--i-mean-devnet"));
+        assert!(!terminal.contains("--i-mean-devnet"));
+        assert!(resolution.contains("refuses every external origin"));
+        assert!(terminal.contains("refuses every external origin"));
+        assert!(!flagship_resolution::usage().contains(OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[0]));
+        assert!(!terminal_sequence::usage().contains(OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[1]));
     }
 
     #[test]

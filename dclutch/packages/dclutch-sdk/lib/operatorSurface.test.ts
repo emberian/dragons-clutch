@@ -42,6 +42,8 @@ describe('unified chain-derived operator surface', () => {
     expect(CAPABILITY_ACTIONS_V1.length).toBeGreaterThanOrEqual(20);
     expect(CAPABILITY_ACTIONS_V1.every((workflow) => workflow.exactBoundary.length > 40)).toBe(true);
     expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-unsigned').every((workflow) => workflow.workspace !== null)).toBe(true);
+    expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-wallet').every((workflow) => workflow.workspace !== null)).toBe(true);
+    expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'claims.redeem')).toMatchObject({ implementation: 'browser-wallet', workspace: '/redeem' });
     expect(CAPABILITY_ACTIONS_V1.some((workflow) => workflow.family === 'Direct' && workflow.implementation === 'awaiting-production')).toBe(true);
     expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'market.found')).toMatchObject({
       implementation: 'rust-unsigned',

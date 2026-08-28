@@ -284,7 +284,7 @@ a { color: inherit; }
 .operator-status.constructible { color: var(--acid); border-color: rgba(185,255,100,.24); background: rgba(185,255,100,.05); }
 .operator-status.request-only { color: #efd784; border-color: rgba(239,215,132,.22); background: rgba(239,215,132,.04); }
 .operator-status.awaiting-abi { color: #ff9b88; border-color: rgba(255,126,102,.2); background: rgba(255,126,102,.035); }
-.operator-status.browser-unsigned, .operator-status.ready-to-preflight { color: var(--acid); border-color: rgba(185,255,100,.24); background: rgba(185,255,100,.05); }
+.operator-status.browser-unsigned, .operator-status.browser-wallet, .operator-status.ready-to-preflight { color: var(--acid); border-color: rgba(185,255,100,.24); background: rgba(185,255,100,.05); }
 .operator-status.rust-unsigned, .operator-status.rust-only { color: #efd784; border-color: rgba(239,215,132,.22); background: rgba(239,215,132,.04); }
 .operator-status.awaiting-production, .operator-status.unavailable { color: #ff9b88; border-color: rgba(255,126,102,.2); background: rgba(255,126,102,.035); }
 .operator-status.needs-chain, .operator-status.needs-market { color: #9ba79d; border-color: rgba(201,226,205,.16); background: rgba(201,226,205,.025); }
