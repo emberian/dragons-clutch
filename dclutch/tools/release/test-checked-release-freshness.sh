@@ -107,6 +107,13 @@ expect_refusal "malformed build run identifier refuses" \
 expect_refusal "legacy keep-elf mode refuses before using stale evidence" \
     "refusing --keep-elf" "$RUNNER" --work "$SCRATCH/keep" --keep-elf
 
+if grep -Fq 'cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked' "$RUNNER" \
+    && grep -Fq "build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked" "$RUNNER"; then
+    ok "release builds and recorded commands require the committed lockfiles"
+else
+    not_ok "release runner lost its locked-build admission"
+fi
+
 if [ "$fail" -ne 0 ]; then
     printf '%s tests failed; %s passed\n' "$fail" "$pass" >&2
     exit 1

@@ -103,7 +103,7 @@ impl DirectOrdinaryGeometryV3 {
     }
 
     /// Exact encoded Product result-domain record width.
-    pub const fn result_domain_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
+    pub fn result_domain_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
         affine(
             DIRECT_ORDINARY_DOMAIN_AFFINE_BASE_BYTES_V3,
             self.outcomes,
@@ -112,7 +112,7 @@ impl DirectOrdinaryGeometryV3 {
     }
 
     /// Exact encoded Product portfolio record width.
-    pub const fn portfolio_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
+    pub fn portfolio_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
         affine(
             PORTFOLIO_HEADER_BYTES,
             self.outcomes,
@@ -121,7 +121,7 @@ impl DirectOrdinaryGeometryV3 {
     }
 
     /// Exact encoded Claims aggregate record width.
-    pub const fn claims_aggregate_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
+    pub fn claims_aggregate_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
         affine(
             LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
             self.outcomes,
@@ -130,7 +130,7 @@ impl DirectOrdinaryGeometryV3 {
     }
 
     /// Exact encoded Claims Position record width.
-    pub const fn claims_position_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
+    pub fn claims_position_record_bytes(self) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
         affine(
             LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
             self.outcomes,
@@ -146,21 +146,18 @@ impl DirectOrdinaryGeometryV3 {
     /// Positions. Every one of them is affine in the SAME outcome count, so a
     /// set that resolves to more than one count does not describe a market and
     /// is refused rather than silently resolved to any of them.
-    pub const fn from_observed_record_bytes(
+    pub fn from_observed_record_bytes(
         portfolio: u32,
         claims_aggregate: u32,
         result_domain: u32,
         source_position: u32,
         destination_position: u32,
     ) -> Result<Self, DirectOrdinaryGeometryErrorV3> {
-        let outcomes = match count(
+        let outcomes = count(
             portfolio,
             PORTFOLIO_HEADER_BYTES,
             PORTFOLIO_COEFFICIENT_BYTES,
-        ) {
-            Ok(value) => value,
-            Err(error) => return Err(error),
-        };
+        )?;
         let observed = [
             count(
                 claims_aggregate,
@@ -183,10 +180,9 @@ impl DirectOrdinaryGeometryV3 {
                 DIRECT_ORDINARY_CLAIMS_ROW_BYTES_V3,
             ),
         ];
-        let mut index = 0;
-        while index < observed.len() {
-            match observed[index] {
-                Ok(value) if value == outcomes => index += 1,
+        for result in observed {
+            match result {
+                Ok(value) if value == outcomes => {}
                 Ok(_) => return Err(DirectOrdinaryGeometryErrorV3::Inconsistent),
                 Err(error) => return Err(error),
             }
@@ -196,39 +192,32 @@ impl DirectOrdinaryGeometryV3 {
 }
 
 /// `base + count * stride`, refusing anything past the u32 account coordinate.
-const fn affine(
-    base: usize,
-    count: u32,
-    stride: usize,
-) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
-    let Some(tail) = (count as usize).checked_mul(stride) else {
+fn affine(base: usize, count: u32, stride: usize) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
+    let base = u32::try_from(base).map_err(|_| DirectOrdinaryGeometryErrorV3::Width)?;
+    let stride = u32::try_from(stride).map_err(|_| DirectOrdinaryGeometryErrorV3::Width)?;
+    let Some(tail) = count.checked_mul(stride) else {
         return Err(DirectOrdinaryGeometryErrorV3::Width);
     };
     let Some(total) = base.checked_add(tail) else {
         return Err(DirectOrdinaryGeometryErrorV3::Width);
     };
-    if total > u32::MAX as usize {
-        return Err(DirectOrdinaryGeometryErrorV3::Width);
-    }
-    Ok(total as u32)
+    Ok(total)
 }
 
 /// The exact affine item count one observed width states, or a refusal.
-const fn count(
-    bytes: u32,
-    base: usize,
-    stride: usize,
-) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
-    if base > u32::MAX as usize || stride == 0 || stride > u32::MAX as usize {
+fn count(bytes: u32, base: usize, stride: usize) -> Result<u32, DirectOrdinaryGeometryErrorV3> {
+    let base = u32::try_from(base).map_err(|_| DirectOrdinaryGeometryErrorV3::Width)?;
+    let stride = u32::try_from(stride).map_err(|_| DirectOrdinaryGeometryErrorV3::Width)?;
+    if stride == 0 {
         return Err(DirectOrdinaryGeometryErrorV3::Width);
     }
-    let Some(tail) = bytes.checked_sub(base as u32) else {
+    let Some(tail) = bytes.checked_sub(base) else {
         return Err(DirectOrdinaryGeometryErrorV3::Inconsistent);
     };
-    if tail % (stride as u32) != 0 {
+    if tail % stride != 0 {
         return Err(DirectOrdinaryGeometryErrorV3::Inconsistent);
     }
-    Ok(tail / (stride as u32))
+    Ok(tail / stride)
 }
 
 #[cfg(test)]
@@ -391,6 +380,73 @@ mod tests {
                 three.claims_position_record_bytes().expect("destination"),
             ),
             Err(DirectOrdinaryGeometryErrorV3::Inconsistent)
+        );
+    }
+
+    /// Hostile endpoint values are refused before they can wrap an account
+    /// coordinate or become a different geometry.
+    #[test]
+    fn coordinate_overflow_and_endpoint_observations_are_refused() {
+        assert_eq!(
+            DirectOrdinaryGeometryV3::from_cut_count(u32::MAX),
+            Err(DirectOrdinaryGeometryErrorV3::Outcomes)
+        );
+
+        let maximum =
+            DirectOrdinaryGeometryV3::from_outcome_count(u32::MAX).expect("geometry value");
+        assert_eq!(
+            maximum.result_domain_record_bytes(),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
+        );
+        assert_eq!(
+            maximum.portfolio_record_bytes(),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
+        );
+        assert_eq!(
+            maximum.claims_aggregate_record_bytes(),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
+        );
+        assert_eq!(
+            maximum.claims_position_record_bytes(),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
+        );
+
+        assert_eq!(
+            DirectOrdinaryGeometryV3::from_observed_record_bytes(
+                u32::MAX,
+                u32::MAX,
+                u32::MAX,
+                u32::MAX,
+                u32::MAX,
+            ),
+            Err(DirectOrdinaryGeometryErrorV3::Inconsistent)
+        );
+    }
+
+    /// The private affine boundary refuses both an oversized base and an
+    /// oversized stride on every supported pointer width. Recovery also
+    /// refuses a zero stride instead of attempting division.
+    #[test]
+    fn affine_components_outside_the_coordinate_are_refused() {
+        assert_eq!(
+            affine(usize::MAX, 2, 1),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
+        );
+        assert_eq!(
+            affine(0, 2, usize::MAX),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
+        );
+        assert_eq!(count(0, 0, 0), Err(DirectOrdinaryGeometryErrorV3::Width));
+
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            count(u32::MAX, usize::MAX, 1),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
+        );
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            count(u32::MAX, 0, usize::MAX),
+            Err(DirectOrdinaryGeometryErrorV3::Width)
         );
     }
 }

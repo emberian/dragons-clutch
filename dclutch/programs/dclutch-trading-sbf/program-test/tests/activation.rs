@@ -1,4 +1,4 @@
-//! ProgramTest evidence for the common data-defined Trading activation outer.
+//! ProgramTest evidence for the common data-defined Trading lifecycle outer.
 
 use std::vec::Vec;
 
@@ -24,8 +24,8 @@ use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_KIND_OFFSET, CAPABILITY_PROGRAM_MAGIC_V1, CAPABILITY_PROGRAM_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_PROFILE_V2, CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET,
     CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
-    CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRootAccountV1,
-    CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+    CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
+    CapabilityRootAccountV1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     activation_registers_v2::{
         ACTIVATION_ACTION_SCALAR_V2, ACTIVATION_CONFIG_IDENTITY_V2,
         ACTIVATION_FIRST_FUNDING_ACCOUNT_V2, ACTIVATION_GENERATION_SCALAR_V2,
@@ -71,7 +71,14 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use dclutch_trading_sbf::TradingSbfError;
+use dclutch_trading_sbf::dispatch::TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2;
 use dclutch_transition_vm::v2::encode::{
     RegisterGeometryV2 as TransitionRegisterGeometryV2, TransitionInstructionV2,
     encode_transition_program_v2_atomic, transition_program_v2_bytes,
@@ -89,6 +96,7 @@ use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::TransactionError;
 use solana_sdk_ids::system_program;
+use solana_system_interface::instruction::transfer;
 use solana_transaction::Transaction;
 
 /// `TradingSbfError::Root`, the refusal the composite-root plan carries.
@@ -99,11 +107,15 @@ const TRADING_CONTENT_REFUSAL_CODE: u32 = TradingSbfError::Content as u32;
 const TRADING_UNSUPPORTED_REFUSAL_CODE: u32 = TradingSbfError::UnsupportedContent as u32;
 /// Selector the family activation request carries, and the set entry's own.
 const FAMILY_ACTIVATION_SELECTOR: u32 = 1;
+/// Selector the same ProgramSet assigns to its distinct close descriptor.
+const FAMILY_CLOSE_SELECTOR: u32 = 2;
 
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x72; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x73; 32]);
 const WRONG_REGISTRY_ID: Pubkey = Pubkey::new_from_array([0x74; 32]);
+const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x75; 32]);
+const REFUND_WALLET: Pubkey = Pubkey::new_from_array([0x76; 32]);
 const GENERATION: u64 = 7;
 const ROOT_INITIAL_DUST: u64 = 1;
 /// Family root-tail width: one projected scalar then one projected identity.
@@ -128,6 +140,16 @@ const ROOT_PRESTATE_SCALAR_REGISTER: u16 = 7;
 const PROFILE_ACCOUNT_COUNT: u16 = 2;
 const SCALAR_COUNT: u16 = 8;
 const IDENTITY_COUNT: u16 = 12;
+/// Close descriptor scalar holding the expected close action.
+const CLOSE_ACTION_SCALAR: u16 = 8;
+/// Close profile projection of the persisted root generation.
+const CLOSE_ROOT_GENERATION_SCALAR: u16 = 9;
+/// Close profile projection of the root's exact pre-close lamports.
+const CLOSE_ROOT_LAMPORTS_SCALAR: u16 = 10;
+const CLOSE_SCALAR_COUNT: u16 = 11;
+const CLOSE_IDENTITY_COUNT: u16 = 13;
+const CLOSE_PROFILE_ACCOUNT_COUNT: u16 = 3;
+const CLOSE_REMAINING_NATIVE_PRINCIPAL: u64 = 17;
 
 /// Scalar bank a General activation declares.
 ///
@@ -200,6 +222,12 @@ struct Fixture {
     manifest_id: ContentId,
     /// Exact FundingLedgerV2 prestate the seam observed.
     funding_prestate: Vec<u8>,
+    /// ProgramSet-selected close instruction for the lifecycle campaign.
+    close_instruction: Option<Instruction>,
+    /// Exact Market RentCredit receiving native principal, rent, and surplus.
+    rent_credit: Pubkey,
+    /// Native principal intentionally left in the ledger after activation.
+    close_principal: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -220,6 +248,8 @@ enum Campaign {
     General,
     /// General's artifacts with the two constant words never projected.
     GeneralUnwrittenMagic,
+    /// ProgramSet with separate activation and native close descriptors.
+    NativeClose,
 }
 
 impl Campaign {
@@ -232,6 +262,7 @@ impl Campaign {
                 | Self::ProgramSetMissingSelector
                 | Self::General
                 | Self::GeneralUnwrittenMagic
+                | Self::NativeClose
         )
     }
 
@@ -249,7 +280,11 @@ impl Campaign {
 /// The selector is read from byte 0 of the family activation request, which is
 /// the same one-byte action the flat campaigns already send. A real family puts
 /// its activation action wherever its own request grammar puts an action.
-fn program_set(descriptor_id: ContentId, campaign: Campaign) -> Vec<u8> {
+fn program_set(
+    descriptor_id: ContentId,
+    close_descriptor_id: Option<ContentId>,
+    campaign: Campaign,
+) -> Vec<u8> {
     let schema = match campaign {
         Campaign::ProgramSetWrongSchema => id(0x77),
         _ => ContentId::new(CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1).expect("descriptor schema"),
@@ -262,8 +297,18 @@ fn program_set(descriptor_id: ContentId, campaign: Campaign) -> Vec<u8> {
         selector,
         CapabilityDescriptorReferenceV2::new(schema, descriptor_id),
     );
-    let mut output = vec![0_u8; encoded_program_set_bytes_v2(1).expect("set width")];
-    encode_program_set_v2(0, SelectorWidthV2::U8, &[entry], &mut output).expect("set bytes");
+    let close = close_descriptor_id.map(|value| {
+        CapabilityProgramSetEntryV2::new(
+            FAMILY_CLOSE_SELECTOR,
+            CapabilityDescriptorReferenceV2::new(
+                ContentId::new(CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1).expect("descriptor schema"),
+                value,
+            ),
+        )
+    });
+    let entries = close.map_or_else(|| vec![entry], |value| vec![entry, value]);
+    let mut output = vec![0_u8; encoded_program_set_bytes_v2(entries.len()).expect("set width")];
+    encode_program_set_v2(0, SelectorWidthV2::U8, &entries, &mut output).expect("set bytes");
     output
 }
 
@@ -413,6 +458,75 @@ fn account_profile(family: Family) -> Vec<u8> {
     })
 }
 
+/// Close profile over the existing root, selected ledger, and exact RentCredit.
+fn close_account_profile(family: Family) -> Vec<u8> {
+    let rules = [
+        AccountRuleInputV1 {
+            privileges: AccountPrivilegesV1::new(false, true, false),
+            effect_permissions: AccountEffectPermissionsV1::new(true, false, true),
+            alias: AccountAliasInputV1::SelfRepresentative,
+            data_length: u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 + family.root_tail_bytes())
+                .expect("root width"),
+        },
+        AccountRuleInputV1 {
+            privileges: AccountPrivilegesV1::new(false, true, false),
+            effect_permissions: AccountEffectPermissionsV1::new(true, false, true),
+            alias: AccountAliasInputV1::SelfRepresentative,
+            data_length: u32::try_from(funding_ledger_bytes_v2(1).expect("funding width"))
+                .expect("funding width"),
+        },
+        AccountRuleInputV1 {
+            privileges: AccountPrivilegesV1::new(false, true, false),
+            effect_permissions: AccountEffectPermissionsV1::new(false, true, false),
+            alias: AccountAliasInputV1::SelfRepresentative,
+            data_length: u32::try_from(
+                dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2,
+            )
+            .expect("credit width"),
+        },
+    ];
+    let operations = [
+        AccountOperationInputV1::RequireKey {
+            account: ACTIVATION_ROOT_ACCOUNT_V2,
+            expected: ACTIVATION_ROOT_IDENTITY_V2,
+        },
+        AccountOperationInputV1::RequireOwner {
+            account: ACTIVATION_ROOT_ACCOUNT_V2,
+            expected: ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        },
+        AccountOperationInputV1::RequireOwner {
+            account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
+            expected: ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        },
+        AccountOperationInputV1::ProjectDataU64 {
+            account: ACTIVATION_ROOT_ACCOUNT_V2,
+            data_offset: u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1).expect("root tail offset"),
+            destination: CLOSE_ROOT_GENERATION_SCALAR,
+        },
+        AccountOperationInputV1::ProjectLamports {
+            account: ACTIVATION_ROOT_ACCOUNT_V2,
+            destination: CLOSE_ROOT_LAMPORTS_SCALAR,
+        },
+        AccountOperationInputV1::RequireKey {
+            account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2 + 1,
+            expected: TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2,
+        },
+    ];
+    let width = account_profile_v1_bytes(rules.len(), operations.len()).expect("profile width");
+    encoded(width, |scratch, output| {
+        encode_account_profile_v1_atomic(
+            &rules,
+            &operations,
+            RegisterGeometryV1 {
+                scalars: CLOSE_SCALAR_COUNT,
+                identities: CLOSE_IDENTITY_COUNT,
+            },
+            scratch,
+            output,
+        )
+    })
+}
+
 /// Encode one transition `ProgramV2` over the family's declared register bank.
 fn transition_program(family: Family) -> Vec<u8> {
     let instructions = match family {
@@ -443,6 +557,53 @@ fn transition_program(family: Family) -> Vec<u8> {
             TransitionRegisterGeometryV2 {
                 scalars: family.scalars(),
                 identities: IDENTITY_COUNT,
+            },
+            &instructions,
+            scratch,
+            output,
+        )
+    })
+}
+
+fn close_transition_program() -> Vec<u8> {
+    let instructions = [
+        TransitionInstructionV2::load_const(
+            CLOSE_ACTION_SCALAR,
+            CoreEffectActionV1::CloseCapability as u64,
+        ),
+        TransitionInstructionV2::scalar_eq(ACTIVATION_ACTION_SCALAR_V2, CLOSE_ACTION_SCALAR),
+        TransitionInstructionV2::scalar_eq(
+            ACTIVATION_GENERATION_SCALAR_V2,
+            CLOSE_ROOT_GENERATION_SCALAR,
+        ),
+    ];
+    let width = transition_program_v2_bytes(instructions.len()).expect("transition width");
+    encoded(width, |scratch, output| {
+        encode_transition_program_v2_atomic(
+            TransitionRegisterGeometryV2 {
+                scalars: CLOSE_SCALAR_COUNT,
+                identities: CLOSE_IDENTITY_COUNT,
+            },
+            &instructions,
+            scratch,
+            output,
+        )
+    })
+}
+
+fn close_effect_program() -> Vec<u8> {
+    let instructions = [EffectInstructionV2::require_lamports_eq(
+        ACTIVATION_ROOT_ACCOUNT_V2,
+        CLOSE_ROOT_LAMPORTS_SCALAR,
+    )];
+    let width = effect_program_v2_bytes(instructions.len()).expect("effect width");
+    encoded(width, |scratch, output| {
+        encode_effect_program_v2_atomic(
+            EffectGeometryV2 {
+                accounts: CLOSE_PROFILE_ACCOUNT_COUNT,
+                scalars: CLOSE_SCALAR_COUNT,
+                identities: CLOSE_IDENTITY_COUNT,
+                request_bytes: 0,
             },
             &instructions,
             scratch,
@@ -568,6 +729,31 @@ fn descriptor(
     config_schema: ContentId,
 ) -> Vec<u8> {
     let transition = transition_program(family);
+    descriptor_with_transition(
+        family,
+        profile_id,
+        effect_id,
+        kind,
+        capacity,
+        root_schema,
+        derivation,
+        config_schema,
+        &transition,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn descriptor_with_transition(
+    family: Family,
+    profile_id: [u8; 32],
+    effect_id: [u8; 32],
+    kind: ContentId,
+    capacity: ContentId,
+    root_schema: ContentId,
+    derivation: ContentId,
+    config_schema: ContentId,
+    transition: &[u8],
+) -> Vec<u8> {
     let mut output = vec![0_u8; CAPABILITY_PROGRAM_HEADER_BYTES_V1 + transition.len()];
     put(&mut output, 0, &CAPABILITY_PROGRAM_MAGIC_V1);
     put_u16(&mut output, 8, 1);
@@ -608,7 +794,7 @@ fn descriptor(
         CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
         u32::try_from(family.root_tail_bytes()).expect("tail width"),
     );
-    put(&mut output, CAPABILITY_PROGRAM_HEADER_BYTES_V1, &transition);
+    put(&mut output, CAPABILITY_PROGRAM_HEADER_BYTES_V1, transition);
     CapabilityProgramV1::decode(&output).expect("descriptor");
     output
 }
@@ -740,6 +926,11 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         WRONG_REGISTRY_ID,
         None,
     );
+    test.add_program(
+        "dclutch_trading_registry_test_program",
+        RENT_PROGRAM_ID,
+        None,
+    );
 
     let rent = Rent::default();
     let family = campaign.family();
@@ -772,11 +963,35 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         config_schema,
     );
     let descriptor_id = ContentId::new(hash(&descriptor).to_bytes()).expect("descriptor ID");
+    let close_profile =
+        matches!(campaign, Campaign::NativeClose).then(|| close_account_profile(family));
+    let close_effect = matches!(campaign, Campaign::NativeClose).then(close_effect_program);
+    let close_descriptor =
+        close_profile
+            .as_ref()
+            .zip(close_effect.as_ref())
+            .map(|(profile, effect)| {
+                let transition = close_transition_program();
+                descriptor_with_transition(
+                    family,
+                    hash(profile).to_bytes(),
+                    hash(effect).to_bytes(),
+                    kind,
+                    capacity,
+                    root_schema,
+                    derivation,
+                    config_schema,
+                    &transition,
+                )
+            });
+    let close_descriptor_id = close_descriptor
+        .as_ref()
+        .map(|bytes| ContentId::new(hash(bytes).to_bytes()).expect("close descriptor ID"));
     // For a set release the selection names the SET, and the descriptor is one of
     // its entries; for a flat release the two identities are the same record.
     let program_set_bytes = campaign
         .program_set()
-        .then(|| program_set(descriptor_id, campaign));
+        .then(|| program_set(descriptor_id, close_descriptor_id, campaign));
     let release_id = match &program_set_bytes {
         Some(bytes) => ContentId::new(hash(bytes).to_bytes()).expect("release ID"),
         None => descriptor_id,
@@ -792,11 +1007,20 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         }
     };
     let config_id = ContentId::new(hash(&config).to_bytes()).expect("config ID");
+    let close_principal = if matches!(campaign, Campaign::NativeClose) {
+        CLOSE_REMAINING_NATIVE_PRINCIPAL
+    } else {
+        0
+    };
     let amounts = FundingAmountsV1::new(
         CompartmentFundingV1::native_lamports(root_rent - ROOT_INITIAL_DUST)
             .expect("root rent quote"),
         CompartmentFundingV1::not_applicable(),
-        CompartmentFundingV1::not_applicable(),
+        if close_principal == 0 {
+            CompartmentFundingV1::not_applicable()
+        } else {
+            CompartmentFundingV1::native_lamports(close_principal).expect("close principal")
+        },
         CompartmentFundingV1::not_applicable(),
         CompartmentFundingV1::not_applicable(),
         CompartmentFundingV1::not_applicable(),
@@ -810,8 +1034,16 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         capacity,
         root_schema,
         derivation,
-        ActivationPolicy::RequiredAtFounding,
-        0,
+        if matches!(campaign, Campaign::NativeClose) {
+            ActivationPolicy::PrepaidLazy
+        } else {
+            ActivationPolicy::RequiredAtFounding
+        },
+        if matches!(campaign, Campaign::NativeClose) {
+            u64::MAX
+        } else {
+            0
+        },
         0,
         [0; MAX_DEPENDENCIES_PER_CAPABILITY],
         FundingQuoteV1::new(amounts, None).expect("quote"),
@@ -865,6 +1097,8 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         },
         outstanding_capabilities: 0,
         principal_cap_sets: u64::MAX,
+        // Replaced with the exact lifecycle RentCredit after the Market PDA is
+        // derived from the immutable identity below.
         rent_beneficiary: identity([0x26; 32]),
         terminal_receipt: None,
     };
@@ -874,6 +1108,23 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     )
     .0;
     state.identity.market_id = identity(market.to_bytes());
+    let (rent_credit, rent_credit_bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RENT_PROGRAM_ID,
+    );
+    let rent_credit_state = LifecycleRentCreditV2::new(
+        RefundAuthority::new(REFUND_WALLET.to_bytes()).expect("refund wallet"),
+        LifecycleAccountIdV2::new(market.to_bytes()).expect("market"),
+        LifecycleAccountIdV2::new(release_set).expect("release set"),
+        GENERATION,
+        rent_credit_bump,
+    )
+    .expect("RentCredit");
+    state.rent_beneficiary = identity(rent_credit.to_bytes());
     let state_bytes = state.encode().expect("Core state");
     add_account(
         &mut test,
@@ -881,6 +1132,13 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         CORE_PROGRAM_ID,
         rent.minimum_balance(state_bytes.len()),
         state_bytes.to_vec(),
+    );
+    add_account(
+        &mut test,
+        rent_credit,
+        RENT_PROGRAM_ID,
+        rent.minimum_balance(rent_credit_state.to_bytes().len()),
+        rent_credit_state.to_bytes().to_vec(),
     );
 
     let header = CapabilityRootHeaderV1::new(
@@ -921,7 +1179,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         &mut test,
         funding,
         TRADING_PROGRAM_ID,
-        funding_rent + root_rent - ROOT_INITIAL_DUST,
+        funding_rent + root_rent - ROOT_INITIAL_DUST + close_principal,
         funding_state.clone(),
     );
 
@@ -941,6 +1199,19 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     let config_record = add_record(&mut test, config_schema.to_bytes(), config);
     let profile_record = add_record(&mut test, ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, profile);
     let effect_record = add_record(&mut test, EFFECT_PROGRAM_SCHEMA, effect);
+    let close_records = close_descriptor.zip(close_profile).zip(close_effect).map(
+        |((descriptor, profile), effect)| {
+            (
+                add_record(
+                    &mut test,
+                    CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
+                    descriptor,
+                ),
+                add_record(&mut test, ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, profile),
+                add_record(&mut test, EFFECT_PROGRAM_SCHEMA, effect),
+            )
+        },
+    );
     let hostile_record = Pubkey::new_from_array([0xa1; 32]);
     add_account(
         &mut test,
@@ -1045,6 +1316,87 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         accounts.push(AccountMeta::new_readonly(descriptor_record.0, false));
         accounts.push(AccountMeta::new_readonly(descriptor_record.1, false));
     }
+    let close_instruction = close_records.as_ref().map(
+        |(close_descriptor_record, close_profile_record, close_effect_record)| {
+            let mut close_role_request = selection.to_bytes().to_vec();
+            close_role_request.extend_from_slice(
+                &dclutch_market_core_codec::CapabilityFundingHeaderV2::new(1, 1, 0b1)
+                    .expect("funding header")
+                    .encode(),
+            );
+            close_role_request.push(u8::try_from(FAMILY_CLOSE_SELECTOR).expect("selector"));
+            let close_role_digest = hash(&close_role_request).to_bytes();
+            let close_context = [0x82; 32];
+            let close_authority_seeds =
+                dclutch_release_set_contract::CallerAuthoritySeedsV1::from_bytes(
+                    release_set,
+                    market.to_bytes(),
+                    ExecutionRoleV1::Core,
+                    close_context,
+                    close_role_digest,
+                )
+                .expect("close caller authority seeds");
+            let close_authority =
+                Pubkey::find_program_address(&close_authority_seeds.as_slices(), &CORE_PROGRAM_ID)
+                    .0;
+            add_account(
+                &mut test,
+                close_authority,
+                system_program::ID,
+                1,
+                Vec::new(),
+            );
+            let close_envelope = CoreEffectEnvelopeV1::new(
+                CoreEffectActionV1::CloseCapability,
+                Role::Trading,
+                identity(CORE_PROGRAM_ID.to_bytes()),
+                identity(close_authority.to_bytes()),
+                identity(release_set),
+                identity(market.to_bytes()),
+                identity(close_context),
+                identity(hash(&state_bytes).to_bytes()),
+                identity(close_role_digest),
+                GENERATION,
+                0,
+                0,
+                u32::try_from(close_role_request.len()).expect("request width"),
+            )
+            .expect("close envelope");
+            let mut close_data = close_envelope.encode().expect("envelope bytes").to_vec();
+            close_data.extend_from_slice(&close_role_request);
+            Instruction {
+                program_id: CORE_PROGRAM_ID,
+                accounts: vec![
+                    AccountMeta::new_readonly(close_authority, false),
+                    AccountMeta::new(root, false),
+                    AccountMeta::new(funding, false),
+                    AccountMeta::new_readonly(manifest_raw, false),
+                    AccountMeta::new_readonly(market, false),
+                    AccountMeta::new_readonly(release_record.0, false),
+                    AccountMeta::new_readonly(release_record.1, false),
+                    AccountMeta::new_readonly(config_record.0, false),
+                    AccountMeta::new_readonly(config_record.1, false),
+                    AccountMeta::new_readonly(close_profile_record.0, false),
+                    AccountMeta::new_readonly(close_profile_record.1, false),
+                    AccountMeta::new_readonly(close_effect_record.0, false),
+                    AccountMeta::new_readonly(close_effect_record.1, false),
+                    AccountMeta::new_readonly(activation_cache, false),
+                    AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+                    AccountMeta::new_readonly(core_programdata, false),
+                    AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
+                    AccountMeta::new_readonly(trading_programdata, false),
+                    AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+                    AccountMeta::new_readonly(solana_sdk_ids::sysvar::rent::ID, false),
+                    AccountMeta::new_readonly(system_program::ID, false),
+                    AccountMeta::new_readonly(close_descriptor_record.0, false),
+                    AccountMeta::new_readonly(close_descriptor_record.1, false),
+                    AccountMeta::new_readonly(RENT_PROGRAM_ID, false),
+                    AccountMeta::new(rent_credit, false),
+                ],
+                data: close_data,
+            }
+        },
+    );
     (
         test,
         Fixture {
@@ -1067,6 +1419,9 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             manifest,
             manifest_id,
             funding_prestate: funding_state,
+            close_instruction,
+            rent_credit,
+            close_principal,
         },
     )
 }
@@ -1095,6 +1450,14 @@ async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
         .await
         .expect("account lookup")
         .expect("account exists")
+}
+
+async fn maybe_account(context: &mut ProgramTestContext, key: Pubkey) -> Option<Account> {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("account lookup")
 }
 
 async fn assert_rollback(
@@ -1166,7 +1529,10 @@ async fn assert_activation_succeeds(
     };
     assert_eq!(decoded.state(), expected_tail.as_slice());
     let funding = account(context, fixture.funding).await;
-    assert_eq!(funding.lamports, fixture.funding_rent);
+    assert_eq!(
+        funding.lamports,
+        fixture.funding_rent + fixture.close_principal
+    );
     let manifest = CapabilityManifestV1::decode(&fixture.manifest).expect("manifest");
     let authenticated = FundingLedgerV2::decode(&funding.data)
         .expect("funding poststate")
@@ -1184,6 +1550,97 @@ async fn common_outer_activates_root_and_funding_commit_last() {
     let (test, fixture) = build_fixture(Campaign::Success);
     let mut context = test.start_with_context().await;
     assert_activation_succeeds(&mut context, &fixture).await;
+}
+
+#[tokio::test]
+async fn native_close_refunds_principal_rent_and_surplus_then_replay_refuses() {
+    const ROOT_SURPLUS: u64 = 11;
+    const LEDGER_SURPLUS: u64 = 13;
+
+    let (test, fixture) = build_fixture(Campaign::NativeClose);
+    let mut context = test.start_with_context().await;
+    assert_eq!(
+        fixture
+            .close_instruction
+            .as_ref()
+            .expect("close instruction")
+            .accounts
+            .len(),
+        25
+    );
+    assert_activation_succeeds(&mut context, &fixture).await;
+    let payer = context.payer.pubkey();
+    submit(&mut context, transfer(&payer, &fixture.root, ROOT_SURPLUS))
+        .await
+        .expect("root donation");
+    submit(
+        &mut context,
+        transfer(&payer, &fixture.funding, LEDGER_SURPLUS),
+    )
+    .await
+    .expect("ledger donation");
+
+    let root_before = account(&mut context, fixture.root).await;
+    let funding_before = account(&mut context, fixture.funding).await;
+    let credit_before = account(&mut context, fixture.rent_credit).await;
+    assert_eq!(root_before.lamports, fixture.root_rent + ROOT_SURPLUS);
+    assert_eq!(
+        funding_before.lamports,
+        fixture.funding_rent + fixture.close_principal + LEDGER_SURPLUS
+    );
+
+    // A writable account with the wrong key/owner/width cannot substitute for
+    // the Market's exact RentCredit, and refusal is commit-last.
+    let mut substituted = fixture
+        .close_instruction
+        .clone()
+        .expect("close instruction");
+    *substituted.accounts.last_mut().expect("RentCredit meta") =
+        AccountMeta::new(fixture.hostile_record, false);
+    submit(&mut context, substituted)
+        .await
+        .expect_err("beneficiary substitution refuses");
+    assert_eq!(account(&mut context, fixture.root).await, root_before);
+    assert_eq!(account(&mut context, fixture.funding).await, funding_before);
+    assert_eq!(
+        account(&mut context, fixture.rent_credit).await,
+        credit_before
+    );
+
+    let close = fixture
+        .close_instruction
+        .clone()
+        .expect("close instruction");
+    submit(&mut context, close.clone())
+        .await
+        .expect("native close succeeds");
+    for closed in [fixture.root, fixture.funding] {
+        if let Some(account) = maybe_account(&mut context, closed).await {
+            assert_eq!(account.owner, system_program::ID);
+            assert_eq!(account.lamports, 0);
+            assert!(account.data.is_empty());
+        }
+    }
+    let expected_credit = credit_before
+        .lamports
+        .checked_add(fixture.root_rent)
+        .and_then(|value| value.checked_add(ROOT_SURPLUS))
+        .and_then(|value| value.checked_add(fixture.funding_rent))
+        .and_then(|value| value.checked_add(fixture.close_principal))
+        .and_then(|value| value.checked_add(LEDGER_SURPLUS))
+        .expect("classified refund sum");
+    assert_eq!(
+        account(&mut context, fixture.rent_credit).await.lamports,
+        expected_credit
+    );
+
+    submit(&mut context, close)
+        .await
+        .expect_err("closed root/ledger replay refuses");
+    assert_eq!(
+        account(&mut context, fixture.rent_credit).await.lamports,
+        expected_credit
+    );
 }
 
 /// General's three activation artifacts create a real `GeneralRootV2`.

@@ -51,11 +51,11 @@ use crate::{
 const FOUND_INVOCATION_V4: u32 = 0;
 const CALLER: usize = 0;
 const MARKET: usize = 1;
-const CURRENT_CORE: usize = 19;
-const TICKET_RAW: usize = 39;
-const FUNDING_START: usize = 42;
-const FOUND_SUFFIX_ACCOUNT_COUNT: usize = 15;
-const _: () = assert!(SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4 == 42);
+const CURRENT_CORE: usize = 25;
+const TICKET_RAW: usize = 45;
+const FUNDING_START: usize = SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4 as usize;
+const FOUND_SUFFIX_ACCOUNT_COUNT: usize = 13;
+const _: () = assert!(SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4 == 48);
 
 /// Exact executed Core-Found prefix fact retained for the common-Hot continuation.
 ///

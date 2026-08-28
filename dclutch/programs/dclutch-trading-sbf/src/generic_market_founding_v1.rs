@@ -1355,9 +1355,11 @@ mod tests {
         // Decision 0004 removed the capability-root account from both the Found
         // and the Open frame; the root is derived, never read. The one account
         // above that width is the instructions sysvar the heap-frame admission
-        // reads back, which is why the demo Market's frame is 138 and not 137.
-        assert_eq!(count(3), 138);
-        assert_eq!(count(16), 151);
+        // reads back. Projected Found V2 consumes the authenticated Custody
+        // projection instead of repeating three finalized record pairs, so
+        // the three-ledger demo frame is exactly 132.
+        assert_eq!(count(3), 132);
+        assert_eq!(count(16), 145);
         assert_eq!(
             GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2,
             GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 + 1

@@ -424,6 +424,10 @@ dependencies = [
 [[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-series-v3-kernel"

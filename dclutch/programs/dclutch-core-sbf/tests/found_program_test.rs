@@ -1,4 +1,4 @@
-//! Real-ELF Core Found31 infrastructure and Runtime Product V2 composition.
+//! Real-ELF Core Found37 infrastructure and Runtime Product V2 composition.
 
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
@@ -96,9 +96,18 @@ use dclutch_series_v3_kernel::{
     series_core_consume_request, template_content_id, ticket_content_id,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SourceMaterialV3,
+    CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+    ManipulationFloorBasis, ManipulationFloorV1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
+    SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
 };
 use solana_account::Account;
+use solana_address_lookup_table_interface::{
+    program as lookup_table_program,
+    state::{AddressLookupTable, LookupTableMeta},
+};
+use solana_hash::Hash;
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
@@ -110,7 +119,7 @@ use solana_program_pack::Pack;
 use solana_program_test::ProgramTest;
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
-use solana_transaction::Transaction;
+use solana_transaction::versioned::VersionedTransaction;
 use spl_token_interface::state::{Account as SplAccount, AccountState as SplAccountState};
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
@@ -121,6 +130,7 @@ const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc6; 32]);
 const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID);
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xb2; 32]);
+const LOOKUP_TABLE: Pubkey = Pubkey::new_from_array([0xb8; 32]);
 const GENERATION: u64 = 1;
 
 /// Preimage of this campaign's fixed key seed.
@@ -231,6 +241,9 @@ struct Fixture {
     portfolio: Record,
     linked_basis: Record,
     source: Record,
+    source_spec: Record,
+    capacity_profile: Record,
+    manipulation_floor: Record,
     manifest: Record,
     release_set: Record,
     cache: Pubkey,
@@ -1221,16 +1234,57 @@ fn fixture(core_mutable: bool) -> Fixture {
     })
     .expect("Realm");
     let realm = Record::new(REALM_SCHEMA_RELEASE_ID_V1, realm_value.to_bytes().to_vec());
-    // This fixture graph has no manipulation-floor record, so the sole
-    // canonical V3 policy is explicitly unbounded principal. A bounded policy
-    // would require the selected floor's finalized raw/staging pair.
-    let source_value = SourceMaterialV3::explicitly_unbounded(
+    let capacity_profile = SourceCapacityProfileV1::new(
+        CapacityEnvelope::Provisional,
+        1,
+        0,
+        source_id(0xd5),
+        source_id(0xd6),
+        208,
+        0,
+    )
+    .expect("Source capacity profile")
+    .bounding_principal(1, 4)
+    .expect("bounded principal ratio");
+    let capacity_profile = Record::new(
+        SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+        capacity_profile.to_bytes().to_vec(),
+    );
+    let adapter_config_id = source_id(0xda);
+    let source_spec_value = SourceSpecV1::new(
+        source_id(0xd7),
+        source_id(0xd8),
+        source_id(0xd9),
+        SourceAccessProfile::RelayedObservationRecord,
+        adapter_config_id,
+        SourceContentId::new(capacity_profile.digest).expect("capacity identity"),
+    );
+    let source_spec = Record::new(
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        source_spec_value.to_bytes().to_vec(),
+    );
+    // κ=1/4 over a 20,000-atom venue floor admits exactly 5,000 complete
+    // sets at this fixture's unit basis. Series consumes that full bound.
+    let manipulation_floor_value = ManipulationFloorV1::new(
+        ManipulationFloorBasis::ObservedDepth,
+        SourceContentId::new(source_spec.digest).expect("SourceSpec identity"),
+        adapter_config_id,
+        SourceContentId::new(COLLATERAL_MINT.to_bytes()).expect("collateral unit"),
+        source_id(0xdb),
+        20_000,
+    );
+    let manipulation_floor = Record::new(
+        MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+        manipulation_floor_value.to_bytes().to_vec(),
+    );
+    let source_value = SourceMaterialV3::bounded_by_floor(
         SourceContentId::new(product.digest).expect("Product root"),
-        source_id(0xb4),
+        SourceContentId::new(source_spec.digest).expect("SourceSpec identity"),
         source_id(0xb5),
         source_id(0xb6),
         None,
         source_id(0xb7),
+        SourceContentId::new(manipulation_floor.digest).expect("manipulation floor identity"),
     );
     let source = Record::new(
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -1256,6 +1310,9 @@ fn fixture(core_mutable: bool) -> Fixture {
         &portfolio,
         &linked_basis,
         &source,
+        &source_spec,
+        &capacity_profile,
+        &manipulation_floor,
         &manifest,
         &release_set,
         &registry_artifact,
@@ -1360,6 +1417,9 @@ fn fixture(core_mutable: bool) -> Fixture {
         portfolio,
         linked_basis,
         source,
+        source_spec,
+        capacity_profile,
+        manipulation_floor,
         manifest,
         release_set,
         cache,
@@ -1407,12 +1467,18 @@ fn found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruction {
             AccountMeta::new_readonly(fixture.domain.staging, false),
             AccountMeta::new_readonly(fixture.portfolio.raw, false),
             AccountMeta::new_readonly(fixture.portfolio.staging, false),
+            AccountMeta::new_readonly(fixture.linked_basis.raw, false),
+            AccountMeta::new_readonly(fixture.linked_basis.staging, false),
             AccountMeta::new_readonly(fixture.source.raw, false),
             AccountMeta::new_readonly(fixture.source.staging, false),
+            AccountMeta::new_readonly(fixture.source_spec.raw, false),
+            AccountMeta::new_readonly(fixture.source_spec.staging, false),
+            AccountMeta::new_readonly(fixture.capacity_profile.raw, false),
+            AccountMeta::new_readonly(fixture.capacity_profile.staging, false),
+            AccountMeta::new_readonly(fixture.manipulation_floor.raw, false),
+            AccountMeta::new_readonly(fixture.manipulation_floor.staging, false),
             AccountMeta::new_readonly(fixture.manifest.raw, false),
             AccountMeta::new_readonly(fixture.manifest.staging, false),
-            AccountMeta::new_readonly(fixture.release_set.raw, false),
-            AccountMeta::new_readonly(fixture.release_set.staging, false),
             AccountMeta::new_readonly(fixture.cache, false),
             AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
             AccountMeta::new_readonly(fixture.core_programdata, false),
@@ -1457,22 +1523,96 @@ fn project_found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruc
     instruction
 }
 
+/// Install one canonical lookup table for the complete instruction frame.
+///
+/// The fee payer and instruction signers remain static. Every other key,
+/// including the invoked program, is sorted by raw public-key bytes and
+/// deduplicated before the message compiler chooses its writable/readonly
+/// indexes. The bank therefore resolves the same table the packet names.
+fn add_instruction_lookup(
+    test: &mut ProgramTest,
+    instructions: &[Instruction],
+) -> AddressLookupTableAccount {
+    let mut addresses = instructions
+        .iter()
+        .flat_map(|instruction| {
+            core::iter::once(instruction.program_id).chain(
+                instruction
+                    .accounts
+                    .iter()
+                    .filter(|meta| !meta.is_signer)
+                    .map(|meta| meta.pubkey),
+            )
+        })
+        .filter(|address| *address != LOOKUP_TABLE)
+        .collect::<Vec<_>>();
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    let data = AddressLookupTable {
+        meta: LookupTableMeta::default(),
+        addresses: addresses.as_slice().into(),
+    }
+    .serialize_for_tests()
+    .expect("lookup-table bytes");
+    test.add_account(
+        LOOKUP_TABLE,
+        Account {
+            lamports: Rent::default().minimum_balance(data.len()),
+            data,
+            owner: lookup_table_program::id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    AddressLookupTableAccount {
+        key: LOOKUP_TABLE,
+        addresses,
+    }
+}
+
+fn signed_v0(
+    payer: &Pubkey,
+    instructions: &[Instruction],
+    lookup: &AddressLookupTableAccount,
+    blockhash: Hash,
+    signers: &[&Keypair],
+) -> VersionedTransaction {
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            payer,
+            instructions,
+            core::slice::from_ref(lookup),
+            blockhash,
+        )
+        .expect("canonical v0 message"),
+    );
+    let transaction =
+        VersionedTransaction::try_new(message, signers).expect("signed v0 transaction");
+    wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    transaction
+}
+
 async fn execute(
     mut fixture: Fixture,
     instruction: Instruction,
 ) -> (Fixture, solana_program_test::ProgramTestContext, bool) {
-    let test = fixture.test.take().expect("ProgramTest");
+    let mut test = fixture.test.take().expect("ProgramTest");
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
         &[instruction],
-        Some(&context.payer.pubkey()),
-        &[&context.payer, &fixture.payer],
+        &lookup,
         blockhash,
+        &[&context.payer, &fixture.payer],
     );
     let accepted = context
         .banks_client
@@ -1486,18 +1626,20 @@ async fn execute_project(
     mut fixture: Fixture,
     instruction: Instruction,
 ) -> (Fixture, solana_program_test::ProgramTestContext, bool) {
-    let test = fixture.test.take().expect("ProgramTest");
+    let mut test = fixture.test.take().expect("ProgramTest");
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
         &[instruction],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &lookup,
         blockhash,
+        &[&context.payer],
     );
     let accepted = context
         .banks_client
@@ -1528,8 +1670,6 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
         AccountMeta::new_readonly(fixture.hoard, false),
         AccountMeta::new_readonly(fixture.funding_source, false),
         AccountMeta::new_readonly(fixture.funding_source_replay, false),
-        AccountMeta::new_readonly(fixture.base.linked_basis.raw, false),
-        AccountMeta::new_readonly(fixture.base.linked_basis.staging, false),
         AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.claims_programdata_meta, false),
         AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
@@ -1541,6 +1681,29 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
     ]);
     let mut data = fixture.request.to_vec();
     data.extend_from_slice(&fixture.lock_receipt);
+    let fixed = accounts
+        .get(..dclutch_core_sbf::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1)
+        .expect("complete Series fixed frame");
+    for (left_index, left) in fixed.iter().enumerate() {
+        for (right_index, right) in fixed.iter().enumerate().skip(left_index + 1) {
+            assert_ne!(
+                left.pubkey, right.pubkey,
+                "Series fixed-frame alias at {left_index}/{right_index}"
+            );
+        }
+        for (right_index, right) in accounts.iter().enumerate() {
+            if left.pubkey == right.pubkey {
+                assert!(
+                    !right.is_signer || left.is_signer,
+                    "Series privilege union makes fixed account {left_index} signer at {right_index}"
+                );
+                assert!(
+                    !right.is_writable || left.is_writable,
+                    "Series privilege union makes fixed account {left_index} writable at {right_index}"
+                );
+            }
+        }
+    }
     Instruction {
         program_id: TRADING_PROGRAM_ID,
         accounts,
@@ -1565,18 +1728,21 @@ async fn execute_series(
     solana_program_test::ProgramTestContext,
     Option<String>,
 ) {
-    let test = fixture.base.test.take().expect("ProgramTest");
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
-        &[series_instruction(&fixture)],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
+        &[instruction],
+        &lookup,
         blockhash,
+        &[&context.payer],
     );
     let failure = submit_and_record(&context, transaction, label).await;
     (fixture, context, failure)
@@ -1618,7 +1784,7 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
 /// Submit one already-built transaction and, if asked, record it as evidence.
 async fn submit_and_record(
     context: &solana_program_test::ProgramTestContext,
-    transaction: Transaction,
+    transaction: VersionedTransaction,
     label: &str,
 ) -> Option<String> {
     let signature = transaction
@@ -1627,7 +1793,10 @@ async fn submit_and_record(
         .copied()
         .expect("a signed transaction has a signature")
         .to_string();
-    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
     let outcome = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -1673,21 +1842,23 @@ async fn execute_series_twice(
     Option<String>,
     Option<String>,
 ) {
-    let test = fixture.base.test.take().expect("ProgramTest");
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let mut context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let instruction = series_instruction(&fixture);
     let first = submit_and_record(
         &context,
-        Transaction::new_signed_with_payer(
+        signed_v0(
+            &context.payer.pubkey(),
             core::slice::from_ref(&instruction),
-            Some(&context.payer.pubkey()),
-            &[&context.payer],
+            &lookup,
             blockhash,
+            &[&context.payer],
         ),
         first_label,
     )
@@ -1702,11 +1873,12 @@ async fn execute_series_twice(
     );
     let replay = submit_and_record(
         &context,
-        Transaction::new_signed_with_payer(
+        signed_v0(
+            &context.payer.pubkey(),
             &[instruction],
-            Some(&context.payer.pubkey()),
-            &[&context.payer],
+            &lookup,
             replay_blockhash,
+            &[&context.payer],
         ),
         replay_label,
     )
@@ -1715,7 +1887,7 @@ async fn execute_series_twice(
 }
 
 #[tokio::test]
-async fn real_found31_accepts_258_outcomes_after_immutable_infrastructure_auth() {
+async fn real_found37_accepts_258_outcomes_after_pinned_infrastructure_auth() {
     let fixture = fixture(false);
     let instruction = found_instruction(&fixture, false);
     let (fixture, context, accepted) = execute(fixture, instruction).await;
@@ -1742,7 +1914,7 @@ async fn real_found31_accepts_258_outcomes_after_immutable_infrastructure_auth()
 }
 
 #[tokio::test]
-async fn project_found31_authenticates_without_signature_or_market_mutation() {
+async fn project_found37_authenticates_without_signature_or_market_mutation() {
     let fixture = fixture(false);
     let instruction = project_found_instruction(&fixture, false);
     let payer = instruction.accounts.first().expect("projection payer meta");
@@ -1767,7 +1939,7 @@ async fn project_found31_authenticates_without_signature_or_market_mutation() {
 }
 
 #[tokio::test]
-async fn projected_found31_refuses_swapped_infrastructure_without_market_mutation() {
+async fn projected_found37_refuses_swapped_infrastructure_without_market_mutation() {
     let fixture = fixture(false);
     let instruction = project_found_instruction(&fixture, true);
     let (fixture, context, accepted) = execute_project(fixture, instruction).await;
@@ -1803,23 +1975,21 @@ async fn swapped_registry_and_rent_artifacts_refuse_without_market_write() {
 }
 
 #[tokio::test]
-async fn mutable_core_release_refuses_after_profile_init_without_market_write() {
+async fn slot_pinned_mutable_core_release_accepts_after_profile_init() {
     let fixture = fixture(true);
     let instruction = found_instruction(&fixture, false);
     let (fixture, context, accepted) = execute(fixture, instruction).await;
-    assert!(!accepted);
+    assert!(accepted);
     let market = context
         .banks_client
         .get_account(fixture.market)
         .await
         .expect("Market query")
-        .expect("vacant Market");
-    assert_eq!(market.owner, system_program::ID);
-    assert!(market.data.is_empty());
-    assert_eq!(
-        market.lamports,
-        Rent::default().minimum_balance(STATE_BYTES)
-    );
+        .expect("Market");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+    let state = CoreState::decode(&market.data).expect("CoreState");
+    assert_eq!(state.phase, Phase::Founding);
+    assert_eq!(state.readiness, Readiness::Prepaid);
 }
 
 async fn assert_series_found_rollback(
@@ -1951,7 +2121,7 @@ async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
 }
 
 #[tokio::test]
-async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollback() {
+async fn series_consume_hostile_programdata_refuses_with_byte_exact_rollback() {
     let fixture = series_fixture(SeriesFault::BatchClaimsProgramdata);
     let (fixture, context, failure) = execute_series(
         fixture,
@@ -1961,8 +2131,8 @@ async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollba
     let failure = failure.expect("substituted Claims ProgramData must refuse");
     assert_refused_with(
         &failure,
-        dclutch_registry_sbf::RegistryError::Deployment as u32,
-        "the Registry batch's exact Deployment refusal",
+        dclutch_core_sbf::CoreSbfError::Release as u32,
+        "Core's exact current-release refusal",
     );
     assert_series_found_rollback(&fixture, &context).await;
 }

@@ -103,10 +103,10 @@ pub const SERIES_CONSUME_IR_REQUEST_BYTES_V3: usize = 2 * SERIES_CONSUME_CORE_RE
 pub const SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3: u16 = 14;
 /// Exact Core Found accounts other than the 1..16 ordered FundingStates.
 ///
-/// This is the fixed 42-account Found/Series prefix plus the exact 15-account
+/// This is the fixed 48-account Found37/Series prefix plus the exact 13-account
 /// permit/Custody/Claims evidence suffix. The FundingState slice is inserted
 /// between them by the Core frame and is the only affine account dimension.
-pub const SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3: u16 = 57;
+pub const SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3: u16 = 61;
 /// Exact Projected Custody Realize child frame.
 pub const SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3: u16 = 12;
 /// Exact Claims Founding V5 child frame.

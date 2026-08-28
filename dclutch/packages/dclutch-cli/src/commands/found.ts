@@ -16,27 +16,13 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { decodeSession, type CliContext } from '../context';
 import { block, type Io } from '../output';
-
-function bootstrapBinary(context: CliContext, env: NodeJS.ProcessEnv): string {
-  const flag = context.flags['bootstrap-bin'];
-  if (typeof flag === 'string' && flag.length > 0) return flag;
-  if (env.DCLUTCH_BOOTSTRAP_BIN !== undefined && env.DCLUTCH_BOOTSTRAP_BIN !== '') return env.DCLUTCH_BOOTSTRAP_BIN;
-  // Repo-resident default: this package lives at packages/dclutch-cli.
-  const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-  const candidates = [
-    resolve(repoRoot, 'tools/local-validator/bootstrap/successor/target/release/dclutch-local-successor-bootstrap'),
-    resolve(repoRoot, '../../tools/local-validator/bootstrap/successor/target/release/dclutch-local-successor-bootstrap'),
-  ];
-  for (const candidate of candidates) if (existsSync(candidate)) return candidate;
-  throw new Error(`the successor bootstrap binary was not found (tried ${candidates.join(', ')}); build it with \`cargo build --release\` in tools/local-validator/bootstrap/successor, or pass --bootstrap-bin / set DCLUTCH_BOOTSTRAP_BIN`);
-}
+import { successorBinary } from '../successor';
 
 export async function found(context: CliContext, io: Io, env: NodeJS.ProcessEnv): Promise<number> {
-  const binary = bootstrapBinary(context, env);
+  const binary = successorBinary(context, env);
 
   if (context.flags.demo === true) {
     const registry = context.flags['registry-program'];

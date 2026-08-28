@@ -2,7 +2,7 @@
 //!
 //! One profile owns the complete Lock→Found→Realize→Claims→Open logical
 //! account vector. The ordered FundingState span is inserted inside Core Found
-//! after its fixed 42-account prefix. Repeated identities are authenticated as
+//! after its fixed 48-account prefix. Repeated identities are authenticated as
 //! route-local aliases of one physical representative; child adapters receive
 //! downgraded privileges while the physical representative supplies their
 //! union. Root and Ticket writes are outer-only commit-last authority.
@@ -38,7 +38,7 @@ const CURRENT_TRADING_IDENTITY: u16 = 0;
 const COMMON_SCALAR_COUNT: u16 = 5;
 const COMMON_IDENTITY_COUNT: u16 = 1;
 const ROOT: usize = 0;
-const TICKET_REPLAY: usize = 53;
+const TICKET_REPLAY: usize = 59;
 
 /// Exact Profile13 artifact width for the global Consume account vector.
 pub const SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
@@ -48,7 +48,7 @@ pub const SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4: usize = DYNAMIC_FIXED_SPAN_HE
 
 /// Exact finalized account widths used to specialize the physical profile.
 ///
-/// Coordinates are the 157 fixed base coordinates before insertion of the
+/// Coordinates are the 161 fixed base coordinates before insertion of the
 /// opaque FundingState span. Aliases must repeat their representative's exact
 /// pre-execution width; no parallel account-layout authority is accepted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,8 +74,8 @@ pub fn encode_series_consume_account_profile_v4_atomic(
 ) -> Result<(), SeriesConsumeAccountProfileErrorV4> {
     if scratch.len() != SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4
         || output.len() != SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4
-        || SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4 != 61
-        || SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4 != 96
+        || SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4 != 67
+        || SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4 != 94
     {
         return Err(SeriesConsumeAccountProfileErrorV4::Geometry);
     }
@@ -242,112 +242,112 @@ const fn write_data() -> AccountEffectPermissionsV2 {
 const WRITABLE_COORDINATES: &[usize] = &[
     0, // Series root, outer commit-last.
     6, 11, 12, 13, 17, // Projected Lock.
-    18, 19, 61, // Shared Market representative, Core payer, permit.
-    72, 73, 74, // Claims aggregate, Position, admission representatives.
+    18, 19, 67, // Shared Market representative, Core payer, permit.
+    76, 77, 78, // Claims aggregate, Position, admission representatives.
 ];
 
 const EXECUTABLE_COORDINATES: &[usize] = &[
     8, 9, 16, // Lock Registry, Trading, Token.
-    22, 38, 42, 68, 70, // Found Rent/Core/System and shared role programs.
+    22, 44, 48, 72, 74, // Found Rent/Core/System and shared role programs.
 ];
 
 // Base coordinates exclude the inserted FundingState span. Every target is an
 // earlier fixed coordinate and the dynamic profile shifts both source and
-// target consistently after insertion coordinate 61.
+// target consistently after insertion coordinate 67.
 const ROUTE_ALIASES: &[(usize, usize)] = &[
     (20, 18),
     (21, 11),
     (25, 2),
     (29, 3),
-    (37, 7),
-    (40, 8),
-    (50, 9),
-    (51, 10),
-    (52, 0),
-    (62, 6),
-    (63, 12),
-    (64, 13),
-    (65, 17),
-    (66, 4),
-    (77, 6),
-    (78, 7),
-    (79, 8),
-    (80, 9),
-    (81, 10),
-    (82, 11),
-    (83, 12),
-    (84, 18),
-    (85, 14),
-    (86, 15),
-    (87, 16),
-    (89, 61),
-    (90, 72),
-    (91, 73),
-    (92, 74),
-    (93, 13),
-    (94, 12),
-    (95, 6),
-    (96, 4),
-    (97, 67),
-    (98, 2),
-    (99, 26),
-    (100, 27),
-    (101, 28),
-    (102, 3),
-    (103, 30),
-    (104, 41),
-    (105, 42),
-    (106, 18),
-    (107, 7),
-    (108, 8),
-    (109, 68),
-    (110, 69),
-    (111, 38),
-    (112, 39),
-    (113, 9),
-    (114, 10),
-    (115, 70),
-    (116, 71),
-    (117, 75),
-    (118, 11),
-    (119, 22),
-    (120, 19),
-    (121, 18),
-    (122, 61),
-    (123, 11),
-    (124, 22),
-    (125, 7),
-    (126, 8),
-    (127, 9),
-    (128, 10),
-    (129, 68),
-    (130, 69),
-    (131, 70),
-    (132, 71),
-    (133, 38),
-    (134, 39),
-    (135, 0),
-    (136, 53),
-    (137, 54),
-    (138, 55),
-    (139, 56),
-    (140, 57),
-    (141, 58),
-    (142, 59),
-    (143, 2),
-    (144, 26),
-    (145, 27),
-    (146, 28),
-    (147, 3),
-    (148, 30),
-    (149, 6),
-    (150, 12),
-    (151, 13),
-    (152, 72),
-    (153, 73),
-    (154, 74),
-    (155, 60),
-    (156, 41),
+    (43, 7),
+    (46, 8),
+    (56, 9),
+    (57, 10),
+    (58, 0),
+    (68, 6),
+    (69, 12),
+    (70, 13),
+    (71, 17),
+    (31, 4),
+    (81, 6),
+    (82, 7),
+    (83, 8),
+    (84, 9),
+    (85, 10),
+    (86, 11),
+    (87, 12),
+    (88, 18),
+    (89, 14),
+    (90, 15),
+    (91, 16),
+    (93, 67),
+    (94, 76),
+    (95, 77),
+    (96, 78),
+    (97, 13),
+    (98, 12),
+    (99, 6),
+    (100, 4),
+    (101, 32),
+    (102, 2),
+    (103, 26),
+    (104, 27),
+    (105, 28),
+    (106, 3),
+    (107, 30),
+    (108, 47),
+    (109, 48),
+    (110, 18),
+    (111, 7),
+    (112, 8),
+    (113, 72),
+    (114, 73),
+    (115, 44),
+    (116, 45),
+    (117, 9),
+    (118, 10),
+    (119, 74),
+    (120, 75),
+    (121, 79),
+    (122, 11),
+    (123, 22),
+    (124, 19),
+    (125, 18),
+    (126, 67),
+    (127, 11),
+    (128, 22),
+    (129, 7),
+    (130, 8),
+    (131, 9),
+    (132, 10),
+    (133, 72),
+    (134, 73),
+    (135, 74),
+    (136, 75),
+    (137, 44),
+    (138, 45),
+    (139, 0),
+    (140, 59),
+    (141, 60),
+    (142, 61),
+    (143, 62),
+    (144, 63),
+    (145, 64),
+    (146, 65),
+    (147, 2),
+    (148, 26),
+    (149, 27),
+    (150, 28),
+    (151, 3),
+    (152, 30),
+    (153, 6),
+    (154, 12),
+    (155, 13),
+    (156, 76),
+    (157, 77),
+    (158, 78),
+    (159, 66),
+    (160, 47),
 ];
 
 #[cfg(test)]
@@ -386,43 +386,43 @@ mod tests {
             profile.artifact_profile(),
             DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         );
-        assert_eq!(span.insertion_coordinate(), 61);
+        assert_eq!(span.insertion_coordinate(), 67);
         assert_eq!(span.count_scalar(), SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4);
         assert_eq!(span.minimum(), 1);
         assert_eq!(span.maximum(), 16);
         assert_eq!(span.step(), 1);
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(0, &[1]),
-            Ok(158)
+            Ok(162)
         );
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(0, &[16]),
-            Ok(173)
+            Ok(177)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(0, &[1]),
-            Ok(65)
+            Ok(69)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(0, &[16]),
-            Ok(80)
-        );
-        assert_eq!(
-            profile.representative_with_dynamic_spans(0, &[7], 61),
-            Ok(61)
+            Ok(84)
         );
         assert_eq!(
             profile.representative_with_dynamic_spans(0, &[7], 67),
             Ok(67)
         );
-        // Base projected replay coordinate62 shifts to expanded69 and aliases6.
         assert_eq!(
-            profile.representative_with_dynamic_spans(0, &[7], 69),
+            profile.representative_with_dynamic_spans(0, &[7], 73),
+            Ok(73)
+        );
+        // Base projected replay coordinate68 shifts to expanded75 and aliases6.
+        assert_eq!(
+            profile.representative_with_dynamic_spans(0, &[7], 75),
             Ok(6)
         );
-        // Base route2 begins76, therefore expanded route2 begins83.
+        // Base route2 begins80, therefore expanded route2 begins87.
         assert_eq!(
-            profile.representative_with_dynamic_spans(0, &[7], 84),
+            profile.representative_with_dynamic_spans(0, &[7], 88),
             Ok(6)
         );
     }
@@ -442,10 +442,10 @@ mod tests {
             EFFECT_PERMISSION_WRITE_DATA
         );
         let found_ticket = profile
-            .route_privileges_with_dynamic_spans(0, &[7], 53)
+            .route_privileges_with_dynamic_spans(0, &[7], 59)
             .expect("Found Ticket");
         let open_ticket = profile
-            .route_privileges_with_dynamic_spans(0, &[7], 143)
+            .route_privileges_with_dynamic_spans(0, &[7], 147)
             .expect("Open Ticket");
         assert!(!found_ticket.writable());
         assert!(!open_ticket.writable());
@@ -513,8 +513,8 @@ mod tests {
         // Both role programs sit past the FundingState span's insertion
         // coordinate, so each base coordinate shifts by the funding width.
         for (role, base, aliases) in [
-            ("Claims", 68_usize, [109_usize, 129]),
-            ("Custody", 70_usize, [115_usize, 131]),
+            ("Claims", 72_usize, [113_usize, 133]),
+            ("Custody", 74_usize, [119_usize, 135]),
         ] {
             let representative = base + shift;
             let mut carriers = vec![];
@@ -546,7 +546,7 @@ mod tests {
         }
         // The two roles are distinct physical accounts. A shared one would make
         // both lookups resolve to the same program.
-        assert_ne!(68 + shift, 70 + shift);
+        assert_ne!(72 + shift, 74 + shift);
     }
 
     #[test]

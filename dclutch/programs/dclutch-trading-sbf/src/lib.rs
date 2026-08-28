@@ -4,11 +4,15 @@
 
 //! Canonical data-driven SBF adapter for the fixed Trading execution role.
 //!
-//! The executable activation path authenticates the common Core envelope,
-//! current Registry releases, finalized descriptor/config/profile/effect
-//! records, and interpreted transition/effects before committing one composite
-//! root, its FundingState accounts, and the exact Core acknowledgment. It has
-//! no family discriminator.
+//! The executable capability lifecycle path authenticates the common Core
+//! envelope, current Registry releases, finalized
+//! descriptor/config/profile/effect records, and interpreted
+//! transition/effects. Activation commits one composite root and its selected
+//! FundingLedgerV2 row. Native close refunds the exact remaining principal,
+//! root/ledger Rent, and separately classified surplus to the Market's one
+//! RentCredit before making the root and selected ledger vacant. Realm/token
+//! custody remains explicitly unsupported. The boundary has no family
+//! discriminator.
 
 // The kernel crates this adapter calls are `no_std`; the adapter layer itself
 // allocates, so the executable links `std` for `Vec`/`Box` and for the
@@ -248,10 +252,11 @@ pub const TRADING_MAX_INSTRUCTION_ACCOUNTS_V3: usize = HOT_FIXED_ACCOUNT_COUNT_V
     + TRADING_MAX_HOT_BANK_PAGES_V3
     + TRADING_MAX_HOT_PHYSICAL_REPRESENTATIVES_V3;
 
-/// Execute the family-neutral authenticated activation route.
+/// Execute the family-neutral authenticated capability lifecycle route.
 ///
-/// Hot actions and closure remain fail-closed until their common profile and
-/// fixed-role receipt composition land in this same authority boundary.
+/// Activation and native closure share the common descriptor/profile boundary.
+/// Realm/token closure remains fail-closed until its ordered-vault adapter
+/// lands in this same authority boundary.
 #[inline(never)]
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -310,7 +315,7 @@ pub fn process_instruction(
     if hot_v3::is_hot_execution_v3(instruction_data) {
         hot_v3::process_hot_execution_v3(program_id, accounts, instruction_data)
     } else {
-        outer::process_activation(program_id, accounts, instruction_data)
+        outer::process_capability_lifecycle(program_id, accounts, instruction_data)
     }
 }
 

@@ -17,6 +17,11 @@ and Cargo's top-package `Compiling <package>` line. This distinction is
 load-bearing: a warm target can make Cargo emit no compiler diagnostics because
 it invoked no compiler. Silence from that run is not a zero-diagnostic build.
 
+Every SBF invocation also passes Cargo's `--locked` admission through
+`cargo-build-sbf`. If a root or nested lockfile is stale, the release refuses
+instead of silently resolving another dependency graph and modifying the
+source checkout.
+
 `--keep-elf` is retained only to give old invocations a precise refusal. Reused
 ELFs and prior logs cannot qualify a new checked-release candidate.
 

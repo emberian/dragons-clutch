@@ -30,7 +30,9 @@ dclutch --session session.json buy --route route.json --take sell-intent.json \
     --outcome 1 --fill 5 --price 400000 --collateral <acct> --keypair taker.json
 
 dclutch --session session.json portfolio
-dclutch --session session.json redeem --market <market> --keypair owner.json
+dclutch --session session.json redeem --market <market> --keypair owner.json \
+  --payout-input payout-input.json \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
 # the funded failure walk: a passed deadline is free money for whoever watched
 dclutch --session session.json walk --book walk-book.json \
@@ -44,10 +46,12 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
 - Refusals render by NAME (band registry, decision 0007) on every error
   path; a refusal is the protocol working, and this tool says which program
   refused and why instead of printing a bare number.
-- `redeem` performs the one wallet-constructible step (the Claims-role
-  Custody replay) and then states the payout gap in the SDK's own words —
-  the payout route for a plain Claims Position admits caller role Core or
-  Trading only (ADR-0008 §7.6). It does not pretend a flag would fix that.
+- `redeem` admits the Claims-role Custody replay, invokes the successor's
+  read-only `wallet-terminal-payout-plan` producer against the explicitly
+  named RPC endpoint, hostile-parses its exact manifest, and refuses unless
+  its Market, owner, Position, winning claim, and full available quantity
+  match the finalized portfolio read. With `--json`, stdout is only the
+  canonical manifest accepted by the SDK and web payout flow.
 - The keypair is always an explicit `--keypair <path>` or `$DCLUTCH_KEYPAIR`;
   there is no default-wallet fallback, deliberately.
 - `--dry-run` on `buy`/`sell`/`redeem`/`walk` builds and prints everything
