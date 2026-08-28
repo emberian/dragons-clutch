@@ -1,6 +1,7 @@
 'use client';
 
 import Nav from '@/components/Nav';
+import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { deploymentProgramLabelsV1, type DeploymentV1 } from '@/lib/deployments';
@@ -892,6 +893,7 @@ export default function ChainExplorer() {
           live. Layouts come from <code>lib/generated/</code> — the byte-gated modules the protocol emits from its Lean
           schemas, its Rust contracts and its route census. What the emission does not say, this page does not say either.
         </p>
+        <PublicDeploymentEvidence deployment={deployment} />
       </section>
 
       <form className="xp-chain" onSubmit={query.view === 'record' ? (event) => void runRecord(event) : submitSearch}>

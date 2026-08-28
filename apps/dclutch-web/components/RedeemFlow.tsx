@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import { inspectClaimsCustodyReplayV1, type ClaimsCustodyReplayRequestV1, type ClaimsCustodyReplayStateV1 } from '@/lib/claimsCustodyReplay';
@@ -10,6 +10,7 @@ import {
   findClientOperationJournalV1,
   markClientOperationSubmittedV1,
   requireSubmittedSignatureMatchV1,
+  submittedClientOperationWireV1,
   transactionSignatureV1,
   writeUnsignedClientOperationJournalV1,
   type ClientOperationJournalV1,
@@ -73,13 +74,19 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
   const wallet = directory.address;
   const replayExists = (replay.kind === 'ready' && replay.state.status === 'exists') || replay.kind === 'confirmed';
 
-  const replayRequest = (owner: string): ClaimsCustodyReplayRequestV1 => Object.freeze({ marketAddress, claimsProgramId, custodyProgramId, registryProgramId, payer: owner });
-  const operationScope = async (owner: string): Promise<ClientOperationScopeV1> => {
+  const replayRequest = useCallback((owner: string): ClaimsCustodyReplayRequestV1 => Object.freeze({
+    marketAddress,
+    claimsProgramId,
+    custodyProgramId,
+    registryProgramId,
+    payer: owner,
+  }), [marketAddress, claimsProgramId, custodyProgramId, registryProgramId]);
+  const operationScope = useCallback(async (owner: string): Promise<ClientOperationScopeV1> => {
     const facts = await client.probe();
     return Object.freeze({ clusterGenesis: facts.genesisHash, market: marketAddress, owner });
-  };
+  }, [client, marketAddress]);
 
-  async function pollReplayJournal(journal: ClientOperationJournalV1, owner: string, alive: () => boolean = () => true): Promise<void> {
+  const pollReplayJournal = useCallback(async (journal: ClientOperationJournalV1, owner: string, alive: () => boolean = () => true): Promise<void> => {
     const signature = journal.signature;
     if (journal.phase !== 'submitted' || signature === null) throw new Error('replay recovery requires one submitted signature');
     for (let attempt = 0; attempt < 30 && alive(); attempt += 1) {
@@ -105,14 +112,19 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
       await pause();
     }
     if (alive()) setReplay({ kind: 'submitted', journal, signature, confirmation: 'Finalized completion is still unresolved. You can reload later; this exact signature stays saved and is never replayed.' });
-  }
+  }, [client, replayRequest]);
 
-  async function pollPayoutJournal(journal: ClientOperationJournalV1, plan: PreparedWalletTerminalPayoutV3, alive: () => boolean = () => true): Promise<void> {
+  const pollPayoutJournal = useCallback(async (journal: ClientOperationJournalV1, plan: PreparedWalletTerminalPayoutV3, alive: () => boolean = () => true): Promise<void> => {
     const signature = journal.signature;
     if (journal.phase !== 'submitted' || signature === null) throw new Error('payout recovery requires one submitted signature');
     for (let attempt = 0; attempt < 45 && alive(); attempt += 1) {
       try {
-        const finalized = await finalizeWalletTerminalPayoutV3(client, signature, plan);
+        const finalized = await finalizeWalletTerminalPayoutV3(
+          client,
+          signature,
+          plan,
+          submittedClientOperationWireV1(journal),
+        );
         await clearFinalizedClientOperationJournalV1(browserStorage(), journal);
         if (alive()) setPayout({ kind: 'confirmed', signature, observedSlot: finalized.observedSlot, payout: finalized.payout });
         return;
@@ -126,7 +138,7 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
       await pause();
     }
     if (alive()) setPayout({ kind: 'submitted', plan, journal, signature, confirmation: 'Finalized completion is still unresolved. You can reload later; this exact signature stays saved and is never replayed.' });
-  }
+  }, [client]);
 
   useEffect(() => {
     let current = true;
@@ -180,7 +192,7 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
       }
     })();
     return () => { current = false; };
-  }, [client, wallet, marketAddress, positionAddress, claimIndex, claimsProgramId, custodyProgramId, registryProgramId]);
+  }, [client, wallet, marketAddress, positionAddress, claimIndex, claimsProgramId, custodyProgramId, registryProgramId, operationScope, pollPayoutJournal, pollReplayJournal, replayRequest]);
 
   async function inspect() {
     setReplay({ kind: 'inspecting' });
@@ -204,9 +216,14 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
       const signed = await requestWalletTransactionSignatureV1(client, directory.handoff(endpoint), plan.transaction, wallet);
       if (!signed.complete) throw new Error('the wallet did not complete the one required signature');
       const transactionId = transactionSignatureV1(signed.transaction.signatures[0]!);
-      submittedJournal = await markClientOperationSubmittedV1(browserStorage(), unsignedJournal, transactionId);
+      submittedJournal = await markClientOperationSubmittedV1(
+        browserStorage(),
+        unsignedJournal,
+        transactionId,
+        signed.wireBytes,
+      );
       setReplay({ kind: 'submitted', journal: submittedJournal, signature: transactionId, confirmation: 'Saved before submission; sending the exact signed packet…' });
-      const returned = await submitSignedTransactionV1(client, signed.transaction);
+      const returned = await submitSignedTransactionV1(client, submittedClientOperationWireV1(submittedJournal));
       requireSubmittedSignatureMatchV1(transactionId, returned);
       await pollReplayJournal(submittedJournal, wallet);
     } catch (error) {
@@ -238,9 +255,14 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
       const signed = await requestWalletTransactionSignatureV1(client, directory.handoff(endpoint), plan.transaction, wallet);
       if (!signed.complete) throw new Error('the wallet did not complete the one required signature');
       const transactionId = transactionSignatureV1(signed.transaction.signatures[0]!);
-      submittedJournal = await markClientOperationSubmittedV1(browserStorage(), unsignedJournal, transactionId);
+      submittedJournal = await markClientOperationSubmittedV1(
+        browserStorage(),
+        unsignedJournal,
+        transactionId,
+        signed.wireBytes,
+      );
       setPayout({ kind: 'submitted', plan, journal: submittedJournal, signature: transactionId, confirmation: 'Saved before submission; sending the exact signed packet…' });
-      const returned = await submitSignedTransactionV1(client, signed.transaction);
+      const returned = await submitSignedTransactionV1(client, submittedClientOperationWireV1(submittedJournal));
       requireSubmittedSignatureMatchV1(transactionId, returned);
       await pollPayoutJournal(submittedJournal, plan);
     } catch (error) {

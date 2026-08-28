@@ -313,6 +313,7 @@ describe('the Direct trade spine', () => {
     expect(directPacketWallV1(1_232)).toBeNull();
     expect(directPacketWallV1(1_233)?.detail).toContain('1,233 bytes');
     expect(() => directPacketWallV1(-1)).toThrow(/nonnegative safe integer/);
-    expect(DIRECT_PRESTATE_WALL_V1.detail).toContain('ADR-0008');
+    expect(DIRECT_PRESTATE_WALL_V1.detail).toContain('distinct Token-2022 collateral account');
+    expect(DIRECT_PRESTATE_WALL_V1.detail).not.toContain('does not exist');
   });
 });

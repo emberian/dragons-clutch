@@ -1,4 +1,4 @@
-import { AddressLookupTableAccount, PublicKey, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
+import { AddressLookupTableAccount, PublicKey, SYSVAR_RENT_PUBKEY, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { hex, sha256 } from './bytes';
@@ -46,13 +46,17 @@ import {
   LIABILITY_BASIS_STATE_VERSION_V2,
 } from './generated/coreFound';
 import { deriveClaimsAggregateAddressV2, deriveClaimsPositionAddressV2 } from './marketCoreV2';
+import { type RpcAccount, type TransactionMetaObservation } from './rpc';
 import {
   buildWalletTerminalPayoutV3,
   canonicalWalletTerminalPayoutLookupAddressesV3,
   compileWalletTerminalPayoutV0,
   encodeWalletTerminalPayoutRequestV3,
+  finalizeWalletTerminalPayoutV3,
   parseWalletTerminalPayoutManifestV3,
   verifyWalletTerminalPayoutPostconditionV3,
+  verifyFinalizedWalletTerminalPayoutTransactionV3,
+  type PreparedWalletTerminalPayoutV3,
   type WalletTerminalPayoutBuildInputV3,
   type WalletTerminalPayoutReportV3,
   type WalletTerminalPayoutRouteV3,
@@ -243,5 +247,65 @@ describe('wallet terminal payout v3', () => {
     await expect(verifyWalletTerminalPayoutPostconditionV3(built, post)).resolves.toBeUndefined();
     const changed = new Uint8Array(recipient); changed[64] ^= 1;
     await expect(verifyWalletTerminalPayoutPostconditionV3(built, { ...post, recipientTokenBytes: changed })).rejects.toThrow('token payout poststate');
+
+    const payer = built.request.owner;
+    const lookupAddress = key(241);
+    const lookupAddresses = canonicalWalletTerminalPayoutLookupAddressesV3(built, payer);
+    const table = new AddressLookupTableAccount({ key: new PublicKey(lookupAddress), state: {
+      deactivationSlot: MAX_U64, lastExtendedSlot: 98, lastExtendedSlotStartIndex: 0,
+      authority: new PublicKey(payer), addresses: lookupAddresses.map((address) => new PublicKey(address)),
+    } });
+    const compiled = compileWalletTerminalPayoutV0(built, {
+      payer, recentBlockhash: key(31), lookupTable: table, lookupObservedSlot: '99',
+    });
+    const plan = Object.freeze({ ...compiled, lookupTable: lookupAddress }) as PreparedWalletTerminalPayoutV3;
+    const signed = VersionedTransaction.deserialize(plan.wireBytes);
+    signed.signatures[0] = new Uint8Array(64).fill(7);
+    const signedWire = signed.serialize();
+    const signature = 'saved-exact-payout-signature';
+    const meta: TransactionMetaObservation = Object.freeze({
+      signature, slot: '100', blockTime: null, succeeded: true, errorText: null,
+      feeLamports: '5', accountAddresses: Object.freeze([payer]),
+      preBalances: Object.freeze(['100']), postBalances: Object.freeze(['95']),
+      logMessages: Object.freeze([]),
+      returnData: Object.freeze({ programId: built.route.claimsProgram, data: receipt }),
+      transactionBytes: signedWire,
+    });
+    const account = (owner: string, data: Uint8Array): RpcAccount => Object.freeze({
+      owner, data, executable: false, lamports: '1', space: data.length,
+    });
+    const rows = Object.freeze([
+      Object.freeze({ address: built.route.aggregate, account: account(built.route.claimsProgram, aggregate) }),
+      Object.freeze({ address: built.route.position, account: account(built.route.claimsProgram, position) }),
+      Object.freeze({ address: built.route.custodyReplay, account: account(built.route.custodyProgram, replay) }),
+      Object.freeze({ address: built.route.hoard, account: account(built.route.tokenProgram, hoard) }),
+      Object.freeze({ address: built.route.recipient, account: account(built.route.tokenProgram, recipient) }),
+    ]);
+    const client = (changedMeta = meta, observedSlot = '101', changedRows = rows) => Object.freeze({
+      transaction: async () => changedMeta,
+      finalizedSlot: async () => '101',
+      multipleAccounts: async () => Object.freeze({ slot: observedSlot, accounts: changedRows }),
+    });
+    await expect(finalizeWalletTerminalPayoutV3(client(), signature, plan, signedWire)).resolves.toEqual({
+      signature, observedSlot: '101', payout: built.payout,
+    });
+    const changedWire = new Uint8Array(signedWire); changedWire[changedWire.length - 1] ^= 1;
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, transactionBytes: changedWire }, signature, plan, signedWire,
+    )).toThrow(/wire bytes/);
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, postBalances: Object.freeze(['94']) }, signature, plan, signedWire,
+    )).toThrow(/payer fee/);
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, accountAddresses: Object.freeze([key(99)]) }, signature, plan, signedWire,
+    )).toThrow(/fee payer/);
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, returnData: null }, signature, plan, signedWire,
+    )).toThrow(/Claims-produced/);
+    await expect(finalizeWalletTerminalPayoutV3(client(meta, '100'), signature, plan, signedWire))
+      .rejects.toThrow(/regressed below/);
+    await expect(finalizeWalletTerminalPayoutV3(
+      client(meta, '101', Object.freeze([...rows].reverse())), signature, plan, signedWire,
+    )).rejects.toThrow(/ordered account closure/);
   });
 });

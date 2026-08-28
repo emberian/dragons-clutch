@@ -265,11 +265,23 @@ export async function requestWalletTransactionSignatureV1(
 /** Submit only an already complete signed packet after a separate user action. */
 export async function submitSignedTransactionV1(
   client: MutationSubmissionClient,
-  transaction: VersionedTransaction,
+  signedWireBytes: Uint8Array,
 ): Promise<string> {
+  if (!(signedWireBytes instanceof Uint8Array) || signedWireBytes.length === 0
+      || signedWireBytes.length > SOLANA_PACKET_BYTES) {
+    throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
+  }
+  const exactWire = new Uint8Array(signedWireBytes);
+  let transaction: VersionedTransaction;
+  try { transaction = VersionedTransaction.deserialize(exactWire); } catch {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
+  if (!sameBytes(transaction.serialize(), exactWire)) {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
   if (transaction.signatures.length === 0 || transaction.signatures.some((signature) => signature.every((byte) => byte === 0))) {
     throw new Error('transaction is not fully signed');
   }
   await client.assertMutationCluster();
-  return client.sendRawTransaction(transaction.serialize());
+  return client.sendRawTransaction(exactWire, { maxRetries: 0 });
 }

@@ -299,7 +299,7 @@ export default function CreateMarketWizard() {
   async function signAndSubmitOne(transaction: VersionedTransaction, client: SolanaRpcClient): Promise<string> {
     const signed = await requestWalletTransactionSignatureV1(client, wallets.handoff(endpoint), transaction, addresses.payer);
     if (!signed.complete) throw new Error('the wallet did not complete the signature set');
-    return submitSignedTransactionV1(client, signed.transaction);
+    return submitSignedTransactionV1(client, signed.wireBytes);
   }
 
   /**

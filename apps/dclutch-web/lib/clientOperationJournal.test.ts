@@ -1,4 +1,4 @@
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { decodeBase58 } from './explorer/base58';
@@ -42,6 +42,19 @@ async function unsigned(storage: MemoryStorage) {
   });
 }
 
+function signedPacket(byte: number) {
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: new PublicKey(scope.owner),
+    recentBlockhash: address(8),
+    instructions: [],
+  }).compileToLegacyMessage());
+  transaction.signatures[0] = new Uint8Array(64).fill(byte);
+  return Object.freeze({
+    signature: transactionSignatureV1(transaction.signatures[0]!),
+    wireBytes: transaction.serialize(),
+  });
+}
+
 describe('client operation crash journal', () => {
   it('keys and recovers one exact unsigned plan by cluster, Market, owner, operation, and digest', async () => {
     const storage = new MemoryStorage();
@@ -71,17 +84,17 @@ describe('client operation crash journal', () => {
   it('persists the signed packet id before submission and never overwrites or discards ambiguity', async () => {
     const storage = new MemoryStorage();
     const journal = await unsigned(storage);
-    const signature = transactionSignatureV1(new Uint8Array(64).fill(7));
-    const submitted = await markClientOperationSubmittedV1(storage, journal, signature);
-    expect(submitted).toMatchObject({ phase: 'submitted', signature });
-    await expect(markClientOperationSubmittedV1(storage, journal, transactionSignatureV1(new Uint8Array(64).fill(8))))
+    const signed = signedPacket(7);
+    const submitted = await markClientOperationSubmittedV1(storage, journal, signed.signature, signed.wireBytes);
+    expect(submitted).toMatchObject({ phase: 'submitted', signature: signed.signature });
+    await expect(markClientOperationSubmittedV1(storage, journal, signedPacket(8).signature, signedPacket(8).wireBytes))
       .rejects.toThrow(/another transaction/);
     await expect(discardUnsignedClientOperationJournalV1(storage, submitted)).rejects.toThrow(/cannot be discarded/);
     await expect(writeUnsignedClientOperationJournalV1(storage, {
       ...scope, operation: 'wallet-terminal-payout-v3', operationDigest: digest(5), intent: 'replacement', plan: 'replacement',
     })).rejects.toThrow(/still unresolved/);
     expect(storage.length).toBe(1);
-    expect(() => requireSubmittedSignatureMatchV1(signature, transactionSignatureV1(new Uint8Array(64).fill(8))))
+    expect(() => requireSubmittedSignatureMatchV1(signed.signature, transactionSignatureV1(new Uint8Array(64).fill(8))))
       .toThrow(/not the exact signed packet id/);
   });
 
@@ -98,7 +111,8 @@ describe('client operation crash journal', () => {
     await discardUnsignedClientOperationJournalV1(storage, first);
     expect(storage.length).toBe(0);
     const second = await unsigned(storage);
-    const submitted = await markClientOperationSubmittedV1(storage, second, transactionSignatureV1(new Uint8Array(64).fill(9)));
+    const signed = signedPacket(9);
+    const submitted = await markClientOperationSubmittedV1(storage, second, signed.signature, signed.wireBytes);
     await clearFinalizedClientOperationJournalV1(storage, submitted);
     expect(storage.length).toBe(0);
   });
