@@ -10859,6 +10859,25 @@ mod tests {
             error.to_string().contains("selected trading ELF path"),
             "{error}"
         );
+
+        let orphan_source_elf = fixture._directory.0.join("dclutch_sbf.so");
+        fs::write(&orphan_source_elf, b"\x7fELFhostile-source-role")
+            .expect("write hostile orphan Source ELF");
+        let error = authenticate_checked_release_gate_role_for_local_v1(
+            &fixture.args.checked_release_gate_path,
+            &fixture.args.expected_checked_release_gate_sha256,
+            &fixture.args.expected_source_revision,
+            &fixture.args.expected_source_tree_sha256,
+            "resolution",
+            &orphan_source_elf,
+        )
+        .expect_err("generic dclutch_sbf.so must not substitute for Resolution");
+        assert!(
+            error.to_string().contains(
+                "selected resolution ELF path is not the gate's exact canonical role ELF"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

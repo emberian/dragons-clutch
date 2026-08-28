@@ -432,6 +432,33 @@ missing activation cache is charged at
 `ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1`; an exact rent-exempt partial or
 complete cache costs zero, while an underfunded or substituted cache refuses.
 
+Activation also has a key-free size reachability gate. Agave 4.0.2 charges the
+single full-ELF SHA-256 at `85 + max(10, live_elf_bytes / 2)` CU. The campaign
+reserves 150,000 CU for every other Registry operation and refuses a pending
+role above 2,499,831 live bytes, the last width that can fit under the
+1,400,000-CU transaction maximum under that conservative projection. This is
+an impossibility filter, not a replacement for measured CU evidence. The
+campaign report prints each role's authenticated live width, conservative
+projection, and headroom before it opens a keypair file.
+
+The finalized permanent-substrate observation at slot 489,506,366 and the
+current M-61 budget rows give this frontier:
+
+| role | live ELF bytes | measured CU | measured + tolerance | ceiling headroom |
+|---|---:|---:|---:|---:|
+| Core | 934,088 | 546,984 | 566,984 | 833,016 |
+| Claims | 1,010,496 | 573,441 | 593,441 | 806,559 |
+| Trading | 1,325,848 | 721,945 | 741,945 | 658,055 |
+| Resolution | 588,336 | 330,385 | 350,385 | 1,049,615 |
+| Custody | 360,328 | 235,103 | 255,103 | 1,144,897 |
+
+These are the currently deployed widths and the checked budget measurements,
+not a prediction for a new candidate. A fresh candidate still needs the
+20-seed M-61 measurement and its checked-release role binding. In particular,
+the generic 9,034,536-byte `dclutch_sbf.so` Source artifact is not Resolution:
+the checked gate refuses that role/path substitution, and the size gate would
+independently project it beyond the chain ceiling before any send.
+
 Before activation, run the hybrid real-ELF gate with the exact authenticated
 live Registry/Rent dumps beside the five new checked ELFs. It must publish and
 activate the new five-role set, authenticate the unchanged profile, create

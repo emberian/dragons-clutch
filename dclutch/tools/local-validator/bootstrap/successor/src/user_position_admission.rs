@@ -76,7 +76,7 @@ use crate::{
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::{hex, pubkey},
-    rpc::{Rpc, RpcAccount, WritePolicyV1},
+    rpc::{Rpc, RpcAccount, WritePolicyV1, parse_json_without_duplicate_keys_v1},
 };
 
 const REPORT_SCHEMA_V1: &str = "dclutch-devnet-user-position-admission-execution-v1";
@@ -324,6 +324,115 @@ struct ReportV1 {
     finalized: Option<FinalizedEvidenceV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     collateral: Option<CollateralReportV1>,
+}
+
+/// Finalized participant facts admitted for one later Direct session.
+///
+/// This is deliberately a projection of [`ReportV1`], not another persisted
+/// report shape.  The admission exterior remains the sole owner of its JSON
+/// and transaction-history joins; Direct receives only the coordinates it can
+/// independently reauthenticate against its own finalized snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FinalizedDirectParticipantEvidenceV1 {
+    pub(crate) market: Pubkey,
+    pub(crate) claims_market: Pubkey,
+    pub(crate) position: Pubkey,
+    pub(crate) owner: Pubkey,
+    pub(crate) collateral_account: Pubkey,
+    pub(crate) collateral_quantity_atoms: u64,
+    pub(crate) custody_authority: Pubkey,
+    pub(crate) mint: Pubkey,
+    pub(crate) token_program: Pubkey,
+    pub(crate) admission_signature: String,
+    pub(crate) admission_slot: u64,
+    pub(crate) collateral_signature: String,
+    pub(crate) collateral_slot: u64,
+}
+
+/// Decode the exact owned-loopback participant report and reopen both of its
+/// finalized transactions before exposing any Direct-facing coordinate.
+pub(crate) fn parse_finalized_direct_participant_evidence_v1(
+    bytes: &[u8],
+    rpc: &mut Rpc,
+) -> Result<FinalizedDirectParticipantEvidenceV1> {
+    let value = parse_json_without_duplicate_keys_v1(bytes)
+        .map_err(|error| Error::new(format!("Direct participant evidence {error}")))?;
+    let report: ReportV1 = serde_json::from_value(value.clone())
+        .map_err(|error| Error::new(format!("Direct participant evidence shape: {error}")))?;
+    if serde_json::to_value(&report)? != value {
+        return Err(Error::new(
+            "Direct participant evidence contained an unknown, defaulted, or noncanonical field",
+        ));
+    }
+    authenticate_report_phase_envelopes(&report)?;
+    authenticate_intent_digest(&report)?;
+    let collateral = report.collateral.as_ref().ok_or_else(|| {
+        Error::new("Direct participant evidence omitted finalized collateral preparation")
+    })?;
+    authenticate_collateral_intent_digest(collateral)?;
+    if report.schema != LOCAL_REPORT_SCHEMA_V1
+        || report.cluster != ExpectedClusterV1::OwnedLoopback.evidence_label()
+        || !report.authorized_mutation
+        || report.phase != PhaseV1::Finalized
+        || collateral.phase != CollateralPhaseV1::Finalized
+    {
+        return Err(Error::new(
+            "Direct participant evidence was not one finalized authorized owned-loopback report",
+        ));
+    }
+    verify_persisted_admission_history(rpc, &report)?;
+    verify_persisted_collateral(rpc, &report)?;
+    project_finalized_direct_participant_evidence_v1(&report)
+}
+
+fn project_finalized_direct_participant_evidence_v1(
+    report: &ReportV1,
+) -> Result<FinalizedDirectParticipantEvidenceV1> {
+    let admission = report
+        .finalized
+        .as_ref()
+        .ok_or_else(|| Error::new("Direct participant admission omitted finalized evidence"))?;
+    let collateral = report
+        .collateral
+        .as_ref()
+        .ok_or_else(|| Error::new("Direct participant evidence omitted collateral preparation"))?;
+    let collateral_finalized = collateral
+        .finalized
+        .as_ref()
+        .ok_or_else(|| Error::new("Direct participant collateral omitted finalized evidence"))?;
+    if report.intent.position_owner != collateral.intent.participant
+        || collateral.intent.quantity_atoms == 0
+    {
+        return Err(Error::new(
+            "Direct participant owner or collateral quantity changed across finalized legs",
+        ));
+    }
+    Ok(FinalizedDirectParticipantEvidenceV1 {
+        market: Pubkey::from_str(&collateral.intent.market)
+            .map_err(|error| Error::new(format!("Direct participant Market: {error}")))?,
+        claims_market: Pubkey::from_str(&report.intent.claims_market)
+            .map_err(|error| Error::new(format!("Direct participant Claims aggregate: {error}")))?,
+        position: Pubkey::from_str(&report.intent.position)
+            .map_err(|error| Error::new(format!("Direct participant Position: {error}")))?,
+        owner: Pubkey::from_str(&report.intent.position_owner)
+            .map_err(|error| Error::new(format!("Direct participant owner: {error}")))?,
+        collateral_account: Pubkey::from_str(&collateral.intent.participant_token_account)
+            .map_err(|error| {
+                Error::new(format!("Direct participant collateral account: {error}"))
+            })?,
+        collateral_quantity_atoms: collateral.intent.quantity_atoms,
+        custody_authority: Pubkey::from_str(&collateral.intent.custody_authority).map_err(
+            |error| Error::new(format!("Direct participant Custody authority: {error}")),
+        )?,
+        mint: Pubkey::from_str(&collateral.intent.mint)
+            .map_err(|error| Error::new(format!("Direct participant Mint: {error}")))?,
+        token_program: Pubkey::from_str(&collateral.intent.token_program)
+            .map_err(|error| Error::new(format!("Direct participant token program: {error}")))?,
+        admission_signature: admission.signature.clone(),
+        admission_slot: admission.slot,
+        collateral_signature: collateral_finalized.signature.clone(),
+        collateral_slot: collateral_finalized.slot,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -3954,10 +4063,16 @@ fn acquire_snapshot(
 }
 
 fn evidence_coordinates(evidence: &Value) -> Result<CoordinatesV1> {
+    let rent_credit = evidence_address(evidence, "founding_lifecycle_rent_credit")?;
+    if rent_credit == evidence_address(evidence, "lifecycle_rent_credit")? {
+        return Err(Error::new(
+            "campaign aliased the DCLTGMF2 founding rent credit to the earlier Found37 generation",
+        ));
+    }
     Ok(CoordinatesV1 {
         claims_market: evidence_address(evidence, "claims_aggregate")?,
         core_market: evidence_address(evidence, "founding_market")?,
-        rent_credit: evidence_address(evidence, "lifecycle_rent_credit")?,
+        rent_credit,
         trading_replay: evidence_address(evidence, "founding_normal_custody_replay")?,
         product: evidence_address(evidence, "product_record")?,
         result_domain: evidence_address(evidence, "result_domain_record")?,
@@ -4006,7 +4121,7 @@ fn authenticate_evidence_hints(
     for (label, account) in [
         ("claims_aggregate", &snapshot.claims_market),
         ("founding_market", &snapshot.core_market),
-        ("lifecycle_rent_credit", &snapshot.rent_credit),
+        ("founding_lifecycle_rent_credit", &snapshot.rent_credit),
         ("founding_normal_custody_replay", replay),
         ("product_record", &snapshot.product_raw),
         ("result_domain_record", &snapshot.result_domain_raw),
@@ -5907,6 +6022,116 @@ mod tests {
         intent.message_sha256 = sha256_hex(&message);
         intent.instructions = instructions.iter().map(instruction_evidence).collect();
         (intent, delegated.to_vec())
+    }
+
+    #[test]
+    fn direct_projection_exposes_only_joined_finalized_participant_facts() {
+        let (mut report, _) = admission_exactness_fixture();
+        let (collateral_intent, _) = collateral_intent_fixture();
+        report.schema = LOCAL_REPORT_SCHEMA_V1.into();
+        report.cluster = ExpectedClusterV1::OwnedLoopback.evidence_label().into();
+        report.intent.position_owner = collateral_intent.participant.clone();
+        report.phase = PhaseV1::Finalized;
+        report.finalized = Some(FinalizedEvidenceV1 {
+            signature: Signature::default().to_string(),
+            slot: 41,
+            fee_lamports: 1,
+            compute_units_consumed: Some(2),
+            return_data_producer: Pubkey::new_unique().to_string(),
+            return_data_sha256: hex(&[0x41; 32]),
+            poststate: BTreeMap::new(),
+        });
+        report.collateral = Some(CollateralReportV1 {
+            phase: CollateralPhaseV1::Finalized,
+            intent_sha256: hex(&[0x42; 32]),
+            envelope_sha256: hex(&[0x43; 32]),
+            intent: collateral_intent.clone(),
+            signed_packet_base64: Some("packet".into()),
+            signed_packet_sha256: Some(hex(&[0x44; 32])),
+            expected_signature: Some(Signature::default().to_string()),
+            finalized: Some(CollateralFinalizedEvidenceV1 {
+                signature: Signature::default().to_string(),
+                slot: 42,
+                fee_lamports: 3,
+                compute_units_consumed: Some(4),
+                return_data: None,
+                poststate: BTreeMap::new(),
+            }),
+        });
+
+        let projected = project_finalized_direct_participant_evidence_v1(&report)
+            .expect("joined finalized Direct participant");
+        assert_eq!(
+            projected.owner,
+            pubkey(&collateral_intent.participant).expect("participant")
+        );
+        assert_eq!(
+            projected.collateral_account,
+            pubkey(&collateral_intent.participant_token_account).expect("collateral account")
+        );
+        assert_eq!(
+            projected.collateral_quantity_atoms,
+            collateral_intent.quantity_atoms
+        );
+        assert_eq!(projected.admission_slot, 41);
+        assert_eq!(projected.collateral_slot, 42);
+
+        let mut foreign_owner = report.clone();
+        foreign_owner.intent.position_owner = Pubkey::new_unique().to_string();
+        assert!(project_finalized_direct_participant_evidence_v1(&foreign_owner).is_err());
+
+        let mut zero_quantity = report.clone();
+        zero_quantity
+            .collateral
+            .as_mut()
+            .expect("collateral")
+            .intent
+            .quantity_atoms = 0;
+        assert!(project_finalized_direct_participant_evidence_v1(&zero_quantity).is_err());
+
+        let mut missing_history = report;
+        missing_history
+            .collateral
+            .as_mut()
+            .expect("collateral")
+            .finalized = None;
+        assert!(project_finalized_direct_participant_evidence_v1(&missing_history).is_err());
+    }
+
+    #[test]
+    fn participant_coordinates_select_the_open_markets_founding_credit_and_refuse_aliasing() {
+        let key = |value: u8| Pubkey::new_from_array([value; 32]);
+        let founding_credit = key(9);
+        let found37_credit = key(10);
+        let mut evidence = json!({
+            "execution": {"market": {"accounts": {
+                "claims_aggregate": {"address": key(1).to_string()},
+                "founding_market": {"address": key(2).to_string()},
+                "founding_lifecycle_rent_credit": {"address": founding_credit.to_string()},
+                "lifecycle_rent_credit": {"address": found37_credit.to_string()},
+                "founding_normal_custody_replay": {"address": key(3).to_string()},
+                "product_record": {"address": key(4).to_string()},
+                "result_domain_record": {"address": key(5).to_string()},
+                "portfolio_record": {"address": key(6).to_string()},
+                "linked_liability_basis_record": {"address": key(7).to_string()}
+            }}}
+        });
+        assert_eq!(
+            evidence_coordinates(&evidence)
+                .expect("DCLTGMF2 coordinates")
+                .rent_credit,
+            founding_credit
+        );
+
+        evidence["execution"]["market"]["accounts"]["founding_lifecycle_rent_credit"]["address"] =
+            Value::String(found37_credit.to_string());
+        assert!(evidence_coordinates(&evidence).is_err());
+
+        evidence["execution"]["market"]["accounts"]
+            .as_object_mut()
+            .expect("account object")
+            .remove("founding_lifecycle_rent_credit");
+        assert!(evidence_coordinates(&evidence).is_err());
     }
 
     #[test]

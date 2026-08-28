@@ -163,6 +163,48 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         self.assertEqual(MODULE.DEVELOPMENT_FEE_BASIS_POINTS, 50)
         self.assertEqual(MODULE.FEE_BASIS_POINTS_DENOMINATOR, 10_000)
 
+    def test_participant_fixture_liquidity_is_exact_and_authority_removed(self) -> None:
+        fixture = {
+            "sourceTokenAccount": "source",
+            "sourceOwner": "participant",
+            "quantityAtoms": 100_000_000,
+            "foundingCollateralAtoms": 1_000_000_000,
+            "totalSupplyAtoms": 1_100_000_000,
+            "mint": "mint",
+            "mintAuthorityRemoved": True,
+            "transactionSignature": "signature",
+            "finalizedSlot": 42,
+            "computeUnitsConsumed": 123,
+        }
+        campaign = {
+            "execution": {"localParticipantFixtureLiquidity": fixture},
+            "founding_targets": {"collateral_mint": "mint"},
+        }
+        market = {"initial_collateral_atoms": 1_000_000_000}
+        self.assertEqual(
+            MODULE.authenticate_participant_fixture_liquidity(
+                campaign, market, "participant", "source"
+            ),
+            fixture,
+        )
+        for field, value in (
+            ("sourceOwner", "substituted"),
+            ("quantityAtoms", 99_999_999),
+            ("totalSupplyAtoms", 1_100_000_001),
+            ("mintAuthorityRemoved", False),
+        ):
+            hostile = {**fixture, field: value}
+            with self.assertRaisesRegex(MODULE.Refusal, "authority-removed"):
+                MODULE.authenticate_participant_fixture_liquidity(
+                    {
+                        **campaign,
+                        "execution": {"localParticipantFixtureLiquidity": hostile},
+                    },
+                    market,
+                    "participant",
+                    "source",
+                )
+
     def test_funding_never_precreates_protocol_accounts(self) -> None:
         self.assertEqual(MODULE.LOCAL_AIRDROP_ROLES, ())
         self.assertEqual(MODULE.VALIDATOR_MINT_ROLE, "core-upgrade-authority")

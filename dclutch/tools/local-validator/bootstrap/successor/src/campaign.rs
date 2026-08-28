@@ -74,7 +74,9 @@ use std::{
 };
 
 use dclutch_pyth_svm::devnet_release_v1;
-use dclutch_registry_contract::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
+use dclutch_registry_contract::{
+    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivationCacheProgressV1, ArtifactReleaseV1,
+};
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
     ProgramV3View,
@@ -614,6 +616,71 @@ impl ObservedRoleV1 {
         }
         conflicts
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActivationComputeProjectionV1 {
+    role: &'static str,
+    pending: bool,
+    live_elf_bytes: u64,
+    conservative_compute_units: u64,
+    headroom_compute_units: u64,
+}
+
+/// Refuse a pending first activation whose authenticated live ELF cannot fit
+/// beneath the pinned runtime's transaction ceiling even under a conservative
+/// size-only projection. This is key-free and runs before any campaign signer
+/// file is opened. It complements, but never replaces, the measured CU gate.
+fn activation_compute_preflight_v1(
+    observed: &[ObservedRoleV1],
+    activated_prefix: usize,
+) -> Result<Vec<ActivationComputeProjectionV1>> {
+    const ROLES: [&str; 5] = ["core", "claims", "trading", "resolution", "custody"];
+    if activated_prefix > ROLES.len() {
+        return Err(Error::new(
+            "activation compute preflight received an impossible written-role count",
+        ));
+    }
+    let mut projection = Vec::with_capacity(ROLES.len());
+    for (ordinal, role) in ROLES.into_iter().enumerate() {
+        let row = observed
+            .iter()
+            .find(|row| row.role == role)
+            .ok_or_else(|| Error::new(format!("activation compute preflight omitted {role}")))?;
+        let Some(programdata_bytes) = row.observed_data_len else {
+            // An absent deployment is already a substrate-stage refusal. It
+            // carries no authenticated width to project and cannot reach an
+            // activation send.
+            continue;
+        };
+        let live_elf_bytes = programdata_bytes
+            .checked_sub(LOADER_V3_PROGRAMDATA_METADATA_BYTES)
+            .ok_or_else(|| Error::new(format!("{role} ProgramData is shorter than Loader V3")))?;
+        let live_elf_bytes = u64::try_from(live_elf_bytes)
+            .map_err(|_| Error::new(format!("{role} live ELF width does not fit u64")))?;
+        let conservative_compute_units =
+            runtime::activation_compute_upper_bound_v1(live_elf_bytes)?;
+        let pending = ordinal >= activated_prefix;
+        if pending && conservative_compute_units > runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1 {
+            return Err(Error::new(format!(
+                "pending {role} activation is unreachable: authenticated live ELF has \
+                 {live_elf_bytes} bytes, above the {}-byte size-only ceiling, projecting \
+                 {conservative_compute_units} CU against the {}-CU transaction maximum; rebuild \
+                 the exact checked role and rerun the measured CU gate before publishing",
+                runtime::MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1,
+                runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+            )));
+        }
+        projection.push(ActivationComputeProjectionV1 {
+            role,
+            pending,
+            live_elf_bytes,
+            conservative_compute_units,
+            headroom_compute_units: runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1
+                .saturating_sub(conservative_compute_units),
+        });
+    }
+    Ok(projection)
 }
 
 /// The command surface, already parsed and validated.
@@ -1654,14 +1721,15 @@ pub(crate) fn founding_state(
     Ok((state, targets))
 }
 
-/// Does the release activation cache exist?
-///
-/// Exact cache progress is the detector. One through four byte-identical role
-/// slots are an inert resume point; a complete cache is done; any mismatched
-/// header, role, owner, privilege, or width is a conflict.
-pub(crate) fn activation_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<StageStateV1> {
-    let address = pubkey(&plan.activation)?;
-    Ok(match runtime::activation_progress(rpc, plan) {
+/// Project one exact activation-cache observation into campaign stage state.
+/// One through four byte-identical role slots are an inert resume point; a
+/// complete cache is done; any mismatched header, role, owner, privilege, or
+/// width is a conflict.
+fn activation_state_from_progress(
+    address: Pubkey,
+    progress: Result<Option<ActivationCacheProgressV1>>,
+) -> StageStateV1 {
+    match progress {
         Ok(None) => StageStateV1::Absent,
         Ok(Some(progress)) if progress.is_complete() => StageStateV1::Complete,
         Ok(Some(progress)) => StageStateV1::Partial(format!(
@@ -1673,7 +1741,7 @@ pub(crate) fn activation_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
             "a release activation cache exists at {address} that this plan does not \
              authenticate: {error}"
         )),
-    })
+    }
 }
 
 /// The payer's balance against what the remaining stages will cost.
@@ -2384,7 +2452,23 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let mut states = vec![(StageV1::Substrate, substrate)];
     states.push((StageV1::Publication, publication_state(&mut rpc, &plan)?));
     states.push((StageV1::Initialize, initialize_state(&mut rpc, &plan)?));
-    states.push((StageV1::Activation, activation_state(&mut rpc, &plan)?));
+    let activation_progress = runtime::activation_progress(&mut rpc, &plan);
+    let activated_prefix = activation_progress
+        .as_ref()
+        .ok()
+        .and_then(|progress| *progress)
+        .map(ActivationCacheProgressV1::written_count)
+        .unwrap_or(0);
+    let activation_compute = if activation_progress.is_ok() {
+        activation_compute_preflight_v1(&observed_roles, activated_prefix)?
+    } else {
+        Vec::new()
+    };
+    let activation_address = pubkey(&plan.activation)?;
+    states.push((
+        StageV1::Activation,
+        activation_state_from_progress(activation_address, activation_progress),
+    ));
     let pyth = match &args.origin {
         ClusterOriginV1::AcknowledgedDevnet { .. } => Some(authenticate_pyth_row(&mut rpc)?),
         // The committed row is a devnet fact. Authenticating it against a
@@ -2444,6 +2528,19 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "observed_programdata_bytes": row.observed_data_len,
             "loader_metadata_bytes": LOADER_V3_PROGRAMDATA_METADATA_BYTES,
         })).collect::<Vec<_>>(),
+        "activation_compute_preflight": {
+            "agave_runtime": "4.0.2",
+            "transaction_ceiling_compute_units": runtime::ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+            "maximum_live_elf_bytes": runtime::MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1,
+            "size_only_not_a_measured_cu_substitute": true,
+            "roles": activation_compute.iter().map(|row| json!({
+                "role": row.role,
+                "pending": row.pending,
+                "live_elf_bytes": row.live_elf_bytes,
+                "conservative_compute_units": row.conservative_compute_units,
+                "headroom_compute_units": row.headroom_compute_units,
+            })).collect::<Vec<_>>(),
+        },
         "wallet": Value::Null,
         "pyth_devnet_release_authentication": pyth.as_ref().map(|rows| rows.iter().map(|(what, ok, detail)| json!({
             "fact": what,
@@ -3492,6 +3589,55 @@ mod tests {
                 .iter()
                 .any(|detail| detail.contains("complete live ELF SHA-256"))
         );
+    }
+
+    fn activation_compute_rows(widths: [u64; 5]) -> Vec<ObservedRoleV1> {
+        ["core", "claims", "trading", "resolution", "custody"]
+            .into_iter()
+            .zip(widths)
+            .map(|(role, width)| {
+                let mut row = observed_role();
+                row.role = role.into();
+                row.observed_data_len = Some(
+                    usize::try_from(width)
+                        .expect("fixture ELF width")
+                        .checked_add(LOADER_V3_PROGRAMDATA_METADATA_BYTES)
+                        .expect("fixture ProgramData width"),
+                );
+                row
+            })
+            .collect()
+    }
+
+    #[test]
+    fn activation_compute_preflight_reports_headroom_and_refuses_source_as_resolution() {
+        let canonical = activation_compute_rows([934_088, 1_010_496, 1_325_848, 588_336, 360_328]);
+        let projection = activation_compute_preflight_v1(&canonical, 0)
+            .expect("canonical five-role activation set has headroom");
+        assert_eq!(projection.len(), 5);
+        let trading = projection
+            .iter()
+            .find(|row| row.role == "trading")
+            .expect("Trading projection");
+        assert_eq!(trading.live_elf_bytes, 1_325_848);
+        assert!(trading.pending);
+        assert!(trading.headroom_compute_units > 500_000);
+
+        let hostile_source_as_resolution =
+            activation_compute_rows([934_088, 1_010_496, 1_325_848, 9_034_536, 360_328]);
+        let error = activation_compute_preflight_v1(&hostile_source_as_resolution, 0)
+            .expect_err("9 MB dclutch_sbf.so substitution cannot reach activation");
+        assert!(error.to_string().contains("pending resolution activation"));
+        assert!(error.to_string().contains("9034536 bytes"));
+        assert!(
+            error
+                .to_string()
+                .contains(&runtime::MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1.to_string())
+        );
+
+        let completed = activation_compute_preflight_v1(&hostile_source_as_resolution, 5)
+            .expect("already complete cache never schedules another activation");
+        assert!(completed.iter().all(|row| !row.pending));
     }
 
     #[test]

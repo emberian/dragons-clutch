@@ -456,6 +456,16 @@ const EXTRA_KEY_ROLES_V1: [&str; 8] = [
     "retirement-beneficiary",
 ];
 
+/// Every disposable local signer identity, deduplicated at the one boundary
+/// where the campaign and lifecycle role surfaces deliberately overlap.
+fn local_key_roles_v1() -> BTreeSet<&'static str> {
+    crate::campaign::KEYPAIR_ROLES
+        .iter()
+        .copied()
+        .chain(EXTRA_KEY_ROLES_V1)
+        .collect()
+}
+
 /// Prepare one exact checked mutable plan and its disposable role key files.
 /// The command is deliberately offline: no validator exists yet and no RPC
 /// origin is accepted as an argument.
@@ -555,11 +565,7 @@ pub(crate) fn prepare_local_mutable_v1(
         .to_path_buf();
 
     let mut keypairs = BTreeMap::new();
-    for role in crate::campaign::KEYPAIR_ROLES
-        .iter()
-        .copied()
-        .chain(EXTRA_KEY_ROLES_V1)
-    {
+    for role in local_key_roles_v1() {
         let secret = derive(LOCAL_KEY_DOMAIN_V1, seed, role);
         let keypair = Keypair::new_from_array(secret);
         let path = key_dir.join(format!("{role}.json"));
@@ -887,6 +893,11 @@ mod tests {
                 crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
             ]),
             "only the fixture source and its owner intentionally cross the local-lifecycle/campaign boundary"
+        );
+        assert_eq!(
+            local_key_roles_v1().len(),
+            campaign_roles.len() + roles.len() - 2,
+            "the local key surface is the canonical set union, not a sequence that writes shared roles twice"
         );
     }
 
