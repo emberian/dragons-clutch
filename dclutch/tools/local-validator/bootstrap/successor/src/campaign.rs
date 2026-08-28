@@ -924,6 +924,77 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
         ));
     }
 
+    // The wrapper's disclosed principal cap is not authority for the Source
+    // graph. Authenticate the two immutable records that actually make the
+    // graph bounded. In particular, an empty floor is otherwise a valid bare
+    // Market input and `compile_market_bodies` deliberately interprets it as
+    // `SourceMaterialV3::explicitly_unbounded`; accepting that shape here
+    // while retaining the wrapper's 1/4-cap fields would make the disclosure
+    // and the Market disagree.
+    let capacity_bytes = runtime::decode_hex(&input.market.source_capacity_profile_hex)?;
+    let capacity = dclutch_source_contract::SourceCapacityProfileV1::decode(&capacity_bytes)
+        .map_err(|error| Error::new(format!("graduation SourceCapacityProfileV1: {error:?}")))?;
+    let expected_capacity = dclutch_source_contract::SourceCapacityProfileV1::new(
+        dclutch_source_contract::CapacityEnvelope::Provisional,
+        1,
+        0,
+        dclutch_source_contract::ContentId::new(crate::market::demo_id(
+            "relayed/capacity/terminal-verifier",
+            &[],
+        ))
+        .map_err(|error| Error::new(format!("graduation capacity verifier: {error:?}")))?,
+        dclutch_source_contract::ContentId::new(
+            dclutch_source_contract::PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1,
+        )
+        .map_err(|error| Error::new(format!("graduation capacity lifting plan: {error:?}")))?,
+        512,
+        4,
+    )
+    .map_err(|error| Error::new(format!("graduation source capacity: {error:?}")))?
+    .bounding_principal(
+        dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+        dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
+    )
+    .map_err(|error| Error::new(format!("graduation source kappa: {error:?}")))?;
+    if capacity.to_bytes().as_slice() != capacity_bytes
+        || capacity != expected_capacity
+        || source.capacity_profile_id().to_bytes() != sha256_bytes(&capacity_bytes)
+    {
+        return Err(Error::new(
+            "graduation SourceCapacityProfileV1 is not the exact selected provisional 1/4 kappa record",
+        ));
+    }
+
+    let floor_bytes = runtime::decode_hex(&input.market.manipulation_floor_hex)?;
+    if floor_bytes.is_empty() {
+        return Err(Error::new(
+            "graduation Market omitted its exact bounded manipulation floor",
+        ));
+    }
+    let floor = dclutch_source_contract::ManipulationFloorV1::decode(&floor_bytes)
+        .map_err(|error| Error::new(format!("graduation ManipulationFloorV1: {error:?}")))?;
+    let expected_floor = dclutch_source_contract::ManipulationFloorV1::new(
+        dclutch_source_contract::ManipulationFloorBasis::CurveDerived,
+        dclutch_source_contract::ContentId::new(sha256_bytes(&source_bytes))
+            .map_err(|error| Error::new(format!("graduation source identity: {error:?}")))?,
+        source.adapter_config_id(),
+        dclutch_source_contract::ContentId::new(crate::market::demo_id(
+            "relayed/collateral-unit/realm-native-lamports",
+            &[],
+        ))
+        .map_err(|error| Error::new(format!("graduation collateral unit: {error:?}")))?,
+        dclutch_source_contract::ContentId::new(
+            dclutch_source_contract::BONDING_CURVE_FLOOR_DERIVATION_ID_V1,
+        )
+        .map_err(|error| Error::new(format!("graduation floor derivation: {error:?}")))?,
+        dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+    );
+    if floor.to_bytes().as_slice() != floor_bytes || floor != expected_floor {
+        return Err(Error::new(
+            "graduation ManipulationFloorV1 changed its source, venue, collateral unit, derivation, basis, or floor",
+        ));
+    }
+
     let admitted = canonical_u128(&input.admitted_principal_atoms, "admitted_principal_atoms")?;
     let cap = canonical_u128(
         &input.admitted_principal_cap_atoms,
@@ -940,6 +1011,23 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     {
         return Err(Error::new(
             "graduation wrapper substituted its disclosed bounty, principal, cap, or failure policy",
+        ));
+    }
+    let capacity = capacity
+        .principal_capacity()
+        .map_err(|error| Error::new(format!("graduation source kappa read-back: {error:?}")))?;
+    if capacity.admit(floor.floor_atoms(), admitted).is_err()
+        || capacity.admit(floor.floor_atoms(), cap).is_err()
+        || capacity
+            .admit(
+                floor.floor_atoms(),
+                cap.checked_add(1)
+                    .ok_or_else(|| Error::new("graduation principal cap overflow"))?,
+            )
+            .is_ok()
+    {
+        return Err(Error::new(
+            "graduation principal disclosure does not match the authenticated kappa boundary",
         ));
     }
     Ok(())
@@ -2820,6 +2908,68 @@ mod tests {
         let mut market = exact;
         market["market"]["product_id"] = json!("22".repeat(32));
         assert!(load_market_input(&serde_json::to_vec(&market).expect("JSON")).is_err());
+    }
+
+    #[test]
+    fn graduation_loader_refuses_unbounded_and_substituted_kappa_graphs() {
+        let exact = graduation_market_value();
+
+        // Empty is a meaningful bare-input shape: the market compiler turns
+        // it into SourceMaterialV3::explicitly_unbounded. The graduation
+        // envelope must not retain its bounded disclosure around that graph.
+        let mut unbounded = exact.clone();
+        unbounded["market"]["manipulation_floor_hex"] = json!("");
+        let refusal = load_market_input(&serde_json::to_vec(&unbounded).expect("JSON"))
+            .expect_err("unbounded graduation graph must refuse");
+        assert!(
+            refusal.0.contains("bounded manipulation floor"),
+            "{refusal:?}"
+        );
+
+        // The capacity body is content-addressed by SourceSpec. A same-width
+        // body with its kappa tail erased remains decodable but is not the
+        // selected provisional 1/4 record.
+        let mut unstated = exact.clone();
+        let mut capacity = runtime::decode_hex(
+            unstated["market"]["source_capacity_profile_hex"]
+                .as_str()
+                .expect("capacity hex"),
+        )
+        .expect("capacity bytes");
+        capacity[dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1
+            ..dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1 + 4]
+            .fill(0);
+        capacity[dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1
+            ..dclutch_source_contract::SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1 + 4]
+            .fill(0);
+        unstated["market"]["source_capacity_profile_hex"] = json!(hex(&capacity));
+        let refusal = load_market_input(&serde_json::to_vec(&unstated).expect("JSON"))
+            .expect_err("unstated graduation kappa must refuse");
+        assert!(refusal.0.contains("capacity"), "{refusal:?}");
+
+        // A canonical floor for another Source is still a valid record. Its
+        // exact identity binding, not decode, is what must refuse it.
+        let floor_bytes = runtime::decode_hex(
+            exact["market"]["manipulation_floor_hex"]
+                .as_str()
+                .expect("floor hex"),
+        )
+        .expect("floor bytes");
+        let floor = dclutch_source_contract::ManipulationFloorV1::decode(&floor_bytes)
+            .expect("canonical floor");
+        let substituted_floor = dclutch_source_contract::ManipulationFloorV1::new(
+            floor.basis(),
+            dclutch_source_contract::ContentId::new([0x91; 32]).expect("hostile source"),
+            floor.adapter_config_id(),
+            floor.collateral_unit_id(),
+            floor.derivation_release_id(),
+            floor.floor_atoms(),
+        );
+        let mut substituted = exact;
+        substituted["market"]["manipulation_floor_hex"] = json!(hex(&substituted_floor.to_bytes()));
+        let refusal = load_market_input(&serde_json::to_vec(&substituted).expect("JSON"))
+            .expect_err("substituted floor binding must refuse");
+        assert!(refusal.0.contains("changed its source"), "{refusal:?}");
     }
 
     fn duplicate_field_before_original(json: &str, field: &str, value: &str) -> String {

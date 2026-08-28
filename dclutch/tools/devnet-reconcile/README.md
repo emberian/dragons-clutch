@@ -107,6 +107,13 @@ canonical ordered source-journal set, and one finalized complete PRIVATE
 session. Missing programs or journals, substituted bytes, provisional evidence,
 and partial lifecycle stage sets refuse before reconciliation.
 
+Each journal row names an exact RFC6901 `completionPointer` and requires the
+pointed value to be `"finalized"`. This admits Direct's nested Hot journal
+without pretending its aggregate evidence owns a top-level phase. The activity
+completion stage projection is exactly founding, participant, ALT, seal,
+Direct, resolution, payout, and retirement; the separately typed chaos session
+may retain its own Hot/retire vocabulary.
+
 All eighteen Program/ProgramData accounts must be present in the finalized
 capture. The consumer hostile-decodes each Loader-v3 Program link and
 ProgramData header, then recomputes the full ProgramData and ELF-tail digests.

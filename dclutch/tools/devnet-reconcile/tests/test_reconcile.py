@@ -277,18 +277,19 @@ def owned_loopback_fixture(root: pathlib.Path):
     receipt_path = root / "receipt.json"
     manifest_path.write_bytes(reconcile.canonical_bytes(manifest))
 
-    def journal(path: str, schema: str, completion: str) -> dict[str, str]:
+    def journal(path: str, schema: str, completion_pointer: str) -> dict[str, str]:
         raw = (evidence / path).read_bytes()
         return {
             "path": path,
             "sha256": hashlib.sha256(raw).hexdigest(),
             "schema": schema,
-            "completionField": completion,
+            "completionPointer": completion_pointer,
+            "completionValue": "finalized",
         }
 
     journals = [
-        journal("fixture-journal.json", source["schema"], "phase"),
-        journal("session.json", session["schema"], "status"),
+        journal("fixture-journal.json", source["schema"], "/phase"),
+        journal("session.json", session["schema"], "/status"),
     ]
     programs = []
     loader = reconcile.LOADER_V3_PROGRAM_ID
@@ -345,7 +346,7 @@ def owned_loopback_fixture(root: pathlib.Path):
             "sha256": journals[1]["sha256"],
             "schema": session["schema"],
             "status": "finalized",
-            "completedStages": list(reconcile.EVENT_KINDS),
+            "completedStages": list(reconcile.OWNED_LOOPBACK_COMPLETED_STAGES),
         },
     }
     receipt_path.write_bytes(reconcile.canonical_bytes(receipt))
@@ -716,6 +717,15 @@ class ReconcileTest(unittest.TestCase):
             (evidence / "fixture-journal.json").unlink()
             with self.assertRaisesRegex(reconcile.Refusal, "cannot resolve source journal"):
                 reconcile.authenticate_owned_loopback_sources(manifest, evidence)
+
+    def test_owned_loopback_completion_pointer_supports_nested_hot_and_refuses_bad_escape(self):
+        value = {"terminal": {"hot": {"phase": "finalized"}}}
+        self.assertEqual(
+            reconcile.json_pointer(value, "/terminal/hot/phase", "nested Hot"),
+            "finalized",
+        )
+        with self.assertRaisesRegex(reconcile.Refusal, "invalid RFC6901 escape"):
+            reconcile.json_pointer(value, "/terminal/~2hot/phase", "nested Hot")
 
     def test_owned_loopback_capture_finality_boundary_refuses(self):
         with tempfile.TemporaryDirectory() as directory:

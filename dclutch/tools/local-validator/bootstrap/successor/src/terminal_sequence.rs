@@ -1837,6 +1837,28 @@ impl<'de> Visitor<'de> for UniqueJsonVisitorV1 {
 /// Submitted journal is never re-signed and never auto-resubmitted: after a
 /// crash the send boundary is ambiguous, so this reconciles/polls only the
 /// locally derived signature and preserves the journal on every refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalResumeRouteV1 {
+    VerifyFinalized,
+    PollOnly,
+    PlannedReadOnly,
+    SignAndSubmitOnce,
+}
+
+const fn terminal_resume_route_v1(
+    phase: StageJournalPhaseV1,
+    execute: bool,
+) -> TerminalResumeRouteV1 {
+    match (phase, execute) {
+        (StageJournalPhaseV1::Finalized, _) => TerminalResumeRouteV1::VerifyFinalized,
+        (StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted, _) => {
+            TerminalResumeRouteV1::PollOnly
+        }
+        (StageJournalPhaseV1::Planned, false) => TerminalResumeRouteV1::PlannedReadOnly,
+        (StageJournalPhaseV1::Planned, true) => TerminalResumeRouteV1::SignAndSubmitOnce,
+    }
+}
+
 pub(crate) fn resume_terminal_journal_v1(
     rpc: &mut Rpc,
     origin: &ClusterOriginV1,
@@ -1863,13 +1885,15 @@ pub(crate) fn resume_terminal_journal_v1(
         journal.authorized_mutation = true;
         write_terminal_journal_v1(journal_path, journal, false)?;
     }
-    match journal.phase {
-        StageJournalPhaseV1::Finalized => verify_persisted_terminal_finalization_v1(rpc, journal),
-        StageJournalPhaseV1::SignedNotSubmitted | StageJournalPhaseV1::Submitted => {
+    match terminal_resume_route_v1(journal.phase, execute) {
+        TerminalResumeRouteV1::VerifyFinalized => {
+            verify_persisted_terminal_finalization_v1(rpc, journal)
+        }
+        TerminalResumeRouteV1::PollOnly => {
             reconcile_terminal_signature_v1(rpc, journal_path, journal)
         }
-        StageJournalPhaseV1::Planned if !execute => Ok(()),
-        StageJournalPhaseV1::Planned => {
+        TerminalResumeRouteV1::PlannedReadOnly => Ok(()),
+        TerminalResumeRouteV1::SignAndSubmitOnce => {
             planned_authorization
                 .ok_or_else(|| {
                     refusal(
@@ -1927,32 +1951,69 @@ pub(crate) fn resume_terminal_journal_v1(
 
             authenticate_terminal_cluster_v1(rpc, origin, expected_cluster)?;
             require_terminal_prestate_unchanged_v1(rpc, journal)?;
-            let returned = rpc
-                .call(
-                    "sendTransaction",
-                    &json!([BASE64.encode(&wire), {
-                        "encoding":"base64",
-                        "skipPreflight":false,
-                        "preflightCommitment":"finalized",
-                        "maxRetries":0
-                    }]),
-                )?
-                .as_str()
-                .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
-                .parse::<Signature>()
-                .map_err(|error| Error::new(format!("terminal returned signature: {error}")))?;
-            if returned != signature {
-                return Err(refusal(
-                    "RPC returned a signature different from the locally persisted packet",
-                ));
-            }
-            journal.phase = StageJournalPhaseV1::Submitted;
-            write_terminal_journal_v1(journal_path, journal, false)?;
+            let signature =
+                submit_terminal_packet_once_v1(journal_path, journal, |signed_packet_base64| {
+                    rpc.call_once(
+                        "sendTransaction",
+                        &json!([signed_packet_base64, {
+                            "encoding":"base64",
+                            "skipPreflight":false,
+                            "preflightCommitment":"finalized",
+                            "maxRetries":0
+                        }]),
+                    )?
+                    .as_str()
+                    .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
+                    .parse::<Signature>()
+                    .map_err(|error| Error::new(format!("terminal returned signature: {error}")))
+                })?;
             wait_terminal_signature_v1(rpc, &signature.to_string())?;
             finalize_terminal_signature_v1(rpc, journal, &signature.to_string())?;
             write_terminal_journal_v1(journal_path, journal, false)
         }
     }
+}
+
+/// Cross the only terminal send boundary in one durable order.
+///
+/// `SignedNotSubmitted` proves the exact packet exists, but it does not prove
+/// whether a process died before or during its first send. The transition to
+/// `Submitted` is therefore fsynced before the one transport attempt. Every
+/// failure after that point leaves the exact local signature in a poll-only
+/// phase; callers may never infer permission to resend from a missing or
+/// hostile RPC response.
+fn submit_terminal_packet_once_v1(
+    journal_path: &Path,
+    journal: &mut DurableTerminalJournalV1,
+    send_once: impl FnOnce(&str) -> Result<Signature>,
+) -> Result<Signature> {
+    authenticate_terminal_journal_v1(journal)?;
+    if journal.phase != StageJournalPhaseV1::SignedNotSubmitted {
+        return Err(refusal(
+            "terminal send requires the exact newly signed, not-yet-crossed boundary",
+        ));
+    }
+    let signed_packet_base64 = journal
+        .signed_packet_base64
+        .clone()
+        .ok_or_else(|| refusal("terminal send omitted its durable signed packet"))?;
+    let expected_signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| refusal("terminal send omitted its durable expected signature"))?
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("terminal expected signature: {error}")))?;
+
+    journal.phase = StageJournalPhaseV1::Submitted;
+    write_terminal_journal_v1(journal_path, journal, false)?;
+
+    let returned = send_once(&signed_packet_base64)?;
+    if returned != expected_signature {
+        return Err(refusal(
+            "RPC returned a signature different from the locally persisted packet",
+        ));
+    }
+    Ok(expected_signature)
 }
 
 fn authenticate_terminal_journal_v1(journal: &DurableTerminalJournalV1) -> Result<()> {
@@ -8027,13 +8088,14 @@ mod tests {
         }
     }
 
-    fn synthetic_system_transfer_journal() -> (
+    fn synthetic_system_transfer_journal_for_payer(
+        payer: Pubkey,
+    ) -> (
         DurableTerminalJournalV1,
         TerminalSemanticMutationV1,
         TerminalMetaClosureV1,
         Vec<ObservedAccount>,
     ) {
-        let payer = key(1);
         let recipient = key(2);
         let instruction = solana_system_interface::instruction::transfer(&payer, &recipient, 10);
         let closure = TerminalMetaClosureV1 {
@@ -8201,6 +8263,37 @@ mod tests {
         };
         refresh_terminal_journal_digest_v1(&mut journal).expect("journal digest");
         (journal, mutation, closure, prestate)
+    }
+
+    fn synthetic_system_transfer_journal() -> (
+        DurableTerminalJournalV1,
+        TerminalSemanticMutationV1,
+        TerminalMetaClosureV1,
+        Vec<ObservedAccount>,
+    ) {
+        synthetic_system_transfer_journal_for_payer(key(1))
+    }
+
+    fn signed_synthetic_system_transfer_journal() -> (DurableTerminalJournalV1, Signature) {
+        let payer = Keypair::new();
+        let (mut journal, _, _, _) = synthetic_system_transfer_journal_for_payer(payer.pubkey());
+        let message_bytes = BASE64
+            .decode(&journal.intent.message_base64)
+            .expect("synthetic message base64");
+        let message: VersionedMessage =
+            bincode::deserialize(&message_bytes).expect("synthetic versioned message");
+        let transaction =
+            VersionedTransaction::try_new(message, &[&payer]).expect("sign synthetic packet");
+        let signature = transaction.signatures[0];
+        let packet = bincode::serialize(&transaction).expect("synthetic signed packet");
+        assert_eq!(packet.len(), journal.intent.wire_bytes);
+        journal.authorized_mutation = true;
+        journal.phase = StageJournalPhaseV1::SignedNotSubmitted;
+        journal.signed_packet_base64 = Some(BASE64.encode(packet));
+        journal.expected_signature = Some(signature.to_string());
+        refresh_terminal_journal_digest_v1(&mut journal).expect("signed journal digest");
+        authenticate_terminal_journal_v1(&journal).expect("canonical signed journal");
+        (journal, signature)
     }
 
     fn unique_test_path(label: &str) -> PathBuf {
@@ -8439,6 +8532,101 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn terminal_resume_routes_both_ambiguous_signed_phases_to_poll_only() {
+        for phase in [
+            StageJournalPhaseV1::SignedNotSubmitted,
+            StageJournalPhaseV1::Submitted,
+        ] {
+            for execute in [false, true] {
+                assert_eq!(
+                    terminal_resume_route_v1(phase, execute),
+                    TerminalResumeRouteV1::PollOnly
+                );
+            }
+        }
+        assert_eq!(
+            terminal_resume_route_v1(StageJournalPhaseV1::Planned, false),
+            TerminalResumeRouteV1::PlannedReadOnly
+        );
+        assert_eq!(
+            terminal_resume_route_v1(StageJournalPhaseV1::Planned, true),
+            TerminalResumeRouteV1::SignAndSubmitOnce
+        );
+    }
+
+    #[test]
+    fn submitted_is_fsynced_before_send_and_a_withheld_response_never_moves_it_back() {
+        let path = unique_test_path("submitted-before-send");
+        let (mut journal, expected_signature) = signed_synthetic_system_transfer_journal();
+        let original_schema = journal.schema.clone();
+        let original_cluster = journal.cluster.clone();
+        write_terminal_journal_v1(&path, &mut journal, true).expect("persist signed journal");
+
+        let mut calls = 0_u8;
+        let error = submit_terminal_packet_once_v1(&path, &mut journal, |packet| {
+            calls = calls.saturating_add(1);
+            let visible = read_terminal_journal_v1(&path).expect("submitted before transport");
+            assert_eq!(visible.phase, StageJournalPhaseV1::Submitted);
+            assert_eq!(
+                visible.expected_signature.as_deref(),
+                Some(expected_signature.to_string().as_str())
+            );
+            assert_eq!(visible.signed_packet_base64.as_deref(), Some(packet));
+            assert_eq!(visible.schema, original_schema);
+            assert_eq!(visible.cluster, original_cluster);
+            Err(Error::new("synthetic withheld send response"))
+        })
+        .expect_err("withheld response remains ambiguous");
+        assert!(
+            error
+                .to_string()
+                .contains("synthetic withheld send response")
+        );
+        assert_eq!(calls, 1);
+
+        let mut restarted = read_terminal_journal_v1(&path).expect("durable submitted restart");
+        assert_eq!(restarted.phase, StageJournalPhaseV1::Submitted);
+        assert_eq!(restarted.schema, TERMINAL_JOURNAL_SCHEMA_V1);
+        assert_eq!(restarted.cluster, "devnet");
+        let mut replayed = false;
+        assert!(
+            submit_terminal_packet_once_v1(&path, &mut restarted, |_| {
+                replayed = true;
+                Ok(expected_signature)
+            })
+            .is_err()
+        );
+        assert!(!replayed, "a Submitted restart reached the send closure");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn mismatched_rpc_signature_refuses_and_retains_submitted_journal() {
+        let path = unique_test_path("mismatched-send-signature");
+        let (mut journal, expected_signature) = signed_synthetic_system_transfer_journal();
+        write_terminal_journal_v1(&path, &mut journal, true).expect("persist signed journal");
+        let wrong_signature = Keypair::new().sign_message(b"another terminal packet");
+        assert_ne!(wrong_signature, expected_signature);
+
+        let error = submit_terminal_packet_once_v1(&path, &mut journal, |_| Ok(wrong_signature))
+            .expect_err("RPC signature substitution must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("different from the locally persisted packet")
+        );
+        let persisted = read_terminal_journal_v1(&path).expect("retained submitted journal");
+        assert_eq!(persisted.phase, StageJournalPhaseV1::Submitted);
+        assert_eq!(
+            persisted.expected_signature.as_deref(),
+            Some(expected_signature.to_string().as_str())
+        );
+        assert_eq!(persisted.schema, TERMINAL_JOURNAL_SCHEMA_V1);
+        assert_eq!(persisted.cluster, "devnet");
+        let _ = fs::remove_file(path);
     }
 
     #[test]

@@ -1187,6 +1187,12 @@ fn buffer_writer_process_nonce_is_live(lease: &BufferWriterLeaseV1) -> Result<bo
         return Ok(false);
     }
     let marker = format!("DCLUTCH_BUFFER_WRITER_ID={}", lease.process_nonce);
+    // The marker is deliberately present in both argv and the environment.
+    // Linux `ps eww` exposes the latter, while macOS `ps` accepts the same
+    // spelling but returns only argv for a PID-scoped query. Requiring the
+    // random marker in either platform's command projection preserves the
+    // exact-process check without treating a matching PID/start/group as
+    // sufficient identity.
     Ok(String::from_utf8_lossy(&output.stdout).contains(&marker))
 }
 
@@ -1357,7 +1363,9 @@ attempt=$3
 command_sha=$4
 permit=$5
 nonce=$6
-shift 6
+identity_marker=$7
+[ "$identity_marker" = "DCLUTCH_BUFFER_WRITER_ID=$nonce" ]
+shift 7
 export LC_ALL=C TZ=UTC DCLUTCH_BUFFER_WRITER_ID="$nonce"
 pid=$$
 pgid=$(/bin/ps -o pgid= -p "$pid" | tr -d ' ')
@@ -1385,6 +1393,7 @@ exec "$@"
             .arg(query.command_sha256)
             .arg(query.permit_path)
             .arg(&process_nonce)
+            .arg(format!("DCLUTCH_BUFFER_WRITER_ID={process_nonce}"))
             .arg(&self.executable)
             .args(query.command_arguments)
             .stdin(Stdio::null())
@@ -8253,11 +8262,17 @@ mod tests {
     impl TestDirectory {
         fn new() -> Self {
             let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
+            let requested = std::env::temp_dir().join(format!(
                 "dclutch-devnet-upgrade-v1-test-{}-{sequence}",
                 std::process::id()
             ));
-            fs::create_dir(&path).expect("create test directory");
+            fs::create_dir(&requested).expect("create test directory");
+            // macOS commonly exposes its temporary root through `/var`,
+            // while `canonicalize` resolves that path beneath `/private/var`.
+            // Exercise the production exact-path checks with the real
+            // canonical coordinate instead of accidentally testing the host
+            // alias before the intended interruption or refusal boundary.
+            let path = fs::canonicalize(&requested).expect("canonical test directory");
             Self(path)
         }
     }
