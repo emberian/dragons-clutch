@@ -250,6 +250,7 @@ pub(crate) struct OpenMarketSessionV1 {
     pub(crate) accounts: BTreeMap<String, crate::model::AccountEvidence>,
     pub(crate) completed: Vec<String>,
     pub(crate) founding_custody_context: String,
+    pub(crate) direct_selected_manifest_entry_index: u16,
     /// The campaign's key source, kept so a post-Open campaign draws its keys
     /// from the same forge and inherits the same reproducibility.
     pub(crate) forge: KeyForge,
@@ -273,6 +274,7 @@ impl OpenMarketSessionV1 {
             keypair_derivation: self.forge.derivation_label().into(),
             keypair_seed_sha256: self.forge.seed_sha256(),
             founding_custody_context: self.founding_custody_context.clone(),
+            direct_selected_manifest_entry_index: self.direct_selected_manifest_entry_index,
             completed: self.completed.clone(),
             transactions: self.transactions.clone(),
             accounts: self.accounts.clone(),
@@ -513,6 +515,7 @@ pub(crate) fn found_through_open(
         accounts,
         completed,
         founding_custody_context: market.founding_custody_context,
+        direct_selected_manifest_entry_index: market.direct_selected_manifest_entry_index,
         forge,
     })
 }

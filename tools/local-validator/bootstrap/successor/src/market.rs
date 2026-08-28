@@ -139,10 +139,23 @@ const FIXTURE_SHELF_LIFE_SECONDS: u32 = 31_536_000;
 
 pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complete authenticated Product and Source graph, creates the lifecycle credit, projects the future Market through Core Found37, stages projected custody and the two controller-owned FundingLedgerV2 accounts through DCLTPCB2, and then opens the Market atomically through DCLTGMF2. The opening transaction locks the Hoard, creates Core and Claims state, realizes custody, consumes the one-shot permit, and commits Open last. Compute evidence must be remeasured for these V2 routes; the runner does not reuse pre-V2 founding measurements.";
 
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct MarketExecutionEvidence {
     pub(crate) completed: Vec<String>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
     pub(crate) founding_custody_context: String,
+    pub(crate) direct_selected_manifest_entry_index: u16,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct MarketExecutionCheckpointV1 {
+    pub(crate) market: String,
+    #[serde(rename = "foundingCustodyContext")]
+    pub(crate) founding_custody_context: String,
+    #[serde(rename = "directSelectedManifestEntryIndex")]
+    pub(crate) direct_selected_manifest_entry_index: u16,
+    pub(crate) direct_capability_root: String,
+    pub(crate) direct_trading_funding_ledger: String,
 }
 
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
@@ -349,6 +362,8 @@ struct MarketRecords {
     statistic_spec: PublishedRecord,
     provider_release: PublishedRecord,
     adapter_config: PublishedRecord,
+    /// Exact Registry closure selected by the manifest's Direct entry.
+    direct: BTreeMap<&'static str, PublishedRecord>,
     principal_cap_sets: u64,
 }
 
@@ -402,6 +417,20 @@ pub(crate) fn execute_found_market(
     payer: &Keypair,
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
+) -> Result<MarketExecutionEvidence> {
+    execute_found_market_with_checkpoint(rpc, plan, input, payer, forge, transactions, &mut |_| {
+        Ok(())
+    })
+}
+
+pub(crate) fn execute_found_market_with_checkpoint(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    transactions: &mut Vec<TransactionEvidence>,
+    checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
 ) -> Result<MarketExecutionEvidence> {
     validate_market_input(input)?;
     let registry = pubkey(&plan.registry.program_id)?;
@@ -641,6 +670,10 @@ pub(crate) fn execute_found_market(
             account_evidence(recovery.raw, &account),
         );
     }
+    for (&label, record) in &records.direct {
+        let account = rpc.required_account(record.raw, label)?;
+        accounts.insert(label.into(), account_evidence(record.raw, &account));
+    }
     let mut completed = vec![
             "created an exact Token-2022 collateral Mint and funded raw-atom wallet with ephemeral local keys".into(),
             "transaction-published and finalized the canonical Realm/Product/Source/Recovery/Manifest graph".into(),
@@ -672,6 +705,7 @@ pub(crate) fn execute_found_market(
             transactions,
             &mut accounts,
             &mut completed,
+            checkpoint,
         )?;
         if lane == PrestateLaneV1::Founding {
             founding_custody_context = Some(context);
@@ -682,6 +716,11 @@ pub(crate) fn execute_found_market(
         accounts,
         founding_custody_context: hex(&founding_custody_context
             .ok_or_else(|| Error::new("founding lane omitted its custody context"))?),
+        direct_selected_manifest_entry_index: input
+            .direct_capability
+            .as_ref()
+            .ok_or_else(|| Error::new("founding evidence omitted its Direct payload"))?
+            .selected_manifest_entry_index,
     })
 }
 
@@ -1051,6 +1090,21 @@ fn publish_market_records(
             transactions,
         )?)
     };
+    let mut direct = BTreeMap::new();
+    for record in crate::direct_market::direct_publication_records_v1(input)? {
+        let published = publish_record(
+            rpc,
+            registry,
+            payer,
+            record.schema,
+            &record.body,
+            None,
+            transactions,
+        )?;
+        if direct.insert(record.label, published).is_some() {
+            return Err(Error::new("Direct publication repeated an evidence label"));
+        }
+    }
     let manifest = publish_record(
         rpc,
         registry,
@@ -1214,6 +1268,7 @@ fn publish_market_records(
             statistic_spec,
             provider_release,
             adapter_config,
+            direct,
             principal_cap_sets,
         },
         semantic_product_id,
@@ -2814,6 +2869,7 @@ fn execute_projected_custody_bootstrap(
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
+    checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
 ) -> Result<[u8; 32]> {
     let registry = pubkey(&plan.registry.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
@@ -2846,6 +2902,24 @@ fn execute_projected_custody_bootstrap(
         lane.generation(input)?,
         expiry_slot,
     )?;
+    if lane == PrestateLaneV1::Founding {
+        let trading = pubkey(&plan.trading.program_id)?;
+        let trading_ledger = coordinates
+            .funding_ledgers
+            .iter()
+            .find(|ledger| ledger.controller == trading)
+            .ok_or_else(|| Error::new("founding checkpoint omitted the Trading FundingLedgerV2"))?;
+        checkpoint(&MarketExecutionCheckpointV1 {
+            market: coordinates.market.to_string(),
+            founding_custody_context: hex(&coordinates.context),
+            direct_selected_manifest_entry_index: coordinates.capability_entry_index,
+            direct_capability_root: Pubkey::new_from_array(
+                coordinates.found.capability_root().to_bytes(),
+            )
+            .to_string(),
+            direct_trading_funding_ledger: trading_ledger.address.to_string(),
+        })?;
+    }
     let principal = coordinates.lock.amount;
 
     // One Token-2022 account owned by the party the principal is refundable to.
@@ -3155,6 +3229,26 @@ fn execute_projected_custody_bootstrap(
         accounts.insert(
             format!("{prefix}_funding_ledger_v2_{index}"),
             account_evidence(funding.address, &account),
+        );
+    }
+    if lane == PrestateLaneV1::Founding {
+        let root = Pubkey::new_from_array(coordinates.found.capability_root().to_bytes());
+        let root_account = rpc.required_account(root, "direct_capability_root")?;
+        accounts.insert(
+            "direct_capability_root".into(),
+            account_evidence(root, &root_account),
+        );
+        let trading = pubkey(&plan.trading.program_id)?;
+        let trading_ledger = coordinates
+            .funding_ledgers
+            .iter()
+            .find(|ledger| ledger.controller == trading)
+            .ok_or_else(|| Error::new("founding evidence omitted the Trading FundingLedgerV2"))?;
+        let ledger_account =
+            rpc.required_account(trading_ledger.address, "direct_trading_funding_ledger")?;
+        accounts.insert(
+            "direct_trading_funding_ledger".into(),
+            account_evidence(trading_ledger.address, &ledger_account),
         );
     }
     let credit_account = rpc.required_account(coordinates.credit, "staged lifecycle credit")?;
