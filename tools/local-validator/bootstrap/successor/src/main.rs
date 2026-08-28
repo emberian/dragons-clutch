@@ -80,6 +80,9 @@ fn run() -> Result<()> {
         Some("wallet-terminal-payout-input") => {
             terminal_lifecycle::run_wallet_terminal_input(arguments.collect())
         }
+        Some("terminal-lifecycle-plan") => {
+            terminal_lifecycle::run_terminal_lifecycle_plan(arguments.collect())
+        }
         Some("wallet-terminal-payout-alt-plan") => wallet_terminal::run_alt(arguments.collect()),
         Some("wallet-terminal-payout-plan") => wallet_terminal::run(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
@@ -919,6 +922,7 @@ fn usage() {
     usage_supervisor();
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
+    println!("{}", terminal_lifecycle::lifecycle_usage());
     println!("{}", wallet_terminal::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
