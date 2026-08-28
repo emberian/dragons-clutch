@@ -18,6 +18,12 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
+use dclutch_capability_contract::{
+    CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
+    ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointPhaseV1,
+    ControllerFundingCheckpointV1,
+};
+
 use dclutch_claims_svm::founding_v5::{
     CLAIMS_FOUNDING_ACCOUNT_COUNT_V5, CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
     CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_REQUEST_BYTES_V5, ClaimsFoundingReceiptV5,
@@ -46,7 +52,9 @@ use solana_program::{
     program::{get_return_data, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
+    sysvar::{Sysvar, clock::Clock},
 };
+use solana_sdk_ids::system_program;
 
 use crate::TradingSbfError;
 
@@ -92,6 +100,12 @@ const CLAIMS_AGGREGATE: usize = 2;
 const CLAIMS_POSITION: usize = 3;
 const CLAIMS_ADMISSION: usize = 4;
 
+const LOCK_REPLAY: usize = 1;
+const LOCK_RENT_CREDIT: usize = 6;
+const LOCK_HOARD_VAULT: usize = 7;
+const LOCK_SOURCE_VAULT: usize = 8;
+const LOCK_SOURCE_REPLAY: usize = 12;
+
 /// Return whether bytes select the sole generic founding outer.
 #[must_use]
 pub fn is_generic_market_founding_v2(instruction_data: &[u8]) -> bool {
@@ -120,6 +134,7 @@ pub fn process_generic_market_founding_v2(
     authenticate_request_join(
         program_id, &frame, &found, &lock, &realize, &claims, &lock_raw,
     )?;
+    let staged = authenticate_staged_checkpoint_v1(program_id, &frame, &found, &lock, &lock_raw)?;
 
     let lock_receipt = execute_lock(program_id, &frame, &lock, &lock_raw)?;
     let found_ack = execute_core_found(program_id, &frame, &found, &found_raw, &lock_receipt)?;
@@ -139,6 +154,8 @@ pub fn process_generic_market_founding_v2(
         .map_err(|_| TradingSbfError::Content)?;
     let open_raw = open.encode().map_err(|_| TradingSbfError::Content)?;
     let open_ack = execute_core_open(program_id, &frame, &open, &open_raw, &claims_receipt)?;
+    authenticate_unchanged_pending_ledgers_v1(&frame, staged)?;
+    close_open_consumed_checkpoint_v1(program_id, &frame, staged)?;
     set_return_data(&open_ack);
     Ok(())
 }
@@ -149,6 +166,7 @@ struct GenericFoundingFrameV1<'accounts, 'info> {
     realize: &'accounts [AccountInfo<'info>],
     claims: &'accounts [AccountInfo<'info>],
     open: &'accounts [AccountInfo<'info>],
+    checkpoint: &'accounts AccountInfo<'info>,
     funding_count: usize,
 }
 
@@ -175,8 +193,11 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
         let open_start = claims_start
             .checked_add(CLAIMS_FOUNDING_ACCOUNT_COUNT_V5)
             .ok_or(TradingSbfError::Content)?;
-        let end = open_start
+        let checkpoint_index = open_start
             .checked_add(GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1)
+            .ok_or(TradingSbfError::Content)?;
+        let end = checkpoint_index
+            .checked_add(1)
             .ok_or(TradingSbfError::Content)?;
         if accounts.len() != end {
             return Err(TradingSbfError::Content.into());
@@ -204,6 +225,7 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
             )?,
             claims: subslice(accounts, claims_start, CLAIMS_FOUNDING_ACCOUNT_COUNT_V5)?,
             open: subslice(accounts, open_start, GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1)?,
+            checkpoint: account(accounts, checkpoint_index)?,
             funding_count,
         })
     }
@@ -248,6 +270,198 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
                 .ok_or(TradingSbfError::Content)?,
         )
     }
+}
+
+#[inline(never)]
+fn authenticate_staged_checkpoint_v1(
+    program_id: &Pubkey,
+    frame: &GenericFoundingFrameV1<'_, '_>,
+    found: &GenericFoundingRequestV1,
+    lock: &ProjectedCustodyRequestV1,
+    lock_raw: &[u8],
+) -> Result<ControllerFundingCheckpointV1, ProgramError> {
+    if frame.checkpoint.owner != program_id
+        || frame.checkpoint.is_signer
+        || !frame.checkpoint.is_writable
+        || frame.checkpoint.executable
+        || frame.checkpoint.data_len() != CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1
+        || found.funding_count() != 2
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let data = frame
+        .checkpoint
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let checkpoint =
+        ControllerFundingCheckpointV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    let input = checkpoint.input();
+    if checkpoint.phase() != ControllerFundingCheckpointPhaseV1::CustodyStaged
+        || input.release_set != found.release_set().to_bytes()
+        || input.market != found.market().to_bytes()
+        || input.generation != found.generation()
+        || input.funding_list != found.funding_list_id().to_bytes()
+        || input.funding_source != found.funding_source().to_bytes()
+        || input.rent_credit != lock.rent_credit
+        || input.lock_request_digest != hash(lock_raw).to_bytes()
+        || input.project_found_receipt_digest != lock.projection_receipt_digest
+        || input.expiry_slot != found.expiry_slot()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let derivation = ControllerFundingCheckpointDerivationV1::new(
+        input.release_set,
+        input.market,
+        input.generation,
+        input.manifest,
+        input.funding_list,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0
+        != *frame.checkpoint.key
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    authenticate_checkpoint_funding_order_v1(frame, checkpoint)?;
+    let ladder_digest = founding_custody_ladder_digest_v1(frame)?;
+    checkpoint
+        .authenticate_open_consumption(
+            Clock::get().map_err(|_| TradingSbfError::Transition)?.slot,
+            ladder_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(checkpoint)
+}
+
+fn checkpoint_funding_accounts<'a, 'info>(
+    frame: &'a GenericFoundingFrameV1<'_, 'info>,
+) -> Result<&'a [AccountInfo<'info>], ProgramError> {
+    let start = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1;
+    frame
+        .found
+        .get(start..start + frame.funding_count)
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn authenticate_checkpoint_funding_order_v1(
+    frame: &GenericFoundingFrameV1<'_, '_>,
+    checkpoint: ControllerFundingCheckpointV1,
+) -> Result<(), ProgramError> {
+    let input = checkpoint.input();
+    let resolution_first =
+        input.resolution_mask.trailing_zeros() < input.trading_mask.trailing_zeros();
+    let expected = if resolution_first {
+        [
+            (input.resolution_ledger, input.resolution_ledger_digest),
+            (input.trading_ledger, input.trading_ledger_digest),
+        ]
+    } else {
+        [
+            (input.trading_ledger, input.trading_ledger_digest),
+            (input.resolution_ledger, input.resolution_ledger_digest),
+        ]
+    };
+    let accounts = checkpoint_funding_accounts(frame)?;
+    if accounts.len() != expected.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    for (account, (expected_key, expected_digest)) in accounts.iter().zip(expected) {
+        if account.key.to_bytes() != expected_key
+            || account.is_signer
+            || account.is_writable
+            || account.executable
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        let data = account
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Content)?;
+        if hash(&data).to_bytes() != expected_digest {
+            return Err(TradingSbfError::Content.into());
+        }
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn founding_custody_ladder_digest_v1(
+    frame: &GenericFoundingFrameV1<'_, '_>,
+) -> Result<[u8; 32], ProgramError> {
+    let observations = [
+        account(frame.lock, LOCK_REPLAY)?,
+        account(frame.lock, LOCK_HOARD_VAULT)?,
+        account(frame.lock, LOCK_SOURCE_VAULT)?,
+        account(frame.lock, LOCK_SOURCE_REPLAY)?,
+    ];
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1);
+    for observation in observations {
+        let data = observation
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Content)?;
+        preimage.extend_from_slice(observation.key.as_ref());
+        preimage.extend_from_slice(observation.owner.as_ref());
+        preimage.extend_from_slice(&observation.lamports().to_le_bytes());
+        preimage.extend_from_slice(
+            &u64::try_from(data.len())
+                .map_err(|_| TradingSbfError::Content)?
+                .to_le_bytes(),
+        );
+        preimage.extend_from_slice(&data);
+    }
+    Ok(hash(&preimage).to_bytes())
+}
+
+fn authenticate_unchanged_pending_ledgers_v1(
+    frame: &GenericFoundingFrameV1<'_, '_>,
+    checkpoint: ControllerFundingCheckpointV1,
+) -> Result<(), ProgramError> {
+    authenticate_checkpoint_funding_order_v1(frame, checkpoint)
+}
+
+#[inline(never)]
+fn close_open_consumed_checkpoint_v1(
+    program_id: &Pubkey,
+    frame: &GenericFoundingFrameV1<'_, '_>,
+    checkpoint: ControllerFundingCheckpointV1,
+) -> Result<(), ProgramError> {
+    let rent_credit = account(frame.lock, LOCK_RENT_CREDIT)?;
+    if frame.checkpoint.owner != program_id
+        || frame.checkpoint.key == rent_credit.key
+        || !frame.checkpoint.is_writable
+        || !rent_credit.is_writable
+        || checkpoint.input().rent_credit != rent_credit.key.to_bytes()
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
+    let data = frame
+        .checkpoint
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Commit)?;
+    if ControllerFundingCheckpointV1::decode(&data).map_err(|_| TradingSbfError::Commit)?
+        != checkpoint
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
+    drop(data);
+    let lamports = frame.checkpoint.lamports();
+    let destination = rent_credit
+        .lamports()
+        .checked_add(lamports)
+        .ok_or(TradingSbfError::Commit)?;
+    **rent_credit
+        .try_borrow_mut_lamports()
+        .map_err(|_| TradingSbfError::Commit)? = destination;
+    **frame
+        .checkpoint
+        .try_borrow_mut_lamports()
+        .map_err(|_| TradingSbfError::Commit)? = 0;
+    frame
+        .checkpoint
+        .resize(0)
+        .map_err(|_| TradingSbfError::Commit)?;
+    frame.checkpoint.assign(&system_program::ID);
+    Ok(())
 }
 
 #[inline(never)]
@@ -1351,15 +1565,16 @@ mod tests {
                 + PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1
                 + CLAIMS_FOUNDING_ACCOUNT_COUNT_V5
                 + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1
+                + 1 // controller-funding checkpoint, closed last
         };
         // Decision 0004 removed the capability-root account from both the Found
         // and the Open frame; the root is derived, never read. The one account
         // above that width is the instructions sysvar the heap-frame admission
         // reads back. Projected Found V2 consumes the authenticated Custody
         // projection instead of repeating three finalized record pairs, so
-        // the three-ledger demo frame is exactly 132.
-        assert_eq!(count(3), 132);
-        assert_eq!(count(16), 145);
+        // the three-ledger demo frame plus its checkpoint is exactly 133.
+        assert_eq!(count(3), 133);
+        assert_eq!(count(16), 146);
         assert_eq!(
             GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2,
             GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 + 1
