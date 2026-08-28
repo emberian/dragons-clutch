@@ -337,7 +337,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let mut journal = JournalV1 {
         schema: JOURNAL_SCHEMA_V1.into(),
         cluster: "devnet".into(),
-        rpc_url: arguments.origin.redacted_url().into(),
+        rpc_url: arguments.origin.redacted_url(),
         authorized_mutation: arguments.execute,
         phase: PhaseV1::Planned,
         intent_sha256: sha256_hex(&serde_json::to_vec(&intent)?),
