@@ -61,8 +61,9 @@ use dclutch_resolution_core_v3_operator::{
     Finality, Observation, ObservedAccount, ResolutionCreateFundSnapshotV3,
     build_resolution_create_fund_v3,
     pre_market_funding_v1::{
-        PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1, PreMarketFundingSnapshotV1,
-        authenticate_pre_market_funding_receipt_v1, build_pre_market_funding_v1,
+        PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1, PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1,
+        PreMarketFundingSnapshotV1, authenticate_pre_market_funding_receipt_v1,
+        build_pre_market_funding_v1,
     },
     validate_resolution_create_fund_report_v3,
 };
@@ -918,6 +919,43 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
     assert_eq!(
         initializer.expected_receipt.rent_credit,
         fixture.rent_credit.to_bytes()
+    );
+
+    let found_start = PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1
+        .checked_sub(PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1)
+        .expect("initializer prefix width");
+    let mut aliased_accounts = initializer.instruction.accounts.clone();
+    aliased_accounts[0].is_signer = false;
+    aliased_accounts[found_start + 4].pubkey = aliased_accounts[found_start + 5].pubkey;
+    let aliased_instruction = Instruction {
+        program_id: TRADING_CALLER_PROGRAM_ID,
+        accounts: aliased_accounts,
+        data: initializer.instruction.data.clone(),
+    };
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("hostile blockhash");
+    let aliased_transaction = Transaction::new_signed_with_payer(
+        &[aliased_instruction],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let aliased = context
+        .banks_client
+        .process_transaction_with_metadata(aliased_transaction)
+        .await
+        .expect("hostile Banks RPC");
+    assert!(
+        aliased.result.is_err(),
+        "Core refuses an internal Found37 alias"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.ledger).await,
+        None,
+        "the refused projection leaves the Resolution ledger vacant"
     );
 
     let mut caller_accounts = initializer.instruction.accounts.clone();

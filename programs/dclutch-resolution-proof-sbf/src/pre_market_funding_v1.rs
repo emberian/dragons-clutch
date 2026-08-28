@@ -7,7 +7,7 @@ use dclutch_capability_contract::{
     FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{PROJECT_FOUND_RECEIPT_BYTES_V2, ProjectFoundReceiptV2};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
     PRE_MARKET_FUNDING_REQUEST_BYTES_V1, PRE_MARKET_FUNDING_REQUEST_MAGIC_V1,
@@ -120,7 +120,7 @@ pub fn process_pre_market_funding_v1(
     )?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
-    let canonical_mask = resolution_mask(manifest)?;
+    let (canonical_mask, native_principal) = resolution_funding_plan(manifest)?;
     if canonical_mask != request.selected_mask {
         return Err(ResolutionError::Funding.into());
     }
@@ -146,24 +146,6 @@ pub fn process_pre_market_funding_v1(
     .map_err(|_| ResolutionError::Funding)?;
     let funding_ledger =
         FundingLedgerV2::decode(&ledger_bytes).map_err(|_| ResolutionError::Funding)?;
-    let ledger_view = funding_ledger
-        .authenticate(manifest_id, manifest)
-        .map_err(|_| ResolutionError::Funding)?;
-    let native_principal = ledger_view
-        .remaining_native_lamports_total()
-        .map_err(|_| ResolutionError::Funding)?;
-    for entry_index in 0_u16..manifest.entry_count() {
-        if request.selected_mask & (1_u16 << entry_index) != 0
-            && manifest
-                .entry(entry_index)
-                .map_err(|_| ResolutionError::Funding)?
-                .funding_quote()
-                .realm_collateral()
-                .is_some()
-        {
-            return Err(ResolutionError::Funding.into());
-        }
-    }
     let exact_rent = rent.minimum_balance(width);
     let target = exact_rent
         .checked_add(native_principal)
@@ -298,23 +280,16 @@ fn authenticate_frame(
         .get(FOUND_START..)
         .ok_or(ResolutionError::AccountFrame)?;
     for (index, account) in found.iter().enumerate() {
-        let executable = matches!(
-            index,
-            FOUND_RENT_PROGRAM | FOUND_CORE_PROGRAM | FOUND_REGISTRY_PROGRAM | FOUND_SYSTEM
-        );
-        if account.is_signer || account.is_writable || account.executable != executable {
+        if !found_outer_flags_are_canonical(index, account) {
             return Err(ResolutionError::AccountFrame.into());
         }
     }
-    for (index, account) in found.iter().enumerate() {
-        if found
-            .iter()
-            .skip(index.checked_add(1).ok_or(ResolutionError::Arithmetic)?)
-            .any(|other| other.key == account.key)
-        {
-            return Err(ResolutionError::AccountFrame.into());
-        }
-    }
+    // Core's successful ProjectFound receipt is the semantic-owner proof that
+    // this exact Found37 slice has no internal aliases. Resolution must still
+    // own the outer flags because the CPI projection deliberately downgrades
+    // every child meta to readonly/non-signer. It also rejects every prefix
+    // alias and prefix-to-Found alias. Repeating Core's 666 internal pairwise
+    // comparisons here adds no independent authority.
     for prefix_index in 0..PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 {
         let prefix = accounts
             .get(prefix_index)
@@ -344,6 +319,14 @@ fn authenticate_frame(
     Ok(())
 }
 
+fn found_outer_flags_are_canonical(index: usize, account: &AccountInfo<'_>) -> bool {
+    let executable = matches!(
+        index,
+        FOUND_RENT_PROGRAM | FOUND_CORE_PROGRAM | FOUND_REGISTRY_PROGRAM | FOUND_SYSTEM
+    );
+    !account.is_signer && !account.is_writable && account.executable == executable
+}
+
 fn project_found(
     core_program: &AccountInfo<'_>,
     found: &[AccountInfo<'_>],
@@ -370,22 +353,30 @@ fn project_found(
     ProjectFoundReceiptV2::decode(&bytes).map_err(|_| ResolutionError::MarketAuthority.into())
 }
 
-fn resolution_mask(
+fn resolution_funding_plan(
     manifest: CapabilityManifestV1<'_>,
-) -> Result<u16, solana_program::program_error::ProgramError> {
+) -> Result<(u16, u64), solana_program::program_error::ProgramError> {
     let mut mask = 0_u16;
+    let mut native_principal = 0_u64;
     for entry_index in 0_u16..manifest.entry_count() {
         let entry = manifest
             .entry(entry_index)
             .map_err(|_| ResolutionError::Funding)?;
         if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+            let quote = entry.funding_quote();
+            if quote.realm_collateral().is_some() {
+                return Err(ResolutionError::Funding.into());
+            }
+            native_principal = native_principal
+                .checked_add(quote.native_lamports_total())
+                .ok_or(ResolutionError::Funding)?;
             mask |= 1_u16 << entry_index;
         }
     }
     if mask.count_ones() != 3 {
         return Err(ResolutionError::Funding.into());
     }
-    Ok(mask)
+    Ok((mask, native_principal))
 }
 
 fn authenticate_release_and_caller(
@@ -407,12 +398,11 @@ fn authenticate_release_and_caller(
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&data)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
+    // Successful Core ProjectFound already authenticated this exact read-only
+    // cache's Registry owner and PDA against the receipt's release-set ID.
+    // Resolution re-decodes the unchanged bytes because it owns the Trading
+    // and Resolution role projections, but a second PDA syscall adds no fact.
     if cache.owner != registry.key
-        || Pubkey::find_program_address(
-            &[ACTIVATION_PDA_DOMAIN_V1, &receipt.release_set.to_bytes()],
-            registry.key,
-        )
-        .0 != *cache.key
         || activated
             .execution_release_set_id()
             .map_err(|_| ResolutionError::ResolutionRelease)?
@@ -628,6 +618,27 @@ mod tests {
             authenticate_ledger_address(&program_id, &components, &substituted),
             Err(ResolutionError::OutputState.into())
         );
+    }
+
+    #[test]
+    fn outer_found_privilege_substitution_still_refuses_before_core_projection() {
+        let key = Pubkey::new_from_array([8; 32]);
+        let owner = Pubkey::new_from_array([7; 32]);
+        let mut lamports = 1_u64;
+        let mut data = [];
+        let mut account =
+            AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+        assert!(found_outer_flags_are_canonical(0, &account));
+        account.is_writable = true;
+        assert!(!found_outer_flags_are_canonical(0, &account));
+        account.is_writable = false;
+        account.is_signer = true;
+        assert!(!found_outer_flags_are_canonical(0, &account));
+        account.is_signer = false;
+        assert!(!found_outer_flags_are_canonical(
+            FOUND_CORE_PROGRAM,
+            &account
+        ));
     }
 
     #[test]
