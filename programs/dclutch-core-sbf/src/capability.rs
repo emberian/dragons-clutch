@@ -82,7 +82,11 @@ pub(crate) fn process(
     selection: CapabilityExecutionSelectionV1,
     funding_header: CapabilityFundingHeaderV2,
 ) -> Result<(), ProgramError> {
-    require_distinct(accounts)?;
+    if request.action == Action::CloseCapability {
+        require_close_capability_aliases(accounts, funding_header.physical_count())?;
+    } else {
+        require_distinct(accounts)?;
+    }
     let route = Route::parse(accounts, funding_header.physical_count())?;
     route.validate(program_id)?;
     let market = account(accounts, MARKET)?;
@@ -240,6 +244,52 @@ pub(crate) fn process(
         _ => return Err(CoreSbfError::Instruction.into()),
     }
     persist_state(market, next_state)
+}
+
+/// Admit exactly the infrastructure aliases required by Trading's authenticated suffix.
+///
+/// The Core route authenticates the activation cache, Core/Trading Loader pairs,
+/// Registry, and Rent sysvar before it invokes Trading. Trading deliberately
+/// authenticates those same accounts again at child-tail coordinates 8..14.
+/// They therefore appear twice in the top-level frame. No other alias is part
+/// of the close ABI.
+fn require_close_capability_aliases(
+    accounts: &[AccountInfo<'_>],
+    physical_count: u8,
+) -> Result<(), CoreSbfError> {
+    let funding_end = FUNDING_START
+        .checked_add(usize::from(physical_count))
+        .ok_or(CoreSbfError::Arithmetic)?;
+    let child_start = funding_end
+        .checked_add(ROUTE_FIXED_ACCOUNTS)
+        .ok_or(CoreSbfError::Arithmetic)?;
+    let pairs = [
+        (funding_end + 1, child_start + 8),
+        (funding_end + 2, child_start + 9),
+        (funding_end + 3, child_start + 10),
+        (funding_end + 4, child_start + 11),
+        (funding_end + 5, child_start + 12),
+        (funding_end + 8, child_start + 13),
+        (funding_end + 9, child_start + 14),
+    ];
+    for (left, right) in pairs {
+        if account(accounts, left)?.key != account(accounts, right)?.key {
+            return Err(CoreSbfError::AccountFrame);
+        }
+    }
+    for (left_index, left) in accounts.iter().enumerate() {
+        for (right_index, right) in accounts
+            .iter()
+            .enumerate()
+            .skip(left_index.saturating_add(1))
+        {
+            if left.key == right.key && !pairs.iter().any(|pair| *pair == (left_index, right_index))
+            {
+                return Err(CoreSbfError::AccountFrame);
+            }
+        }
+    }
+    Ok(())
 }
 
 impl<'accounts, 'info> Route<'accounts, 'info> {
@@ -956,6 +1006,8 @@ const _: usize = CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
+
     use super::*;
     use dclutch_capability_contract::{
         CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
@@ -1005,6 +1057,90 @@ mod tests {
             lazy_quote(),
         )
         .expect("entry")
+    }
+
+    fn test_account(key: Pubkey) -> AccountInfo<'static> {
+        let key = Box::leak(Box::new(key));
+        let owner = Box::leak(Box::new(system_program::ID));
+        let lamports = Box::leak(Box::new(0_u64));
+        let data = Box::leak(Vec::<u8>::new().into_boxed_slice());
+        AccountInfo::new(key, false, false, lamports, data, owner, false)
+    }
+
+    fn canonical_close_frame() -> Vec<AccountInfo<'static>> {
+        let physical_count = 1_u8;
+        let funding_end = FUNDING_START + usize::from(physical_count);
+        let child_start = funding_end + ROUTE_FIXED_ACCOUNTS;
+        let mut accounts = (0_u8..37)
+            .map(|index| test_account(Pubkey::new_from_array([index.saturating_add(1); 32])))
+            .collect::<Vec<_>>();
+        for (left, right) in [
+            (funding_end + 1, child_start + 8),
+            (funding_end + 2, child_start + 9),
+            (funding_end + 3, child_start + 10),
+            (funding_end + 4, child_start + 11),
+            (funding_end + 5, child_start + 12),
+            (funding_end + 8, child_start + 13),
+            (funding_end + 9, child_start + 14),
+        ] {
+            accounts[right] = accounts[left].clone();
+        }
+        accounts
+    }
+
+    #[test]
+    fn close_alias_policy_admits_only_the_seven_authenticated_suffix_pairs() {
+        let exact = canonical_close_frame();
+        assert_eq!(require_close_capability_aliases(&exact, 1), Ok(()));
+
+        let funding_end = FUNDING_START + 1;
+        let child_start = funding_end + ROUTE_FIXED_ACCOUNTS;
+        let pairs = [
+            (funding_end + 1, child_start + 8),
+            (funding_end + 2, child_start + 9),
+            (funding_end + 3, child_start + 10),
+            (funding_end + 4, child_start + 11),
+            (funding_end + 5, child_start + 12),
+            (funding_end + 8, child_start + 13),
+            (funding_end + 9, child_start + 14),
+        ];
+        for (_, right) in pairs {
+            let mut missing = canonical_close_frame();
+            missing[right] = test_account(Pubkey::new_unique());
+            assert_eq!(
+                require_close_capability_aliases(&missing, 1),
+                Err(CoreSbfError::AccountFrame)
+            );
+        }
+
+        let mut third_alias = canonical_close_frame();
+        third_alias[0] = third_alias[pairs[0].0].clone();
+        assert_eq!(
+            require_close_capability_aliases(&third_alias, 1),
+            Err(CoreSbfError::AccountFrame)
+        );
+
+        let mut cross_pair = canonical_close_frame();
+        cross_pair[pairs[1].0] = cross_pair[pairs[0].0].clone();
+        cross_pair[pairs[1].1] = cross_pair[pairs[0].0].clone();
+        assert_eq!(
+            require_close_capability_aliases(&cross_pair, 1),
+            Err(CoreSbfError::AccountFrame)
+        );
+
+        let mut shifted = canonical_close_frame();
+        shifted[pairs[0].1] = shifted[pairs[1].0].clone();
+        assert_eq!(
+            require_close_capability_aliases(&shifted, 1),
+            Err(CoreSbfError::AccountFrame)
+        );
+
+        let mut extra = canonical_close_frame();
+        extra[36] = extra[35].clone();
+        assert_eq!(
+            require_close_capability_aliases(&extra, 1),
+            Err(CoreSbfError::AccountFrame)
+        );
     }
 
     #[test]
