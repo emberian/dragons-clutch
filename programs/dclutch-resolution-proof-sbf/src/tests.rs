@@ -36,7 +36,7 @@ use dclutch_resolution_codec::{
     ACCEPT_PYTH_REQUEST_BYTES, AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES,
     FundedTransitionActionV3, FundedTransitionRequestV3, PRIMARY_CERTIFICATE_SEQUENCE_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
@@ -303,7 +303,7 @@ fn fixture() -> Fixture {
     let resolution_release = artifact(
         program_id,
         resolution_programdata,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V5,
         resolution_elf,
         73,
     );
@@ -527,7 +527,7 @@ fn fixture() -> Fixture {
     let capability_entries = [
         CapabilityEntryV1::new(
             core_id([0xd3; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
             core_id(recovery_allocation_id),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),
@@ -541,7 +541,7 @@ fn fixture() -> Fixture {
         .expect("recovery funding entry"),
         CapabilityEntryV1::new(
             core_id([0xd4; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
             core_id(recovery_policy_id.to_bytes()),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),
@@ -555,7 +555,7 @@ fn fixture() -> Fixture {
         .expect("exhaustion funding entry"),
         CapabilityEntryV1::new(
             core_id([0xd8; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
             core_id(material_id),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),
@@ -598,6 +598,7 @@ fn fixture() -> Fixture {
         terminal_winner: 0,
         identity: market_identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: core_identity([0xc3; 32]),
         terminal_receipt: None,
     }

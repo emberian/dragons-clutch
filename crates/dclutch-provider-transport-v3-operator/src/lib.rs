@@ -27,8 +27,8 @@ use dclutch_resolution_codec::{
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
-    SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 #[cfg(feature = "transaction-planning")]
@@ -92,7 +92,7 @@ pub struct ProviderSubmitSnapshotV3 {
     pub market: ObservedAccount,
     /// Current Runtime V2 Source state.
     pub source_state: ObservedAccount,
-    /// Finalized SourceMaterialV2 raw record.
+    /// Finalized `SourceMaterialV3` raw record.
     pub source_material: ObservedAccount,
     /// Finalized primary SourceSpec raw record.
     pub source_spec: ObservedAccount,
@@ -152,7 +152,7 @@ pub struct ProviderExecuteSnapshotV3 {
     pub lifecycle: ObservedAccount,
     /// Receiver-owned provider update.
     pub update: ObservedAccount,
-    /// Finalized SourceMaterialV2.
+    /// Finalized `SourceMaterialV3`.
     pub source_material: ObservedAccount,
     /// Finalized primary SourceSpec.
     pub source_spec: ObservedAccount,
@@ -266,10 +266,10 @@ pub fn build_provider_submit_v3(
     authenticate_raw(
         registry,
         &snapshot.source_material,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source.material_id().to_bytes(),
     )?;
-    let material = SourceMaterialV2::decode(&snapshot.source_material.data)
+    let material = SourceMaterialV3::decode(&snapshot.source_material.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
     authenticate_raw(
         registry,
@@ -380,7 +380,7 @@ pub fn build_provider_submit_v3(
     .0;
     let material_staging = staging(
         registry,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source.material_id().to_bytes(),
     );
     let source_staging = staging(
@@ -515,10 +515,10 @@ pub fn build_provider_execute_v3(
     authenticate_raw(
         registry,
         &snapshot.source_material,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source.material_id().to_bytes(),
     )?;
-    let material = SourceMaterialV2::decode(&snapshot.source_material.data)
+    let material = SourceMaterialV3::decode(&snapshot.source_material.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
     authenticate_raw(
         registry,
@@ -706,7 +706,7 @@ pub fn build_provider_execute_v3(
         raw_meta(&snapshot.source_material),
         staging_meta(
             registry,
-            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
             source.material_id().to_bytes(),
         ),
         raw_meta(&snapshot.source_spec),

@@ -11,7 +11,7 @@
 //! - the **successor validator**: the tier-1 producer's own founding campaign
 //!   (`found_through_open`, compiled in by `#[path]`), in transaction-only
 //!   record publication, founding a zero-cut graduation Product whose
-//!   `SourceMaterialV2` carries NO recovery policy — the §12.8 demo shape the
+//!   240-byte `SourceMaterialV3` carries NO recovery policy — the §12.8 demo shape the
 //!   no-recovery admission (`e5b6923`) made foundable.
 //!
 //! The success walk drives the REAL `dclutch-relayer` daemon binary: observe

@@ -36,7 +36,7 @@ use dclutch_relay_contract::{
 };
 use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
 use dclutch_source_contract::{
-    ContentId as SourceContentId, ProviderReleaseV1, SourceMaterialV2, SourceResolutionStateV2,
+    ContentId as SourceContentId, ProviderReleaseV1, SourceMaterialV3, SourceResolutionStateV2,
     SourceSpecV1, WindowKind, WindowSpecV1,
 };
 use solana_program::hash::hashv;
@@ -71,10 +71,10 @@ pub enum RelayJoinErrorV1 {
 /// shared-observation child and is a different access profile.
 #[derive(Clone, Copy)]
 pub struct AuthenticatedRelaySourceRecordsV1 {
-    /// `SourceMaterialV2` content identity, from the Market's own policy.
+    /// `SourceMaterialV3` content identity, from the Market's own policy.
     pub material_id: SourceContentId,
     /// The authenticated material.
-    pub material: SourceMaterialV2,
+    pub material: SourceMaterialV3,
     /// `SourceSpecV1` content identity, from the material.
     pub source_spec_id: SourceContentId,
     /// The authenticated specification.

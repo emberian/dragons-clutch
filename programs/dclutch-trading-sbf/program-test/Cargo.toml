@@ -42,6 +42,7 @@ dclutch-transition-vm = { path = "../../../crates/dclutch-transition-vm" }
 dclutch-trading-sbf = { path = "..", features = ["no-entrypoint"] }
 solana-account = "=4.3.2"
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
+solana-compute-budget-interface = "=3.0.0"
 solana-message = "=4.4.1"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }

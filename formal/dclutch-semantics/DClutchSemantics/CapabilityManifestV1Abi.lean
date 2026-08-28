@@ -274,6 +274,98 @@ def stateRemainingRentAmountOffset : Nat :=
    | some (offset, _) => offset
    | none => 0)
 
+/-! ## Manifest-keyed ordered funding ledger
+
+`FundingLedgerV2` replaces one mutable account per selected manifest entry with
+one controller-homogeneous subset account. The account has an exact header
+followed by one congruent slot for each set bit of `selectedMask`, in ascending
+manifest-index order. A slot stores only physical
+remaining principal: asset classes, per-asset totals, and released principal
+are derived from the authenticated immutable quote and therefore cannot become
+parallel persisted truths.
+-/
+
+def fundingLedgerMagicV2 : String := "DCLTFL02"
+def fundingLedgerSchemaVersionV2 : Nat := 2
+
+/-- Adapter PDA seed domain for the one manifest-keyed funding ledger. -/
+def fundingLedgerPdaDomainV2 : String := "dclutch/cap-funding-ledger/v2"
+/-- Per-entry token-signing authority under one funding ledger. -/
+def fundingLedgerAuthorityPdaDomainV2 : String := "dclutch/cap-ledger-auth/v2"
+/-- Optional per-entry Realm-collateral vault. -/
+def fundingLedgerVaultPdaDomainV2 : String := "dclutch/cap-ledger-vault/v2"
+
+inductive LedgerHeaderFieldV2 where
+  | magic | schemaVersion | selectedMask | reserved | manifestId
+  deriving DecidableEq, Repr
+
+def ledgerHeaderSchemaV2 : List (FieldSpec LedgerHeaderFieldV2) := [
+  ⟨.magic, .bytes 8⟩,
+  ⟨.schemaVersion, .u16⟩,
+  ⟨.selectedMask, .u16⟩,
+  ⟨.reserved, .reserved 4⟩,
+  ⟨.manifestId, .bytes 32⟩
+]
+
+def ledgerHeaderLayoutV2 : List (PlacedField LedgerHeaderFieldV2) :=
+  specialize ledgerHeaderSchemaV2
+def ledgerHeaderBytesV2 : Nat := schemaWidth ledgerHeaderSchemaV2
+def ledgerHeaderReservedBytesV2 : Nat := 4
+
+namespace LedgerHeaderFieldV2
+
+def constantName : LedgerHeaderFieldV2 → String
+  | .magic => "CAPABILITY_FUNDING_LEDGER_MAGIC_OFFSET_V2"
+  | .schemaVersion => "CAPABILITY_FUNDING_LEDGER_SCHEMA_OFFSET_V2"
+  | .selectedMask => "CAPABILITY_FUNDING_LEDGER_SELECTED_MASK_OFFSET_V2"
+  | .reserved => "CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2"
+  | .manifestId => "CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2"
+
+end LedgerHeaderFieldV2
+
+inductive LedgerSlotFieldV2 where
+  | status | reserved | activationSlot
+  | rent | creation | work | provider | bounty | liquidity | service
+  deriving DecidableEq, Repr
+
+def ledgerSlotSchemaV2 : List (FieldSpec LedgerSlotFieldV2) := [
+  ⟨.status, .u8⟩,
+  ⟨.reserved, .reserved 7⟩,
+  ⟨.activationSlot, .u64⟩,
+  ⟨.rent, .u64⟩,
+  ⟨.creation, .u64⟩,
+  ⟨.work, .u64⟩,
+  ⟨.provider, .u64⟩,
+  ⟨.bounty, .u64⟩,
+  ⟨.liquidity, .u64⟩,
+  ⟨.service, .u64⟩
+]
+
+def ledgerSlotLayoutV2 : List (PlacedField LedgerSlotFieldV2) :=
+  specialize ledgerSlotSchemaV2
+def ledgerSlotBytesV2 : Nat := schemaWidth ledgerSlotSchemaV2
+def ledgerSlotReservedBytesV2 : Nat := 7
+
+namespace LedgerSlotFieldV2
+
+def constantName : LedgerSlotFieldV2 → String
+  | .status => "CAPABILITY_FUNDING_LEDGER_SLOT_STATUS_OFFSET_V2"
+  | .reserved => "CAPABILITY_FUNDING_LEDGER_SLOT_RESERVED_OFFSET_V2"
+  | .activationSlot => "CAPABILITY_FUNDING_LEDGER_SLOT_ACTIVATION_SLOT_OFFSET_V2"
+  | .rent => "CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_RENT_OFFSET_V2"
+  | .creation => "CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_CREATION_OFFSET_V2"
+  | .work => "CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_WORK_OFFSET_V2"
+  | .provider => "CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_PROVIDER_OFFSET_V2"
+  | .bounty => "CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_BOUNTY_OFFSET_V2"
+  | .liquidity => "CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_LIQUIDITY_OFFSET_V2"
+  | .service => "CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_SERVICE_OFFSET_V2"
+
+end LedgerSlotFieldV2
+
+/-- The one exact account width for a canonically bounded manifest count. -/
+def fundingLedgerBytesV2 (slotCount : Nat) : Nat :=
+  ledgerHeaderBytesV2 + slotCount * ledgerSlotBytesV2
+
 /-! ## One capability entry -/
 
 inductive EntryField where
@@ -463,6 +555,10 @@ theorem quote_fields_are_disjoint :
     quoteLayout.Pairwise Before := specializeFrom_pairwise 0 quoteSchema
 theorem state_fields_are_disjoint :
     stateLayout.Pairwise Before := specializeFrom_pairwise 0 stateSchema
+theorem ledger_header_fields_are_disjoint :
+    ledgerHeaderLayoutV2.Pairwise Before := specializeFrom_pairwise 0 ledgerHeaderSchemaV2
+theorem ledger_slot_fields_are_disjoint :
+    ledgerSlotLayoutV2.Pairwise Before := specializeFrom_pairwise 0 ledgerSlotSchemaV2
 theorem entry_fields_are_disjoint :
     entryLayout.Pairwise Before := specializeFrom_pairwise 0 entrySchema
 theorem header_fields_are_disjoint :
@@ -490,6 +586,20 @@ theorem state_carries_two_congruent_amount_blocks :
       coordinate? StateField.released stateLayout = some (192, amountsBytes) := by
   native_decide
 
+/-- Every ledger entry has one and only one fixed-width physical slot. -/
+theorem ledger_slot_is_exactly_status_slot_and_seven_remaining_amounts :
+    ledgerSlotBytesV2 = 72 := by native_decide
+
+/-- A four-entry subset uses the exact dynamic width rather than reserving the
+sixteen-entry maximum. -/
+theorem four_slot_funding_ledger_is_336_bytes :
+    fundingLedgerBytesV2 4 = 336 := by native_decide
+
+/-- Decision 0013's Direct market uses one three-entry Resolution subset and
+one one-entry Direct subset. -/
+theorem resolution_and_direct_subset_data_is_384_bytes :
+    fundingLedgerBytesV2 3 + fundingLedgerBytesV2 1 = 384 := by native_decide
+
 /-- Every funding seed domain fits one SVM seed component. -/
 theorem funding_domain_is_seedable :
     fundingPdaDomain.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
@@ -497,20 +607,28 @@ theorem funding_authority_domain_is_seedable :
     fundingAuthorityPdaDomain.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
 theorem funding_vault_domain_is_seedable :
     fundingVaultPdaDomain.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
+theorem funding_ledger_domain_is_seedable :
+    fundingLedgerPdaDomainV2.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
+theorem funding_ledger_authority_domain_is_seedable :
+    fundingLedgerAuthorityPdaDomainV2.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
+theorem funding_ledger_vault_domain_is_seedable :
+    fundingLedgerVaultPdaDomainV2.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
 theorem readiness_domain_is_seedable :
     readinessPdaDomain.toUTF8.size ≤ svmMaxSeedBytes := by native_decide
 
 /-- The four record magics in this family are pairwise distinct, so magic
 dispatch cannot route one record to another's decoder. -/
 theorem magics_are_pairwise_distinct :
-    [manifestMagic, fundingQuoteMagic, fundingStateMagic, readinessMagic].Nodup := by
+    [manifestMagic, fundingQuoteMagic, fundingStateMagic, fundingLedgerMagicV2,
+      readinessMagic].Nodup := by
   native_decide
 
 /-- The four seed domains are pairwise distinct, so no account addressed under
 one can be reached by a derivation under another. -/
 theorem domains_are_pairwise_distinct :
     [fundingPdaDomain, fundingAuthorityPdaDomain, fundingVaultPdaDomain,
-      readinessPdaDomain].Nodup := by
+      fundingLedgerPdaDomainV2, fundingLedgerAuthorityPdaDomainV2,
+      fundingLedgerVaultPdaDomainV2, readinessPdaDomain].Nodup := by
   native_decide
 
 end DClutch.CapabilityManifestV1Abi

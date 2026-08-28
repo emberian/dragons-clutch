@@ -13,8 +13,10 @@ mod generated_source_resolution;
 #[allow(missing_docs)]
 #[rustfmt::skip]
 mod generated_v2;
+mod pre_market_funding_v1;
 mod provider_transport_v3;
 mod provider_v3;
+mod source_closure_receipt_v3;
 mod v2;
 
 pub use generated_v2::{
@@ -23,6 +25,7 @@ pub use generated_v2::{
     RESOLUTION_CERTIFICATE_VERSION_V2, SOURCE_CLOSURE_RECEIPT_BYTES_V2,
     SOURCE_CLOSURE_RECEIPT_MAGIC_V2, SOURCE_CLOSURE_RECEIPT_VERSION_V2,
 };
+pub use pre_market_funding_v1::*;
 pub use provider_transport_v3::*;
 pub use provider_v3::{
     PROVIDER_EXECUTION_RECEIPT_BYTES_V3, PROVIDER_EXECUTION_REQUEST_BYTES_V3,
@@ -37,6 +40,11 @@ pub use provider_v3::{
     PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_TRADING_RECORDS_START_V3,
     PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, ProviderCallerV3, ProviderExecutionReceiptV3,
     ProviderExecutionRequestV3,
+};
+pub use source_closure_receipt_v3::{
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_KIND_V3,
+    SOURCE_CLOSURE_RECEIPT_MAGIC_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
+    SOURCE_CLOSURE_RECEIPT_VERSION_V3, SourceClosureReceiptV3,
 };
 pub use v2::{
     AcceptPythRequestV2, ResolutionCertificateKindV2, ResolutionCertificateV2,
@@ -57,6 +65,9 @@ pub const RESOLUTION_CERTIFICATE_BYTES: usize =
 /// Bytes in the sole canonical Resolution role request carried by a Core effect.
 pub const RESOLUTION_CORE_ROLE_REQUEST_BYTES: usize =
     generated_source_resolution::CORE_REQUEST_BYTES_VALUE;
+/// Bytes in the subset-ledger Resolution role request carried by a Core effect.
+pub const RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2: usize =
+    generated_source_resolution::CORE_REQUEST_V2_BYTES_VALUE;
 /// Bytes in one canonical persisted Source closure receipt.
 pub const SOURCE_CLOSURE_RECEIPT_BYTES: usize = generated_source_resolution::CLOSURE_BYTES_VALUE;
 /// PDA domain for a deterministic, typed, ordered certificate paired with a Source state.
@@ -76,6 +87,10 @@ pub const FUNDED_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/funded-poststate/
 pub const RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/resolution-poststate/v1";
 /// Domain separating the exact three-account Resolution funding-set digest.
 pub const SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/source-funding-set/v1";
+/// Domain separating the exact Source/subset-ledger effect poststate digest.
+pub const RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2: &[u8] = b"dclutch/resolution-poststate/v2";
+/// Domain separating one exact three-entry subset-ledger prestate digest.
+pub const SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2: &[u8] = b"dclutch/source-funding-set/v2";
 /// Closed semantic release preimage for the sequential funded controller profile.
 pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V3: &[u8] =
     b"dclutch/release/source-resolution-controller-deterministic-prepaid-cert-funded-recovery-exhaustion-failure-v3";
@@ -91,6 +106,14 @@ pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V4: &[u8] =
 pub const RESOLUTION_CONTROLLER_RELEASE_ID_V4: [u8; 32] = [
     0x03, 0x6f, 0xdf, 0xcd, 0x80, 0x81, 0xbc, 0x8d, 0x21, 0x9c, 0x7f, 0xd8, 0xa6, 0xf5, 0xd7, 0x7b,
     0x56, 0xbe, 0x2d, 0x51, 0x43, 0x01, 0x06, 0xa7, 0x5c, 0x26, 0x8c, 0xde, 0xd7, 0xf0, 0x73, 0xde,
+];
+/// Closed semantic release preimage for subset-ledger and pre-Market initialization semantics.
+pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5: &[u8] =
+    b"dclutch/release/source-resolution-controller-subset-ledger-pre-market-v5";
+/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5`].
+pub const RESOLUTION_CONTROLLER_RELEASE_ID_V5: [u8; 32] = [
+    0xaa, 0x5c, 0x14, 0x18, 0xab, 0xc9, 0xc6, 0x79, 0xb9, 0x69, 0xb5, 0xc6, 0xca, 0x79, 0xa9, 0x32,
+    0x7f, 0xa9, 0xfb, 0xf9, 0xf3, 0x9c, 0x3b, 0xe0, 0x28, 0xae, 0xdb, 0x3f, 0x91, 0x44, 0x8c, 0x7a,
 ];
 /// Schema identity used only to finalize a canonical Pyth-release record.
 pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
@@ -127,6 +150,10 @@ pub enum Error {
     InvalidReceiptShape,
     /// The closure receipt did not attest exactly the three canonical funding compartments.
     InvalidFundingCount,
+    /// A pre-Market funding request or receipt was non-canonical.
+    InvalidPreMarketFunding,
+    /// Closure refund components overflowed or did not equal the attested total.
+    InvalidClosureRefund,
 }
 
 /// Result alias for Resolution codecs.
@@ -1103,6 +1130,255 @@ impl ResolutionRoleRequestV1 {
     }
 }
 
+/// Clean-break Resolution request carrying one canonical subset funding ledger.
+///
+/// The three entry indices retain semantic role order. Their exact pairwise
+/// union derives the ledger mask; physical ledger rows are ordered by ascending
+/// manifest index rather than by these role fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionRoleRequestV2 {
+    /// Exact Core action tag.
+    pub action: ResolutionCoreActionV1,
+    /// Action-partitioned terminal or closure receipt kind.
+    pub receipt_kind: ResolutionCoreReceiptKindV1,
+    /// Canonical Source state account.
+    pub source_state: [u8; 32],
+    /// Finalized Source-material content identity.
+    pub source_material: [u8; 32],
+    /// Finalized capability-manifest content identity.
+    pub capability_manifest: [u8; 32],
+    /// Canonical Resolution-controller subset funding ledger.
+    pub funding_ledger: [u8; 32],
+    /// Terminal certificate, closure receipt, or zero according to `action`.
+    pub receipt: [u8; 32],
+    /// Funding beneficiary, or zero for terminal admission.
+    pub beneficiary: [u8; 32],
+    /// Capability-manifest entry selecting recovery funding.
+    pub recovery_entry_index: u16,
+    /// Capability-manifest entry selecting exhaustion funding.
+    pub exhaustion_entry_index: u16,
+    /// Capability-manifest entry selecting explicit-failure funding.
+    pub failure_entry_index: u16,
+    /// Exact terminal or closure sequence, or zero before terminal admission.
+    pub receipt_sequence: u64,
+}
+
+impl ResolutionRoleRequestV2 {
+    /// Decode one exact canonical subset-ledger request.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        exact_width(input, RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2)?;
+        exact(
+            input,
+            generated_source_resolution::CORE_REQUEST_V2_MAGIC_OFFSET,
+            &generated_source_resolution::CORE_REQUEST_V2_MAGIC_BYTES,
+            Error::InvalidMagic,
+        )?;
+        if u16_at(
+            input,
+            generated_source_resolution::CORE_REQUEST_V2_VERSION_OFFSET,
+        )? != generated_source_resolution::CORE_REQUEST_V2_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        require_zero(
+            input,
+            generated_source_resolution::CORE_REQUEST_V2_RESERVED_HEADER_OFFSET,
+            4,
+        )?;
+        require_zero(
+            input,
+            generated_source_resolution::CORE_REQUEST_V2_RESERVED_BODY_OFFSET,
+            2,
+        )?;
+        let value = Self {
+            action: ResolutionCoreActionV1::decode(byte_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_ACTION_OFFSET,
+            )?)?,
+            receipt_kind: ResolutionCoreReceiptKindV1::decode(byte_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_RECEIPT_KIND_OFFSET,
+            )?)?,
+            source_state: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_SOURCE_STATE_OFFSET,
+            )?,
+            source_material: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_SOURCE_MATERIAL_OFFSET,
+            )?,
+            capability_manifest: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_CAPABILITY_MANIFEST_OFFSET,
+            )?,
+            funding_ledger: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_FUNDING_LEDGER_OFFSET,
+            )?,
+            receipt: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_RECEIPT_OFFSET,
+            )?,
+            beneficiary: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_BENEFICIARY_OFFSET,
+            )?,
+            recovery_entry_index: u16_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_RECOVERY_ENTRY_INDEX_OFFSET,
+            )?,
+            exhaustion_entry_index: u16_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_EXHAUSTION_ENTRY_INDEX_OFFSET,
+            )?,
+            failure_entry_index: u16_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_FAILURE_ENTRY_INDEX_OFFSET,
+            )?,
+            receipt_sequence: u64_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_V2_RECEIPT_SEQUENCE_OFFSET,
+            )?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode one exact canonical subset-ledger request.
+    pub fn to_bytes(self) -> Result<[u8; RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2]> {
+        self.validate()?;
+        let mut output = [0_u8; RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2];
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_MAGIC_OFFSET,
+            &generated_source_resolution::CORE_REQUEST_V2_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_VERSION_OFFSET,
+            &generated_source_resolution::CORE_REQUEST_V2_ABI_VERSION.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_ACTION_OFFSET,
+            &[self.action.byte()],
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_RECEIPT_KIND_OFFSET,
+            &[self.receipt_kind.byte()],
+        )?;
+        for (offset, value) in [
+            (
+                generated_source_resolution::CORE_REQUEST_V2_SOURCE_STATE_OFFSET,
+                &self.source_state,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_V2_SOURCE_MATERIAL_OFFSET,
+                &self.source_material,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_V2_CAPABILITY_MANIFEST_OFFSET,
+                &self.capability_manifest,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_V2_FUNDING_LEDGER_OFFSET,
+                &self.funding_ledger,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_V2_RECEIPT_OFFSET,
+                &self.receipt,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_V2_BENEFICIARY_OFFSET,
+                &self.beneficiary,
+            ),
+        ] {
+            put(&mut output, offset, value)?;
+        }
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_RECOVERY_ENTRY_INDEX_OFFSET,
+            &self.recovery_entry_index.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_EXHAUSTION_ENTRY_INDEX_OFFSET,
+            &self.exhaustion_entry_index.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_FAILURE_ENTRY_INDEX_OFFSET,
+            &self.failure_entry_index.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_V2_RECEIPT_SEQUENCE_OFFSET,
+            &self.receipt_sequence.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+
+    /// Return the exact nonzero union mask of the three semantic role indices.
+    pub fn funding_entry_mask(self) -> Result<u16> {
+        let mut mask = 0_u16;
+        for index in [
+            self.recovery_entry_index,
+            self.exhaustion_entry_index,
+            self.failure_entry_index,
+        ] {
+            let bit = 1_u16
+                .checked_shl(u32::from(index))
+                .ok_or(Error::InvalidFundingCount)?;
+            if mask & bit != 0 {
+                return Err(Error::DuplicateCoordinate);
+            }
+            mask |= bit;
+        }
+        Ok(mask)
+    }
+
+    fn validate(self) -> Result<()> {
+        if is_zero(&self.source_state)
+            || is_zero(&self.source_material)
+            || is_zero(&self.capability_manifest)
+            || is_zero(&self.funding_ledger)
+        {
+            return Err(Error::ZeroCoordinate);
+        }
+        if self.funding_entry_mask()?.count_ones() != 3 {
+            return Err(Error::InvalidFundingCount);
+        }
+        let shape_is_valid = match self.action {
+            ResolutionCoreActionV1::CreateFund | ResolutionCoreActionV1::VerifyFundReady => {
+                self.receipt_kind == ResolutionCoreReceiptKindV1::None
+                    && is_zero(&self.receipt)
+                    && !is_zero(&self.beneficiary)
+                    && self.receipt_sequence == 0
+            }
+            ResolutionCoreActionV1::AdmitTerminal => {
+                matches!(
+                    self.receipt_kind,
+                    ResolutionCoreReceiptKindV1::TerminalSuccess
+                        | ResolutionCoreReceiptKindV1::TerminalFailure
+                ) && !is_zero(&self.receipt)
+                    && is_zero(&self.beneficiary)
+                    && self.receipt_sequence != 0
+            }
+            ResolutionCoreActionV1::CloseFund => {
+                self.receipt_kind == ResolutionCoreReceiptKindV1::Closure
+                    && !is_zero(&self.receipt)
+                    && !is_zero(&self.beneficiary)
+                    && self.receipt_sequence != 0
+            }
+        };
+        if !shape_is_valid {
+            return Err(Error::InvalidReceiptShape);
+        }
+        Ok(())
+    }
+}
+
 /// Persisted receipt proving terminal Source state and all funding accounts were discharged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceClosureReceiptV1 {
@@ -1902,6 +2178,23 @@ mod tests {
         }
     }
 
+    fn core_request_v2() -> ResolutionRoleRequestV2 {
+        ResolutionRoleRequestV2 {
+            action: ResolutionCoreActionV1::CloseFund,
+            receipt_kind: ResolutionCoreReceiptKindV1::Closure,
+            source_state: id(1),
+            source_material: id(2),
+            capability_manifest: id(3),
+            funding_ledger: id(4),
+            receipt: id(5),
+            beneficiary: id(6),
+            recovery_entry_index: 0,
+            exhaustion_entry_index: 1,
+            failure_entry_index: 2,
+            receipt_sequence: 4,
+        }
+    }
+
     fn closure() -> SourceClosureReceiptV1 {
         SourceClosureReceiptV1 {
             market: id(1),
@@ -2199,6 +2492,47 @@ mod tests {
     }
 
     #[test]
+    fn generated_core_request_v2_binds_one_ledger_and_exact_three_bit_union() -> Result<()> {
+        let value = core_request_v2();
+        let encoded = value.to_bytes()?;
+        assert_eq!(
+            encoded,
+            generated_source_resolution::CORE_REQUEST_V2_EXAMPLE
+        );
+        assert_eq!(ResolutionRoleRequestV2::decode(&encoded), Ok(value));
+        assert_eq!(value.funding_entry_mask(), Ok(0b111));
+
+        for length in 0..RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2 {
+            assert_eq!(
+                ResolutionRoleRequestV2::decode(encoded.get(..length).ok_or(Error::InvalidLength)?,),
+                Err(Error::InvalidLength)
+            );
+        }
+        let mut duplicate = value;
+        duplicate.failure_entry_index = duplicate.recovery_entry_index;
+        assert_eq!(duplicate.to_bytes(), Err(Error::DuplicateCoordinate));
+        let mut out_of_range = value;
+        out_of_range.failure_entry_index = 16;
+        assert_eq!(out_of_range.to_bytes(), Err(Error::InvalidFundingCount));
+        let mut zero_ledger = value;
+        zero_ledger.funding_ledger = [0; 32];
+        assert_eq!(zero_ledger.to_bytes(), Err(Error::ZeroCoordinate));
+        let mut hostile = encoded;
+        hostile[generated_source_resolution::CORE_REQUEST_V2_RESERVED_BODY_OFFSET] = 1;
+        assert_eq!(
+            ResolutionRoleRequestV2::decode(&hostile),
+            Err(Error::NonCanonicalReserved)
+        );
+        let mut v1_magic = encoded;
+        v1_magic[..8].copy_from_slice(&generated_source_resolution::CORE_REQUEST_MAGIC_BYTES);
+        assert_eq!(
+            ResolutionRoleRequestV2::decode(&v1_magic),
+            Err(Error::InvalidMagic)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn generated_closure_round_trip_and_hostile_discharge_facts_match() -> Result<()> {
         let value = closure();
         let encoded = value.to_bytes()?;
@@ -2311,5 +2645,21 @@ mod tests {
             Err(Error::ZeroCoordinate)
         );
         assert!(ResolutionReleaseCandidateV1::new([1; 32], [2; 32]).is_ok());
+    }
+
+    #[test]
+    fn v5_subset_ledger_semantics_cannot_alias_the_v4_release() {
+        assert_eq!(
+            dclutch_sha256_adapter::digest(RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5),
+            RESOLUTION_CONTROLLER_RELEASE_ID_V5
+        );
+        assert_ne!(
+            RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V4,
+            RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5
+        );
+        assert_ne!(
+            RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V5
+        );
     }
 }

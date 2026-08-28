@@ -3,7 +3,7 @@
 use dclutch_product_runtime_v2::ResultDomainV2;
 
 use super::{
-    ContentId, Error, MarketChildDeltaV1, Result, SourceMaterialV2, SourceResolutionPhaseV1,
+    ContentId, Error, MarketChildDeltaV1, Result, SourceMaterialV3, SourceResolutionPhaseV1,
     SourceResolutionRouteV1, WindowSpecV1, generated_source_resolution_state_v2 as generated,
 };
 
@@ -170,7 +170,7 @@ impl SourceResolutionCreationPlanV2 {
 
 impl SourceResolutionStateV2 {
     /// Begin a fresh primary state bound to one authenticated Market generation
-    /// and exact `SourceMaterialV2` content digest.
+    /// and exact `SourceMaterialV3` content digest.
     #[allow(clippy::too_many_arguments)]
     pub fn fresh(
         market: [u8; 32],
@@ -386,7 +386,7 @@ impl SourceResolutionStateV2 {
     pub fn resolve_primary_from_authenticated_domain(
         &mut self,
         material_id: ContentId,
-        material: SourceMaterialV2,
+        material: SourceMaterialV3,
         authenticated_product_record_digest: ContentId,
         domain: ResultDomainV2<'_>,
         resolution_evidence_id: ContentId,
@@ -450,7 +450,7 @@ impl SourceResolutionStateV2 {
     pub fn exhaust_after_primary_deadline(
         &mut self,
         material_id: ContentId,
-        material: SourceMaterialV2,
+        material: SourceMaterialV3,
         authenticated_window_spec_id: ContentId,
         window: WindowSpecV1,
         expected_generation: u64,
@@ -490,7 +490,7 @@ impl SourceResolutionStateV2 {
     pub fn commit_failure_from_authenticated_domain(
         &mut self,
         material_id: ContentId,
-        material: SourceMaterialV2,
+        material: SourceMaterialV3,
         authenticated_product_record_digest: ContentId,
         domain: ResultDomainV2<'_>,
         expected_generation: u64,
@@ -622,7 +622,7 @@ impl SourceResolutionStateV2 {
         self.generation
     }
 
-    /// Return the exact `SourceMaterialV2` content digest.
+    /// Return the exact `SourceMaterialV3` content digest.
     pub const fn material_id(self) -> ContentId {
         self.material_id
     }
@@ -793,8 +793,8 @@ mod tests {
         ProductContentId::new(value).expect("nonzero")
     }
 
-    fn material(product: ContentId) -> SourceMaterialV2 {
-        SourceMaterialV2::new(product, id(4), id(5), id(6), None, id(7))
+    fn material(product: ContentId) -> SourceMaterialV3 {
+        SourceMaterialV3::explicitly_unbounded(product, id(4), id(5), id(6), None, id(7))
     }
 
     fn runtime_domain_bytes(region_count: u32) -> alloc::vec::Vec<u8> {
@@ -888,7 +888,8 @@ mod tests {
         // Skipping straight to failure would take an outcome away from the
         // holders who paid for it, so this transition refuses and the funded
         // per-leg walk owns that case.
-        let with_recovery = SourceMaterialV2::new(id(3), id(4), id(5), id(6), Some(id(8)), id(7));
+        let with_recovery =
+            SourceMaterialV3::explicitly_unbounded(id(3), id(4), id(5), id(6), Some(id(8)), id(7));
         let window = terminal_window(id(4), 1_000_000, 600);
         let mut state = SourceResolutionStateV2::fresh(key(1), 9, id(2), key(3), 7, 0, 0)
             .expect("fresh")

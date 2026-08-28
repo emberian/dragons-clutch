@@ -1030,6 +1030,223 @@ theorem hostile_core_request_examples_refuse :
       receiptSequence := 0 })) = none := by
   native_decide
 
+/-! `ResolutionRoleRequestV2` is the clean subset-ledger successor.  The three
+semantic roles retain their distinct manifest indices, while one canonical
+ledger coordinate replaces the three physical FundingState coordinates. -/
+
+def coreRequestMagicV2 : List UInt8 :=
+  [0x44, 0x43, 0x53, 0x52, 0x43, 0x52, 0x30, 0x32] -- `DCSRCR02`
+
+def coreRequestVersionV2 : Nat := 2
+
+inductive CoreRequestFieldV2 where
+  | magic | version | action | receiptKind | reservedHeader
+  | sourceState | sourceMaterial | capabilityManifest | fundingLedger
+  | receipt | beneficiary
+  | recoveryEntryIndex | exhaustionEntryIndex | failureEntryIndex
+  | reservedBody | receiptSequence
+  deriving DecidableEq, Repr
+
+def coreRequestSchemaV2 : List (FieldSpec CoreRequestFieldV2) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩,
+  ⟨.receiptKind, .u8⟩, ⟨.reservedHeader, .reserved 4⟩,
+  ⟨.sourceState, .bytes 32⟩, ⟨.sourceMaterial, .bytes 32⟩,
+  ⟨.capabilityManifest, .bytes 32⟩, ⟨.fundingLedger, .bytes 32⟩,
+  ⟨.receipt, .bytes 32⟩, ⟨.beneficiary, .bytes 32⟩,
+  ⟨.recoveryEntryIndex, .u16⟩, ⟨.exhaustionEntryIndex, .u16⟩,
+  ⟨.failureEntryIndex, .u16⟩, ⟨.reservedBody, .reserved 2⟩,
+  ⟨.receiptSequence, .u64⟩
+]
+
+def coreRequestLayoutV2 : List (PlacedField CoreRequestFieldV2) :=
+  DClutch.AbiSchema.specialize coreRequestSchemaV2
+def coreRequestBytesV2 : Nat := schemaWidth coreRequestSchemaV2
+
+namespace CoreRequestFieldV2
+
+def all : List CoreRequestFieldV2 := [
+  .magic, .version, .action, .receiptKind, .reservedHeader,
+  .sourceState, .sourceMaterial, .capabilityManifest, .fundingLedger,
+  .receipt, .beneficiary, .recoveryEntryIndex, .exhaustionEntryIndex,
+  .failureEntryIndex, .reservedBody, .receiptSequence
+]
+
+def coordinate (field : CoreRequestFieldV2) : Nat × Nat :=
+  (coordinate? field coreRequestLayoutV2).getD (0, 0)
+
+def offset (field : CoreRequestFieldV2) : Nat := (coordinate field).1
+def width (field : CoreRequestFieldV2) : Nat := (coordinate field).2
+
+def rustName : CoreRequestFieldV2 → String
+  | .magic => "CORE_REQUEST_V2_MAGIC_OFFSET"
+  | .version => "CORE_REQUEST_V2_VERSION_OFFSET"
+  | .action => "CORE_REQUEST_V2_ACTION_OFFSET"
+  | .receiptKind => "CORE_REQUEST_V2_RECEIPT_KIND_OFFSET"
+  | .reservedHeader => "CORE_REQUEST_V2_RESERVED_HEADER_OFFSET"
+  | .sourceState => "CORE_REQUEST_V2_SOURCE_STATE_OFFSET"
+  | .sourceMaterial => "CORE_REQUEST_V2_SOURCE_MATERIAL_OFFSET"
+  | .capabilityManifest => "CORE_REQUEST_V2_CAPABILITY_MANIFEST_OFFSET"
+  | .fundingLedger => "CORE_REQUEST_V2_FUNDING_LEDGER_OFFSET"
+  | .receipt => "CORE_REQUEST_V2_RECEIPT_OFFSET"
+  | .beneficiary => "CORE_REQUEST_V2_BENEFICIARY_OFFSET"
+  | .recoveryEntryIndex => "CORE_REQUEST_V2_RECOVERY_ENTRY_INDEX_OFFSET"
+  | .exhaustionEntryIndex => "CORE_REQUEST_V2_EXHAUSTION_ENTRY_INDEX_OFFSET"
+  | .failureEntryIndex => "CORE_REQUEST_V2_FAILURE_ENTRY_INDEX_OFFSET"
+  | .reservedBody => "CORE_REQUEST_V2_RESERVED_BODY_OFFSET"
+  | .receiptSequence => "CORE_REQUEST_V2_RECEIPT_SEQUENCE_OFFSET"
+
+theorem all_fields_are_schema_order :
+    coreRequestSchemaV2.map (fun field => field.name) = all := by native_decide
+
+theorem rust_names_are_unique : (all.map rustName).Nodup := by native_decide
+
+end CoreRequestFieldV2
+
+theorem core_request_v2_width : coreRequestBytesV2 = 224 := by native_decide
+
+theorem core_request_v2_well_formed : WellFormed coreRequestSchemaV2 := by
+  constructor
+  · native_decide
+  · intro field member
+    simp [coreRequestSchemaV2] at member
+    rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+      rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
+
+theorem core_request_v2_fields_disjoint : coreRequestLayoutV2.Pairwise Before := by
+  exact specializeFrom_pairwise 0 coreRequestSchemaV2
+
+theorem core_request_v2_coordinates_are_canonical :
+    coordinates coreRequestLayoutV2 = [
+      (.magic, 0, 8), (.version, 8, 2), (.action, 10, 1),
+      (.receiptKind, 11, 1), (.reservedHeader, 12, 4),
+      (.sourceState, 16, 32), (.sourceMaterial, 48, 32),
+      (.capabilityManifest, 80, 32), (.fundingLedger, 112, 32),
+      (.receipt, 144, 32), (.beneficiary, 176, 32),
+      (.recoveryEntryIndex, 208, 2), (.exhaustionEntryIndex, 210, 2),
+      (.failureEntryIndex, 212, 2), (.reservedBody, 214, 2),
+      (.receiptSequence, 216, 8)
+    ] := by native_decide
+
+structure ResolutionRoleRequestV2 where
+  action : CoreAction
+  receiptKind : Nat
+  sourceState : Nat
+  sourceMaterial : Nat
+  capabilityManifest : Nat
+  fundingLedger : Nat
+  receipt : Nat
+  beneficiary : Nat
+  recoveryEntryIndex : Nat
+  exhaustionEntryIndex : Nat
+  failureEntryIndex : Nat
+  receiptSequence : Nat
+  deriving DecidableEq, Repr
+
+def ResolutionRoleRequestV2.commonValid (request : ResolutionRoleRequestV2) : Bool :=
+  request.sourceState != 0 && request.sourceMaterial != 0 &&
+  request.capabilityManifest != 0 && request.fundingLedger != 0 &&
+  request.recoveryEntryIndex < 16 && request.exhaustionEntryIndex < 16 &&
+  request.failureEntryIndex < 16 &&
+  request.recoveryEntryIndex != request.exhaustionEntryIndex &&
+  request.recoveryEntryIndex != request.failureEntryIndex &&
+  request.exhaustionEntryIndex != request.failureEntryIndex
+
+def ResolutionRoleRequestV2.shapeValid (request : ResolutionRoleRequestV2) : Bool :=
+  request.commonValid && match request.action with
+  | .createFund | .verifyFundReady =>
+      request.receipt = 0 && request.receiptKind = 0 &&
+      request.receiptSequence = 0 && request.beneficiary != 0
+  | .admitTerminal =>
+      request.receipt != 0 && request.beneficiary = 0 &&
+      (request.receiptKind = coreTerminalSuccessKind ||
+        request.receiptKind = coreTerminalFailureKind) &&
+      request.receiptSequence != 0
+  | .closeFund =>
+      request.receipt != 0 && request.beneficiary != 0 &&
+      request.receiptKind = coreClosureKind && request.receiptSequence != 0
+
+def encodeCoreRequestV2 (request : ResolutionRoleRequestV2) : List UInt8 :=
+  coreRequestMagicV2 ++ Codec.encodeLE 2 coreRequestVersionV2 ++
+  [request.action.tag, UInt8.ofNat request.receiptKind] ++ List.replicate 4 0 ++
+  Codec.encodeLE 32 request.sourceState ++ Codec.encodeLE 32 request.sourceMaterial ++
+  Codec.encodeLE 32 request.capabilityManifest ++ Codec.encodeLE 32 request.fundingLedger ++
+  Codec.encodeLE 32 request.receipt ++ Codec.encodeLE 32 request.beneficiary ++
+  Codec.encodeLE 2 request.recoveryEntryIndex ++
+  Codec.encodeLE 2 request.exhaustionEntryIndex ++
+  Codec.encodeLE 2 request.failureEntryIndex ++ List.replicate 2 0 ++
+  Codec.encodeLE 8 request.receiptSequence
+
+def decodeCoreRequestV2 (input : List UInt8) : Option ResolutionRoleRequestV2 := do
+  if input.length != coreRequestBytesV2 then none else
+  if input.take (CoreRequestFieldV2.offset .version) != coreRequestMagicV2 then none else
+  if Codec.decodeLE ((input.drop (CoreRequestFieldV2.offset .version)).take 2) !=
+      coreRequestVersionV2 then none else
+  let action ← decodeCoreAction ((input[CoreRequestFieldV2.offset .action]?).getD 0)
+  if (input.drop (CoreRequestFieldV2.offset .reservedHeader)).take 4 !=
+      List.replicate 4 0 then none else
+  if (input.drop (CoreRequestFieldV2.offset .reservedBody)).take 2 !=
+      List.replicate 2 0 then none else
+  let request : ResolutionRoleRequestV2 := {
+    action
+    receiptKind := (input[CoreRequestFieldV2.offset .receiptKind]?).getD 0 |>.toNat
+    sourceState := Codec.decodeLE ((input.drop (CoreRequestFieldV2.offset .sourceState)).take 32)
+    sourceMaterial := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .sourceMaterial)).take 32)
+    capabilityManifest := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .capabilityManifest)).take 32)
+    fundingLedger := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .fundingLedger)).take 32)
+    receipt := Codec.decodeLE ((input.drop (CoreRequestFieldV2.offset .receipt)).take 32)
+    beneficiary := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .beneficiary)).take 32)
+    recoveryEntryIndex := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .recoveryEntryIndex)).take 2)
+    exhaustionEntryIndex := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .exhaustionEntryIndex)).take 2)
+    failureEntryIndex := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .failureEntryIndex)).take 2)
+    receiptSequence := Codec.decodeLE
+      ((input.drop (CoreRequestFieldV2.offset .receiptSequence)).take 8)
+  }
+  if request.shapeValid then some request else none
+
+def exampleCoreRequestV2 : ResolutionRoleRequestV2 := {
+  action := .closeFund
+  receiptKind := coreClosureKind
+  sourceState := 1
+  sourceMaterial := 2
+  capabilityManifest := 3
+  fundingLedger := 4
+  receipt := 5
+  beneficiary := 6
+  recoveryEntryIndex := 0
+  exhaustionEntryIndex := 1
+  failureEntryIndex := 2
+  receiptSequence := 4
+}
+
+theorem encode_core_request_v2_length (request : ResolutionRoleRequestV2) :
+    (encodeCoreRequestV2 request).length = coreRequestBytesV2 := by
+  simp [encodeCoreRequestV2, coreRequestMagicV2, coreRequestBytesV2,
+    coreRequestSchemaV2, Codec.encodeLE_length]
+  native_decide
+
+theorem example_core_request_v2_round_trip :
+    decodeCoreRequestV2 (encodeCoreRequestV2 exampleCoreRequestV2) =
+      some exampleCoreRequestV2 := by
+  native_decide
+
+theorem hostile_core_request_v2_examples_refuse :
+    decodeCoreRequestV2 [] = none ∧
+    decodeCoreRequestV2 (encodeCoreRequestV2 exampleCoreRequestV2 |>.drop 1) = none ∧
+    decodeCoreRequestV2 (List.set (encodeCoreRequestV2 exampleCoreRequestV2)
+      (CoreRequestFieldV2.offset .action) 0xff) = none ∧
+    decodeCoreRequestV2 (List.set (encodeCoreRequestV2 exampleCoreRequestV2)
+      (CoreRequestFieldV2.offset .reservedBody) 1) = none ∧
+    decodeCoreRequestV2 (encodeCoreRequestV2 ({ exampleCoreRequestV2 with
+      failureEntryIndex := 16 })) = none := by
+  native_decide
+
 theorem core_actions_partition :
     CoreAction.createFund ≠ CoreAction.verifyFundReady ∧
     CoreAction.createFund ≠ CoreAction.admitTerminal ∧

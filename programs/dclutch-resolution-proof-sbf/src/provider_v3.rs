@@ -16,7 +16,7 @@ use dclutch_resolution_codec::{
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, ProviderReleaseV1, PythAdapterConfigV1,
-    PythProviderAdapterObligationV2, SourceMaterialV2, SourceResolutionStateV2, SourceSpecV1,
+    PythProviderAdapterObligationV2, SourceMaterialV3, SourceResolutionStateV2, SourceSpecV1,
     StatisticSpecV1, WindowSpecV1,
 };
 use solana_program::hash::{hash, hashv};
@@ -78,7 +78,7 @@ const fn map_normalization_error(error: dclutch_source_contract::Error) -> Provi
 #[derive(Clone, Copy)]
 pub struct AuthenticatedSourceRecordsV3 {
     pub(crate) material_id: SourceContentId,
-    pub(crate) material: SourceMaterialV2,
+    pub(crate) material: SourceMaterialV3,
     pub(crate) source_spec_id: SourceContentId,
     pub(crate) source: SourceSpecV1,
     pub(crate) provider_release_id: SourceContentId,
@@ -619,7 +619,7 @@ mod tests {
             SourceContentId::new(hash(&statistic.to_bytes()).to_bytes()).expect("statistic digest");
         let failure_policy_release =
             SourceContentId::new(SOURCE_FAILURE_POLICY_RELEASE_ID_V2).expect("failure release");
-        let material = SourceMaterialV2::new(
+        let material = SourceMaterialV3::explicitly_unbounded(
             product_record_id,
             source_spec_id,
             window_spec_id,

@@ -5,9 +5,9 @@ extern crate std;
 use std::{boxed::Box, vec, vec::Vec};
 
 use dclutch_market_core_codec::{
-    Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
-    CapabilityFundingHeaderV1, CoreEffectActionV1, CoreEffectEnvelopeV1, Identity, REQUEST_BYTES,
-    Request, Role, SeriesCoreRequestV1,
+    Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1,
+    CapabilityFundingHeaderV1, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1,
+    Identity, REQUEST_BYTES, Request, Role, SeriesCoreRequestV1,
 };
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
@@ -22,7 +22,7 @@ use solana_program::{
 };
 
 use crate::{
-    CAPABILITY_PREFIX_BYTES_V1, CAPABILITY_ROLE_PREFIX_BYTES_V1, CoreSbfError, process_instruction,
+    CAPABILITY_PREFIX_BYTES_V1, CAPABILITY_ROLE_PREFIX_BYTES_V2, CoreSbfError, process_instruction,
 };
 
 const PACKET_DATA_BYTES: usize = 1_232;
@@ -66,7 +66,9 @@ fn valid_capability_instruction() -> Vec<u8> {
         CapabilityExecutionSelectionV1::from_bytes(0, [2; 32], [3; 32], [4; 32], [5; 32])
             .expect("selection")
             .to_bytes();
-    let header = CapabilityFundingHeaderV1::new(1).expect("header").encode();
+    let header = CapabilityFundingHeaderV2::new(1, 1, 1)
+        .expect("header")
+        .encode();
     let family_request = [42];
     let role_request_bytes =
         u32::try_from(selection.len() + header.len() + family_request.len()).expect("role width");
@@ -135,9 +137,41 @@ fn non_consume_series_action_refuses_before_account_access() {
 fn noncanonical_funding_header_refuses_before_account_access() {
     let mut instruction = valid_capability_instruction();
     let header_start = CAPABILITY_PREFIX_BYTES_V1 + CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
-    let reserved = header_start + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1 - 1;
+    let reserved = header_start + CAPABILITY_FUNDING_HEADER_BYTES_V2 - 1;
     let byte = instruction.get_mut(reserved).expect("reserved header byte");
     *byte = 1;
+    assert_eq!(
+        process_instruction(&Pubkey::new_unique(), &[], &instruction),
+        Err(ProgramError::Custom(CoreSbfError::Instruction as u32))
+    );
+}
+
+#[test]
+fn legacy_funding_header_refuses_at_v2_dispatch_before_account_access() {
+    let mut instruction = valid_capability_instruction();
+    let header_start = CAPABILITY_PREFIX_BYTES_V1 + CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
+    let header_end = header_start + CAPABILITY_FUNDING_HEADER_BYTES_V2;
+    instruction
+        .get_mut(header_start..header_end)
+        .expect("legacy header span")
+        .copy_from_slice(
+            &CapabilityFundingHeaderV1::new(1)
+                .expect("legacy header")
+                .encode(),
+        );
+    assert_eq!(
+        process_instruction(&Pubkey::new_unique(), &[], &instruction),
+        Err(ProgramError::Custom(CoreSbfError::Instruction as u32))
+    );
+}
+
+#[test]
+fn unknown_funding_header_refuses_at_v2_dispatch_before_account_access() {
+    let mut instruction = valid_capability_instruction();
+    let header_start = CAPABILITY_PREFIX_BYTES_V1 + CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
+    *instruction
+        .get_mut(header_start)
+        .expect("header magic byte") ^= 0xff;
     assert_eq!(
         process_instruction(&Pubkey::new_unique(), &[], &instruction),
         Err(ProgramError::Custom(CoreSbfError::Instruction as u32))
@@ -172,7 +206,7 @@ fn maximum_profile_general_activation_fits_one_lookup_v0_packet() {
         .iter()
         .map(|key| AccountMeta::new_readonly(*key, false))
         .collect::<Vec<_>>();
-    let role_bytes = CAPABILITY_ROLE_PREFIX_BYTES_V1 + MEASURED_GENERAL_V2_REQUEST_BYTES;
+    let role_bytes = CAPABILITY_ROLE_PREFIX_BYTES_V2 + MEASURED_GENERAL_V2_REQUEST_BYTES;
     assert_eq!(role_bytes, 416);
     let instruction_bytes = REQUEST_BYTES + CORE_EFFECT_ENVELOPE_BYTES_V1 + role_bytes;
     assert_eq!(instruction_bytes, 768);

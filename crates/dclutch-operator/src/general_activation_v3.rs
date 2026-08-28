@@ -3,11 +3,12 @@
 //! This is the planner half of the General V3 activation adapter. It reads one
 //! finalized snapshot of the live Core Market, the Market-selected capability
 //! manifest, the finalized `GeneralConfigV3` record, the General-owned
-//! `FundingStateV1`, and the capability-root account; it selects the unique
+//! ordered Trading-owned `FundingLedgerV2` set, and the capability-root
+//! account; it selects the unique
 //! General manifest entry; it derives the composite root address from the
-//! resulting `CapabilityExecutionSelectionV1`; and it calls
-//! [`activate_general_owned_v3`] for the exact General-owned poststate. It
-//! performs no RPC, no signing, no submission, and no account mutation.
+//! resulting `CapabilityExecutionSelectionV1`; and it derives the exact
+//! General-owned root plus selected-row funding poststate. It performs no RPC,
+//! no signing, no submission, and no account mutation.
 //!
 //! It deliberately does **not** build a Trading instruction, and it no longer
 //! needs to. The two blockers this header used to name are both closed:
@@ -27,15 +28,16 @@
 //! General's own three activation artifacts exist as of the GEN-ART lane, and
 //! `programs/dclutch-trading-sbf/program-test/tests/activation.rs`
 //! (`Campaign::General`) creates a real `GeneralRootV2` through that seam on a
-//! validator, then requires this module's [`activate_general_owned_v3`] to
-//! agree with it byte for byte on both the root tail and the FundingState
+//! validator, then requires this module's planner to agree with it byte for
+//! byte on both the root tail and the selected FundingLedgerV2 row
 //! poststate. So this planner is no longer the only thing that can produce
 //! those bytes -- it is now one of two independent authorities that produce the
 //! same ones, which is a considerably stronger position than it had.
 
 use dclutch_capability_contract::{
-    ActivationPolicy, CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1,
-    ContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
+    ActivationPolicy, CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
+    ContentId, FundingLedgerStatusV2, FundingLedgerV2, manifest_entry_for_ledger_row_v2,
+    validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
@@ -43,10 +45,11 @@ use dclutch_capability_program_contract::{
 use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     GeneralActivationDispositionV2, GeneralLifecycleV2, GeneralRootV2,
-    root_v3::activate_general_owned_v3,
     v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3},
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_market_core_codec::{
+    CapabilityFundingHeaderV2, CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES,
+};
 use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
@@ -66,8 +69,8 @@ pub struct GeneralActivationStateV3 {
     pub manifest_record: ObservedAccount,
     /// Registry-owned finalized `GeneralConfigV3` raw record.
     pub config_record: ObservedAccount,
-    /// Trading-owned General `FundingStateV1` account.
-    pub funding_state: ObservedAccount,
+    /// Ordered Trading-owned funding ledgers covering the dependency closure.
+    pub funding_ledgers: Vec<GeneralFundingLedgerInputV2>,
     /// The composite capability root: System-owned and vacant, or already created.
     pub capability_root: ObservedAccount,
     /// Registry-authenticated current Core program.
@@ -76,12 +79,19 @@ pub struct GeneralActivationStateV3 {
     pub trading_program: Pubkey,
     /// Exact Rent-exempt minimum for [`GENERAL_COMPOSITE_ROOT_BYTES_V3`].
     pub exact_root_rent_lamports: u64,
-    /// Exact Rent-exempt minimum for [`FUNDING_STATE_BYTES`].
-    pub exact_funding_rent_lamports: u64,
     /// Slot the activation would execute in.
     pub current_slot: u64,
     /// Lowest finalized slot accepted for this attempt.
     pub minimum_finalized_slot: u64,
+}
+
+/// One canonical observed FundingLedgerV2 input and its chain-derived Rent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneralFundingLedgerInputV2 {
+    /// Trading-owned ledger account at the controller-scoped canonical PDA.
+    pub account: ObservedAccount,
+    /// Exact Rent-exempt minimum for this ledger's dynamic byte width.
+    pub exact_rent_lamports: u64,
 }
 
 /// Complete chain-derived General V3 activation plan.
@@ -101,8 +111,10 @@ pub struct GeneralCapabilityActivationV3 {
     pub disposition: GeneralActivationDispositionV2,
     /// Exact General-owned mutable root tail.
     pub root_state: GeneralRootV2,
-    /// Exact General-owned `FundingStateV1` poststate.
-    pub funding_after: FundingStateV1,
+    /// Canonical physical-ledger count and exact logical dependency union.
+    pub funding_header: CapabilityFundingHeaderV2,
+    /// Exact full poststate bytes in the input ledger-account order.
+    pub funding_after: Vec<Vec<u8>>,
     /// Unique General manifest entry index.
     pub entry_index: u16,
     /// Exact finalized observation shared by every input.
@@ -122,7 +134,7 @@ pub enum GeneralActivationErrorV3 {
     Entry,
     /// Config bytes, width, or record digest refused.
     Config,
-    /// FundingState owner, width, derivation, or custody observation refused.
+    /// FundingLedger owner, partition, derivation, or custody refused.
     Funding,
     /// The root account was neither exactly vacant nor an exact prior activation.
     Root,
@@ -156,6 +168,7 @@ pub fn plan_general_capability_activation_v3(
 
     let (entry_index, entry) = select_general_entry(manifest, config_id)?;
     require_admissible_phase(entry, core.phase)?;
+    require_general_entry(entry, config_id, config, core.identity.generation)?;
 
     let market_key = state.market.key.to_bytes();
     let generation = core.identity.generation;
@@ -186,41 +199,65 @@ pub fn plan_general_capability_activation_v3(
         return Err(GeneralActivationErrorV3::Root);
     }
 
-    let funding = authenticate_funding(state, manifest_id, manifest, root_header)?;
+    let required_mask = dependency_closure_mask(manifest, entry_index)?;
+    let (funding_header, funding_prestate) =
+        authenticate_funding_ledgers(state, manifest_id, manifest, root_header, required_mask)?;
     let existing_root_state = authenticate_root_prestate(state)?;
-    let custody = FundingCustodyObservationV1::native_only(
-        state.funding_state.lamports,
-        state.exact_funding_rent_lamports,
-    )
-    .map_err(|_| GeneralActivationErrorV3::Funding)?;
+    let expected_root_state = GeneralRootV2::active(market_key, config_id.to_bytes(), generation)
+        .map_err(GeneralActivationErrorV3::Activation)?;
+    let (disposition, root_state, funding_after) = if let Some(present) = existing_root_state {
+        if present != expected_root_state
+            || state.capability_root.lamports != state.exact_root_rent_lamports
+        {
+            return Err(GeneralActivationErrorV3::Root);
+        }
+        require_funding_ledger_states(&funding_prestate, manifest_id, manifest, entry_index, true)?;
+        (
+            GeneralActivationDispositionV2::Idempotent,
+            present,
+            funding_prestate,
+        )
+    } else {
+        require_funding_ledger_states(
+            &funding_prestate,
+            manifest_id,
+            manifest,
+            entry_index,
+            false,
+        )?;
+        let (funding_after, selected_rent, selected_creation) = activate_funding_ledgers(
+            funding_prestate,
+            manifest_id,
+            manifest,
+            entry_index,
+            state.current_slot,
+        )?;
+        if selected_creation != 0
+            || selected_rent
+                .checked_add(state.capability_root.lamports)
+                .ok_or(GeneralActivationErrorV3::Arithmetic)?
+                != state.exact_root_rent_lamports
+        {
+            return Err(GeneralActivationErrorV3::Funding);
+        }
+        (
+            GeneralActivationDispositionV2::Create,
+            expected_root_state,
+            funding_after,
+        )
+    };
 
-    let activation = activate_general_owned_v3(
-        market_key,
-        generation,
-        manifest_id,
-        manifest,
-        entry_index,
-        config_id,
-        config,
-        funding,
-        custody,
-        state.current_slot,
-        state.exact_root_rent_lamports,
-        state.capability_root.lamports,
-        existing_root_state,
-    )
-    .map_err(GeneralActivationErrorV3::Activation)?;
-
-    let composite_root = compose_general_root_v3(root_header, activation.root_state());
+    let composite_root = compose_general_root_v3(root_header, root_state);
     Ok(GeneralCapabilityActivationV3 {
         selection,
         root_header,
         root,
         root_bump,
         composite_root,
-        disposition: activation.disposition(),
-        root_state: activation.root_state(),
-        funding_after: activation.funding_after(),
+        disposition,
+        root_state,
+        funding_header,
+        funding_after,
         entry_index,
         observation,
     })
@@ -308,12 +345,18 @@ fn require_one_finalized_snapshot(
     for account in [
         &state.manifest_record,
         &state.config_record,
-        &state.funding_state,
         &state.capability_root,
     ] {
         if account.observation != observation {
             return Err(GeneralActivationErrorV3::Snapshot);
         }
+    }
+    if state
+        .funding_ledgers
+        .iter()
+        .any(|ledger| ledger.account.observation != observation)
+    {
+        return Err(GeneralActivationErrorV3::Snapshot);
     }
     Ok(observation)
 }
@@ -343,34 +386,220 @@ fn authenticate_market(
     Ok(core)
 }
 
-fn authenticate_funding(
+fn authenticate_funding_ledgers(
     state: &GeneralActivationStateV3,
     manifest_id: ContentId,
     manifest: CapabilityManifestV1<'_>,
     root_header: CapabilityRootHeaderV1,
-) -> Result<FundingStateV1, GeneralActivationErrorV3> {
-    if state.funding_state.owner != state.trading_program
-        || state.funding_state.executable
-        || state.funding_state.data.len() != FUNDING_STATE_BYTES
-    {
-        return Err(GeneralActivationErrorV3::Funding);
-    }
-    let funding = FundingStateV1::decode(&state.funding_state.data)
+    required_mask: u16,
+) -> Result<(CapabilityFundingHeaderV2, Vec<Vec<u8>>), GeneralActivationErrorV3> {
+    let mut masks = Vec::with_capacity(state.funding_ledgers.len());
+    let mut bytes = Vec::with_capacity(state.funding_ledgers.len());
+    for input in &state.funding_ledgers {
+        if input.account.owner != state.trading_program
+            || input.account.executable
+            || input.exact_rent_lamports == 0
+        {
+            return Err(GeneralActivationErrorV3::Funding);
+        }
+        let ledger = FundingLedgerV2::decode(&input.account.data)
+            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+        let selected_bit = 1_u16
+            .checked_shl(u32::from(root_header.selection().entry_index()))
+            .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+        if ledger.selected_mask() != selected_bit {
+            // ManifestV1 does not bind a controller per entry. The offline
+            // planner has no authenticated Core/Resolution release premise,
+            // so it admits only the one Trading-owned selected-entry ledger.
+            return Err(GeneralActivationErrorV3::Funding);
+        }
+        let authenticated = ledger
+            .authenticate(manifest_id, manifest)
+            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+        let derivation = CapabilityFundingLedgerDerivationV2::new(
+            state.trading_program.to_bytes(),
+            root_header.market(),
+            root_header.generation(),
+            manifest_id,
+            ledger,
+        )
         .map_err(|_| GeneralActivationErrorV3::Funding)?;
-    let derivation = CapabilityFundingDerivationV1::new(
-        root_header.market(),
-        root_header.generation(),
-        manifest_id,
-        manifest,
-        funding,
-    )
-    .map_err(|_| GeneralActivationErrorV3::Funding)?;
-    let expected =
-        Pubkey::find_program_address(&derivation.seed_components(), &state.trading_program).0;
-    if expected != state.funding_state.key {
+        let expected =
+            Pubkey::find_program_address(&derivation.seed_components(), &state.trading_program).0;
+        if expected != input.account.key {
+            return Err(GeneralActivationErrorV3::Funding);
+        }
+        authenticated
+            .validate_native_custody(input.account.lamports, input.exact_rent_lamports, false)
+            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+        let mut row_index = 0_u16;
+        while row_index < ledger.slot_count() {
+            let entry_index = manifest_entry_for_ledger_row_v2(ledger.selected_mask(), row_index)
+                .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            if manifest
+                .entry(entry_index)
+                .map_err(|_| GeneralActivationErrorV3::Funding)?
+                .funding_quote()
+                .realm_collateral()
+                .is_some()
+            {
+                return Err(GeneralActivationErrorV3::Funding);
+            }
+            row_index = row_index
+                .checked_add(1)
+                .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+        }
+        masks.push(ledger.selected_mask());
+        bytes.push(input.account.data.clone());
+    }
+    validate_funding_ledger_masks_v2(manifest.entry_count(), required_mask, &masks)
+        .map_err(|_| GeneralActivationErrorV3::Funding)?;
+    let physical_count =
+        u8::try_from(bytes.len()).map_err(|_| GeneralActivationErrorV3::Funding)?;
+    let logical_count =
+        u8::try_from(required_mask.count_ones()).map_err(|_| GeneralActivationErrorV3::Funding)?;
+    let header = CapabilityFundingHeaderV2::new(physical_count, logical_count, required_mask)
+        .map_err(|_| GeneralActivationErrorV3::Funding)?;
+    Ok((header, bytes))
+}
+
+fn dependency_closure_mask(
+    manifest: CapabilityManifestV1<'_>,
+    selected_entry_index: u16,
+) -> Result<u16, GeneralActivationErrorV3> {
+    let selected_bit = 1_u16
+        .checked_shl(u32::from(selected_entry_index))
+        .ok_or(GeneralActivationErrorV3::Entry)?;
+    let mut closure = selected_bit;
+    loop {
+        let before = closure;
+        let mut entry_index = 0_u16;
+        while entry_index < manifest.entry_count() {
+            let entry_bit = 1_u16
+                .checked_shl(u32::from(entry_index))
+                .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+            if closure & entry_bit != 0 {
+                let entry = manifest
+                    .entry(entry_index)
+                    .map_err(|_| GeneralActivationErrorV3::Entry)?;
+                let mut position = 0_usize;
+                while position < usize::from(entry.dependency_count()) {
+                    let dependency = entry
+                        .dependency(position)
+                        .map_err(|_| GeneralActivationErrorV3::Entry)?;
+                    closure |= 1_u16
+                        .checked_shl(u32::from(dependency))
+                        .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+                    position = position
+                        .checked_add(1)
+                        .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+                }
+            }
+            entry_index = entry_index
+                .checked_add(1)
+                .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+        }
+        if before == closure {
+            return Ok(closure);
+        }
+    }
+}
+
+fn activate_funding_ledgers(
+    mut ledgers: Vec<Vec<u8>>,
+    manifest_id: ContentId,
+    manifest: CapabilityManifestV1<'_>,
+    selected_entry_index: u16,
+    current_slot: u64,
+) -> Result<(Vec<Vec<u8>>, u64, u64), GeneralActivationErrorV3> {
+    let mut selected_debit = None;
+    for bytes in &mut ledgers {
+        let ledger =
+            FundingLedgerV2::decode(bytes).map_err(|_| GeneralActivationErrorV3::Funding)?;
+        let selected_bit = 1_u16
+            .checked_shl(u32::from(selected_entry_index))
+            .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+        if ledger.selected_mask() & selected_bit != 0 {
+            let debit = FundingLedgerV2::activate_in_place(
+                bytes,
+                manifest_id,
+                manifest,
+                selected_entry_index,
+                current_slot,
+            )
+            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            if selected_debit.is_some() {
+                return Err(GeneralActivationErrorV3::Funding);
+            }
+            selected_debit = Some((debit.rent_lamports(), debit.creation_lamports()));
+        }
+    }
+    let (rent, creation) = selected_debit.ok_or(GeneralActivationErrorV3::Funding)?;
+    Ok((ledgers, rent, creation))
+}
+
+fn require_funding_ledger_states(
+    ledgers: &[Vec<u8>],
+    manifest_id: ContentId,
+    manifest: CapabilityManifestV1<'_>,
+    selected_entry_index: u16,
+    selected_active: bool,
+) -> Result<(), GeneralActivationErrorV3> {
+    let mut observed_selected = false;
+    for bytes in ledgers {
+        let authenticated = FundingLedgerV2::decode(bytes)
+            .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+            .map_err(|_| GeneralActivationErrorV3::Funding)?;
+        let ledger = authenticated.ledger();
+        let mut row_index = 0_u16;
+        while row_index < ledger.slot_count() {
+            let entry_index = manifest_entry_for_ledger_row_v2(ledger.selected_mask(), row_index)
+                .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            let slot = authenticated
+                .slot(entry_index)
+                .map_err(|_| GeneralActivationErrorV3::Funding)?;
+            let is_selected = entry_index == selected_entry_index;
+            if is_selected {
+                if observed_selected
+                    || (selected_active
+                        && (slot.status() != FundingLedgerStatusV2::Active
+                            || slot.activation_slot() == 0))
+                    || (!selected_active
+                        && (slot.status() != FundingLedgerStatusV2::Pending
+                            || slot.activation_slot() != 0))
+                {
+                    return Err(GeneralActivationErrorV3::Funding);
+                }
+                observed_selected = true;
+            } else if slot.status() != FundingLedgerStatusV2::Active || slot.activation_slot() == 0
+            {
+                return Err(GeneralActivationErrorV3::Funding);
+            }
+            row_index = row_index
+                .checked_add(1)
+                .ok_or(GeneralActivationErrorV3::Arithmetic)?;
+        }
+    }
+    if !observed_selected {
         return Err(GeneralActivationErrorV3::Funding);
     }
-    Ok(funding)
+    Ok(())
+}
+
+fn require_general_entry(
+    entry: CapabilityEntryV1,
+    config_id: ContentId,
+    config: GeneralConfigV3,
+    generation: u64,
+) -> Result<(), GeneralActivationErrorV3> {
+    if config.generation() != generation
+        || entry.release_id().to_bytes() != config.program_set_id()
+        || entry.config_id() != config_id
+        || entry.capacity_profile_id().to_bytes() != config.capacity_profile_id()
+    {
+        return Err(GeneralActivationErrorV3::Entry);
+    }
+    Ok(())
 }
 
 fn authenticate_root_prestate(

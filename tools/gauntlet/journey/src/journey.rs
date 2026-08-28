@@ -231,7 +231,7 @@ pub(crate) fn execute(
                          launcher, the Pyth release record is published by the infrastructure \
                          plan, and the Market's own source spec, window spec, statistic spec, \
                          provider release and adapter configuration are finalized records at the \
-                         identities its SourceMaterialV2 names."
+                         identities its SourceMaterialV3 names."
                     ),
                 },
                 LamportClaimV1::inapplicable(

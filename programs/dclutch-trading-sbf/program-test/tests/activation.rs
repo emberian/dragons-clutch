@@ -11,11 +11,11 @@ use dclutch_account_profile_contract::{
     },
 };
 use dclutch_capability_contract::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityFundingDerivationV1,
-    CapabilityManifestV1, CompartmentFundingV1, ContentId, FUNDING_STATE_BYTES,
-    FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1, FundingAmountsV1, FundingCustodyObservationV1,
-    FundingQuoteV1, FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
+    FundingAmountsV1, FundingCompartment, FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1,
+    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+    funding_ledger_remaining_offset_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
@@ -54,7 +54,6 @@ use dclutch_general_config_contract::{
         GENERAL_ROOT_REVISION_OFFSET_V2, GENERAL_ROOT_SCHEMA_ID_V2, GeneralRootV2,
         general_root_creation_tail_v2,
     },
-    root_v3::activate_general_owned_v3,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
 use dclutch_market_core_codec::{
@@ -78,6 +77,7 @@ use dclutch_transition_vm::v2::encode::{
     encode_transition_program_v2_atomic, transition_program_v2_bytes,
 };
 use solana_account::Account;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::instruction::InstructionError;
 use solana_program::{
     hash::hash,
@@ -117,7 +117,7 @@ const ROOT_TAIL_BYTES: usize = 40;
 const TAIL_GENERATION_OFFSET: u32 = 0;
 /// Tail offset of the projected Market identity.
 const TAIL_MARKET_OFFSET: u32 = 8;
-/// Scalar the profile projects the FundingState's remaining Rent quote into.
+/// Scalar the profile projects the FundingLedger's remaining Rent quote into.
 ///
 /// It is past the eight common slots the seam seeds, so nothing the outer wrote
 /// is overwritten -- the register ABI's own boundary, not a coincidence.
@@ -135,7 +135,7 @@ const IDENTITY_COUNT: u16 = 12;
 /// into, and three the transition loads with the constants an EffectProgram has
 /// no way to produce -- it can only move a register.
 const GENERAL_SCALAR_COUNT: u16 = 12;
-/// Scalar the General profile projects the FundingState's Rent quote into.
+/// Scalar the General profile projects the FundingLedger's Rent quote into.
 const GENERAL_FUNDING_RENT_SCALAR: u16 = 8;
 /// Scalar the General transition loads with `GENERAL_ROOT_MAGIC_WORD_V2`.
 const GENERAL_MAGIC_SCALAR: u16 = 9;
@@ -194,16 +194,12 @@ struct Fixture {
     root_tail_bytes: usize,
     /// Content identity of the config record the selection names.
     config_id: ContentId,
-    /// Decoded General config, for the campaign that publishes one.
-    general_config: Option<GeneralConfigV3>,
     /// Exact capability-manifest bytes the seam authenticated.
     manifest: Vec<u8>,
     /// Content identity of those bytes.
     manifest_id: ContentId,
-    /// Exact FundingState prestate the seam observed.
-    funding_prestate: FundingStateV1,
-    /// Exact FundingState lamport prestate the seam observed.
-    funding_prestate_lamports: u64,
+    /// Exact FundingLedgerV2 prestate the seam observed.
+    funding_prestate: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -279,7 +275,7 @@ fn id(byte: u8) -> ContentId {
 ///
 /// `require_entry` joins the manifest entry to exactly two of these fields --
 /// `program_set_id` and `capacity_profile_id` -- so the config cannot be a
-/// placeholder if `activate_general_owned_v3` is to accept the same manifest the
+/// placeholder if the General activation oracle is to accept the same manifest the
 /// seam read. The remaining capacities are plausible and unread by activation.
 fn general_config(capacity_profile_id: [u8; 32], program_set_id: [u8; 32]) -> GeneralConfigV3 {
     GeneralConfigV3::new(GeneralConfigV3Input {
@@ -345,7 +341,7 @@ where
 /// The two account rules every activation in this file declares.
 ///
 /// The seam pins their order itself: the composite root is
-/// `ACTIVATION_ROOT_ACCOUNT_V2` and the FundingStates follow from
+/// `ACTIVATION_ROOT_ACCOUNT_V2` and the FundingLedgers follow from
 /// `ACTIVATION_FIRST_FUNDING_ACCOUNT_V2`, in role-request order.
 fn activation_rules() -> [AccountRuleInputV1; 2] {
     [
@@ -356,12 +352,13 @@ fn activation_rules() -> [AccountRuleInputV1; 2] {
             alias: AccountAliasInputV1::SelfRepresentative,
             data_length: 0,
         },
-        // The FundingState: debited, and rewritten by the outer's own commit.
+        // The FundingLedger: debited, and rewritten by the outer's own commit.
         AccountRuleInputV1 {
             privileges: AccountPrivilegesV1::new(false, true, false),
             effect_permissions: AccountEffectPermissionsV1::new(true, false, true),
             alias: AccountAliasInputV1::SelfRepresentative,
-            data_length: u32::try_from(FUNDING_STATE_BYTES).expect("funding width"),
+            data_length: u32::try_from(funding_ledger_bytes_v2(1).expect("funding width"))
+                .expect("funding width"),
         },
     ]
 }
@@ -381,11 +378,14 @@ fn account_profile(family: Family) -> Vec<u8> {
     ];
     // An EffectProgram has no arithmetic over account data -- it can only move a
     // register's worth of lamports -- so a funded activation MUST project the
-    // live FundingState's remaining Rent quote into a scalar here.
+    // live FundingLedger's remaining Rent quote into a scalar here.
     operations.push(AccountOperationInputV1::ProjectDataU64 {
         account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
-        data_offset: u32::try_from(FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1)
-            .expect("rent quote offset"),
+        data_offset: u32::try_from(
+            funding_ledger_remaining_offset_v2(0, FundingCompartment::Rent)
+                .expect("rent quote offset"),
+        )
+        .expect("rent quote offset"),
         destination: match family {
             Family::Fixture => FUNDING_RENT_SCALAR_REGISTER,
             Family::General => GENERAL_FUNDING_RENT_SCALAR,
@@ -744,7 +744,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     let rent = Rent::default();
     let family = campaign.family();
     let root_rent = rent.minimum_balance(232 + family.root_tail_bytes());
-    let funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
+    let funding_rent = rent.minimum_balance(funding_ledger_bytes_v2(1).expect("funding width"));
     let profile = account_profile(family);
     let effect = effect_program(campaign);
     // General's kind and root schema are its own published protocol facts, not
@@ -782,13 +782,13 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         None => descriptor_id,
     };
     // The config record is real for General, because the root's tail carries its
-    // identity and `activate_general_owned_v3` decodes it. It names the release
+    // identity and the General planner decodes it. It names the release
     // it is activated under, which is why it is built after the set identity.
-    let (config, general_config) = match family {
-        Family::Fixture => (vec![0x61; 32], None),
+    let config = match family {
+        Family::Fixture => vec![0x61; 32],
         Family::General => {
             let config = general_config(capacity.to_bytes(), release_id.to_bytes());
-            (config.to_bytes().to_vec(), Some(config))
+            config.to_bytes().to_vec()
         }
     };
     let config_id = ContentId::new(hash(&config).to_bytes()).expect("config ID");
@@ -864,6 +864,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             generation: GENERATION,
         },
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x26; 32]),
         terminal_receipt: None,
     };
@@ -901,24 +902,17 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         ROOT_INITIAL_DUST,
         Vec::new(),
     );
-    let funding_custody = FundingCustodyObservationV1::native_only(
-        funding_rent + root_rent - ROOT_INITIAL_DUST,
-        funding_rent,
-    )
-    .expect("funding custody");
-    let funding_state = FundingStateV1::new(
-        manifest_id,
-        CapabilityManifestV1::decode(&manifest).expect("manifest"),
-        0,
-        funding_custody,
-    )
-    .expect("funding state");
-    let funding_derivation = CapabilityFundingDerivationV1::new(
+    let decoded_manifest = CapabilityManifestV1::decode(&manifest).expect("manifest");
+    let mut funding_state = vec![0_u8; funding_ledger_bytes_v2(1).expect("funding width")];
+    FundingLedgerV2::initialize(&mut funding_state, manifest_id, decoded_manifest, 0b1)
+        .expect("funding ledger");
+    let funding_ledger = FundingLedgerV2::decode(&funding_state).expect("funding ledger");
+    let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
+        TRADING_PROGRAM_ID.to_bytes(),
         market.to_bytes(),
         GENERATION,
         manifest_id,
-        CapabilityManifestV1::decode(&manifest).expect("manifest"),
-        funding_state,
+        funding_ledger,
     )
     .expect("funding derivation");
     let funding =
@@ -928,7 +922,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         funding,
         TRADING_PROGRAM_ID,
         funding_rent + root_rent - ROOT_INITIAL_DUST,
-        funding_state.to_bytes().to_vec(),
+        funding_state.clone(),
     );
 
     let descriptor_record = add_record(
@@ -980,7 +974,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
 
     let mut role_request = selection.to_bytes().to_vec();
     role_request.extend_from_slice(
-        &dclutch_market_core_codec::CapabilityFundingHeaderV1::new(1)
+        &dclutch_market_core_codec::CapabilityFundingHeaderV2::new(1, 1, 0b1)
             .expect("funding header")
             .encode(),
     );
@@ -1070,11 +1064,9 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             family,
             root_tail_bytes: family.root_tail_bytes(),
             config_id,
-            general_config,
             manifest,
             manifest_id,
             funding_prestate: funding_state,
-            funding_prestate_lamports: funding_rent + root_rent - ROOT_INITIAL_DUST,
         },
     )
 }
@@ -1085,7 +1077,10 @@ async fn submit(
 ) -> Result<(), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            instruction,
+        ],
         Some(&context.payer.pubkey()),
         &[&context.payer],
         blockhash,
@@ -1132,12 +1127,11 @@ fn refusal_code(error: &BanksClientError) -> Option<u32> {
 
 /// Submit one campaign and require the exact created root and funding poststate.
 ///
-/// Returns the created family tail and the FundingState poststate, which the
-/// General campaign checks further against General's own activation function.
+/// Returns the created family tail and complete FundingLedgerV2 poststate.
 async fn assert_activation_succeeds(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
-) -> (Vec<u8>, FundingStateV1) {
+) -> (Vec<u8>, Vec<u8>) {
     submit(context, fixture.instruction.clone())
         .await
         .expect("activation succeeds");
@@ -1173,11 +1167,16 @@ async fn assert_activation_succeeds(
     assert_eq!(decoded.state(), expected_tail.as_slice());
     let funding = account(context, fixture.funding).await;
     assert_eq!(funding.lamports, fixture.funding_rent);
-    let funding = FundingStateV1::decode(&funding.data).expect("funding poststate");
-    assert_eq!(funding.status(), FundingStatus::Active);
-    assert!(funding.activation_slot() > 0);
-    assert_eq!(funding.remaining().rent().amount(), 0);
-    (decoded.state().to_vec(), funding)
+    let manifest = CapabilityManifestV1::decode(&fixture.manifest).expect("manifest");
+    let authenticated = FundingLedgerV2::decode(&funding.data)
+        .expect("funding poststate")
+        .authenticate(fixture.manifest_id, manifest)
+        .expect("authenticated funding poststate");
+    let slot = authenticated.slot(0).expect("selected slot");
+    assert_eq!(slot.status(), FundingLedgerStatusV2::Active);
+    assert!(slot.activation_slot() > 0);
+    assert_eq!(slot.remaining().rent().amount(), 0);
+    (decoded.state().to_vec(), funding.data)
 }
 
 #[tokio::test]
@@ -1193,15 +1192,15 @@ async fn common_outer_activates_root_and_funding_commit_last() {
 /// actually decode. The three artifacts are authored against published
 /// coordinates only -- `activation_registers_v2` for the seam's registers,
 /// `GENERAL_ROOT_*_OFFSET_V2` plus the two constant words for the tail, and
-/// `FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1` for the Rent quote -- so no
+/// `funding_ledger_remaining_offset_v2` for the Rent quote -- so no
 /// General layout is restated in an artifact author.
 ///
 /// The three claims, in strengthening order: the projected tail is
 /// `general_root_creation_tail_v2`; `GeneralRootV2::decode` accepts it and it
 /// equals `GeneralRootV2::active`; and General's own
-/// `activate_general_owned_v3`, run over the same manifest, config, funding and
+/// `FundingLedgerV2::activate_in_place`, run over the same manifest, funding and
 /// slot the chain used, agrees with the interpreted artifacts byte for byte on
-/// BOTH the root tail and the FundingState poststate. That last one is what
+/// the selected-row FundingLedger poststate. That last one is what
 /// makes this an activation of General rather than a coincidence of widths: two
 /// independent authorities -- three data artifacts run by a family-neutral seam,
 /// and a Rust function that knows what a General root is -- produce the same
@@ -1220,34 +1219,25 @@ async fn general_activation_artifacts_create_a_real_general_root() {
         GeneralRootV2::active(market, config_id, GENERATION).expect("active root")
     );
 
-    let config = fixture.general_config.expect("General config");
     let manifest = CapabilityManifestV1::decode(&fixture.manifest).expect("manifest");
-    let custody = FundingCustodyObservationV1::native_only(
-        fixture.funding_prestate_lamports,
-        fixture.funding_rent,
-    )
-    .expect("funding custody");
-    let activation = activate_general_owned_v3(
-        market,
-        GENERATION,
+    let authenticated = FundingLedgerV2::decode(&funding_after)
+        .expect("funding poststate")
+        .authenticate(fixture.manifest_id, manifest)
+        .expect("authenticated funding poststate");
+    let activation_slot = authenticated
+        .slot(0)
+        .expect("selected slot")
+        .activation_slot();
+    let mut expected_funding = fixture.funding_prestate.clone();
+    FundingLedgerV2::activate_in_place(
+        &mut expected_funding,
         fixture.manifest_id,
         manifest,
         0,
-        fixture.config_id,
-        config,
-        fixture.funding_prestate,
-        custody,
-        funding_after.activation_slot(),
-        fixture.root_rent - ROOT_INITIAL_DUST,
-        ROOT_INITIAL_DUST,
-        None,
+        activation_slot,
     )
-    .expect("General owned activation");
-    assert_eq!(
-        activation.root_state().to_bytes().as_slice(),
-        tail.as_slice()
-    );
-    assert_eq!(activation.funding_after(), funding_after);
+    .expect("selected funding activation");
+    assert_eq!(expected_funding, funding_after);
 }
 
 /// A `CapabilityProgramSetV2` at `capability_release` activates the same root.
@@ -1405,24 +1395,24 @@ async fn a_tail_that_is_unwritten_or_the_wrong_width_refuses() {
     }
 }
 
-/// The three artifacts are byte-identical to what this file hand-encoded.
+/// The three artifacts are byte-identical to their canonical V2 reference.
 ///
 /// Before `73f7ec7`/`f98d439`/`d18c32d` gave the three generations public
-/// encoders, this file wrote all three wire formats itself. The replacement is
-/// only worth having if it moved nothing: these are the exact bytes the deleted
-/// hand-encoders produced, captured first. They are also the record digests the
-/// descriptor names and the PDA seeds every raw record sits at, so a byte that
-/// moved here would move five addresses.
+/// encoders, this file wrote all three wire formats itself. The funding profile
+/// intentionally moved at the V2 clean break: its account width is one 120-byte
+/// ledger and its Rent amount is at offset 64. These are also the record digests
+/// the descriptor names and the PDA seeds every raw record sits at, so the
+/// migrated bytes remain pinned here.
 #[test]
-fn the_public_encoders_reproduce_the_prior_artifact_bytes() {
+fn the_public_encoders_reproduce_the_canonical_v2_artifact_bytes() {
     const PROFILE: [u8; 128] = [
         0x44, 0x43, 0x4c, 0x54, 0x41, 0x50, 0x30, 0x31, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x04,
         0x00, 0x08, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x02, 0x05, 0x01, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x02, 0x05, 0x01, 0x00, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00, 0x00, 0x48,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00, 0x00, 0x40,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];

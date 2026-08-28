@@ -111,7 +111,7 @@ impl RecoveryAttemptV2 {
     }
 }
 
-/// Product-free finite ordered recovery policy selected by `SourceMaterialV2`.
+/// Product-free finite ordered recovery policy selected by `SourceMaterialV3`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecoveryPolicyV2 {
     capacity_profile_id: ContentId,

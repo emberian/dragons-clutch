@@ -28,8 +28,8 @@
 use std::collections::BTreeMap;
 
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, Phase, Readiness, Request,
@@ -39,8 +39,8 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_resolution_codec::{
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
-    SOURCE_CLOSURE_RECEIPT_BYTES_V2, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2, SourceClosureReceiptV2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_resolution_core_v3_operator::{
     Observation, ObservedAccount, ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
@@ -51,8 +51,8 @@ use dclutch_resolution_core_v3_operator::{
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
-    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV2,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3,
     SourceResolutionPhaseV1, SourceResolutionStateV2, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use solana_program::hash::hash;
@@ -113,8 +113,8 @@ pub(crate) struct ResolutionAddressesV1 {
     /// staging cursor for it.
     pub(crate) pyth_release: Pubkey,
     pub(crate) source_state: Pubkey,
-    /// Recovery, exhaustion, failure — in the order the operator consumes them.
-    pub(crate) funding: [Pubkey; 3],
+    /// Resolution-owned subset ledger containing recovery, exhaustion, and failure rows.
+    pub(crate) funding: Pubkey,
     pub(crate) funding_entry_indices: [u16; 3],
     pub(crate) rent_beneficiary: Pubkey,
     /// The terminal certificate this Market's first terminal sequence would
@@ -158,11 +158,11 @@ impl RecordPairV1 {
 
 /// Derive every resolution coordinate from the founding's evidence.
 ///
-/// The three funding destinations are re-derived here from the manifest, which
+/// The subset-ledger destination is re-derived here from the manifest, which
 /// duplicates a private selection inside the operator. That duplication is safe
-/// in exactly one direction: `build_resolution_create_fund_v3` re-derives each
+/// in exactly one direction: `build_resolution_create_fund_v3` re-derives the
 /// address itself and REFUSES if the supplied account is not the one it
-/// computes, so an error here becomes a refusal rather than a wrong Fund.
+/// computes, so an error here becomes a refusal rather than a wrong ledger.
 pub(crate) fn derive(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
@@ -202,7 +202,7 @@ pub(crate) fn derive(
     let (source_material, source_material_body) = located(
         rpc,
         "source_material_record",
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     )?;
     let (capability_manifest, manifest_body) = located(
         rpc,
@@ -229,8 +229,8 @@ pub(crate) fn derive(
     let (portfolio, _) = located(rpc, "portfolio_record", PORTFOLIO_SCHEMA_ID_V2)?;
     let pyth_release = crate::runtime::record(plan, "pyth_release")?.0;
 
-    let material = SourceMaterialV2::decode(&source_material_body)
-        .map_err(|error| Error::new(format!("SourceMaterialV2: {error:?}")))?;
+    let material = SourceMaterialV3::decode(&source_material_body)
+        .map_err(|error| Error::new(format!("SourceMaterialV3: {error:?}")))?;
     let policy = RecoveryPolicyV2::decode(&recovery_body)
         .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
     let manifest = CapabilityManifestV1::decode(&manifest_body)
@@ -249,30 +249,29 @@ pub(crate) fn derive(
     let funding_entry_indices = select_funding_entries(&material, &policy, manifest)?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|error| Error::new(format!("Market capability manifest identity: {error:?}")))?;
-    let funding_state_rent = rpc.minimum_balance(FUNDING_STATE_BYTES)?;
-    let mut funding = [Pubkey::default(); 3];
-    for (slot, entry_index) in funding_entry_indices.into_iter().enumerate() {
-        let entry = manifest
-            .entry(entry_index)
-            .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        let target = funding_state_rent
-            .checked_add(entry.funding_quote().amounts().native_lamports_total())
-            .ok_or_else(|| Error::new("funding target overflowed u64"))?;
-        let custody = FundingCustodyObservationV1::native_only(target, funding_state_rent)
-            .map_err(|error| Error::new(format!("funding custody: {error:?}")))?;
-        let state = FundingStateV1::new(manifest_id, manifest, entry_index, custody)
-            .map_err(|error| Error::new(format!("pending FundingState: {error:?}")))?;
-        let derivation = CapabilityFundingDerivationV1::new(
-            addresses.founding_market.to_bytes(),
-            generation,
-            manifest_id,
-            manifest,
-            state,
-        )
-        .map_err(|error| Error::new(format!("funding derivation: {error:?}")))?;
-        funding[slot] =
-            Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0;
-    }
+    let selected_mask = funding_entry_indices
+        .into_iter()
+        .fold(0_u16, |mask, entry_index| mask | (1_u16 << entry_index));
+    let mut ledger_bytes = vec![
+        0_u8;
+        funding_ledger_bytes_v2(3).map_err(|error| Error::new(format!(
+            "FundingLedgerV2 width: {error:?}"
+        )))?
+    ];
+    FundingLedgerV2::initialize(&mut ledger_bytes, manifest_id, manifest, selected_mask)
+        .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
+    let ledger = FundingLedgerV2::decode(&ledger_bytes)
+        .map_err(|error| Error::new(format!("FundingLedgerV2: {error:?}")))?;
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        resolution_program.to_bytes(),
+        addresses.founding_market.to_bytes(),
+        generation,
+        manifest_id,
+        ledger,
+    )
+    .map_err(|error| Error::new(format!("funding-ledger derivation: {error:?}")))?;
+    let funding =
+        Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0;
 
     let certificate = Pubkey::find_program_address(
         &[
@@ -287,7 +286,7 @@ pub(crate) fn derive(
 
     let closure_receipt = Pubkey::find_program_address(
         &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
             source_state.as_ref(),
             &2_u64.to_le_bytes(),
         ],
@@ -329,9 +328,7 @@ pub(crate) fn derive(
 pub(crate) fn watch(ledger: &mut ConservationLedgerV1, addresses: &ResolutionAddressesV1) {
     for (label, address) in [
         ("resolution_source_state", addresses.source_state),
-        ("resolution_funding_recovery", addresses.funding[0]),
-        ("resolution_funding_exhaustion", addresses.funding[1]),
-        ("resolution_funding_failure", addresses.funding[2]),
+        ("resolution_funding_subset_ledger", addresses.funding),
         ("resolution_terminal_certificate", addresses.certificate),
         ("resolution_closure_receipt", addresses.closure_receipt),
         ("resolution_rent_beneficiary", addresses.rent_beneficiary),
@@ -368,38 +365,22 @@ pub(crate) fn resolve(
     let mut submitted = 0_usize;
     let mut compute_units = 0_u64;
 
-    // 1. Prepay. `CreateFund` consumes precommitted, prepaid destinations: the
-    //    Source state and three Funds are System-owned and empty, and the
-    //    operator computes the exact top-up each one needs. Prepaying in its
-    //    own transaction rather than composing four transfers ahead of a
-    //    twenty-account frame keeps this campaign inside the legacy packet
-    //    without an address lookup table, and it makes the two facts separable
-    //    in the evidence: what was funded, and what was created.
+    // 1. Prepay only the vacant Source state. Founding already initialized and
+    //    funded the canonical Resolution-owned subset ledger, whose three rows
+    //    must still be Pending. CreateFund consumes that existing ledger; it
+    //    neither creates it nor accepts a second funding transfer.
     let create = build_resolution_create_fund_v3(&create_snapshot(rpc, addresses)?)
         .map_err(|error| Error::new(format!("chain-derived CreateFund: {error:?}")))?;
     validate_resolution_create_fund_report_v3(&create)
         .map_err(|error| Error::new(format!("CreateFund report: {error:?}")))?;
-    let mut prepay = Vec::with_capacity(4);
     if create.source_top_up_lamports > 0 {
-        prepay.push(transfer(
-            &payer.pubkey(),
-            &addresses.source_state,
-            create.source_top_up_lamports,
-        ));
-    }
-    for (destination, top_up) in addresses
-        .funding
-        .into_iter()
-        .zip(create.funding_top_up_lamports)
-    {
-        if top_up > 0 {
-            prepay.push(transfer(&payer.pubkey(), &destination, top_up));
-        }
-    }
-    if !prepay.is_empty() {
         let evidence = rpc.send(
-            "journey: prepay the Source resolution state and the three Resolution Funds",
-            &prepay,
+            "journey: prepay the Source resolution state",
+            &[transfer(
+                &payer.pubkey(),
+                &addresses.source_state,
+                create.source_top_up_lamports,
+            )],
             payer,
         )?;
         fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
@@ -408,10 +389,22 @@ pub(crate) fn resolve(
         transactions.push(evidence);
     }
 
+    // Rebuild from the prepaid snapshot and insist the Source destination now
+    // has exactly the required balance before publishing the routed frame.
+    let create = build_resolution_create_fund_v3(&create_snapshot(rpc, addresses)?)
+        .map_err(|error| Error::new(format!("chain-derived CreateFund after prepay: {error:?}")))?;
+    validate_resolution_create_fund_report_v3(&create)
+        .map_err(|error| Error::new(format!("CreateFund report after prepay: {error:?}")))?;
+    if create.source_top_up_lamports != 0 {
+        return Err(Error::new(format!(
+            "the Source prepayment did not reach its exact target: {} lamports remain",
+            create.source_top_up_lamports
+        )));
+    }
+
     // 2. The frame does not fit a legacy packet, and that is a measurement
-    //    rather than an inconvenience: `CreateFund` carries twenty accounts and
-    //    a Core effect envelope, and the first execution of this stage was
-    //    refused by the RPC at 2,016 bytes against the 1,232 limit. So it rides
+    //    rather than an inconvenience: `CreateFund` carries eighteen accounts
+    //    and a Core effect envelope. It rides
     //    a finalized address lookup table as a v0 transaction, exactly as
     //    Found31 and DCLTGMF1 do, through the producer's own table publisher --
     //    one author for the routing shape rather than a second copy of it here.
@@ -427,51 +420,9 @@ pub(crate) fn resolve(
     fees = fees.saturating_add(crate::provider::fees_since(transactions, before_tables));
     let mut table_lamports = crate::provider::table_rent(&tables);
 
-    // 2. The adversarial half FIRST. A second creation at the same generation
-    //    must refuse, and the cheapest honest way to prove the guard is live is
-    //    to submit the creation twice and assert the SECOND one fails — which
-    //    is exactly what this campaign does below, after the honest creation.
-    //    Before that: an over-funded Fund. Every Fund's lamports must equal
-    //    rent plus exactly the native principal its own manifest entry quotes,
-    //    and over-funding is not a donation a prepaid compartment may keep.
-    let over = rpc.send_v0_expected_failure_with_signers(
-        "journey: over-funding a Resolution Fund by one lamport refuses the creation",
-        &[
-            transfer(&payer.pubkey(), &addresses.funding[0], 1),
-            create.instruction.clone(),
-        ],
-        payer,
-        &[],
-        routing,
-        &tables,
-    )?;
-    fees = fees.saturating_add(over.fee_lamports.unwrap_or(0));
-    compute_units = compute_units.saturating_add(over.compute_units_consumed.unwrap_or(0));
-    submitted += 1;
-    transactions.push(over);
-    // The refusal has to roll the transfer back with it, or the Fund is now
-    // permanently unfundable and the refusal was worse than useless.
-    let after_refusal = rpc
-        .account(addresses.funding[0])?
-        .map(|account| account.lamports)
-        .unwrap_or(0);
-
-    // 3. The honest creation, rebuilt from the prepaid snapshot so its top-ups
-    //    are zero and the frame is byte-identical to the one just refused.
-    let create = build_resolution_create_fund_v3(&create_snapshot(rpc, addresses)?)
-        .map_err(|error| Error::new(format!("chain-derived CreateFund after prepay: {error:?}")))?;
-    validate_resolution_create_fund_report_v3(&create)
-        .map_err(|error| Error::new(format!("CreateFund report after prepay: {error:?}")))?;
-    if create.source_top_up_lamports != 0 || create.funding_top_up_lamports != [0; 3] {
-        return Err(Error::new(format!(
-            "the prepayment did not reach the exact funding target: source needs {} more and the \
-             Funds need {:?} more. The over-funding refusal must have kept a lamport (the Fund \
-             holds {after_refusal}).",
-            create.source_top_up_lamports, create.funding_top_up_lamports
-        )));
-    }
+    // 3. The honest creation consumes the already-existing Pending ledger.
     let evidence = rpc.send_v0_with_signers(
-        "journey: an Open Market creates its own Resolution Fund",
+        "journey: an Open Market creates its Source state from its pending Resolution ledger",
         std::slice::from_ref(&create.instruction),
         payer,
         &[],
@@ -496,13 +447,11 @@ pub(crate) fn resolve(
             "the created Source resolution state does not bind this Market at this generation",
         ));
     }
-    for (label, address) in funding_labels(addresses) {
-        let status = FundingStateV1::decode(&rpc.required_account(address, label)?.data)
-            .map_err(|error| Error::new(format!("{label}: {error:?}")))?
-            .status();
-        if status != FundingStatus::Pending {
+    for (entry_index, status) in funding_statuses(rpc, addresses)? {
+        if status != FundingLedgerStatusV2::Pending {
             return Err(Error::new(format!(
-                "{label} is {status:?} immediately after creation, not Pending"
+                "Resolution funding row {entry_index} is {status:?} immediately after creation, \
+                 not Pending"
             )));
         }
     }
@@ -524,7 +473,7 @@ pub(crate) fn resolve(
 
     // 5. Activation. Core stays Open + Consumed: an already-open Market
     //    consumed its readiness at the commit-last Open, and the activation
-    //    lives in the three FundingState accounts, which terminal admission
+    //    lives in the Resolution-owned subset ledger, which terminal admission
     //    rechecks. One semantic owner for that fact, not two.
     let verify = build_resolution_verify_fund_ready_v3(&verify_snapshot(rpc, addresses)?)
         .map_err(|error| Error::new(format!("chain-derived VerifyFundReady: {error:?}")))?;
@@ -534,7 +483,7 @@ pub(crate) fn resolve(
         .account(addresses.rent_beneficiary)?
         .map(|account| account.lamports)
         .unwrap_or(0);
-    // Same shape, same reason: twenty accounts and an effect envelope do not
+    // Same shape, same reason: nineteen accounts and an effect envelope do not
     // fit a legacy packet. A second table rather than a reused one, because
     // the two frames route different accounts and a table extended to cover
     // both would be a routing fact this campaign invented.
@@ -553,7 +502,7 @@ pub(crate) fn resolve(
     ));
     table_lamports = table_lamports.saturating_add(crate::provider::table_rent(&verify_tables));
     let evidence = rpc.send_v0_with_signers(
-        "journey: activate the three-ledger Resolution funding of an Open Market",
+        "journey: activate the Resolution subset ledger of an Open Market",
         std::slice::from_ref(&verify.instruction),
         payer,
         &[],
@@ -585,13 +534,10 @@ pub(crate) fn resolve(
             verify.expected_beneficiary_credit_lamports
         )));
     }
-    for (label, address) in funding_labels(addresses) {
-        let status = FundingStateV1::decode(&rpc.required_account(address, label)?.data)
-            .map_err(|error| Error::new(format!("{label}: {error:?}")))?
-            .status();
-        if status != FundingStatus::Active {
+    for (entry_index, status) in funding_statuses(rpc, addresses)? {
+        if status != FundingLedgerStatusV2::Active {
             return Err(Error::new(format!(
-                "{label} is {status:?} after activation, not Active"
+                "Resolution funding row {entry_index} is {status:?} after activation, not Active"
             )));
         }
     }
@@ -603,14 +549,14 @@ pub(crate) fn resolve(
             transactions: submitted,
             compute_units,
             note: format!(
-                "The atomically founded Market created its own Source resolution state and three \
-                 Resolution Funds and activated them, on a real validator, with a fee payer and no \
-                 other signer -- the funding ladder's whole frame is non-signing, which is why it \
-                 is reachable at all while every Claims mutation is not. Two refusals were proved \
-                 on the way: over-funding a Fund by one lamport, and a second CreateFund at the \
-                 same generation. Manifest entries {:?} carry the recovery, exhaustion and failure \
-                 compartments. The Market stayed Open + Consumed, and its rent beneficiary gained \
-                 exactly the {} lamports the activation declared.",
+                "The atomically founded Market consumed its existing Pending Resolution subset \
+                 ledger to create the Source resolution state, then activated the ledger's three \
+                 selected rows, on a real validator, with a fee payer and no other signer -- the \
+                 funding ladder's whole frame is non-signing, which is why it is reachable at all \
+                 while every Claims mutation is not. A second CreateFund at the same generation \
+                 was proved to refuse. Manifest entries {:?} carry the recovery, exhaustion and \
+                 failure compartments. The Market stayed Open + Consumed, and its rent beneficiary \
+                 gained exactly the {} lamports the activation declared.",
                 addresses.funding_entry_indices, verify.expected_beneficiary_credit_lamports
             ),
         },
@@ -622,16 +568,41 @@ pub(crate) fn resolve(
     ))
 }
 
-fn funding_labels(addresses: &ResolutionAddressesV1) -> [(&'static str, Pubkey); 3] {
-    [
-        ("recovery Fund", addresses.funding[0]),
-        ("exhaustion Fund", addresses.funding[1]),
-        ("failure Fund", addresses.funding[2]),
-    ]
+fn funding_statuses(
+    rpc: &mut Rpc,
+    addresses: &ResolutionAddressesV1,
+) -> Result<[(u16, FundingLedgerStatusV2); 3]> {
+    let market = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
+        .map_err(|error| Error::new(format!("Market: {error:?}")))?;
+    let manifest_account = rpc.required_account(
+        addresses.capability_manifest.raw,
+        "capability manifest record",
+    )?;
+    let manifest = CapabilityManifestV1::decode(&manifest_account.data)
+        .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
+    let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
+        .map_err(|error| Error::new(format!("Market capability manifest identity: {error:?}")))?;
+    let funding_account = rpc.required_account(addresses.funding, "Resolution subset ledger")?;
+    let funding = FundingLedgerV2::decode(&funding_account.data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .map_err(|error| Error::new(format!("Resolution subset ledger: {error:?}")))?;
+    let mut statuses = [(0_u16, FundingLedgerStatusV2::Pending); 3];
+    for (status, entry_index) in statuses.iter_mut().zip(addresses.funding_entry_indices) {
+        *status = (
+            entry_index,
+            funding
+                .slot(entry_index)
+                .map_err(|error| {
+                    Error::new(format!("Resolution funding row {entry_index}: {error:?}"))
+                })?
+                .status(),
+        );
+    }
+    Ok(statuses)
 }
 
 fn select_funding_entries(
-    material: &SourceMaterialV2,
+    material: &SourceMaterialV3,
     policy: &RecoveryPolicyV2,
     manifest: CapabilityManifestV1<'_>,
 ) -> Result<[u16; 3]> {
@@ -652,7 +623,7 @@ fn select_funding_entries(
         let entry = manifest
             .entry(entry_index)
             .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
             continue;
         }
         for (slot, config) in expected.iter().enumerate() {
@@ -699,6 +670,7 @@ fn create_snapshot(
             addresses.resolution_programdata,
             addresses.source_material.raw,
             addresses.capability_manifest.raw,
+            addresses.funding,
             sysvar::rent::ID,
             system_program::ID,
             addresses.recovery_policy.raw,
@@ -724,12 +696,10 @@ fn create_snapshot(
         capability_manifest: at(8)?,
         capability_manifest_staging: vacant(observation, addresses.capability_manifest.staging),
         source_destination: observed_or_vacant(rpc, observation, addresses.source_state)?,
-        recovery_destination: observed_or_vacant(rpc, observation, addresses.funding[0])?,
-        exhaustion_destination: observed_or_vacant(rpc, observation, addresses.funding[1])?,
-        failure_destination: observed_or_vacant(rpc, observation, addresses.funding[2])?,
-        rent_sysvar: at(9)?,
-        system_program: at(10)?,
-        recovery_policy: at(11)?,
+        funding_ledger: at(9)?,
+        rent_sysvar: at(10)?,
+        system_program: at(11)?,
+        recovery_policy: at(12)?,
         recovery_policy_staging: vacant(observation, addresses.recovery_policy.staging),
     })
 }
@@ -750,9 +720,7 @@ fn verify_snapshot(
             addresses.source_material.raw,
             addresses.capability_manifest.raw,
             addresses.source_state,
-            addresses.funding[0],
-            addresses.funding[1],
-            addresses.funding[2],
+            addresses.funding,
             addresses.rent_beneficiary,
             sysvar::clock::ID,
             sysvar::rent::ID,
@@ -779,13 +747,11 @@ fn verify_snapshot(
         capability_manifest: at(8)?,
         capability_manifest_staging: vacant(observation, addresses.capability_manifest.staging),
         source_state: at(9)?,
-        recovery_funding: at(10)?,
-        exhaustion_funding: at(11)?,
-        failure_funding: at(12)?,
-        beneficiary: at(13)?,
-        clock_sysvar: at(14)?,
-        rent_sysvar: at(15)?,
-        recovery_policy: at(16)?,
+        funding_ledger: at(10)?,
+        beneficiary: at(11)?,
+        clock_sysvar: at(12)?,
+        rent_sysvar: at(13)?,
+        recovery_policy: at(14)?,
         recovery_policy_staging: vacant(observation, addresses.recovery_policy.staging),
     })
 }
@@ -916,7 +882,7 @@ pub(crate) fn retire(
     // CloseFund closes the Source subtree and writes the closure receipt the
     // retirement itself consumes. Prepaid in its own transaction, same rule as
     // every other precommitted output.
-    let closure_rent = rpc.minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V2)?;
+    let closure_rent = rpc.minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3)?;
     let evidence = rpc.send(
         "journey: prepay the Source closure receipt",
         &[transfer(
@@ -969,15 +935,49 @@ pub(crate) fn retire(
     submitted += 1;
     transactions.push(evidence);
 
-    let receipt = SourceClosureReceiptV2::decode(
+    let receipt = SourceClosureReceiptV3::decode(
         &rpc.required_account(addresses.closure_receipt, "Source closure receipt")?
             .data,
     )
-    .map_err(|error| Error::new(format!("SourceClosureReceiptV2: {error:?}")))?;
+    .map_err(|error| Error::new(format!("SourceClosureReceiptV3: {error:?}")))?;
     if receipt.market != addresses.market.to_bytes() {
         return Err(Error::new(
             "the Source closure receipt does not bind the Market that was closed",
         ));
+    }
+    for (label, observed, expected) in [
+        (
+            "Source-state refund",
+            receipt.source_refund_lamports,
+            close.source_refund_lamports,
+        ),
+        (
+            "remaining native ledger principal",
+            receipt.ledger_remaining_native_principal,
+            close.ledger_remaining_native_principal,
+        ),
+        (
+            "ledger rent reserve",
+            receipt.ledger_rent_lamports,
+            close.ledger_rent_lamports,
+        ),
+        (
+            "ledger lamport surplus",
+            receipt.ledger_lamport_surplus,
+            close.ledger_lamport_surplus,
+        ),
+        (
+            "total beneficiary refund",
+            receipt.refund_lamports,
+            close.expected_refund_lamports,
+        ),
+    ] {
+        if observed != expected {
+            return Err(Error::new(format!(
+                "the V3 Source closure receipt commits {observed} lamports for {label}, while the \
+                 chain-derived CloseFund report declares {expected}"
+            )));
+        }
     }
     let beneficiary_after = rpc
         .required_account(addresses.rent_beneficiary, "Market rent beneficiary")?
@@ -989,12 +989,10 @@ pub(crate) fn retire(
             close.expected_refund_lamports
         )));
     }
-    for (label, address) in funding_labels(addresses) {
-        if rpc.account(address)?.is_some() {
-            return Err(Error::new(format!(
-                "{label} still exists after the Source subtree was closed"
-            )));
-        }
+    if rpc.account(addresses.funding)?.is_some() {
+        return Err(Error::new(
+            "the Resolution subset ledger still exists after the Source subtree was closed",
+        ));
     }
 
     // Where it stops, and why. The retirement itself is one atomic Registry
@@ -1022,10 +1020,11 @@ pub(crate) fn retire(
             transactions: submitted,
             compute_units,
             note: format!(
-                "The resolved Market entered Retiring and its whole Source subtree is closed: all \
-                 three Resolution Funds are gone, the Source closure receipt binds this Market, \
-                 and the Market's rent beneficiary gained exactly the {} lamports the operator \
-                 declared. Both routes are permissionless and non-signing -- a Market that has \
+                "The resolved Market entered Retiring and its whole Source subtree is closed: the \
+                 Resolution subset ledger is gone, the Source closure receipt binds this Market, \
+                 and the Market's rent beneficiary gained exactly {} lamports: {} from the Source \
+                 state, {} remaining native principal, {} of ledger rent, and {} of ledger \
+                 surplus. Both routes are permissionless and non-signing -- a Market that has \
                  resolved may be retired by anyone, and the permission is the terminal receipt \
                  rather than a key. THE RETIREMENT ITSELF DOES NOT RUN, and the reason is measured \
                  rather than read: `build_market_retirement_v1` refuses to compile the atomic \
@@ -1035,7 +1034,11 @@ pub(crate) fn retire(
                  gate. So the LAST step of the Market's life is behind the same door as the \
                  middle of it -- which is worth saying plainly, because the retirement gap looked \
                  like it was behind the terminal receipt right up until the receipt existed.",
-                close.expected_refund_lamports
+                close.expected_refund_lamports,
+                close.source_refund_lamports,
+                close.ledger_remaining_native_principal,
+                close.ledger_rent_lamports,
+                close.ledger_lamport_surplus,
             ),
         },
         crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
@@ -1061,9 +1064,7 @@ fn close_snapshot(
             addresses.source_material.raw,
             addresses.capability_manifest.raw,
             addresses.source_state,
-            addresses.funding[0],
-            addresses.funding[1],
-            addresses.funding[2],
+            addresses.funding,
             addresses.certificate,
             addresses.closure_receipt,
             addresses.rent_beneficiary,
@@ -1093,16 +1094,14 @@ fn close_snapshot(
         capability_manifest: at(8)?,
         capability_manifest_staging: vacant(observation, addresses.capability_manifest.staging),
         source_state: at(9)?,
-        recovery_funding: at(10)?,
-        exhaustion_funding: at(11)?,
-        failure_funding: at(12)?,
-        certificate: at(13)?,
-        closure_destination: at(14)?,
-        beneficiary: at(15)?,
-        clock_sysvar: at(16)?,
-        rent_sysvar: at(17)?,
-        system_program: at(18)?,
-        recovery_policy: at(19)?,
+        funding_ledger: at(10)?,
+        certificate: at(11)?,
+        closure_destination: at(12)?,
+        beneficiary: at(13)?,
+        clock_sysvar: at(14)?,
+        rent_sysvar: at(15)?,
+        system_program: at(16)?,
+        recovery_policy: at(17)?,
         recovery_policy_staging: vacant(observation, addresses.recovery_policy.staging),
     })
 }

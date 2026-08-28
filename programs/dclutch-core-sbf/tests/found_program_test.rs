@@ -25,14 +25,14 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
-    CompartmentV1, PROJECTED_CUSTODY_STATE_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    CompartmentV1, PROJECTED_CUSTODY_STATE_BYTES_V2, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
     ProjectedCallerRoleV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1,
-    ProjectedCustodyStateV1,
+    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV2,
+    ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    ProjectFoundRequestV1, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
+    ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
     SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
 };
 use dclutch_product_payoff_v2_codec::{
@@ -96,7 +96,7 @@ use dclutch_series_v3_kernel::{
     series_core_consume_request, template_content_id, ticket_content_id,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
+    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SourceMaterialV3,
 };
 use solana_account::Account;
 use solana_program::{
@@ -940,7 +940,7 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
         expected_revision: 2,
         resulting_revision: 3,
         amount: hoard_principal,
-        state_rent_lamports: rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V1),
+        state_rent_lamports: rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V2),
         vault_rent_lamports: rent.minimum_balance(SplAccount::LEN),
         funding_source_replay_revision: 3,
         funding_source_state_rent_lamports: 1,
@@ -952,15 +952,16 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
             .expect("projected LockAndClose request"),
     )
     .to_bytes();
-    let projected_seeds = ProjectedCustodyStateSeedsV1::from_request(projected_request);
+    let projected_seeds = ProjectedCustodyStateSeedsV2::from_request(projected_request);
     let (projected_replay, projected_bump) =
         Pubkey::find_program_address(&projected_seeds.as_slices(), &CUSTODY_PROGRAM_ID);
-    let projected_state = ProjectedCustodyStateV1 {
+    let projected_state = ProjectedCustodyStateV2 {
         phase: ProjectedCustodyPhaseV1::HoardLocked,
         request: projected_request,
         next_revision: 3,
         locked_amount: hoard_principal,
         last_request_digest: lock_request_digest,
+        principal_cap_sets: u64::MAX,
         bump: projected_bump,
     };
     let projected_data = projected_state.encode().expect("projected state").to_vec();
@@ -1220,7 +1221,10 @@ fn fixture(core_mutable: bool) -> Fixture {
     })
     .expect("Realm");
     let realm = Record::new(REALM_SCHEMA_RELEASE_ID_V1, realm_value.to_bytes().to_vec());
-    let source_value = SourceMaterialV2::new(
+    // This fixture graph has no manipulation-floor record, so the sole
+    // canonical V3 policy is explicitly unbounded principal. A bounded policy
+    // would require the selected floor's finalized raw/staging pair.
+    let source_value = SourceMaterialV3::explicitly_unbounded(
         SourceContentId::new(product.digest).expect("Product root"),
         source_id(0xb4),
         source_id(0xb5),
@@ -1229,7 +1233,7 @@ fn fixture(core_mutable: bool) -> Fixture {
         source_id(0xb7),
     );
     let source = Record::new(
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source_value.to_bytes().to_vec(),
     );
     let manifest = funded_manifest_record();
@@ -1445,7 +1449,7 @@ fn project_found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruc
         GENERATION,
         identity(fixture.market.to_bytes()),
     );
-    instruction.data = ProjectFoundRequestV1::new(found)
+    instruction.data = ProjectFoundRequestV2::new(found)
         .expect("ProjectFound")
         .encode()
         .expect("ProjectFound bytes")
