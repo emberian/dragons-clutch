@@ -1606,7 +1606,14 @@ fn checked_role<'a>(
     plan: &'a SuccessorPlan,
     set_role: &'a CheckedUpgradeRolePinV1,
 ) -> Result<(&'a ProgramPin, &'static str)> {
-    Ok(match set_role.role.as_str() {
+    checked_plan_role(plan, &set_role.role)
+}
+
+fn checked_plan_role<'a>(
+    plan: &'a SuccessorPlan,
+    role: &str,
+) -> Result<(&'a ProgramPin, &'static str)> {
+    Ok(match role {
         "registry" => (&plan.registry, "registry_artifact_release"),
         "rent" => (&plan.rent_credit, "rent_artifact_release"),
         "custody" => (&plan.custody, "custody_artifact_release"),
@@ -1690,14 +1697,31 @@ fn authenticate_checked_plan_role_projection(
 /// A saved public-cluster plan is an untrusted projection. Before any keypair
 /// file is loaded, rehash its mixed deployment-set evidence and bind every
 /// mutable Program pin and artifact body back to that owner.
-fn authenticate_checked_campaign_plan(plan: &SuccessorPlan) -> Result<()> {
+fn authenticate_checked_campaign_plan(
+    plan: &SuccessorPlan,
+    origin: &ClusterOriginV1,
+) -> Result<()> {
     let mutable = runtime::role_pins(plan)
         .into_iter()
         .any(|(_, pin)| pin.upgrade_authority.is_some());
-    require_checked_mutable_binding(mutable, plan.checked_upgrade_set.is_some())?;
+    require_checked_mutable_binding(
+        mutable,
+        plan.checked_upgrade_set.is_some(),
+        plan.checked_local_mutable_set.is_some(),
+    )?;
+    if plan.checked_local_mutable_set.is_some() {
+        crate::cluster::ExpectedClusterV1::OwnedLoopback.authenticate(origin)?;
+        crate::local_mutable::authenticate_checked_local_mutable_plan_v1(plan)?;
+        for role in crate::local_mutable::ROLE_ORDER_V1 {
+            let (_, record_label) = checked_plan_role(plan, role)?;
+            let _ = runtime::record(plan, record_label)?;
+        }
+        return runtime::authenticate_checked_activation_projection(plan);
+    }
     let Some(set) = plan.checked_upgrade_set.as_ref() else {
         return Ok(());
     };
+    crate::cluster::ExpectedClusterV1::Devnet.authenticate(origin)?;
     crate::upgrade::reauthenticate_checked_deployment_set_pin(set)?;
     if set.devnet_genesis_hash != crate::cluster::DEVNET_GENESIS_HASH
         || plan.record_publication != "transaction"
@@ -1731,8 +1755,17 @@ fn authenticate_checked_campaign_plan(plan: &SuccessorPlan) -> Result<()> {
     runtime::authenticate_checked_activation_projection(plan)
 }
 
-fn require_checked_mutable_binding(mutable: bool, has_checked_set: bool) -> Result<()> {
-    if mutable && !has_checked_set {
+fn require_checked_mutable_binding(
+    mutable: bool,
+    has_checked_upgrade_set: bool,
+    has_checked_local_set: bool,
+) -> Result<()> {
+    if has_checked_upgrade_set && has_checked_local_set {
+        return Err(Error::new(
+            "saved plan mixed permanent-devnet and owned-loopback checked deployment evidence",
+        ));
+    }
+    if mutable && !has_checked_upgrade_set && !has_checked_local_set {
         return Err(Error::new(
             "mutable saved plan is not bound to checked deployment-set evidence",
         ));
@@ -1784,35 +1817,60 @@ fn authenticate_live_checked_role(
 }
 
 fn authenticate_checked_live_substrate(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
-    let Some(set) = plan.checked_upgrade_set.as_ref() else {
-        return Ok(());
-    };
+    let (roles, floor): (Vec<(&str, &ProgramPin)>, u64) =
+        if let Some(set) = plan.checked_upgrade_set.as_ref() {
+            let floor = set
+                .roles
+                .iter()
+                .map(|role| role.deployment_slot)
+                .chain(std::iter::once(
+                    set.infrastructure_carry_forward.context_slot,
+                ))
+                .max()
+                .ok_or_else(|| Error::new("checked deployment set omitted roles"))?;
+            let roles = set
+                .roles
+                .iter()
+                .map(|role| {
+                    let (pin, _) = checked_role(plan, role)?;
+                    Ok((role.role.as_str(), pin))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (roles, floor)
+        } else if let Some(set) = plan.checked_local_mutable_set.as_ref() {
+            let floor = set
+                .roles
+                .iter()
+                .map(|role| role.deployment_slot)
+                .max()
+                .ok_or_else(|| Error::new("checked local mutable set omitted roles"))?;
+            let roles = set
+                .roles
+                .iter()
+                .map(|role| {
+                    let (pin, _) = checked_plan_role(plan, &role.role)?;
+                    Ok((role.role.as_str(), pin))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (roles, floor)
+        } else {
+            return Ok(());
+        };
     let mut addresses = Vec::with_capacity(14);
-    for role in &set.roles {
-        let (pin, _) = checked_role(plan, role)?;
+    for (_, pin) in &roles {
         addresses.push(pubkey(&pin.program_id)?);
         addresses.push(pubkey(&pin.programdata_id)?);
     }
-    let floor = set
-        .roles
-        .iter()
-        .map(|role| role.deployment_slot)
-        .chain(std::iter::once(
-            set.infrastructure_carry_forward.context_slot,
-        ))
-        .max()
-        .ok_or_else(|| Error::new("checked deployment set omitted roles"))?;
     let (_, accounts) = rpc.finalized_accounts(&addresses, floor)?;
-    for (index, role) in set.roles.iter().enumerate() {
-        let (pin, _) = checked_role(plan, role)?;
+    for (index, (role, pin)) in roles.into_iter().enumerate() {
         let program = accounts[index * 2]
             .as_ref()
-            .ok_or_else(|| Error::new(format!("{} Program is absent", role.role)))?;
+            .ok_or_else(|| Error::new(format!("{role} Program is absent")))?;
         let programdata = accounts[index * 2 + 1]
             .as_ref()
-            .ok_or_else(|| Error::new(format!("{} ProgramData is absent", role.role)))?;
+            .ok_or_else(|| Error::new(format!("{role} ProgramData is absent")))?;
         let candidate = fs::read(&pin.checked_candidate_elf_path)?;
-        authenticate_live_checked_role(&role.role, pin, program, programdata, &candidate)?;
+        authenticate_live_checked_role(role, pin, program, programdata, &candidate)?;
     }
     Ok(())
 }
@@ -1828,7 +1886,7 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     let plan_source = fs::read(&args.plan_path)?;
     let plan: SuccessorPlan =
         serde_json::from_value(parse_json_without_duplicate_keys_v1(&plan_source)?)?;
-    authenticate_checked_campaign_plan(&plan)?;
+    authenticate_checked_campaign_plan(&plan, &args.origin)?;
     let plan_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(&plan_source));
     // Decode the complete dossier before connection or key access. The same
     // bytes are hashed into both the campaign report and its outer CLI journal.
@@ -2330,11 +2388,13 @@ mod tests {
 
     #[test]
     fn mutable_saved_plan_requires_checked_set_before_key_loading() {
-        require_checked_mutable_binding(false, false).expect("legacy immutable plan");
-        require_checked_mutable_binding(true, true).expect("checked mutable plan");
-        let refusal = require_checked_mutable_binding(true, false)
+        require_checked_mutable_binding(false, false, false).expect("legacy immutable plan");
+        require_checked_mutable_binding(true, true, false).expect("checked devnet mutable plan");
+        require_checked_mutable_binding(true, false, true).expect("checked local mutable plan");
+        let refusal = require_checked_mutable_binding(true, false, false)
             .expect_err("unbound mutable plan must refuse");
         assert!(refusal.0.contains("not bound"), "{}", refusal.0);
+        assert!(require_checked_mutable_binding(true, true, true).is_err());
     }
 
     #[test]
