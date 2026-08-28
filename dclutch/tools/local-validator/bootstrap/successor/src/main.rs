@@ -31,6 +31,7 @@ mod terminal_sequence;
 mod upgrade;
 mod user_position_admission;
 mod wallet_terminal;
+mod wallet_terminal_payout_exterior;
 
 type Result<T> = core::result::Result<T, Error>;
 const PUBLIC_TERMINAL_COMMANDS_V1: [&str; 1] = ["devnet-terminal-sequence-v1"];
@@ -118,6 +119,9 @@ fn run() -> Result<()> {
         }
         Some("local-private-validator-user-position-admission-v1") => {
             user_position_admission::run_owned_loopback(arguments.collect())
+        }
+        Some("local-private-validator-wallet-terminal-payout-v1") => {
+            wallet_terminal_payout_exterior::run(arguments.collect())
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some(command) if command == OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[0] => {
@@ -1283,6 +1287,7 @@ fn usage() {
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
+    println!("{}", wallet_terminal_payout_exterior::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
          ABSOLUTE_JSON [--market ABSOLUTE_JSON] --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... \

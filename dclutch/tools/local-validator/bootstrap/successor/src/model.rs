@@ -63,6 +63,11 @@ pub(crate) struct SuccessorRunSpec {
 pub(crate) struct MarketRunInput {
     pub(crate) generation: u64,
     pub(crate) collateral_display_decimals: u8,
+    /// Local-validator-only collateral kept outside every Hoard principal so
+    /// the participant exterior can execute a real Token-2022 transfer after
+    /// founding. Zero is the only public/devnet value; the local fixture uses
+    /// the one exact amount authenticated by the campaign.
+    pub(crate) local_participant_fixture_liquidity_atoms: u64,
     pub(crate) initial_collateral_atoms: u64,
     pub(crate) product_id: String,
     pub(crate) coordinate_domain_id: String,

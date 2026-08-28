@@ -29,6 +29,8 @@ pub enum DirectOrdinaryRegisterErrorV3 {
     ConfigContentMismatch,
     /// An authenticated semantic, release, program, account, or PDA identity was zero.
     ZeroIdentity,
+    /// The lifecycle anchor was not the canonical all-zero System Program ID.
+    SystemProgramMismatch,
     /// Typed TransitionVM program emission refused.
     TransitionProgram,
 }
@@ -194,10 +196,13 @@ pub fn project_direct_ordinary_registers_v3(
         context.seller_token_account,
         context.buyer_token_account,
     ];
+    if context.system_program != [0; 32] {
+        return Err(DirectOrdinaryRegisterErrorV3::SystemProgramMismatch);
+    }
     if identities
         .iter()
         .enumerate()
-        .any(|(index, value)| *value == [0; 32] && index != 25 && index != 26)
+        .any(|(index, value)| *value == [0; 32] && index != 23 && index != 25 && index != 26)
     {
         return Err(DirectOrdinaryRegisterErrorV3::ZeroIdentity);
     }
@@ -451,7 +456,7 @@ mod tests {
             token_program: id(40),
             seller_maker_root: id(42),
             buyer_maker_root: id(43),
-            system_program: id(44),
+            system_program: [0; 32],
             custody_authority: id(45),
             seller_rent_beneficiary: id(71),
             seller_rent_beneficiary_observation: id(71),
@@ -560,6 +565,51 @@ mod tests {
                 if item == 2 { 20 } else { 0 }
             );
         }
+    }
+
+    #[test]
+    fn only_the_canonical_zero_system_program_identity_is_admitted_atomically() {
+        let config = DirectExecutionConfigV1::new(100, 1_000, id(60)).expect("config");
+        let mut canonical = context(config);
+        canonical.system_program = [0; 32];
+        let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
+            + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
+        let mut scratch_scalars = std::vec![0_u64; scalar_width];
+        let mut scratch_identities = [[0_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
+        let mut output_scalars = std::vec![0_u64; scalar_width];
+        let mut output_identities = [[0_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
+        assert_eq!(
+            project_direct_ordinary_registers_v3(
+                request(),
+                canonical,
+                &mut scratch_scalars,
+                &mut scratch_identities,
+                &mut output_scalars,
+                &mut output_identities,
+            ),
+            Ok(())
+        );
+        assert_eq!(output_identities[IDENTITY_SYSTEM_PROGRAM_V3], [0; 32]);
+
+        let mut substituted = canonical;
+        substituted.system_program = id(44);
+        output_scalars.fill(0x55);
+        output_identities.fill([0x55; 32]);
+        let scalar_before = output_scalars.clone();
+        let identity_before = output_identities;
+        assert_eq!(
+            project_direct_ordinary_registers_v3(
+                request(),
+                substituted,
+                &mut scratch_scalars,
+                &mut scratch_identities,
+                &mut output_scalars,
+                &mut output_identities,
+            ),
+            Err(DirectOrdinaryRegisterErrorV3::SystemProgramMismatch)
+        );
+        assert_eq!(output_scalars, scalar_before);
+        assert_eq!(output_identities, identity_before);
     }
 
     #[test]

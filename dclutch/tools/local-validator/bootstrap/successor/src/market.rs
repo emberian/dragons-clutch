@@ -140,12 +140,41 @@ const FIXTURE_SHELF_LIFE_SECONDS: u32 = 31_536_000;
 
 pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complete authenticated Product and Source graph, creates the lifecycle credit, projects the future Market through Core Found37, stages projected custody and the two controller-owned FundingLedgerV2 accounts through DCLTPCB2, and then opens the Market atomically through DCLTGMF2. The opening transaction locks the Hoard, creates Core and Claims state, realizes custody, consumes the one-shot permit, and commits Open last. Compute evidence must be remeasured for these V2 routes; the runner does not reuse pre-V2 founding measurements.";
 
+/// The one local-only participant allocation. It is test liquidity, not
+/// founding principal, and therefore never enters a Hoard or a principal cap.
+pub(crate) const LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1: u64 = 100_000_000;
+/// Local-prepare role that owns the fixture Token-2022 account.
+pub(crate) const LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1: &str = "participant";
+/// Local-prepare role whose key is the fixture Token-2022 account address.
+pub(crate) const LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1: &str = "direct-buyer";
+
+/// Exact finalized receipt for the local-only participant allocation.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LocalParticipantFixtureLiquidityEvidenceV1 {
+    pub(crate) source_token_account: String,
+    pub(crate) source_owner: String,
+    pub(crate) quantity_atoms: u64,
+    pub(crate) founding_collateral_atoms: u64,
+    pub(crate) total_supply_atoms: u64,
+    pub(crate) mint: String,
+    pub(crate) mint_authority_removed: bool,
+    pub(crate) transaction_signature: String,
+    pub(crate) finalized_slot: u64,
+    pub(crate) compute_units_consumed: u64,
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct MarketExecutionEvidence {
     pub(crate) completed: Vec<String>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
     pub(crate) founding_custody_context: String,
     pub(crate) direct_selected_manifest_entry_index: u16,
+    /// Projected by campaign.rs at `execution.localParticipantFixtureLiquidity`;
+    /// skipped here so the report has one JSON coordinate for the receipt.
+    #[serde(skip)]
+    pub(crate) local_participant_fixture_liquidity:
+        Option<LocalParticipantFixtureLiquidityEvidenceV1>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -162,6 +191,9 @@ pub(crate) struct MarketExecutionCheckpointV1 {
     pub(crate) expiry_slot: u64,
     pub(crate) found_record: String,
     pub(crate) lock_record: String,
+    #[serde(rename = "localParticipantFixtureLiquidity")]
+    pub(crate) local_participant_fixture_liquidity:
+        Option<LocalParticipantFixtureLiquidityEvidenceV1>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
     pub(crate) completed: Vec<String>,
 }
@@ -174,6 +206,16 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
         return Err(Error::new(
             "market input requires positive raw collateral and denominators",
         ));
+    }
+    if !matches!(
+        input.local_participant_fixture_liquidity_atoms,
+        0 | LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+    ) {
+        return Err(Error::new(format!(
+            "local participant fixture liquidity must be absent or exactly \
+             {LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1} atoms; hidden multipliers and \
+             caller-chosen fixture supply are refused"
+        )));
     }
     let cuts = input
         .cuts
@@ -446,15 +488,20 @@ pub(crate) fn execute_found_market_with_checkpoint(
     let core = pubkey(&plan.core.program_id)?;
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
-    let (mint, collateral_wallet) = create_real_collateral(
+    let created_collateral = create_real_collateral(
         rpc,
         payer,
         forge,
         token_program,
         input.collateral_display_decimals,
         input.initial_collateral_atoms,
+        input.local_participant_fixture_liquidity_atoms,
         transactions,
     )?;
+    let mint = created_collateral.mint;
+    let collateral_wallet = created_collateral.wallet;
+    let local_participant_fixture_liquidity =
+        created_collateral.local_participant_fixture_liquidity;
 
     let release_set_digest = hex32(&plan.release_set_id)?;
     let founding_targets = derive_founding_targets(plan, input, mint)?;
@@ -677,6 +724,18 @@ pub(crate) fn execute_found_market_with_checkpoint(
         let account = rpc.required_account(key, label)?;
         accounts.insert(label.into(), account_evidence(key, &account));
     }
+    if let Some(fixture) = &local_participant_fixture_liquidity {
+        let source = fixture
+            .source_token_account
+            .parse()
+            .map_err(|_| Error::new("local participant fixture source is not a public key"))?;
+        let account =
+            rpc.required_account(source, "local participant fixture collateral source")?;
+        accounts.insert(
+            "local_participant_fixture_source".into(),
+            account_evidence(source, &account),
+        );
+    }
     if let Some(floor) = records.manipulation_floor {
         let account = rpc.required_account(floor.raw, "manipulation_floor_record")?;
         accounts.insert(
@@ -728,6 +787,7 @@ pub(crate) fn execute_found_market_with_checkpoint(
             transactions,
             &mut accounts,
             &mut completed,
+            local_participant_fixture_liquidity.as_ref(),
             checkpoint,
         )?;
         if lane == PrestateLaneV1::Founding {
@@ -744,6 +804,7 @@ pub(crate) fn execute_found_market_with_checkpoint(
             .as_ref()
             .ok_or_else(|| Error::new("founding evidence omitted its Direct payload"))?
             .selected_manifest_entry_index,
+        local_participant_fixture_liquidity,
     })
 }
 
@@ -822,6 +883,10 @@ fn reconstruct_dcltpcb2_checkpoint_v1(
     let wallet_keypair = forge.keypair(role::COLLATERAL_WALLET);
     let mint = mint_keypair.pubkey();
     let wallet = wallet_keypair.pubkey();
+    let expected_supply = input
+        .initial_collateral_atoms
+        .checked_add(input.local_participant_fixture_liquidity_atoms)
+        .ok_or_else(|| Error::new("checkpoint collateral supply overflow"))?;
     if checkpoint_account(checkpoint, "collateral_mint")? != mint
         || checkpoint_account(checkpoint, "collateral_wallet")? != wallet
     {
@@ -838,7 +903,7 @@ fn reconstruct_dcltpcb2_checkpoint_v1(
     if mint_account.owner != token_program
         || wallet_account.owner != token_program
         || parsed_mint.decimals != input.collateral_display_decimals
-        || parsed_mint.supply != input.initial_collateral_atoms
+        || parsed_mint.supply != expected_supply
         || !parsed_mint.is_initialized
         || !parsed_mint.mint_authority.is_none()
         || !parsed_mint.freeze_authority.is_none()
@@ -849,6 +914,56 @@ fn reconstruct_dcltpcb2_checkpoint_v1(
         return Err(Error::new(
             "DCLTPCB2 checkpoint collateral roles no longer match the exact founding assets",
         ));
+    }
+    match (
+        input.local_participant_fixture_liquidity_atoms,
+        checkpoint.local_participant_fixture_liquidity.as_ref(),
+    ) {
+        (0, None) => {}
+        (LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1, Some(receipt)) => {
+            let source = forge
+                .keypair(LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1)
+                .pubkey();
+            let owner = forge
+                .keypair(LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1)
+                .pubkey();
+            let source_account = rpc.required_account(
+                source,
+                "checkpoint local participant fixture collateral source",
+            )?;
+            let parsed_source = TokenAccount::parse(&source_account.data).map_err(|error| {
+                Error::new(format!("checkpoint participant fixture source: {error:?}"))
+            })?;
+            if receipt.source_token_account != source.to_string()
+                || receipt.source_owner != owner.to_string()
+                || receipt.quantity_atoms != LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+                || receipt.founding_collateral_atoms != input.initial_collateral_atoms
+                || receipt.total_supply_atoms != expected_supply
+                || receipt.mint != mint.to_string()
+                || !receipt.mint_authority_removed
+                || receipt.transaction_signature.parse::<Signature>().is_err()
+                || receipt.finalized_slot == 0
+                || receipt.compute_units_consumed == 0
+                || source_account.owner != token_program
+                || parsed_source.mint != mint.to_bytes()
+                || parsed_source.owner != owner.to_bytes()
+                || parsed_source.amount != LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+                || parsed_source.state != AccountState::Initialized
+                || !parsed_source.delegate.is_none()
+                || parsed_source.delegated_amount != 0
+                || !parsed_source.native_reserve.is_none()
+                || !parsed_source.close_authority.is_none()
+            {
+                return Err(Error::new(
+                    "DCLTPCB2 checkpoint local participant fixture liquidity changed",
+                ));
+            }
+        }
+        _ => {
+            return Err(Error::new(
+                "DCLTPCB2 checkpoint fixture-liquidity presence differs from its Market input",
+            ));
+        }
     }
 
     let targets = derive_founding_targets(plan, input, mint)?;
@@ -1039,6 +1154,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
         accounts,
         founding_custody_context: checkpoint.founding_custody_context.clone(),
         direct_selected_manifest_entry_index: checkpoint.direct_selected_manifest_entry_index,
+        local_participant_fixture_liquidity: checkpoint.local_participant_fixture_liquidity.clone(),
     })
 }
 
@@ -1109,6 +1225,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         accounts,
         founding_custody_context: checkpoint.founding_custody_context.clone(),
         direct_selected_manifest_entry_index: checkpoint.direct_selected_manifest_entry_index,
+        local_participant_fixture_liquidity: checkpoint.local_participant_fixture_liquidity.clone(),
     })
 }
 
@@ -1906,6 +2023,36 @@ fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {
     ))
 }
 
+struct CreatedCollateralV1 {
+    mint: Pubkey,
+    wallet: Pubkey,
+    local_participant_fixture_liquidity: Option<LocalParticipantFixtureLiquidityEvidenceV1>,
+}
+
+fn authenticate_collateral_supply_partition_v1(
+    founding_collateral_atoms: u64,
+    fixture_liquidity_atoms: u64,
+    observed_supply_atoms: u64,
+    observed_founding_wallet_atoms: u64,
+    observed_fixture_source_atoms: Option<u64>,
+    mint_authority_removed: bool,
+) -> Result<u64> {
+    let expected_supply = founding_collateral_atoms
+        .checked_add(fixture_liquidity_atoms)
+        .ok_or_else(|| Error::new("collateral fixture supply overflow"))?;
+    if observed_supply_atoms != expected_supply
+        || observed_founding_wallet_atoms != founding_collateral_atoms
+        || observed_fixture_source_atoms
+            != (fixture_liquidity_atoms != 0).then_some(fixture_liquidity_atoms)
+        || !mint_authority_removed
+    {
+        return Err(Error::new(
+            "collateral supply is not the exact founding/fixture partition with mint authority removed",
+        ));
+    }
+    Ok(expected_supply)
+}
+
 fn create_real_collateral(
     rpc: &mut Rpc,
     payer: &Keypair,
@@ -1913,13 +2060,31 @@ fn create_real_collateral(
     token_program: Pubkey,
     decimals: u8,
     atoms: u64,
+    local_participant_fixture_liquidity_atoms: u64,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(Pubkey, Pubkey)> {
+) -> Result<CreatedCollateralV1> {
     if atoms == 0 {
         return Err(Error::new("initial collateral raw atoms must be positive"));
     }
     let mint = forge.keypair(role::COLLATERAL_MINT);
     let wallet = forge.keypair(role::COLLATERAL_WALLET);
+    let total_supply_atoms = atoms
+        .checked_add(local_participant_fixture_liquidity_atoms)
+        .ok_or_else(|| Error::new("collateral fixture supply overflow"))?;
+    let local_fixture = if local_participant_fixture_liquidity_atoms == 0 {
+        None
+    } else {
+        if local_participant_fixture_liquidity_atoms != LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+        {
+            return Err(Error::new("local participant fixture amount changed"));
+        }
+        Some((
+            forge.keypair(LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1),
+            forge
+                .keypair(LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1)
+                .pubkey(),
+        ))
+    };
     let mint_rent = rpc.minimum_balance(MINT_BYTES)?;
     let wallet_rent = rpc.minimum_balance(ACCOUNT_BYTES)?;
     let mut initialize_mint = Vec::with_capacity(70);
@@ -1930,15 +2095,18 @@ fn create_real_collateral(
     let mut initialize_wallet = Vec::with_capacity(33);
     initialize_wallet.push(18);
     initialize_wallet.extend_from_slice(payer.pubkey().as_ref());
-    let mut mint_to = Vec::with_capacity(10);
-    mint_to.push(14);
-    mint_to.extend_from_slice(&atoms.to_le_bytes());
-    mint_to.push(decimals);
+    let mint_to_checked = |amount: u64| {
+        let mut data = Vec::with_capacity(10);
+        data.push(14);
+        data.extend_from_slice(&amount.to_le_bytes());
+        data.push(decimals);
+        data
+    };
     let mut remove_authority = Vec::with_capacity(38);
     remove_authority.extend_from_slice(&[6, 0]);
     remove_authority.extend_from_slice(&0_u32.to_le_bytes());
     remove_authority.extend_from_slice(&[0_u8; 32]);
-    let instructions = [
+    let mut instructions = vec![
         create_account(
             &payer.pubkey(),
             &mint.pubkey(),
@@ -1973,23 +2141,62 @@ fn create_real_collateral(
                 AccountMeta::new(wallet.pubkey(), false),
                 AccountMeta::new_readonly(payer.pubkey(), true),
             ],
-            data: mint_to,
-        },
-        Instruction {
-            program_id: token_program,
-            accounts: vec![
-                AccountMeta::new(mint.pubkey(), false),
-                AccountMeta::new_readonly(payer.pubkey(), true),
-            ],
-            data: remove_authority,
+            data: mint_to_checked(atoms),
         },
     ];
-    transactions.push(rpc.send_with_signers(
-        "create real Token-2022 collateral and raw-atom wallet",
+    if let Some((source, owner)) = &local_fixture {
+        let mut initialize_source = Vec::with_capacity(33);
+        initialize_source.push(18);
+        initialize_source.extend_from_slice(owner.as_ref());
+        instructions.extend([
+            create_account(
+                &payer.pubkey(),
+                &source.pubkey(),
+                wallet_rent,
+                ACCOUNT_BYTES as u64,
+                &token_program,
+            ),
+            Instruction {
+                program_id: token_program,
+                accounts: vec![
+                    AccountMeta::new(source.pubkey(), false),
+                    AccountMeta::new_readonly(mint.pubkey(), false),
+                ],
+                data: initialize_source,
+            },
+            Instruction {
+                program_id: token_program,
+                accounts: vec![
+                    AccountMeta::new(mint.pubkey(), false),
+                    AccountMeta::new(source.pubkey(), false),
+                    AccountMeta::new_readonly(payer.pubkey(), true),
+                ],
+                data: mint_to_checked(local_participant_fixture_liquidity_atoms),
+            },
+        ]);
+    }
+    instructions.push(Instruction {
+        program_id: token_program,
+        accounts: vec![
+            AccountMeta::new(mint.pubkey(), false),
+            AccountMeta::new_readonly(payer.pubkey(), true),
+        ],
+        data: remove_authority,
+    });
+    let mut signers = vec![&mint, &wallet];
+    if let Some((source, _)) = &local_fixture {
+        signers.push(source);
+    }
+    let transaction = rpc.send_with_signers(
+        if local_fixture.is_some() {
+            "create immutable Token-2022 collateral plus explicit local participant fixture liquidity"
+        } else {
+            "create real Token-2022 collateral and raw-atom wallet"
+        },
         &instructions,
         payer,
-        &[&mint, &wallet],
-    )?);
+        &signers,
+    )?;
     let mint_account = rpc.required_account(mint.pubkey(), "collateral Mint")?;
     let wallet_account = rpc.required_account(wallet.pubkey(), "collateral token wallet")?;
     let parsed_mint = Mint::parse(&mint_account.data)
@@ -1998,14 +2205,11 @@ fn create_real_collateral(
         .map_err(|error| Error::new(format!("collateral wallet: {error:?}")))?;
     if mint_account.owner != token_program
         || wallet_account.owner != token_program
-        || !parsed_mint.mint_authority.is_none()
         || !parsed_mint.freeze_authority.is_none()
         || !parsed_mint.is_initialized
-        || parsed_mint.supply != atoms
         || parsed_mint.decimals != decimals
         || parsed_wallet.mint != mint.pubkey().to_bytes()
         || parsed_wallet.owner != payer.pubkey().to_bytes()
-        || parsed_wallet.amount != atoms
         || parsed_wallet.state != AccountState::Initialized
         || !parsed_wallet.delegate.is_none()
         || !parsed_wallet.native_reserve.is_none()
@@ -2015,7 +2219,70 @@ fn create_real_collateral(
             "real Token-2022 collateral poststate refused exact base profile",
         ));
     }
-    Ok((mint.pubkey(), wallet.pubkey()))
+    let local_participant_fixture_liquidity = match local_fixture {
+        None => {
+            authenticate_collateral_supply_partition_v1(
+                atoms,
+                0,
+                parsed_mint.supply,
+                parsed_wallet.amount,
+                None,
+                parsed_mint.mint_authority.is_none(),
+            )?;
+            None
+        }
+        Some((source, owner)) => {
+            let source_account = rpc.required_account(
+                source.pubkey(),
+                "local participant fixture collateral source",
+            )?;
+            let parsed_source = TokenAccount::parse(&source_account.data).map_err(|error| {
+                Error::new(format!("local participant fixture source: {error:?}"))
+            })?;
+            if source_account.owner != token_program
+                || parsed_source.mint != mint.pubkey().to_bytes()
+                || parsed_source.owner != owner.to_bytes()
+                || parsed_source.amount != local_participant_fixture_liquidity_atoms
+                || parsed_source.state != AccountState::Initialized
+                || !parsed_source.delegate.is_none()
+                || parsed_source.delegated_amount != 0
+                || !parsed_source.native_reserve.is_none()
+                || !parsed_source.close_authority.is_none()
+            {
+                return Err(Error::new(
+                    "local participant fixture source refused exact immutable base-token profile",
+                ));
+            }
+            authenticate_collateral_supply_partition_v1(
+                atoms,
+                local_participant_fixture_liquidity_atoms,
+                parsed_mint.supply,
+                parsed_wallet.amount,
+                Some(parsed_source.amount),
+                parsed_mint.mint_authority.is_none(),
+            )?;
+            Some(LocalParticipantFixtureLiquidityEvidenceV1 {
+                source_token_account: source.pubkey().to_string(),
+                source_owner: owner.to_string(),
+                quantity_atoms: local_participant_fixture_liquidity_atoms,
+                founding_collateral_atoms: atoms,
+                total_supply_atoms,
+                mint: mint.pubkey().to_string(),
+                mint_authority_removed: parsed_mint.mint_authority.is_none(),
+                transaction_signature: transaction.signature.clone(),
+                finalized_slot: transaction.slot,
+                compute_units_consumed: transaction.compute_units_consumed.ok_or_else(|| {
+                    Error::new("local participant fixture transaction omitted compute units")
+                })?,
+            })
+        }
+    };
+    transactions.push(transaction);
+    Ok(CreatedCollateralV1 {
+        mint: mint.pubkey(),
+        wallet: wallet.pubkey(),
+        local_participant_fixture_liquidity,
+    })
 }
 
 fn found_snapshot_keys(
@@ -3254,8 +3521,8 @@ impl PrestateLaneV1 {
     /// once `current_slot > expiry_slot`, so the expiry must outlast staging;
     /// and every slot past that is dead waiting. Staging costs about thirteen
     /// transactions at roughly thirty-two slots of finality each, so ~420
-    /// slots; 1,200 leaves nearly double that as margin and still expires
-    /// promptly afterwards. The runner does not assume the arithmetic held - it
+    /// slots; 900 leaves about another full staging interval as margin and
+    /// still expires promptly afterwards. The runner does not assume the arithmetic held - it
     /// checks the margin before staging and waits for the real slot after.
     const fn expiry_slots(self) -> u64 {
         match self {
@@ -3321,6 +3588,7 @@ fn execute_projected_custody_bootstrap(
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
+    local_participant_fixture_liquidity: Option<&LocalParticipantFixtureLiquidityEvidenceV1>,
     checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
 ) -> Result<[u8; 32]> {
     let registry = pubkey(&plan.registry.program_id)?;
@@ -3738,6 +4006,7 @@ fn execute_projected_custody_bootstrap(
             expiry_slot,
             found_record: found_record.raw.to_string(),
             lock_record: lock_record.raw.to_string(),
+            local_participant_fixture_liquidity: local_participant_fixture_liquidity.cloned(),
             accounts: accounts.clone(),
             completed: completed.clone(),
         })?;
@@ -5621,6 +5890,7 @@ pub(crate) struct PythMarketParamsV1<'a> {
     pub(crate) cuts: Vec<i128>,
     pub(crate) coefficients: Vec<u64>,
     pub(crate) generation: u64,
+    pub(crate) local_participant_fixture_liquidity_atoms: u64,
 }
 
 /// Construct the canonical local demo Market: SOL/USD range protection.
@@ -5686,6 +5956,7 @@ pub(crate) fn demo_market_input(
             cuts: vec![12_000, 18_000],
             coefficients: vec![1, 0, 1, 0],
             generation: 1,
+            local_participant_fixture_liquidity_atoms: LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1,
         },
         direct,
     )
@@ -5760,6 +6031,7 @@ pub(crate) fn devnet_market_input(
             cuts: spec.cuts,
             coefficients: spec.coefficients,
             generation: spec.generation,
+            local_participant_fixture_liquidity_atoms: 0,
         },
         direct,
     )
@@ -6123,6 +6395,7 @@ fn pyth_market_input(
     let mut input = MarketRunInput {
         generation: params.generation,
         collateral_display_decimals: 6,
+        local_participant_fixture_liquidity_atoms: params.local_participant_fixture_liquidity_atoms,
         initial_collateral_atoms: 1_000_000_000,
         product_id: hex(&product_identity),
         coordinate_domain_id: hex(&coordinate_domain),
@@ -6539,5 +6812,59 @@ mod tests {
         assert_ne!(authority.pubkey(), wallet.pubkey());
         assert_ne!(mint.pubkey(), wallet.pubkey());
         assert_ne!(token_program, system_program::ID);
+    }
+
+    #[test]
+    fn local_fixture_supply_is_exact_separate_and_permanently_immutable() {
+        let founding = 1_000_000_000;
+        let fixture = LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1;
+        assert_eq!(
+            authenticate_collateral_supply_partition_v1(
+                founding,
+                fixture,
+                1_100_000_000,
+                founding,
+                Some(fixture),
+                true,
+            )
+            .expect("exact partition"),
+            1_100_000_000
+        );
+        assert!(
+            authenticate_collateral_supply_partition_v1(
+                founding,
+                fixture,
+                1_200_000_000,
+                founding,
+                Some(fixture),
+                true,
+            )
+            .is_err(),
+            "a hidden supply multiplier must refuse"
+        );
+        assert!(
+            authenticate_collateral_supply_partition_v1(
+                founding,
+                fixture,
+                1_100_000_000,
+                founding,
+                Some(fixture),
+                false,
+            )
+            .is_err(),
+            "a retained mint authority must refuse"
+        );
+        assert!(
+            authenticate_collateral_supply_partition_v1(
+                founding,
+                fixture,
+                1_100_000_000,
+                founding,
+                Some(fixture + 1),
+                true,
+            )
+            .is_err(),
+            "fixture liquidity must not leak into founding principal or grow by one atom"
+        );
     }
 }

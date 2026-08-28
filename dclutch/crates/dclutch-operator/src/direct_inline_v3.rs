@@ -19,19 +19,22 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
-        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
-        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
-        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
+        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
+        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
         HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
         HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
         HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+        HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
     },
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
@@ -58,6 +61,17 @@ use dclutch_direct_codec::{
     },
     registered_requests_v4::encode_direct_registration_request_v3_atomic,
 };
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
+};
+use dclutch_product_runtime_v2::ResultDomainV2;
+use dclutch_registry_contract::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+};
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
@@ -65,11 +79,11 @@ use solana_address_lookup_table_interface::{
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
 use solana_program::{
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
-use solana_sdk_ids::{ed25519_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, ed25519_program, sysvar};
 
 use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
 
@@ -607,6 +621,294 @@ pub fn build_direct_registration_hot_v4(
     build_direct_hot_request_v4(state, &encoded, core::slice::from_ref(&signature))
 }
 
+/// Complete chain-authenticated selection needed before a Direct route may
+/// provision permanent routing infrastructure or construct Hot execution.
+///
+/// This is the one host semantic owner for the conjunction the Trading outer
+/// rechecks: canonical Core Market, activated release set, current Core and
+/// Trading Loader deployments, exact Trading artifact release and semantic
+/// release, manifest/ProgramSet/descriptor selection, every finalized
+/// selected artifact, and the finalized Product graph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedDirectHotChainV4 {
+    /// Same finalized observation shared by the complete frame.
+    pub observation: Observation,
+    /// Market-selected immutable execution release set.
+    pub release_set: [u8; 32],
+    /// Canonical Core Market address.
+    pub market: Pubkey,
+    /// Market-selected Registry program.
+    pub registry_program: Pubkey,
+    /// Exact activated Trading ArtifactRelease identity.
+    pub trading_artifact_release: [u8; 32],
+    /// Semantic release derived from that authenticated Trading release.
+    pub trading_semantic_release: [u8; 32],
+    /// Exact action-selected CapabilityProgramV4 digest.
+    pub selected_program: [u8; 32],
+    /// Product-authenticated outcome count.
+    pub outcome_count: u32,
+    /// Product graph-root content digest.
+    pub product_record: [u8; 32],
+    /// Product-stable identity joined through Product, Market, Claims, and basis.
+    pub product_id: [u8; 32],
+    /// Product-selected semantic liability-basis identity.
+    pub semantic_basis: [u8; 32],
+    /// Exact finalized linked-basis body digest.
+    pub linked_basis_record: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedDirectLinkedBasisV4 {
+    semantic_basis: [u8; 32],
+    record_digest: [u8; 32],
+}
+
+/// Authenticate the complete chain selection for one exact Direct request.
+pub fn authenticate_direct_hot_chain_v4(
+    state: &DirectHotStateV4,
+    request: &[u8],
+) -> Result<AuthenticatedDirectHotChainV4, Error> {
+    let checked = state.hot_outer.ok_or(Error::HotOuterUnavailable)?;
+    if checked.artifact_release == [0; 32]
+        || checked.checked_manifest_digest == [0; 32]
+        || state.release_set == [0; 32]
+    {
+        return Err(Error::ZeroIdentity);
+    }
+    let observation = validate_frame(state, checked)?;
+    let rent_account = &fixed_account(state, HOT_RENT_SYSVAR_ACCOUNT_V3)?.account;
+    let rent = decode_rent(rent_account).map_err(|_| Error::ArtifactMismatch)?;
+    let (market, trading_semantic_release) =
+        authenticate_direct_market_release_v4(state, checked, &rent)?;
+    let product = authenticate_product_graph(state)?;
+    let market_state =
+        CoreState::decode(&fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account.data)
+            .map_err(|_| Error::ProductGraphMismatch)?;
+    if market_state.identity.product_record.to_bytes() != product.product_record {
+        return Err(Error::ProductGraphMismatch);
+    }
+    let linked_basis = authenticate_direct_linked_basis_v4(state, &rent, product)?;
+    let decoded = DirectExecutionRequestV3::decode(request, product.outcome_count)
+        .map_err(|_| Error::EconomicMismatch)?;
+    let bundle = authenticate_chain_artifacts_v4(state, request, product.outcome_count)?;
+    if bundle.action != decoded.action() {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok(AuthenticatedDirectHotChainV4 {
+        observation,
+        release_set: state.release_set,
+        market,
+        registry_program: fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?
+            .account
+            .key,
+        trading_artifact_release: checked.artifact_release,
+        trading_semantic_release,
+        selected_program: hash(
+            &fixed_account(state, HOT_DESCRIPTOR_RAW_ACCOUNT_V3)?
+                .account
+                .data,
+        )
+        .to_bytes(),
+        outcome_count: product.outcome_count,
+        product_record: product.product_record,
+        product_id: product.product_id,
+        semantic_basis: linked_basis.semantic_basis,
+        linked_basis_record: linked_basis.record_digest,
+    })
+}
+
+fn authenticate_direct_linked_basis_v4(
+    state: &DirectHotStateV4,
+    rent: &solana_program::rent::Rent,
+    product: AuthenticatedProductGraphObservationV3,
+) -> Result<AuthenticatedDirectLinkedBasisV4, Error> {
+    let registry = fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?
+        .account
+        .key;
+    let linked = finalized_record(
+        state,
+        registry,
+        rent,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3 + 1,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        hash(
+            &fixed_account(state, HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?
+                .account
+                .data,
+        )
+        .to_bytes(),
+    )?;
+    let basis = ProductBasisV3::decode(linked).map_err(|_| Error::ProductGraphMismatch)?;
+    let domain = ResultDomainV2::decode(
+        &fixed_account(state, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?
+            .account
+            .data,
+    )
+    .map_err(|_| Error::ProductGraphMismatch)?;
+    let semantic = semantic_basis_preimage_v3(linked).map_err(|_| Error::ProductGraphMismatch)?;
+    let semantic_id = hashv(&[
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic.prefix(),
+        semantic.suffix(),
+    ])
+    .to_bytes();
+    if semantic_id != product.liability_basis_id
+        || basis.product_id() != product.product_id
+        || basis.result_domain_id() != product.result_domain_id
+        || basis.coordinate_domain_id() != domain.coordinate_domain_id().to_bytes()
+        || basis.result_unit_id() != domain.result_unit_id().to_bytes()
+        || basis.payout_scale() == 0
+    {
+        return Err(Error::ProductGraphMismatch);
+    }
+    Ok(AuthenticatedDirectLinkedBasisV4 {
+        semantic_basis: semantic_id,
+        record_digest: hash(linked).to_bytes(),
+    })
+}
+
+fn authenticate_direct_market_release_v4(
+    state: &DirectHotStateV4,
+    checked: CheckedHotOuterReleaseV3,
+    rent: &solana_program::rent::Rent,
+) -> Result<(Pubkey, [u8; 32]), Error> {
+    let market_account = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
+    let core_program = &fixed_account(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?.account;
+    let core_programdata = &fixed_account(state, HOT_CORE_PROGRAMDATA_ACCOUNT_V3)?.account;
+    let trading_program = &fixed_account(state, HOT_TRADING_PROGRAM_ACCOUNT_V3)?.account;
+    let trading_programdata = &fixed_account(state, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3)?.account;
+    let registry_program = &fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?.account;
+    let activation = &fixed_account(state, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
+    if market_account.owner != core_program.key
+        || market_account.executable
+        || market_account.data.len() != STATE_BYTES
+        || !rent.is_exempt(market_account.lamports, market_account.data.len())
+        || registry_program.owner != bpf_loader_upgradeable::ID
+        || !registry_program.executable
+        || ProgramV3View::parse(&registry_program.data).is_err()
+    {
+        return Err(Error::FixedFrameMismatch);
+    }
+    let market = CoreState::decode(&market_account.data).map_err(|_| Error::ArtifactMismatch)?;
+    let expected_market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
+        &core_program.key,
+    )
+    .0;
+    if market
+        .encode()
+        .map_err(|_| Error::ArtifactMismatch)?
+        .as_slice()
+        != market_account.data
+        || market.phase != Phase::Open
+        || market_account.key != expected_market
+        || market.identity.market_id.to_bytes() != market_account.key.to_bytes()
+        || market.identity.registry_program.to_bytes() != registry_program.key.to_bytes()
+        || market.identity.selected_release_set.to_bytes() != state.release_set
+        || market.identity.generation != state.generation
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    if activation.owner != registry_program.key
+        || activation.executable
+        || activation.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
+        || !rent.is_exempt(activation.lamports, activation.data.len())
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &state.release_set],
+        &registry_program.key,
+    )
+    .0;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation.data)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    if activation.key != expected_cache
+        || activated
+            .execution_release_set_id()
+            .map_err(|_| Error::ArtifactMismatch)?
+            .to_bytes()
+            != state.release_set
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let core = authenticate_direct_role_deployment_v4(
+        activated,
+        ExecutionRoleV1::Core,
+        core_program,
+        core_programdata,
+    )?;
+    let trading = authenticate_direct_role_deployment_v4(
+        activated,
+        ExecutionRoleV1::Trading,
+        trading_program,
+        trading_programdata,
+    )?;
+    if trading_program.key != checked.trading_program
+        || trading.artifact_release_id().to_bytes() != checked.artifact_release
+        || core.release().program().to_bytes() != core_program.key.to_bytes()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok((
+        market_account.key,
+        trading.release().semantic_release_id().to_bytes(),
+    ))
+}
+
+pub(crate) fn authenticate_direct_role_deployment_v4(
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
+    role: ExecutionRoleV1,
+    program: &ObservedAccount,
+    programdata: &ObservedAccount,
+) -> Result<dclutch_registry_contract::ActivatedRoleV1, Error> {
+    let selected = activated.role(role).map_err(|_| Error::ArtifactMismatch)?;
+    let observation = direct_deployment_observation_v4(program, programdata, selected.release())?;
+    selected
+        .authenticate_current_deployment(observation)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    Ok(selected)
+}
+
+pub(crate) fn direct_deployment_observation_v4(
+    program: &ObservedAccount,
+    programdata: &ObservedAccount,
+    release: ArtifactReleaseV1,
+) -> Result<DeploymentObservationV1, Error> {
+    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || program.key.to_bytes() != release.program().to_bytes()
+        || programdata.key.to_bytes() != release.programdata()
+        || program.owner != bpf_loader_upgradeable::ID
+        || programdata.owner != bpf_loader_upgradeable::ID
+        || !program.executable
+        || programdata.executable
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let program_view = ProgramV3View::parse(&program.data).map_err(|_| Error::ArtifactMismatch)?;
+    let expected =
+        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if program_view.programdata() != programdata.key.to_bytes() || programdata.key != expected {
+        return Err(Error::ArtifactMismatch);
+    }
+    let data = ProgramDataV3View::parse(&programdata.data).map_err(|_| Error::ArtifactMismatch)?;
+    DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        program_view.programdata(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        data.deployment_slot(),
+        hash(data.elf()).to_bytes(),
+        data.upgrade_authority(),
+    )
+    .map_err(|_| Error::ArtifactMismatch)
+}
+
 fn authenticate_chain_artifacts_v4<'a>(
     state: &'a DirectInlineHotStateV3,
     request: &'a [u8],
@@ -1013,7 +1315,7 @@ fn canonical_lookup_addresses(
     Ok(addresses)
 }
 
-fn validate_direct_hot_instruction_sequence_v4(
+pub(crate) fn validate_direct_hot_instruction_sequence_v4(
     action: DirectExecutionActionV3,
     tail_count: u32,
     hot_instruction_data: &[u8],

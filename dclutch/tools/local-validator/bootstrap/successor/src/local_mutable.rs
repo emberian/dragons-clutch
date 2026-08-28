@@ -873,13 +873,20 @@ mod tests {
         assert_eq!(roles.len(), EXTRA_KEY_ROLES_V1.len());
         assert!(roles.contains("pyth-encoded-vaa"));
         assert!(roles.contains("pyth-update-account"));
-        assert!(
-            roles.is_disjoint(
-                &crate::campaign::KEYPAIR_ROLES
-                    .iter()
-                    .copied()
-                    .collect::<BTreeSet<_>>()
-            )
+        let campaign_roles = crate::campaign::KEYPAIR_ROLES
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            roles
+                .intersection(&campaign_roles)
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+            ]),
+            "only the fixture source and its owner intentionally cross the local-lifecycle/campaign boundary"
         );
     }
 
