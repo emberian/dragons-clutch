@@ -1214,6 +1214,7 @@ fn prepare_inner(
             crate::local_mutable::build_checked_local_mutable_set_v1(
                 gate,
                 args.core_bootstrap_upgrade_authority,
+                &hex(&release_set_id),
                 [
                     ("registry", &registry_pin),
                     ("rent", &rent_pin),

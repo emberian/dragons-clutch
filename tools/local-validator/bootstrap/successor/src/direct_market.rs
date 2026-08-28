@@ -2113,6 +2113,13 @@ mod tests {
             source_tree_sha256: "33".repeat(32),
             solana_cli_version: "solana-cli 4.0.2".into(),
             retained_upgrade_authority: fixture.retained_authority.to_string(),
+            execution_release_set: crate::model::CheckedLocalExecutionReleaseSetPinV1 {
+                schema: crate::local_mutable::CHECKED_LOCAL_EXECUTION_RELEASE_SET_SCHEMA_V1.into(),
+                checked_execution_release_set_id: "55".repeat(32),
+                execution_release_set_id: mixed_origin.release_set_id.clone(),
+                checked_execution_release_set_base64: String::new(),
+                roles: Vec::new(),
+            },
             set_sha256: "44".repeat(32),
             roles: Vec::new(),
         });

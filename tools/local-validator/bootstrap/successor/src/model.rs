@@ -314,6 +314,29 @@ pub(crate) struct CheckedLocalMutableRolePinV1 {
     pub(crate) semantic_release_id: String,
 }
 
+/// One complete deployment-bound `CheckedReleaseV1` in canonical execution
+/// role order. The manifest bytes are retained because the compact
+/// multiprogram envelope carries only their content identities.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalExecutionReleaseRolePinV1 {
+    pub(crate) role: String,
+    pub(crate) checked_release_id: String,
+    pub(crate) checked_release_base64: String,
+}
+
+/// Exact five-role local execution evidence derived from one checked build
+/// gate and the seven authenticated local Loader pairs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalExecutionReleaseSetPinV1 {
+    pub(crate) schema: String,
+    pub(crate) checked_execution_release_set_id: String,
+    pub(crate) execution_release_set_id: String,
+    pub(crate) checked_execution_release_set_base64: String,
+    pub(crate) roles: Vec<CheckedLocalExecutionReleaseRolePinV1>,
+}
+
 /// Checked provenance for the seven-role decision-0012 localhost substrate.
 ///
 /// Permanent-devnet plans continue to require `checked_upgrade_set`; this
@@ -329,6 +352,7 @@ pub(crate) struct CheckedLocalMutableSetPinV1 {
     pub(crate) source_tree_sha256: String,
     pub(crate) solana_cli_version: String,
     pub(crate) retained_upgrade_authority: String,
+    pub(crate) execution_release_set: CheckedLocalExecutionReleaseSetPinV1,
     pub(crate) set_sha256: String,
     pub(crate) roles: Vec<CheckedLocalMutableRolePinV1>,
 }
