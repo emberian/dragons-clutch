@@ -706,6 +706,34 @@ const ACTIVATION_ROLES_V1: [ExecutionRoleV1; 5] = [
 /// Number of exact roles in the profile-1 activation walk-up.
 pub(crate) const ACTIVATION_ROLE_COUNT_V1: usize = ACTIVATION_ROLES_V1.len();
 
+/// Transaction ceiling requested by every successor campaign instruction.
+pub(crate) const ACTIVATION_TRANSACTION_CU_LIMIT_V1: u64 = 1_400_000;
+/// Agave's SHA-256 syscall base charge under the pinned 4.0.2 runtime.
+const ACTIVATION_SHA256_BASE_CU_V1: u64 = 85;
+/// Conservative allowance for every activation cost other than hashing the
+/// live ELF. The largest measured residual among the five permanent roles is
+/// 79,855 CU; this reserve adds the required 20,000-CU measurement tolerance
+/// and more than 50,000 CU of explicit growth/noise margin.
+const ACTIVATION_NON_HASH_CU_RESERVE_V1: u64 = 150_000;
+/// Largest live ELF tail admitted by the size-only reachability preflight.
+/// At the pinned SHA-256 schedule this consumes at most the 1.4M transaction
+/// ceiling after the conservative non-hash reserve. A measured CU gate remains
+/// mandatory: this bound catches impossible payloads, it does not predict a
+/// candidate's actual compute consumption.
+pub(crate) const MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1: u64 = 2_499_831;
+
+/// Conservative size-only compute projection for one first-time role
+/// activation. Agave charges SHA-256 at `85 + max(10, bytes / 2)` CU; Registry
+/// then performs record, Loader, release, rent, and cache authentication.
+pub(crate) fn activation_compute_upper_bound_v1(live_elf_bytes: u64) -> Result<u64> {
+    let hash = ACTIVATION_SHA256_BASE_CU_V1
+        .checked_add(10_u64.max(live_elf_bytes / 2))
+        .ok_or_else(|| Error::new("activation SHA-256 compute projection overflow"))?;
+    ACTIVATION_NON_HASH_CU_RESERVE_V1
+        .checked_add(hash)
+        .ok_or_else(|| Error::new("activation total compute projection overflow"))
+}
+
 /// Exact ten-account frame admitting one role into the shared activation cache.
 ///
 /// Activation is one role per transaction: whole-ELF hashing costs about one
@@ -2497,6 +2525,39 @@ mod tests {
     }
 
     #[test]
+    fn activation_compute_guard_admits_canonical_roles_and_refuses_impossible_payloads() {
+        let canonical_live_elf_bytes = [
+            ("core", 934_088_u64),
+            ("claims", 1_010_496),
+            ("trading", 1_325_848),
+            ("resolution", 588_336),
+            ("custody", 360_328),
+        ];
+        for (role, bytes) in canonical_live_elf_bytes {
+            let upper = activation_compute_upper_bound_v1(bytes).expect("bounded canonical role");
+            assert!(
+                upper < ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+                "canonical {role} needs size-only headroom"
+            );
+        }
+        assert_eq!(
+            activation_compute_upper_bound_v1(MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1)
+                .expect("exact size ceiling"),
+            ACTIVATION_TRANSACTION_CU_LIMIT_V1
+        );
+        assert!(
+            activation_compute_upper_bound_v1(MAX_ACTIVATABLE_LIVE_ELF_BYTES_V1 + 1)
+                .expect("one-byte overflow is representable")
+                > ACTIVATION_TRANSACTION_CU_LIMIT_V1
+        );
+        assert!(
+            activation_compute_upper_bound_v1(9_034_536)
+                .expect("hostile Source substitution is representable")
+                > ACTIVATION_TRANSACTION_CU_LIMIT_V1
+        );
+    }
+
+    #[test]
     fn agave_4_0_2_loader_revoke_retains_inactive_authority_bytes() {
         let validator_path = PathBuf::from(
             which_validator().expect("solana-test-validator 4.0.2 must be installed"),
@@ -2596,30 +2657,84 @@ mod tests {
 
     #[test]
     fn real_sbf_infrastructure_revoke_and_registry_activation_when_supplied() {
-        let (Ok(core_elf), Ok(registry_elf), Ok(rent_elf)) = (
+        let (
+            Ok(core_elf),
+            Ok(registry_elf),
+            Ok(rent_elf),
+            Ok(claims_elf),
+            Ok(trading_elf),
+            Ok(resolution_elf),
+            Ok(custody_elf),
+        ) = (
             std::env::var("DCLUTCH_SUCCESSOR_CORE_ELF"),
             std::env::var("DCLUTCH_SUCCESSOR_REGISTRY_ELF"),
             std::env::var("DCLUTCH_SUCCESSOR_RENT_ELF"),
-        ) else {
+            std::env::var("DCLUTCH_SUCCESSOR_CLAIMS_ELF"),
+            std::env::var("DCLUTCH_SUCCESSOR_TRADING_ELF"),
+            std::env::var("DCLUTCH_SUCCESSOR_RESOLUTION_ELF"),
+            std::env::var("DCLUTCH_SUCCESSOR_CUSTODY_ELF"),
+        )
+        else {
             return;
         };
+        let checked_gate = PathBuf::from(
+            std::env::var("DCLUTCH_SUCCESSOR_CHECKED_GATE")
+                .expect("real-SBF role set requires its checked-release gate"),
+        );
+        let expected_gate_sha256 = std::env::var("DCLUTCH_SUCCESSOR_CHECKED_GATE_SHA256")
+            .expect("real-SBF role set requires the explicit gate digest");
+        let expected_source_revision = std::env::var("DCLUTCH_SUCCESSOR_SOURCE_REVISION")
+            .expect("real-SBF role set requires the explicit source revision");
+        let expected_source_tree_sha256 = std::env::var("DCLUTCH_SUCCESSOR_SOURCE_TREE_SHA256")
+            .expect("real-SBF role set requires the explicit source-tree digest");
         let core_elf = fs::canonicalize(core_elf).expect("canonical Core test ELF");
         let registry_elf = fs::canonicalize(registry_elf).expect("canonical Registry test ELF");
         let rent_elf = fs::canonicalize(rent_elf).expect("canonical Rent test ELF");
-        // The Found path invokes only Registry, Core, and Rent. When the real
-        // Claims/Trading/Resolution/Custody artifacts are supplied the release
-        // set binds them exactly; otherwise each role is a distinct immutable
-        // Loader deployment of the Registry ELF, and the evidence says so.
-        let role_elf = |name: &str| {
-            std::env::var(name)
-                .ok()
-                .map(|value| fs::canonicalize(value).expect("canonical role test ELF"))
-                .unwrap_or_else(|| registry_elf.clone())
+        let claims_elf = fs::canonicalize(claims_elf).expect("canonical Claims test ELF");
+        let trading_elf = fs::canonicalize(trading_elf).expect("canonical Trading test ELF");
+        let resolution_elf =
+            fs::canonicalize(resolution_elf).expect("canonical Resolution test ELF");
+        let custody_elf = fs::canonicalize(custody_elf).expect("canonical Custody test ELF");
+        let authenticate_role = |role: &str, elf: &Path| {
+            crate::upgrade::authenticate_checked_release_gate_role_for_local_v1(
+                &checked_gate,
+                &expected_gate_sha256,
+                &expected_source_revision,
+                &expected_source_tree_sha256,
+                role,
+                elf,
+            )
+            .unwrap_or_else(|error| panic!("checked-release {role} admission: {error}"));
         };
-        let claims_elf = role_elf("DCLUTCH_SUCCESSOR_CLAIMS_ELF");
-        let trading_elf = role_elf("DCLUTCH_SUCCESSOR_TRADING_ELF");
-        let resolution_elf = role_elf("DCLUTCH_SUCCESSOR_RESOLUTION_ELF");
-        let custody_elf = role_elf("DCLUTCH_SUCCESSOR_CUSTODY_ELF");
+        for (role, elf) in [
+            ("registry", registry_elf.as_path()),
+            ("rent", rent_elf.as_path()),
+            ("custody", custody_elf.as_path()),
+            ("resolution", resolution_elf.as_path()),
+            ("claims", claims_elf.as_path()),
+            ("trading", trading_elf.as_path()),
+            ("core", core_elf.as_path()),
+        ] {
+            authenticate_role(role, elf);
+        }
+        for (role, elf) in [
+            ("core", core_elf.as_path()),
+            ("claims", claims_elf.as_path()),
+            ("trading", trading_elf.as_path()),
+            ("resolution", resolution_elf.as_path()),
+            ("custody", custody_elf.as_path()),
+        ] {
+            let bytes = u64::try_from(fs::metadata(elf).expect("role ELF metadata").len())
+                .expect("role ELF width");
+            let upper =
+                activation_compute_upper_bound_v1(bytes).expect("activation compute upper bound");
+            assert!(
+                upper <= ACTIVATION_TRANSACTION_CU_LIMIT_V1,
+                "checked-release {role} ELF has {bytes} bytes and a conservative {upper}-CU \
+                 first-activation bound, above the {}-CU transaction ceiling",
+                ACTIVATION_TRANSACTION_CU_LIMIT_V1
+            );
+        }
         let authority = Keypair::new();
         let root = std::env::temp_dir().join(format!(
             "dclutch-successor-real-sbf-{}-{}",
