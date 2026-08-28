@@ -1649,8 +1649,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
+ "dclutch-execution-strategy-contract",
  "dclutch-refusal-registry",
  "dclutch-release-set-contract",
+ "dclutch-trading-sbf",
  "solana-program",
 ]
 
