@@ -57,13 +57,17 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
   payout input. An already-derived `--payout-input` remains available for
   automation.
 - Keep the same `--payout-alt-plan` and `--payout-journal` paths when you rerun
-  the command. Replay and lookup-table setup finish in separate runs. Before
-  your key is read for the payout, the exact unsigned transaction and verifier
-  state are saved to the journal. Before the transaction is sent, its exact
-  signed ID is saved. If a submitted run is interrupted, rerunning only checks
-  that saved transaction at finalized commitment; it never signs or sends it
-  again. You may archive an unsigned plan with `--discard-unsigned-payout`, but
-  a submitted journal stays until the exact receipt and account changes pass.
+  the command. Replay and lookup-table setup finish in separate runs. Replay
+  creation uses `<payout-journal>.claims-replay.json`: its exact unsigned packet
+  is saved before your key is read, and its exact signed ID is saved before one
+  raw send. The command checks the exact finalized Claims transaction, Custody
+  receipt, rent movement, and replay account, archives that journal, and asks
+  you to rerun before continuing. The payout uses the same ordering in the main
+  journal, including its verifier state. If a submitted run is interrupted,
+  rerunning only checks that saved transaction at finalized commitment; it
+  never signs or sends it again. You may archive an unsigned plan with
+  `--discard-unsigned-payout`, but a submitted journal stays until the exact
+  receipt and account changes pass.
 - The keypair is always an explicit `--keypair <path>` or `$DCLUTCH_KEYPAIR`;
   there is no default-wallet fallback, deliberately.
 - Every public-chain mutation (`buy`, `sell`, `redeem`, and `walk`) requires
