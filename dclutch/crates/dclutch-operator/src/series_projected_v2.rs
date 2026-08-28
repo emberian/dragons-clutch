@@ -25,7 +25,6 @@ use dclutch_trading_sbf::{
         encode_projected_market_execution_v2,
     },
     series::{
-        account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
         artifacts_v3::SERIES_CONSUME_ROUTE_COUNT_V3, artifacts_v4::SeriesConsumeArtifactBundleV4,
     },
 };
@@ -622,7 +621,8 @@ mod tests {
     }
 
     fn profile() -> Vec<u8> {
-        let lengths = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
+        let lengths = [0_u32;
+            dclutch_trading_sbf::series::account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         let mut scratch = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
         let mut output = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
         encode_series_consume_account_profile_v4_atomic(

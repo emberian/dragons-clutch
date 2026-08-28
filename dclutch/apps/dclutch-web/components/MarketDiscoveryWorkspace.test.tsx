@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import MarketDiscoveryWorkspace from './MarketDiscoveryWorkspace';
+import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
+
+import MarketDiscoveryWorkspace, { EmptyMarkets } from './MarketDiscoveryWorkspace';
 
 /**
  * The product inversion this surface carries: /markets lands on CONTENT. The
@@ -16,6 +18,7 @@ describe('Market discovery route', () => {
     expect(html).toContain('Markets on Devnet');
     expect(html).toContain('Reading the finalized market list…');
     expect(html).toContain('enumerated from the Core program itself');
+    expect(html).toContain('whole current-compatible market list');
     // The one button is a refresh, disabled while the auto-load is in flight.
     expect(html).toContain('>Reading…</button>');
   });
@@ -58,5 +61,28 @@ describe('Market discovery route', () => {
     expect(html).not.toContain('Sign');
     expect(html).not.toContain('Submit');
     expect(html).not.toContain('Connect identity');
+  });
+
+  it('renders historical incompatible accounts without listing them as current markets', () => {
+    const legacyAddress = '3Dhpq9tufPuBMroMfUNaWhfZMPfLFh6MG7vwhJFfqjMm';
+    const empty = renderToStaticMarkup(<EmptyMarkets
+      deployment={DEVNET_DEPLOYMENT_V1}
+      enumeration={{
+        mode: 'program-scan',
+        note: 'test scan',
+        scanSlot: '489269449',
+        addresses: Object.freeze([]),
+        scannedAccounts: 2,
+        incompatibleMarketAccounts: Object.freeze([
+          Object.freeze({ address: legacyAddress, magic: 'DCLTCOR2', accountBytes: 352 }),
+        ]),
+      }}
+    />);
+    expect(empty).toContain('No current compatible market is listed on devnet');
+    expect(empty).toContain('1 historical DCLTCOR2 Market account');
+    expect(empty).toContain('disclosed here but not listed as current');
+    expect(empty).toContain(legacyAddress);
+    expect(empty).toContain(`/explorer?view=account&amp;q=${legacyAddress}`);
+    expect(empty).not.toContain('No markets on devnet');
   });
 });

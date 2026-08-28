@@ -124,7 +124,7 @@ has exactly one producer:
 | Finalized records (products, sources, configs) | published on chain by the campaign driver | **on the chain** — fetch by address, never paste | every program; the web app reads them live |
 | Market spec (`run-spec`) | you, via the create wizard or a spec file | your work directory | founding |
 | Keypairs | `solana-keygen` (or the driver's per-role forge) | files you keep | signing; the address a keypair file prints is the one you fund |
-| Relay publication log | the relay daemon | [portal.dregg.studio/relay/](https://portal.dregg.studio/relay/) | anyone checking the operator is alive |
+| Relay publication log | the relay daemon | [publication_log.jsonl](https://portal.dregg.studio/relay/publication_log.jsonl) | anyone checking the operator is alive |
 | Evidence documents | each campaign, as it runs | [`docs/evidence/`](docs/evidence) | humans; the reference site |
 
 If a console asks you to paste something and you don't know where it comes

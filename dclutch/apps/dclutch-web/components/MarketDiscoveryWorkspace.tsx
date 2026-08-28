@@ -15,6 +15,7 @@ import {
   type MarketCapabilityManifestV1,
   type MarketDiscoveryCardV1,
   type MarketDiscoveryV1,
+  type MarketEnumerationV1,
 } from '@/lib/marketDiscovery';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
@@ -95,18 +96,47 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
 }
 
 /** The cluster-true empty state: a fact and a link, never a form. */
-function EmptyMarkets({ deployment }: Readonly<{ deployment: DeploymentV1 }>) {
+export function EmptyMarkets({
+  deployment,
+  enumeration,
+}: Readonly<{
+  deployment: DeploymentV1;
+  enumeration: MarketEnumerationV1;
+}>) {
+  const incompatible = enumeration.mode === 'program-scan'
+    ? enumeration.incompatibleMarketAccounts
+    : Object.freeze([]);
+  const incompatibleDisclosure = incompatible.length === 0 ? null : <>
+    <p className="market-empty">
+      This scan also found {incompatible.length} historical DCLTCOR2 Market account{incompatible.length === 1 ? '' : 's'}.
+      {` ${incompatible.length === 1 ? 'It uses' : 'They use'} the old 352-byte layout, which the current 360-byte reader cannot decode, so ${incompatible.length === 1 ? 'it is' : 'they are'} disclosed here but not listed as current.`}
+    </p>
+    <details className="direct-details">
+      <summary>Show the historical account{incompatible.length === 1 ? '' : 's'}</summary>
+      <ul className="market-bindings">
+        {incompatible.map((account) => <li key={account.address}>
+          <Anchor href={`/explorer?view=account&q=${encodeURIComponent(account.address)}`} title={account.address}>{account.address}</Anchor>
+          <small>{account.magic} · {account.accountBytes} bytes · historical and incompatible</small>
+        </li>)}
+      </ul>
+    </details>
+  </>;
   if (deployment.cluster === 'devnet') {
-    return <p className="market-empty">
-      No markets on devnet at this finalized floor. The moment a founding lands on this deployment, it appears
-      here with zero configuration — the deployment evidence records the campaign for the first one.{' '}
-      <Anchor href={docsHrefV1('evidence/DEPLOY_1.html', 'docs/evidence/DEPLOY_1.md')}>Read the deployment evidence →</Anchor>
-    </p>;
+    return <div>
+      <p className="market-empty">
+        No current compatible market is listed on devnet at this finalized floor. When a current founding lands on this deployment, it appears here with zero configuration.{' '}
+        <Anchor href={docsHrefV1('evidence/DEPLOY_1.html', 'docs/evidence/DEPLOY_1.md')}>Read the deployment evidence →</Anchor>
+      </p>
+      {incompatibleDisclosure}
+    </div>;
   }
-  return <p className="market-empty">
-    No markets on this {deployment.label.toLowerCase()} deployment at the finalized floor.{' '}
-    <Anchor href="/create">Found the first →</Anchor>
-  </p>;
+  return <div>
+    <p className="market-empty">
+      No current compatible market is listed on this {deployment.label.toLowerCase()} deployment at the finalized floor.{' '}
+      <Anchor href="/create">Found the first →</Anchor>
+    </p>
+    {incompatibleDisclosure}
+  </div>;
 }
 
 export default function MarketDiscoveryWorkspace() {
@@ -153,7 +183,7 @@ export default function MarketDiscoveryWorkspace() {
       <div>
         <p className="eyebrow">Markets on {deployment.label} · finalized reads only</p>
         <h1>Every card is a read.<br /><em>Or it says REFUSED.</em></h1>
-        <p>This is the whole market list of the {deployment.label} deployment, enumerated from the Core program itself — no index, no curation. Each card lists exactly what finalized state justifies: phase, generation and immutable identities from the Market root; the per-claim supply vector from the Claims aggregate that actually holds it; the finalized Realm record behind the collateral mint; and the capability manifest the Market authenticated. There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.</p>
+        <p>This is the whole current-compatible market list of the {deployment.label} deployment, enumerated from the Core program itself — no index, no curation. The same scan separately discloses historical Market accounts this reader cannot decode. Each card lists exactly what finalized state justifies: phase, generation and immutable identities from the Market root; the per-claim supply vector from the Claims aggregate that actually holds it; the finalized Realm record behind the collateral mint; and the capability manifest the Market authenticated. There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.</p>
       </div>
       <aside>
         <span>Provenance</span>
@@ -165,7 +195,7 @@ export default function MarketDiscoveryWorkspace() {
     <section className="trade-v3-card">
       <header>
         <span>01</span>
-        <div><h2>The markets</h2><p>One card per Market the Core program owns at one finalized floor. A card is decoded or refused; it is never partially invented. Supplies come from the Claims aggregate, never from the root, in raw u64 atoms.</p></div>
+        <div><h2>The current markets</h2><p>One card per current-compatible Market the Core program owns at one finalized floor. Historical incompatible accounts are counted and disclosed separately. A card is decoded or refused; it is never partially invented. Supplies come from the Claims aggregate, never from the root, in raw u64 atoms.</p></div>
         <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read the chain'}</button></div>
       </header>
       {state.kind === 'refused'
@@ -175,13 +205,13 @@ export default function MarketDiscoveryWorkspace() {
         <div className="trade-v3-evidence">
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
           <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>one observation epoch for every card</small></article>
-          <article><span>Enumeration</span><strong>{discovery.enumeration.mode}</strong><small>{discovery.enumeration.addresses.length} address{discovery.enumeration.addresses.length === 1 ? '' : 'es'}</small></article>
+          <article><span>Enumeration</span><strong>{discovery.enumeration.mode}</strong><small>{discovery.enumeration.addresses.length} current address{discovery.enumeration.addresses.length === 1 ? '' : 'es'}{discovery.enumeration.mode === 'program-scan' ? ` · ${discovery.enumeration.incompatibleMarketAccounts.length} historical incompatible` : ''}</small></article>
           <article><span>Core program</span><strong>{shortAddressV1(deployment.programs.core, 6)}</strong><small>{deployment.cluster === 'devnet' ? 'DEPLOY-1 permanent address' : 'the active deployment'}</small></article>
         </div>
         <p className="direct-status">{discovery.enumeration.note}</p>
         {discovery.enumeration.mode === 'refused' && <p className="market-refusal">{discovery.enumeration.reason}</p>}
         {discovery.cards.length === 0
-          ? discovery.enumeration.mode === 'refused' ? null : <EmptyMarkets deployment={deployment} />
+          ? discovery.enumeration.mode === 'refused' ? null : <EmptyMarkets deployment={deployment} enumeration={discovery.enumeration} />
           : <div className="market-card-grid">{discovery.cards.map((card) => <MarketCard key={card.address} card={card} />)}</div>}
       </>}
     </section>

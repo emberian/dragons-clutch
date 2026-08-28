@@ -6,6 +6,7 @@ import { useDeploymentV1 } from '@/lib/deploymentStore';
 import {
   enumerateCoreMarketAddressesV1,
   inspectMarketDiscoveryV1,
+  type MarketEnumerationV1,
 } from '@/lib/marketDiscovery';
 import { SolanaRpcClient } from '@/lib/rpc';
 
@@ -24,13 +25,34 @@ import NumberStrip, { type NumberStripStatV1 } from './NumberStrip';
  * physical dimensions and are never added, here or anywhere else.
  */
 
-type PulseState = Readonly<{ stats: ReadonlyArray<NumberStripStatV1>; provenance: string }>;
+export type PulseState = Readonly<{ stats: ReadonlyArray<NumberStripStatV1>; provenance: string }>;
 
 const UNREAD: ReadonlyArray<NumberStripStatV1> = Object.freeze([
-  Object.freeze({ label: 'Markets founded', value: null, detail: 'finalized Core Market accounts' }),
-  Object.freeze({ label: 'Collateral locked', value: null, detail: 'Hoard principal, raw atoms' }),
-  Object.freeze({ label: 'Resolutions run', value: null, detail: 'terminal receipts written' }),
+  Object.freeze({ label: 'Current markets listed', value: null, detail: 'compatible finalized Core Market accounts' }),
+  Object.freeze({ label: 'Collateral in listed markets', value: null, detail: 'Hoard principal, raw atoms' }),
+  Object.freeze({ label: 'Resolutions in listed markets', value: null, detail: 'terminal receipts written' }),
 ]);
+
+type ProgramScanEnumerationV1 = Extract<MarketEnumerationV1, Readonly<{ mode: 'program-scan' }>>;
+
+function incompatibleDisclosure(enumeration: ProgramScanEnumerationV1): string {
+  const count = enumeration.incompatibleMarketAccounts.length;
+  return count === 0
+    ? 'The Core program owns no historical incompatible Market account at this floor.'
+    : `The same scan found ${count} historical DCLTCOR2 Market account${count === 1 ? '' : 's'} in the old 352-byte layout. ${count === 1 ? 'It is' : 'They are'} incompatible with this reader and not listed as current.`;
+}
+
+/** The truthful zero-current state, kept pure so the legacy-account case is pinned by tests. */
+export function emptyCurrentMarketPulseV1(deploymentLabel: string, enumeration: ProgramScanEnumerationV1): PulseState {
+  return Object.freeze({
+    stats: Object.freeze([
+      Object.freeze({ label: 'Current markets listed', value: '0', detail: 'compatible finalized Core Market accounts' }),
+      Object.freeze({ label: 'Collateral in listed markets', value: '0', detail: 'no current compatible Market is listed' }),
+      Object.freeze({ label: 'Resolutions in listed markets', value: '0', detail: 'no current compatible Market is listed' }),
+    ]),
+    provenance: `Read finalized off ${deploymentLabel} at slot ${enumeration.scanSlot}: zero current compatible Markets are listed. ${incompatibleDisclosure(enumeration)}`,
+  });
+}
 
 export default function LandingPulse() {
   const deployment = useDeploymentV1();
@@ -52,14 +74,7 @@ export default function LandingPulse() {
           return;
         }
         if (enumeration.addresses.length === 0) {
-          settle({
-            stats: Object.freeze([
-              Object.freeze({ label: 'Markets founded', value: '0', detail: 'finalized Core Market accounts' }),
-              Object.freeze({ label: 'Collateral locked', value: '0', detail: 'Hoard principal, raw atoms' }),
-              Object.freeze({ label: 'Resolutions run', value: '0', detail: 'terminal receipts written' }),
-            ]),
-            provenance: `Read finalized off ${deployment.label} at slot ${enumeration.scanSlot}: the Core program owns no Market yet. These zeros are the chain's, not placeholders.`,
-          });
+          settle(emptyCurrentMarketPulseV1(deployment.label, enumeration));
           return;
         }
         const discovery = await inspectMarketDiscoveryV1(client, {
@@ -86,11 +101,11 @@ export default function LandingPulse() {
         const resolutions = decoded.filter((card) => card.settlement.status === 'terminal').length;
         settle({
           stats: Object.freeze([
-            Object.freeze({ label: 'Markets founded', value: String(decoded.length), detail: 'finalized Core Market accounts' }),
-            Object.freeze({ label: 'Collateral locked', value: locked.value, detail: locked.detail }),
-            Object.freeze({ label: 'Resolutions run', value: String(resolutions), detail: 'terminal receipts written' }),
+            Object.freeze({ label: 'Current markets listed', value: String(decoded.length), detail: 'compatible finalized Core Market accounts' }),
+            Object.freeze({ label: 'Collateral in listed markets', value: locked.value, detail: locked.detail }),
+            Object.freeze({ label: 'Resolutions in listed markets', value: String(resolutions), detail: 'terminal receipts written' }),
           ]),
-          provenance: `Read finalized off ${deployment.label} at floor ${discovery.floorSlot}, from the deployment's own program addresses.`,
+          provenance: `Read finalized off ${deployment.label} at floor ${discovery.floorSlot}, from the deployment's own program addresses. ${incompatibleDisclosure(enumeration)}`,
         });
       } catch (error) {
         settle({ stats: UNREAD, provenance: `Refused: ${error instanceof Error ? error.message : 'the read failed without a usable reason'}` });
