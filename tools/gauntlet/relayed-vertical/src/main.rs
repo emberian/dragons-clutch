@@ -29,6 +29,9 @@
 use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 
 // ------------------------------------------------------------- tier-1, verbatim
+#[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
+#[allow(dead_code)]
+mod cluster;
 #[path = "../../../local-validator/bootstrap/successor/src/market.rs"]
 #[allow(dead_code)]
 mod market;
