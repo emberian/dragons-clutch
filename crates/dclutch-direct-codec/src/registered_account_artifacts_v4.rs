@@ -816,25 +816,14 @@ fn push_operation(
 /// both accounts it creates. Two distinct representatives observing one key is
 /// exactly `CrossItemAlias`, so the ONLY case anyone can construct refused.
 ///
-/// The ordinary ruling's stated reason does NOT carry over, and the registered
-/// packet is measured here rather than assumed. `waist.rs` measures the live
-/// ordinary continuation at 1,228 bytes of the 1,232-byte v0 packet -- four
-/// bytes of margin -- at 44 physical accounts and one signer, and records that
-/// each further physical account costs exactly two bytes because the
-/// continuation carries the nested Hot account list twice. Registered differs
-/// from that baseline by three exactly known terms: fifteen fewer physical
-/// accounts (29 against 44, -30 bytes), a registration request 140 bytes
-/// narrower than the inline-ordinary one (316 against 456), and one signed
-/// intent instead of two in the ed25519 precompile (-14 bytes). That is a
-/// derived 1,044 bytes, or 188 bytes of margin -- and a second signer would
-/// cost 64 for its signature, 32 for a static key a signer may never ALT-route,
-/// and 2 for one more twice-carried account, reaching 1,142 and still fitting.
-///
-/// So the registered packet would have carried two signers. It is the
-/// `CrossItemAlias` refusal, not the byte budget, that forces the alias here,
-/// and the next lane to reach for a second signer should re-read that and not
-/// the ordinary packet number. The derived figures are an ESTIMATE from a
-/// measured baseline; no registered continuation has ever been compiled.
+/// The ordinary ruling's stated reason does NOT carry over. `waist.rs` now
+/// measures its full compute-budgeted continuation at 1,204 bytes of the
+/// 1,232-byte v0 packet after compact native evidence. Registered has fewer
+/// physical accounts, a narrower request, and one detached signature, but no
+/// registered continuation packet has been compiled and measured here. It is
+/// the `CrossItemAlias` refusal, not an extrapolated packet estimate, that
+/// forces the alias; any lane adding another signer must first add an exact v0
+/// packet gate for the registered family.
 /// A Sell keeps only the one alias the whole family shares: coordinate 9 is the
 /// record payer and coordinate 6 the maker-replay payer, and a registered
 /// creation has ONE payer. Every other entry in `ROUTE_ALIASES` is a view into a

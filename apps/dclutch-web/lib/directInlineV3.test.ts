@@ -1,5 +1,6 @@
 import {
   AddressLookupTableAccount,
+  ComputeBudgetProgram,
   Ed25519Program,
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
@@ -18,6 +19,7 @@ import {
   encodeCompactIntentSigningMessageV2,
   encodeDirectInlineOrdinaryRequestV3,
   previewDirectInlineV3,
+  validateDirectInlineInstructionSequenceV3,
   validateDirectNativeEvidenceInstructionV3,
   validateRuntimeAccountProfileV2,
 } from './directInlineV3';
@@ -27,11 +29,12 @@ import {
   CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
   DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3,
   DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3,
   DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
-  DIRECT_NATIVE_EVIDENCE_BYTES_V3,
   DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3,
   DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3,
   DIRECT_NATIVE_EVIDENCE_HEADERLESS_REGISTRY_BIAS_V4,
+  DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3,
   DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
   DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
   HOT_EXECUTION_ENVELOPE_BYTES_V3,
@@ -49,11 +52,11 @@ function key(seed: number): string {
   return new PublicKey(new Uint8Array(32).fill(seed)).toBase58();
 }
 
-function intent(side: 0 | 1, market: string, collateral: string): CompactIntentV2Input {
+function intent(side: 0 | 1, market: string, collateral: string, outcome = 70_000): CompactIntentV2Input {
   return Object.freeze({
     side,
     lifecycle: 0,
-    outcome: 70_000,
+    outcome,
     market,
     generation: 19n,
     nonce: BigInt(side),
@@ -66,23 +69,24 @@ function intent(side: 0 | 1, market: string, collateral: string): CompactIntentV
   });
 }
 
-function participants(market: string): Readonly<{ seller: SignedDirectIntentV3; buyer: SignedDirectIntentV3 }> {
+function participants(market: string, outcome = 70_000): Readonly<{ seller: SignedDirectIntentV3; buyer: SignedDirectIntentV3 }> {
   return Object.freeze({
-    seller: Object.freeze({ maker: key(2), signature: new Uint8Array(64).fill(11), intent: intent(0, market, key(3)) }),
-    buyer: Object.freeze({ maker: key(4), signature: new Uint8Array(64).fill(12), intent: intent(1, market, key(5)) }),
+    seller: Object.freeze({ maker: key(2), signature: new Uint8Array(64).fill(11), intent: intent(0, market, key(3), outcome) }),
+    buyer: Object.freeze({ maker: key(4), signature: new Uint8Array(64).fill(12), intent: intent(1, market, key(5), outcome) }),
   });
 }
 
-function runtimeProfile(): Uint8Array {
+function runtimeProfile(stride = 0): Uint8Array {
   const fixedAccounts = 5;
   const predicateBytes = 16;
   const profileHeader = 48 + predicateBytes;
-  const output = new Uint8Array(profileHeader + fixedAccounts * 16);
+  const output = new Uint8Array(profileHeader + (fixedAccounts + stride) * 16);
   output.set(new TextEncoder().encode('DCLTAP02'), 0);
   const view = new DataView(output.buffer);
   view.setUint16(8, 2, true);
   view.setUint16(10, 14, true);
   view.setUint16(12, fixedAccounts, true);
+  view.setUint16(14, stride, true);
   view.setUint16(20, 1, true);
   view.setUint16(42, 1, true);
   output[48] = 1;
@@ -105,7 +109,7 @@ function containsSlice(bytes: Uint8Array, needle: Uint8Array): boolean {
   return false;
 }
 
-function route(checked = true): DirectInlineHotRouteV3 {
+function route(checked = true, productionGeometry = false): DirectInlineHotRouteV3 {
   const market = key(10);
   const fixed = Array.from({ length: HOT_FIXED_ACCOUNT_COUNT_V3 }, (_, index) => account(key(20 + index)));
   fixed[HOT_MARKET_ACCOUNT_V3] = account(market);
@@ -113,12 +117,17 @@ function route(checked = true): DirectInlineHotRouteV3 {
   fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3] = account(key(12), false, true);
   fixed[HOT_RENT_SYSVAR_ACCOUNT_V3] = account(SYSVAR_RENT_PUBKEY.toBase58());
   fixed[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = account(SYSVAR_INSTRUCTIONS_PUBKEY.toBase58());
+  const runtimeAccounts = productionGeometry
+    ? Object.freeze(Array.from({ length: 51 }, (_, index) => account(key(100 + index))))
+    : Object.freeze([]);
   const routeAccounts = Object.freeze({
     payer: key(91),
     tradingProgram: key(12),
     fixedAccounts: Object.freeze(fixed),
-    strategyAccounts: Object.freeze([]),
-    runtimeAccounts: Object.freeze([]),
+    // The live 91-meta Hot geometry includes the invoked Trading identity as
+    // one non-loaded meta in addition to 89 ALT-routed keys.
+    strategyAccounts: productionGeometry ? Object.freeze([account(key(12), false, true)]) : Object.freeze([]),
+    runtimeAccounts,
   });
   const lookupTable = new AddressLookupTableAccount({
     key: new PublicKey(key(90)),
@@ -136,10 +145,10 @@ function route(checked = true): DirectInlineHotRouteV3 {
     releaseSet: new Uint8Array(32).fill(31),
     generation: 19n,
     rootPrestateDigest: new Uint8Array(32).fill(32),
-    outcomeCount: 70_001,
+    outcomeCount: productionGeometry ? 51 : 70_001,
     priceScale: 1_000_000n,
     feeBasisPoints: 25,
-    accountProfile: runtimeProfile(),
+    accountProfile: runtimeProfile(productionGeometry ? 1 : 0),
     selectedProgramSchema: CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
     selectedProgram: new Uint8Array(32).fill(33),
     recentBlockhash: key(92),
@@ -180,23 +189,24 @@ describe('Direct V3 inline transaction construction', () => {
   });
 
   it('compiles the exact adjacent Ed25519 + Trading v0 batch and fails closed without a checked outer', () => {
-    const candidate = route();
-    const { seller, buyer } = participants(candidate.market);
+    const candidate = route(true, true);
+    const { seller, buyer } = participants(candidate.market, 0);
     const plan = compileDirectInlineTransactionV3({ route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n });
     expect(plan.hotInstructionBytes).toHaveLength(HOT_EXECUTION_ENVELOPE_BYTES_V3 + DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3);
     expect(plan.requiredSigners).toEqual([candidate.payer]);
-    expect(plan.transaction.message.compiledInstructions).toHaveLength(2);
-    expect(plan.nativeEvidenceBytes).toHaveLength(DIRECT_NATIVE_EVIDENCE_BYTES_V3);
-    expect(plan.nativeEvidenceInstructionIndex).toBe(0);
-    expect(plan.tradingInstructionIndex).toBe(1);
+    expect(plan.transaction.message.compiledInstructions).toHaveLength(3);
+    expect(plan.nativeEvidenceBytes).toHaveLength(158);
+    expect(plan.nativeEvidenceInstructionIndex).toBe(1);
+    expect(plan.tradingInstructionIndex).toBe(2);
     expect(plan.nativeMessageOffsets).toEqual([
       DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
       DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
     ]);
     expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(seller.intent))).toBe(false);
     expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(buyer.intent))).toBe(false);
-    expect(plan.wireBytes.length).toBeLessThanOrEqual(1_232);
-    expect(plan.loadedAddresses).toBeGreaterThan(20);
+    expect(plan.wireBytes).toHaveLength(1_204);
+    expect(1_232 - plan.wireBytes.length).toBe(28);
+    expect(plan.loadedAddresses).toBe(89);
     expect(() => compileDirectInlineTransactionV3({ route: route(false), seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n })).toThrow(/unavailable/);
   });
 
@@ -217,11 +227,39 @@ describe('Direct V3 inline transaction construction', () => {
     expect(() => validateDirectNativeEvidenceInstructionV3(
       evidence, trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
     )).not.toThrow();
+    const compute = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
+    expect(() => validateDirectInlineInstructionSequenceV3(
+      [compute, evidence, trading], new PublicKey(candidate.tradingProgram),
+    )).not.toThrow();
+    expect(() => validateDirectInlineInstructionSequenceV3(
+      [compute, trading, evidence], new PublicKey(candidate.tradingProgram),
+    )).toThrow(/immediately adjacent/);
+    expect(() => validateDirectInlineInstructionSequenceV3(
+      [evidence, trading], new PublicKey(candidate.tradingProgram),
+    )).toThrow(/exactly ComputeBudget/);
+    expect(() => validateDirectInlineInstructionSequenceV3(
+      [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_399_999 }), evidence, trading],
+      new PublicKey(candidate.tradingProgram),
+    )).toThrow(/SetComputeUnitLimit/);
 
     const offset = plan.nativeEvidenceBytes.slice();
     new DataView(offset.buffer).setUint16(2 + 8, DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 - 1, true);
     expect(() => validateDirectNativeEvidenceInstructionV3(
       new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: offset as Buffer }),
+      trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).toThrow(/offset or instruction index/);
+
+    const publicKeyOffset = plan.nativeEvidenceBytes.slice();
+    new DataView(publicKeyOffset.buffer).setUint16(2 + 4, DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3 - 1, true);
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: publicKeyOffset as Buffer }),
+      trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).toThrow(/offset or instruction index/);
+
+    const publicKeyInstructionIndex = plan.nativeEvidenceBytes.slice();
+    new DataView(publicKeyInstructionIndex.buffer).setUint16(2 + 6, 0xffff, true);
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: publicKeyInstructionIndex as Buffer }),
       trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
     )).toThrow(/offset or instruction index/);
 
@@ -244,11 +282,12 @@ describe('Direct V3 inline transaction construction', () => {
     )).toThrow(/not the authenticated Trading program/);
   });
 
-  it('pins the exact bias-zero native-evidence wire against the Rust codec vector', () => {
+  it('pins the exact compact bias-zero native-evidence wire against the Rust codec vector', () => {
     // Expected bytes are the vector asserted by
     // crates/dclutch-direct-codec/src/native_evidence_v3.rs, test
     // `direct_and_headerless_registry_use_exact_current_instruction_offsets`:
-    // 222-byte evidence, message offsets 192 and 396, u16::MAX sentinels, and
+    // 158-byte evidence, Trading-referenced maker/message offsets, self-contained
+    // signatures, and
     // the same coordinates for the headerless Registry successor.
     const candidate = route();
     const { seller, buyer } = participants(candidate.market);
@@ -260,22 +299,25 @@ describe('Direct V3 inline transaction construction', () => {
     expect(DIRECT_NATIVE_EVIDENCE_HEADERLESS_REGISTRY_BIAS_V4).toBe(DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3);
     expect(DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3).toBe(192);
     expect(DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3).toBe(396);
-    expect(evidence).toHaveLength(222);
+    expect(evidence).toHaveLength(158);
     expect(evidence[0]).toBe(2);
     expect(evidence[1]).toBe(0);
-    for (const [descriptor, publicKey, message] of [[2, 30, 192], [16, 126, 396]]) {
-      expect(u16le(descriptor)).toBe(publicKey + 32);
+    for (const [descriptor, signature, maker, message] of [
+      [2, 30, DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3, 192],
+      [16, 94, DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3, 396],
+    ]) {
+      expect(u16le(descriptor)).toBe(signature);
       expect(u16le(descriptor + 2)).toBe(0xffff);
-      expect(u16le(descriptor + 4)).toBe(publicKey);
-      expect(u16le(descriptor + 6)).toBe(0xffff);
+      expect(u16le(descriptor + 4)).toBe(maker);
+      expect(u16le(descriptor + 6)).toBe(plan.tradingInstructionIndex);
       expect(u16le(descriptor + 8)).toBe(message);
       expect(u16le(descriptor + 10)).toBe(172);
       expect(u16le(descriptor + 12)).toBe(plan.tradingInstructionIndex);
     }
-    expect([...evidence.slice(30, 62)]).toEqual([...new PublicKey(seller.maker).toBytes()]);
-    expect([...evidence.slice(62, 126)]).toEqual([...seller.signature]);
-    expect([...evidence.slice(126, 158)]).toEqual([...new PublicKey(buyer.maker).toBytes()]);
-    expect([...evidence.slice(158, 222)]).toEqual([...buyer.signature]);
+    expect([...evidence.slice(30, 94)]).toEqual([...seller.signature]);
+    expect([...evidence.slice(94, 158)]).toEqual([...buyer.signature]);
+    expect([...plan.hotInstructionBytes.slice(DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3, DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3 + 32)]).toEqual([...new PublicKey(seller.maker).toBytes()]);
+    expect([...plan.hotInstructionBytes.slice(DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3, DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3 + 32)]).toEqual([...new PublicKey(buyer.maker).toBytes()]);
     expect([...plan.hotInstructionBytes.slice(192, 192 + 172)]).toEqual([...encodeCompactIntentSigningMessageV2(seller.intent)]);
     expect([...plan.hotInstructionBytes.slice(396, 396 + 172)]).toEqual([...encodeCompactIntentSigningMessageV2(buyer.intent)]);
   });

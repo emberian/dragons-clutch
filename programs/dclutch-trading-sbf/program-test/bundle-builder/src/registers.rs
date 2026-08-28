@@ -382,6 +382,10 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
             tail_count,
             NativeEd25519InstructionViewV1 {
                 ed25519_data: evidence,
+                ed25519_instruction_index: input
+                    .native_message_instruction_index
+                    .checked_sub(1)
+                    .ok_or(BuilderError::Projection("native-signature-adjacency"))?,
                 authenticated_message_data: input.instruction_data,
                 message_instruction_index: input.native_message_instruction_index,
                 message_offset_bias: 0,

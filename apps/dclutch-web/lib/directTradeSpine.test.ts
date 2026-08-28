@@ -8,8 +8,9 @@ import {
   CAPABILITY_MANIFEST_HEADER_BYTES_V1,
 } from './capabilityManifest';
 import {
-  DIRECT_PACKET_WALL_V1,
+  DIRECT_PACKET_BUDGET_EVIDENCE_V1,
   DIRECT_PRESTATE_WALL_V1,
+  directPacketWallV1,
   inspectDirectTradeSpineV1,
 } from './directTradeSpine';
 import * as Abi from './generated/directInlineV3';
@@ -238,7 +239,7 @@ describe('the Direct trade spine', () => {
     const wallNames = spine.walls.map((wall) => wall.name);
     expect(wallNames).toContain('activation');
     expect(wallNames).toContain('prestate');
-    expect(wallNames).toContain('packet');
+    expect(wallNames).not.toContain('packet');
   });
 
   it('reports an activated root as standing, leaving only the walls that remain', async () => {
@@ -257,7 +258,9 @@ describe('the Direct trade spine', () => {
     if (spine.status !== 'inspected') return;
     expect(spine.rootExists).toBe(true);
     expect(spine.tradable).toBe(true);
-    expect(spine.walls.map((wall) => wall.name)).toEqual(['packet']);
+    expect(spine.walls.map((wall) => wall.name)).toEqual([]);
+    expect(spine.reason).toContain('1,204 of 1,232 bytes');
+    expect(spine.reason).toContain('leaving 28 bytes');
   });
 
   it('names a non-Open phase as the Market speaking, not an outage', async () => {
@@ -297,8 +300,17 @@ describe('the Direct trade spine', () => {
     if (spine.status === 'refused') expect(spine.reason).toContain('not owned by the selected Core program');
   });
 
-  it('carries the packet and prestate walls verbatim as named protocol facts', () => {
-    expect(DIRECT_PACKET_WALL_V1.detail).toContain('1,268 > 1,232');
+  it('reports canonical packet evidence and names only measured overflow as a wall', () => {
+    expect(DIRECT_PACKET_BUDGET_EVIDENCE_V1).toEqual({
+      wireBytes: 1_204,
+      packetLimit: 1_232,
+      marginBytes: 28,
+      computeUnitLimit: 1_400_000,
+    });
+    expect(directPacketWallV1(1_204)).toBeNull();
+    expect(directPacketWallV1(1_232)).toBeNull();
+    expect(directPacketWallV1(1_233)?.detail).toContain('1,233 bytes');
+    expect(() => directPacketWallV1(-1)).toThrow(/nonnegative safe integer/);
     expect(DIRECT_PRESTATE_WALL_V1.detail).toContain('ADR-0008');
   });
 });

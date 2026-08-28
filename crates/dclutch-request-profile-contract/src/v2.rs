@@ -351,6 +351,8 @@ impl<'a> RequestProfileV2<'a> {
 pub struct NativeEd25519InstructionViewV1<'a> {
     /// Exact preceding native instruction data.
     pub ed25519_data: &'a [u8],
+    /// Authenticated top-level index of that immediately preceding instruction.
+    pub ed25519_instruction_index: u16,
     /// Exact complete nested message bytes owned by the selected request
     /// profile (the Trading instruction in direct mode and the byte-identical
     /// nested Trading instruction in continuation mode).
@@ -404,7 +406,12 @@ pub fn seed_authenticated_signers_atomic(
                 .ok_or(Error::ArithmeticOverflow)?,
         )
         .ok_or(Error::ArithmeticOverflow)?;
-    if view.ed25519_data.first().copied() != u8::try_from(count).ok()
+    if view
+        .ed25519_instruction_index
+        .checked_add(1)
+        .is_none_or(|expected| expected != view.message_instruction_index)
+        || view.message_instruction_index == ED25519_SELF_INSTRUCTION_INDEX
+        || view.ed25519_data.first().copied() != u8::try_from(count).ok()
         || view.ed25519_data.get(1).copied() != Some(0)
         || view.ed25519_data.len() < payload_start
     {
@@ -423,29 +430,42 @@ pub fn seed_authenticated_signers_atomic(
                     .ok_or(Error::ArithmeticOverflow)?,
             )
             .ok_or(Error::ArithmeticOverflow)?;
-        let public_key_offset = payload;
-        let signature_offset = public_key_offset
-            .checked_add(ED25519_PUBLIC_KEY_BYTES)
-            .ok_or(Error::ArithmeticOverflow)?;
+        let signature_offset = payload;
         let message_offset = requirement
             .message_offset
             .checked_add(view.message_offset_bias)
             .ok_or(Error::ArithmeticOverflow)?;
+        let public_key_offset = message_offset
+            .checked_sub(
+                u16::try_from(ED25519_PUBLIC_KEY_BYTES).map_err(|_| Error::ArithmeticOverflow)?,
+            )
+            .ok_or(Error::InvalidRequirement)?;
         if read_u16(view.ed25519_data, descriptor)? != u16_from(signature_offset)?
             || read_u16(view.ed25519_data, add(descriptor, 2)?)? != ED25519_SELF_INSTRUCTION_INDEX
-            || read_u16(view.ed25519_data, add(descriptor, 4)?)? != u16_from(public_key_offset)?
-            || read_u16(view.ed25519_data, add(descriptor, 6)?)? != ED25519_SELF_INSTRUCTION_INDEX
+            || read_u16(view.ed25519_data, add(descriptor, 4)?)? != public_key_offset
+            || read_u16(view.ed25519_data, add(descriptor, 6)?)? != view.message_instruction_index
             || read_u16(view.ed25519_data, add(descriptor, 8)?)? != message_offset
             || read_u16(view.ed25519_data, add(descriptor, 10)?)? != requirement.message_bytes
             || read_u16(view.ed25519_data, add(descriptor, 12)?)? != view.message_instruction_index
-            || view.message_instruction_index == ED25519_SELF_INSTRUCTION_INDEX
         {
             return Err(Error::InvalidNativeInstruction);
         }
+        let current_public_key_start = usize::from(
+            requirement
+                .message_offset
+                .checked_sub(
+                    u16::try_from(ED25519_PUBLIC_KEY_BYTES)
+                        .map_err(|_| Error::ArithmeticOverflow)?,
+                )
+                .ok_or(Error::InvalidRequirement)?,
+        );
+        let current_public_key_end = current_public_key_start
+            .checked_add(ED25519_PUBLIC_KEY_BYTES)
+            .ok_or(Error::ArithmeticOverflow)?;
         let signer: [u8; 32] = array(
-            view.ed25519_data
-                .get(public_key_offset..signature_offset)
-                .ok_or(Error::InvalidNativeInstruction)?,
+            view.authenticated_message_data
+                .get(current_public_key_start..current_public_key_end)
+                .ok_or(Error::MessageMismatch)?,
         )?;
         if signer == [0; 32]
             || view
@@ -502,7 +522,9 @@ fn validate_requirements(profile: NativeSignatureEvidenceProfileV1<'_>) -> Resul
     let mut prior_end = 0_u32;
     while index < profile.count {
         let requirement = profile.requirement(index)?;
-        if requirement.message_bytes == 0 {
+        if requirement.message_bytes == 0
+            || usize::from(requirement.message_offset) < ED25519_PUBLIC_KEY_BYTES
+        {
             return Err(Error::InvalidRequirement);
         }
         let start = u32::from(requirement.message_offset);
@@ -624,7 +646,6 @@ mod tests {
 
     fn native_instruction(
         requirements: &[(u16, u16, u32)],
-        signers: &[[u8; 32]],
         message_instruction_index: u16,
         message_offset_bias: u16,
     ) -> Vec<u8> {
@@ -634,16 +655,23 @@ mod tests {
         *bytes.first_mut().expect("count byte") =
             u8::try_from(requirements.len()).expect("fixture count");
         let mut payload = header;
-        for (index, ((offset, width, _), signer)) in requirements.iter().zip(signers).enumerate() {
+        for (index, (offset, width, _)) in requirements.iter().enumerate() {
             let descriptor =
                 ED25519_SIGNATURE_OFFSETS_START + index * ED25519_SIGNATURE_OFFSETS_BYTES;
-            let public_key = payload;
-            let signature = public_key + ED25519_PUBLIC_KEY_BYTES;
+            let signature = payload;
+            let public_key = offset
+                .checked_add(message_offset_bias)
+                .and_then(|value| {
+                    value.checked_sub(
+                        u16::try_from(ED25519_PUBLIC_KEY_BYTES).expect("public-key width"),
+                    )
+                })
+                .expect("public-key offset");
             for (field, value) in [
                 (descriptor, u16::try_from(signature).expect("offset")),
                 (descriptor + 2, ED25519_SELF_INSTRUCTION_INDEX),
-                (descriptor + 4, u16::try_from(public_key).expect("offset")),
-                (descriptor + 6, ED25519_SELF_INSTRUCTION_INDEX),
+                (descriptor + 4, public_key),
+                (descriptor + 6, message_instruction_index),
                 (
                     descriptor + 8,
                     offset
@@ -658,7 +686,6 @@ mod tests {
                     .expect("descriptor field")
                     .copy_from_slice(&value.to_le_bytes());
             }
-            bytes.extend_from_slice(signer);
             bytes.extend_from_slice(&[0x55; ED25519_SIGNATURE_BYTES]);
             payload = signature + ED25519_SIGNATURE_BYTES;
         }
@@ -668,21 +695,23 @@ mod tests {
 
     #[test]
     fn exact_record_bounded_profile_and_native_batch_seed_atomically() {
-        let requirements = [(20, 3, 0), (30, 4, 1)];
+        let requirements = [(40, 3, 0), (80, 4, 1)];
         let bytes = profile_bytes(&requirements);
         let profile = RequestProfileV2::decode(&bytes).expect("profile");
         assert_eq!(profile.request_profile().bytes(), AGREEMENT_PROFILE_V1);
         assert_eq!(profile.native_signatures().requirement_count(), 2);
-        let mut current = [0_u8; 40];
+        let mut current = [0_u8; 84];
+        current.get_mut(8..40).expect("signer one").fill(7);
+        current.get_mut(48..80).expect("signer two").fill(8);
         current
-            .get_mut(20..23)
+            .get_mut(40..43)
             .expect("message one")
             .copy_from_slice(b"one");
         current
-            .get_mut(30..34)
+            .get_mut(80..84)
             .expect("message two")
             .copy_from_slice(b"two!");
-        let native = native_instruction(&requirements, &[[7; 32], [8; 32]], 4, 128);
+        let native = native_instruction(&requirements, 4, 128);
         let input = [[0_u8; 32]; 2];
         let mut scratch = [[9_u8; 32]; 2];
         let mut output = [[6_u8; 32]; 2];
@@ -691,6 +720,7 @@ mod tests {
             2,
             NativeEd25519InstructionViewV1 {
                 ed25519_data: &native,
+                ed25519_instruction_index: 3,
                 authenticated_message_data: &current,
                 message_instruction_index: 4,
                 message_offset_bias: 128,
@@ -708,8 +738,8 @@ mod tests {
     #[test]
     fn typed_v2_encoder_round_trips_and_preserves_output_on_refusal() {
         let requirements = [
-            NativeSignatureRequirementV1::new(20, 3, 0),
-            NativeSignatureRequirementV1::new(30, 4, 1),
+            NativeSignatureRequirementV1::new(40, 3, 0),
+            NativeSignatureRequirementV1::new(80, 4, 1),
         ];
         let width = REQUEST_PROFILE_V2_HEADER_BYTES
             + AGREEMENT_PROFILE_V1.len()
@@ -735,8 +765,8 @@ mod tests {
         );
 
         let overlapping = [
-            NativeSignatureRequirementV1::new(20, 3, 0),
-            NativeSignatureRequirementV1::new(22, 4, 1),
+            NativeSignatureRequirementV1::new(40, 3, 0),
+            NativeSignatureRequirementV1::new(42, 4, 1),
         ];
         let mut hostile_scratch = vec![0_u8; width];
         let mut hostile_output = vec![7_u8; width];
@@ -757,14 +787,15 @@ mod tests {
     fn hostile_profiles_refuse_noncanonical_or_aliased_requirements() {
         for requirements in [
             Vec::new(),
-            vec![(20, 0, 0)],
-            vec![(20, 4, 0), (23, 4, 1)],
-            vec![(30, 4, 0), (20, 4, 1)],
-            vec![(20, 4, 0), (30, 4, 0)],
+            vec![(20, 4, 0)],
+            vec![(40, 0, 0)],
+            vec![(40, 4, 0), (43, 4, 1)],
+            vec![(50, 4, 0), (40, 4, 1)],
+            vec![(40, 4, 0), (50, 4, 0)],
         ] {
             assert!(RequestProfileV2::decode(&profile_bytes(&requirements)).is_err());
         }
-        let canonical = profile_bytes(&[(20, 4, 0)]);
+        let canonical = profile_bytes(&[(40, 4, 0)]);
         for mutate in [0_usize, 8, 10, 20] {
             let mut hostile = canonical.clone();
             *hostile.get_mut(mutate).expect("hostile coordinate") ^= 1;
@@ -782,22 +813,25 @@ mod tests {
 
     #[test]
     fn hostile_native_layout_message_and_registers_preserve_output() {
-        let requirements = [(20, 3, 0), (30, 4, 1)];
+        let requirements = [(40, 3, 0), (80, 4, 1)];
         let profile_bytes = profile_bytes(&requirements);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let mut current = [0_u8; 40];
+        let mut current = [0_u8; 84];
+        current.get_mut(8..40).expect("signer one").fill(7);
+        current.get_mut(48..80).expect("signer two").fill(8);
         current
-            .get_mut(20..23)
+            .get_mut(40..43)
             .expect("message one")
             .copy_from_slice(b"one");
         current
-            .get_mut(30..34)
+            .get_mut(80..84)
             .expect("message two")
             .copy_from_slice(b"two!");
-        let canonical = native_instruction(&requirements, &[[7; 32], [8; 32]], 4, 128);
-        for case in 0..10 {
+        let canonical = native_instruction(&requirements, 4, 128);
+        for case in 0..13 {
             let mut native = canonical.clone();
             let mut authenticated_message_data = current.as_slice();
+            let mut ed25519_instruction_index = 3;
             let mut message_instruction_index = 4;
             let mut message_offset_bias = 128;
             let mut input = [[0_u8; 32]; 2];
@@ -811,7 +845,10 @@ mod tests {
                 6 => message_instruction_index = 5,
                 7 => message_offset_bias = 127,
                 8 => authenticated_message_data = &current[..32],
-                _ => *input.get_mut(1).expect("identity register") = [4; 32],
+                9 => *input.get_mut(1).expect("identity register") = [4; 32],
+                10 => ed25519_instruction_index = 2,
+                11 => *native.get_mut(2 + 6).expect("public-key index") = 3,
+                _ => *native.get_mut(2 + 4).expect("public-key offset") ^= 1,
             }
             let mut scratch = [[9_u8; 32]; 2];
             let mut output = [[6_u8; 32]; 2];
@@ -822,6 +859,7 @@ mod tests {
                     2,
                     NativeEd25519InstructionViewV1 {
                         ed25519_data: &native,
+                        ed25519_instruction_index,
                         authenticated_message_data,
                         message_instruction_index,
                         message_offset_bias,

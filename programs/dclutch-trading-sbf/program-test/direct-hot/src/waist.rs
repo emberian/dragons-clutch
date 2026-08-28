@@ -56,7 +56,9 @@ use solana_program::{
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
-use solana_sdk_ids::{bpf_loader_upgradeable, ed25519_program, system_program, sysvar};
+use solana_sdk_ids::{
+    bpf_loader_upgradeable, compute_budget, ed25519_program, system_program, sysvar,
+};
 use solana_transaction::versioned::VersionedTransaction;
 
 pub const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x91; 32]);
@@ -878,7 +880,7 @@ pub fn legacy_registry_hot_instruction(
     (outer, admission)
 }
 
-pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> [Instruction; 2] {
+pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> [Instruction; 3] {
     let (registry, _) = registry_hot_instruction(releases, direct.chain.hot_instruction.clone());
     let signatures = [
         direct.makers[0]
@@ -894,13 +896,26 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
     ];
     let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
     encode_direct_headerless_registry_native_evidence_v4_atomic(
-        1,
+        2,
         &registry.data,
         signatures,
         &mut evidence,
     )
     .expect("detached current-Registry native evidence");
     [
+        Instruction {
+            program_id: compute_budget::ID,
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![2];
+                data.extend_from_slice(
+                    &u32::try_from(COMPUTE_LIMIT)
+                        .expect("compute limit width")
+                        .to_le_bytes(),
+                );
+                data
+            },
+        },
         Instruction {
             program_id: ed25519_program::ID,
             accounts: Vec::new(),
@@ -1002,32 +1017,25 @@ pub async fn submit_v0(
         wire <= 1_232,
         "canonical continuation packet overflow: {wire} bytes"
     );
-    if instructions.len() == 2
+    if instructions.len() == 3
         && instructions
             .first()
-            .is_some_and(|instruction| instruction.program_id == ed25519_program::ID)
+            .is_some_and(|instruction| instruction.program_id == compute_budget::ID)
         && instructions
             .get(1)
+            .is_some_and(|instruction| instruction.program_id == ed25519_program::ID)
+        && instructions
+            .get(2)
             .is_some_and(|instruction| instruction.program_id == REGISTRY_PROGRAM_ID)
     {
-        // Decision 0005 added the read-only validated-artifact seal at fixed
-        // coordinate 38. The key itself is ALT-routed, but the continuation
-        // carries the nested Hot account list twice, so the canonical packet
-        // grew by exactly two index bytes: 1,224 -> 1,226 of the 1,232 limit.
-        //
-        // `10d5a8b` then appended the Custody callee at logical coordinate 90,
-        // taking the Direct profile from ninety fixed accounts to ninety-one.
-        // That is one more physical account in the same twice-carried list, so
-        // it is the same two index bytes again: 1,226 -> 1,228.
-        //
-        // !! FOUR BYTES OF MARGIN REMAIN !! Two more accounts appended to this
-        // profile overflow the canonical packet, and the failure is a hard
-        // refusal at `wire <= 1_232` above, not a partial result. This assertion
-        // is the tripwire that made the growth visible at all -- both increments
-        // reached it as a stale-pin failure before any execution, which is the
-        // behaviour to keep. The next coordinate added here needs a plan for the
-        // packet, not just a new number on this line.
-        assert_eq!(wire, 1_228, "transparent continuation wire changed");
+        // Compact native evidence references both maker keys from the exact
+        // following Registry/Trading bytes instead of restating 64 bytes. That
+        // pays for the mandatory 40-byte SetComputeUnitLimit addition and leaves
+        // 28 bytes: 1,228 + 40 - 64 = 1,204.
+        assert_eq!(
+            wire, 1_204,
+            "budgeted transparent continuation wire changed"
+        );
     }
     let mut all_signers = vec![transaction_payer];
     all_signers.extend_from_slice(signers);

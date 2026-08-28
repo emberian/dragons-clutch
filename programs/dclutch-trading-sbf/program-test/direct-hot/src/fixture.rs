@@ -613,6 +613,7 @@ fn market_and_claims(
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: core_identity(rent_credit.0.to_bytes())?,
         terminal_receipt: None,
     }
@@ -2676,7 +2677,7 @@ pub mod via_builder {
         instruction_data.extend_from_slice(&request);
         let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
         encode_direct_headerless_registry_native_evidence_v4_atomic(
-            1,
+            2,
             &instruction_data,
             [[1_u8; 64]; 2],
             &mut evidence,
@@ -2988,7 +2989,7 @@ pub mod via_builder {
             clock_slot: input.clock_slot,
             generation: GENERATION,
             ed25519_evidence: Some(&evidence),
-            native_message_instruction_index: 1,
+            native_message_instruction_index: 2,
             externally_installed_extra: &externally_installed_extra,
             payer: input.payer,
         };

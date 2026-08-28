@@ -104,6 +104,7 @@ import {
   SYSTEM_PROGRAM_ID,
   authenticateArtifactDeploymentV1,
   deriveFinalizedRecordAddressesV1,
+  type ArtifactReleaseV1,
 } from './releaseRegistry';
 import { decodeCheckedInfrastructureV1 } from './infrastructure';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
@@ -140,6 +141,45 @@ export type DirectHotRouteInspectionV3 = Readonly<{
   transitionDigest: string;
   checkedOuter: CheckedHotOuterEvidenceV3;
 }>;
+
+export type DirectHotDeploymentObservationV3 = Readonly<{
+  artifact: ArtifactReleaseV1;
+  programAddress: string;
+  program: RpcAccount;
+  programDataAddress: string;
+  programData: RpcAccount;
+}>;
+
+/** Authenticate both executable deployments under decision 0012's slot pin. */
+export async function authenticateDirectHotOuterDeploymentsV3(
+  expectedTradingProgram: string,
+  expectedCoreProgram: string,
+  trading: DirectHotDeploymentObservationV3,
+  core: DirectHotDeploymentObservationV3,
+): Promise<void> {
+  if (trading.programAddress !== expectedTradingProgram
+      || core.programAddress !== expectedCoreProgram
+      || trading.artifact.program !== expectedTradingProgram
+      || core.artifact.program !== expectedCoreProgram) {
+    throw new Error('checked infrastructure selects another Core or Trading program');
+  }
+  await Promise.all([
+    authenticateArtifactDeploymentV1(
+      trading.program,
+      trading.programAddress,
+      trading.programData,
+      trading.programDataAddress,
+      trading.artifact,
+    ),
+    authenticateArtifactDeploymentV1(
+      core.program,
+      core.programAddress,
+      core.programData,
+      core.programDataAddress,
+      core.artifact,
+    ),
+  ]);
+}
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -872,21 +912,23 @@ export async function inspectDirectHotRouteV3(
     if (checked.execution.releaseSet.id !== hex(releaseSet)) throw new Error('checked infrastructure selects another Market execution release set');
     const trading = checked.execution.artifacts.trading;
     const core = checked.execution.artifacts.core;
-    if (trading.upgradeAuthority !== null || core.upgradeAuthority !== null) throw new Error('Core and Trading releases must both be immutable for checked hot execution');
-    if (trading.program !== tradingProgram || core.program !== coreProgram) throw new Error('checked infrastructure selects another Core or Trading program');
     const tradingProgramAccount = required(observation.accounts, fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3].address, 'Trading program');
     const tradingProgramData = required(observation.accounts, fixed[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3].address, 'Trading ProgramData');
     const coreProgramAccount = required(observation.accounts, fixed[HOT_CORE_PROGRAM_ACCOUNT_V3].address, 'Core program');
     const coreProgramData = required(observation.accounts, fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address, 'Core ProgramData');
-    await authenticateArtifactDeploymentV1(tradingProgramAccount, tradingProgram, tradingProgramData, fixed[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3].address, trading);
-    await authenticateArtifactDeploymentV1(coreProgramAccount, coreProgram, coreProgramData, fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address, core);
+    await authenticateDirectHotOuterDeploymentsV3(
+      tradingProgram,
+      coreProgram,
+      Object.freeze({ artifact: trading, programAddress: tradingProgram, program: tradingProgramAccount, programDataAddress: fixed[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3].address, programData: tradingProgramData }),
+      Object.freeze({ artifact: core, programAddress: coreProgram, program: coreProgramAccount, programDataAddress: fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address, programData: coreProgramData }),
+    );
     const cache = required(observation.accounts, fixed[HOT_ACTIVATION_CACHE_ACCOUNT_V3].address, 'activation cache');
     if (cache.owner !== registryProgram || cache.executable || ascii(cache.data, 0, 8) !== 'DCLTACT1' || !same(slice(cache.data, 16, 32), releaseSet)) throw new Error('Registry activation cache does not select this Market release set');
     if (!same(slice(cache.data, ACTIVATION_CACHE_TRADING_OFFSET, 32), Uint8Array.from((checked.execution.releaseSet.roles.trading.artifactReleaseId.match(/../g) ?? []).map((value) => Number.parseInt(value, 16))))) throw new Error('activation cache Trading artifact differs from checked release evidence');
     checkedOuter = Object.freeze({ status: 'checked', tradingArtifactRelease: checked.execution.releaseSet.roles.trading.artifactReleaseId, checkedManifestDigest: checked.checkedInfrastructureId });
   }
 
-  const latest = await client.latestBlockhash(observation.slot);
+  const latest = await client.latestMutationBlockhash(observation.slot);
   if (manifest.lookupTables.length !== 1) throw new Error('Direct InlineOrdinary requires one canonical finalized lookup table');
   const lookupTables = Object.freeze(manifest.lookupTables.map((address) => lookupTable(address, required(observation.accounts, address, 'lookup table'))));
   const route: DirectInlineHotRouteV3 = Object.freeze({
