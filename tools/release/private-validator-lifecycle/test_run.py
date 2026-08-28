@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 MODULE_PATH = Path(__file__).with_name("run.py")
 SPEC = importlib.util.spec_from_file_location(
@@ -158,7 +159,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                         "1",
                     ]
                 )
-            paths, seeds, through = MODULE.parse(
+            paths, seeds, through, hold_participant = MODULE.parse(
                 [
                     "--repo",
                     str(repo),
@@ -174,10 +175,130 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     "1",
                     "--through",
                     "participant",
+                    "--hold-after-participant",
                 ]
             )
             self.assertEqual(paths.work, root / "work")
             self.assertEqual((seeds, through), (1, "participant"))
+            self.assertTrue(hold_participant)
+
+    def test_participant_handoff_is_fsync_new_and_reauthenticated_after_resume(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            keys = root / "keys"
+            keys.mkdir()
+            plan = root / "plan.json"
+            market = root / "market.json"
+            founding = root / "founding.json"
+            participant = root / "participant.json"
+            for path, value in (
+                (plan, b"plan\n"),
+                (market, b"market\n"),
+                (founding, b"founding\n"),
+                (participant, b"participant\n"),
+            ):
+                path.write_bytes(value)
+            document = MODULE.participant_handoff_document(
+                source_revision="11" * 20,
+                checked_release_gate_sha256="22" * 32,
+                rpc_url="http://127.0.0.1:46088",
+                validator_pid=1234,
+                plan=plan,
+                market=market,
+                founding=founding,
+                participant=participant,
+                key_directory=keys,
+            )
+            self.assertEqual(
+                set(document),
+                {
+                    "schema",
+                    "status",
+                    "sourceRevision",
+                    "checkedReleaseGateSha256",
+                    "rpcUrl",
+                    "validatorPid",
+                    "plan",
+                    "marketInput",
+                    "foundingEvidence",
+                    "participantEvidence",
+                    "participantSha256",
+                    "keyDirectory",
+                },
+            )
+            self.assertEqual(document["status"], "ready")
+            self.assertEqual(
+                document["participantSha256"], MODULE.sha256_file(participant)
+            )
+
+            class Validator:
+                pid = 1234
+
+                @staticmethod
+                def poll() -> None:
+                    return None
+
+            receipt = root / "participant-handoff.json"
+            with (
+                mock.patch.object(MODULE.os, "kill") as stopped,
+                mock.patch.object(MODULE.os, "getpgid", return_value=1234),
+                mock.patch.object(MODULE, "rpc", return_value="ok"),
+            ):
+                MODULE.hold_after_participant(receipt, document, Validator())
+            stopped.assert_called_once_with(MODULE.os.getpid(), MODULE.signal.SIGSTOP)
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+
+            participant.write_bytes(b"substituted participant\n")
+            with (
+                mock.patch.object(MODULE.os, "getpgid", return_value=1234),
+                mock.patch.object(MODULE, "rpc", return_value="ok"),
+                self.assertRaisesRegex(MODULE.Refusal, "participant evidence changed"),
+            ):
+                MODULE.authenticate_participant_handoff(
+                    receipt, document, Validator()
+                )
+
+            substituted = dict(document)
+            substituted["participantSha256"] = "33" * 32
+            receipt.unlink()
+            MODULE.write_json_new(receipt, substituted)
+            with (
+                mock.patch.object(MODULE.os, "getpgid", return_value=1234),
+                mock.patch.object(MODULE, "rpc", return_value="ok"),
+                self.assertRaisesRegex(MODULE.Refusal, "changed while"),
+            ):
+                MODULE.authenticate_participant_handoff(
+                    receipt, document, Validator()
+                )
+
+    def test_participant_handoff_refuses_nonparticipant_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            fake = root / "fake"
+            fake.write_text("x")
+            fake.chmod(0o755)
+            repo = root / "repo"
+            release = root / "release"
+            repo.mkdir()
+            release.mkdir()
+            with self.assertRaisesRegex(MODULE.Refusal, "requires --through participant"):
+                MODULE.parse(
+                    [
+                        "--repo",
+                        str(repo),
+                        "--release-root",
+                        str(release),
+                        "--validator",
+                        str(fake),
+                        "--solana",
+                        str(fake),
+                        "--work",
+                        str(root / "work"),
+                        "--hold-after-participant",
+                    ]
+                )
 
     def test_full_mode_refuses_until_all_callers_are_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:

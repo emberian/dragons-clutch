@@ -26,11 +26,12 @@ from pathlib import Path
 import signal
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
 from typing import Any, Iterable, Sequence
-from urllib import request
+from urllib import parse as urllib_parse, request
 
 SCHEMA = "dclutch-private-validator-lifecycle-summary-v1"
 PARTICIPANT_PROBE_SCHEMA = "dclutch-private-validator-participant-probe-summary-v1"
@@ -38,6 +39,7 @@ FULL_PROBE_SCHEMA = "dclutch-private-validator-full-lifecycle-probe-summary-v1"
 RUN_SCHEMA = "dclutch-private-validator-lifecycle-run-v1"
 PARTICIPANT_PROBE_RUN_SCHEMA = "dclutch-private-validator-participant-probe-run-v1"
 FULL_PROBE_RUN_SCHEMA = "dclutch-private-validator-full-lifecycle-probe-run-v1"
+PARTICIPANT_HANDOFF_SCHEMA = "dclutch-private-validator-participant-handoff-v1"
 SEED_DOMAIN = b"dclutch/private-validator-lifecycle/named-seed/v1\0"
 FOUNDING_PARTICIPANT_COMMANDS = (
     "local-mutable-prepare-v1",
@@ -686,6 +688,136 @@ def terminate_group(child: subprocess.Popen[bytes] | None) -> None:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(child.pid, signal.SIGKILL)
         child.wait(timeout=10)
+
+
+def participant_handoff_document(
+    *,
+    source_revision: str,
+    checked_release_gate_sha256: str,
+    rpc_url: str,
+    validator_pid: int,
+    plan: Path,
+    market: Path,
+    founding: Path,
+    participant: Path,
+    key_directory: Path,
+) -> dict[str, Any]:
+    """Describe one live finalized participant state without copying key bytes.
+
+    This is a process-control owner, not protocol evidence.  Direct consumes
+    only the named immutable evidence files and key paths while this exact
+    supervisor-owned validator remains stopped at the handoff boundary.
+    """
+
+    if (
+        len(source_revision) != 40
+        or any(character not in "0123456789abcdef" for character in source_revision)
+    ):
+        raise Refusal("participant handoff source revision is not lowercase hex")
+    if (
+        len(checked_release_gate_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in checked_release_gate_sha256
+        )
+    ):
+        raise Refusal("participant handoff checked-gate digest is not lowercase hex")
+    if (
+        not isinstance(validator_pid, int)
+        or isinstance(validator_pid, bool)
+        or validator_pid <= 0
+    ):
+        raise Refusal("participant handoff validator PID must be positive")
+    # `rpc` owns the structural loopback refusal.  A read here is deliberately
+    # omitted; the live health check happens only after SIGCONT so a substituted
+    # or dead process cannot trigger teardown as an accepted handoff.
+    parsed = urllib_parse.urlparse(rpc_url)
+    try:
+        rpc_port = parsed.port
+    except ValueError as error:
+        raise Refusal("participant handoff RPC port is invalid") from error
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or rpc_port is None
+        or not 0 < rpc_port <= 65535
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.netloc != f"127.0.0.1:{rpc_port}"
+    ):
+        raise Refusal("participant handoff RPC escaped loopback")
+    exact_plan = canonical_file(plan, "participant handoff plan")
+    exact_market = canonical_file(market, "participant handoff market")
+    exact_founding = canonical_file(founding, "participant handoff founding evidence")
+    exact_participant = canonical_file(
+        participant, "participant handoff participant evidence"
+    )
+    exact_keys = canonical_directory(key_directory, "participant handoff key directory")
+    return {
+        "schema": PARTICIPANT_HANDOFF_SCHEMA,
+        "status": "ready",
+        "sourceRevision": source_revision,
+        "checkedReleaseGateSha256": checked_release_gate_sha256,
+        "rpcUrl": rpc_url,
+        "validatorPid": validator_pid,
+        "plan": str(exact_plan),
+        "marketInput": str(exact_market),
+        "foundingEvidence": str(exact_founding),
+        "participantEvidence": str(exact_participant),
+        "participantSha256": sha256_file(exact_participant),
+        "keyDirectory": str(exact_keys),
+    }
+
+
+def authenticate_participant_handoff(
+    receipt_path: Path,
+    expected: dict[str, Any],
+    validator: subprocess.Popen[bytes],
+) -> None:
+    """Reopen the fsynced handoff and prove the original child still owns it."""
+
+    exact_path = canonical_file(receipt_path, "participant handoff receipt")
+    if stat.S_IMODE(exact_path.stat().st_mode) != 0o600:
+        raise Refusal("participant handoff receipt mode changed from 0600")
+    observed = read_unique_json(exact_path, "participant handoff receipt")
+    if observed != expected:
+        raise Refusal("participant handoff receipt changed while the supervisor was stopped")
+    for key, label in (
+        ("plan", "plan"),
+        ("marketInput", "market input"),
+        ("foundingEvidence", "founding evidence"),
+        ("participantEvidence", "participant evidence"),
+    ):
+        canonical_file(observed[key], f"participant handoff {label}")
+    canonical_directory(observed["keyDirectory"], "participant handoff key directory")
+    if sha256_file(Path(observed["participantEvidence"])) != observed["participantSha256"]:
+        raise Refusal("participant handoff participant evidence changed while stopped")
+    if validator.pid != expected.get("validatorPid") or validator.poll() is not None:
+        raise Refusal("participant handoff validator process identity changed")
+    try:
+        process_group = os.getpgid(validator.pid)
+    except ProcessLookupError as error:
+        raise Refusal("participant handoff validator process disappeared") from error
+    if process_group != validator.pid:
+        raise Refusal("participant handoff validator process group identity changed")
+    if rpc(expected["rpcUrl"], "getHealth") != "ok":
+        raise Refusal("participant handoff validator was not healthy after resume")
+
+
+def hold_after_participant(
+    receipt_path: Path,
+    receipt: dict[str, Any],
+    validator: subprocess.Popen[bytes],
+) -> None:
+    """Publish one durable boundary, stop this supervisor, and verify on resume."""
+
+    write_json_new(receipt_path, receipt)
+    os.kill(os.getpid(), signal.SIGSTOP)
+    authenticate_participant_handoff(receipt_path, receipt, validator)
 
 
 def write_json_new(path: Path, value: Any) -> None:
@@ -2076,6 +2208,7 @@ def run_one(
     gate_digest: str,
     index: int,
     through: str,
+    hold_participant: bool,
 ) -> dict[str, Any]:
     name, seed = named_seed(index)
     run = paths.work / "runs" / name
@@ -2330,6 +2463,7 @@ def run_one(
             "market_input_sha256": sha256_file(market),
         }
         if through == "participant":
+            handoff_path = run / "participant-handoff.json"
             result = {
                 "schema": PARTICIPANT_PROBE_RUN_SCHEMA,
                 "name": name,
@@ -2346,6 +2480,19 @@ def run_one(
                 "validator_log": str(run / "validator.log"),
             }
             write_json_new(run / "RESULT.json", result)
+            if hold_participant:
+                handoff = participant_handoff_document(
+                    source_revision=gate["source_revision"],
+                    checked_release_gate_sha256=gate_digest,
+                    rpc_url=url,
+                    validator_pid=child.pid,
+                    plan=plan,
+                    market=market,
+                    founding=evidence,
+                    participant=participant,
+                    key_directory=prepare_work / "keys",
+                )
+                hold_after_participant(handoff_path, handoff, child)
             return result
 
         # Exterior stages intentionally have their own driver commands.  The
@@ -2439,7 +2586,7 @@ def compute_unit_report(runs: Sequence[dict[str, Any]]) -> dict[str, dict[str, A
     }
 
 
-def parse(argv: Sequence[str]) -> tuple[Paths, int, str]:
+def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--release-root", required=True)
@@ -2451,7 +2598,10 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str]:
     parser.add_argument(
         "--through", choices=("participant", "full-probe", "full"), default="full"
     )
+    parser.add_argument("--hold-after-participant", action="store_true")
     args = parser.parse_args(argv)
+    if args.hold_after_participant and args.through != "participant":
+        raise Refusal("--hold-after-participant requires --through participant")
     if args.through == "full" and args.seeds != 20:
         raise Refusal("full release evidence requires exactly 20 named seeds")
     if args.through == "full-probe" and args.seeds != 1:
@@ -2485,11 +2635,11 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str]:
         solana=canonical_file(args.solana, "solana CLI"),
         work=work,
     )
-    return paths, args.seeds, args.through
+    return paths, args.seeds, args.through, args.hold_after_participant
 
 
 def main(argv: Sequence[str]) -> int:
-    paths, seeds, through = parse(argv)
+    paths, seeds, through, hold_participant = parse(argv)
     commit = clean_commit(paths.repo)
     gate_path, gate, gate_digest = checked_gate(paths, commit)
     paths.work.mkdir(mode=0o700)
@@ -2504,7 +2654,17 @@ def main(argv: Sequence[str]) -> int:
     failures: list[dict[str, str]] = []
     for index in range(1, seeds + 1):
         try:
-            runs.append(run_one(paths, gate_path, gate, gate_digest, index, through))
+            runs.append(
+                run_one(
+                    paths,
+                    gate_path,
+                    gate,
+                    gate_digest,
+                    index,
+                    through,
+                    hold_participant,
+                )
+            )
         except Exception as error:
             failures.append({"seed": f"seed-{index:02d}", "error": str(error)})
     mean = arithmetic_mean(row["dcltgmf2_compute_units"] for row in runs)

@@ -120,3 +120,22 @@ are `floor(seller gross collateral atoms * 50 / 10,000)`, buyer fee atoms are
 `floor(buyer gross collateral atoms * 50 / 10,000)`, and the recipient gets
 their exact sum. The realized Direct stage remains the fee semantic owner's
 evidence.
+
+When the callable Direct exterior must consume the same authenticated local
+state before it is integrated into this supervisor, add
+`--hold-after-participant`. After finalized participant admission the
+supervisor writes `runs/seed-01/RESULT.json` and a create-new, mode-0600
+`runs/seed-01/participant-handoff.json`, then stops itself with `SIGSTOP` while
+leaving its exact validator child and watchdog alive. The handoff receipt owns
+only process control: source and checked-gate digests, loopback RPC, validator
+PID, canonical plan/market/founding/participant/key-directory paths, and the
+participant evidence digest. It never copies key bytes or claims Direct
+completion.
+
+The external Direct driver must wait until the supervisor process is visibly
+stopped before using those paths. After it has durably finalized or refused,
+send `SIGCONT` to the supervisor PID. Before teardown, the resumed supervisor
+reopens the exact receipt, checks its mode and bytes, proves the original
+`Popen` child/process-group identity is still live, and requires the same
+loopback RPC to report healthy. Any substitution or dead child refuses and the
+ordinary `finally` boundary still terminates the complete validator group.
