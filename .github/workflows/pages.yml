@@ -13,12 +13,19 @@
 #   - This builds from the dclutch/ SUBTREE. If the subtree lags the live
 #     tree (it is updated in waves), the build fails or publishes stale
 #     truth; refresh the subtree first.
-#   - The app export uses root-absolute asset URLs and works when the site
-#     is served at a domain root (a custom domain). Under the default
-#     /<repo>/ project-page subpath the app's assets do not resolve —
-#     vinext 1.0.0-beta.3's basePath is incompatible with output:'export'.
-#     The docs pages are subpath-safe either way, and the landing page
-#     states the app caveat rather than hiding it.
+#   - THE APP IS THE SITE. It is mounted at the artifact root, where the URLs
+#     its export emits already point (`/_next/…` for assets, `/markets` and
+#     friends for navigation), and the rendered documentation is a section of
+#     it at /docs/. This REQUIRES a custom domain: served under the default
+#     /<repo>/ project-page subpath, nothing in the app resolves. Neither of
+#     vinext 1.0.0-beta.3's relocation knobs can save a subpath — basePath is
+#     incompatible with output:'export' (its prerenderer skips every route),
+#     and assetPrefix moves assets without moving routes. See
+#     dclutch/apps/dclutch-web/next.config.ts for the measurements.
+#     Mounting the app under /app/ was the 2026-08-27 breakage: pages asking
+#     for /_next/… while the assets sat at /app/_next/…, so every workspace
+#     served raw unstyled HTML and never hydrated. render-site.mjs now
+#     link-checks the app's own pages, which is what would have caught it.
 name: pages
 
 on:
@@ -47,6 +54,12 @@ jobs:
           node-version: 22
       - name: Build the frontend static export
         working-directory: dclutch/apps/dclutch-web
+        env:
+          # The rendered documentation ships in this artifact, so the app's
+          # landing links to the pages a reader can actually open. Unset (dev,
+          # the Cloudflare worker) it links the Markdown in the repository
+          # instead — see apps/dclutch-web/lib/flags.ts.
+          NEXT_PUBLIC_DCLUTCH_DOCS_BASE: /docs
         run: |
           npm ci
           DCLUTCH_PAGES_EXPORT=1 npm run build
