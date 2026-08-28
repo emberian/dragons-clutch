@@ -3479,6 +3479,83 @@ fn require_published_record_matches_derivation_v1(
     Ok(())
 }
 
+/// Expiry geometry for the one SourceAbort proof lane.
+///
+/// Public/devnet keeps the shipped 900/64 policy byte-for-byte. The shorter
+/// policy is selected only by the exact 100,000,000-atom owned-loopback fixture
+/// marker that campaign admission already refuses on devnet. It budgets the
+/// observed 32-slot local finality window across all sixteen finalized
+/// transaction barriers before the pre-expiry refusal, plus two full windows:
+/// one staging reserve and one refusal-dispatch reserve. Runtime guards refuse
+/// safely if a loaded validator consumes either reserve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceAbortExpiryPolicyV1 {
+    PublicDevnet,
+    OwnedLoopback,
+}
+
+impl SourceAbortExpiryPolicyV1 {
+    const LOCAL_FINALITY_WINDOW_SLOTS_V1: u64 = 32;
+    const LOCAL_PRE_EXPIRY_FINALIZED_BARRIERS_V1: u64 = 16;
+    const LOCAL_RESERVE_WINDOWS_V1: u64 = 2;
+    const LOCAL_POST_STAGE_FINALIZED_BARRIERS_V1: u64 = 4;
+
+    fn from_input(input: &MarketRunInput) -> Result<Self> {
+        match input.local_participant_fixture_liquidity_atoms {
+            0 => Ok(Self::PublicDevnet),
+            LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1 => Ok(Self::OwnedLoopback),
+            _ => Err(Error::new(
+                "SourceAbort expiry policy received a noncanonical local fixture quantity",
+            )),
+        }
+    }
+
+    const fn expiry_slots(self) -> u64 {
+        match self {
+            Self::PublicDevnet => 900,
+            Self::OwnedLoopback => {
+                Self::LOCAL_FINALITY_WINDOW_SLOTS_V1
+                    * (Self::LOCAL_PRE_EXPIRY_FINALIZED_BARRIERS_V1
+                        + Self::LOCAL_RESERVE_WINDOWS_V1)
+            }
+        }
+    }
+
+    const fn minimum_staging_margin_slots(self) -> u64 {
+        match self {
+            Self::PublicDevnet => 64,
+            Self::OwnedLoopback => {
+                Self::LOCAL_FINALITY_WINDOW_SLOTS_V1
+                    * (Self::LOCAL_POST_STAGE_FINALIZED_BARRIERS_V1 + 1)
+            }
+        }
+    }
+
+    const fn minimum_pre_expiry_refusal_margin_slots(self) -> u64 {
+        match self {
+            Self::PublicDevnet => 0,
+            Self::OwnedLoopback => Self::LOCAL_FINALITY_WINDOW_SLOTS_V1 * 2,
+        }
+    }
+}
+
+fn require_expiry_margin_v1(
+    stage: &str,
+    current_slot: u64,
+    expiry_slot: u64,
+    minimum_margin_slots: u64,
+) -> Result<()> {
+    let guarded_slot = current_slot
+        .checked_add(minimum_margin_slots)
+        .ok_or_else(|| Error::new(format!("{stage} expiry-margin arithmetic overflowed")))?;
+    if guarded_slot >= expiry_slot {
+        return Err(Error::new(format!(
+            "{stage} reached slot {current_slot} with expiry at {expiry_slot}: fewer than the required {minimum_margin_slots} margin slots remain"
+        )));
+    }
+    Ok(())
+}
+
 /// What a staged projected-Custody prestate is being staged *for*.
 ///
 /// Both lanes run the identical four-stage `DCLTPCB2` ladder. They differ in
@@ -3521,21 +3598,25 @@ impl PrestateLaneV1 {
     /// once `current_slot > expiry_slot`, so the expiry must outlast staging;
     /// and every slot past that is dead waiting. Staging costs about thirteen
     /// transactions at roughly thirty-two slots of finality each, so ~420
-    /// slots; 900 leaves about another full staging interval as margin and
-    /// still expires promptly afterwards. The runner does not assume the arithmetic held - it
-    /// checks the margin before staging and waits for the real slot after.
-    const fn expiry_slots(self) -> u64 {
+    /// slots; public/devnet retains 900. Owned loopback uses the separately
+    /// authenticated fixture policy above so repeated private validation does
+    /// not spend hundreds of dead slots after the rollback proof. The runner
+    /// does not assume the arithmetic held: it checks both dispatch margins and
+    /// waits for the real slot after.
+    fn expiry_slots(self, input: &MarketRunInput) -> Result<u64> {
         match self {
-            Self::Founding => 500_000,
-            Self::SourceAbort => 900,
+            Self::Founding => Ok(500_000),
+            Self::SourceAbort => Ok(SourceAbortExpiryPolicyV1::from_input(input)?.expiry_slots()),
         }
     }
 
     /// Slots that must remain before expiry for staging to be worth attempting.
-    const fn minimum_staging_margin_slots(self) -> u64 {
+    fn minimum_staging_margin_slots(self, input: &MarketRunInput) -> Result<u64> {
         match self {
-            Self::Founding => 0,
-            Self::SourceAbort => 64,
+            Self::Founding => Ok(0),
+            Self::SourceAbort => {
+                Ok(SourceAbortExpiryPolicyV1::from_input(input)?.minimum_staging_margin_slots())
+            }
         }
     }
 
@@ -3605,7 +3686,7 @@ fn execute_projected_custody_bootstrap(
     let market_rent = rpc.minimum_balance(STATE_BYTES)?;
     let expiry_slot = rpc
         .finalized_slot()?
-        .checked_add(lane.expiry_slots())
+        .checked_add(lane.expiry_slots(input)?)
         .ok_or_else(|| Error::new("founding expiry slot overflow"))?;
 
     let coordinates = derive_founding_coordinates(
@@ -3905,11 +3986,12 @@ fn execute_projected_custody_bootstrap(
     // Custody's `initialize` refuses outright. Say so here rather than let a
     // slow validator turn into an opaque refusal three transactions later.
     let staged_at = rpc.finalized_slot()?;
-    if staged_at.checked_add(lane.minimum_staging_margin_slots()) >= Some(expiry_slot) {
-        return Err(Error::new(format!(
-            "staging reached slot {staged_at} with expiry at {expiry_slot}: not enough margin left to create the prestate"
-        )));
-    }
+    require_expiry_margin_v1(
+        "projected-Custody staging",
+        staged_at,
+        expiry_slot,
+        lane.minimum_staging_margin_slots(input)?,
+    )?;
 
     transactions.push(rpc.send_v0_on_founding_heap_with_signers(
         lane.prestate_label(),
@@ -4047,6 +4129,7 @@ fn execute_projected_custody_bootstrap(
             transactions,
             accounts,
             completed,
+            SourceAbortExpiryPolicyV1::from_input(input)?,
         ),
     }?;
     Ok(coordinates.context)
@@ -4084,6 +4167,7 @@ fn execute_source_abort_v1(
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
+    expiry_policy: SourceAbortExpiryPolicyV1,
 ) -> Result<()> {
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
@@ -4110,11 +4194,12 @@ fn execute_source_abort_v1(
     // funded principal may not be destroyed. A route that let anyone unwind a
     // live founding would be a worse bug than the one it fixes.
     let staged_at = rpc.finalized_slot()?;
-    if staged_at >= expiry_slot {
-        return Err(Error::new(format!(
-            "the prestate expired at {expiry_slot} before its pre-expiry refusal could be observed at {staged_at}"
-        )));
-    }
+    require_expiry_margin_v1(
+        "the pre-expiry DCLTPCA1 rollback probe",
+        staged_at,
+        expiry_slot,
+        expiry_policy.minimum_pre_expiry_refusal_margin_slots(),
+    )?;
 
     let rollback_recipient = crate::seed::fresh_probe_address();
     let refused = rpc.send_v0_expected_failure_with_signers(
@@ -4179,6 +4264,13 @@ fn execute_source_abort_v1(
     completed.push(
         "proved DCLTPCA1 refuses to unwind a funded source compartment while its founding is still satisfiable, and rolls the whole transaction back to a fee-only debit".into(),
     );
+    completed.push(format!(
+        "authenticated {:?} SourceAbort expiry geometry: {} slots from coordinate derivation, at least {} slots before staging, and at least {} slots before the pre-expiry rollback probe",
+        expiry_policy,
+        expiry_policy.expiry_slots(),
+        expiry_policy.minimum_staging_margin_slots(),
+        expiry_policy.minimum_pre_expiry_refusal_margin_slots(),
+    ));
     completed.push(
         "executed DCLTPCA1 after expiry: the source principal is back with the party that supplied it, and the source vault, source replay, empty Hoard vault, and projection are all closed to the lifecycle credit".into(),
     );
@@ -6432,6 +6524,83 @@ fn pyth_market_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_abort_expiry_policy_is_exactly_owned_loopback_only() {
+        let registry = Pubkey::new_unique();
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let mut input = demo_market_input(registry, direct.compiler()).expect("local market");
+        let local = SourceAbortExpiryPolicyV1::from_input(&input).expect("local policy");
+        assert_eq!(local, SourceAbortExpiryPolicyV1::OwnedLoopback);
+        assert_eq!(local.expiry_slots(), 576);
+        assert_eq!(local.minimum_staging_margin_slots(), 160);
+        assert_eq!(local.minimum_pre_expiry_refusal_margin_slots(), 64);
+
+        input.local_participant_fixture_liquidity_atoms = 0;
+        let public = SourceAbortExpiryPolicyV1::from_input(&input).expect("public policy");
+        assert_eq!(public, SourceAbortExpiryPolicyV1::PublicDevnet);
+        assert_eq!(public.expiry_slots(), 900);
+        assert_eq!(public.minimum_staging_margin_slots(), 64);
+        assert_eq!(public.minimum_pre_expiry_refusal_margin_slots(), 0);
+
+        input.local_participant_fixture_liquidity_atoms =
+            LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1 - 1;
+        assert!(SourceAbortExpiryPolicyV1::from_input(&input).is_err());
+    }
+
+    #[test]
+    fn owned_loopback_source_abort_preserves_both_pre_expiry_dispatch_margins() {
+        let policy = SourceAbortExpiryPolicyV1::OwnedLoopback;
+        let start = 1_000;
+        let expiry = start + policy.expiry_slots();
+
+        // Twelve finalized barriers precede DCLTPCB2 staging. Four more carry
+        // the stage, the DCLTPCA1 table, and the hostile rollback proof to
+        // finality. Both boundaries retain one full 32-slot reserve window.
+        let before_stage = start + 12 * SourceAbortExpiryPolicyV1::LOCAL_FINALITY_WINDOW_SLOTS_V1;
+        require_expiry_margin_v1(
+            "staging",
+            before_stage,
+            expiry,
+            policy.minimum_staging_margin_slots(),
+        )
+        .expect("measured local staging budget");
+        let before_refusal = start + 15 * SourceAbortExpiryPolicyV1::LOCAL_FINALITY_WINDOW_SLOTS_V1;
+        require_expiry_margin_v1(
+            "rollback probe",
+            before_refusal,
+            expiry,
+            policy.minimum_pre_expiry_refusal_margin_slots(),
+        )
+        .expect("measured local refusal-dispatch budget");
+
+        assert!(
+            require_expiry_margin_v1(
+                "staging",
+                expiry - policy.minimum_staging_margin_slots(),
+                expiry,
+                policy.minimum_staging_margin_slots(),
+            )
+            .is_err()
+        );
+        assert!(
+            require_expiry_margin_v1(
+                "rollback probe",
+                expiry - policy.minimum_pre_expiry_refusal_margin_slots(),
+                expiry,
+                policy.minimum_pre_expiry_refusal_margin_slots(),
+            )
+            .is_err()
+        );
+        assert!(require_expiry_margin_v1("overflow", u64::MAX, expiry, 1).is_err());
+
+        assert!(require_expiry_margin_v1("public", expiry - 1, expiry, 0).is_ok());
+        assert!(require_expiry_margin_v1("public", expiry, expiry, 0).is_err());
+    }
 
     fn direct_controller_manifest(
         direct_index: Option<usize>,
