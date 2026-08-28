@@ -58,27 +58,25 @@ facts before you ask for a signature. `inspectMarketDetailV1`
 `inspectPortfolioV1` (`@dclutch/sdk/portfolio`) derives a user's positions
 directly from market addresses — no indexer involved.
 
-## Buying and selling
+## Reviewing a Direct trade
 
-A Direct trade settles between two signed **intents**: one seller, one
-buyer, crossed at one execution price. Your client plays one side and needs
-the other side's signed intent (or plays both sides, in a bench).
+A Direct trade settles between two signed **intents**: one seller and one
+buyer, crossed at one execution price. The public SDK currently lets you
+authenticate a route and preview that arithmetic. It deliberately does not
+offer a safe signing or submission workflow yet.
 
 ```ts
 import {
-  compileDirectInlineTransactionV3,
-  encodeCompactIntentSigningMessageV2,
+  previewDirectInlineV3,
 } from '@dclutch/sdk/directInlineV3';
 import { inspectDirectHotRouteV3 } from '@dclutch/sdk/directHotChain';
-import nacl from 'tweetnacl';
 
 // 1. Acquire the route: the market's fixed trading accounts, read back and
 //    checked at one finalized slot.
 const inspection = await inspectDirectHotRouteV3(client, routeManifest);
 
-// 2. Build and sign your intent (here: buying outcome 1, up to 5 units,
-//    limit price in the market's own scale).
-const intent = {
+// 2. Describe unsigned terms. Do not ask either maker for a signature.
+const buyerIntent = {
   side: 1, lifecycle: 0, outcome: 1,
   market: inspection.route.market,
   generation: inspection.route.generation,
@@ -89,29 +87,25 @@ const intent = {
   feeBasisPoints: inspection.route.feeBasisPoints,
   collateralAccount: MY_COLLATERAL_ACCOUNT,
 } as const;
-const signature = nacl.sign.detached(
-  encodeCompactIntentSigningMessageV2(intent), myKeypair.secretKey);
 
-// 3. Cross it with the counterparty's signed intent and submit.
-const plan = compileDirectInlineTransactionV3({
-  route: inspection.route,
-  seller: theirSignedIntent,
-  buyer: { maker: myKeypair.publicKey.toBase58(), signature, intent },
-  fill: 5n, executionPrice: 400_000n,
-  clockSlot: BigInt(inspection.observedSlot),
-});
-plan.transaction.sign([payerKeypair]);
-await client.sendRawTransaction(plan.transaction.serialize());
+// 3. Review exact integer arithmetic only.
+const preview = previewDirectInlineV3(
+  inspection.route,
+  { intent: sellerIntent },
+  { intent: buyerIntent },
+  5n,
+  400_000n,
+  BigInt(inspection.observedSlot),
+);
 ```
 
-`plan.preview` tells you the exact collateral debit, credit, and fees
-before anything is signed — show it to your user. The compiler refuses
-anything the chain would refuse (an intent that does not admit the fill, a
-price outside either limit, a stale slot), so a transaction that compiles
-is one the program will actually consider.
-
-The CLI's `intent` / `buy` / `sell` commands are this exact code plus a
-JSON file format for handing intents between machines.
+`preview` tells you the exact collateral debit, credit, and fees at the
+chosen integer rounding boundary. It is not a transaction and does not prove
+that a fill landed. The CLI can still create an authenticated off-chain intent
+file, but `buy` and `sell` refuse before session, key, transaction, or RPC
+access. They reopen only after one caller owns a durable exact-packet journal,
+the authenticated Trading acknowledgement, and all ten ordered writable
+poststates from finalized history.
 
 ## Redeeming
 
