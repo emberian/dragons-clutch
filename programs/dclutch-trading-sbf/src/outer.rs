@@ -1325,10 +1325,10 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
                 .try_borrow_data()
                 .map_err(|_| TradingSbfError::Content)?;
             let ledger = FundingLedgerV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
-            if ledger.selected_mask() & selected_bit != 0 {
-                if selected.replace((index, account)).is_some() {
-                    return Err(TradingSbfError::Content.into());
-                }
+            if ledger.selected_mask() & selected_bit != 0
+                && selected.replace((index, account)).is_some()
+            {
+                return Err(TradingSbfError::Content.into());
             }
         }
         let (selected_index, selected_account) = selected.ok_or(TradingSbfError::Content)?;
