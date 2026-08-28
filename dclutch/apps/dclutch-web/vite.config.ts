@@ -52,6 +52,10 @@ export default defineConfig(async () => {
     // exports but no `workerd` export, so the Cloudflare environment must be
     // pointed at the browser implementation instead of failing resolution.
     resolve: {
+      // npm installs the local SDK as a symlink. Keep the symlink path during
+      // resolution so SDK dependencies are found in this app's clean install,
+      // rather than by walking from the monorepo package's real path.
+      preserveSymlinks: true,
       alias: {
         'rpc-websockets': fileURLToPath(new URL(
           './node_modules/rpc-websockets/dist/index.browser.mjs',
