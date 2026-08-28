@@ -417,6 +417,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -465,6 +466,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-sha256-adapter",
+ "dclutch-token-svm",
  "dclutch-transition-vm",
 ]
 
@@ -536,6 +538,7 @@ dependencies = [
  "dclutch-direct-codec",
  "dclutch-market-core-codec",
  "dclutch-market-founding-v1-operator",
+ "dclutch-market-retirement-v1-operator",
  "dclutch-operator",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
@@ -554,6 +557,7 @@ dependencies = [
  "dclutch-representation-composition-v3-kernel",
  "dclutch-representation-composition-v3-operator",
  "dclutch-resolution-codec",
+ "dclutch-resolution-core-v3-operator",
  "dclutch-source-contract",
  "dclutch-token-svm",
  "dclutch-versioned-message-operator",
@@ -608,6 +612,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-market-retirement-v1-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-market-core-codec",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-resolution-codec",
+ "dclutch-resolution-core-v3-operator",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-program-option",
+ "solana-program-pack",
+ "solana-sdk-ids",
+ "spl-token-interface",
+]
+
+[[package]]
 name = "dclutch-operator"
 version = "0.1.0"
 dependencies = [
@@ -637,6 +665,7 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
+ "dclutch-relay-contract",
  "dclutch-release-set-contract",
  "dclutch-release-tool",
  "dclutch-rent-contract",
@@ -645,6 +674,7 @@ dependencies = [
  "dclutch-series-v3-kernel",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
+ "dclutch-user-position-admission-contract",
  "dclutch-versioned-message-operator",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
@@ -652,6 +682,7 @@ dependencies = [
  "solana-message",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface",
  "spl-token-2022-interface",
 ]
 
@@ -815,6 +846,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
  "dclutch-token-svm",
  "solana-program",
  "solana-sdk-ids",
@@ -1016,6 +1048,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
+ "dclutch-direct-codec",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -3582,6 +3615,26 @@ dependencies = [
  "solana-program-error",
  "solana-zero-copy",
  "spl-discriminator",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "spl-token-interface"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7143c4e676984047a400e2fbd7ac29a1659f2b1b52b897cfde19316b562e4589"
+dependencies = [
+ "arrayref",
+ "bytemuck",
+ "num-derive",
+ "num-traits",
+ "num_enum",
+ "solana-instruction",
+ "solana-program-error",
+ "solana-program-option",
+ "solana-program-pack",
+ "solana-pubkey 3.0.0",
+ "solana-sdk-ids",
  "thiserror 2.0.20",
 ]
 
