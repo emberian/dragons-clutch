@@ -8,7 +8,7 @@ import {
 } from '@solana/web3.js';
 
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import { deriveFinalizedRecordAddressesV1, SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
@@ -395,7 +395,7 @@ export function buildUnsignedBearerTransferV2(
     payerKey: key(inspection.payer, 'transaction payer'), recentBlockhash, instructions: [instruction],
   }).compileToV0Message([inspection.lookupTable]));
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`Bearer transfer is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`Bearer transfer is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
     .slice(0, transaction.message.header.numRequiredSignatures).map((value) => value.toBase58()));
   const expected = new Set([inspection.payer, inspection.authority]);

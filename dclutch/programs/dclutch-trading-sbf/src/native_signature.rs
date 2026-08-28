@@ -359,6 +359,7 @@ pub(crate) fn seed_native_signatures_at_authenticated_instruction(
         tail_count,
         NativeEd25519InstructionViewV1 {
             ed25519_data: preceding.data(),
+            ed25519_instruction_index: preceding_index,
             authenticated_message_data,
             message_instruction_index: current,
             message_offset_bias,
@@ -456,23 +457,24 @@ mod tests {
         message_offset: u16,
         message_bytes: u16,
         message_instruction_index: u16,
-        signer: [u8; 32],
+        _signer: [u8; 32],
     ) -> Vec<u8> {
-        let public_key = ED25519_SIGNATURE_OFFSETS_START + ED25519_SIGNATURE_OFFSETS_BYTES;
-        let signature = public_key + ED25519_PUBLIC_KEY_BYTES;
+        let signature = ED25519_SIGNATURE_OFFSETS_START + ED25519_SIGNATURE_OFFSETS_BYTES;
+        let public_key = message_offset
+            .checked_sub(u16::try_from(ED25519_PUBLIC_KEY_BYTES).expect("public-key width"))
+            .expect("maker immediately precedes message");
         let mut bytes = vec![1_u8, 0];
         for value in [
             u16::try_from(signature).expect("offset"),
             ED25519_SELF_INSTRUCTION_INDEX,
-            u16::try_from(public_key).expect("offset"),
-            ED25519_SELF_INSTRUCTION_INDEX,
+            public_key,
+            message_instruction_index,
             message_offset,
             message_bytes,
             message_instruction_index,
         ] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        bytes.extend_from_slice(&signer);
         bytes.extend_from_slice(&[0x55; ED25519_SIGNATURE_BYTES]);
         bytes
     }
@@ -644,12 +646,12 @@ mod tests {
     /// `load_instruction_at_checked`, which is the reader this adapter replaced.
     #[test]
     fn borrowed_view_agrees_with_the_owning_sysvar_reader() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         let mut bytes = sysvar_bytes(
             &ed25519_program::ID,
             &native,
@@ -684,14 +686,14 @@ mod tests {
     /// admission read.
     #[test]
     fn every_truncated_sysvar_prefix_refuses() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let profile_bytes = profile_bytes(20, 3);
+        let profile_bytes = profile_bytes(32, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         let full = sysvar_bytes(
             &ed25519_program::ID,
             &native,
@@ -712,12 +714,12 @@ mod tests {
     /// A substituted current-instruction index is refused, never followed.
     #[test]
     fn substituted_current_instruction_index_refuses() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         // 0 points at the ed25519 batch itself, 2 and 9 past the last record.
         for index in [0_u16, 2, 9, u16::MAX] {
             let mut bytes = sysvar_bytes(
@@ -763,14 +765,14 @@ mod tests {
     /// index field.
     #[test]
     fn crafted_offset_table_entries_refuse() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let profile_bytes = profile_bytes(20, 3);
+        let profile_bytes = profile_bytes(32, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         let reference = sysvar_bytes(
             &ed25519_program::ID,
             &native,
@@ -808,14 +810,14 @@ mod tests {
     /// check, and the widths below span both failure modes.
     #[test]
     fn oversized_declared_account_count_refuses() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let profile_bytes = profile_bytes(20, 3);
+        let profile_bytes = profile_bytes(32, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         let reference = sysvar_bytes(
             &ed25519_program::ID,
             &native,
@@ -850,12 +852,12 @@ mod tests {
     /// comparison alone.
     #[test]
     fn substituted_meta_privileges_refuse() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         for privileges in [1_u8, 2, 3] {
             let mut bytes = sysvar_bytes(
                 &ed25519_program::ID,
@@ -899,20 +901,19 @@ mod tests {
     /// are the boundary cases either side of that window.
     #[test]
     fn message_slice_boundaries_refuse_outside_the_authenticated_bytes() {
-        let mut nested_hot = [0_u8; 32];
+        let mut nested_hot = [7_u8; 40];
         nested_hot
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
         let mut registry_outer = vec![0xa5; 128];
         registry_outer.extend_from_slice(&nested_hot);
-        let profile_bytes = profile_bytes(20, 3);
+        let profile_bytes = profile_bytes(32, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
         // (message offset in the outer instruction, whether it may seed)
-        // 148 is the exact authenticated position of the three signed bytes;
-        // 147 and 149 straddle it, and 157 puts the three-byte window exactly at
-        // the end of the nested bytes while 158 runs one past it.
-        for (offset, admitted) in [(148_u16, true), (147, false), (149, false), (158, false)] {
+        // 160 is the exact authenticated position of the three signed bytes;
+        // 159 and 161 straddle it, and 165 runs beyond the nested bytes.
+        for (offset, admitted) in [(160_u16, true), (159, false), (161, false), (165, false)] {
             let native = ed25519_data(offset, 3, 1, [7; 32]);
             let mut bytes = sysvar_bytes(
                 &ed25519_program::ID,
@@ -945,14 +946,14 @@ mod tests {
 
     #[test]
     fn reads_adjacent_native_instruction_and_seeds_selected_register() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let profile_bytes = profile_bytes(20, 3);
+        let profile_bytes = profile_bytes(32, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         let mut sysvar_lamports = 1;
         let mut sysvar_data = Vec::new();
         let instructions = sysvar_account(
@@ -997,16 +998,16 @@ mod tests {
 
     #[test]
     fn registry_outer_binds_detached_message_to_authenticated_nested_hot_bytes() {
-        let mut nested_hot = [0_u8; 32];
+        let mut nested_hot = [7_u8; 40];
         nested_hot
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
         let mut registry_outer = vec![0xa5; 128];
         registry_outer.extend_from_slice(&nested_hot);
-        let profile_bytes = profile_bytes(20, 3);
+        let profile_bytes = profile_bytes(32, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(148, 3, 1, [7; 32]);
+        let native = ed25519_data(160, 3, 1, [7; 32]);
         let mut sysvar_lamports = 1;
         let mut sysvar_data = Vec::new();
         let instructions = sysvar_account(
@@ -1056,21 +1057,21 @@ mod tests {
 
     #[test]
     fn wrong_program_current_bytes_or_nonadjacency_refuse_without_commit() {
-        let mut current_data = [0_u8; 32];
+        let mut current_data = [7_u8; 40];
         current_data
-            .get_mut(20..23)
+            .get_mut(32..35)
             .expect("message")
             .copy_from_slice(b"sig");
-        let profile_bytes = profile_bytes(20, 3);
+        let profile_bytes = profile_bytes(32, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(20, 3, 1, [7; 32]);
+        let native = ed25519_data(32, 3, 1, [7; 32]);
         for case in 0..3 {
             let preceding_program = if case == 0 {
                 Pubkey::new_from_array([4; 32])
             } else {
                 ed25519_program::ID
             };
-            let observed_current = if case == 1 { [3_u8; 32] } else { current_data };
+            let observed_current = if case == 1 { [3_u8; 40] } else { current_data };
             let mut sysvar_lamports = 1;
             let mut sysvar_data = Vec::new();
             let instructions = sysvar_account(

@@ -7,9 +7,8 @@
 //! Two founding routes are on `declares_extended_heap_profile_v1`'s list and
 //! get exactly that.
 //!
-//! Hot is deliberately NOT on that list, and the reason recorded there is that
-//! its continuation packet has no room for the instruction. This test measures
-//! that reason instead of restating it, and pins the consequence: a Hot
+//! Hot is deliberately NOT on that list. Compact native evidence has now made
+//! room for the instruction, so this test pins the remaining consequence: a Hot
 //! transaction may carry `RequestHeapFrame` and it changes nothing, because the
 //! route does not declare the profile.
 //!
@@ -81,11 +80,6 @@ fn request_heap_frame(bytes: u32) -> Instruction {
     compute_budget_instruction(1, &bytes.to_le_bytes())
 }
 
-/// `ComputeBudgetInstruction::SetComputeUnitLimit(units)`, hand-encoded.
-fn set_compute_unit_limit(units: u32) -> Instruction {
-    compute_budget_instruction(2, &units.to_le_bytes())
-}
-
 fn compute_budget_instruction(discriminant: u8, payload: &[u8]) -> Instruction {
     let mut data = Vec::with_capacity(1 + payload.len());
     data.push(discriminant);
@@ -141,7 +135,7 @@ fn budget_free_program_test(artifacts: &Elves) -> ProgramTest {
 }
 
 #[tokio::test]
-async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
+async fn a_requested_heap_frame_is_inert_for_hot_and_fits_its_compact_packet() {
     let artifacts = elves();
     let mut test = budget_free_program_test(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
@@ -155,10 +149,9 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     // indices, so a prepended instruction shifts both and the transaction
     // refuses for an unrelated reason. The runtime scans the whole message for
     // ComputeBudget instructions, so trailing position costs nothing.
-    let mut instructions = Vec::with_capacity(canonical.len() + 2);
+    let mut instructions = Vec::with_capacity(canonical.len() + 1);
     instructions.extend(canonical);
     instructions.push(request_heap_frame(262_144));
-    instructions.push(set_compute_unit_limit(1_400_000));
 
     // Not `test.start_with_context()`: a pinned substrate's programs are not
     // visible at slot 1, and `direct_case` built the maker replays around this
@@ -184,11 +177,8 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     );
     // One signature plus its count byte: this transaction has a single signer.
     let wire = 1 + 64 + message.serialize().len();
-    assert!(
-        wire > PACKET_LIMIT,
-        "the packet fits now -- the recorded reason Hot is off the extended \
-         heap profile has expired and the decision should be revisited"
-    );
+    assert_eq!(wire, 1_212, "compact Hot plus heap-request wire changed");
+    assert!(wire <= PACKET_LIMIT);
 
     let transaction =
         VersionedTransaction::try_new(message, &[&direct.payer]).expect("signed transaction");

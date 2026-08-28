@@ -9,7 +9,7 @@ import {
 } from '@solana/web3.js';
 
 import { hex, isZero, requireZero, sha256, slice, u16, u64 } from './bytes';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import {
   HOT_EXECUTION_ENVELOPE_BYTES_V3,
   HOT_EXECUTION_MAGIC_V3,
@@ -323,7 +323,7 @@ export async function compileDealerEquityTransactionV3(
     payerKey: exactKey(route.payer, 'payer'), recentBlockhash: route.recentBlockhash, instructions: [instruction],
   }).compileToV0Message([...route.lookupTables]));
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`Dealer V3 transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`Dealer V3 transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
     .slice(0, transaction.message.header.numRequiredSignatures).map((value) => value.toBase58()));
   if (requiredSigners.length !== 1 || requiredSigners[0] !== route.payer) throw new Error('Dealer V3 message requires an unexpected transaction signer');

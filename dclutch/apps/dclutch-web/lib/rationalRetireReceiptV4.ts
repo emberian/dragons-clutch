@@ -39,7 +39,7 @@ import {
   type RationalProductBasisViewV3,
 } from './rationalTerminalHotV3';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 
 export const RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4 = 400;
 export const RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4 = 528;
@@ -872,7 +872,7 @@ export function buildRationalRetireReceiptCandidateV4(
     payerKey: key(inspection.payer, 'payer'), recentBlockhash, instructions: [instruction],
   }).compileToV0Message([inspection.lookupTable]));
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`compact RetireReceipt is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`compact RetireReceipt is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys.slice(0, transaction.message.header.numRequiredSignatures).map((value) => value.toBase58()));
   if (requiredSigners.length !== 1 || requiredSigners[0] !== inspection.payer) throw new Error('compact RetireReceipt has an unexpected wallet signer set');
   const loadedAddresses = transaction.message.addressTableLookups.reduce((total, lookup) => total + lookup.readonlyIndexes.length + lookup.writableIndexes.length, 0);

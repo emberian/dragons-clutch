@@ -1,6 +1,8 @@
+import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import {
+  authenticateDirectHotOuterDeploymentsV3,
   decodeDirectDescriptorV4,
   decodeDirectProgramSetV2,
   decodeDirectRootSelectionV1,
@@ -10,6 +12,12 @@ import {
 } from './directHotChain';
 import { sha256 } from './bytes';
 import * as Abi from './generated/directInlineV3';
+import {
+  LOADER_V3_PROGRAMDATA_OFFSET,
+  UPGRADEABLE_LOADER_ID,
+  type ArtifactReleaseV1,
+} from './releaseRegistry';
+import { type RpcAccount } from './rpc';
 
 function identity(seed: number): Uint8Array {
   return new Uint8Array(32).fill(seed);
@@ -32,6 +40,52 @@ function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
   let offset = 0;
   for (const part of parts) { output.set(part, offset); offset += part.length; }
   return output;
+}
+
+function rpcAccount(owner: string, executable: boolean, data: Uint8Array): RpcAccount {
+  return Object.freeze({ owner, executable, data, lamports: '1', space: data.length });
+}
+
+async function mutableDeployment(seed: number, slot = 81n): Promise<Readonly<{
+  artifact: ArtifactReleaseV1;
+  programAddress: string;
+  program: RpcAccount;
+  programDataAddress: string;
+  programData: RpcAccount;
+}>> {
+  const programKey = new PublicKey(identity(seed));
+  const loader = new PublicKey(UPGRADEABLE_LOADER_ID);
+  const programDataKey = PublicKey.findProgramAddressSync([programKey.toBytes()], loader)[0];
+  const authority = new PublicKey(identity(seed + 40)).toBase58();
+  const programBytes = new Uint8Array(36);
+  putU32(programBytes, 0, 2);
+  programBytes.set(programDataKey.toBytes(), 4);
+  const programDataBytes = new Uint8Array(LOADER_V3_PROGRAMDATA_OFFSET + 64);
+  putU32(programDataBytes, 0, 3);
+  putU64(programDataBytes, 4, slot);
+  programDataBytes[12] = 1;
+  programDataBytes.set(new PublicKey(authority).toBytes(), 13);
+  programDataBytes.fill(seed, LOADER_V3_PROGRAMDATA_OFFSET);
+  const elfDigest = Array.from(await sha256(programDataBytes.slice(LOADER_V3_PROGRAMDATA_OFFSET)),
+    (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const artifact: ArtifactReleaseV1 = Object.freeze({
+    bytes: new Uint8Array(),
+    program: programKey.toBase58(),
+    loader: UPGRADEABLE_LOADER_ID,
+    programData: programDataKey.toBase58(),
+    semanticReleaseId: '11'.repeat(32),
+    elfDigest,
+    deploymentSlot: 81n,
+    upgradePolicy: 'exact-authority',
+    upgradeAuthority: authority,
+  });
+  return Object.freeze({
+    artifact,
+    programAddress: programKey.toBase58(),
+    program: rpcAccount(UPGRADEABLE_LOADER_ID, true, programBytes),
+    programDataAddress: programDataKey.toBase58(),
+    programData: rpcAccount(UPGRADEABLE_LOADER_ID, false, programDataBytes),
+  });
 }
 
 async function categoricalBasisFixture(): Promise<Readonly<{ basis: Uint8Array; domain: Uint8Array }>> {
@@ -169,6 +223,32 @@ function signedRequestProfileFixture(): Uint8Array {
 }
 
 describe('Direct V3 chain-selected artifacts', () => {
+  it('admits decision-0012 mutable deployments at their exact pins and refuses slot drift', async () => {
+    const trading = await mutableDeployment(20);
+    const core = await mutableDeployment(21);
+    await expect(authenticateDirectHotOuterDeploymentsV3(
+      trading.programAddress,
+      core.programAddress,
+      trading,
+      core,
+    )).resolves.toBeUndefined();
+
+    const upgraded = await mutableDeployment(20, 82n);
+    await expect(authenticateDirectHotOuterDeploymentsV3(
+      trading.programAddress,
+      core.programAddress,
+      upgraded,
+      core,
+    )).rejects.toThrow(/ReleaseSupersededByUpgrade.*slot 81.*slot 82/);
+
+    await expect(authenticateDirectHotOuterDeploymentsV3(
+      core.programAddress,
+      trading.programAddress,
+      trading,
+      core,
+    )).rejects.toThrow(/another Core or Trading program/);
+  });
+
   it('joins the immutable root selection to one exact manifest entry', () => {
     const selection = decodeDirectRootSelectionV1(rootFixture());
     const selected = decodeSelectedDirectManifestEntryV1(manifestFixture(), selection);
