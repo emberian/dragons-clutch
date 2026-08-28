@@ -2,7 +2,7 @@
 // the public view delegates to the generated private coordinate instead of
 // restating it in a consumer.
 
-use super::{CoreState, Error, STATE_IDENTITY_REALM_OFFSET};
+use super::{CoreState, Error, STATE_IDENTITY_REALM_OFFSET, STATE_PRINCIPAL_CAP_SETS_OFFSET};
 
 /// Canonical patch/projection coordinates of [`CoreState`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -11,6 +11,9 @@ pub struct CoreStateLayoutV2;
 impl CoreStateLayoutV2 {
     /// Immutable Realm content identity selected by the Market.
     pub const REALM_ID: usize = STATE_IDENTITY_REALM_OFFSET;
+
+    /// Canonical source-policy ceiling in complete-set units.
+    pub const PRINCIPAL_CAP_SETS: usize = STATE_PRINCIPAL_CAP_SETS_OFFSET;
 
     /// Hostile-decode state and copy its exact Realm identity atomically.
     pub fn copy_realm_id_into(input: &[u8], output: &mut [u8; 32]) -> Result<(), Error> {
@@ -46,6 +49,7 @@ mod tests {
                 generation: 9,
             },
             outstanding_capabilities: 10,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: identity(11),
             terminal_receipt: None,
         }

@@ -77,6 +77,15 @@ impl RoleBatchAdmissions {
         })
     }
 
+    /// Return one Registry-authenticated release-set projection.
+    ///
+    /// The activation cache authenticates the complete immutable role map.
+    /// Callers that only need a controller identity do not need to re-present
+    /// that controller's Loader accounts as a second authority.
+    pub(crate) fn projected_binding(self, role: Role) -> Binding {
+        selected_binding(self.selected, role)
+    }
+
     /// Lower one exact Core/Claims/Resolution/Custody Registry batch into the
     /// shared fixed-memory retirement admission observation.
     pub(crate) fn retirement(self, state: CoreState) -> Result<RetirementAdmissions, CoreSbfError> {

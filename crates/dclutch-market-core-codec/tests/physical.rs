@@ -3,7 +3,7 @@
 use dclutch_market_core_codec::{
     Binding, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1,
     CoreEffectActionV1, CoreEffectEnvelopeV1, CoreMarketViewV1, CoreReferenceObservationV1,
-    CoreState, Error, FOUNDING_INTENT_BYTES_V5, FoundingIntentV5, Identity,
+    CoreState, CoreStateLayoutV2, Error, FOUNDING_INTENT_BYTES_V5, FoundingIntentV5, Identity,
     MARKET_CORE_STATE_PDA_DOMAIN_V2, MarketCoreStateSeedsV2, MarketIdentity, Phase, Product,
     Readiness, Realm, ReleaseSet, Role, SERIES_CORE_ACK_BYTES_V1,
     SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, SERIES_CORE_REQUEST_BYTES_V1,
@@ -745,9 +745,23 @@ fn core_state_for_view() -> CoreState {
             generation: 7,
         },
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: id(66),
         terminal_receipt: None,
     }
+}
+
+#[test]
+fn core_state_refuses_the_absent_principal_cap_sentinel() {
+    let mut state = core_state_for_view();
+    state.principal_cap_sets = 0;
+    assert_eq!(state.encode(), Err(Error::InvalidPhase));
+
+    let mut bytes = core_state_for_view()
+        .encode()
+        .expect("canonical Core state");
+    bytes[CoreStateLayoutV2::PRINCIPAL_CAP_SETS..CoreStateLayoutV2::PRINCIPAL_CAP_SETS + 8].fill(0);
+    assert_eq!(CoreState::decode(&bytes), Err(Error::InvalidPhase));
 }
 
 fn references_for_view() -> CoreReferenceObservationV1 {

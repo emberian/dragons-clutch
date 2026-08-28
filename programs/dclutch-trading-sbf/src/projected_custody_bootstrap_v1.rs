@@ -32,32 +32,35 @@
 
 extern crate alloc;
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId, FUNDING_STATE_BYTES,
-    FundingCustodyObservationV1, FundingStateV1,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId, FundingLedgerV2,
+    funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
 };
 use dclutch_custody_contract::{
     FoundingPrestateStageV1, INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
-    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV1,
+    PROJECTED_CUSTODY_STATE_BYTES_V2, ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1,
+    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
-    GENERIC_FOUNDING_MAX_FUNDING_STATES_V1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
-    GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
-    generic_founding_funding_list_id_v1,
+    Action, GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingRequestV1, GenericFoundingStageV1,
+    Identity, ProjectFoundRequestV2, Request, generic_founding_funding_list_id_v1,
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_resolution_codec::{
+    PRE_MARKET_FUNDING_RECEIPT_BYTES_V1, PreMarketFundingReceiptV1, PreMarketFundingRequestV1,
+    pre_market_funding_prestate_digest_v1,
+};
 use solana_program::{
     account_info::AccountInfo,
     hash::hash,
     instruction::{AccountMeta, Instruction},
-    program::{invoke, invoke_signed},
+    program::{get_return_data, invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -71,12 +74,12 @@ use crate::generic_market_founding_v1::{
     authenticate_instructions_sysvar_v1, authenticate_projected_lock_join_v1,
 };
 
-/// Sole top-level projected-Custody founding-bootstrap instruction.
-pub const PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1: [u8; 8] = *b"DCLTPCB1";
+/// Sole top-level projected-Custody and controller-ledger bootstrap instruction.
+pub const PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2: [u8; 8] = *b"DCLTPCB2";
 /// Exact outer instruction width. All economic bytes live in readonly accounts.
-pub const PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTION_BYTES_V1: usize = 8;
+pub const PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTION_BYTES_V2: usize = 8;
 /// Exact readonly raw-request prefix width.
-pub const PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V1: usize = 2;
+pub const PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V2: usize = 2;
 
 const FOUND_RAW: usize = 0;
 const LOCK_RAW: usize = 1;
@@ -91,27 +94,25 @@ const LOCK_RAW: usize = 1;
 /// caller's word for it — scanning **this instruction's own account list** to
 /// find it. A frame that does not present it keeps the 32 KiB ceiling and dies
 /// exactly where it died before, so the slot is part of the route's wire.
-pub const PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1: usize =
-    PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V1;
+pub const PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V2: usize =
+    PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V2;
 
-const CUSTODY_PROGRAM: usize = PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1 + 1;
+const CUSTODY_PROGRAM: usize = PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V2 + 1;
 const INITIALIZE_START: usize = CUSTODY_PROGRAM + 1;
 
-/// Exact fixed physical frame width, before the founding's FundingState tail.
-///
-/// The tail is one account per capability-manifest entry and its length is
-/// pinned by the founding artifact's own `funding_count`, so the total frame is
-/// `PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1 + funding_count`.
-pub const PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1: usize = INITIALIZE_START
-    + PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1
+/// Exact common frame width before the controller-ledger suffix.
+pub const PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNT_COUNT_V2: usize = INITIALIZE_START
+    + PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2
     + PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1
     + PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1;
+const RESOLUTION_PROGRAM: usize = PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNT_COUNT_V2;
+const RESOLUTION_PROGRAMDATA: usize = RESOLUTION_PROGRAM + 1;
+const PRE_MARKET_CALLER_AUTHORITY: usize = RESOLUTION_PROGRAMDATA + 1;
+const RESOLUTION_LEDGER: usize = PRE_MARKET_CALLER_AUTHORITY + 1;
+const TRADING_LEDGER: usize = RESOLUTION_LEDGER + 1;
 
-/// Exact total physical frame width for one founding at `funding_count` states.
-#[must_use]
-pub const fn projected_custody_bootstrap_account_count_v1(funding_count: usize) -> usize {
-    PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1 + funding_count
-}
+/// Exact total DCLTPCB2 frame: common Custody ladder plus five funding accounts.
+pub const PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNT_COUNT_V2: usize = TRADING_LEDGER + 1;
 
 // Indices shared by every projected-Custody physical frame.
 const COMMON_CALLER: usize = 0;
@@ -119,6 +120,7 @@ const COMMON_STATE: usize = 1;
 const COMMON_CACHE: usize = 2;
 const COMMON_REGISTRY: usize = 3;
 const COMMON_CALLER_PROGRAM: usize = 4;
+const COMMON_CALLER_PROGRAMDATA: usize = 5;
 const COMMON_RENT_CREDIT: usize = 6;
 
 // Initialize-specific indices.
@@ -296,10 +298,10 @@ fn authenticate_abort_programs_v1(
     Ok(())
 }
 
-/// Return whether bytes select the sole projected-Custody bootstrap route.
+/// Return whether bytes select the sole projected-Custody V2 bootstrap route.
 #[must_use]
-pub fn is_projected_custody_bootstrap_v1(instruction_data: &[u8]) -> bool {
-    instruction_data == PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1
+pub fn is_projected_custody_bootstrap_v2(instruction_data: &[u8]) -> bool {
+    instruction_data == PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2
 }
 
 /// Create the projected replay, Hoard vault, and funded source compartment as
@@ -311,12 +313,12 @@ pub fn is_projected_custody_bootstrap_v1(instruction_data: &[u8]) -> bool {
 /// three-stage version overflowed it by four kilobytes when every stage's
 /// request, encoding, and prestate coexisted here.
 #[inline(never)]
-pub fn process_projected_custody_bootstrap_v1(
+pub fn process_projected_custody_bootstrap_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    if !is_projected_custody_bootstrap_v1(instruction_data) {
+    if !is_projected_custody_bootstrap_v2(instruction_data) {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let frame = BootstrapFrameV1::parse(accounts)?;
@@ -358,7 +360,7 @@ pub fn process_projected_custody_bootstrap_v1(
         OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
         lock.amount,
     )?;
-    stage_founding_capability_funding_v1(program_id, &frame, &funding)
+    stage_founding_capability_funding_v2(program_id, &frame, &funding)
 }
 
 /// Decode both readonly artifacts, authenticate every program and the founding
@@ -383,7 +385,7 @@ fn authenticate_and_project(
     // predicate is what makes the prestate admissible at Lock: the two routes
     // cannot drift into disagreeing about what a founding's Lock request is.
     authenticate_projected_lock_join_v1(program_id, core_program.key, &found, &lock)?;
-    let funding = founding_funding_facts_v1(&found, frame.funding.len())?;
+    let funding = founding_funding_facts_v2(&found)?;
     Ok((lock, funding))
 }
 
@@ -393,17 +395,14 @@ fn authenticate_and_project(
 /// value, so four of them in one frame is four copies of a four-hundred-byte
 /// request against a four-kilobyte budget.
 #[inline(never)]
-fn founding_funding_facts_v1(
+fn founding_funding_facts_v2(
     found: &GenericFoundingRequestV1,
-    supplied: usize,
 ) -> Result<FoundingFundingFactsV1, ProgramError> {
-    // The FundingState tail belongs to this founding and to no other: its
-    // length is the artifact's `funding_count` and the ordered address list it
-    // must hash to is the artifact's `funding_list_id`.
-    if usize::from(found.funding_count()) != supplied {
+    if found.funding_count() != 2 {
         return Err(TradingSbfError::Content.into());
     }
     Ok(FoundingFundingFactsV1 {
+        release_set: found.release_set().to_bytes(),
         market: found.market().to_bytes(),
         generation: found.generation(),
         funding_list_id: found.funding_list_id(),
@@ -412,6 +411,7 @@ fn founding_funding_facts_v1(
 
 /// The founding artifact's own commitment to its capability-funding tail.
 struct FoundingFundingFactsV1 {
+    release_set: [u8; 32],
     market: [u8; 32],
     generation: u64,
     funding_list_id: Identity,
@@ -474,30 +474,15 @@ fn run_stage<'info>(
     )
 }
 
-/// Create every prepaid `FundingStateV1` the founding's Found stage consumes.
+/// Initialize the canonical Resolution and Trading controller-subset ledgers.
 ///
-/// Core's generic Found stage requires one Trading-owned funding state per
-/// capability-manifest entry, `Pending`, at a derived address, holding exactly
-/// the manifest's quoted native principal above rent. Nothing in the protocol
-/// could create one for a generic founding: the only allocator is the Series
-/// ticket-consume path, which is Series-shaped and had no caller at all, and a
-/// host cannot create them itself because they are Trading-owned program
-/// addresses with no private key. This is that missing prestate, staged in the
-/// same rollback domain as the rest of the founding's prestate.
-///
-/// Funding provenance is the founding's prepaid payer — the same account that
-/// funds the projected replay, the Hoard vault, and the source compartment. No
-/// Hoard, fee, liveness, or reserve compartment is touched, and no principal
-/// moves: these are lamports, precommitted and prepaid exactly as the manifest
-/// quotes them.
-///
-/// Nothing here is a caller choice. The manifest is the record Core itself
-/// authenticated during the `ProjectFound` projection at stage one, every
-/// address is derived from it, and the ordered list of created addresses must
-/// hash to the founding artifact's own `funding_list_id` or the whole
-/// transaction rolls back.
+/// Resolution owns and initializes its ledger through a release-authenticated
+/// CPI. Trading creates only its own ledger. Both are joined back to the exact
+/// manifest and the founding artifact's two-key list before this transaction
+/// can commit, so neither a partial partition nor a stranded substitute can
+/// survive a refusal.
 #[inline(never)]
-fn stage_founding_capability_funding_v1(
+fn stage_founding_capability_funding_v2(
     program_id: &Pubkey,
     frame: &BootstrapFrameV1<'_, '_>,
     facts: &FoundingFundingFactsV1,
@@ -509,6 +494,9 @@ fn stage_founding_capability_funding_v1(
     let payer = account(frame.initialize, INITIALIZE_PAYER)?;
     let rent_account = account(frame.initialize, INITIALIZE_RENT)?;
     let system = account(frame.initialize, INITIALIZE_SYSTEM)?;
+    let resolution_program = frame.resolution_program;
+    let resolution_ledger = frame.resolution_ledger;
+    let trading_ledger = frame.trading_ledger;
     if manifest_raw.is_signer
         || manifest_raw.is_writable
         || manifest_raw.executable
@@ -519,9 +507,7 @@ fn stage_founding_capability_funding_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let state_rent = Rent::from_account_info(rent_account)
-        .map_err(|_| TradingSbfError::Content)?
-        .minimum_balance(FUNDING_STATE_BYTES);
+    let rent = Rent::from_account_info(rent_account).map_err(|_| TradingSbfError::Content)?;
     let manifest_data = manifest_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
@@ -529,99 +515,185 @@ fn stage_founding_capability_funding_v1(
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| TradingSbfError::Content)?;
     let manifest_id =
         ContentId::new(hash(&manifest_data).to_bytes()).map_err(|_| TradingSbfError::Content)?;
-    if usize::from(manifest.entry_count()) != frame.funding.len() {
-        return Err(TradingSbfError::Content.into());
+    let cache = account(frame.initialize, COMMON_CACHE)?;
+    let registry = account(frame.initialize, COMMON_REGISTRY)?;
+    let cache_data = cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
+        .map_err(|_| TradingSbfError::Release)?;
+    let resolution = activated
+        .role(ExecutionRoleV1::Resolution)
+        .map_err(|_| TradingSbfError::Release)?;
+    let trading = activated
+        .role(ExecutionRoleV1::Trading)
+        .map_err(|_| TradingSbfError::Release)?;
+    if cache.owner != registry.key
+        || resolution.release().program().to_bytes() != resolution_program.key.to_bytes()
+        || trading.release().program().to_bytes() != program_id.to_bytes()
+    {
+        return Err(TradingSbfError::Release.into());
     }
-    let mut keys = [Identity::new([1; 32]).map_err(|_| TradingSbfError::Content)?;
-        GENERIC_FOUNDING_MAX_FUNDING_STATES_V1];
-    for (index, target) in frame.funding.iter().enumerate() {
-        let entry_index = u16::try_from(index).map_err(|_| TradingSbfError::Content)?;
-        create_one_funding_state_v1(
-            program_id,
-            target,
-            payer,
-            system,
-            manifest,
-            manifest_id,
-            facts,
-            entry_index,
-            state_rent,
-        )?;
-        *keys.get_mut(index).ok_or(TradingSbfError::Content)? =
-            Identity::new(target.key.to_bytes()).map_err(|_| TradingSbfError::Content)?;
-    }
-    // The list identity is the founding artifact's, and Core recomputes exactly
-    // this over exactly these accounts. Checking it here means a manifest that
-    // is not this Market's cannot leave a single funded account behind, because
-    // the refusal rolls the whole bootstrap back.
-    let list = generic_founding_funding_list_id_v1(
-        keys.get(..frame.funding.len())
-            .ok_or(TradingSbfError::Content)?,
+    let resolution_mask = controller_mask(
+        manifest,
+        resolution.release().semantic_release_id().to_bytes(),
+    )?;
+    let trading_mask =
+        controller_mask(manifest, trading.release().semantic_release_id().to_bytes())?;
+    let required_union = manifest_required_union(manifest.entry_count())?;
+    validate_funding_ledger_masks_v2(
+        manifest.entry_count(),
+        required_union,
+        &[resolution_mask, trading_mask],
     )
     .map_err(|_| TradingSbfError::Content)?;
+    let project_found = ProjectFoundRequestV2::new(Request::administrative(
+        Action::Found,
+        facts.generation,
+        Identity::new(facts.market).map_err(|_| TradingSbfError::Content)?,
+    ))
+    .map_err(|_| TradingSbfError::Content)?;
+    initialize_resolution_ledger_v2(
+        program_id,
+        frame,
+        facts,
+        project_found,
+        manifest,
+        manifest_id,
+        resolution_mask,
+        &rent,
+    )?;
+    create_trading_ledger_v2(
+        program_id,
+        trading_ledger,
+        payer,
+        system,
+        manifest,
+        manifest_id,
+        facts,
+        trading_mask,
+        &rent,
+    )?;
+    let keys = [
+        Identity::new(resolution_ledger.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
+        Identity::new(trading_ledger.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
+    ];
+    let list = generic_founding_funding_list_id_v1(&keys).map_err(|_| TradingSbfError::Content)?;
     if list != facts.funding_list_id {
         return Err(TradingSbfError::Content.into());
     }
     Ok(())
 }
 
-/// One funding state's derived address, exact prepayment, and exact bytes.
-///
-/// Pure: it reads no account and writes nothing, so the whole derivation the
-/// Found stage will re-evaluate can be exercised adversarially without a chain.
-struct PlannedFundingStateV1 {
-    address: Pubkey,
-    bump: u8,
-    state: FundingStateV1,
-    required: u64,
-    derivation: CapabilityFundingDerivationV1,
+fn controller_mask(
+    manifest: CapabilityManifestV1<'_>,
+    semantic_release: [u8; 32],
+) -> Result<u16, ProgramError> {
+    let mut mask = 0_u16;
+    for entry_index in 0_u16..manifest.entry_count() {
+        if manifest
+            .entry(entry_index)
+            .map_err(|_| TradingSbfError::Content)?
+            .release_id()
+            .to_bytes()
+            == semantic_release
+        {
+            mask |= 1_u16
+                .checked_shl(u32::from(entry_index))
+                .ok_or(TradingSbfError::Content)?;
+        }
+    }
+    if mask == 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(mask)
 }
 
-/// Derive one funding state entirely from the authenticated manifest.
-#[inline(never)]
-fn plan_one_funding_state_v1(
-    program_id: &Pubkey,
+fn manifest_required_union(entry_count: u16) -> Result<u16, ProgramError> {
+    if entry_count == 0 || entry_count > 16 {
+        return Err(TradingSbfError::Content.into());
+    }
+    if entry_count == 16 {
+        Ok(u16::MAX)
+    } else {
+        1_u16
+            .checked_shl(u32::from(entry_count))
+            .and_then(|bound| bound.checked_sub(1))
+            .ok_or_else(|| TradingSbfError::Content.into())
+    }
+}
+
+struct PlannedFundingLedgerV2 {
+    address: Pubkey,
+    bump: u8,
+    bytes: Vec<u8>,
+    exact_rent: u64,
+    exact_native_principal: u64,
+    exact_lamports: u64,
+    derivation: CapabilityFundingLedgerDerivationV2,
+}
+
+fn plan_funding_ledger_v2(
+    controller: &Pubkey,
     manifest: CapabilityManifestV1<'_>,
     manifest_id: ContentId,
     facts: &FoundingFundingFactsV1,
-    entry_index: u16,
-    state_rent: u64,
-) -> Result<PlannedFundingStateV1, ProgramError> {
-    let quoted = manifest
-        .entry(entry_index)
-        .map_err(|_| TradingSbfError::Content)?
-        .funding_quote()
-        .amounts()
-        .native_lamports_total();
-    let required = state_rent
-        .checked_add(quoted)
+    selected_mask: u16,
+    rent: &Rent,
+) -> Result<PlannedFundingLedgerV2, ProgramError> {
+    let width = funding_ledger_bytes_v2(
+        u16::try_from(selected_mask.count_ones()).map_err(|_| TradingSbfError::Content)?,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let mut bytes = vec![0_u8; width];
+    FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, selected_mask)
+        .map_err(|_| TradingSbfError::Content)?;
+    let ledger = FundingLedgerV2::decode(&bytes).map_err(|_| TradingSbfError::Content)?;
+    let authenticated = ledger
+        .authenticate(manifest_id, manifest)
+        .map_err(|_| TradingSbfError::Content)?;
+    for entry_index in 0_u16..manifest.entry_count() {
+        if selected_mask & (1_u16 << entry_index) != 0
+            && manifest
+                .entry(entry_index)
+                .map_err(|_| TradingSbfError::Content)?
+                .funding_quote()
+                .realm_collateral()
+                .is_some()
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+    }
+    let exact_rent = rent.minimum_balance(width);
+    let exact_native_principal = authenticated
+        .remaining_native_lamports_total()
+        .map_err(|_| TradingSbfError::Content)?;
+    let exact_lamports = exact_rent
+        .checked_add(exact_native_principal)
         .ok_or(TradingSbfError::Content)?;
-    let custody = FundingCustodyObservationV1::native_only(required, state_rent)
-        .map_err(|_| TradingSbfError::Content)?;
-    let state = FundingStateV1::new(manifest_id, manifest, entry_index, custody)
-        .map_err(|_| TradingSbfError::Content)?;
-    let derivation = CapabilityFundingDerivationV1::new(
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        controller.to_bytes(),
         facts.market,
         facts.generation,
         manifest_id,
-        manifest,
-        state,
+        ledger,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    let (address, bump) = Pubkey::find_program_address(&derivation.seed_components(), program_id);
-    Ok(PlannedFundingStateV1 {
+    let (address, bump) = Pubkey::find_program_address(&derivation.seed_components(), controller);
+    Ok(PlannedFundingLedgerV2 {
         address,
         bump,
-        state,
-        required,
+        bytes,
+        exact_rent,
+        exact_native_principal,
+        exact_lamports,
         derivation,
     })
 }
 
-/// Create and prepay one funding state at its derived address.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn create_one_funding_state_v1<'info>(
+fn create_trading_ledger_v2<'info>(
     program_id: &Pubkey,
     target: &AccountInfo<'info>,
     payer: &AccountInfo<'info>,
@@ -629,61 +701,55 @@ fn create_one_funding_state_v1<'info>(
     manifest: CapabilityManifestV1<'_>,
     manifest_id: ContentId,
     facts: &FoundingFundingFactsV1,
-    entry_index: u16,
-    state_rent: u64,
+    selected_mask: u16,
+    rent: &Rent,
 ) -> Result<(), ProgramError> {
     if target.owner != &system_program::ID
         || target.data_len() != 0
+        || target.lamports() != 0
         || target.is_signer
         || !target.is_writable
         || target.executable
         || target.key == payer.key
+        || !payer.is_signer
+        || !payer.is_writable
+        || system.key != &system_program::ID
+        || !system.executable
     {
         return Err(TradingSbfError::Content.into());
     }
-    let planned = plan_one_funding_state_v1(
+    let planned = plan_funding_ledger_v2(
         program_id,
         manifest,
         manifest_id,
         facts,
-        entry_index,
-        state_rent,
+        selected_mask,
+        rent,
     )?;
-    let PlannedFundingStateV1 {
-        address,
-        bump,
-        state,
-        required,
-        derivation,
-    } = planned;
-    if &address != target.key {
+    if planned.address != *target.key || payer.lamports() < planned.exact_lamports {
         return Err(TradingSbfError::Content.into());
     }
-    let top_up = required
-        .checked_sub(target.lamports())
-        .ok_or(TradingSbfError::Content)?;
-    if top_up > 0 {
-        invoke(
-            &transfer(payer.key, target.key, top_up),
-            &[payer.clone(), target.clone(), system.clone()],
-        )
-        .map_err(|_| TradingSbfError::Transition)?;
-    }
-    let bump_seed = [bump];
-    let [domain, market, generation, entry, config, release] = derivation.seed_components();
+    invoke(
+        &transfer(payer.key, target.key, planned.exact_lamports),
+        &[payer.clone(), target.clone(), system.clone()],
+    )
+    .map_err(|_| TradingSbfError::Transition)?;
+    let bump_seed = [planned.bump];
+    let [domain, controller, market, generation, manifest_seed, mask] =
+        planned.derivation.seed_components();
     let signer = [
         domain,
+        controller,
         market,
         generation,
-        entry,
-        config,
-        release,
+        manifest_seed,
+        mask,
         bump_seed.as_slice(),
     ];
     invoke_signed(
         &allocate(
             target.key,
-            u64::try_from(FUNDING_STATE_BYTES).map_err(|_| TradingSbfError::Content)?,
+            u64::try_from(planned.bytes.len()).map_err(|_| TradingSbfError::Content)?,
         ),
         &[target.clone(), system.clone()],
         &[&signer],
@@ -696,19 +762,191 @@ fn create_one_funding_state_v1<'info>(
     )
     .map_err(|_| TradingSbfError::Transition)?;
     if target.owner != program_id
-        || target.data_len() != FUNDING_STATE_BYTES
-        || target.lamports() != required
+        || target.data_len() != planned.bytes.len()
+        || target.lamports() != planned.exact_lamports
     {
         return Err(TradingSbfError::Transition.into());
     }
-    let bytes = state.to_bytes();
     let mut data = target
         .try_borrow_mut_data()
         .map_err(|_| TradingSbfError::Transition)?;
-    if data.len() != bytes.len() {
+    if data.len() != planned.bytes.len() || data.iter().any(|byte| *byte != 0) {
         return Err(TradingSbfError::Transition.into());
     }
-    data.copy_from_slice(&bytes);
+    data.copy_from_slice(&planned.bytes);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn initialize_resolution_ledger_v2<'info>(
+    program_id: &Pubkey,
+    frame: &BootstrapFrameV1<'_, 'info>,
+    facts: &FoundingFundingFactsV1,
+    project_found: ProjectFoundRequestV2,
+    manifest: CapabilityManifestV1<'_>,
+    manifest_id: ContentId,
+    selected_mask: u16,
+    rent: &Rent,
+) -> Result<(), ProgramError> {
+    let resolution_program = frame.resolution_program;
+    let resolution_programdata = frame.resolution_programdata;
+    let caller_program = account(frame.initialize, COMMON_CALLER_PROGRAM)?;
+    let caller_programdata = account(frame.initialize, COMMON_CALLER_PROGRAMDATA)?;
+    let funding_source = account(frame.initialize, INITIALIZE_PAYER)?;
+    let target = frame.resolution_ledger;
+    let authority = frame.pre_market_caller_authority;
+    if !resolution_program.executable
+        || resolution_program.is_signer
+        || resolution_program.is_writable
+        || caller_program.key != program_id
+        || !caller_program.executable
+        || caller_programdata.is_signer
+        || caller_programdata.is_writable
+        || caller_programdata.executable
+        || resolution_programdata.is_signer
+        || resolution_programdata.is_writable
+        || resolution_programdata.executable
+        || authority.is_signer
+        || authority.is_writable
+        || authority.executable
+        || target.owner != &system_program::ID
+        || target.data_len() != 0
+        || target.lamports() != 0
+        || target.is_signer
+        || !target.is_writable
+        || target.executable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let planned = plan_funding_ledger_v2(
+        resolution_program.key,
+        manifest,
+        manifest_id,
+        facts,
+        selected_mask,
+        rent,
+    )?;
+    if planned.address != *target.key || funding_source.lamports() < planned.exact_lamports {
+        return Err(TradingSbfError::Content.into());
+    }
+    let prestate_digest = pre_market_funding_prestate_digest_v1(
+        target.key.to_bytes(),
+        target.owner.to_bytes(),
+        target.lamports(),
+        u64::try_from(target.data_len()).map_err(|_| TradingSbfError::Content)?,
+    );
+    let request = PreMarketFundingRequestV1 {
+        project_found,
+        manifest: manifest_id.to_bytes(),
+        selected_mask,
+        funding_source: funding_source.key.to_bytes(),
+        ledger: target.key.to_bytes(),
+        prestate_digest,
+    };
+    let request_bytes = request.encode().map_err(|_| TradingSbfError::Content)?;
+    let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
+        facts.release_set,
+        facts.market,
+        ExecutionRoleV1::Trading,
+        manifest_id.to_bytes(),
+        hash(&request_bytes).to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::Release)?;
+    let (expected_authority, bump) =
+        Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+    if expected_authority != *authority.key {
+        return Err(TradingSbfError::Release.into());
+    }
+    let found = subslice(frame.initialize, INITIALIZE_FOUND_START, 37)?;
+    let mut metas = Vec::with_capacity(44);
+    metas.push(AccountMeta::new_readonly(*authority.key, true));
+    metas.push(AccountMeta::new_readonly(*caller_program.key, false));
+    metas.push(AccountMeta::new_readonly(*caller_programdata.key, false));
+    metas.push(AccountMeta::new_readonly(*resolution_program.key, false));
+    metas.push(AccountMeta::new_readonly(
+        *resolution_programdata.key,
+        false,
+    ));
+    metas.push(AccountMeta::new(*funding_source.key, true));
+    metas.push(AccountMeta::new(*target.key, false));
+    metas.extend(
+        found
+            .iter()
+            .map(|value| AccountMeta::new_readonly(*value.key, false)),
+    );
+    let instruction = Instruction {
+        program_id: *resolution_program.key,
+        accounts: metas,
+        data: request_bytes.to_vec(),
+    };
+    let mut infos = Vec::with_capacity(44);
+    infos.extend([
+        authority.clone(),
+        caller_program.clone(),
+        caller_programdata.clone(),
+        resolution_program.clone(),
+        resolution_programdata.clone(),
+        funding_source.clone(),
+        target.clone(),
+    ]);
+    infos.extend_from_slice(found);
+    let bump_seed = [bump];
+    let [domain, release_set, market, role, context, request_digest] = authority_seeds.as_slices();
+    invoke_signed(
+        &instruction,
+        &infos,
+        &[&[
+            domain,
+            release_set,
+            market,
+            role,
+            context,
+            request_digest,
+            &bump_seed,
+        ]],
+    )
+    .map_err(|_| TradingSbfError::Transition)?;
+    let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
+    if producer != *resolution_program.key
+        || receipt_bytes.len() != PRE_MARKET_FUNDING_RECEIPT_BYTES_V1
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let receipt = PreMarketFundingReceiptV1::decode(&receipt_bytes)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let found_request = project_found
+        .found
+        .encode()
+        .map_err(|_| TradingSbfError::Content)?;
+    let expected_receipt = PreMarketFundingReceiptV1 {
+        market: facts.market,
+        generation: facts.generation,
+        manifest: manifest_id.to_bytes(),
+        selected_mask,
+        ledger: target.key.to_bytes(),
+        prestate_digest,
+        poststate_digest: hash(&planned.bytes).to_bytes(),
+        exact_rent_lamports: planned.exact_rent,
+        exact_native_principal: planned.exact_native_principal,
+        found_request_digest: hash(&found_request).to_bytes(),
+        funding_source: funding_source.key.to_bytes(),
+        rent_credit: account(found, 2)?.key.to_bytes(),
+    };
+    if receipt != expected_receipt
+        || target.owner != resolution_program.key
+        || target.data_len() != planned.bytes.len()
+        || target.lamports() != planned.exact_lamports
+        || hash(
+            &target
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Transition)?,
+        )
+        .to_bytes()
+            != expected_receipt.poststate_digest
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
     Ok(())
 }
 
@@ -718,25 +956,23 @@ struct BootstrapFrameV1<'accounts, 'info> {
     initialize: &'accounts [AccountInfo<'info>],
     open_hoard: &'accounts [AccountInfo<'info>],
     open_source: &'accounts [AccountInfo<'info>],
-    funding: &'accounts [AccountInfo<'info>],
+    resolution_program: &'accounts AccountInfo<'info>,
+    resolution_programdata: &'accounts AccountInfo<'info>,
+    pre_market_caller_authority: &'accounts AccountInfo<'info>,
+    resolution_ledger: &'accounts AccountInfo<'info>,
+    trading_ledger: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> BootstrapFrameV1<'accounts, 'info> {
     #[inline(never)]
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        // The tail width is not a caller choice: it is asserted against the
-        // founding artifact's own `funding_count` before anything is created.
-        if accounts.len() <= PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1
-            || accounts.len()
-                > PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1
-                    + GENERIC_FOUNDING_MAX_FUNDING_STATES_V1
-        {
+        if accounts.len() != PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNT_COUNT_V2 {
             return Err(TradingSbfError::Content.into());
         }
         let raw = subslice(
             accounts,
             0,
-            PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V1,
+            PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V2,
         )?;
         for (index, value) in raw.iter().enumerate() {
             if value.is_signer
@@ -751,10 +987,10 @@ impl<'accounts, 'info> BootstrapFrameV1<'accounts, 'info> {
         }
         authenticate_instructions_sysvar_v1(account(
             accounts,
-            PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1,
+            PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V2,
         )?)?;
         let open_start = INITIALIZE_START
-            .checked_add(PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1)
+            .checked_add(PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2)
             .ok_or(TradingSbfError::Content)?;
         let source_start = open_start
             .checked_add(PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1)
@@ -765,7 +1001,7 @@ impl<'accounts, 'info> BootstrapFrameV1<'accounts, 'info> {
             initialize: subslice(
                 accounts,
                 INITIALIZE_START,
-                PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1,
+                PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2,
             )?,
             open_hoard: subslice(
                 accounts,
@@ -777,9 +1013,11 @@ impl<'accounts, 'info> BootstrapFrameV1<'accounts, 'info> {
                 source_start,
                 PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1,
             )?,
-            funding: accounts
-                .get(PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1..)
-                .ok_or(TradingSbfError::Content)?,
+            resolution_program: account(accounts, RESOLUTION_PROGRAM)?,
+            resolution_programdata: account(accounts, RESOLUTION_PROGRAMDATA)?,
+            pre_market_caller_authority: account(accounts, PRE_MARKET_CALLER_AUTHORITY)?,
+            resolution_ledger: account(accounts, RESOLUTION_LEDGER)?,
+            trading_ledger: account(accounts, TRADING_LEDGER)?,
         })
     }
 
@@ -960,14 +1198,14 @@ fn authenticate_poststate(
     locked_amount: u64,
 ) -> Result<(), ProgramError> {
     if state_account.owner != custody_program.key
-        || state_account.data_len() != PROJECTED_CUSTODY_STATE_BYTES_V1
+        || state_account.data_len() != PROJECTED_CUSTODY_STATE_BYTES_V2
     {
         return Err(TradingSbfError::Transition.into());
     }
     let data = state_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
-    let state = ProjectedCustodyStateV1::decode(&data).map_err(|_| TradingSbfError::Transition)?;
+    let state = ProjectedCustodyStateV2::decode(&data).map_err(|_| TradingSbfError::Transition)?;
     if state.phase != phase
         || state.next_revision != next_revision
         || state.locked_amount != locked_amount
@@ -1108,29 +1346,20 @@ mod tests {
 
     #[test]
     fn bootstrap_abi_is_data_account_only_and_frame_width_is_fixed() {
-        assert!(is_projected_custody_bootstrap_v1(
-            &PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1
+        assert!(is_projected_custody_bootstrap_v2(
+            &PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2
         ));
-        assert!(!is_projected_custody_bootstrap_v1(&[0; 8]));
+        assert!(!is_projected_custody_bootstrap_v2(&[0; 8]));
         // A prefix of the tag is not the tag: the route carries no payload.
-        assert!(!is_projected_custody_bootstrap_v1(&[
-            b'D', b'C', b'L', b'T', b'P', b'C', b'B', b'1', 0
+        assert!(!is_projected_custody_bootstrap_v2(&[
+            b'D', b'C', b'L', b'T', b'P', b'C', b'B', b'2', 0
         ]));
-        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTION_BYTES_V1, 8);
-        // 78 before the instructions sysvar the heap-frame admission reads
-        // back; presenting it is what lets the route run on the granted heap
-        // instead of the compile-time 32 KiB it exhausted at stage three.
-        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1, 79);
+        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTION_BYTES_V2, 8);
+        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNT_COUNT_V2, 85);
+        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNT_COUNT_V2, 90);
         assert_eq!(
-            PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1,
-            PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V1
-        );
-        // The FundingState tail is one account per capability-manifest entry,
-        // and the founding artifact's own `funding_count` pins its length.
-        assert_eq!(projected_custody_bootstrap_account_count_v1(3), 82);
-        assert_eq!(
-            projected_custody_bootstrap_account_count_v1(GENERIC_FOUNDING_MAX_FUNDING_STATES_V1),
-            95
+            PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V2,
+            PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V2
         );
     }
 
@@ -1259,7 +1488,8 @@ mod tests {
             built.push(
                 CapabilityEntryV1::new(
                     ContentId::new([0x40 + byte; 32]).expect("kind"),
-                    ContentId::new([0x50; 32]).expect("release"),
+                    ContentId::new(if index < 3 { [0x50; 32] } else { [0x51; 32] })
+                        .expect("release"),
                     ContentId::new([0x60 + byte; 32]).expect("config"),
                     ContentId::new([0x70 + byte; 32]).expect("capacity"),
                     ContentId::new([0x80; 32]).expect("schema"),
@@ -1279,32 +1509,32 @@ mod tests {
         bytes
     }
 
-    fn funding_list(
-        manifest_bytes: &[u8],
-        market: [u8; 32],
-        generation: u64,
-        rent: u64,
-    ) -> Identity {
+    fn funding_list(manifest_bytes: &[u8], market: [u8; 32], generation: u64) -> Identity {
         let manifest = CapabilityManifestV1::decode(manifest_bytes).expect("manifest");
         let manifest_id = ContentId::new(hash(manifest_bytes).to_bytes()).expect("manifest id");
         let facts = FoundingFundingFactsV1 {
+            release_set: [0xaa; 32],
             market,
             generation,
             funding_list_id: Identity::new([1; 32]).expect("placeholder"),
         };
-        let mut keys = Vec::new();
-        for index in 0..manifest.entry_count() {
-            let planned =
-                plan_one_funding_state_v1(&trading(), manifest, manifest_id, &facts, index, rent)
-                    .expect("planned funding state");
-            // Exactly what Core re-derives and re-validates at Found.
-            assert_eq!(planned.state.entry_index(), index);
-            assert_eq!(planned.state.manifest_content_id(), manifest_id);
-            assert_eq!(planned.required, rent + 3);
-            assert_eq!(planned.derivation.market(), market);
-            assert_eq!(planned.derivation.generation(), generation);
-            keys.push(Identity::new(planned.address.to_bytes()).expect("key"));
-        }
+        let rent = Rent::default();
+        let resolution = plan_funding_ledger_v2(
+            &Pubkey::new_from_array([0x52; 32]),
+            manifest,
+            manifest_id,
+            &facts,
+            0b0111,
+            &rent,
+        )
+        .expect("Resolution ledger");
+        let trading =
+            plan_funding_ledger_v2(&trading(), manifest, manifest_id, &facts, 0b1000, &rent)
+                .expect("Trading ledger");
+        let keys = [
+            Identity::new(resolution.address.to_bytes()).expect("Resolution key"),
+            Identity::new(trading.address.to_bytes()).expect("Trading key"),
+        ];
         generic_founding_funding_list_id_v1(&keys).expect("list")
     }
 
@@ -1318,48 +1548,44 @@ mod tests {
     /// `funding_list_id` and therefore refuse.
     #[test]
     fn the_capability_funding_tail_is_pinned_to_one_founding() {
-        let manifest = demo_manifest(3);
+        let manifest = demo_manifest(4);
         let market = [0x11; 32];
-        let honest = funding_list(&manifest, market, 7, 2_500_000);
+        let honest = funding_list(&manifest, market, 7);
 
         // A different Market, or a different generation, is a different tail.
-        assert_ne!(honest, funding_list(&manifest, [0x12; 32], 7, 2_500_000));
-        assert_ne!(honest, funding_list(&manifest, market, 8, 2_500_000));
+        assert_ne!(honest, funding_list(&manifest, [0x12; 32], 7));
+        assert_ne!(honest, funding_list(&manifest, market, 8));
         // A manifest whose entries differ is a different tail, because the
         // config and release identities are PDA seeds.
-        assert_ne!(
-            honest,
-            funding_list(&demo_manifest(2), market, 7, 2_500_000)
-        );
+        assert_ne!(honest, funding_list(&demo_manifest(5), market, 7));
 
         // Order is load-bearing: the list identity refuses a permuted set.
         let bytes = manifest.clone();
         let decoded = CapabilityManifestV1::decode(&bytes).expect("manifest");
         let manifest_id = ContentId::new(hash(&bytes).to_bytes()).expect("id");
         let facts = FoundingFundingFactsV1 {
+            release_set: [0xaa; 32],
             market,
             generation: 7,
             funding_list_id: honest,
         };
-        let mut keys = Vec::new();
-        for index in 0..decoded.entry_count() {
-            keys.push(
-                Identity::new(
-                    plan_one_funding_state_v1(
-                        &trading(),
-                        decoded,
-                        manifest_id,
-                        &facts,
-                        index,
-                        2_500_000,
-                    )
-                    .expect("planned")
-                    .address
-                    .to_bytes(),
-                )
-                .expect("key"),
-            );
-        }
+        let rent = Rent::default();
+        let resolution = plan_funding_ledger_v2(
+            &Pubkey::new_from_array([0x52; 32]),
+            decoded,
+            manifest_id,
+            &facts,
+            0b0111,
+            &rent,
+        )
+        .expect("Resolution");
+        let trading =
+            plan_funding_ledger_v2(&trading(), decoded, manifest_id, &facts, 0b1000, &rent)
+                .expect("Trading");
+        let mut keys = vec![
+            Identity::new(resolution.address.to_bytes()).expect("Resolution key"),
+            Identity::new(trading.address.to_bytes()).expect("Trading key"),
+        ];
         assert_eq!(
             generic_founding_funding_list_id_v1(&keys).expect("ordered"),
             honest
@@ -1459,9 +1685,9 @@ mod tests {
             b'D', b'C', b'L', b'T', b'P', b'C', b'A', b'1', 0
         ]));
         assert!(!is_projected_custody_abort_v1(
-            &PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1
+            &PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2
         ));
-        assert!(!is_projected_custody_bootstrap_v1(
+        assert!(!is_projected_custody_bootstrap_v2(
             &PROJECTED_CUSTODY_ABORT_MAGIC_V1
         ));
         assert_eq!(PROJECTED_CUSTODY_ABORT_INSTRUCTION_BYTES_V1, 8);

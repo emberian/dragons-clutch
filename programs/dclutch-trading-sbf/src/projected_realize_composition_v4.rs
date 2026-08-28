@@ -8,9 +8,9 @@ use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CustodyReplayV1,
     PROJECTED_CUSTODY_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_RECEIPT_MAGIC_V1,
     PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
-    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1,
+    PROJECTED_CUSTODY_STATE_BYTES_V2, ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1,
     ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
-    ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1, normal_replay_from_realization_v1,
+    ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2, normal_replay_from_realization_v1,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -296,7 +296,7 @@ fn prepare(
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     let state =
-        ProjectedCustodyStateV1::decode(&state_data).map_err(|_| TradingSbfError::Content)?;
+        ProjectedCustodyStateV2::decode(&state_data).map_err(|_| TradingSbfError::Content)?;
     drop(state_data);
     let market_data = market_account
         .try_borrow_data()
@@ -434,7 +434,7 @@ fn authenticate_frame(
     let state_account = account_at(accounts, STATE)?;
     let market_account = account_at(accounts, MARKET)?;
     let state = Pubkey::find_program_address(
-        &ProjectedCustodyStateSeedsV1::from_request(request).as_slices(),
+        &ProjectedCustodyStateSeedsV2::from_request(request).as_slices(),
         custody_program.key,
     )
     .0;
@@ -476,7 +476,7 @@ fn authenticate_frame(
             .any(|(account, key)| key.is_some_and(|key| account.key != &key))
         || !exact_privileges(accounts)
         || state_account.owner != custody_program.key
-        || state_account.data_len() != PROJECTED_CUSTODY_STATE_BYTES_V1
+        || state_account.data_len() != PROJECTED_CUSTODY_STATE_BYTES_V2
         || market_account.owner.to_bytes() != request.core_program
         || market_account.data_len() != STATE_BYTES
     {

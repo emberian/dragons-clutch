@@ -857,6 +857,7 @@ fn core_market(
         },
         identity,
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: semantic_identity([0x65; 32]),
         terminal_receipt: terminal_receipt.map(semantic_identity),
     };

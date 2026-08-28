@@ -7,8 +7,9 @@
 use alloc::boxed::Box;
 
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
+    validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_claims_svm::founding_v5::{
@@ -26,9 +27,9 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_custody_contract::{
-    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1, PROJECTED_CUSTODY_STATE_BYTES_V1,
+    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1, PROJECTED_CUSTODY_STATE_BYTES_V2,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+    ProjectedCustodyPhaseV1, ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, Admission, ChildEffectObservation, CoreState, FoundingIntentV5,
@@ -46,6 +47,7 @@ use dclutch_release_set_contract::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
@@ -61,8 +63,8 @@ use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
     CoreSbfError,
-    found::{self, PreparedFound},
-    frame::{FOUND_ACCOUNT_COUNT_V2, FoundAccounts, require_distinct},
+    found::{self, PreparedFound, ProjectedFoundAuthorityV2},
+    frame::{PROJECTED_FOUND_ACCOUNT_COUNT_V2, ProjectedFoundAccountsV2, require_distinct},
     release::{RoleBatchAdmissions, RoleDeploymentAccounts, authenticate_roles},
 };
 
@@ -71,10 +73,11 @@ pub use dclutch_market_core_codec::{
     GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
 };
 
-const _: () = assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == FOUND_ACCOUNT_COUNT_V2 + 3);
+const _: () =
+    assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 3);
 
 struct GenericFoundAccounts<'accounts, 'info> {
-    found: FoundAccounts<'accounts, 'info>,
+    found: ProjectedFoundAccountsV2<'accounts, 'info>,
     trading_program: &'accounts AccountInfo<'info>,
     trading_programdata: &'accounts AccountInfo<'info>,
     clock: &'accounts AccountInfo<'info>,
@@ -118,15 +121,15 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
             return Err(CoreSbfError::AccountFrame);
         }
         require_distinct(accounts)?;
-        let found = FoundAccounts::parse(
+        let found = ProjectedFoundAccountsV2::parse(
             program_id,
             accounts
-                .get(..FOUND_ACCOUNT_COUNT_V2)
+                .get(..PROJECTED_FOUND_ACCOUNT_COUNT_V2)
                 .ok_or(CoreSbfError::AccountFrame)?,
         )?;
-        let trading_program = account(accounts, FOUND_ACCOUNT_COUNT_V2)?;
-        let trading_programdata = account(accounts, FOUND_ACCOUNT_COUNT_V2 + 1)?;
-        let clock = account(accounts, FOUND_ACCOUNT_COUNT_V2 + 2)?;
+        let trading_program = account(accounts, PROJECTED_FOUND_ACCOUNT_COUNT_V2)?;
+        let trading_programdata = account(accounts, PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 1)?;
+        let clock = account(accounts, PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 2)?;
         let funding_start = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1;
         let suffix_start = funding_start
             .checked_add(funding_count)
@@ -409,8 +412,16 @@ fn process_found(
     if clock.slot > request.expiry_slot() {
         return Err(CoreSbfError::Reference.into());
     }
-    let prepared = prepare_generic_core_found(program_id, &frame, request, &rent)?;
-    authenticate_generic_core_found_references(&frame, request, request_bytes, &prepared, &rent)?;
+    let roles = authenticate_generic_found_roles(&frame, request)?;
+    let prepared = prepare_generic_core_found(program_id, &frame, request, &rent, roles)?;
+    authenticate_generic_core_found_references(
+        &frame,
+        request,
+        request_bytes,
+        &prepared,
+        &rent,
+        roles,
+    )?;
     let permit_plan = prepare_generic_claims_permit(
         program_id,
         &frame,
@@ -419,7 +430,7 @@ fn process_found(
         &prepared,
         &rent,
     )?;
-    found::apply_prepared(program_id, &frame.found, *prepared)?;
+    found::apply_projected_prepared(program_id, &frame.found, *prepared)?;
     create_permit(
         program_id,
         frame.suffix.permit,
@@ -436,29 +447,90 @@ fn prepare_generic_core_found(
     frame: &GenericFoundAccounts<'_, '_>,
     request: &GenericFoundingRequestV1,
     rent: &Rent,
+    roles: RoleBatchAdmissions,
 ) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
-    let admission = authenticate_generic_core_admission(frame, request)?;
+    roles.require(Role::Custody)?;
+    let authority = authenticate_projected_found_authority(program_id, frame, request)?;
+    MarketPrincipalCapSetsV1::read(authority.principal_cap_sets)
+        .admit(request.quantity())
+        .map_err(|_| CoreSbfError::Funding)?;
+    let admission = roles.admission(Role::Core)?;
     let found_request = Request::administrative(
         Action::Found,
         request.generation(),
         identity(request.market().to_bytes())?,
     );
-    let prepared = Box::new(found::prepare_with_admission(
+    let prepared = found::prepare_projected_with_admission(
         program_id,
         &frame.found,
         found_request,
         rent,
         admission,
-    )?);
+        authority,
+    )?;
     Ok(prepared)
 }
 
 #[inline(never)]
-fn authenticate_generic_core_admission(
+fn authenticate_projected_found_authority(
+    program_id: &Pubkey,
     frame: &GenericFoundAccounts<'_, '_>,
     request: &GenericFoundingRequestV1,
-) -> Result<Admission, CoreSbfError> {
-    authenticate_generic_found_roles(frame, request)?.admission(Role::Core)
+) -> Result<ProjectedFoundAuthorityV2, CoreSbfError> {
+    let data = frame
+        .suffix
+        .projected_replay
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::ChildAck)?;
+    if frame.suffix.projected_replay.owner != frame.suffix.custody_program.key
+        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V2
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    let projected = decode_projected_state(&data)?;
+    drop(data);
+    let (expected, bump) = Pubkey::find_program_address(
+        &ProjectedCustodyStateSeedsV2::from_request(projected.request).as_slices(),
+        frame.suffix.custody_program.key,
+    );
+    let context = hashv(&[
+        PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+        request.context().to_bytes().as_slice(),
+    ])
+    .to_bytes();
+    let principal = request
+        .hoard_principal()
+        .map_err(|_| CoreSbfError::Arithmetic)?;
+    if expected != *frame.suffix.projected_replay.key
+        || bump != projected.bump
+        || projected.phase != ProjectedCustodyPhaseV1::HoardLocked
+        || projected.request.market != request.market().to_bytes()
+        || projected.request.generation != request.generation()
+        || projected.request.release_set != request.release_set().to_bytes()
+        || projected.request.parent_capability_root != request.capability_root().to_bytes()
+        || projected.request.context_digest != context
+        || projected.request.caller_program != frame.trading_program.key.to_bytes()
+        || projected.request.core_program != program_id.to_bytes()
+        || projected.request.rent_program != frame.found.rent_program.key.to_bytes()
+        || projected.request.refund_owner != request.beneficiary().to_bytes()
+        || projected.request.rent_credit != frame.found.rent_credit.key.to_bytes()
+        || projected.request.hoard_vault != request.hoard().to_bytes()
+        || projected.request.funding_source_vault != request.funding_source().to_bytes()
+        || projected.request.funding_source_context != request.context().to_bytes()
+        || projected.request.expiry_slot != request.expiry_slot()
+        || projected.locked_amount != principal
+        || projected.principal_cap_sets == 0
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    Ok(ProjectedFoundAuthorityV2 {
+        realm_id: projected.request.realm,
+        collateral_mint: projected.request.mint,
+        token_program: projected.request.token_program,
+        collateral_release: projected.request.collateral_release,
+        resolution_policy_id: projected.request.source,
+        principal_cap_sets: projected.principal_cap_sets,
+    })
 }
 
 #[inline(never)]
@@ -468,9 +540,10 @@ fn authenticate_generic_core_found_references(
     request_bytes: &[u8],
     prepared: &PreparedFound,
     rent: &Rent,
+    roles: RoleBatchAdmissions,
 ) -> Result<(), CoreSbfError> {
     authenticate_found_request(frame, request, request_bytes, prepared, rent)?;
-    authenticate_generic_funding_and_capability_root(frame, request, prepared, rent)
+    authenticate_generic_funding_and_capability_root(frame, request, prepared, rent, roles)
 }
 
 #[inline(never)]
@@ -815,6 +888,7 @@ fn authenticate_generic_funding_and_capability_root(
     request: &GenericFoundingRequestV1,
     prepared: &PreparedFound,
     rent: &Rent,
+    roles: RoleBatchAdmissions,
 ) -> Result<(), CoreSbfError> {
     let manifest_data = frame
         .found
@@ -823,19 +897,70 @@ fn authenticate_generic_funding_and_capability_root(
         .map_err(|_| CoreSbfError::Funding)?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
-    if usize::from(manifest.entry_count()) != frame.funding.len()
-        || usize::from(request.funding_count()) != frame.funding.len()
-    {
+    if usize::from(request.funding_count()) != frame.funding.len() {
         return Err(CoreSbfError::Funding);
     }
     let manifest_id =
         CapabilityContentId::new(prepared.manifest_id).map_err(|_| CoreSbfError::Funding)?;
     authenticate_derived_capability_root(frame.trading_program, request, manifest, manifest_id)?;
+    let resolution = roles.projected_binding(Role::Resolution);
+    let trading = roles.projected_binding(Role::Trading);
+    let mut expected_masks = [0_u16; 2];
+    let mut expected_controllers = [resolution.program, trading.program];
+    let mut entry_index = 0_u16;
+    while entry_index < manifest.entry_count() {
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(|_| CoreSbfError::Funding)?;
+        let bit = 1_u16
+            .checked_shl(u32::from(entry_index))
+            .ok_or(CoreSbfError::Arithmetic)?;
+        if entry.release_id().to_bytes() == resolution.semantic_release.to_bytes() {
+            expected_masks[0] |= bit;
+        } else if entry.release_id().to_bytes() == trading.semantic_release.to_bytes() {
+            expected_masks[1] |= bit;
+        } else {
+            return Err(CoreSbfError::Funding);
+        }
+        entry_index = entry_index.checked_add(1).ok_or(CoreSbfError::Arithmetic)?;
+    }
+    if expected_masks[0] == 0 {
+        expected_masks[0] = expected_masks[1];
+        expected_controllers[0] = expected_controllers[1];
+        expected_masks[1] = 0;
+    } else if expected_masks[1] != 0
+        && expected_masks[0].trailing_zeros() > expected_masks[1].trailing_zeros()
+    {
+        expected_masks.swap(0, 1);
+        expected_controllers.swap(0, 1);
+    }
+    let physical_count = if expected_masks[1] == 0 { 1 } else { 2 };
+    if frame.funding.len() != physical_count {
+        return Err(CoreSbfError::Funding);
+    }
+    let required_union = if manifest.entry_count() == 16 {
+        u16::MAX
+    } else {
+        1_u16
+            .checked_shl(u32::from(manifest.entry_count()))
+            .and_then(|value| value.checked_sub(1))
+            .ok_or(CoreSbfError::Arithmetic)?
+    };
+    validate_funding_ledger_masks_v2(
+        manifest.entry_count(),
+        required_union,
+        &expected_masks[..physical_count],
+    )
+    .map_err(|_| CoreSbfError::Funding)?;
+
     let mut keys = [Identity::new([1; 32]).map_err(|_| CoreSbfError::Funding)?;
         GENERIC_FOUNDING_MAX_FUNDING_STATES_V1];
     for (index, funding_account) in frame.funding.iter().enumerate() {
-        if funding_account.owner != frame.trading_program.key
-            || funding_account.data_len() != FUNDING_STATE_BYTES
+        let controller = expected_controllers
+            .get(index)
+            .ok_or(CoreSbfError::Funding)?;
+        let mask = *expected_masks.get(index).ok_or(CoreSbfError::Funding)?;
+        if funding_account.owner.to_bytes() != controller.to_bytes()
             || funding_account.is_signer
             || funding_account.is_writable
             || funding_account.executable
@@ -845,31 +970,48 @@ fn authenticate_generic_funding_and_capability_root(
         let data = funding_account
             .try_borrow_data()
             .map_err(|_| CoreSbfError::Funding)?;
-        let funding = FundingStateV1::decode(&data).map_err(|_| CoreSbfError::Funding)?;
-        let expected_index = u16::try_from(index).map_err(|_| CoreSbfError::Arithmetic)?;
-        if funding.status() != FundingStatus::Pending
-            || funding.manifest_content_id() != manifest_id
-            || funding.entry_index() != expected_index
+        let funding = FundingLedgerV2::decode(&data).map_err(|_| CoreSbfError::Funding)?;
+        if funding.selected_mask() != mask
+            || funding.as_bytes().len()
+                != funding_ledger_bytes_v2(funding.slot_count())
+                    .map_err(|_| CoreSbfError::Funding)?
         {
             return Err(CoreSbfError::Funding);
         }
-        let custody = FundingCustodyObservationV1::native_only(
-            funding_account.lamports(),
-            rent.minimum_balance(FUNDING_STATE_BYTES),
-        )
-        .map_err(|_| CoreSbfError::Funding)?;
-        funding
-            .validate_against(manifest_id, manifest, custody)
+        let authenticated = funding
+            .authenticate(manifest_id, manifest)
             .map_err(|_| CoreSbfError::Funding)?;
-        let derivation = CapabilityFundingDerivationV1::new(
+        let mut selected_entry = 0_u16;
+        while selected_entry < manifest.entry_count() {
+            if mask & (1_u16 << selected_entry) != 0 {
+                let slot = authenticated
+                    .slot(selected_entry)
+                    .map_err(|_| CoreSbfError::Funding)?;
+                if slot.status() != FundingLedgerStatusV2::Pending {
+                    return Err(CoreSbfError::Funding);
+                }
+            }
+            selected_entry = selected_entry
+                .checked_add(1)
+                .ok_or(CoreSbfError::Arithmetic)?;
+        }
+        authenticated
+            .validate_native_custody(
+                funding_account.lamports(),
+                rent.minimum_balance(data.len()),
+                false,
+            )
+            .map_err(|_| CoreSbfError::Funding)?;
+        let derivation = CapabilityFundingLedgerDerivationV2::new(
+            controller.to_bytes(),
             request.market().to_bytes(),
             request.generation(),
             manifest_id,
-            manifest,
             funding,
         )
         .map_err(|_| CoreSbfError::Funding)?;
-        if Pubkey::find_program_address(&derivation.seed_components(), frame.trading_program.key).0
+        let controller_program = Pubkey::new_from_array(controller.to_bytes());
+        if Pubkey::find_program_address(&derivation.seed_components(), &controller_program).0
             != *funding_account.key
         {
             return Err(CoreSbfError::Funding);
@@ -941,14 +1083,14 @@ fn authenticate_generic_projected(
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
     if frame.suffix.projected_replay.owner != frame.suffix.custody_program.key
-        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V1
+        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V2
     {
         return Err(CoreSbfError::ChildAck);
     }
     let projected = decode_projected_state(&data)?;
     drop(data);
     let (expected, bump) = Pubkey::find_program_address(
-        &ProjectedCustodyStateSeedsV1::from_request(projected.request).as_slices(),
+        &ProjectedCustodyStateSeedsV2::from_request(projected.request).as_slices(),
         frame.suffix.custody_program.key,
     );
     let context = hashv(&[
@@ -983,6 +1125,7 @@ fn authenticate_generic_projected(
         || projected.request.token_program != prepared.token_program
         || projected.request.collateral_release != prepared.collateral_release
         || projected.request.expiry_slot != request.expiry_slot()
+        || projected.principal_cap_sets != prepared.candidate_state().principal_cap_sets
         || projected.locked_amount != principal
         || projected.last_request_digest != lock_receipt.request_digest
         || projected.next_revision != lock_receipt.resulting_revision
@@ -1054,8 +1197,8 @@ fn authenticate_generic_projected(
 }
 
 #[inline(never)]
-fn decode_projected_state(bytes: &[u8]) -> Result<Box<ProjectedCustodyStateV1>, CoreSbfError> {
-    ProjectedCustodyStateV1::decode(bytes)
+fn decode_projected_state(bytes: &[u8]) -> Result<Box<ProjectedCustodyStateV2>, CoreSbfError> {
+    ProjectedCustodyStateV2::decode(bytes)
         .map(Box::new)
         .map_err(|_| CoreSbfError::ChildAck)
 }
@@ -1075,7 +1218,7 @@ fn digest_core_state(state: &CoreState) -> Result<[u8; 32], CoreSbfError> {
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn finish_projected_facts(
-    projected: &ProjectedCustodyStateV1,
+    projected: &ProjectedCustodyStateV2,
     realize: &dclutch_custody_contract::ProjectedCustodyRequestV1,
     realize_request_digest: [u8; 32],
     market: &CoreState,

@@ -484,6 +484,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(ACTOR).expect("beneficiary"),
         terminal_receipt: None,
     };

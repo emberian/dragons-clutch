@@ -485,6 +485,7 @@ fn core_market(
         terminal_winner: if terminal { WINNER } else { 0 },
         identity: market_identity,
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x65; 32]),
         terminal_receipt: terminal.then(|| identity([0x66; 32])),
     };

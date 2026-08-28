@@ -35,8 +35,9 @@ import { type BindingCheck } from './decoders';
  * Three facts about the real representation shape this module, and each was
  * measured against a live chain rather than assumed:
  *
- *   1. A Market is `DCLTCOR2` — the Lean-emitted 352-byte Core state. It holds
- *      identity and lifecycle only.
+ *   1. A Market is `DCLTCOR3` — the Lean-emitted 360-byte Core state. It holds
+ *      identity, lifecycle, and the authenticated source-derived principal cap.
+ *      Older 352-byte devnet Markets are incompatible with this generation.
  *   2. The per-claim SUPPLY vector is not in it. It lives in a Claims-owned
  *      LiabilityBasisV2 aggregate at a PDA derived from the Market, so a card
  *      without a Claims program says its liabilities are UNREAD rather than
@@ -185,6 +186,7 @@ export type MarketDiscoveryCardV1 =
     readiness: MarketCoreReadinessV2;
     generation: string;
     outstandingCapabilities: string;
+    principalCapSets: string;
     settlement: MarketCoreSettlementV2;
     identity: MarketIdentityV1;
     collateral: MarketCollateralV1;
@@ -661,6 +663,7 @@ export async function inspectMarketDiscoveryV1(
       readiness: state.readiness,
       generation: state.identity.generation,
       outstandingCapabilities: state.outstandingCapabilities,
+      principalCapSets: state.principalCapSets,
       settlement: state.settlement,
       identity: Object.freeze({
         schemaMagic: CORE_STATE_MAGIC_TEXT,

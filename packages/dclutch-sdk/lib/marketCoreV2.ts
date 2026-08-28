@@ -18,6 +18,7 @@ import {
   CORE_STATE_MARKET_ID_OFFSET,
   CORE_STATE_OUTSTANDING_CAPABILITIES_OFFSET,
   CORE_STATE_PHASE_OFFSET,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
   CORE_STATE_PRODUCT_ID_OFFSET,
   CORE_STATE_PRODUCT_RECORD_OFFSET,
   CORE_STATE_READINESS_OFFSET,
@@ -60,11 +61,12 @@ import {
 /**
  * The Market a real dClutch chain actually holds.
  *
- * `DCLTCOR2` is the live Core state: 352 fixed bytes emitted by
+ * `DCLTCOR3` is the current Core state: 360 fixed bytes emitted by
  * `formal/dclutch-semantics/EmitMarketCoreRust.lean` into
  * `crates/dclutch-market-core-codec/src/generated.rs`, from which every offset
- * below is generated rather than retyped. It carries IDENTITY and LIFECYCLE and
- * nothing else.
+ * below is generated rather than retyped. It carries identity, lifecycle, and
+ * the source-derived cap on complete principal sets. Older 352-byte devnet
+ * Markets predate that cap and are incompatible with this generation.
  *
  * What it deliberately does NOT carry is the economics. There is no Hoard
  * figure, no per-claim supply vector and no settlement summary in these bytes:
@@ -191,9 +193,18 @@ export type MarketCoreStateV2 = Readonly<{
   marketId: string;
   identity: MarketCoreIdentityV2;
   outstandingCapabilities: string;
+  principalCapSets: string;
   rentBeneficiary: string;
   settlement: MarketCoreSettlementV2;
 }>;
+
+function requireCurrentCoreStateWidth(bytes: Uint8Array): void {
+  if (bytes.length === CORE_STATE_BYTES) return;
+  const legacy = bytes.length === 352
+    ? ' This older devnet Market generation is incompatible.'
+    : '';
+  throw new Error(`Core Market state is ${bytes.length} bytes; the exact current width is ${CORE_STATE_BYTES}.${legacy}`);
+}
 
 function identityBytes(bytes: Uint8Array): ReadonlyArray<Uint8Array> {
   const generation = slice(bytes, CORE_STATE_GENERATION_OFFSET, 8);
@@ -218,15 +229,16 @@ function identityBytes(bytes: Uint8Array): ReadonlyArray<Uint8Array> {
  * the eight identities and the generation it declares.
  */
 export function deriveMarketCoreAddressV2(coreProgramId: string, bytes: Uint8Array): string {
+  requireCurrentCoreStateWidth(bytes);
   return PublicKey.findProgramAddressSync(
     identityBytes(bytes) as Uint8Array[],
     new PublicKey(coreProgramId),
   )[0].toBase58();
 }
 
-/** Decode one live `DCLTCOR2` Core Market state account. */
+/** Decode one current `DCLTCOR3` Core Market state account. */
 export function decodeMarketCoreStateV2(address: string, bytes: Uint8Array): MarketCoreStateV2 {
-  if (bytes.length !== CORE_STATE_BYTES) throw new Error(`Core Market state is ${bytes.length} bytes; the exact width is ${CORE_STATE_BYTES}`);
+  requireCurrentCoreStateWidth(bytes);
   if (ascii(bytes, 0, 8) !== ascii(CORE_STATE_MAGIC, 0, 8)) throw new Error(`Core Market magic is not ${ascii(CORE_STATE_MAGIC, 0, 8)}`);
   const version = u16(bytes, CORE_STATE_VERSION_OFFSET);
   if (version !== CORE_VERSION) throw new Error(`Core Market state version ${version} is unsupported`);
@@ -272,6 +284,8 @@ export function decodeMarketCoreStateV2(address: string, bytes: Uint8Array): Mar
   const terminalPhase = phase === 'Terminal' || phase === 'Retiring' || phase === 'Retired';
   if (settlement.status === 'terminal' && !terminalPhase) throw new Error(`Core Market is ${phase} but carries a terminal receipt`);
   if (settlement.status === 'open' && phase === 'Terminal') throw new Error('Core Market is Terminal but carries no terminal receipt');
+  const principalCapSets = u64(bytes, CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET);
+  if (principalCapSets === 0n) throw new Error('Core Market principal cap is absent');
 
   return Object.freeze({
     address,
@@ -282,6 +296,7 @@ export function decodeMarketCoreStateV2(address: string, bytes: Uint8Array): Mar
     marketId: pubkey(slice(bytes, CORE_STATE_MARKET_ID_OFFSET, 32), 'Core Market identity'),
     identity,
     outstandingCapabilities: u64(bytes, CORE_STATE_OUTSTANDING_CAPABILITIES_OFFSET).toString(),
+    principalCapSets: principalCapSets.toString(),
     rentBeneficiary: pubkey(slice(bytes, CORE_STATE_RENT_BENEFICIARY_OFFSET, 32), 'Core Market rent beneficiary'),
     settlement,
   });

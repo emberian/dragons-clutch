@@ -165,6 +165,9 @@ structure FoundingFrame where
   realm : Realm
   product : Product
   identity : MarketIdentity
+  /-- Canonical complete-set principal ceiling projected from Source policy.
+  `2^64 - 1` is the one explicit unbounded representation at the wire boundary. -/
+  principalCapSets : Nat
   coreAdmission : ExecutionRelease.Admission
   quote : FoundingQuote
   accounts : FoundingAccounts
@@ -190,6 +193,7 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   frame.identity.realmId == frame.realm.realmId &&
   frame.identity.productRecordId == frame.product.productRecordId &&
   frame.identity.productId == frame.product.productId &&
+  0 < frame.principalCapSets && frame.principalCapSets < 2^64 &&
   frame.identity.executionReleaseSetId == frame.coreAdmission.selected.releaseSetId &&
   frame.identity.registryProgramId == frame.coreAdmission.marketRegistryProgram &&
   frame.coreAdmission.marketReleaseSetId == frame.identity.executionReleaseSetId &&
@@ -388,6 +392,7 @@ inductive Readiness where
 
 structure State where
   identity : MarketIdentity
+  principalCapSets : Nat
   rentBeneficiaryId : Identity
   phase : Phase
   readiness : Readiness
@@ -414,11 +419,13 @@ def childCountPhaseValid (state : State) : Bool :=
 /-- Complete executable invariant. -/
 def State.valid (state : State) : Bool :=
   state.identity.valid && state.rentBeneficiaryId != 0 &&
+  0 < state.principalCapSets && state.principalCapSets < 2^64 &&
   lifecyclePhaseValid state && terminalFieldsValid state && childCountPhaseValid state
 
 def initialState (frame : FoundingFrame) : State :=
   {
     identity := frame.identity
+    principalCapSets := frame.principalCapSets
     rentBeneficiaryId := frame.accounts.rentCreditId
     phase := .founding
     readiness := .prepaid

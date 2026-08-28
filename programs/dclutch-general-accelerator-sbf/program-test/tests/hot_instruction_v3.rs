@@ -530,6 +530,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
             ..provisional
         },
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x26; 32]),
         terminal_receipt: None,
     }

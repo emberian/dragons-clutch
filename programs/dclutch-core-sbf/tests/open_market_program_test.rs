@@ -372,6 +372,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
     };

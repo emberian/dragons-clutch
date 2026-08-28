@@ -7,7 +7,10 @@ const sources = Object.freeze({
   physical: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated_physical.rs', root), 'utf8'),
   product: readFileSync(new URL('crates/dclutch-product-runtime-v2-admission/src/lib.rs', root), 'utf8'),
   realm: readFileSync(new URL('crates/dclutch-realm-contract/src/lib.rs', root), 'utf8'),
-  source: readFileSync(new URL('crates/dclutch-source-contract/src/generated_source_material_v2.rs', root), 'utf8'),
+  source: readFileSync(new URL('crates/dclutch-source-contract/src/generated_source_material_v3.rs', root), 'utf8'),
+  sourceJoin: readFileSync(new URL('crates/dclutch-source-contract/src/provider_join_v2.rs', root), 'utf8'),
+  sourceCapacity: readFileSync(new URL('crates/dclutch-source-contract/src/generated_principal_capacity_v1.rs', root), 'utf8'),
+  payoff: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs', root), 'utf8'),
   capability: readFileSync(new URL('crates/dclutch-capability-contract/src/lib.rs', root), 'utf8'),
   releaseSet: readFileSync(new URL('crates/dclutch-release-set-contract/src/lib.rs', root), 'utf8'),
   registry: readFileSync(new URL('crates/dclutch-registry-contract/src/artifact.rs', root), 'utf8'),
@@ -87,8 +90,10 @@ const FOUND_ACCOUNT_LABELS = Object.freeze({
   'state.payer': 'payer', 'state.market': 'Market destination', 'state.rent_credit': 'RentCredit', 'state.rent_program': 'Rent program',
   'state.realm.record.raw': 'Realm raw', 'state.realm.record.staging': 'Realm staging', 'state.product.raw': 'Product raw', 'state.product.staging': 'Product staging',
   'state.result_domain.raw': 'result domain raw', 'state.result_domain.staging': 'result domain staging', 'state.portfolio.raw': 'portfolio raw', 'state.portfolio.staging': 'portfolio staging',
-  'state.source_material.record.raw': 'Source material raw', 'state.source_material.record.staging': 'Source staging', 'state.capability_manifest.record.raw': 'capability manifest raw', 'state.capability_manifest.record.staging': 'capability staging',
-  'state.execution_release_set.record.raw': 'execution release set raw', 'state.execution_release_set.record.staging': 'release-set staging', 'state.activation_cache': 'activation cache', 'state.core_program': 'Core program',
+  'state.linked_basis.raw': 'linked basis raw', 'state.linked_basis.staging': 'linked basis staging', 'state.source_material.record.raw': 'Source material raw', 'state.source_material.record.staging': 'Source staging',
+  'state.source_spec.record.raw': 'Source spec raw', 'state.source_spec.record.staging': 'Source spec staging', 'state.capacity_profile.record.raw': 'capacity profile raw', 'state.capacity_profile.record.staging': 'capacity profile staging',
+  'state.manipulation_floor.record.raw': 'manipulation floor raw', 'state.manipulation_floor.record.staging': 'manipulation floor staging', 'state.capability_manifest.record.raw': 'capability manifest raw', 'state.capability_manifest.record.staging': 'capability staging',
+  'state.activation_cache': 'activation cache', 'state.core_program': 'Core program',
   'state.core_programdata': 'Core ProgramData', 'state.registry_program': 'Registry program', 'state.rent': 'Rent sysvar', 'state.system_program': 'System program',
   'state.infrastructure_profile': 'infrastructure profile', 'state.registry_artifact.raw': 'Registry artifact raw', 'state.registry_artifact.staging': 'Registry artifact staging',
   'state.registry_programdata': 'Registry ProgramData', 'state.rent_artifact.raw': 'Rent artifact raw', 'state.rent_artifact.staging': 'Rent artifact staging', 'state.rent_programdata': 'Rent ProgramData',
@@ -110,16 +115,18 @@ for (const name of [
   'CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2',
   'LIFECYCLE_RENT_SCHEMA_VERSION_V2',
 ]) output += `export const ${name} = ${scalar('lifecycleRent', name)} as const;\n`;
-output += `export const CORE_FOUND_ACCOUNT_COUNT_V2 = ${scalar('operator', 'FOUND_ACCOUNT_COUNT_V2')} as const;\n`;
+output += `export const CORE_FOUND_ACCOUNT_COUNT_V3 = ${scalar('operator', 'FOUND_ACCOUNT_COUNT_V3')} as const;\n`;
 const accountMetas = foundAccountMetas();
-if (accountMetas.length !== scalar('operator', 'FOUND_ACCOUNT_COUNT_V2')) throw new Error('Found account count and projection differ');
-output += `export const CORE_FOUND_ACCOUNT_LABELS_V2 = Object.freeze(${JSON.stringify(accountMetas.map((meta) => foundAccountLabel(meta.field)))}) as ReadonlyArray<string>;\n`;
-output += `export const CORE_FOUND_ACCOUNT_ROLES_V2 = Object.freeze(${JSON.stringify(accountMetas.map(({ signer, writable }) => ({ signer, writable })))}) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;\n`;
+if (accountMetas.length !== scalar('operator', 'FOUND_ACCOUNT_COUNT_V3')) throw new Error('Found account count and projection differ');
+output += `export const CORE_FOUND_ACCOUNT_LABELS_V3 = Object.freeze(${JSON.stringify(accountMetas.map((meta) => foundAccountLabel(meta.field)))}) as ReadonlyArray<string>;\n`;
+output += `export const CORE_FOUND_ACCOUNT_ROLES_V3 = Object.freeze(${JSON.stringify(accountMetas.map(({ signer, writable }) => ({ signer, writable })))}) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;\n`;
 output += array('CORE_REQUEST_MAGIC', bytes('core', 'REQUEST_MAGIC'));
 output += array('MARKET_CORE_STATE_PDA_DOMAIN_V2', bytes('physical', 'MARKET_CORE_STATE_PDA_DOMAIN_V2'));
 for (const [source, name] of [
   ['product', 'PRODUCT_RECORD_SCHEMA_ID_V2'], ['product', 'RESULT_DOMAIN_SCHEMA_ID_V2'], ['product', 'PORTFOLIO_SCHEMA_ID_V2'],
-  ['realm', 'REALM_SCHEMA_RELEASE_ID_V1'], ['source', 'SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2'],
+  ['realm', 'REALM_SCHEMA_RELEASE_ID_V1'], ['source', 'SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3'],
+  ['sourceJoin', 'SOURCE_SPEC_SCHEMA_ID_V1'], ['sourceJoin', 'SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1'],
+  ['sourceCapacity', 'MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1'], ['payoff', 'GRADED_BASIS_RECORD_SCHEMA_ID_V3'],
   ['capability', 'CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1'],
   ['releaseSet', 'EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1'],
   ['registry', 'ARTIFACT_RELEASE_SCHEMA_ID_V1'],
@@ -154,6 +161,7 @@ for (const name of [
   'STATE_MARKET_ID_OFFSET', 'STATE_IDENTITY_REALM_OFFSET', 'STATE_PRODUCT_RECORD_OFFSET', 'STATE_PRODUCT_ID_OFFSET',
   'STATE_RESOLUTION_POLICY_OFFSET', 'STATE_CAPABILITY_MANIFEST_OFFSET', 'STATE_SELECTED_RELEASE_SET_OFFSET',
   'STATE_REGISTRY_PROGRAM_OFFSET', 'STATE_GENERATION_OFFSET', 'STATE_OUTSTANDING_CAPABILITIES_OFFSET',
+  'STATE_PRINCIPAL_CAP_SETS_OFFSET',
   'STATE_RENT_BENEFICIARY_OFFSET', 'STATE_TERMINAL_RECEIPT_OFFSET',
 ]) output += `export const CORE_${name} = ${scalar('core', name)} as const;\n`;
 for (const name of [

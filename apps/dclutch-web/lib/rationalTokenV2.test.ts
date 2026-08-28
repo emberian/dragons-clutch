@@ -3,12 +3,23 @@ import { describe, expect, it } from 'vitest';
 
 import { type RpcAccount } from './rpc';
 import {
+  CORE_PHASE_OPEN_TAG,
+  CORE_READINESS_CONSUMED_TAG,
+  CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
+  CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_VERSION,
+} from './generated/coreFound';
+import {
   TOKEN_2022_BEHAVIOR_PROFILE_ID_V2,
   TOKEN_2022_PROGRAM_ID,
   buildUnsignedBearerTransferV2,
   decodeToken2022BehaviorAccountV2,
   decodeToken2022BehaviorMintV2,
   decodeTokenBehaviorSelectionV2,
+  decodeRationalTokenCoreMarketV2,
   encodeTokenBehaviorSelectionV2,
   type BearerTransferInspectionV2,
 } from './rationalTokenV2';
@@ -33,6 +44,20 @@ function putU64(bytes: Uint8Array, offset: number, value: bigint): void {
 
 function account(owner: string, data: Uint8Array): RpcAccount {
   return Object.freeze({ owner, data, executable: false, lamports: '1000000', space: data.length });
+}
+
+function currentCoreFixture(principalCapSets: bigint): Uint8Array {
+  const bytes = new Uint8Array(CORE_STATE_BYTES);
+  bytes.set(CORE_STATE_MAGIC, 0);
+  putU16(bytes, CORE_STATE_VERSION_OFFSET, CORE_VERSION);
+  bytes[10] = CORE_PHASE_OPEN_TAG;
+  bytes[11] = CORE_READINESS_CONSUMED_TAG;
+  for (const offset of [16, 48, 80, 112, 144, 176, 208, 240, CORE_STATE_RENT_BENEFICIARY_OFFSET]) {
+    bytes.fill(1, offset, offset + 32);
+  }
+  putU64(bytes, 272, 1n);
+  putU64(bytes, CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET, principalCapSets);
+  return bytes;
 }
 
 function mintFixture(mint: string, controller: string, decimals = 255, metadata = false): RpcAccount {
@@ -61,6 +86,16 @@ function tokenAccountFixture(mint: string, owner: string, amount: bigint): RpcAc
 }
 
 describe('TokenBehaviorSelectionV2 and ordinary Bearer transfer', () => {
+  it('uses the generated 360-byte Core authority and refuses an absent principal cap', () => {
+    const decoded = decodeRationalTokenCoreMarketV2(currentCoreFixture(42n));
+    expect(decoded.phase).toBe('Open');
+    expect(decoded.principalCapSets).toBe(42n);
+    expect(() => decodeRationalTokenCoreMarketV2(new Uint8Array(352)))
+      .toThrow('exact CoreStateV2 ABI');
+    expect(() => decodeRationalTokenCoreMarketV2(currentCoreFixture(0n)))
+      .toThrow('principal cap is absent');
+  });
+
   it('binds exact Market Realm/release bytes and refuses profile, program, reserved, and authority substitutions', () => {
     const realm = new Uint8Array(32).fill(1); const release = new Uint8Array(32).fill(2);
     const bytes = encodeTokenBehaviorSelectionV2(realm, release);

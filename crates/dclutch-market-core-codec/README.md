@@ -4,12 +4,15 @@ This standalone crate is the generated, fixed-memory interpreter for
 `DClutchSemantics.MarketCore`. It is safe Rust, `no_std`, `no_alloc`, and is not
 yet an account-owning Solana adapter.
 
-`MarketCoreAbi.lean` owns the semantic wire layout. The V2 Market header is
-exactly 352 bytes and the request is 72 bytes. The header persists only:
+`MarketCoreAbi.lean` owns the semantic wire layout. The current V2 Market header
+is exactly 360 bytes and the request is 72 bytes. Older 352-byte devnet Markets
+predate the authenticated principal cap and are incompatible. The header
+persists only:
 
 - immutable Market identity references, Registry program, and generation;
 - lifecycle phase, readiness, and terminal winner/receipt;
 - the immutable RentCredit beneficiary; and
+- the Source-derived cap on complete principal sets; and
 - a checked count of outstanding manifest-selected optional capabilities.
 
 The header persists the exact Product Runtime V2 graph-root digest and its

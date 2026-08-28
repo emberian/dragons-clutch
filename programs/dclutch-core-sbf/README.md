@@ -86,7 +86,7 @@ Found has exactly 37 pairwise-distinct accounts, in this order:
 All accounts after the first two are read-only. Core authenticates every raw
 record, its dust-tolerant empty system-owned finalized cursor, all cross-record
 identities, the Market PDA, and the canonical RentCredit before transferring
-only the exact missing rent, allocating, assigning, and writing the 352-byte
+only the exact missing rent, allocating, assigning, and writing the 360-byte
 state. Trust is ordered: authenticate the Core-owned infrastructure profile;
 directly reauthenticate its immutable Registry and Rent artifacts/current
 Loader deployments; observe the selected release-set digest; reauthenticate

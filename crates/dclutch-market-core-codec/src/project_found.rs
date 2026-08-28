@@ -3,15 +3,15 @@
 use crate::{Action, Error as CoreError, Identity, REQUEST_BYTES, Request};
 
 /// Exact ProjectFound instruction prefix.
-pub const PROJECT_FOUND_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTPFQ1";
+pub const PROJECT_FOUND_REQUEST_MAGIC_V2: [u8; 8] = *b"DCLTPFQ2";
 /// Exact ProjectFound instruction width.
-pub const PROJECT_FOUND_REQUEST_BYTES_V1: usize = 16 + REQUEST_BYTES;
+pub const PROJECT_FOUND_REQUEST_BYTES_V2: usize = 16 + REQUEST_BYTES;
 /// Exact ProjectFound return receipt magic.
-pub const PROJECT_FOUND_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTPFR1";
+pub const PROJECT_FOUND_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLTPFR2";
 /// Exact ProjectFound return receipt width.
-pub const PROJECT_FOUND_RECEIPT_BYTES_V1: usize = 404;
+pub const PROJECT_FOUND_RECEIPT_BYTES_V2: usize = 404;
 
-const VERSION_V1: u16 = 1;
+const VERSION_V2: u16 = 2;
 
 /// Stable refusal from the ProjectFound physical ABI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,12 +42,12 @@ impl From<CoreError> for ProjectFoundError {
 
 /// Read-only request to authenticate and project one future Market.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProjectFoundRequestV1 {
+pub struct ProjectFoundRequestV2 {
     /// The exact ordinary Core Found request being projected.
     pub found: Request,
 }
 
-impl ProjectFoundRequestV1 {
+impl ProjectFoundRequestV2 {
     /// Construct a request only from a canonical Found action.
     pub fn new(found: Request) -> Result<Self, ProjectFoundError> {
         if found.action != Action::Found {
@@ -59,9 +59,9 @@ impl ProjectFoundRequestV1 {
 
     /// Hostile-decode one exact request.
     pub fn decode(input: &[u8]) -> Result<Self, ProjectFoundError> {
-        exact_len(input, PROJECT_FOUND_REQUEST_BYTES_V1)?;
-        exact_magic(input, &PROJECT_FOUND_REQUEST_MAGIC_V1)?;
-        if read_u16(input, 8)? != VERSION_V1 || any_nonzero(input, 10, 6)? {
+        exact_len(input, PROJECT_FOUND_REQUEST_BYTES_V2)?;
+        exact_magic(input, &PROJECT_FOUND_REQUEST_MAGIC_V2)?;
+        if read_u16(input, 8)? != VERSION_V2 || any_nonzero(input, 10, 6)? {
             return Err(ProjectFoundError::NonCanonical);
         }
         let found = Request::decode(slice(input, 16, REQUEST_BYTES)?)?;
@@ -69,11 +69,11 @@ impl ProjectFoundRequestV1 {
     }
 
     /// Encode the sole canonical request bytes.
-    pub fn encode(self) -> Result<[u8; PROJECT_FOUND_REQUEST_BYTES_V1], ProjectFoundError> {
+    pub fn encode(self) -> Result<[u8; PROJECT_FOUND_REQUEST_BYTES_V2], ProjectFoundError> {
         let value = Self::new(self.found)?;
-        let mut output = [0; PROJECT_FOUND_REQUEST_BYTES_V1];
-        write(&mut output, 0, &PROJECT_FOUND_REQUEST_MAGIC_V1)?;
-        write(&mut output, 8, &VERSION_V1.to_le_bytes())?;
+        let mut output = [0; PROJECT_FOUND_REQUEST_BYTES_V2];
+        write(&mut output, 0, &PROJECT_FOUND_REQUEST_MAGIC_V2)?;
+        write(&mut output, 8, &VERSION_V2.to_le_bytes())?;
         write(&mut output, 16, &value.found.encode()?)?;
         Ok(output)
     }
@@ -81,7 +81,7 @@ impl ProjectFoundRequestV1 {
 
 /// Immediate Core-produced projection of one future Market identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProjectFoundReceiptV1 {
+pub struct ProjectFoundReceiptV2 {
     /// Future Core Market PDA.
     pub market: Identity,
     /// Market generation.
@@ -104,11 +104,15 @@ pub struct ProjectFoundReceiptV1 {
     pub release_set: Identity,
     /// Immutable infrastructure-selected Rent program.
     pub rent_program: Identity,
+    /// Canonical source-policy ceiling in complete-set units.
+    ///
+    /// `u64::MAX` is the one explicit unbounded representation.
+    pub principal_cap_sets: u64,
     /// SHA-256 of the exact embedded canonical Core Found request.
     pub found_request_digest: [u8; 32],
 }
 
-impl ProjectFoundReceiptV1 {
+impl ProjectFoundReceiptV2 {
     /// Construct one checked receipt.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -123,9 +127,10 @@ impl ProjectFoundReceiptV1 {
         source: Identity,
         release_set: Identity,
         rent_program: Identity,
+        principal_cap_sets: u64,
         found_request_digest: [u8; 32],
     ) -> Result<Self, ProjectFoundError> {
-        if found_request_digest.iter().all(|byte| *byte == 0) {
+        if principal_cap_sets == 0 || found_request_digest.iter().all(|byte| *byte == 0) {
             return Err(ProjectFoundError::ZeroIdentity);
         }
         Ok(Self {
@@ -140,12 +145,13 @@ impl ProjectFoundReceiptV1 {
             source,
             release_set,
             rent_program,
+            principal_cap_sets,
             found_request_digest,
         })
     }
 
     /// Encode the sole canonical receipt.
-    pub fn encode(self) -> Result<[u8; PROJECT_FOUND_RECEIPT_BYTES_V1], ProjectFoundError> {
+    pub fn encode(self) -> Result<[u8; PROJECT_FOUND_RECEIPT_BYTES_V2], ProjectFoundError> {
         let value = Self::new(
             self.market,
             self.generation,
@@ -158,11 +164,12 @@ impl ProjectFoundReceiptV1 {
             self.source,
             self.release_set,
             self.rent_program,
+            self.principal_cap_sets,
             self.found_request_digest,
         )?;
-        let mut output = [0; PROJECT_FOUND_RECEIPT_BYTES_V1];
-        write(&mut output, 0, &PROJECT_FOUND_RECEIPT_MAGIC_V1)?;
-        write(&mut output, 8, &VERSION_V1.to_le_bytes())?;
+        let mut output = [0; PROJECT_FOUND_RECEIPT_BYTES_V2];
+        write(&mut output, 0, &PROJECT_FOUND_RECEIPT_MAGIC_V2)?;
+        write(&mut output, 8, &VERSION_V2.to_le_bytes())?;
         write(&mut output, 16, &value.market.to_bytes())?;
         write(&mut output, 48, &value.generation.to_le_bytes())?;
         for (offset, identity) in [
@@ -179,16 +186,17 @@ impl ProjectFoundReceiptV1 {
             write(&mut output, offset, &identity.to_bytes())?;
         }
         write(&mut output, 344, &value.found_request_digest)?;
+        write(&mut output, 376, &value.principal_cap_sets.to_le_bytes())?;
         Ok(output)
     }
 
     /// Hostile-decode one exact receipt.
     pub fn decode(input: &[u8]) -> Result<Self, ProjectFoundError> {
-        exact_len(input, PROJECT_FOUND_RECEIPT_BYTES_V1)?;
-        exact_magic(input, &PROJECT_FOUND_RECEIPT_MAGIC_V1)?;
-        if read_u16(input, 8)? != VERSION_V1
+        exact_len(input, PROJECT_FOUND_RECEIPT_BYTES_V2)?;
+        exact_magic(input, &PROJECT_FOUND_RECEIPT_MAGIC_V2)?;
+        if read_u16(input, 8)? != VERSION_V2
             || any_nonzero(input, 10, 6)?
-            || any_nonzero(input, 376, 28)?
+            || any_nonzero(input, 384, 20)?
         {
             return Err(ProjectFoundError::NonCanonical);
         }
@@ -204,6 +212,7 @@ impl ProjectFoundReceiptV1 {
             Identity::new(read_array(input, 248)?)?,
             Identity::new(read_array(input, 280)?)?,
             Identity::new(read_array(input, 312)?)?,
+            read_u64(input, 376)?,
             read_array(input, 344)?,
         )
     }
@@ -292,11 +301,11 @@ mod tests {
     #[test]
     fn project_request_and_receipt_are_canonical() {
         let found = Request::administrative(Action::Found, 9, id(1));
-        let request = ProjectFoundRequestV1::new(found).expect("Found");
+        let request = ProjectFoundRequestV2::new(found).expect("Found");
         let bytes = request.encode().expect("request");
-        assert_eq!(ProjectFoundRequestV1::decode(&bytes), Ok(request));
+        assert_eq!(ProjectFoundRequestV2::decode(&bytes), Ok(request));
 
-        let receipt = ProjectFoundReceiptV1::new(
+        let receipt = ProjectFoundReceiptV2::new(
             id(1),
             9,
             id(2),
@@ -308,11 +317,12 @@ mod tests {
             id(8),
             id(9),
             id(10),
+            u64::MAX,
             [11; 32],
         )
         .expect("receipt");
         let bytes = receipt.encode().expect("receipt bytes");
-        assert_eq!(ProjectFoundReceiptV1::decode(&bytes), Ok(receipt));
+        assert_eq!(ProjectFoundReceiptV2::decode(&bytes), Ok(receipt));
         assert_eq!(receipt.verify_found_request([11; 32]), Ok(()));
     }
 
@@ -320,17 +330,17 @@ mod tests {
     fn hostile_bytes_and_non_found_requests_refuse() {
         let open = Request::administrative(Action::OpenMarket, 9, id(1));
         assert_eq!(
-            ProjectFoundRequestV1::new(open),
+            ProjectFoundRequestV2::new(open),
             Err(ProjectFoundError::NotFound)
         );
         let mut bytes =
-            ProjectFoundRequestV1::new(Request::administrative(Action::Found, 9, id(1)))
+            ProjectFoundRequestV2::new(Request::administrative(Action::Found, 9, id(1)))
                 .expect("Found")
                 .encode()
                 .expect("bytes");
         bytes[10] = 1;
         assert_eq!(
-            ProjectFoundRequestV1::decode(&bytes),
+            ProjectFoundRequestV2::decode(&bytes),
             Err(ProjectFoundError::NonCanonical)
         );
     }

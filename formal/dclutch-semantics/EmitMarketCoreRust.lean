@@ -310,13 +310,15 @@ pub struct CoreState {
     pub terminal_winner: u32,
     pub identity: MarketIdentity,
     pub outstanding_capabilities: u64,
+    /// Source-projected ceiling in complete-set units. `u64::MAX` is unbounded.
+    pub principal_cap_sets: u64,
     pub rent_beneficiary: Identity,
     pub terminal_receipt: Option<Identity>,
 }
 
 impl CoreState {
     fn valid_static(self) -> bool {
-        match self.phase {
+        self.principal_cap_sets != 0 && match self.phase {
             Phase::Founding => {
                 self.readiness != Readiness::Consumed
                     && self.terminal_receipt.is_none()
@@ -364,6 +366,11 @@ impl CoreState {
             STATE_OUTSTANDING_CAPABILITIES_OFFSET,
             self.outstanding_capabilities,
         )?;
+        put_u64(
+            &mut output,
+            STATE_PRINCIPAL_CAP_SETS_OFFSET,
+            self.principal_cap_sets,
+        )?;
         put_identity(&mut output, STATE_RENT_BENEFICIARY_OFFSET, self.rent_beneficiary)?;
         if let Some(receipt) = self.terminal_receipt {
             put_identity(&mut output, STATE_TERMINAL_RECEIPT_OFFSET, receipt)?;
@@ -404,6 +411,7 @@ impl CoreState {
                 generation: read_u64(input, STATE_GENERATION_OFFSET)?,
             },
             outstanding_capabilities: read_u64(input, STATE_OUTSTANDING_CAPABILITIES_OFFSET)?,
+            principal_cap_sets: read_u64(input, STATE_PRINCIPAL_CAP_SETS_OFFSET)?,
             rent_beneficiary: read_identity(input, STATE_RENT_BENEFICIARY_OFFSET)?,
             terminal_receipt,
         };
@@ -626,6 +634,8 @@ pub struct FoundingFrame {
     pub realm: Realm,
     pub product: Product,
     pub identity: MarketIdentity,
+    /// Canonical complete-set cap projected by authenticated Source policy.
+    pub principal_cap_sets: u64,
     pub core_admission: Admission,
     pub quote: FoundingQuote,
     pub accounts: FoundingAccounts,
@@ -742,6 +752,7 @@ pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, E
         || frame.identity.realm_id != frame.realm.realm_id
         || frame.identity.product_record != frame.product.product_record
         || frame.identity.product_id != frame.product.product_id
+        || frame.principal_cap_sets == 0
         || frame.identity.selected_release_set != frame.core_admission.selected.release_set_id
         || frame.identity.registry_program != frame.core_admission.market_registry_program
         || !admission_valid(frame.core_admission, Role::Core)
@@ -771,6 +782,7 @@ pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, E
         terminal_winner: 0,
         identity: frame.identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: frame.principal_cap_sets,
         rent_beneficiary: frame.accounts.rent_credit,
         terminal_receipt: None,
     };

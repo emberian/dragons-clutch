@@ -134,6 +134,7 @@ fn founding_frame(outcome_count: u32, market_lamports: u64) -> FoundingFrame {
         realm: realm(),
         product: product(outcome_count),
         identity: identity(),
+        principal_cap_sets: 1_000,
         core_admission: admission(Role::Core),
         quote: FoundingQuote { market_rent: 100 },
         accounts: FoundingAccounts {
@@ -270,7 +271,7 @@ fn terminal_state(outcome_count: u32, selector: u32) -> CoreState {
 
 #[test]
 fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
-    assert_eq!(STATE_BYTES, 352);
+    assert_eq!(STATE_BYTES, 360);
     assert_eq!(REQUEST_BYTES, 72);
     assert_eq!(ACTION_VERIFY_READINESS_TAG, 1);
     assert_eq!(ACTION_ACTIVATE_CAPABILITY_TAG, 8);

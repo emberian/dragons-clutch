@@ -1347,6 +1347,7 @@ mod tests {
             terminal_winner: 0,
             identity,
             outstanding_capabilities: 1,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
             terminal_receipt: None,
         };
@@ -1495,6 +1496,7 @@ mod tests {
                 terminal_winner: 0,
                 identity,
                 outstanding_capabilities: 1,
+                principal_cap_sets: u64::MAX,
                 rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
                 terminal_receipt: receipt,
             }

@@ -1,7 +1,7 @@
 //! Family-neutral atomic Market founding request and acknowledgement.
 //!
 //! The request is an immutable capability-artifact projection.  It carries
-//! only the coordinates that cannot be recovered from Found31 or the
+//! only the coordinates that cannot be recovered from Found37 or the
 //! projected-Custody state.  Core still authenticates every repeated field
 //! against those semantic owners before creating a Market or a permit.
 
@@ -17,7 +17,7 @@ pub const GENERIC_FOUNDING_REQUEST_BYTES_V1: usize = 400;
 /// Exact fixed acknowledgement width.
 pub const GENERIC_FOUNDING_ACK_BYTES_V1: usize = 248;
 /// Fixed Core accounts before the exact ordered FundingState span.
-pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = 34;
+pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = 28;
 /// Fixed Core accounts after the exact ordered FundingState span.
 pub const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact Core final-Open account count.

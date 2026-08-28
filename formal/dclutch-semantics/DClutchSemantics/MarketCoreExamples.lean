@@ -90,6 +90,7 @@ def founding : FoundingFrame := {
   realm
   product
   identity
+  principalCapSets := 1000
   coreAdmission := admission .core
   quote := { marketRent := 100 }
   accounts := {

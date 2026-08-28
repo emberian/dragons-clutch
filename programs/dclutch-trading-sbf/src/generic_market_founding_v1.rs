@@ -51,11 +51,11 @@ use solana_program::{
 use crate::TradingSbfError;
 
 /// Sole top-level generic Market founding instruction.
-pub const GENERIC_MARKET_FOUNDING_MAGIC_V1: [u8; 8] = *b"DCLTGMF1";
+pub const GENERIC_MARKET_FOUNDING_MAGIC_V2: [u8; 8] = *b"DCLTGMF2";
 /// Exact outer instruction width. All economic bytes live in readonly accounts.
-pub const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1: usize = 8;
+pub const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2: usize = 8;
 /// Exact readonly raw-request prefix width.
-pub const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1: usize = 4;
+pub const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2: usize = 4;
 
 /// Index of the instructions sysvar this route presents to its own entrypoint.
 ///
@@ -68,20 +68,20 @@ pub const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1: usize = 4;
 /// optional convenience, and it is authenticated here rather than tolerated:
 /// a frame carrying something else at this index refuses instead of running
 /// out of memory three stages later.
-pub const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1: usize =
-    GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1;
+pub const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2: usize =
+    GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2;
 
 /// Exact readonly prefix width: the four raw requests and the sysvar.
-pub const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1: usize =
-    GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1 + 1;
+pub const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2: usize =
+    GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2 + 1;
 
 const FOUND_RAW: usize = 0;
 const LOCK_RAW: usize = 1;
 const REALIZE_RAW: usize = 2;
 const CLAIMS_RAW: usize = 3;
 
-const CORE_FOUND_CORE_PROGRAM: usize = 19;
-const CORE_FOUND_TRADING_PROGRAM: usize = 31;
+const CORE_FOUND_CORE_PROGRAM: usize = 13;
+const CORE_FOUND_TRADING_PROGRAM: usize = 25;
 const CORE_FOUND_MARKET: usize = 1;
 
 const CORE_FOUND_PERMIT_SUFFIX: usize = 0;
@@ -94,18 +94,18 @@ const CLAIMS_ADMISSION: usize = 4;
 
 /// Return whether bytes select the sole generic founding outer.
 #[must_use]
-pub fn is_generic_market_founding_v1(instruction_data: &[u8]) -> bool {
-    instruction_data == GENERIC_MARKET_FOUNDING_MAGIC_V1
+pub fn is_generic_market_founding_v2(instruction_data: &[u8]) -> bool {
+    instruction_data == GENERIC_MARKET_FOUNDING_MAGIC_V2
 }
 
 /// Execute Lock→Found→Realize→Claims→Open as one rollback domain.
 #[inline(never)]
-pub fn process_generic_market_founding_v1(
+pub fn process_generic_market_founding_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    if !is_generic_market_founding_v1(instruction_data) {
+    if !is_generic_market_founding_v2(instruction_data) {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let found_raw = raw_account_bytes(accounts, FOUND_RAW, GENERIC_FOUNDING_REQUEST_BYTES_V1)?;
@@ -162,7 +162,7 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
             .checked_add(funding_count)
             .and_then(|value| value.checked_add(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1))
             .ok_or(TradingSbfError::Content)?;
-        let lock_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1;
+        let lock_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2;
         let found_start = lock_start
             .checked_add(PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1)
             .ok_or(TradingSbfError::Content)?;
@@ -183,12 +183,12 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
         }
         authenticate_raw_accounts(
             accounts
-                .get(..GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1)
+                .get(..GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2)
                 .ok_or(TradingSbfError::Content)?,
         )?;
         authenticate_instructions_sysvar_v1(account(
             accounts,
-            GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1,
+            GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2,
         )?)?;
         Ok(Self {
             lock: subslice(
@@ -845,7 +845,7 @@ pub(crate) fn authenticate_instructions_sysvar_v1(
 }
 
 fn authenticate_raw_accounts(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
-    if accounts.len() != GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 {
+    if accounts.len() != GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 {
         return Err(TradingSbfError::Content.into());
     }
     for (index, account) in accounts.iter().enumerate() {
@@ -973,11 +973,11 @@ mod tests {
 
     #[test]
     fn outer_abi_is_data_account_only_and_stage_distinct() {
-        assert!(is_generic_market_founding_v1(
-            &GENERIC_MARKET_FOUNDING_MAGIC_V1
+        assert!(is_generic_market_founding_v2(
+            &GENERIC_MARKET_FOUNDING_MAGIC_V2
         ));
-        assert!(!is_generic_market_founding_v1(&[0; 8]));
-        assert_eq!(GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1, 8);
+        assert!(!is_generic_market_founding_v2(&[0; 8]));
+        assert_eq!(GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2, 8);
         let request = found();
         assert_ne!(
             request.encode().expect("found bytes"),
@@ -1343,7 +1343,7 @@ mod tests {
     #[test]
     fn frame_width_is_runtime_funding_polymorphic() {
         let count = |funding: usize| {
-            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1
+            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2
                 + PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1
                 + GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
                 + funding
@@ -1359,8 +1359,8 @@ mod tests {
         assert_eq!(count(3), 138);
         assert_eq!(count(16), 151);
         assert_eq!(
-            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1,
-            GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 + 1
+            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2,
+            GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 + 1
         );
     }
 }

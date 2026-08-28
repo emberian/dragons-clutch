@@ -1146,8 +1146,8 @@ const fn hot_cu_profile_lifts_every_route_v1() -> bool {
 ///
 /// The two entries are the one-time, ALT-backed founding transactions:
 ///
-/// - `DCLTGMF1`, the atomic Lock/Found/Realize/Claims/Open route;
-/// - `DCLTPCB1`, projected-Custody bootstrap, which commit `328fead` measured
+/// - `DCLTGMF2`, the atomic Lock/Found/Realize/Claims/Open route;
+/// - `DCLTPCB2`, projected-Custody bootstrap, which commit `328fead` measured
 ///   dying out of memory and diagnosed precisely: it "holds three stages' worth
 ///   of allocations live [...] against an allocator that never frees, so its
 ///   peak is the sum. Either it allocates less, or it supplies its own global
@@ -1162,8 +1162,8 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    if crate::generic_market_founding_v1::is_generic_market_founding_v1(instruction_data)
-        || crate::projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v1(
+    if crate::generic_market_founding_v1::is_generic_market_founding_v2(instruction_data)
+        || crate::projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2(
             instruction_data,
         )
     {
@@ -2711,8 +2711,8 @@ mod tests {
             ))]
             {
                 for magic in [
-                    crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V1,
-                    crate::projected_custody_bootstrap_v1::PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1,
+                    crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V2,
+                    crate::projected_custody_bootstrap_v1::PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2,
                 ] {
                     assert!(declares_extended_heap_profile_v1(&magic));
                     let mut nearly = magic;
