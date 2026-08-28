@@ -447,9 +447,18 @@ pub(crate) fn execute_found_market_with_checkpoint(
         transactions,
     )?;
 
-    let (records, product_id) =
-        publish_market_records(rpc, registry, input, mint, payer, transactions)?;
     let release_set_digest = hex32(&plan.release_set_id)?;
+    let founding_targets = derive_founding_targets(plan, input, mint)?;
+    let (records, product_id) = publish_market_records(
+        rpc,
+        registry,
+        input,
+        mint,
+        founding_targets.open_market,
+        release_set_digest,
+        payer,
+        transactions,
+    )?;
     let market_identity = MarketIdentity {
         market_id: identity([0xff; 32])?,
         realm_id: identity(records.realm.digest)?,
@@ -466,6 +475,11 @@ pub(crate) fn execute_found_market_with_checkpoint(
         &core,
     )
     .0;
+    if market != founding_targets.found31_market {
+        return Err(Error::new(
+            "published Market graph moved from its pre-publication derivation",
+        ));
+    }
     let credit = Pubkey::find_program_address(
         &[
             LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
@@ -1018,11 +1032,27 @@ fn compile_market_bodies(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn native_composition_bodies_for_test(
+    registry: Pubkey,
+    input: &MarketRunInput,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let compiled = compile_market_bodies(registry, input, Pubkey::new_from_array([0x7b; 32]))?;
+    Ok((
+        compiled.product.to_vec(),
+        compiled.domain,
+        compiled.portfolio,
+        decode_hex(&input.linked_basis_hex)?,
+    ))
+}
+
 fn publish_market_records(
     rpc: &mut Rpc,
     registry: Pubkey,
     input: &MarketRunInput,
     collateral_mint: Pubkey,
+    terminal_market: Pubkey,
+    release_set: [u8; 32],
     payer: &Keypair,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(MarketRecords, ProductContentId)> {
@@ -1058,6 +1088,9 @@ fn publish_market_records(
         hostile_wallet,
         transactions,
     )?;
+    let product_body = product.clone();
+    let domain_body = domain.clone();
+    let portfolio_body = portfolio.clone();
     let (product, domain, portfolio) = publish_product_graph(
         rpc,
         registry,
@@ -1091,7 +1124,18 @@ fn publish_market_records(
         )?)
     };
     let mut direct = BTreeMap::new();
-    for record in crate::direct_market::direct_publication_records_v1(input)? {
+    let linked_basis_bytes = decode_hex(&input.linked_basis_hex)?;
+    for record in crate::direct_market::direct_publication_records_v1(
+        input,
+        dclutch_representation_composition_v3_operator::native_categorical_v1::NativeCategoricalCompositionInputV1 {
+            market: terminal_market.to_bytes(),
+            release_set,
+            product_record_bytes: &product_body,
+            result_domain_bytes: &domain_body,
+            portfolio_bytes: &portfolio_body,
+            product_basis_bytes: &linked_basis_bytes,
+        },
+    )? {
         let published = publish_record(
             rpc,
             registry,
@@ -1225,7 +1269,7 @@ fn publish_market_records(
     // record's links are checked against the graph that was just compiled, so
     // a basis belonging to a different Product cannot be published as this
     // Market's.
-    let basis_bytes = decode_hex(&input.linked_basis_hex)?;
+    let basis_bytes = linked_basis_bytes;
     let basis_state = ProductBasisV3::decode(&basis_bytes)
         .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
     let outcome_width =
