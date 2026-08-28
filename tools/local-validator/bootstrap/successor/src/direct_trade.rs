@@ -6196,10 +6196,14 @@ mod tests {
     use solana_program::pubkey::Pubkey;
 
     use super::{
-        DirectTradeExpectedPoststateV1, DirectTradeJournalPhaseV1, DirectTradeJournalV1,
-        DirectTradeStageV1, JOURNAL_SCHEMA_V1, OWNED_EVIDENCE_SCHEMA_V1, OWNED_JOURNAL_SCHEMA_V1,
+        DirectClaimBalanceEvidenceV1, DirectFinalizedMutationEvidenceV1,
+        DirectLookupActivationEvidenceV1, DirectPositionTransitionEvidenceV1,
+        DirectTradeExpectedPoststateV1, DirectTradeFinalizedEvidenceV1, DirectTradeJournalPhaseV1,
+        DirectTradeJournalV1, DirectTradeObservedPoststateV1, DirectTradeStageV1,
+        JOURNAL_SCHEMA_V1, OWNED_EVIDENCE_SCHEMA_V1, OWNED_JOURNAL_SCHEMA_V1,
         OWNED_PRIVATE_SESSION_SCHEMA_V1, OWNED_PUBLIC_MANIFEST_SCHEMA_V1,
-        authenticate_direct_history_v1, authenticate_lookup_activation_slot_order_v1,
+        authenticate_direct_history_v1, authenticate_embedded_direct_evidence_identity_v1,
+        authenticate_lookup_activation_slot_order_v1, direct_evidence_digest_v1,
         direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
         direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
         journal_state_sha256, refresh_direct_journal_digest_v1, require_unique_json_v1,
@@ -6246,6 +6250,126 @@ mod tests {
         }
     }
 
+    fn terminal_evidence() -> DirectTradeFinalizedEvidenceV1 {
+        let seller_owner = Pubkey::new_unique().to_string();
+        let seller_position = Pubkey::new_unique().to_string();
+        let buyer_owner = Pubkey::new_unique().to_string();
+        let buyer_position = Pubkey::new_unique().to_string();
+        let expected = DirectTradeExpectedPoststateV1 {
+            address: Pubkey::new_unique().to_string(),
+            owner: Pubkey::new_unique().to_string(),
+            lamports: 1,
+            executable: false,
+            data_base64: BASE64.encode([1]),
+            data_sha256: super::sha256_hex(&[1]),
+        };
+        let observed = DirectTradeObservedPoststateV1 {
+            address: expected.address.clone(),
+            owner: expected.owner.clone(),
+            lamports: expected.lamports,
+            executable: expected.executable,
+            data_len: 1,
+            data_sha256: expected.data_sha256.clone(),
+        };
+        let mutation = |kind: &str| DirectFinalizedMutationEvidenceV1 {
+            kind: kind.into(),
+            prefix_len: None,
+            path: format!("/tmp/{kind}.json"),
+            sha256: "33".repeat(32),
+            intent_sha256: "44".repeat(32),
+            schema: OWNED_JOURNAL_SCHEMA_V1.into(),
+            completion_pointer: "/phase".into(),
+            completion_value: "finalized".into(),
+            signature: format!("{kind}-signature"),
+            slot: 7,
+            fee_payer: Pubkey::new_unique().to_string(),
+            fee_lamports: 5_000,
+            compute_units_consumed: 1,
+        };
+        let mut evidence = DirectTradeFinalizedEvidenceV1 {
+            schema: OWNED_EVIDENCE_SCHEMA_V1.into(),
+            status: "finalized".into(),
+            cluster: "owned-loopback".into(),
+            public_manifest_sha256: "11".repeat(32),
+            public_manifest_base64: BASE64.encode(b"{}"),
+            private_session_sha256: "22".repeat(32),
+            journal_state_sha256: "33".repeat(32),
+            hot_journal_base64: BASE64.encode(b"{}"),
+            signature: "hot-signature".into(),
+            finalized_slot: 7,
+            market: Pubkey::new_unique().to_string(),
+            seller_owner: seller_owner.clone(),
+            seller_position: seller_position.clone(),
+            buyer_position: buyer_position.clone(),
+            buyer_owner: buyer_owner.clone(),
+            buyer_collateral_source: Pubkey::new_unique().to_string(),
+            seller_collateral_destination: Pubkey::new_unique().to_string(),
+            fee_token_account: Pubkey::new_unique().to_string(),
+            fee_basis_points_per_side: 50,
+            fee_recipient: Pubkey::new_unique().to_string(),
+            mint: Pubkey::new_unique().to_string(),
+            outcome_index: 0,
+            outcome_count: 4,
+            fill_atoms: 1,
+            execution_price: 500_000,
+            price_scale: 1_000_000,
+            lookup_table: Pubkey::new_unique().to_string(),
+            lookup_addresses_sha256: "55".repeat(32),
+            lookup_address_count: 57,
+            static_account_count: 4,
+            loaded_address_count: 57,
+            unique_message_account_count: 61,
+            wire_bytes: 1_159,
+            capability_seal: Pubkey::new_unique().to_string(),
+            capability_seal_sha256: "66".repeat(32),
+            hot_ack_producer: Pubkey::new_unique().to_string(),
+            hot_ack_base64: BASE64.encode([2]),
+            hot_ack_sha256: super::sha256_hex(&[2]),
+            mutations: vec![
+                mutation("replay-setup"),
+                mutation("token-setup"),
+                mutation("hot"),
+            ],
+            lookup_activation: DirectLookupActivationEvidenceV1 {
+                path: "/tmp/activation.json".into(),
+                sha256: "77".repeat(32),
+                intent_sha256: "88".repeat(32),
+                schema: OWNED_JOURNAL_SCHEMA_V1.into(),
+                completion_pointer: "/phase".into(),
+                completion_value: "finalized".into(),
+                finalized_slot: 6,
+                lookup_table: Pubkey::new_unique().to_string(),
+                lookup_addresses_sha256: "55".repeat(32),
+            },
+            positions: [
+                DirectPositionTransitionEvidenceV1 {
+                    account: seller_position.clone(),
+                    owner: seller_owner.clone(),
+                    pre_data_base64: BASE64.encode([3]),
+                    post_data_base64: BASE64.encode([4]),
+                },
+                DirectPositionTransitionEvidenceV1 {
+                    account: buyer_position.clone(),
+                    owner: buyer_owner.clone(),
+                    pre_data_base64: BASE64.encode([5]),
+                    post_data_base64: BASE64.encode([6]),
+                },
+            ],
+            claim_balances: vec![DirectClaimBalanceEvidenceV1 {
+                owner: buyer_owner,
+                position: buyer_position,
+                recipient_token: Pubkey::new_unique().to_string(),
+                claim_index: 0,
+                quantity_atoms: 1,
+            }],
+            final_accounts: vec![expected; 10],
+            poststates: vec![observed; 10],
+            evidence_sha256: String::new(),
+        };
+        evidence.evidence_sha256 = direct_evidence_digest_v1(&evidence).expect("evidence digest");
+        evidence
+    }
+
     #[test]
     fn action_order_is_total_over_one_exact_extension_count() {
         assert_eq!(
@@ -6283,6 +6407,52 @@ mod tests {
         assert!(authenticate_lookup_activation_slot_order_v1(10, 10, 10, 12).is_err());
         assert!(authenticate_lookup_activation_slot_order_v1(11, 10, 12, 13).is_err());
         assert!(authenticate_lookup_activation_slot_order_v1(13, 10, 11, 12).is_err());
+    }
+
+    #[test]
+    fn terminal_identity_refuses_position_order_and_mutation_role_substitution() {
+        let exact = terminal_evidence();
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &exact,
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_ok()
+        );
+
+        let mut reordered = exact.clone();
+        reordered.positions.swap(0, 1);
+        reordered.evidence_sha256 = direct_evidence_digest_v1(&reordered).expect("digest");
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &reordered,
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_err()
+        );
+
+        let mut substituted = exact.clone();
+        substituted.mutations[0].kind = "token-setup".into();
+        substituted.evidence_sha256 = direct_evidence_digest_v1(&substituted).expect("digest");
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &substituted,
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_err()
+        );
+
+        let mut public_cluster = exact;
+        public_cluster.cluster = "devnet".into();
+        public_cluster.evidence_sha256 =
+            direct_evidence_digest_v1(&public_cluster).expect("digest");
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &public_cluster,
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_err()
+        );
     }
 
     #[test]
