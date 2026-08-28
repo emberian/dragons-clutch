@@ -258,6 +258,11 @@ fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
             "Direct compiler requires the Trading COMPILED_DIRECT_RELEASE_ID_V1 semantic owner",
         ));
     }
+    if plan.checked_local_mutable_set.is_some() {
+        return Err(Error::new(
+            "Direct devnet planning refuses a plan that also carries owned-loopback deployment evidence",
+        ));
+    }
     let checked = plan.checked_upgrade_set.as_ref().ok_or_else(|| {
         Error::new("Direct devnet planning requires a checked mixed deployment-set plan")
     })?;
@@ -2083,6 +2088,31 @@ mod tests {
         assert_eq!(activation_probe.checked_calls.get(), 1);
         assert_eq!(activation_probe.activation_calls.get(), 1);
         assert_eq!(activation_probe.rpc_calls.get(), 0);
+
+        let mut mixed_origin = fixture.plan.clone();
+        mixed_origin.checked_local_mutable_set = Some(crate::model::CheckedLocalMutableSetPinV1 {
+            schema: crate::local_mutable::CHECKED_LOCAL_MUTABLE_SET_SCHEMA_V1.into(),
+            checked_release_gate_path: "/private/tmp/never-read-mixed-gate.json".into(),
+            checked_release_gate_sha256: "11".repeat(32),
+            source_revision: "22".repeat(20),
+            source_tree_sha256: "33".repeat(32),
+            solana_cli_version: "solana-cli 4.0.2".into(),
+            retained_upgrade_authority: fixture.retained_authority.to_string(),
+            set_sha256: "44".repeat(32),
+            roles: Vec::new(),
+        });
+        let mixed_origin_probe = load_fixture_v1(
+            &fixture,
+            &mixed_origin,
+            fixture.accounts.clone(),
+            fixture.finalized_slot,
+            Some(0),
+            Some(Pubkey::new_from_array([0xbf; 32])),
+        );
+        assert!(mixed_origin_probe.result.is_err());
+        assert_eq!(mixed_origin_probe.checked_calls.get(), 0);
+        assert_eq!(mixed_origin_probe.activation_calls.get(), 0);
+        assert_eq!(mixed_origin_probe.rpc_calls.get(), 0);
 
         let mut coordinate_alias = fixture.plan.clone();
         coordinate_alias.claims.program_id = coordinate_alias.trading.program_id.clone();

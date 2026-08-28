@@ -35,15 +35,6 @@ use crate::{
 
 pub(crate) const CHECKED_LOCAL_MUTABLE_SET_SCHEMA_V1: &str = "dclutch-checked-local-mutable-set-v1";
 const SET_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/checked-local-mutable-set/v1";
-pub(crate) const ROLE_ORDER_V1: [&str; 7] = [
-    "registry",
-    "rent",
-    "custody",
-    "resolution",
-    "claims",
-    "trading",
-    "core",
-];
 
 /// Operator-independent checked-gate facts supplied to local plan preparation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,7 +53,11 @@ pub(crate) fn build_checked_local_mutable_set_v1(
     retained_authority: Pubkey,
     roles: [(&str, &ProgramPin); 7],
 ) -> Result<CheckedLocalMutableSetPinV1> {
-    if roles.iter().map(|(role, _)| *role).ne(ROLE_ORDER_V1) {
+    if roles
+        .iter()
+        .map(|(role, _)| *role)
+        .ne(crate::upgrade::CHECKED_ROLE_ORDER_V1)
+    {
         return Err(Error::new(
             "checked local mutable roles are not in canonical decision-0012 order",
         ));
@@ -75,7 +70,7 @@ pub(crate) fn build_checked_local_mutable_set_v1(
 
     let gate_path = canonical_regular(&gate.path, "checked local release gate")?;
     let retained = retained_authority.to_string();
-    let mut projected = Vec::with_capacity(ROLE_ORDER_V1.len());
+    let mut projected = Vec::with_capacity(crate::upgrade::CHECKED_ROLE_ORDER_V1.len());
     let mut programs = BTreeSet::new();
     let mut programdata = BTreeSet::new();
     let mut solana_cli_version = None;
@@ -427,7 +422,10 @@ pub(crate) fn prepare_local_mutable_v1(
     let mut programs = BTreeMap::new();
     let mut artifacts = BTreeMap::new();
     let mut deployments = RoleDeploymentsV1::default();
-    for (ordinal, role) in ROLE_ORDER_V1.into_iter().enumerate() {
+    for (ordinal, role) in crate::upgrade::CHECKED_ROLE_ORDER_V1
+        .into_iter()
+        .enumerate()
+    {
         let program = Pubkey::new_from_array(derive(LOCAL_ID_DOMAIN_V1, seed, role));
         programs.insert(role.into(), program.to_string());
         let elf = gate_root.join(format!("elf/{role}.so"));
@@ -702,18 +700,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn role_order_is_the_permanent_decision_0012_order() {
+    fn local_launcher_uses_the_upgrade_role_owner_without_an_alias() {
+        assert_eq!(crate::upgrade::CHECKED_ROLE_ORDER_V1.len(), 7);
         assert_eq!(
-            ROLE_ORDER_V1,
-            [
-                "registry",
-                "rent",
-                "custody",
-                "resolution",
-                "claims",
-                "trading",
-                "core"
-            ]
+            crate::upgrade::CHECKED_ROLE_ORDER_V1
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            crate::upgrade::CHECKED_ROLE_ORDER_V1.len()
         );
     }
 

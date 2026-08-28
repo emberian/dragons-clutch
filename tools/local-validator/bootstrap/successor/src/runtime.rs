@@ -1362,6 +1362,48 @@ fn expected_activation(plan: &SuccessorPlan) -> Result<ActivatedExecutionRelease
         .map_err(|error| Error::new(format!("construct expected activation: {error:?}")))
 }
 
+/// Rebuild the exact Registry/Rent infrastructure profile from its saved body.
+/// External campaign admission calls this without invoking the local
+/// supervisor's deliberately immutable-only plan validator.
+pub(crate) fn authenticate_infrastructure_profile_projection(plan: &SuccessorPlan) -> Result<()> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let rent = pubkey(&plan.rent_credit.program_id)?;
+    validate_program_ids(&[registry, core, rent])?;
+    let address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core).0;
+    if plan.infrastructure_profile.address != address.to_string()
+        || hex32(&plan.infrastructure_profile.schema_id)?
+            != PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1
+    {
+        return Err(Error::new(
+            "infrastructure profile address or schema is not canonical",
+        ));
+    }
+    let body = decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let profile = ProtocolInfrastructureProfileV1::decode(&body)
+        .map_err(|error| Error::new(format!("infrastructure profile: {error:?}")))?;
+    let registry_artifact = artifact_id(&plan.registry.artifact_release_id)?;
+    let rent_artifact = artifact_id(&plan.rent_credit.artifact_release_id)?;
+    if profile.registry().program().to_bytes() != registry.to_bytes()
+        || profile.registry().artifact_release() != registry_artifact
+        || profile.rent().program().to_bytes() != rent.to_bytes()
+        || profile.rent().artifact_release() != rent_artifact
+        || plan.infrastructure_profile.registry_artifact_release_id
+            != plan.registry.artifact_release_id
+        || plan.infrastructure_profile.rent_artifact_release_id
+            != plan.rent_credit.artifact_release_id
+    {
+        return Err(Error::new(
+            "infrastructure profile substituted a Registry or Rent binding",
+        ));
+    }
+    if plan.infrastructure_profile.body_sha256 != hex(&sha2::Sha256::digest(&body)) {
+        return Err(Error::new("infrastructure profile body hash mismatch"));
+    }
+    Ok(())
+}
+
 /// Rebuild the activation projection from the saved record bodies and require
 /// its PDA to match. External campaign admission calls this without invoking
 /// the local supervisor's deliberately immutable-only plan validator.
@@ -1677,40 +1719,7 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
         ));
     }
 
-    let profile_address = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
-        &programs[1],
-    )
-    .0;
-    if plan.infrastructure_profile.address != profile_address.to_string()
-        || hex32(&plan.infrastructure_profile.schema_id)?
-            != PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1
-    {
-        return Err(Error::new(
-            "infrastructure profile address or schema is not canonical",
-        ));
-    }
-    let body = decode_hex(&plan.infrastructure_profile.body_hex)?;
-    let profile = ProtocolInfrastructureProfileV1::decode(&body)
-        .map_err(|error| Error::new(format!("infrastructure profile: {error:?}")))?;
-    let registry_artifact = artifact_id(&plan.registry.artifact_release_id)?;
-    let rent_artifact = artifact_id(&plan.rent_credit.artifact_release_id)?;
-    if profile.registry().program().to_bytes() != programs[0].to_bytes()
-        || profile.registry().artifact_release() != registry_artifact
-        || profile.rent().program().to_bytes() != programs[6].to_bytes()
-        || profile.rent().artifact_release() != rent_artifact
-        || plan.infrastructure_profile.registry_artifact_release_id
-            != plan.registry.artifact_release_id
-        || plan.infrastructure_profile.rent_artifact_release_id
-            != plan.rent_credit.artifact_release_id
-    {
-        return Err(Error::new(
-            "infrastructure profile substituted a Registry or Rent binding",
-        ));
-    }
-    if plan.infrastructure_profile.body_sha256 != hex(&sha2::Sha256::digest(&body)) {
-        return Err(Error::new("infrastructure profile body hash mismatch"));
-    }
+    authenticate_infrastructure_profile_projection(plan)?;
     for label in [
         "execution_release_set",
         "registry_artifact_release",

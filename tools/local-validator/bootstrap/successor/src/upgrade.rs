@@ -105,7 +105,7 @@ const EXTENSION_FEE_RESERVE_LAMPORTS: u64 = 1_000_000;
 /// so the operator can preserve the evidence and lift this bound explicitly.
 const SIGNATURE_HISTORY_MAX_PAGES: usize = 16;
 const SIGNATURE_HISTORY_PAGE_ROWS: u64 = 1_000;
-const ROLES: &[&str] = &[
+pub(crate) const CHECKED_ROLE_ORDER_V1: [&str; 7] = [
     "registry",
     "rent",
     "custody",
@@ -1556,7 +1556,10 @@ pub(crate) fn run_baseline(arguments: Vec<String>) -> Result<()> {
         target_rent_exempt_minimum_lamports.saturating_sub(observation.programdata_lamports);
     let mut baseline = UpgradeBaselineV1 {
         schema: BASELINE_SCHEMA.into(),
-        canonical_role_order: ROLES.iter().map(|role| (*role).into()).collect(),
+        canonical_role_order: CHECKED_ROLE_ORDER_V1
+            .iter()
+            .map(|role| (*role).into())
+            .collect(),
         role_ordinal: role_ordinal(&args.role)?,
         role: args.role,
         program_id: args.program_id.to_string(),
@@ -5614,7 +5617,7 @@ fn validate_frame_report(link: &CheckedGateLinkV1, bytes: &[u8]) -> Result<()> {
 }
 
 fn validate_baseline(args: &UpgradeArgsV1, baseline: &UpgradeBaselineV1) -> Result<()> {
-    let expected_order = ROLES
+    let expected_order = CHECKED_ROLE_ORDER_V1
         .iter()
         .map(|role| String::from(*role))
         .collect::<Vec<_>>();
@@ -8165,17 +8168,17 @@ fn sync_parent_directory(parent: &Path) -> Result<()> {
 }
 
 fn require_role(role: &str) -> Result<()> {
-    if !ROLES.contains(&role) {
+    if !CHECKED_ROLE_ORDER_V1.contains(&role) {
         return Err(Error::new(format!(
             "unknown Upgrade role {role:?}; one run names exactly one of {}",
-            ROLES.join(", ")
+            CHECKED_ROLE_ORDER_V1.join(", ")
         )));
     }
     Ok(())
 }
 
 fn role_ordinal(role: &str) -> Result<u8> {
-    ROLES
+    CHECKED_ROLE_ORDER_V1
         .iter()
         .position(|known| *known == role)
         .and_then(|index| u8::try_from(index).ok())
@@ -9038,7 +9041,10 @@ mod tests {
             };
             let mut baseline = UpgradeBaselineV1 {
                 schema: BASELINE_SCHEMA.into(),
-                canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
+                canonical_role_order: CHECKED_ROLE_ORDER_V1
+                    .iter()
+                    .map(|role| String::from(*role))
+                    .collect(),
                 role_ordinal: role_ordinal("custody").expect("role"),
                 role: "custody".into(),
                 program_id: program.to_string(),
@@ -9585,7 +9591,10 @@ mod tests {
                 let context_slot = 600_000 + u64::from(byte) * 10;
                 let mut baseline = UpgradeBaselineV1 {
                     schema: BASELINE_SCHEMA.into(),
-                    canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
+                    canonical_role_order: CHECKED_ROLE_ORDER_V1
+                        .iter()
+                        .map(|role| String::from(*role))
+                        .collect(),
                     role_ordinal: byte,
                     role: (*role).into(),
                     program_id: program.to_string(),
@@ -10865,6 +10874,10 @@ mod tests {
         .expect("checked local mutable plan JSON");
         crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
             .expect("reauthenticate checked local mutable plan");
+        let loopback = crate::cluster::ClusterOriginV1::parse("http://127.0.0.1:20890/", None)
+            .expect("owned loopback origin");
+        crate::campaign::authenticate_checked_campaign_plan(&plan, &loopback)
+            .expect("all seven ArtifactRelease rows and the profile rejoin the checked set");
         let checked = plan
             .checked_local_mutable_set
             .as_ref()
@@ -10880,7 +10893,7 @@ mod tests {
             14
         );
         for (ordinal, role) in checked.roles.iter().enumerate() {
-            assert_eq!(role.role, crate::local_mutable::ROLE_ORDER_V1[ordinal]);
+            assert_eq!(role.role, CHECKED_ROLE_ORDER_V1[ordinal]);
             assert_eq!(role.deployment_slot, ordinal as u64 + 1);
             assert!(plan.genesis_accounts.values().any(|account| {
                 account.address == role.programdata_id
@@ -10888,6 +10901,60 @@ mod tests {
             }));
         }
         assert!(report.keypairs.len() >= crate::campaign::KEYPAIR_ROLES.len());
+
+        let mut substituted_record = plan.clone();
+        let rent_record = substituted_record
+            .records
+            .get("rent_artifact_release")
+            .expect("rent ArtifactRelease")
+            .clone();
+        substituted_record.registry.artifact_release_id = rent_record.content_sha256.clone();
+        substituted_record
+            .records
+            .insert("registry_artifact_release".into(), rent_record);
+        let error =
+            crate::campaign::authenticate_checked_campaign_plan(&substituted_record, &loopback)
+                .expect_err("coherently substituted role record must refuse");
+        assert!(
+            error.to_string().contains("checked mutable slot pin"),
+            "{error}"
+        );
+
+        let binding = |pin: &crate::model::ProgramPin| {
+            dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+                dclutch_release_set_contract::ProgramIdentityV1::new(
+                    crate::plan::pubkey(&pin.program_id)
+                        .expect("program")
+                        .to_bytes(),
+                )
+                .expect("program identity"),
+                dclutch_release_set_contract::ArtifactReleaseIdV1::new(
+                    crate::plan::hex32(&pin.artifact_release_id).expect("artifact ID"),
+                )
+                .expect("artifact identity"),
+            )
+        };
+        let mut substituted_profile = plan.clone();
+        let profile = dclutch_release_set_contract::ProtocolInfrastructureProfileV1::new(
+            binding(&substituted_profile.core),
+            binding(&substituted_profile.rent_credit),
+        )
+        .expect("coherent but substituted profile");
+        let profile_bytes = profile.to_bytes();
+        substituted_profile.infrastructure_profile.body_hex = crate::plan::hex(&profile_bytes);
+        substituted_profile.infrastructure_profile.body_sha256 = digest(&profile_bytes);
+        substituted_profile
+            .infrastructure_profile
+            .registry_artifact_release_id = substituted_profile.core.artifact_release_id.clone();
+        let error =
+            crate::campaign::authenticate_checked_campaign_plan(&substituted_profile, &loopback)
+                .expect_err("coherently substituted infrastructure profile must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("substituted a Registry or Rent binding"),
+            "{error}"
+        );
     }
 
     #[test]

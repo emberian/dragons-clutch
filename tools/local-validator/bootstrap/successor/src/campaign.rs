@@ -93,7 +93,10 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 use crate::{
     Error, Result,
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
-    model::{CheckedUpgradeRolePinV1, ProgramPin, SuccessorPlan},
+    model::{
+        CheckedDeploymentDispositionV1, CheckedLocalMutableRolePinV1, CheckedUpgradeRolePinV1,
+        ProgramPin, SuccessorPlan,
+    },
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
     runtime,
@@ -1725,31 +1728,127 @@ fn checked_plan_role<'a>(
     })
 }
 
+#[derive(Clone, Copy)]
+enum CheckedPlanRoleEvidenceV1<'a> {
+    PermanentDevnet(&'a CheckedUpgradeRolePinV1),
+    OwnedLoopback(&'a CheckedLocalMutableRolePinV1),
+}
+
+impl<'a> CheckedPlanRoleEvidenceV1<'a> {
+    fn role(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.role,
+            Self::OwnedLoopback(role) => &role.role,
+        }
+    }
+
+    fn program_id(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.program_id,
+            Self::OwnedLoopback(role) => &role.program_id,
+        }
+    }
+
+    fn programdata_id(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.programdata_id,
+            Self::OwnedLoopback(role) => &role.programdata_id,
+        }
+    }
+
+    fn checked_candidate_elf_path(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.checked_candidate_elf_path,
+            Self::OwnedLoopback(role) => &role.checked_candidate_elf_path,
+        }
+    }
+
+    fn checked_candidate_elf_sha256(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.checked_candidate_elf_sha256,
+            Self::OwnedLoopback(role) => &role.checked_candidate_elf_sha256,
+        }
+    }
+
+    fn live_elf_sha256(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.live_elf_sha256,
+            Self::OwnedLoopback(role) => &role.live_elf_sha256,
+        }
+    }
+
+    fn programdata_account_sha256(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.programdata_account_sha256,
+            Self::OwnedLoopback(role) => &role.programdata_account_sha256,
+        }
+    }
+
+    fn deployment_slot(self) -> u64 {
+        match self {
+            Self::PermanentDevnet(role) => role.deployment_slot,
+            Self::OwnedLoopback(role) => role.deployment_slot,
+        }
+    }
+
+    fn semantic_release_id(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.semantic_release_id,
+            Self::OwnedLoopback(role) => &role.semantic_release_id,
+        }
+    }
+
+    fn carried_artifact(self) -> Result<Option<(&'a str, &'a str)>> {
+        match self {
+            Self::PermanentDevnet(role)
+                if role.disposition == CheckedDeploymentDispositionV1::CarryForward =>
+            {
+                Ok(Some((
+                    role.artifact_release_body_hex.as_deref().ok_or_else(|| {
+                        Error::new(format!(
+                            "carried {} role omitted ArtifactRelease body",
+                            role.role
+                        ))
+                    })?,
+                    role.artifact_release_id.as_deref().ok_or_else(|| {
+                        Error::new(format!(
+                            "carried {} role omitted ArtifactRelease identity",
+                            role.role
+                        ))
+                    })?,
+                )))
+            }
+            Self::PermanentDevnet(_) | Self::OwnedLoopback(_) => Ok(None),
+        }
+    }
+}
+
 fn authenticate_checked_plan_role_projection(
     plan: &SuccessorPlan,
-    set_role: &CheckedUpgradeRolePinV1,
+    evidence: CheckedPlanRoleEvidenceV1<'_>,
     retained_authority: Pubkey,
 ) -> Result<()> {
-    let (pin, record_label) = checked_role(plan, set_role)?;
+    let role = evidence.role();
+    let (pin, record_label) = checked_plan_role(plan, role)?;
     let candidate = fs::read(&pin.checked_candidate_elf_path)?;
     let candidate_sha = hex(&<sha2::Sha256 as sha2::Digest>::digest(&candidate));
-    if pin.program_id != set_role.program_id
-        || pin.programdata_id != set_role.programdata_id
+    if pin.program_id != evidence.program_id()
+        || pin.programdata_id != evidence.programdata_id()
         || pin.elf_path != pin.checked_candidate_elf_path
         || pin.elf_sha256 != pin.checked_candidate_elf_sha256
-        || pin.checked_candidate_elf_path != set_role.checked_candidate_elf_path
-        || pin.checked_candidate_elf_sha256 != set_role.checked_candidate_elf_sha256
-        || candidate_sha != set_role.checked_candidate_elf_sha256
-        || pin.live_elf_sha256 != set_role.live_elf_sha256
-        || pin.semantic_release_id != set_role.semantic_release_id
-        || pin.deployment_slot != set_role.deployment_slot
-        || pin.programdata_sha256 != set_role.programdata_account_sha256
+        || pin.checked_candidate_elf_path != evidence.checked_candidate_elf_path()
+        || pin.checked_candidate_elf_sha256 != evidence.checked_candidate_elf_sha256()
+        || candidate_sha != evidence.checked_candidate_elf_sha256()
+        || pin.live_elf_sha256 != evidence.live_elf_sha256()
+        || pin.semantic_release_id != evidence.semantic_release_id()
+        || pin.deployment_slot != evidence.deployment_slot()
+        || pin.programdata_sha256 != evidence.programdata_account_sha256()
         || pin.upgrade_authority.as_deref() != Some(retained_authority.to_string().as_str())
         || pin.deployment_source != "observed-programdata-account"
     {
         return Err(Error::new(format!(
             "saved plan role {} differs from its authenticated deployment-set evidence",
-            set_role.role
+            role
         )));
     }
     let pair = plan
@@ -1778,14 +1877,12 @@ fn authenticate_checked_plan_role_projection(
             "saved plan {record_label} differs from its checked mutable slot pin"
         )));
     }
-    if set_role.disposition == crate::model::CheckedDeploymentDispositionV1::CarryForward
-        && (set_role.artifact_release_body_hex.as_deref() != Some(pair.body_hex.as_str())
-            || set_role.artifact_release_id.as_deref() != Some(body_sha.as_str()))
-    {
-        return Err(Error::new(format!(
-            "saved plan replaced carried {} ArtifactRelease bytes",
-            set_role.role
-        )));
+    if let Some((carried_body, carried_id)) = evidence.carried_artifact()? {
+        if carried_body != pair.body_hex || carried_id != body_sha {
+            return Err(Error::new(format!(
+                "saved plan replaced carried {role} ArtifactRelease bytes"
+            )));
+        }
     }
     Ok(())
 }
@@ -1793,7 +1890,7 @@ fn authenticate_checked_plan_role_projection(
 /// A saved public-cluster plan is an untrusted projection. Before any keypair
 /// file is loaded, rehash its mixed deployment-set evidence and bind every
 /// mutable Program pin and artifact body back to that owner.
-fn authenticate_checked_campaign_plan(
+pub(crate) fn authenticate_checked_campaign_plan(
     plan: &SuccessorPlan,
     origin: &ClusterOriginV1,
 ) -> Result<()> {
@@ -1808,10 +1905,21 @@ fn authenticate_checked_campaign_plan(
     if plan.checked_local_mutable_set.is_some() {
         crate::cluster::ExpectedClusterV1::OwnedLoopback.authenticate(origin)?;
         crate::local_mutable::authenticate_checked_local_mutable_plan_v1(plan)?;
-        for role in crate::local_mutable::ROLE_ORDER_V1 {
-            let (_, record_label) = checked_plan_role(plan, role)?;
+        let set = plan
+            .checked_local_mutable_set
+            .as_ref()
+            .ok_or_else(|| Error::new("checked local mutable set disappeared"))?;
+        let retained = pubkey(&set.retained_upgrade_authority)?;
+        for role in &set.roles {
+            authenticate_checked_plan_role_projection(
+                plan,
+                CheckedPlanRoleEvidenceV1::OwnedLoopback(role),
+                retained,
+            )?;
+            let (_, record_label) = checked_plan_role(plan, &role.role)?;
             let _ = runtime::record(plan, record_label)?;
         }
+        runtime::authenticate_infrastructure_profile_projection(plan)?;
         return runtime::authenticate_checked_activation_projection(plan);
     }
     let Some(set) = plan.checked_upgrade_set.as_ref() else {
@@ -1831,7 +1939,11 @@ fn authenticate_checked_campaign_plan(
     }
     let retained = pubkey(&set.retained_upgrade_authority)?;
     for role in &set.roles {
-        authenticate_checked_plan_role_projection(plan, role, retained)?;
+        authenticate_checked_plan_role_projection(
+            plan,
+            CheckedPlanRoleEvidenceV1::PermanentDevnet(role),
+            retained,
+        )?;
         let (_, record_label) = checked_role(plan, role)?;
         let _ = runtime::record(plan, record_label)?;
     }
@@ -1848,6 +1960,7 @@ fn authenticate_checked_campaign_plan(
             "saved plan replaced the authenticated carried infrastructure profile",
         ));
     }
+    runtime::authenticate_infrastructure_profile_projection(plan)?;
     runtime::authenticate_checked_activation_projection(plan)
 }
 
