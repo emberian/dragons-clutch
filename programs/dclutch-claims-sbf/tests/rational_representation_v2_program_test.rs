@@ -704,9 +704,9 @@ fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
     let resolution = release(RESOLUTION_PROGRAM_ID, 0x45, &artifacts.resolution);
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
-        binding(resolution),
-        binding(trading),
         binding(claims),
+        binding(trading),
+        binding(resolution),
         binding(custody),
     )
     .expect("release set");
