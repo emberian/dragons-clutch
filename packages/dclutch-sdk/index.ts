@@ -28,6 +28,8 @@ export * from './lib/marketDetail';
 export * from './lib/marketCoreV2';
 export * from './lib/portfolio';
 export * from './lib/activity';
+export * from './lib/deployments';
+export * from './lib/operatorSurface';
 
 // Refusals by name: band arithmetic over the registered code space.
 export * from './lib/refusals';

@@ -102,6 +102,30 @@ describe('bounded finalized RPC client', () => {
     });
   });
 
+  it('reads a bounded account-data window without downloading a full ProgramData ELF', async () => {
+    const addresses = ['11111111111111111111111111111111', 'SysvarC1ock11111111111111111111111111111111'];
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getMultipleAccounts');
+      expect(request.params).toEqual([addresses, {
+        commitment: 'finalized',
+        encoding: 'base64',
+        minContextSlot: 44,
+        dataSlice: { offset: 0, length: 45 },
+      }]);
+      return response({ context: { slot: 46 }, value: [
+        { data: ['', 'base64'], executable: false, lamports: 1, owner: addresses[0], space: 9_000_000 },
+        null,
+      ] });
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher)
+      .multipleAccountDataSlices(addresses, 0, 45, '44')).resolves.toMatchObject({
+      slot: '46', accounts: [{ account: { data: new Uint8Array(), space: 9_000_000 } }, { account: null }],
+    });
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher)
+      .multipleAccountDataSlices(addresses, 0, 0, '44')).rejects.toThrow(/outside the bounded account profile/);
+  });
+
   it('admits exact devnet and strict loopback local-validator identities only', async () => {
     const withGenesis = (genesis: string): typeof fetch => async () => response(genesis);
     await expect(new SolanaRpcClient('https://custom.proxy.example/solana', withGenesis(SOLANA_DEVNET_GENESIS_HASH_V1)).assertMutationCluster()).resolves.toEqual({

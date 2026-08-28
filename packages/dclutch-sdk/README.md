@@ -33,6 +33,20 @@ must be read before claiming the two surfaces have converged.
   still stated by hand (record magics, seed domains, literal byte offsets);
   `lib/abiCoverage.test.ts` fails when the inventory grows.
 
+## Checked live-devnet read
+
+`LIVE_DEVNET_OPERATOR_PRESET_V1` supplies the canonical public endpoint and
+the six operator-role coordinates already owned by `lib/deployments.ts`.
+Pass it to `acquireOperatorSurfaceV1` with a `SolanaRpcClient` to reacquire
+devnet genesis, the exact Loader Program links, six canonical ProgramData
+PDAs, their 45-byte slot/authority headers, and the complete Registry
+activation cache at finalized commitment. The read deliberately uses data
+slices for ProgramData, so it never downloads the multi-megabyte ELF bodies.
+
+The returned `routeSpecificReleaseAdmission` remains `unproven`. A matching
+program generation does not invent a Realm or Market and does not authenticate
+the releases selected by a particular route.
+
 ## Versioning
 
 `0.1.0`, and honestly so: the API is the extraction of a moving application

@@ -336,13 +336,21 @@ export class SolanaRpcClient {
     });
   }
 
-  async multipleAccounts(addresses: ReadonlyArray<string>, minimumContextSlot?: string): Promise<MultipleAccountObservation> {
+  private async multipleAccountsRead(
+    addresses: ReadonlyArray<string>,
+    minimumContextSlot?: string,
+    dataSlice?: Readonly<{ offset: number; length: number }>,
+  ): Promise<MultipleAccountObservation> {
     if (addresses.length === 0 || addresses.length > MAX_MULTIPLE_ACCOUNTS) throw new Error(`getMultipleAccounts requires 1..${MAX_MULTIPLE_ACCOUNTS} exact addresses`);
     const canonical = addresses.map((address) => new PublicKey(address).toBase58());
     if (canonical.some((address, index) => address !== addresses[index])) throw new Error('getMultipleAccounts addresses must be canonical base58 text');
     if (new Set(canonical).size !== canonical.length) throw new Error('getMultipleAccounts addresses must be distinct');
     const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
+    if (dataSlice !== undefined) configuration.dataSlice = {
+      offset: exactUnsigned(dataSlice.offset, 'account data-slice offset'),
+      length: exactUnsigned(dataSlice.length, 'account data-slice length'),
+    };
     const raw = await this.#request('getMultipleAccounts', [canonical, configuration]);
     if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value) || raw.value.length !== canonical.length) throw new Error('getMultipleAccounts did not return one finalized value per address');
     const slot = String(exactUnsigned(raw.context.slot, 'multiple-account observation slot'));
@@ -353,6 +361,31 @@ export class SolanaRpcClient {
       slot,
       accounts: Object.freeze(canonical.map((address, index) => Object.freeze({ address, account: values[index] === null ? null : parseAccount(values[index], `multiple account ${index}`) }))),
     });
+  }
+
+  async multipleAccounts(addresses: ReadonlyArray<string>, minimumContextSlot?: string): Promise<MultipleAccountObservation> {
+    return this.multipleAccountsRead(addresses, minimumContextSlot);
+  }
+
+  /**
+   * Read one bounded byte window from each finalized account.
+   *
+   * Loader ProgramData accounts carry whole ELFs. A caller that only needs the
+   * 45-byte Loader header must not download those bodies or weaken the RPC
+   * client's four-MiB response refusal to make them fit.
+   */
+  async multipleAccountDataSlices(
+    addresses: ReadonlyArray<string>,
+    offset: number,
+    length: number,
+    minimumContextSlot?: string,
+  ): Promise<MultipleAccountObservation> {
+    const checkedOffset = exactUnsigned(offset, 'account data-slice offset');
+    const checkedLength = exactUnsigned(length, 'account data-slice length');
+    if (checkedOffset > 10_485_760 || checkedLength < 1 || checkedLength > 4_096 || checkedOffset + checkedLength > 10_485_760) {
+      throw new Error('account data slice is outside the bounded account profile');
+    }
+    return this.multipleAccountsRead(addresses, minimumContextSlot, { offset: checkedOffset, length: checkedLength });
   }
 
   async finalizedSlot(): Promise<string> {
