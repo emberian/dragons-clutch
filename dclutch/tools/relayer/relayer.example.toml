@@ -90,6 +90,21 @@ compute_unit_price_micro_lamports = 1
 # key = "1111111111111111111111111111111B"                            # PLACEHOLDER
 # addresses = ["1111111111111111111111111111111C"]                    # PLACEHOLDER
 
+# This table is deliberately absent from an ordinary dry-run configuration.
+# When present with `submission_enabled = false`, `show-config` reports
+# `armed-no-send`; both submit commands refuse before reading a fee-payer key or
+# building a transaction. Flip it only after the accepted public caller receipt
+# and live Market named here exist.
+# [submit.launch_capability]
+# submission_enabled = false
+# relay_program_data = "1111111111111111111111111111111D"              # PLACEHOLDER
+# relay_program_deployment_slot = 0                                     # PLACEHOLDER
+# market_owner = "1111111111111111111111111111111E"                    # PLACEHOLDER
+# source_material_id = "1111111111111111111111111111111F"              # PLACEHOLDER
+# provider_release_id = "1111111111111111111111111111111G"             # PLACEHOLDER
+# accepted_caller_receipt_path = "./accepted-caller-receipt.json"
+# accepted_caller_receipt_sha256 = "0000000000000000000000000000000000000000000000000000000000000000" # PLACEHOLDER; all-zero is refused before live use
+
 # The §4.2 four-account DBC set, in the order the release pins.  The ORDER is
 # part of the identity: reordering these produces a different account_set_id.
 [[account_sets]]

@@ -34,6 +34,19 @@ pub(crate) struct DaemonConfigV1 {
     pub(crate) set_name: String,
 }
 
+/// Exact capability that lets the daemon leave armed-no-send in this
+/// rehearsal. The caller creates this only after the record-creation
+/// transaction has finalized and writes its exact receipt.
+pub(crate) struct LaunchCapabilityV1<'a> {
+    pub(crate) relay_program_data: Pubkey,
+    pub(crate) relay_program_deployment_slot: u64,
+    pub(crate) market_owner: Pubkey,
+    pub(crate) source_material_id: [u8; 32],
+    pub(crate) provider_release_id: [u8; 32],
+    pub(crate) accepted_caller_receipt_path: &'a Path,
+    pub(crate) accepted_caller_receipt_sha256: [u8; 32],
+}
+
 /// Render the daemon's TOML for the rehearsal.
 ///
 /// The observed cluster is the twin (loopback, its real genesis hash), the
@@ -49,12 +62,14 @@ pub(crate) fn render_config(
     attestation_keypair: &Path,
     fee_payer_keypair: &Path,
     submit_endpoint: &str,
+    submit_genesis_base58: &str,
     relay_program: Pubkey,
     market: Pubkey,
     generation: u64,
     relayer_key_set_raw: Pubkey,
     relayer_key_set_staging: Pubkey,
     lookup_table: Option<(Pubkey, &[Pubkey])>,
+    launch_capability: Option<LaunchCapabilityV1<'_>>,
     relay_family_id: [u8; 32],
     decoding_rules_id: [u8; 32],
     positions: &[(Pubkey, Pubkey, u16, Vec<u32>)],
@@ -63,7 +78,7 @@ pub(crate) fn render_config(
     std::fs::create_dir_all(&output_dir)?;
     let mut text = String::new();
     text.push_str(&format!(
-        "output_dir = \"{}\"\npoll_interval_seconds = 5\n\n[observed_cluster]\nrpc_endpoints = [\"{}\"]\nexpected_genesis_hash = \"{}\"\nrequest_timeout_seconds = 30\n\n[observed_cluster.rehearsal_twin]\nattested_cluster_id = \"{}\"\n\n[keys]\nattestation_keypair_path = \"{}\"\nfee_payer_keypair_path = \"{}\"\n\n[submit]\nendpoint = \"{}\"\nallow_public_submission = false\nrelay_program_id = \"{}\"\nmarket = \"{}\"\ngeneration = {}\nrelayer_key_set = \"{}\"\nrelayer_key_set_staging_vacancy = \"{}\"\ncompute_unit_limit = 400000\n",
+        "output_dir = \"{}\"\npoll_interval_seconds = 5\n\n[observed_cluster]\nrpc_endpoints = [\"{}\"]\nexpected_genesis_hash = \"{}\"\nrequest_timeout_seconds = 30\n\n[observed_cluster.rehearsal_twin]\nattested_cluster_id = \"{}\"\n\n[keys]\nattestation_keypair_path = \"{}\"\nfee_payer_keypair_path = \"{}\"\n\n[submit]\nendpoint = \"{}\"\nexpected_genesis_hash = \"{}\"\nallow_public_submission = false\nrelay_program_id = \"{}\"\nmarket = \"{}\"\ngeneration = {}\nrelayer_key_set = \"{}\"\nrelayer_key_set_staging_vacancy = \"{}\"\ncompute_unit_limit = 400000\n",
         output_dir.display(),
         twin_rpc_url,
         twin_genesis_base58,
@@ -71,6 +86,7 @@ pub(crate) fn render_config(
         attestation_keypair.display(),
         fee_payer_keypair.display(),
         submit_endpoint,
+        submit_genesis_base58,
         relay_program,
         market,
         generation,
@@ -85,6 +101,21 @@ pub(crate) fn render_config(
             text.push_str(&format!("    \"{address}\",\n"));
         }
         text.push_str("]\n");
+    }
+    if let Some(capability) = launch_capability {
+        text.push_str(&format!(
+            "\n[submit.launch_capability]\nsubmission_enabled = true\nrelay_program_data = \
+             \"{}\"\nrelay_program_deployment_slot = {}\nmarket_owner = \"{}\"\nsource_material_id = \
+             \"{}\"\nprovider_release_id = \"{}\"\naccepted_caller_receipt_path = \
+             \"{}\"\naccepted_caller_receipt_sha256 = \"{}\"\n",
+            capability.relay_program_data,
+            capability.relay_program_deployment_slot,
+            capability.market_owner,
+            hex_lower(&capability.source_material_id),
+            hex_lower(&capability.provider_release_id),
+            capability.accepted_caller_receipt_path.display(),
+            hex_lower(&capability.accepted_caller_receipt_sha256),
+        ));
     }
     let set_name = "dbc-graduation".to_owned();
     text.push_str(&format!(
@@ -108,6 +139,30 @@ pub(crate) fn render_config(
         output_dir,
         set_name,
     })
+}
+
+/// Read one loopback validator's genesis hash for the submit-side value pin.
+pub(crate) fn genesis_hash(endpoint: &str) -> Result<String> {
+    let response: serde_json::Value = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|error| Error::new(format!("submit genesis client: {error}")))?
+        .post(endpoint)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getGenesisHash",
+            "params": [],
+        }))
+        .send()
+        .map_err(|error| Error::new(format!("submit genesis read: {error}")))?
+        .json()
+        .map_err(|error| Error::new(format!("submit genesis response: {error}")))?;
+    response
+        .get("result")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new("submit genesis response carried no string result"))
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

@@ -141,6 +141,11 @@ default is exactly the quiet wrong this family exists to prevent.
 | `submit.relayer_key_set`, `.relayer_key_set_staging_vacancy` | the raw immutable key-set record and its finalized staging vacancy |
 | `submit.compute_unit_limit`, `.compute_unit_price_micro_lamports` | optional ComputeBudget preamble |
 | `submit.address_lookup_table` | optional `{ key, addresses }` the v0 message compiles against |
+| `submit.launch_capability` | optional live-launch pin; absent or disabled means armed-no-send |
+| `submit.launch_capability.relay_program_data`, `.relay_program_deployment_slot` | exact finalized Program → ProgramData slot pin checked before a send |
+| `submit.launch_capability.market_owner` | exact owner required for the existing non-executable live Market |
+| `submit.launch_capability.source_material_id`, `.provider_release_id` | exact immutable bindings required in every acknowledged observation record |
+| `submit.launch_capability.accepted_caller_receipt_path`, `.accepted_caller_receipt_sha256` | exact accepted caller output that authorized this launch shape |
 | `account_sets[].name` | `[A-Za-z0-9_-]`; indexes artifact directories |
 | `account_sets[].relay_family_id` | `ProviderReleaseV1.provider_family_id` |
 | `account_sets[].decoding_rules_id` | `ProviderReleaseV1.decoding_rules_id` |
@@ -333,6 +338,15 @@ publication requirement only up to that boundary.
 
 Code-complete, execution-gated, and **not exercised against any cluster**.
 
+The daemon is **armed-no-send by default**, even when `[submit]` names an
+endpoint. A send additionally requires `[submit.launch_capability]` with an
+explicit true enable bit, an exact accepted-caller receipt digest, the finalized
+Loader-v3 Program → ProgramData link and accepted deployment slot, and an
+existing non-executable Market under the pinned owner. The receipt is caller-
+owned; the relayer treats its complete-byte SHA-256 as a capability and does not
+invent a second DTO for the caller's meaning. A missing, disabled, replaced or
+wrongly hashed receipt refuses before transaction construction.
+
 Instruction order is `[compute budget…] · Ed25519 precompile · relay`, v0
 message, over an optional Market ALT. The precompile is immediately before the
 relay instruction by construction. The signed message sits at a fixed offset in
@@ -346,6 +360,19 @@ program validates.
 On blockhash expiry the daemon **re-signs the built transaction and never
 re-observes.** The attestation is bound to `observed_slot`; taking a fresh read
 because a blockhash aged out would silently change the fact being attested.
+Retries are bounded at five send attempts per append or seal. After every send
+response — success, refusal, timeout or response loss — the daemon reads the
+record at finalized commitment before deciding whether to retry.
+
+A signature is never treated as an acknowledgement. The acknowledgement is the
+finalized record owned by the pinned relay program with the exact immutable
+market, generation, source material, account set, provider release, key set,
+observed cluster and slot. Every already-filled body must be byte-identical to
+the signed artifact, and its running digest must recompute exactly. This makes a
+duplicate invocation or restart resume at the next append, makes response loss
+indistinguishable from an ordinary successful landing, and makes a forged RPC
+"ACK" a refusal rather than progress. The hash-chained, atomic-file journal
+under `delivery-journal/<record>/` records convergence but is not authority.
 
 Only the **append** and **seal** routes are built. Record creation and
 retirement are not, so the observation record must already exist for the

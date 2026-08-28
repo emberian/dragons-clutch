@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
@@ -742,6 +743,7 @@ fn success_walk(
             )
         })
         .collect();
+    let submit_genesis = daemon::genesis_hash(session.rpc.url())?;
 
     // Fund the daemon's fee payer on the DEVNET side.
     session.transactions.push(session.rpc.airdrop(
@@ -760,11 +762,13 @@ fn success_walk(
         attestation_path,
         fee_payer_path,
         session.rpc.url(),
+        &submit_genesis,
         book_template(Pubkey::new_unique(), 0).resolution_program,
         market,
         generation,
         book_template(Pubkey::new_unique(), 0).key_set.raw,
         book_template(Pubkey::new_unique(), 0).key_set.staging,
+        None,
         None,
         RELAYED_FAMILY_RELEASE_ID_V1,
         facts.relayed_adapter_config_digest,
@@ -816,6 +820,24 @@ fn success_walk(
         &[create],
         authority,
     )?);
+    let accepted_create = session
+        .transactions
+        .last()
+        .ok_or_else(|| Error::new("record creation produced no accepted transaction receipt"))?;
+    let accepted_receipt_path = request.work.join("accepted-relay-record-caller.json");
+    let accepted_receipt = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema": "dclutch.relay.accepted-caller-receipt.v1",
+        "operation": "create-relayed-observation-record",
+        "signature": accepted_create.signature,
+        "finalized_slot": accepted_create.slot,
+        "market": market.to_string(),
+        "generation": generation,
+        "record": record.to_string(),
+        "account_set_id_hex": hex(&facts.account_set_id),
+        "observed_slot": artifacts.observed_slot,
+    }))?;
+    std::fs::write(&accepted_receipt_path, &accepted_receipt)?;
+    let accepted_receipt_sha256: [u8; 32] = Sha256::digest(&accepted_receipt).into();
 
     // 3. The Market's routing table, covering the append/seal and consumption
     //    frames — the family's two known over-packet wires ride it.
@@ -854,12 +876,24 @@ fn success_walk(
         attestation_path,
         fee_payer_path,
         session.rpc.url(),
+        &submit_genesis,
         book.resolution_program,
         market,
         generation,
         book.key_set.raw,
         book.key_set.staging,
         Some((table, &routed_addresses)),
+        Some(daemon::LaunchCapabilityV1 {
+            relay_program_data: pubkey(&session.plan.resolution.programdata_id)?,
+            relay_program_deployment_slot: session.plan.resolution.deployment_slot,
+            market_owner: pubkey(&session.plan.core.program_id)?,
+            source_material_id: facts.material_digest,
+            provider_release_id: crate::market::record_identity(&hex_decode(
+                &facts.input.provider_release_hex,
+            )),
+            accepted_caller_receipt_path: &accepted_receipt_path,
+            accepted_caller_receipt_sha256: accepted_receipt_sha256,
+        }),
         RELAYED_FAMILY_RELEASE_ID_V1,
         facts.relayed_adapter_config_digest,
         &positions,
