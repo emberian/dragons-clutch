@@ -276,6 +276,8 @@ pub(crate) struct ProducedReplaySetupV1 {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct OwnedLoopbackDirectProducerReceiptV1 {
     pub(crate) schema: String,
+    pub(crate) status: String,
+    pub(crate) producer_receipt: String,
     pub(crate) public_manifest: String,
     pub(crate) public_manifest_sha256: String,
     pub(crate) private_session: String,
@@ -290,6 +292,7 @@ pub(crate) struct OwnedLoopbackDirectProducerReceiptV1 {
     pub(crate) participant_collateral_slot: u64,
     pub(crate) replay_setup: ProducedReplaySetupV1,
     pub(crate) token_setup: ProducedTokenSetupV1,
+    pub(crate) receipt_sha256: String,
 }
 
 #[derive(Clone, Copy)]
@@ -576,6 +579,10 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         .arguments
         .output_dir
         .join("direct-trade-finalized.json");
+    let receipt_path = validated
+        .arguments
+        .output_dir
+        .join("direct-trade-produced.json");
     let public_bytes = pretty_json_bytes_v1(&public_manifest)?;
     let public_sha256 = sha256_hex(&public_bytes);
     let mut private_session = ProducedDirectTradePrivateSessionV1 {
@@ -597,8 +604,10 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
     write_create_new_v1(&public_path, &public_bytes)?;
     write_create_new_v1(&session_path, &session_bytes)?;
 
-    let receipt = OwnedLoopbackDirectProducerReceiptV1 {
+    let mut receipt = OwnedLoopbackDirectProducerReceiptV1 {
         schema: OWNED_PRODUCER_RECEIPT_SCHEMA_V1.into(),
+        status: "produced".into(),
+        producer_receipt: receipt_path.display().to_string(),
         public_manifest: public_path.display().to_string(),
         public_manifest_sha256: public_sha256,
         private_session: session_path.display().to_string(),
@@ -613,7 +622,10 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         participant_collateral_slot: public.participant.collateral_slot,
         replay_setup: public.replay_setup,
         token_setup,
+        receipt_sha256: String::new(),
     };
+    receipt.receipt_sha256 = producer_receipt_sha256_v1(&receipt)?;
+    write_create_new_v1(&receipt_path, &pretty_json_bytes_v1(&receipt)?)?;
     Ok(receipt)
 }
 
@@ -670,6 +682,7 @@ fn validate_paths_v1(
         "direct-trade-public.json",
         "direct-trade-session.json",
         "direct-trade-finalized.json",
+        "direct-trade-produced.json",
         "direct-trade-journal",
     ] {
         if arguments.output_dir.join(target).try_exists()? {
@@ -1545,6 +1558,12 @@ fn private_session_sha256_v1(session: &ProducedDirectTradePrivateSessionV1) -> R
     Ok(sha256_hex(&serde_json::to_vec(&canonical)?))
 }
 
+fn producer_receipt_sha256_v1(receipt: &OwnedLoopbackDirectProducerReceiptV1) -> Result<String> {
+    let mut canonical = receipt.clone();
+    canonical.receipt_sha256.clear();
+    Ok(sha256_hex(&serde_json::to_vec(&canonical)?))
+}
+
 fn pretty_json_bytes_v1(value: &impl Serialize) -> Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
@@ -1694,8 +1713,10 @@ mod tests {
 
     use super::{
         CAPABILITY_SEAL_PDA_DOMAIN_V1, EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
-        ProducedDirectTradePrivateSessionV1, derive_capability_seal_v1, exact_quote_v1,
-        fee_floor_v1, private_session_sha256_v1, require_distinct_v1, signed_intent_v1,
+        OwnedLoopbackDirectProducerReceiptV1, ProducedDirectTradePrivateSessionV1,
+        ProducedReplaySetupV1, ProducedTokenSetupV1, derive_capability_seal_v1, exact_quote_v1,
+        fee_floor_v1, private_session_sha256_v1, producer_receipt_sha256_v1, require_distinct_v1,
+        signed_intent_v1,
     };
     use dclutch_direct_codec::intent_v2::CompactIntentV2;
 
@@ -1726,6 +1747,72 @@ mod tests {
         assert_eq!(private_session_sha256_v1(&session)?, digest);
         session.plan.push('x');
         assert_ne!(private_session_sha256_v1(&session)?, digest);
+        Ok(())
+    }
+
+    #[test]
+    fn producer_completion_digest_binds_status_path_and_both_setup_plans() -> crate::Result<()> {
+        let mut receipt = OwnedLoopbackDirectProducerReceiptV1 {
+            schema: "dclutch-owned-loopback-direct-trade-producer-receipt-v1".into(),
+            status: "produced".into(),
+            producer_receipt: "/tmp/direct-trade-produced.json".into(),
+            public_manifest: "/tmp/public".into(),
+            public_manifest_sha256: "11".repeat(32),
+            private_session: "/tmp/private".into(),
+            private_session_sha256: "22".repeat(32),
+            plan_sha256: "33".repeat(32),
+            market_input_sha256: "44".repeat(32),
+            campaign_report_sha256: "55".repeat(32),
+            participant_report_sha256: "66".repeat(32),
+            participant_admission_signature: "admission".into(),
+            participant_admission_slot: 7,
+            participant_collateral_signature: "collateral".into(),
+            participant_collateral_slot: 8,
+            replay_setup: ProducedReplaySetupV1 {
+                request_base64: "AA==".into(),
+                request_sha256: "77".repeat(32),
+                maker: "maker".into(),
+                maker_root: "maker-root".into(),
+                custody_replay: "replay".into(),
+                payer: "payer".into(),
+                rent_refund: "refund".into(),
+                expected_initial_revision: 0,
+                expected_resulting_revision: 1,
+            },
+            token_setup: ProducedTokenSetupV1 {
+                request_base64: "AA==".into(),
+                request_sha256: "88".repeat(32),
+                seller_token: "seller-token".into(),
+                seller_owner: "seller".into(),
+                fee_token: "fee-token".into(),
+                fee_recipient: "fee-recipient".into(),
+                payer: "payer".into(),
+                rent_refund: "refund".into(),
+                mint: "mint".into(),
+                token_program: "token-program".into(),
+                trading_program: "trading-program".into(),
+            },
+            receipt_sha256: String::new(),
+        };
+        let digest = producer_receipt_sha256_v1(&receipt)?;
+        receipt.receipt_sha256 = digest.clone();
+        assert_eq!(producer_receipt_sha256_v1(&receipt)?, digest);
+        for mutate in [
+            |receipt: &mut OwnedLoopbackDirectProducerReceiptV1| receipt.status.push('x'),
+            |receipt: &mut OwnedLoopbackDirectProducerReceiptV1| {
+                receipt.producer_receipt.push('x');
+            },
+            |receipt: &mut OwnedLoopbackDirectProducerReceiptV1| {
+                receipt.replay_setup.request_sha256.push('x');
+            },
+            |receipt: &mut OwnedLoopbackDirectProducerReceiptV1| {
+                receipt.token_setup.request_sha256.push('x');
+            },
+        ] {
+            let mut hostile = receipt.clone();
+            mutate(&mut hostile);
+            assert_ne!(producer_receipt_sha256_v1(&hostile)?, digest);
+        }
         Ok(())
     }
 
