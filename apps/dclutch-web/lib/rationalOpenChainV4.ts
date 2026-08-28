@@ -31,7 +31,7 @@ import {
   decodeToken2022BehaviorAccountV2,
   decodeToken2022BehaviorMintV2,
 } from './rationalTokenV2';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import {
   UPGRADEABLE_LOADER_ID,
   RENT_SYSVAR_ID,
@@ -434,7 +434,7 @@ export function buildRationalOpenCandidateV4(inspection: RationalOpenChainInspec
   try { wireBytes = transaction.serialize(); } catch {
     throw new Error(`Rational open ${inspection.action} packet exceeds the Solana message/packet encoding bound`);
   }
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`Rational open packet is ${wireBytes.length} bytes, above ${PACKET_DATA_SIZE}`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`Rational open packet is ${wireBytes.length} bytes, above ${SOLANA_PACKET_BYTES_V1}`);
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys.slice(0, transaction.message.header.numRequiredSignatures).map((value) => value.toBase58()));
   const expectedSigners = inspection.payer === inspection.actor ? [inspection.payer] : [inspection.payer, inspection.actor].sort();
   if ([...requiredSigners].sort().join(':') !== expectedSigners.join(':')) throw new Error('Rational open packet has an unexpected wallet signer set');

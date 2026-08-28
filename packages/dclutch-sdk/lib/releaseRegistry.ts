@@ -7,7 +7,7 @@ import {
 } from '@solana/web3.js';
 
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import { releaseSupersededMeaningV1 } from './refusals';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
@@ -562,7 +562,7 @@ function compilePacket(payer: PublicKey, registry: PublicKey, accounts: Construc
   checkedComputeLimit(computeUnitLimit); key(recentBlockhash, 'recent blockhash');
   const instruction = new TransactionInstruction({ programId: registry, keys: accounts, data: Buffer.from(data) });
   const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnitLimit }), instruction] }).compileToV0Message());
-  const wireBytes = transaction.serialize(); if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`unsigned transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  const wireBytes = transaction.serialize(); if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`unsigned transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   return Object.freeze({ transaction, wireBytes, signers: Object.freeze(transaction.message.staticAccountKeys.slice(0, transaction.message.header.numRequiredSignatures).map((value) => value.toBase58())) });
 }
 

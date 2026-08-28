@@ -78,7 +78,7 @@ import {
   HOT_TRADING_PROGRAM_ACCOUNT_V3,
   RULE_BYTES,
 } from './generated/directInlineV3';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const MAX_U16 = 0xffff;
@@ -693,7 +693,7 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     instructions,
   }).compileToV0Message([...input.route.lookupTables]));
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`Direct V3 transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`Direct V3 transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
     .slice(0, transaction.message.header.numRequiredSignatures)
     .map((key) => key.toBase58()));

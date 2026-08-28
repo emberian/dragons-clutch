@@ -15,6 +15,10 @@ import {
   encodeControllerInstructionV1,
 } from './directCodec';
 import { POSITION_PDA_DOMAIN_V1 } from './generated/realmPositionV1';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+
+// Internal compatibility while the Found builder moves to the neutral owner.
+export { SOLANA_PACKET_BYTES_V1 as PACKET_DATA_SIZE } from './solanaLimits';
 
 export const CONTROLLER_SEED = new TextEncoder().encode('dclutch-controller-v1');
 export const REPLAY_SEED = new TextEncoder().encode('dclutch/direct-replay/v3');
@@ -29,7 +33,6 @@ export const REPLAY_SEED = new TextEncoder().encode('dclutch/direct-replay/v3');
 export const POSITION_SEED = POSITION_PDA_DOMAIN_V1;
 export const CLAIM_PROGRAM_ID = new PublicKey(new Uint8Array(32).fill(81));
 export const CUSTODY_PROGRAM_ID = new PublicKey(new Uint8Array(32).fill(75));
-export const PACKET_DATA_SIZE = 1_232;
 
 const ED_DESCRIPTOR_BYTES = 14;
 const ED_PAYLOAD_OFFSET = 2 + 2 * ED_DESCRIPTOR_BYTES;
@@ -260,7 +263,7 @@ export function buildUnsignedDirectTransaction(input: DirectMatchInputV1): Unsig
   }).compileToV0Message([input.lookupTable]);
   const transaction = new VersionedTransaction(message);
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`unsigned transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`unsigned transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   return Object.freeze({
     transaction,
     wireBytes,

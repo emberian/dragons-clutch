@@ -10,9 +10,8 @@
  * from the protocol's Rust and Lean authorities and byte-gated by the
  * `abi:*:verify` scripts, which run inside `npm test`.
  *
- * This root re-exports the surfaces most clients start from. Every module is
- * also importable directly as `@dclutch/sdk/<module>` and
- * `@dclutch/sdk/generated/<module>`.
+ * This root re-exports the surfaces most clients start from. Supported modules
+ * are also importable directly as `@dclutch/sdk/<module>`.
  */
 
 // Reading the chain: the bounded, hostile-decoding RPC client and the
@@ -37,10 +36,10 @@ export * from './lib/failureWalk';
 // the spine inspection that names which walls stand between a market and a
 // trade.
 export * from './lib/directTradeSpine';
+export * from './lib/directMakerReplay';
 export * from './lib/directTicket';
-export * from './lib/directTransaction';
 export * from './lib/directInlineV3';
-export * from './lib/directCodec';
+export * from './lib/solanaLimits';
 
 // Redemption: the Claims-role Custody replay the chain demands, then the
 // terminal redemption wire.
