@@ -1687,8 +1687,8 @@ pub(crate) mod tests {
         assert_eq!(
             Sha256::digest(&encoded).as_slice(),
             &[
-                52, 169, 11, 85, 125, 206, 162, 246, 75, 76, 228, 55, 122, 166, 101, 116, 92, 238,
-                121, 134, 109, 248, 211, 143, 111, 129, 80, 254, 88, 13, 28, 250,
+                128, 13, 1, 186, 150, 117, 150, 146, 138, 175, 134, 124, 187, 40, 18, 23, 123, 139,
+                118, 71, 79, 118, 80, 143, 79, 32, 120, 207, 172, 211, 153, 210,
             ],
             "update only after inspecting the exact seven-field JSON vector",
         );
@@ -1696,6 +1696,16 @@ pub(crate) mod tests {
         assert_eq!(value.as_object().expect("object").len(), 7);
         assert_eq!(value["format"], OUTPUT_FORMAT);
         assert_eq!(value["signedPacketBase64"], "AQIDBAU=");
+        let route = value["route"].as_object().expect("route object");
+        assert_eq!(route.len(), 31);
+        assert_eq!(route["resolutionProgram"], key(29));
+        assert_eq!(route["resolutionProgramData"], key(30));
+        assert_eq!(route["terminalCertificate"], key(37));
+        assert!(route.get("terminalCoordinateRaw").is_none());
+        assert!(route.get("terminalCoordinateStaging").is_none());
+        let request = value["request"].as_object().expect("request object");
+        assert_eq!(request.len(), 25);
+        assert_eq!(request["terminalRecordDigest"], id(37));
     }
 
     #[test]
