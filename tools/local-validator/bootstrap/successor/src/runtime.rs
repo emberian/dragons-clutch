@@ -645,6 +645,7 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
 fn role_deployment_input(input: &RunProgramInput) -> RoleDeploymentInputV1 {
     RoleDeploymentInputV1 {
         observed_programdata: input.observed_programdata.as_deref().map(PathBuf::from),
+        expected_live_elf_sha256: input.observed_elf_sha256.clone(),
         genesis_deployment_slot: input.genesis_deployment_slot.unwrap_or(0),
         // The supervised `run` substrate is the genesis install this campaign
         // materializes and then revokes, so there is no mutable deployment for
@@ -1186,6 +1187,14 @@ fn activation_artifact(
     plan: &SuccessorPlan,
     label: &str,
 ) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1)> {
+    let pin = match label {
+        "core_artifact_release" => &plan.core,
+        "claims_artifact_release" => &plan.claims,
+        "trading_artifact_release" => &plan.trading,
+        "resolution_artifact_release" => &plan.resolution,
+        "custody_artifact_release" => &plan.custody,
+        _ => return Err(Error::new(format!("no execution-role pin for {label}"))),
+    };
     let pair = plan
         .records
         .get(label)
@@ -1201,6 +1210,24 @@ fn activation_artifact(
         .map_err(|error| Error::new(format!("decode {label}: {error:?}")))?;
     let release_id = ArtifactReleaseIdV1::new(digest)
         .map_err(|error| Error::new(format!("decode {label} content ID: {error:?}")))?;
+    let expected_authority = pin
+        .upgrade_authority
+        .as_deref()
+        .map(pubkey)
+        .transpose()?
+        .map(|authority| authority.to_bytes());
+    if hex(&digest) != pin.artifact_release_id
+        || release.program().to_bytes() != pubkey(&pin.program_id)?.to_bytes()
+        || release.programdata() != pubkey(&pin.programdata_id)?.to_bytes()
+        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.elf_digest() != hex32(&pin.live_elf_sha256)?
+        || release.deployment_slot() != pin.deployment_slot
+        || release.upgrade_authority() != expected_authority
+    {
+        return Err(Error::new(format!(
+            "activation record {label} does not match its exact serialized deployment pin"
+        )));
+    }
     Ok((release_id, release))
 }
 
@@ -1353,6 +1380,25 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
         let _ = pubkey(&input.program_id)?;
         let _ = hex32(&input.elf_sha256)?;
         let _ = hex32(&input.semantic_release_id)?;
+        match (
+            input.observed_programdata.as_deref(),
+            input.observed_elf_sha256.as_deref(),
+        ) {
+            (Some(_), Some(digest)) => {
+                let _ = hex32(digest)?;
+            }
+            (Some(_), None) => {
+                return Err(Error::new(format!(
+                    "{label} observed ProgramData omitted its complete live ELF SHA-256"
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(Error::new(format!(
+                    "{label} live ELF SHA-256 was supplied without observed ProgramData"
+                )));
+            }
+            (None, None) => {}
+        }
         validate_existing_canonical_file(Path::new(&input.elf_path), &format!("{label} ELF"))?;
         validate_existing_canonical_file(
             Path::new(&input.attestation),
@@ -1580,18 +1626,44 @@ fn validate_program_pin(
         Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
     if pubkey(&pin.programdata_id)? != expected_programdata
         || pin.upgrade_authority.is_some()
-        || !PathBuf::from(&pin.elf_path).is_absolute()
+        || pin.elf_path != pin.checked_candidate_elf_path
+        || pin.elf_sha256 != pin.checked_candidate_elf_sha256
+        || !PathBuf::from(&pin.checked_candidate_elf_path).is_absolute()
     {
         return Err(Error::new(
             "program pin is not an immutable canonical Loader-v3 binding",
         ));
     }
-    let expected_elf = hex32(&pin.elf_sha256)?;
+    let expected_candidate = hex32(&pin.checked_candidate_elf_sha256)?;
+    let expected_live = hex32(&pin.live_elf_sha256)?;
     let _ = hex32(&pin.semantic_release_id)?;
     let _ = artifact_id(&pin.artifact_release_id)?;
-    let elf = fs::read(&pin.elf_path)?;
-    if sha2::Sha256::digest(&elf).as_slice() != expected_elf {
-        return Err(Error::new(format!("{label} ELF digest mismatch")));
+    let elf = fs::read(&pin.checked_candidate_elf_path)?;
+    if sha2::Sha256::digest(&elf).as_slice() != expected_candidate {
+        return Err(Error::new(format!(
+            "{label} checked candidate ELF digest mismatch"
+        )));
+    }
+    let record_label = match label {
+        "rent-credit" => "rent_artifact_release".to_owned(),
+        other => format!("{other}_artifact_release"),
+    };
+    let pair = plan
+        .records
+        .get(&record_label)
+        .ok_or_else(|| Error::new(format!("missing {record_label}")))?;
+    let release = ArtifactReleaseV1::decode(&decode_hex(&pair.body_hex)?)
+        .map_err(|error| Error::new(format!("decode {record_label}: {error:?}")))?;
+    if release.program().to_bytes() != program.to_bytes()
+        || release.programdata() != expected_programdata.to_bytes()
+        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.elf_digest() != expected_live
+        || release.deployment_slot() != pin.deployment_slot
+        || release.upgrade_authority().is_some()
+    {
+        return Err(Error::new(format!(
+            "{label} artifact release did not match its serialized dual-digest deployment pin"
+        )));
     }
     let genesis = plan
         .genesis_accounts
@@ -1617,6 +1689,11 @@ fn validate_program_pin(
     // is carried by digest instead of rebuilt.
     match pin.deployment_source.as_str() {
         "genesis-install" => {
+            if expected_live != expected_candidate || pin.live_elf_padding_bytes != 0 {
+                return Err(Error::new(format!(
+                    "{label} genesis install did not preserve one exact unpadded ELF identity"
+                )));
+            }
             let expected = loader_programdata_bytes(&elf, pin.deployment_slot, bootstrap_authority);
             if genesis.data_sha256 != hex(&sha2::Sha256::digest(&expected)) {
                 return Err(Error::new(format!(

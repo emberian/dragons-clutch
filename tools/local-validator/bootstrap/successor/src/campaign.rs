@@ -71,7 +71,9 @@ use std::{
 };
 
 use dclutch_pyth_svm::devnet_release_v1;
-use dclutch_registry_svm::{LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View};
+use dclutch_registry_svm::{
+    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
+};
 use serde_json::json;
 use solana_sdk::{
     pubkey::Pubkey,
@@ -236,6 +238,10 @@ pub(crate) struct ObservedRoleV1 {
     /// ProgramData must remain non-executable; the linked Program account is
     /// the executable half of the Loader V3 pair.
     pub(crate) observed_executable: Option<bool>,
+    pub(crate) observed_live_elf_sha256: Option<String>,
+    pub(crate) pinned_live_elf_sha256: String,
+    pub(crate) checked_candidate_elf_sha256: String,
+    pub(crate) live_elf_padding_bytes: usize,
     pub(crate) observed_data_len: Option<usize>,
 }
 
@@ -288,6 +294,14 @@ impl ObservedRoleV1 {
                 self.role,
                 self.observed_authority.as_deref().unwrap_or("none"),
                 self.pinned_authority.as_deref().unwrap_or("none")
+            ));
+        }
+        if self.observed_live_elf_sha256.as_deref() != Some(self.pinned_live_elf_sha256.as_str()) {
+            conflicts.push(format!(
+                "{} observed complete live ELF SHA-256 {} but the release binds {}",
+                self.role,
+                self.observed_live_elf_sha256.as_deref().unwrap_or("none"),
+                self.pinned_live_elf_sha256
             ));
         }
         conflicts
@@ -375,10 +389,10 @@ pub(crate) fn substrate_state(
     for (role, pin) in runtime::role_pins(plan) {
         let programdata = pubkey(&pin.programdata_id)?;
         let account = rpc.account(programdata)?;
-        let (slot, authority, owner, executable, data_len) = match &account {
-            None => (None, None, None, None, None),
+        let (slot, authority, owner, executable, live_elf_sha256, data_len) = match &account {
+            None => (None, None, None, None, None, None),
             Some(account) => {
-                let view = ProgramDataMetadataV3View::parse(&account.data).map_err(|error| {
+                let view = ProgramDataV3View::parse(&account.data).map_err(|error| {
                     Error::new(format!(
                         "{role} ProgramData at {programdata} does not parse as a Loader V3 \
                          ProgramData account: {error:?}"
@@ -390,6 +404,7 @@ pub(crate) fn substrate_state(
                         .map(|key| Pubkey::from(key).to_string()),
                     Some(account.owner.to_string()),
                     Some(account.executable),
+                    Some(hex(&<sha2::Sha256 as sha2::Digest>::digest(view.elf()))),
                     Some(account.data.len()),
                 )
             }
@@ -404,6 +419,10 @@ pub(crate) fn substrate_state(
             pinned_authority: pin.upgrade_authority.clone(),
             observed_owner: owner,
             observed_executable: executable,
+            observed_live_elf_sha256: live_elf_sha256,
+            pinned_live_elf_sha256: pin.live_elf_sha256.clone(),
+            checked_candidate_elf_sha256: pin.checked_candidate_elf_sha256.clone(),
+            live_elf_padding_bytes: pin.live_elf_padding_bytes,
             observed_data_len: data_len,
         };
         if account.is_none() {
@@ -780,7 +799,7 @@ pub(crate) fn deploy_ladder(plan: &SuccessorPlan, origin: &ClusterOriginV1) -> V
              # {role}, pins slot {}",
             origin.redacted_url(),
             role.to_uppercase(),
-            pin.elf_path,
+            pin.checked_candidate_elf_path,
             pin.deployment_slot
         ));
     }
@@ -886,6 +905,10 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
             "observed_programdata_owner": row.observed_owner,
             "loader_owner_holds": row.loader_owner_holds(),
             "observed_programdata_executable": row.observed_executable,
+            "observed_live_elf_sha256": row.observed_live_elf_sha256,
+            "release_binds_live_elf_sha256": row.pinned_live_elf_sha256,
+            "checked_candidate_elf_sha256": row.checked_candidate_elf_sha256,
+            "live_elf_padding_bytes": row.live_elf_padding_bytes,
             "observed_programdata_bytes": row.observed_data_len,
             "loader_metadata_bytes": LOADER_V3_PROGRAMDATA_METADATA_BYTES,
         })).collect::<Vec<_>>(),
@@ -1111,6 +1134,10 @@ mod tests {
             pinned_authority: Some(Pubkey::new_from_array([9; 32]).to_string()),
             observed_owner: Some(bpf_loader_upgradeable::ID.to_string()),
             observed_executable: Some(false),
+            observed_live_elf_sha256: Some("ab".repeat(32)),
+            pinned_live_elf_sha256: "ab".repeat(32),
+            checked_candidate_elf_sha256: "cd".repeat(32),
+            live_elf_padding_bytes: 17,
             observed_data_len: Some(45),
         }
     }
@@ -1154,6 +1181,15 @@ mod tests {
                 .pin_conflicts()
                 .iter()
                 .any(|detail| detail.contains("executable flag"))
+        );
+
+        let mut changed_live_payload = observed_role();
+        changed_live_payload.observed_live_elf_sha256 = Some("ef".repeat(32));
+        assert!(
+            changed_live_payload
+                .pin_conflicts()
+                .iter()
+                .any(|detail| detail.contains("complete live ELF SHA-256"))
         );
     }
 
@@ -1306,6 +1342,10 @@ mod tests {
             programdata_id: String::new(),
             elf_path: "/dev/null".into(),
             elf_sha256: String::new(),
+            checked_candidate_elf_path: "/dev/null".into(),
+            checked_candidate_elf_sha256: String::new(),
+            live_elf_sha256: String::new(),
+            live_elf_padding_bytes: 0,
             semantic_release_id: String::new(),
             artifact_release_id: String::new(),
             upgrade_authority: None,
