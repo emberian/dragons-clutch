@@ -276,7 +276,6 @@ def owned_loopback_fixture(root: pathlib.Path):
     capture_path = evidence / "capture.json"
     receipt_path = root / "receipt.json"
     manifest_path.write_bytes(reconcile.canonical_bytes(manifest))
-    capture_path.write_bytes(reconcile.canonical_bytes(capture))
 
     def journal(path: str, schema: str, completion: str) -> dict[str, str]:
         raw = (evidence / path).read_bytes()
@@ -292,19 +291,38 @@ def owned_loopback_fixture(root: pathlib.Path):
         journal("session.json", session["schema"], "status"),
     ]
     programs = []
+    loader = reconcile.LOADER_V3_PROGRAM_ID
+    _, authority_raw = key(81)
     for index, role in enumerate(reconcile.OWNED_LOOPBACK_PROGRAM_ROLES):
         program_id, _ = key(100 + index)
-        programdata, _ = key(120 + index)
+        programdata, programdata_raw = key(120 + index)
+        slot = index + 1
+        elf = b"\x7fELF" + bytes([index + 1]) * 60
+        program_bytes = struct.pack("<I", 2) + programdata_raw
+        programdata_bytes = bytearray(45)
+        struct.pack_into("<I", programdata_bytes, 0, 3)
+        struct.pack_into("<Q", programdata_bytes, 4, slot)
+        programdata_bytes[12] = 1
+        programdata_bytes[13:45] = authority_raw
+        programdata_bytes.extend(elf)
+        program_account = rpc_account(loader, 1_140_000, program_bytes)
+        program_account["executable"] = True
+        capture["accounts"][program_id] = {"contextSlot": "200", "value": program_account}
+        capture["accounts"][programdata] = {
+            "contextSlot": "200",
+            "value": rpc_account(loader, 2_000_000, bytes(programdata_bytes)),
+        }
         programs.append(
             {
                 "role": role,
                 "programId": program_id,
                 "programDataAddress": programdata,
-                "deploymentSlot": str(index + 1),
-                "elfSha256": f"{index + 1:02x}" * 32,
-                "genesisProgramDataSha256": f"{index + 21:02x}" * 32,
+                "deploymentSlot": str(slot),
+                "elfSha256": hashlib.sha256(elf).hexdigest(),
+                "genesisProgramDataSha256": hashlib.sha256(programdata_bytes).hexdigest(),
             }
         )
+    capture_path.write_bytes(reconcile.canonical_bytes(capture))
     receipt = {
         "schema": reconcile.OWNED_LOOPBACK_RECEIPT_SCHEMA,
         "status": "finalized",
@@ -626,6 +644,44 @@ class ReconcileTest(unittest.TestCase):
             with self.assertRaisesRegex(reconcile.Refusal, "seven-plus-provider"):
                 reconcile.authenticate_owned_loopback_session(
                     receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence, manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_captured_elf_substitution_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, capture, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            programdata = receipt["programs"][0]["programDataAddress"]
+            encoded = capture["accounts"][programdata]["value"]["data"][0]
+            body = bytearray(base64.b64decode(encoded))
+            body[-1] ^= 1
+            capture["accounts"][programdata]["value"]["data"][0] = base64.b64encode(body).decode()
+            capture_path.write_bytes(reconcile.canonical_bytes(capture))
+            receipt["capture"]["sha256"] = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "genesis bytes, or exact ELF"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence,
+                    manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_programdata_link_substitution_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, capture, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            program = receipt["programs"][0]["programId"]
+            encoded = capture["accounts"][program]["value"]["data"][0]
+            body = bytearray(base64.b64decode(encoded))
+            body[-1] ^= 1
+            capture["accounts"][program]["value"]["data"][0] = base64.b64encode(body).decode()
+            capture_path.write_bytes(reconcile.canonical_bytes(capture))
+            receipt["capture"]["sha256"] = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "exact Loader-v3 ProgramData link"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence,
+                    manifest_path, capture_path, manifest,
                     reconcile.captured_owned_loopback(capture_path),
                 )
 

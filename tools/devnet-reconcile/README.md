@@ -107,6 +107,11 @@ canonical ordered source-journal set, and one finalized complete PRIVATE
 session. Missing programs or journals, substituted bytes, provisional evidence,
 and partial lifecycle stage sets refuse before reconciliation.
 
+All eighteen Program/ProgramData accounts must be present in the finalized
+capture. The consumer hostile-decodes each Loader-v3 Program link and
+ProgramData header, then recomputes the full ProgramData and ELF-tail digests.
+Receipt strings alone are not Loader evidence.
+
 ## Adapter and capture shapes
 
 All integer quantities in the adapter are canonical decimal strings. Account

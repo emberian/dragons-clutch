@@ -23,6 +23,7 @@ from typing import Any
 
 DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+LOADER_V3_PROGRAM_ID = "BPFLoaderUpgradeab1e11111111111111111111111"
 MANIFEST_SCHEMA = "dclutch-activity-reconcile-manifest-v1"
 CAPTURE_SCHEMA = "dclutch-captured-finalized-rpc-v1"
 DOSSIER_SCHEMA = "dclutch-public-activity-dossier-v1"
@@ -976,6 +977,61 @@ def canonical_relative_evidence(
     return path, value
 
 
+def authenticate_loader_v3_program(
+    rpc_capture: OwnedLoopbackCapturedRpc,
+    role: str,
+    program_id: str,
+    programdata_id: str,
+    deployment_slot: int,
+    elf_sha256: str,
+    genesis_programdata_sha256: str,
+) -> None:
+    program_slot, program_value = rpc_capture.account(program_id)
+    programdata_slot, programdata_value = rpc_capture.account(programdata_id)
+    if program_slot < deployment_slot or programdata_slot < deployment_slot:
+        refuse(f"{role} Loader identities were observed before their deployment slot")
+    program = exact_keys(
+        program_value,
+        {"lamports", "owner", "data", "executable", "rentEpoch"},
+        {"space"},
+        f"{role} Program account",
+    )
+    programdata = exact_keys(
+        programdata_value,
+        {"lamports", "owner", "data", "executable", "rentEpoch"},
+        {"space"},
+        f"{role} ProgramData account",
+    )
+    if (
+        program["owner"] != LOADER_V3_PROGRAM_ID
+        or program.get("executable") is not True
+        or not isinstance(program.get("lamports"), int)
+        or program["lamports"] <= 0
+        or programdata["owner"] != LOADER_V3_PROGRAM_ID
+        or programdata.get("executable") is not False
+        or not isinstance(programdata.get("lamports"), int)
+        or programdata["lamports"] <= 0
+    ):
+        refuse(f"{role} Program/ProgramData Loader owner, privilege, or funding differs")
+    program_bytes = account_data(program["data"], f"{role} Program data")
+    programdata_bytes = account_data(programdata["data"], f"{role} ProgramData data")
+    if (
+        len(program_bytes) != 36
+        or struct.unpack_from("<I", program_bytes, 0)[0] != 2
+        or program_bytes[4:36] != b58decode(programdata_id, f"{role} ProgramData link")
+    ):
+        refuse(f"{role} Program does not carry its exact Loader-v3 ProgramData link")
+    if (
+        len(programdata_bytes) <= 45
+        or struct.unpack_from("<I", programdata_bytes, 0)[0] != 3
+        or programdata_bytes[12] not in (0, 1)
+        or u64(programdata_bytes, 4) != deployment_slot
+        or sha256_bytes(programdata_bytes) != genesis_programdata_sha256
+        or sha256_bytes(programdata_bytes[45:]) != elf_sha256
+    ):
+        refuse(f"{role} ProgramData slot, genesis bytes, or exact ELF tail differs")
+
+
 def authenticate_owned_loopback_session(
     receipt_path: pathlib.Path,
     expected_receipt_sha256: str,
@@ -1059,6 +1115,15 @@ def authenticate_owned_loopback_session(
                 "elfSha256": elf_sha256,
                 "genesisProgramDataSha256": genesis_programdata_sha256,
             }
+        )
+        authenticate_loader_v3_program(
+            rpc_capture,
+            expected_role,
+            program_id,
+            programdata_id,
+            slot,
+            elf_sha256,
+            genesis_programdata_sha256,
         )
     if program_ids & programdata_ids:
         refuse("owned-loopback Program and ProgramData closures overlap")
