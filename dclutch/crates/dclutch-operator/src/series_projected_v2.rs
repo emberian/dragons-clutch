@@ -25,6 +25,7 @@ use dclutch_trading_sbf::{
         encode_projected_market_execution_v2,
     },
     series::{
+        account_profile_v4::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
         artifacts_v3::SERIES_CONSUME_ROUTE_COUNT_V3, artifacts_v4::SeriesConsumeArtifactBundleV4,
     },
 };
@@ -621,7 +622,7 @@ mod tests {
     }
 
     fn profile() -> Vec<u8> {
-        let lengths = [0_u32; 157];
+        let lengths = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         let mut scratch = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
         let mut output = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
         encode_series_consume_account_profile_v4_atomic(
@@ -767,7 +768,7 @@ mod tests {
         let logical = logical_accounts(profile, FUNDING_COUNT);
         let packed = pack_profile13_accounts(profile, FUNDING_COUNT, &logical)
             .expect("packed physical frame");
-        assert_eq!(packed.len(), 71);
+        assert_eq!(packed.len(), 75);
         for (ordinal, meta) in packed.iter().enumerate() {
             let geometry = profile
                 .physical_account_geometry_with_dynamic_spans(0, &[FUNDING_COUNT], ordinal)
@@ -798,10 +799,10 @@ mod tests {
             &logical,
         )
         .expect("complete projected Hot frame");
-        // 104 before the validated-artifact seal joined the fixed hot prefix.
+        // 108 before the validated-artifact seal joined the fixed hot prefix.
         assert_eq!(
             packed.len(),
-            105 + usize::try_from(FUNDING_COUNT).expect("count")
+            109 + usize::try_from(FUNDING_COUNT).expect("count")
         );
         assert!(
             packed
@@ -994,7 +995,7 @@ mod tests {
         let physical_accounts = profile
             .physical_account_count_with_dynamic_spans(0, &[MAXIMUM_FUNDING_COUNT])
             .expect("physical account count");
-        assert_eq!(physical_accounts, 80);
+        assert_eq!(physical_accounts, 84);
 
         let family_request = request_with_proof(SeriesActionV3::Consume, 9);
         let projected = build_series_projected_consume_v2(
@@ -1055,7 +1056,7 @@ mod tests {
         let required_signatures = usize::from(message.header.num_required_signatures);
         let wire_bytes =
             1 + required_signatures * 64 + VersionedMessage::V0(message).serialize().len();
-        assert_eq!(wire_bytes, 850);
+        assert_eq!(wire_bytes, 858);
         assert!(
             wire_bytes + REQUIRED_PACKET_MARGIN <= SOLANA_PACKET_BYTES,
             "{wire_bytes}B runtime-subframe packet leaves less than {REQUIRED_PACKET_MARGIN}B margin"

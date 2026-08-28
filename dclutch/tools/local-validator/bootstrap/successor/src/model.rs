@@ -299,6 +299,8 @@ pub(crate) struct SuccessorRunEvidence {
     /// it from the finalized founding aggregate before using it.
     #[serde(rename = "foundingCustodyContext")]
     pub(crate) founding_custody_context: String,
+    #[serde(rename = "directSelectedManifestEntryIndex")]
+    pub(crate) direct_selected_manifest_entry_index: u16,
     pub(crate) completed: Vec<String>,
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,

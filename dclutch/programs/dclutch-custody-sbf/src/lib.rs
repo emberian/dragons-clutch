@@ -21,6 +21,7 @@ use dclutch_custody_contract::{
 
 mod delegated;
 mod projected;
+mod retirement_replay_handoff_v1;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
@@ -170,6 +171,22 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len()
+        == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        && instruction_data
+            .get(..dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+            == Some(dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request =
+            dclutch_custody_contract::RetirementReplayHandoffRequestV1::decode(instruction_data)
+                .map_err(|_| CustodySbfError::Instruction)?;
+        return retirement_replay_handoff_v1::process(
+            program_id,
+            accounts,
+            request,
+            instruction_data,
+        );
+    }
     if instruction_data.len() == DELEGATED_CUSTODY_REQUEST_BYTES_V2
         && instruction_data.get(..DELEGATED_CUSTODY_REQUEST_MAGIC_V2.len())
             == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice())

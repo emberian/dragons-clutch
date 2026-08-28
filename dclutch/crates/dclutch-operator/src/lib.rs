@@ -71,3 +71,5 @@ pub mod wallet_terminal_payout_v3;
 pub mod versioned {
     pub use dclutch_versioned_message_operator::*;
 }
+/// Finalized devnet planning for wallet-authorized Claims Position admission.
+pub mod user_position_admission_v1;

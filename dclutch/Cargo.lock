@@ -1709,6 +1709,7 @@ dependencies = [
 name = "dclutch-custody-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-market-core-codec",
@@ -2076,6 +2077,7 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
+ "dclutch-relay-contract",
  "dclutch-release-set-contract",
  "dclutch-release-tool",
  "dclutch-rent-contract",
@@ -2084,6 +2086,7 @@ dependencies = [
  "dclutch-series-v3-kernel",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
+ "dclutch-user-position-admission-contract",
  "dclutch-versioned-message-operator",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
@@ -2091,6 +2094,7 @@ dependencies = [
  "solana-message 3.1.0",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
  "spl-token-2022-interface",
 ]
 

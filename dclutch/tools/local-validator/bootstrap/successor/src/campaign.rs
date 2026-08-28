@@ -74,7 +74,7 @@ use dclutch_pyth_svm::devnet_release_v1;
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signer},
@@ -320,6 +320,49 @@ pub(crate) struct CampaignArgsV1 {
     pub(crate) keypairs: BTreeMap<String, [u8; 32]>,
     pub(crate) execute: bool,
     pub(crate) through: StageV1,
+}
+
+fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| Error::new("evidence output requires a UTF-8 file name"))?;
+    let temporary = path.with_file_name(format!(".{file_name}.dclutch-{}.tmp", std::process::id()));
+    let bytes = serde_json::to_vec_pretty(value)?;
+    fs::write(&temporary, &bytes)
+        .map_err(|error| Error::new(format!("write {}: {error}", temporary.display())))?;
+    fs::rename(&temporary, path).map_err(|error| {
+        Error::new(format!(
+            "atomically replace {} from {}: {error}",
+            path.display(),
+            temporary.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn compatible_founding_checkpoint(
+    path: &Path,
+    plan_sha256: &str,
+    market_sha256: Option<&str>,
+) -> Result<Option<Value>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(Error::new(format!(
+                "read prior evidence {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let prior: Value = serde_json::from_slice(&bytes)?;
+    if prior.get("plan_sha256").and_then(Value::as_str) != Some(plan_sha256)
+        || prior.get("market_sha256").and_then(Value::as_str) != market_sha256
+    {
+        return Ok(None);
+    }
+    Ok(prior.get("foundingCheckpoint").cloned())
 }
 
 /// Read one Solana CLI keypair file and return its 32-byte secret seed.
@@ -816,10 +859,20 @@ pub(crate) fn deploy_ladder(plan: &SuccessorPlan, origin: &ClusterOriginV1) -> V
 
 /// Run the driver.
 pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
+    if args.execute && args.evidence_path.is_none() {
+        return Err(Error::new(
+            "--execute requires --evidence ABSOLUTE_JSON so intent is durable before any mutation",
+        ));
+    }
     let plan: SuccessorPlan = serde_json::from_slice(&fs::read(&args.plan_path)?)?;
     let plan_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(fs::read(
         &args.plan_path,
     )?));
+    let market_sha256 = args
+        .market_path
+        .as_ref()
+        .map(|path| fs::read(path).map(|bytes| hex(&<sha2::Sha256 as sha2::Digest>::digest(bytes))))
+        .transpose()?;
     let policy = if args.execute {
         WritePolicyV1::Writes
     } else {
@@ -876,14 +929,23 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
         ClusterOriginV1::Loopback { .. } => None,
     };
 
-    let report = json!({
+    let mut report = json!({
         "schema": "dclutch-successor-campaign-report-v1",
         "cluster": args.origin.label(),
         "rpc_url": args.origin.redacted_url(),
         "mode": if args.execute { "execute" } else { "preflight (reads only, enforced)" },
         "plan": args.plan_path.display().to_string(),
         "plan_sha256": plan_sha256,
+        "market_input": args.market_path.as_ref().map(|path| path.display().to_string()),
+        "market_sha256": market_sha256,
+        "evidence_output": args.evidence_path.as_ref().map(|path| path.display().to_string()),
         "through_stage": args.through.name(),
+        "execution_intent": {
+            "authorized_mutation": args.execute,
+            "through_stage": args.through.name(),
+            "plan": args.plan_path.display().to_string(),
+            "market": args.market_path.as_ref().map(|path| path.display().to_string()),
+        },
         "payer": authority.pubkey().to_string(),
         "keypair_derivation": forge.derivation_label(),
         "private_key_persisted": forge.persists_private_keys(),
@@ -950,28 +1012,64 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
                              ladder, not the driver's).",
     });
 
-    let rendered = serde_json::to_vec_pretty(&report)?;
-    if let Some(path) = &args.evidence_path {
-        fs::write(path, &rendered)
-            .map_err(|error| Error::new(format!("write {}: {error}", path.display())))?;
+    if let Some(path) = &args.evidence_path
+        && let Some(checkpoint) = compatible_founding_checkpoint(
+            path,
+            report["plan_sha256"].as_str().unwrap_or_default(),
+            report["market_sha256"].as_str(),
+        )?
+    {
+        report["foundingCheckpoint"] = checkpoint;
     }
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&rendered)?;
-    stdout.write_all(b"\n")?;
+
+    if let Some(path) = &args.evidence_path {
+        write_evidence_atomically(path, &report)?;
+    }
 
     if !args.execute {
+        let mut stdout = std::io::stdout();
+        stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+        stdout.write_all(b"\n")?;
         return Ok(());
     }
-    execute_stages(
-        &mut rpc,
-        &plan,
-        &authority,
-        &forge,
-        market.as_ref(),
-        founding_keys,
-        &states,
-        args.through,
-    )
+    let execution = {
+        let mut checkpoint = |value: &crate::market::MarketExecutionCheckpointV1| -> Result<()> {
+            report["foundingCheckpoint"] = serde_json::to_value(value)?;
+            if let Some(path) = &args.evidence_path {
+                write_evidence_atomically(path, &report)?;
+            }
+            Ok(())
+        };
+        execute_stages(
+            &mut rpc,
+            &plan,
+            &authority,
+            &forge,
+            market.as_ref(),
+            founding_keys,
+            &states,
+            args.through,
+            &mut checkpoint,
+        )?
+    };
+    report["execution"] = json!({
+        "completed": true,
+        "recoveredFinalizedFounding": execution.recovered_finalized_founding,
+        "transactions": execution.transactions,
+        "market": execution.market,
+    });
+    if execution.recovered_finalized_founding && report.get("foundingCheckpoint").is_none() {
+        return Err(Error::new(
+            "the chain proves this founding complete but its crash-safe evidence has no compatible founding checkpoint",
+        ));
+    }
+    if let Some(path) = &args.evidence_path {
+        write_evidence_atomically(path, &report)?;
+    }
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
 }
 
 /// Advance the chain through the requested stages, skipping what is done.
@@ -979,6 +1077,12 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
 /// The stages through activation sign with the Core authority alone; the
 /// founding is the one that needs the forge's other roles and the market
 /// input, and it refuses by name when the input is absent.
+struct CampaignExecutionEvidenceV1 {
+    transactions: Vec<crate::model::TransactionEvidence>,
+    market: Option<crate::market::MarketExecutionEvidence>,
+    recovered_finalized_founding: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_stages(
     rpc: &mut Rpc,
@@ -989,7 +1093,8 @@ fn execute_stages(
     founding_keys: Option<(Pubkey, Pubkey)>,
     states: &[(StageV1, StageStateV1)],
     through: StageV1,
-) -> Result<()> {
+    checkpoint: &mut dyn FnMut(&crate::market::MarketExecutionCheckpointV1) -> Result<()>,
+) -> Result<CampaignExecutionEvidenceV1> {
     for (stage, state) in states {
         if let StageStateV1::Conflict(detail) = state {
             return Err(Error::new(format!(
@@ -1010,12 +1115,17 @@ fn execute_stages(
         ));
     }
     let mut transactions = Vec::new();
+    let mut market_evidence = None;
+    let mut recovered_finalized_founding = false;
     for (stage, state) in states {
         if *stage > through {
             break;
         }
         if *state == StageStateV1::Complete {
             eprintln!("campaign stage {}: already complete, skipped", stage.name());
+            if *stage == StageV1::Founding {
+                recovered_finalized_founding = true;
+            }
             continue;
         }
         match stage {
@@ -1073,13 +1183,14 @@ fn execute_stages(
                 let (mint, wallet) = founding_keys.ok_or_else(|| {
                     Error::new("the founding stage reached execution without peeked keys")
                 })?;
-                let evidence = crate::market::execute_found_market(
+                let evidence = crate::market::execute_found_market_with_checkpoint(
                     rpc,
                     plan,
                     input,
                     authority,
                     forge,
                     &mut transactions,
+                    checkpoint,
                 )?;
                 // Detector == verifier: the same read that would have skipped
                 // this stage must pass now that it executed — against the SAME
@@ -1100,6 +1211,7 @@ fn execute_stages(
                     targets.open_market,
                     evidence.completed.len()
                 );
+                market_evidence = Some(evidence);
             }
         }
     }
@@ -1107,7 +1219,11 @@ fn execute_stages(
         "campaign: {} transactions submitted this run",
         transactions.len()
     );
-    Ok(())
+    Ok(CampaignExecutionEvidenceV1 {
+        transactions,
+        market: market_evidence,
+        recovered_finalized_founding,
+    })
 }
 
 /// The acknowledgment text the usage line prints.
@@ -1122,6 +1238,65 @@ pub(crate) fn acknowledgment_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fake_runner_crash_restart_preserves_checkpoint_and_finalizes_atomically() {
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-campaign-crash-restart-{}.json",
+            Pubkey::new_unique()
+        ));
+        let mut first_runner = json!({
+            "schema": "dclutch-successor-campaign-report-v1",
+            "plan_sha256": "11".repeat(32),
+            "market_sha256": "22".repeat(32),
+            "evidence_output": path.display().to_string(),
+            "intent": { "execute": true, "through": "founding" },
+        });
+        write_evidence_atomically(&path, &first_runner).expect("durable prewrite");
+        first_runner["foundingCheckpoint"] = json!({
+            "market": Pubkey::new_unique().to_string(),
+            "foundingCustodyContext": "33".repeat(32),
+            "directSelectedManifestEntryIndex": 2,
+            "direct_capability_root": Pubkey::new_unique().to_string(),
+            "direct_trading_funding_ledger": Pubkey::new_unique().to_string(),
+        });
+        write_evidence_atomically(&path, &first_runner).expect("pre-mutation checkpoint");
+        drop(first_runner); // fake process death after mutation, before final evidence update
+
+        let checkpoint =
+            compatible_founding_checkpoint(&path, &"11".repeat(32), Some(&"22".repeat(32)))
+                .expect("restart reads durable evidence")
+                .expect("compatible checkpoint");
+        let mut restarted_runner = json!({
+            "schema": "dclutch-successor-campaign-report-v1",
+            "plan_sha256": "11".repeat(32),
+            "market_sha256": "22".repeat(32),
+            "evidence_output": path.display().to_string(),
+            "foundingCheckpoint": checkpoint,
+            "execution": {
+                "completed": true,
+                "recoveredFinalizedFounding": true,
+                "transactions": [],
+            },
+        });
+        write_evidence_atomically(&path, &restarted_runner).expect("atomic final evidence");
+        let finalized: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read final evidence"))
+                .expect("decode final evidence");
+        assert_eq!(finalized["execution"]["recoveredFinalizedFounding"], true);
+        assert_eq!(
+            finalized["foundingCheckpoint"]["directSelectedManifestEntryIndex"],
+            2
+        );
+        assert!(
+            compatible_founding_checkpoint(&path, &"44".repeat(32), Some(&"22".repeat(32)))
+                .expect("incompatible restart")
+                .is_none()
+        );
+        restarted_runner = Value::Null;
+        drop(restarted_runner);
+        fs::remove_file(path).expect("remove isolated test evidence");
+    }
 
     fn observed_role() -> ObservedRoleV1 {
         ObservedRoleV1 {

@@ -356,6 +356,99 @@ pub(crate) fn validate_direct_market_capability_v1(input: &MarketRunInput) -> Re
     Ok(())
 }
 
+pub(crate) struct DirectPublicationRecordV1 {
+    pub(crate) label: &'static str,
+    pub(crate) schema: [u8; 32],
+    pub(crate) body: Vec<u8>,
+}
+
+/// Exact finalized Registry closure selected by the market's Direct entry.
+///
+/// The close Transition is embedded in its V1 descriptor and therefore is
+/// not a parallel record. Every returned body is independently rejoined by
+/// `validate_direct_market_capability_v1` before this function returns.
+pub(crate) fn direct_publication_records_v1(
+    input: &MarketRunInput,
+) -> Result<Vec<DirectPublicationRecordV1>> {
+    validate_direct_market_capability_v1(input)?;
+    let payload = input
+        .direct_capability
+        .as_ref()
+        .ok_or_else(|| Error::new("Direct publication omitted its typed payload"))?;
+    let capacity_profile: [u8; 32] =
+        Sha256::digest(decode_hex(&input.source_capacity_profile_hex)?).into();
+    let release = decode_direct_release_v1(payload, capacity_profile)?;
+    let descriptor = CapabilityProgramV4::decode(&release.ordinary.descriptor)
+        .map_err(|error| Error::new(format!("Direct CapabilityProgramV4: {error:?}")))?;
+    let record = |label, schema, body: &[u8]| DirectPublicationRecordV1 {
+        label,
+        schema,
+        body: body.to_vec(),
+    };
+    Ok(vec![
+        record(
+            "direct_execution_config_record",
+            descriptor.config_schema().to_bytes(),
+            &decode_hex(&payload.execution_config_hex)?,
+        ),
+        record(
+            "direct_ordinary_account_profile_record",
+            descriptor.account_profile().schema().to_bytes(),
+            &release.ordinary.account_profile,
+        ),
+        record(
+            "direct_ordinary_lifecycle_policy_record",
+            descriptor.lifecycle().schema().to_bytes(),
+            &release.ordinary.lifecycle_policy,
+        ),
+        record(
+            "direct_ordinary_request_profile_record",
+            descriptor.request_profile().schema().to_bytes(),
+            &release.ordinary.request_profile,
+        ),
+        record(
+            "direct_ordinary_transition_record",
+            descriptor.transition().schema().to_bytes(),
+            &release.ordinary.transition,
+        ),
+        record(
+            "direct_ordinary_strategy_record",
+            descriptor.strategy().schema().to_bytes(),
+            &release.ordinary.strategy,
+        ),
+        record(
+            "direct_ordinary_effect_record",
+            descriptor.effect().schema().to_bytes(),
+            &release.ordinary.effect,
+        ),
+        record(
+            "direct_ordinary_descriptor_record",
+            dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID,
+            &release.ordinary.descriptor,
+        ),
+        record(
+            "direct_native_close_account_profile_record",
+            dclutch_direct_codec::native_close_bundle_v1::direct_native_close_account_profile_schema_v1(),
+            &release.native_close.account_profile,
+        ),
+        record(
+            "direct_native_close_effect_record",
+            dclutch_direct_codec::native_close_bundle_v1::direct_native_close_effect_schema_v1(),
+            &release.native_close.effect,
+        ),
+        record(
+            "direct_native_close_descriptor_record",
+            dclutch_direct_codec::native_close_bundle_v1::direct_native_close_descriptor_schema_v1(),
+            &release.native_close.descriptor,
+        ),
+        record(
+            "direct_program_set_record",
+            dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            &release.program_set,
+        ),
+    ])
+}
+
 fn direct_manifest_entry_v1(
     release: &DirectInlineOrdinaryNativeCloseProgramSetV1,
     descriptor: CapabilityProgramV4,
@@ -638,6 +731,15 @@ fn set_width(output: &mut [u32], coordinate: usize, value: u32) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn test_market() -> MarketRunInput {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037).expect("deployment widths"),
+        );
+        crate::market::demo_market_input(registry, direct.compiler()).expect("Direct demo market")
+    }
+
     #[test]
     fn ordinary_profile_lengths_bind_geometry_and_exact_deployments() {
         let widths =
@@ -657,5 +759,88 @@ mod tests {
         assert_eq!(output[32], output[33]);
         assert_eq!(output[39], output[27]);
         assert_eq!(output[87], TOKEN_ACCOUNT_BYTES);
+    }
+
+    #[test]
+    fn market_specific_capacity_profiles_coexist_under_one_trading_release() {
+        let widths =
+            DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037).expect("deployment widths");
+        let logical_data_lengths = direct_logical_data_lengths_v1(
+            widths,
+            DirectOrdinaryGeometryV3::from_outcome_count(4).expect("geometry"),
+        )
+        .expect("profile lengths");
+        let release = |capacity_profile| {
+            let ordinary =
+                build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
+                    account_profile: DirectInlineOrdinaryAccountProfileInputV3 {
+                        logical_data_lengths: &logical_data_lengths,
+                    },
+                    capacity_profile,
+                })
+                .expect("ordinary bundle");
+            build_direct_inline_ordinary_native_close_program_set_v1(ordinary, capacity_profile)
+                .expect("ordinary/close ProgramSet")
+        };
+        let first = release([0x51; 32]);
+        let second = release([0x52; 32]);
+        assert_ne!(first.program_set_id, second.program_set_id);
+        assert_eq!(
+            dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1,
+            dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1
+        );
+    }
+
+    #[test]
+    fn typed_direct_closure_refuses_every_independent_identity_substitution() {
+        let input = test_market();
+        validate_direct_market_capability_v1(&input).expect("canonical Direct closure");
+        let publication = direct_publication_records_v1(&input).expect("publication closure");
+        assert_eq!(publication.len(), 12);
+        let labels = publication
+            .iter()
+            .map(|record| record.label)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(labels.len(), publication.len());
+        for record in &publication {
+            assert_ne!(record.schema, [0; 32]);
+            assert!(!record.body.is_empty());
+        }
+
+        let mut wrong_capacity = input.clone();
+        let mut capacity = decode_hex(&wrong_capacity.source_capacity_profile_hex)
+            .expect("capacity profile bytes");
+        capacity[0] ^= 1;
+        wrong_capacity.source_capacity_profile_hex = hex(&capacity);
+        assert!(validate_direct_market_capability_v1(&wrong_capacity).is_err());
+
+        let mut wrong_config = input.clone();
+        let payload = wrong_config
+            .direct_capability
+            .as_mut()
+            .expect("Direct payload");
+        let mut config = decode_hex(&payload.execution_config_hex).expect("config bytes");
+        config[0] ^= 1;
+        payload.execution_config_hex = hex(&config);
+        assert!(validate_direct_market_capability_v1(&wrong_config).is_err());
+
+        let mut wrong_set = input.clone();
+        let payload = wrong_set
+            .direct_capability
+            .as_mut()
+            .expect("Direct payload");
+        let mut program_set = decode_hex(&payload.program_set_hex).expect("ProgramSet bytes");
+        let last = program_set.len() - 1;
+        program_set[last] ^= 1;
+        payload.program_set_hex = hex(&program_set);
+        assert!(validate_direct_market_capability_v1(&wrong_set).is_err());
+
+        let mut wrong_index = input;
+        let payload = wrong_index
+            .direct_capability
+            .as_mut()
+            .expect("Direct payload");
+        payload.selected_manifest_entry_index = (payload.selected_manifest_entry_index + 1) % 4;
+        assert!(validate_direct_market_capability_v1(&wrong_index).is_err());
     }
 }
