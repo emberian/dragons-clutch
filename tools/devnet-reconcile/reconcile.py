@@ -1673,6 +1673,14 @@ def authenticate_owned_loopback_private_session(
     if not isinstance(stages, list) or len(stages) != len(OWNED_LOOPBACK_COMPLETED_STAGES):
         refuse("owned-loopback private session omits the exact eight lifecycle stage owners")
     journal_by_path = {journal["path"]: journal for journal in journals}
+    if journal_by_path.get(session_relative) != {
+        "path": session_relative,
+        "sha256": receipt["sha256"],
+        "schema": OWNED_LOOPBACK_PRIVATE_SESSION_SCHEMA,
+        "completionPointer": "/status",
+        "completionValue": "finalized",
+    }:
+        refuse("private session differs from the authenticated top-level completion journal")
     projected_stages: list[dict[str, str]] = []
     stage_paths: set[str] = set()
     for index, (raw_stage, expected_stage) in enumerate(

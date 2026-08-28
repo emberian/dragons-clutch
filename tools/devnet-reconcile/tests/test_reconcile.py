@@ -1080,6 +1080,29 @@ class ReconcileTest(unittest.TestCase):
                     reconcile.captured_owned_loopback(capture_path),
                 )
 
+    def test_owned_loopback_session_nested_completion_pointer_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            session_journal = next(
+                row for row in receipt["journals"] if row["path"] == "session.json"
+            )
+            session_journal["completionPointer"] = "/stages/0/completionValue"
+            receipt["journalSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(receipt["journals"])
+            ).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "top-level completion journal"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path,
+                    hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    evidence,
+                    manifest_path,
+                    capture_path,
+                    manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
     def test_owned_loopback_self_consistent_partial_chaos_session_refuses(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
