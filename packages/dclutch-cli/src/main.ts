@@ -43,6 +43,8 @@ global flags:
   --json                 machine-readable output where a command supports it
   --dry-run              build and print, sign and submit nothing
   --payout-input <json>  exact Rust payout-plan input for redeem
+  --payout-alt-plan <json>
+                         persist/resume the owner-funded ordered ALT, then emit payout
   --i-mean-devnet <hash> name devnet by its full genesis hash for redeem
 
 program ids come from --session or explicit --core-program/--claims-program/... flags.
@@ -61,6 +63,7 @@ const FLAG_OPTIONS = {
   'session-out': { type: 'string' },
   'bootstrap-bin': { type: 'string' },
   'payout-input': { type: 'string' },
+  'payout-alt-plan': { type: 'string' },
   'i-mean-devnet': { type: 'string' },
   'registry-program': { type: 'string' },
   'core-program': { type: 'string' },

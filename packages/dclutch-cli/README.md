@@ -32,6 +32,7 @@ dclutch --session session.json buy --route route.json --take sell-intent.json \
 dclutch --session session.json portfolio
 dclutch --session session.json redeem --market <market> --keypair owner.json \
   --payout-input payout-input.json \
+  --payout-alt-plan payout-alt-plan.json \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
 # the funded failure walk: a passed deadline is free money for whoever watched
@@ -47,11 +48,17 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
   path; a refusal is the protocol working, and this tool says which program
   refused and why instead of printing a bare number.
 - `redeem` admits the Claims-role Custody replay, invokes the successor's
-  read-only `wallet-terminal-payout-plan` producer against the explicitly
-  named RPC endpoint, hostile-parses its exact manifest, and refuses unless
-  its Market, owner, Position, winning claim, and full available quantity
-  match the finalized portfolio read. With `--json`, stdout is only the
-  canonical manifest accepted by the SDK and web payout flow.
+  read-only payout producer against the explicitly named RPC endpoint, and
+  refuses unless its Market, owner, Position, winning claim, and full available
+  quantity match the finalized portfolio read. For a new payout, omit
+  `lookupTable` from the input and pass `--payout-alt-plan <path>`. The command
+  writes the checked owner-funded table plan there before submission, resumes
+  an exact finalized prefix after interruption, extends addresses in the
+  payout frame's first-use order, waits for a later finalized slot, and then
+  invokes `wallet-terminal-payout-plan` itself. Reuse the same command and plan
+  path to resume; you never construct or patch the phase-two input manually.
+  With `--json`, successful stdout is only the canonical manifest accepted by
+  the SDK and web payout flow.
 - The keypair is always an explicit `--keypair <path>` or `$DCLUTCH_KEYPAIR`;
   there is no default-wallet fallback, deliberately.
 - `--dry-run` on `buy`/`sell`/`redeem`/`walk` builds and prints everything
