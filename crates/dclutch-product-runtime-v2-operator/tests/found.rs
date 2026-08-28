@@ -724,6 +724,14 @@ fn valid_found37_exports_runtime_width_instruction() {
         build_found_instruction_v2(GENERATION, fixture.state()).expect("Found instruction plan");
     assert_eq!(plan.outcome_count, 258);
     assert_eq!(plan.instruction.accounts.len(), 37);
+    assert_eq!(
+        plan.instruction
+            .accounts
+            .get(dclutch_market_core_codec::FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
+            .expect("capability-manifest raw meta")
+            .pubkey,
+        fixture.manifest.raw,
+    );
     assert_eq!(plan.market_address, fixture.market);
     assert_eq!(
         plan.product.product_record_digest.to_bytes(),
