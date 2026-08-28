@@ -51,6 +51,20 @@ FLAGSHIP_RESOLUTION_COMMAND = "local-private-validator-flagship-resolution-v1"
 PAYOUT_INPUT_COMMAND = "local-private-validator-wallet-terminal-payout-input-v1"
 PAYOUT_EXECUTE_COMMAND = "local-private-validator-wallet-terminal-payout-v1"
 TERMINAL_RETIREMENT_COMMAND = "local-private-validator-terminal-sequence-v1"
+PROVIDER_CLOSURE_COMMAND = "local-private-validator-pyth-provider-closure-v1"
+ACTIVITY_STAGE_COMMAND = "local-private-validator-activity-stage-completion-v1"
+ACTIVITY_MANIFEST_COMMAND = "local-private-validator-activity-manifest-v1"
+ACTIVITY_CAPTURE_COMMAND = "local-private-validator-finalized-activity-capture-v1"
+LIFECYCLE_SESSION_COMMAND = "local-private-validator-lifecycle-session-v1"
+LIFECYCLE_RECEIPT_COMMAND = "local-private-validator-lifecycle-receipt-v1"
+FINAL_EVIDENCE_COMMANDS = (
+    PROVIDER_CLOSURE_COMMAND,
+    ACTIVITY_STAGE_COMMAND,
+    ACTIVITY_MANIFEST_COMMAND,
+    ACTIVITY_CAPTURE_COMMAND,
+    LIFECYCLE_SESSION_COMMAND,
+    LIFECYCLE_RECEIPT_COMMAND,
+)
 FULL_LIFECYCLE_BLOCKERS = (
     "owned-loopback Direct producer",
     "Direct-owned canonical nonzero-claim payout schedule",
@@ -423,6 +437,7 @@ def command_surface(bootstrap: Path, through: str) -> str:
                 PAYOUT_INPUT_COMMAND,
                 PAYOUT_EXECUTE_COMMAND,
                 TERMINAL_RETIREMENT_COMMAND,
+                *FINAL_EVIDENCE_COMMANDS,
             )
         )
     missing = [command for command in required if command not in result.stdout]

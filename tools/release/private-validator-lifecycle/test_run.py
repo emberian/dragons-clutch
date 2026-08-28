@@ -35,6 +35,37 @@ SIGNATURES = [base58(bytes([index]) * 64) for index in range(1, 20)]
 
 
 class PrivateValidatorLifecycleTests(unittest.TestCase):
+    def test_full_help_requires_every_dispatched_final_evidence_command(self) -> None:
+        required = (
+            *MODULE.FOUNDING_PARTICIPANT_COMMANDS,
+            MODULE.PYTH_PROVISION_COMMAND,
+            MODULE.FLAGSHIP_RESOLUTION_COMMAND,
+            MODULE.PAYOUT_INPUT_COMMAND,
+            MODULE.PAYOUT_EXECUTE_COMMAND,
+            MODULE.TERMINAL_RETIREMENT_COMMAND,
+            *MODULE.FINAL_EVIDENCE_COMMANDS,
+        )
+        with tempfile.TemporaryDirectory() as root_text:
+            bootstrap = Path(root_text) / "fake-bootstrap"
+
+            def install(commands: tuple[str, ...]) -> None:
+                bootstrap.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' "
+                    + " ".join(f"'{command}'" for command in commands)
+                    + "\n"
+                )
+                bootstrap.chmod(0o755)
+
+            install(required)
+            self.assertEqual(len(MODULE.command_surface(bootstrap, "full-probe")), 64)
+            for omitted in MODULE.FINAL_EVIDENCE_COMMANDS:
+                with self.subTest(omitted=omitted):
+                    install(
+                        tuple(command for command in required if command != omitted)
+                    )
+                    with self.assertRaisesRegex(MODULE.Refusal, omitted):
+                        MODULE.command_surface(bootstrap, "full")
+
     def test_named_seeds_are_stable_distinct_and_named(self) -> None:
         first = MODULE.named_seed(1)
         last = MODULE.named_seed(20)
