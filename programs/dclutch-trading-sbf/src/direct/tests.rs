@@ -20,8 +20,8 @@ use dclutch_claims_svm::{
 };
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_VAULT_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1,
-    CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, DelegatedCustodyReceiptV2,
-    OperationV1, ReceiptEvidenceV1,
+    CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DelegatedCustodyReceiptV2, OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
@@ -2222,7 +2222,9 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
     assert_eq!(plan.buyer_delegated_after, 0);
     assert_eq!(plan.seller_destination_after, 48);
     assert_eq!(plan.fee_destination_after, 44);
-    let net = plan.custody[0].expect("seller net");
+    let net =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
+            .expect("seller net");
     assert_eq!(net.request.custody.amount, 18);
     assert_eq!(net.request.custody.expected_revision, 7);
     assert_eq!(net.request.custody.semantic.transfer_index, 0);
@@ -2239,7 +2241,9 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
     assert_eq!(net.request.allowance_before, 22);
     assert_eq!(net.request.allowance_after, 4);
     assert_eq!(net.delegated_after, 4);
-    let fee = plan.custody[1].expect("combined fee");
+    let fee =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1)
+            .expect("combined fee");
     assert_eq!(fee.request.custody.amount, 4);
     assert_eq!(fee.request.custody.expected_revision, 8);
     assert_eq!(fee.request.custody.semantic.transfer_index, 1);
@@ -2339,7 +2343,9 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
         Err(DirectPhysicalError::Postcondition)
     );
 
-    let net = plan.custody[0].expect("net");
+    let net =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
+            .expect("net");
     let request_bytes = net.request.encode().expect("request");
     let poststate = id(78);
     let custody_receipt = CustodyReceiptV1::new(
@@ -2384,6 +2390,102 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
         verify_inline_custody_receipt_v2(net, &custody_receipt, id(79), net.delegated_after + 1,),
         Err(DirectPhysicalError::Postcondition)
     );
+}
+
+#[test]
+fn inline_effect_partition_is_exhaustive_ordered_and_inactive_safe() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let plan = prepare_inline_ordinary_physical_v2(
+        direct,
+        context,
+        inline_lifecycle_plans(direct, context),
+        collateral,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("inline physical plan");
+    let net =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
+            .expect("seller net");
+    let fee =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1)
+            .expect("combined fee");
+    let mut bank = [0xa5_u8; DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3];
+    bank.get_mut(..DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2)
+        .expect("Claims bank")
+        .copy_from_slice(&claims_output);
+    for (slot, effect) in [(1_usize, net), (2_usize, fee)] {
+        let start =
+            DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2 + slot * DELEGATED_CUSTODY_REQUEST_BYTES_V2;
+        let end = start + DELEGATED_CUSTODY_REQUEST_BYTES_V2;
+        bank.get_mut(start..end)
+            .expect("Custody slot")
+            .copy_from_slice(&effect.request.encode().expect("Custody request"));
+    }
+    let dispatch = DirectInlineEffectDispatchV2 {
+        custody_slots: [1, 2],
+        custody_count: 2,
+        child_dispatch_writable: [false, true, true, false],
+    };
+    verify_inline_effect_partition_physical_v2(direct, context, collateral, &bank, dispatch)
+        .expect("canonical partition");
+
+    // Inactive bytes remain Effect-owned and are not a second typed oracle.
+    let mut inactive_changed = bank;
+    inactive_changed[DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2] ^= 0xff;
+    verify_inline_effect_partition_physical_v2(
+        direct,
+        context,
+        collateral,
+        &inactive_changed,
+        dispatch,
+    )
+    .expect("inactive raw bytes do not affect candidate arithmetic");
+
+    let mut active_changed = bank;
+    active_changed[DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2 + DELEGATED_CUSTODY_REQUEST_BYTES_V2] ^= 1;
+    assert_eq!(
+        verify_inline_effect_partition_physical_v2(
+            direct,
+            context,
+            collateral,
+            &active_changed,
+            dispatch,
+        ),
+        Err(DirectPhysicalError::Postcondition)
+    );
+    for hostile in [
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [2, 1],
+            ..dispatch
+        },
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [1, 1],
+            child_dispatch_writable: [false, true, false, false],
+            ..dispatch
+        },
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [1, 0],
+            custody_count: 1,
+            child_dispatch_writable: [false, true, false, false],
+        },
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [0, 1],
+            child_dispatch_writable: [true, true, false, false],
+            ..dispatch
+        },
+        DirectInlineEffectDispatchV2 {
+            child_dispatch_writable: [true, true, true, false],
+            ..dispatch
+        },
+    ] {
+        assert_eq!(
+            verify_inline_effect_partition_physical_v2(direct, context, collateral, &bank, hostile,),
+            Err(DirectPhysicalError::Postcondition)
+        );
+    }
 }
 
 #[test]

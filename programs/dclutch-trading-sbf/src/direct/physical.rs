@@ -4,62 +4,17 @@
 //! outer authenticates the descriptor, account profile, fixed-role programs,
 //! accounts, and receipts, then commits these Direct candidates last.
 
+pub use dclutch_direct_codec::inline_candidate_v2::{
+    DirectExternalCollateralV2, DirectExternalDebitV2,
+    DirectInlineCandidateErrorV2 as DirectPhysicalError,
+};
 use dclutch_direct_codec::successor::{
     DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_REGISTERED_RECORD_BYTES_V2, DirectExecutionConfigV1,
     RegisteredOrdinarySettlementV2, RegisteredRecordAfterFillV2, RegisteredRecordCloseV2,
 };
 
-/// Stable refusal from Direct physical projection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectPhysicalError {
-    /// A required program, content, account, or digest identity was zero.
-    ZeroIdentity,
-    /// Market, generation, maker, config, or endpoint bindings differed.
-    Binding,
-    /// Runtime Product width or caller-owned buffers had another exact width.
-    Width,
-    /// Checked balance, revision, or vector arithmetic failed.
-    Arithmetic,
-    /// The sole Direct successor settlement refused.
-    Settlement,
-    /// Canonical Claims request construction or receipt verification refused.
-    Claims,
-    /// Canonical Custody request construction or receipt verification refused.
-    Custody,
-    /// A child receipt or observed poststate differed from the exact plan.
-    Postcondition,
-    /// Exact Direct state-candidate encoding or output geometry refused.
-    State,
-}
-
 /// Result alias for Direct physical planning.
 pub type Result<T> = core::result::Result<T, DirectPhysicalError>;
-
-/// One authenticated external collateral token account.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectExternalCollateralV2 {
-    /// Exact token-account key.
-    pub account: [u8; 32],
-    /// Exact persisted external token authority.
-    pub owner: [u8; 32],
-    /// Authenticated token amount before this outer action.
-    pub balance: u64,
-}
-
-/// One authenticated external collateral source delegated to Custody.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectExternalDebitV2 {
-    /// Exact token-account key.
-    pub account: [u8; 32],
-    /// Exact persisted external token authority.
-    pub owner: [u8; 32],
-    /// Canonical Custody transfer-authority PDA.
-    pub delegate: [u8; 32],
-    /// Exact remaining delegated allowance before this fill.
-    pub delegated_amount: u64,
-    /// Authenticated token amount before this fill.
-    pub balance: u64,
-}
 
 /// Terminal disposition of one registered-record account after child success.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

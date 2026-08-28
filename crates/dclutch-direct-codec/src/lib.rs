@@ -21,6 +21,7 @@ pub mod artifacts_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod begin_retiring_bundle_v1;
 pub mod execution_v3;
+pub mod inline_candidate_v2;
 pub mod intent_v2;
 #[cfg(not(target_os = "solana"))]
 pub mod native_close_bundle_v1;
