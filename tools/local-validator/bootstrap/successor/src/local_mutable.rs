@@ -1326,6 +1326,103 @@ fn absolute_new_directory(value: String, label: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn test_checked_execution_pin_v1() -> (CheckedLocalExecutionReleaseSetPinV1, String) {
+        use dclutch_release_tool::{BuildMetadataV1, ReleaseEvidenceV1, build_checked_release};
+
+        let mut releases = Vec::new();
+        let mut manifests = Vec::new();
+        for (ordinal, role) in EXECUTION_ROLE_ORDER_V1.into_iter().enumerate() {
+            let seed = u8::try_from(ordinal).expect("test role ordinal") + 1;
+            let mut elf = vec![0_u8; 64];
+            elf[..4].copy_from_slice(b"\x7fELF");
+            elf[4] = 2;
+            elf[5] = 1;
+            elf[6] = 1;
+            elf[16..18].copy_from_slice(&3_u16.to_le_bytes());
+            elf[18..20].copy_from_slice(&263_u16.to_le_bytes());
+            elf[20..24].copy_from_slice(&1_u32.to_le_bytes());
+            elf[52..54].copy_from_slice(&64_u16.to_le_bytes());
+            elf[63] = seed;
+            let program_id = [seed; 32];
+            let programdata_id = [seed + 10; 32];
+            let loader = bpf_loader_upgradeable::ID.to_bytes();
+            let authority = [99; 32];
+            let mut program = [0_u8; 36];
+            program[..4].copy_from_slice(&2_u32.to_le_bytes());
+            program[4..].copy_from_slice(&programdata_id);
+            let mut programdata = vec![0_u8; 45];
+            programdata[..4].copy_from_slice(&3_u32.to_le_bytes());
+            programdata[4..12].copy_from_slice(&u64::from(seed).to_le_bytes());
+            programdata[12] = 1;
+            programdata[13..45].copy_from_slice(&authority);
+            programdata.extend_from_slice(&elf);
+            let semantic = format!("dclutch/test/local-checked/{role}/v1");
+            let metadata = BuildMetadataV1::parse(&format!(
+                "dclutch-release-metadata-v1\nsemantic_kind=unowned\nprogram_id={}\nprogramdata_id={}\nloader_program_id={}\nprogram_owner={}\nprogram_executable=true\nprogramdata_owner={}\nprogramdata_executable=false\nsource_digest={}\ncargo_lock_digest={}\nsource_revision=0123456789abcdef0123456789abcdef01234567\nrustc_version=rustc 1.89.0\nsolana_version=solana-cli 4.0.2\ncargo_build_sbf_version=cargo-build-sbf 4.0.2\ntarget_triple=sbf-solana-solana\nbuild_command=cargo build-sbf --manifest-path programs/test/Cargo.toml -- --locked\nassumption=synthetic exact Loader evidence is scoped to this hostile unit test\n",
+                hex(&program_id),
+                hex(&programdata_id),
+                hex(&loader),
+                hex(&loader),
+                hex(&loader),
+                "44".repeat(32),
+                "55".repeat(32),
+            ))
+            .expect("canonical metadata");
+            let checked = build_checked_release(ReleaseEvidenceV1 {
+                elf: &elf,
+                semantic_preimage: semantic.as_bytes(),
+                program_account_data: &program,
+                programdata_account_data: &programdata,
+                metadata: &metadata,
+            })
+            .expect("checked test release");
+            manifests.push(checked.encode().expect("encode checked test release"));
+            releases.push(checked);
+        }
+        let refs = [
+            &releases[0],
+            &releases[1],
+            &releases[2],
+            &releases[3],
+            &releases[4],
+        ];
+        let release_set = derive_execution_release_set(refs).expect("derive test release set");
+        let complete = build_checked_execution_release_set(release_set, refs)
+            .expect("build checked test release set");
+        let execution_release_set_id = hex(complete
+            .execution_release_set_id()
+            .expect("execution release set ID")
+            .as_bytes());
+        let roles = EXECUTION_ROLE_ORDER_V1
+            .into_iter()
+            .zip(manifests)
+            .map(|(role, manifest)| {
+                let checked = CheckedReleaseV1::decode(&manifest).expect("decode checked role");
+                CheckedLocalExecutionReleaseRolePinV1 {
+                    role: role.into(),
+                    checked_release_id: hex(checked
+                        .checked_release_id()
+                        .expect("checked role ID")
+                        .as_bytes()),
+                    checked_release_base64: BASE64.encode(manifest),
+                }
+            })
+            .collect();
+        (
+            CheckedLocalExecutionReleaseSetPinV1 {
+                schema: CHECKED_LOCAL_EXECUTION_RELEASE_SET_SCHEMA_V1.into(),
+                checked_execution_release_set_id: hex(complete
+                    .checked_execution_release_set_id()
+                    .expect("checked set ID")
+                    .as_bytes()),
+                execution_release_set_id: execution_release_set_id.clone(),
+                checked_execution_release_set_base64: BASE64.encode(complete.encode()),
+                roles,
+            },
+            execution_release_set_id,
+        )
+    }
+
     #[test]
     fn local_launcher_uses_the_upgrade_role_owner_without_an_alias() {
         assert_eq!(crate::upgrade::CHECKED_ROLE_ORDER_V1.len(), 7);
@@ -1389,5 +1486,50 @@ mod tests {
         let first = checked_local_set_digest_v1(&set).expect("digest");
         set.set_sha256 = "different ignored value".into();
         assert_eq!(first, checked_local_set_digest_v1(&set).expect("digest"));
+    }
+
+    #[test]
+    fn persisted_execution_set_refuses_role_manifest_and_envelope_substitution() {
+        let (pin, release_set_id) = test_checked_execution_pin_v1();
+        assert_eq!(
+            authenticate_persisted_execution_release_set_v1(&pin, &release_set_id)
+                .expect("canonical checked execution set")
+                .len(),
+            CHECKED_MULTIPROGRAM_BYTES_V1
+        );
+
+        let mut reordered = pin.clone();
+        reordered.roles.swap(0, 1);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&reordered, &release_set_id).is_err()
+        );
+
+        let mut replaced_id = pin.clone();
+        replaced_id.roles[2].checked_release_id = "66".repeat(32);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&replaced_id, &release_set_id).is_err()
+        );
+
+        let mut replaced_manifest = pin.clone();
+        let mut manifest = BASE64
+            .decode(&replaced_manifest.roles[3].checked_release_base64)
+            .expect("checked role base64");
+        *manifest.last_mut().expect("checked role byte") ^= 1;
+        replaced_manifest.roles[3].checked_release_base64 = BASE64.encode(manifest);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&replaced_manifest, &release_set_id)
+                .is_err()
+        );
+
+        let mut replaced_envelope = pin;
+        let mut envelope = BASE64
+            .decode(&replaced_envelope.checked_execution_release_set_base64)
+            .expect("checked set base64");
+        *envelope.last_mut().expect("checked set byte") ^= 1;
+        replaced_envelope.checked_execution_release_set_base64 = BASE64.encode(envelope);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&replaced_envelope, &release_set_id)
+                .is_err()
+        );
     }
 }
