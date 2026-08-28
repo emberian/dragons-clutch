@@ -23,7 +23,9 @@ use dclutch_claims_svm::{
     },
     signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3, SignedDeltaReceiptV3},
     sparse_native_transfer_v1::{
-        SPARSE_NATIVE_TRANSFER_MAGIC_V1, SparseNativeTransferReceiptV1, SparseNativeTransferV1,
+        SPARSE_NATIVE_TRANSFER_MAGIC_V1, SparseNativeTransferPoststateSlicesV1,
+        SparseNativeTransferReceiptV1, SparseNativeTransferV1,
+        sparse_native_transfer_poststate_digest_v1,
     },
 };
 use dclutch_core_contract::ContentId;
@@ -50,7 +52,9 @@ use solana_program::{
 
 use crate::{
     TradingSbfError,
-    child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
+    child_receipt_v3::{
+        ReceiptDeliveryV3, deliver_receipt_dependency_v3, receipt_dependency_width_v3,
+    },
     hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
@@ -82,9 +86,9 @@ pub fn execute_claims_route_v3<'info>(
     effect: ProgramV3<'_>,
     composition: ClaimsCompositionV3<'_>,
     route_index: u16,
+    invocation_index: u32,
+    invocation: ResolvedInvocationV3,
     tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
@@ -102,10 +106,10 @@ pub fn execute_claims_route_v3<'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let invocation = effect
-        .resolved_invocation(route_index, 0, tail_count, scalars, identities)
-        .map_err(|_| TradingSbfError::Content)?;
-    if invocation.role != FixedRole::Claims || !composition_owns_route(composition, route_index) {
+    if invocation_index != 0
+        || invocation.role != FixedRole::Claims
+        || !composition_owns_route(composition, route_index)
+    {
         return Err(TradingSbfError::Content.into());
     }
     let request = invocation_request(invocation, request_bank, family_request)?;
@@ -177,6 +181,35 @@ pub fn execute_claims_route_v3<'info>(
         program_id.to_bytes(),
         post_resources,
     )
+}
+
+/// Exact maximum child-wire width this authenticated Claims invocation uses.
+///
+/// The mutation-free child preflight calls this before the first CPI so the
+/// one reusable wire allocation is bought at its final width. Requests with no
+/// dependency (including Direct ordinary) need no second request decode. When
+/// a dependency exists, the same request-kind owner used by execution decides
+/// whether Claims reads it as an exact suffix.
+pub(crate) fn claims_child_wire_capacity_v3(
+    invocation: ResolvedInvocationV3,
+    request_bank: &[u8],
+    family_request: &[u8],
+) -> Result<usize, ProgramError> {
+    let request = invocation_request(invocation, request_bank, family_request)?;
+    let receipt_bytes = receipt_dependency_width_v3(invocation);
+    if receipt_bytes == 0 {
+        return Ok(request.len());
+    }
+    let (_, receipt_kind) = route_authority(request, invocation.kind)?;
+    let suffix = if receipt_kind.delivery() == ReceiptDeliveryV3::ExactSuffix {
+        usize::try_from(receipt_bytes).map_err(|_| TradingSbfError::Content)?
+    } else {
+        0
+    };
+    request
+        .len()
+        .checked_add(suffix)
+        .ok_or_else(|| TradingSbfError::Content.into())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -775,13 +808,14 @@ fn sparse_native_post_resource_digest(
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
-    Ok(hashv(&[
-        b"dclutch/claims/sparse-native-post/v1",
-        &market,
-        &position,
-        &admission,
-    ])
-    .to_bytes())
+    let empty = &[][..];
+    Ok(sparse_native_transfer_poststate_digest_v1(
+        SparseNativeTransferPoststateSlicesV1 {
+            market: [&market, empty, empty, empty, empty],
+            source: [&position, empty, empty, empty, empty],
+            destination: [&admission, empty, empty, empty, empty],
+        },
+    ))
 }
 
 fn founding_post_resource_digests(

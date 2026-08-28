@@ -545,7 +545,53 @@ pub fn project_inline_custody_effect_v2(
 /// continuation; fee sole. Inactive raw bytes remain data-defined Effect
 /// authority and are deliberately never decoded or used in arithmetic.
 #[inline(never)]
+pub fn prepare_and_verify_inline_effect_partition_v2(
+    direct: InlineOrdinaryInputV2,
+    context: DirectInlineCandidateContextV2,
+    collateral: DirectInlineCollateralFrameV2,
+    request_bank: &[u8],
+    dispatch: DirectInlineEffectDispatchV2,
+) -> Result<DirectInlineCandidateV2> {
+    let candidate = prepare_inline_ordinary_candidate_v2(direct, context, collateral)?;
+    verify_inline_effect_partition_prepared_v2(
+        direct,
+        context,
+        collateral,
+        candidate,
+        request_bank,
+        dispatch,
+    )?;
+    Ok(candidate)
+}
+
+/// Hostile-check a separately supplied candidate against the same exact
+/// Effect partition. Callers that need both should prefer
+/// [`prepare_and_verify_inline_effect_partition_v2`], which cannot substitute
+/// a candidate between preparation and the partition join.
+#[inline(never)]
 pub fn verify_inline_effect_partition_v2(
+    direct: InlineOrdinaryInputV2,
+    context: DirectInlineCandidateContextV2,
+    collateral: DirectInlineCollateralFrameV2,
+    candidate: DirectInlineCandidateV2,
+    request_bank: &[u8],
+    dispatch: DirectInlineEffectDispatchV2,
+) -> Result<()> {
+    let authenticated = prepare_and_verify_inline_effect_partition_v2(
+        direct,
+        context,
+        collateral,
+        request_bank,
+        dispatch,
+    )?;
+    if authenticated != candidate {
+        return Err(DirectInlineCandidateErrorV2::Postcondition);
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn verify_inline_effect_partition_prepared_v2(
     direct: InlineOrdinaryInputV2,
     context: DirectInlineCandidateContextV2,
     collateral: DirectInlineCollateralFrameV2,
@@ -569,6 +615,15 @@ pub fn verify_inline_effect_partition_v2(
         return Err(DirectInlineCandidateErrorV2::Postcondition);
     }
     let mut seen = [false; DIRECT_INLINE_CUSTODY_ROUTE_SLOTS_V2];
+    let mut source_after = collateral.buyer_source.balance;
+    let mut delegated_after = collateral.buyer_source.delegated_amount;
+    let mut seller_after = collateral.seller_destination.balance;
+    let mut fee_after =
+        if collateral.seller_destination.account == collateral.fee_destination.account {
+            seller_after
+        } else {
+            collateral.fee_destination.balance
+        };
     let mut transfer_index = 0_usize;
     while transfer_index < count {
         let slot = usize::from(
@@ -584,12 +639,25 @@ pub fn verify_inline_effect_partition_v2(
             return Err(DirectInlineCandidateErrorV2::Postcondition);
         }
         *seen_slot = true;
-        let effect = project_inline_custody_effect_v2(
-            direct,
-            context,
-            collateral,
-            candidate.settlement,
-            u8::try_from(transfer_index).map_err(|_| DirectInlineCandidateErrorV2::Width)?,
+        let (amount, destination) =
+            custody_route(&candidate.settlement, &collateral, transfer_index)?;
+        let destination_before = if destination.account == collateral.seller_destination.account {
+            seller_after
+        } else {
+            fee_after
+        };
+        let effect = compile_custody_effect(
+            &direct,
+            &context,
+            &collateral.buyer_source,
+            destination,
+            transfer_index,
+            amount,
+            source_after,
+            delegated_after,
+            destination_before,
+            count,
+            candidate.settlement.effects.buyer_collateral_debit,
         )?;
         let expected_request = effect
             .request
@@ -607,11 +675,24 @@ pub fn verify_inline_effect_partition_v2(
         if request_bank.get(start..end) != Some(expected_request.as_slice()) {
             return Err(DirectInlineCandidateErrorV2::Postcondition);
         }
+        source_after = effect.source_after;
+        delegated_after = effect.delegated_after;
+        if destination.account == collateral.seller_destination.account {
+            seller_after = effect.destination_after;
+        }
+        if destination.account == collateral.fee_destination.account {
+            fee_after = effect.destination_after;
+        }
         transfer_index = transfer_index
             .checked_add(1)
             .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
     }
-    if dispatch.child_dispatch_writable != seen {
+    if dispatch.child_dispatch_writable != seen
+        || source_after != candidate.buyer_source_after
+        || delegated_after != candidate.buyer_delegated_after
+        || seller_after != candidate.seller_destination_after
+        || fee_after != candidate.fee_destination_after
+    {
         return Err(DirectInlineCandidateErrorV2::Postcondition);
     }
     Ok(())

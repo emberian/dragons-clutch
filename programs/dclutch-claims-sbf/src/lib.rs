@@ -25,7 +25,6 @@ use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
-    entrypoint,
     entrypoint::ProgramResult,
     hash::{hash, hashv},
     program::{invoke_signed, set_return_data},
@@ -52,7 +51,8 @@ pub mod signed_delta_v3;
 pub mod sparse_native_transfer_v1;
 mod terminal_settlement_v3;
 
-entrypoint!(process_instruction);
+#[cfg(not(feature = "no-entrypoint"))]
+solana_program::entrypoint!(process_instruction);
 
 /// Generic Claims child account index: caller authority PDA signer.
 pub const AUTHORITY_ACCOUNT: usize = 0;

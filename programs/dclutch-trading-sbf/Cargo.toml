@@ -40,7 +40,6 @@ dealer-family = [
 families = [
     "series-family",
     "dealer-family",
-    "dep:dclutch-direct-codec",
 ]
 # Test-only real-SBF profile that measures the common outer without linking
 # family modules whose separate physical adapters are still under review.
@@ -55,7 +54,7 @@ dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm", optional = true
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract", optional = true }
 dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec", optional = true }
-dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec", optional = true }
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel", optional = true }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract", features = ["alloc"] }

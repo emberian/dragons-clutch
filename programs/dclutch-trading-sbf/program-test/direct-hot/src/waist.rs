@@ -991,6 +991,21 @@ pub async fn submit_v0(
     transaction_payer: Option<&Keypair>,
     signers: &[&Keypair],
 ) -> Result<u64, RefusedExecution> {
+    Ok(
+        submit_v0_observed(context, instructions, addresses, transaction_payer, signers)
+            .await?
+            .compute_units_consumed,
+    )
+}
+
+/// Submit one canonical v0 transaction and retain exact success metadata.
+pub async fn submit_v0_observed(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    addresses: Vec<Pubkey>,
+    transaction_payer: Option<&Keypair>,
+    signers: &[&Keypair],
+) -> Result<SuccessfulExecution, RefusedExecution> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let transaction_payer = transaction_payer.unwrap_or(&context.payer);
     let message = VersionedMessage::V0(
@@ -1063,8 +1078,23 @@ pub async fn submit_v0(
     }
     Ok(processed
         .metadata
-        .map(|metadata| metadata.compute_units_consumed)
-        .unwrap_or_default())
+        .map_or_else(SuccessfulExecution::default, |metadata| {
+            SuccessfulExecution {
+                compute_units_consumed: metadata.compute_units_consumed,
+                return_data: metadata
+                    .return_data
+                    .map(|returned| (returned.program_id, returned.data)),
+            }
+        }))
+}
+
+/// Exact metadata retained from one successful canonical v0 execution.
+#[derive(Default)]
+pub struct SuccessfulExecution {
+    /// Compute units the runtime charged.
+    pub compute_units_consumed: u64,
+    /// Final transaction return-data producer and bytes, when present.
+    pub return_data: Option<(Pubkey, Vec<u8>)>,
 }
 
 /// One refused execution together with the program log it reached.
