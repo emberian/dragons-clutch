@@ -124,7 +124,14 @@ pub fn process_pre_market_funding_v1(
     if canonical_mask != request.selected_mask {
         return Err(ResolutionError::Funding.into());
     }
-    authenticate_release_and_caller(program_id, accounts, found, request, receipt)?;
+    authenticate_release_and_caller(
+        program_id,
+        accounts,
+        found,
+        instruction_data,
+        request,
+        receipt,
+    )?;
 
     let manifest_id =
         CapabilityContentId::new(request.manifest).map_err(|_| ResolutionError::Funding)?;
@@ -137,8 +144,10 @@ pub fn process_pre_market_funding_v1(
         request.selected_mask,
     )
     .map_err(|_| ResolutionError::Funding)?;
-    let ledger_view = FundingLedgerV2::decode(&ledger_bytes)
-        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+    let funding_ledger =
+        FundingLedgerV2::decode(&ledger_bytes).map_err(|_| ResolutionError::Funding)?;
+    let ledger_view = funding_ledger
+        .authenticate(manifest_id, manifest)
         .map_err(|_| ResolutionError::Funding)?;
     let native_principal = ledger_view
         .remaining_native_lamports_total()
@@ -176,6 +185,7 @@ pub fn process_pre_market_funding_v1(
         receipt.market.to_bytes(),
         receipt.generation,
         manifest_id,
+        funding_ledger,
         &ledger_bytes,
         system,
     )?;
@@ -382,6 +392,7 @@ fn authenticate_release_and_caller(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     found: &[AccountInfo<'_>],
+    exact_request: &[u8],
     request: PreMarketFundingRequestV1,
     receipt: ProjectFoundReceiptV2,
 ) -> ProgramResult {
@@ -446,7 +457,10 @@ fn authenticate_release_and_caller(
             resolution.release().programdata(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let digest = hash(&request.encode().map_err(|_| ResolutionError::Instruction)?).to_bytes();
+    // `decode` above accepts only the exact-width, canonical request encoding.
+    // Hash those caller-owned bytes directly: re-encoding here would duplicate
+    // validation and projection work without adding an independent fact.
+    let digest = hash(exact_request).to_bytes();
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         receipt.release_set.to_bytes(),
         receipt.market.to_bytes(),
@@ -504,29 +518,39 @@ fn require_funding_source(observed_lamports: u64, exact_target: u64) -> ProgramR
     }
 }
 
+#[inline(always)]
+fn authenticate_ledger_address(
+    program_id: &Pubkey,
+    components: &[&[u8]],
+    observed: &Pubkey,
+) -> Result<u8, solana_program::program_error::ProgramError> {
+    let (expected, bump) = Pubkey::find_program_address(components, program_id);
+    if expected != *observed {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(bump)
+}
+
 fn initialize_ledger<'info>(
     program_id: &Pubkey,
     output: &AccountInfo<'info>,
     market: [u8; 32],
     generation: u64,
     manifest_id: CapabilityContentId,
+    funding_ledger: FundingLedgerV2<'_>,
     ledger_bytes: &[u8],
     system: &AccountInfo<'info>,
 ) -> ProgramResult {
-    let ledger = FundingLedgerV2::decode(ledger_bytes).map_err(|_| ResolutionError::Funding)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         program_id.to_bytes(),
         market,
         generation,
         manifest_id,
-        ledger,
+        funding_ledger,
     )
     .map_err(|_| ResolutionError::Funding)?;
-    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0 != *output.key {
-        return Err(ResolutionError::OutputState.into());
-    }
-    let (_, bump) = Pubkey::find_program_address(&derivation.seed_components(), program_id);
     let components = derivation.seed_components();
+    let bump = authenticate_ledger_address(program_id, &components, output.key)?;
     let bump_seed = [bump];
     let [domain, controller, market, generation, manifest, mask] = components;
     let signer: [&[u8]; 7] = [
@@ -572,11 +596,38 @@ mod tests {
         }
         .encode()
         .expect("request");
+        let decoded = PreMarketFundingRequestV1::decode(&request).expect("canonical request");
+        assert_eq!(decoded.encode().expect("canonical re-encoding"), request);
+        assert_eq!(
+            hash(&decoded.encode().expect("canonical digest bytes")),
+            hash(&request)
+        );
         assert!(is_pre_market_funding_v1(&request));
         assert!(!is_pre_market_funding_v1(&request[..request.len() - 1]));
         let mut wrong = request;
         wrong[0] ^= 1;
         assert!(!is_pre_market_funding_v1(&wrong));
+        let mut noncanonical = request;
+        noncanonical[10] = 1;
+        assert!(PreMarketFundingRequestV1::decode(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn ledger_address_substitution_refuses_without_a_second_derivation() {
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let first = [1_u8; 32];
+        let second = [2_u8; 8];
+        let components: [&[u8]; 3] = [b"dclutch/test-ledger", &first, &second];
+        let (expected, bump) = Pubkey::find_program_address(&components, &program_id);
+        assert_eq!(
+            authenticate_ledger_address(&program_id, &components, &expected),
+            Ok(bump)
+        );
+        let substituted = Pubkey::new_from_array([7; 32]);
+        assert_eq!(
+            authenticate_ledger_address(&program_id, &components, &substituted),
+            Err(ResolutionError::OutputState.into())
+        );
     }
 
     #[test]
