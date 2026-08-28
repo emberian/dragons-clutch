@@ -1514,6 +1514,7 @@ mod tests {
         let payer = key(242);
         let canonical = canonical_wallet_terminal_payout_lookup_addresses_v3(&report, payer)
             .expect("canonical addresses");
+        assert_eq!(canonical.len(), 33);
         assert_eq!(canonical.first(), Some(&fixture.route.claims_program));
         assert!(!canonical.contains(&payer));
         assert!(!canonical.contains(&report.owner));
@@ -1526,7 +1527,9 @@ mod tests {
         )
         .expect("packet-safe payout");
         assert_eq!(plan.required_signers, vec![payer, key(17)]);
-        assert!(plan.message.loaded_addresses > 20);
+        assert_eq!(plan.message.loaded_addresses, 33);
+        assert_eq!(plan.message.message.static_account_keys().len(), 2);
+        assert_eq!(plan.message.loaded_addresses + 2, 35);
         assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
 
         let mut reordered = table.clone();
