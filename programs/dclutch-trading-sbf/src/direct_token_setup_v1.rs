@@ -114,7 +114,7 @@ pub fn process_direct_token_setup_v1(
     let rent =
         Rent::from_account_info(account(accounts, RENT)?).map_err(|_| TradingSbfError::Content)?;
     let request_digest = hash(instruction_data).to_bytes();
-    let frame_digest = direct_token_setup_frame_digest_v1(frame_addresses(accounts)?);
+    let frame_digest = authenticated_frame_digest_v1(accounts)?;
     let authenticated = authenticate_semantics(program_id, accounts, request, &rent)?;
 
     // Preflight every checked delta before the first CPI. Transaction rollback
@@ -175,6 +175,30 @@ pub fn process_direct_token_setup_v1(
     {
         return Err(TradingSbfError::Transition.into());
     }
+    emit_token_setup_receipt_v1(
+        accounts,
+        request,
+        &authenticated,
+        request_digest,
+        frame_digest,
+        exact_rent,
+        seller_normalization,
+        fee_normalization,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn emit_token_setup_receipt_v1(
+    accounts: &[AccountInfo<'_>],
+    request: DirectTokenSetupRequestV1,
+    authenticated: &AuthenticatedSetupV1,
+    request_digest: [u8; 32],
+    frame_digest: [u8; 32],
+    exact_rent: u64,
+    seller_normalization: DirectTokenRentNormalizationV1,
+    fee_normalization: DirectTokenRentNormalizationV1,
+) -> ProgramResult {
     let seller_poststate_digest = authenticate_token_poststate(
         accounts,
         SELLER_TOKEN,
@@ -212,6 +236,7 @@ pub fn process_direct_token_setup_v1(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_top_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> ProgramResult {
     if accounts.len() != DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1 {
         return Err(TradingSbfError::Content.into());
@@ -239,6 +264,7 @@ fn authenticate_top_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> 
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_semantics(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -309,6 +335,7 @@ fn authenticate_semantics(
     })
 }
 
+#[inline(never)]
 fn authenticate_market(
     accounts: &[AccountInfo<'_>],
     request: DirectTokenSetupRequestV1,
@@ -344,6 +371,7 @@ fn authenticate_market(
     Ok(state)
 }
 
+#[inline(never)]
 fn authenticate_activation(
     accounts: &[AccountInfo<'_>],
     market: CoreState,
@@ -389,6 +417,7 @@ fn authenticate_activation(
     Ok((trading.release(), claims.release()))
 }
 
+#[inline(never)]
 fn authenticate_root_and_config(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -451,6 +480,7 @@ fn authenticate_root_and_config(
     Ok((config_id, config))
 }
 
+#[inline(never)]
 fn authenticate_realm(
     accounts: &[AccountInfo<'_>],
     market: CoreState,
@@ -486,6 +516,7 @@ fn authenticate_realm(
     Ok(realm)
 }
 
+#[inline(never)]
 fn authenticate_mint(accounts: &[AccountInfo<'_>], realm: RealmV1) -> ProgramResult {
     let mint_account = account(accounts, COLLATERAL_MINT)?;
     let data = mint_account
@@ -514,6 +545,7 @@ fn authenticate_mint(accounts: &[AccountInfo<'_>], realm: RealmV1) -> ProgramRes
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_seller_position(
     accounts: &[AccountInfo<'_>],
     request: DirectTokenSetupRequestV1,
@@ -567,6 +599,7 @@ fn authenticate_seller_position(
     Ok((aggregate, position))
 }
 
+#[inline(never)]
 fn borrow_finalized_record<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
     raw_index: usize,
@@ -609,6 +642,7 @@ fn borrow_finalized_record<'a, 'info>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn normalize_and_initialize_token(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -697,6 +731,7 @@ fn normalize_and_initialize_token(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_token_poststate(
     accounts: &[AccountInfo<'_>],
     index: usize,
@@ -721,6 +756,7 @@ fn authenticate_token_poststate(
     Ok(hash(&data).to_bytes())
 }
 
+#[inline(never)]
 fn immutable_digests(accounts: &[AccountInfo<'_>]) -> Result<[[u8; 32]; 8], ProgramError> {
     let mut output = [[0; 32]; 8];
     for (slot, index) in [
@@ -744,6 +780,7 @@ fn immutable_digests(accounts: &[AccountInfo<'_>]) -> Result<[[u8; 32]; 8], Prog
     Ok(output)
 }
 
+#[inline(never)]
 fn frame_addresses(
     accounts: &[AccountInfo<'_>],
 ) -> Result<[[u8; 32]; DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1], ProgramError> {
@@ -755,6 +792,13 @@ fn frame_addresses(
         return Err(TradingSbfError::Content.into());
     }
     Ok(output)
+}
+
+#[inline(never)]
+fn authenticated_frame_digest_v1(accounts: &[AccountInfo<'_>]) -> Result<[u8; 32], ProgramError> {
+    Ok(direct_token_setup_frame_digest_v1(frame_addresses(
+        accounts,
+    )?))
 }
 
 fn privilege_byte(info: &AccountInfo<'_>) -> u8 {

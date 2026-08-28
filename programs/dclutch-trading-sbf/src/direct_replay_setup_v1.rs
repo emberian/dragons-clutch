@@ -59,6 +59,18 @@ const _: () = assert!(
         == DIRECT_REPLAY_SETUP_ACCOUNT_COUNT_V1
 );
 
+#[derive(Clone, Copy)]
+struct ReplayInvocationV1 {
+    request: DirectReplaySetupRequestV1,
+    maker_root: [u8; 32],
+    top_request_digest: [u8; 32],
+    custody_request_digest: [u8; 32],
+    observed_lamports: u64,
+    payer_before: u64,
+    refund_before: u64,
+    exact_rent: u64,
+}
+
 /// Execute one exact permissionless Direct replay setup request.
 #[inline(never)]
 pub fn process_direct_replay_setup_v1(
@@ -69,6 +81,17 @@ pub fn process_direct_replay_setup_v1(
     let request = DirectReplaySetupRequestV1::decode(instruction_data)
         .map_err(|_| TradingSbfError::Content)?;
     authenticate_top_frame(program_id, accounts)?;
+    let invocation = invoke_replay_child_v1(program_id, accounts, instruction_data, request)?;
+    authenticate_and_emit_replay_v1(program_id, accounts, invocation)
+}
+
+#[inline(never)]
+fn invoke_replay_child_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+    request: DirectReplaySetupRequestV1,
+) -> Result<ReplayInvocationV1, ProgramError> {
     let market_state = authenticate_market(accounts, request)?;
     let maker_root = Pubkey::find_program_address(
         &MakerReplaySeedsV1::new(
@@ -127,10 +150,54 @@ pub fn process_direct_replay_setup_v1(
         custody_request,
         custody_request_digest,
     )?;
-    let payer_top_up = exact_rent.saturating_sub(observed_lamports);
-    let refunded_excess = observed_lamports.saturating_sub(exact_rent);
-    if payer_before.checked_sub(payer_top_up) != Some(payer.lamports())
-        || refund_before.checked_add(refunded_excess) != Some(rent_refund.lamports())
+    Ok(ReplayInvocationV1 {
+        request,
+        maker_root: maker_root.to_bytes(),
+        top_request_digest,
+        custody_request_digest,
+        observed_lamports,
+        payer_before,
+        refund_before,
+        exact_rent,
+    })
+}
+
+#[inline(never)]
+fn authenticate_and_emit_replay_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    invocation: ReplayInvocationV1,
+) -> ProgramResult {
+    let market_state = authenticate_market(accounts, invocation.request)?;
+    let payer = account(accounts, PAYER)?;
+    let rent_refund = account(accounts, RENT_REFUND)?;
+    let custody_request = expected_custody_request_v1(
+        invocation.request,
+        market_state,
+        program_id.to_bytes(),
+        invocation.maker_root,
+        payer.key.to_bytes(),
+        rent_refund.key.to_bytes(),
+        invocation.exact_rent,
+        invocation.top_request_digest,
+    )?;
+    let custody_request_digest = hash(
+        &custody_request
+            .to_bytes()
+            .map_err(|_| TradingSbfError::Content)?,
+    )
+    .to_bytes();
+    if custody_request_digest != invocation.custody_request_digest {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let payer_top_up = invocation
+        .exact_rent
+        .saturating_sub(invocation.observed_lamports);
+    let refunded_excess = invocation
+        .observed_lamports
+        .saturating_sub(invocation.exact_rent);
+    if invocation.payer_before.checked_sub(payer_top_up) != Some(payer.lamports())
+        || invocation.refund_before.checked_add(refunded_excess) != Some(rent_refund.lamports())
     {
         return Err(TradingSbfError::Transition.into());
     }
@@ -138,23 +205,46 @@ pub fn process_direct_replay_setup_v1(
         accounts,
         custody_request,
         custody_request_digest,
-        exact_rent,
+        invocation.exact_rent,
     )?;
+    emit_replay_receipt_v1(
+        accounts,
+        &invocation,
+        custody_poststate,
+        custody_replay_digest,
+        payer_top_up,
+        refunded_excess,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn emit_replay_receipt_v1(
+    accounts: &[AccountInfo<'_>],
+    invocation: &ReplayInvocationV1,
+    custody_poststate: [u8; 32],
+    custody_replay_digest: [u8; 32],
+    payer_top_up: u64,
+    refunded_excess: u64,
+) -> ProgramResult {
+    let replay = account(accounts, REPLAY)?;
+    let rent_refund = account(accounts, RENT_REFUND)?;
+    let payer = account(accounts, PAYER)?;
     let receipt = DirectReplaySetupReceiptV1 {
-        request_digest: top_request_digest,
-        market: request.market,
-        maker: request.maker,
-        maker_root: maker_root.to_bytes(),
+        request_digest: invocation.top_request_digest,
+        market: invocation.request.market,
+        maker: invocation.request.maker,
+        maker_root: invocation.maker_root,
         custody_replay: replay.key.to_bytes(),
         rent_refund: rent_refund.key.to_bytes(),
         payer: payer.key.to_bytes(),
-        custody_request_digest,
+        custody_request_digest: invocation.custody_request_digest,
         custody_poststate,
         custody_replay_digest,
-        observed_lamports,
+        observed_lamports: invocation.observed_lamports,
         payer_top_up,
         refunded_excess,
-        exact_rent,
+        exact_rent: invocation.exact_rent,
         post_lamports: replay.lamports(),
     }
     .to_bytes()
@@ -165,6 +255,7 @@ pub fn process_direct_replay_setup_v1(
 
 /// Build the sole Custody request admitted by this route.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 pub fn expected_custody_request_v1(
     top: DirectReplaySetupRequestV1,
     market: CoreState,
@@ -227,6 +318,7 @@ pub fn expected_custody_request_v1(
     Ok(request)
 }
 
+#[inline(never)]
 fn authenticate_top_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> ProgramResult {
     if accounts.len() != DIRECT_REPLAY_SETUP_ACCOUNT_COUNT_V1 {
         return Err(TradingSbfError::Content.into());
@@ -264,6 +356,7 @@ fn authenticate_top_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> 
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_market(
     accounts: &[AccountInfo<'_>],
     request: DirectReplaySetupRequestV1,
@@ -305,6 +398,7 @@ fn authenticate_market(
     Ok(state)
 }
 
+#[inline(never)]
 fn authenticate_child_coordinates(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -337,6 +431,7 @@ fn authenticate_child_coordinates(
     Ok(())
 }
 
+#[inline(never)]
 fn invoke_custody(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -386,6 +481,7 @@ fn invoke_custody(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_child_result(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
