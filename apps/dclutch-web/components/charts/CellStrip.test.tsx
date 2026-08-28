@@ -31,6 +31,10 @@ describe('CellStrip', () => {
       caption="Fifty cells."
     />);
     expect(html.split('viz-hit').length - 1).toBe(50);
+    // Many cells keep their width and scroll in their own container instead
+    // of compressing below a usable slot on narrow screens.
+    expect(html).toContain('viz-scroll');
+    expect(html).toContain('min-width');
     // Index axis stays sparse: first, middle, last — not fifty labels.
     expect(html).toContain('>0</text>');
     expect(html).toContain('>24</text>');

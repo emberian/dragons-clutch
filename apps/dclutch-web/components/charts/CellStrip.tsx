@@ -79,9 +79,9 @@ export default function CellStrip({
     : [0, Math.floor((plan.bars.length - 1) / 2), plan.bars.length - 1];
 
   return <figure className="viz-figure">
-    <svg
+    <div className="viz-scroll"><svg
       viewBox={`0 0 ${width} ${height}`}
-      style={{ maxWidth: `${width}px` }}
+      style={{ maxWidth: `${width}px`, minWidth: plan.bars.length > 24 ? `${width}px` : undefined }}
       role="group"
       aria-label={caption}
     >
@@ -129,7 +129,7 @@ export default function CellStrip({
         fontSize={7}
         fill="var(--viz-muted)"
       >{index}</text>)}
-    </svg>
+    </svg></div>
     <p className="viz-readout" aria-live="polite">
       <span className="viz-key" style={{ background: terminal ? (shownBar.index === winner ? 'var(--viz-accent)' : 'var(--viz-deemph)') : 'var(--viz-mark)' }} />
       <strong>claim {shownBar.index} · {shownBar.atoms} atoms</strong>
