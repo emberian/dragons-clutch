@@ -43,12 +43,17 @@ describe('unified chain-derived operator surface', () => {
     expect(CAPABILITY_ACTIONS_V1.every((workflow) => workflow.exactBoundary.length > 40)).toBe(true);
     expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-unsigned').every((workflow) => workflow.workspace !== null)).toBe(true);
     expect(CAPABILITY_ACTIONS_V1.some((workflow) => workflow.family === 'Direct' && workflow.implementation === 'awaiting-production')).toBe(true);
-    expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.action === 'Found common Core Market')).toMatchObject({
-      implementation: 'browser-unsigned',
+    expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'market.found')).toMatchObject({
+      implementation: 'rust-unsigned',
       workspace: '/found',
-      exactBoundary: expect.stringContaining('Found37'),
+      exactBoundary: expect.stringContaining('cannot open a current devnet Market'),
     });
     const direct = CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'direct.inline');
-    expect(direct && evaluateCapabilityV1(direct, null)).toMatchObject({ status: 'needs-chain' });
+    expect(direct).toMatchObject({
+      implementation: 'awaiting-production',
+      workspace: '/trade',
+      exactBoundary: expect.stringContaining('does not create an intent'),
+    });
+    expect(direct && evaluateCapabilityV1(direct, null)).toMatchObject({ status: 'unavailable' });
   });
 });
