@@ -1,14 +1,14 @@
 /**
  * The ComputeBudget declarations a founding transaction cannot go without.
  *
- * Solana's default is 200,000 compute units per transaction. Found31 alone
- * spends over a million — the release authentication hashes whole program ELFs
- * — and DCLTGMF1 measured 1,209,776 CU on a real validator. A builder that
- * omits the limit therefore does not produce a slow transaction; it produces
- * one the runtime kills with `Program failed to complete`, which reads like a
- * program bug and is not one.
+ * Solana's default is 200,000 compute units per transaction. Found37 and the
+ * DCLTGMF2 outer reauthenticate release and record state under an explicitly
+ * configured limit. A current performance claim for either route requires its
+ * pass count and 20-seed mean; this module only reproduces the configured
+ * declaration. Omitting it produces a transaction the runtime kills with
+ * `Program failed to complete`, which reads like a program bug and is not one.
  *
- * MEASURED, not assumed. The browser's Found31 builder shipped without these,
+ * The browser's first Found builder shipped without these,
  * and the first time anyone submitted its output — from the create wizard,
  * against a local validator — that is exactly the error it got.
  *
@@ -56,8 +56,8 @@ export function setComputeUnitLimitV1(units: number = LOCAL_PROTOCOL_COMPUTE_UNI
 /**
  * `RequestHeapFrame(bytes)`.
  *
- * Only the two routes on `declares_extended_heap_profile_v1` — DCLTGMF1 and
- * DCLTPCB1 — should carry this, and both present the instructions sysvar so
+ * Only the two routes on `declares_extended_heap_profile_v1` — DCLTGMF2 and
+ * DCLTPCB2 — should carry this, and both present the instructions sysvar so
  * Trading's adapter can re-derive the grant from what the runtime serialized
  * rather than from a caller's claim. On any other route it costs compute and
  * changes nothing, which is why it is opt-in here rather than always applied.

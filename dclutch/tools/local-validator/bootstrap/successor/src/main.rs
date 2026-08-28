@@ -75,6 +75,7 @@ fn run() -> Result<()> {
         Some("devnet-market") => run_devnet_market(arguments.collect()),
         Some("graduation-market") => run_graduation_market(arguments.collect()),
         Some("ledger-census") => run_ledger_census(arguments.collect()),
+        Some("wallet-terminal-payout-alt-plan") => wallet_terminal::run_alt(arguments.collect()),
         Some("wallet-terminal-payout-plan") => wallet_terminal::run(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
         Some("campaign") => run_campaign(arguments.collect()),

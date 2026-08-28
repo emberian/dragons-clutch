@@ -29,7 +29,8 @@ use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     wallet_terminal_payout_v3::{
         WalletTerminalPayoutInputV3, WalletTerminalPayoutReportV3, WalletTerminalPayoutRouteV3,
-        build_wallet_terminal_payout_v3, compile_wallet_terminal_payout_v0,
+        build_wallet_terminal_payout_v3, canonical_wallet_terminal_payout_lookup_addresses_v3,
+        compile_wallet_terminal_payout_v0,
     },
 };
 use dclutch_product_payoff_v2_codec::{
@@ -57,7 +58,12 @@ use dclutch_representation_composition_v3_operator::{
 };
 use dclutch_token_svm::{Mint, TokenProgram};
 use serde::{Deserialize, Serialize};
-use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table,
+};
+use solana_program::{
+    account_info::AccountInfo, hash::hash, instruction::Instruction, pubkey::Pubkey, rent::Rent,
+};
 use solana_sdk::hash::Hash;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
@@ -68,13 +74,16 @@ use crate::{
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
 
+use dclutch_versioned_message_operator::EXTEND_ADDRESSES_PER_TRANSACTION_V1;
+
 const INPUT_FORMAT: &str = "dclutch-wallet-terminal-payout-plan-input-v1";
 const OUTPUT_FORMAT: &str = "dclutch-wallet-terminal-payout-v3";
+const ALT_OUTPUT_FORMAT: &str = "dclutch-wallet-terminal-payout-alt-plan-v1";
 // Compilation is a geometry/ALT admission check only. The browser obtains a
 // fresh blockhash immediately before wallet signing; this hash is never emitted.
 const GEOMETRY_BLOCKHASH: [u8; 32] = [0xa5; 32];
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProgramSelectorsV1 {
     registry: String,
@@ -83,7 +92,7 @@ struct ProgramSelectorsV1 {
     custody: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecordSelectorsV1 {
     realm: String,
@@ -100,7 +109,7 @@ struct RecordSelectorsV1 {
 }
 
 /// Immutable selectors and wallet coordinates for one checked payout.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PlanInputV1 {
     format: String,
@@ -116,7 +125,12 @@ struct PlanInputV1 {
     parent_context: String,
     custody_context: String,
     release_set: String,
-    lookup_table: String,
+    #[serde(
+        default,
+        deserialize_with = "optional_lookup_table",
+        skip_serializing_if = "Option::is_none"
+    )]
+    lookup_table: Option<String>,
     programs: ProgramSelectorsV1,
     records: RecordSelectorsV1,
 }
@@ -143,7 +157,7 @@ struct SelectedInputV1 {
     parent_context: [u8; 32],
     custody_context: [u8; 32],
     release_set: [u8; 32],
-    lookup_table: Pubkey,
+    lookup_table: Option<Pubkey>,
     registry: Pubkey,
     core: Pubkey,
     claims: Pubkey,
@@ -171,8 +185,14 @@ struct SelectedInputV1 {
     hoard: Pubkey,
 }
 
+#[derive(Clone, Copy)]
+enum LookupTableRequirementV1 {
+    Present,
+    Absent,
+}
+
 impl SelectedInputV1 {
-    fn parse(input: PlanInputV1) -> Result<Self> {
+    fn parse(input: &PlanInputV1, requirement: LookupTableRequirementV1) -> Result<Self> {
         if input.format != INPUT_FORMAT {
             return Err(Error::new(format!(
                 "wallet payout input format must be {INPUT_FORMAT}"
@@ -184,7 +204,20 @@ impl SelectedInputV1 {
         let recipient = nonzero_pubkey(&input.recipient, "recipient")?;
         let collateral_mint = nonzero_pubkey(&input.collateral_mint, "collateralMint")?;
         let token_program = nonzero_pubkey(&input.token_program, "tokenProgram")?;
-        let lookup_table = nonzero_pubkey(&input.lookup_table, "lookupTable")?;
+        let lookup_table = match (&input.lookup_table, requirement) {
+            (Some(value), LookupTableRequirementV1::Present) => {
+                Some(nonzero_pubkey(value, "lookupTable")?)
+            }
+            (None, LookupTableRequirementV1::Absent) => None,
+            (None, LookupTableRequirementV1::Present) => {
+                return Err(Error::new("lookupTable is required for a payout manifest"));
+            }
+            (Some(_), LookupTableRequirementV1::Absent) => {
+                return Err(Error::new(
+                    "lookupTable must be omitted while preparing its canonical ALT plan",
+                ));
+            }
+        };
         let registry = nonzero_pubkey(&input.programs.registry, "programs.registry")?;
         let core = nonzero_pubkey(&input.programs.core, "programs.core")?;
         let claims = nonzero_pubkey(&input.programs.claims, "programs.claims")?;
@@ -350,7 +383,6 @@ impl SelectedInputV1 {
             self.recipient,
             self.collateral_mint,
             self.token_program,
-            self.lookup_table,
             self.registry,
             self.core,
             self.claims,
@@ -365,6 +397,9 @@ impl SelectedInputV1 {
             self.hoard,
             sysvar::rent::ID,
         ];
+        if let Some(lookup_table) = self.lookup_table {
+            values.push(lookup_table);
+        }
         for pair in [
             self.realm,
             self.product,
@@ -546,7 +581,56 @@ struct WalletTerminalPayoutManifestV3 {
     lookup_table: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstructionAccountV1 {
+    address: String,
+    signer: bool,
+    writable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstructionManifestV1 {
+    program_id: String,
+    accounts: Vec<InstructionAccountV1>,
+    data_base64: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WalletTerminalPayoutAltPlanV1 {
+    format: &'static str,
+    source_input_sha256: String,
+    observation_slot: String,
+    payer: String,
+    authority: String,
+    lookup_table: String,
+    addresses: Vec<String>,
+    create: InstructionManifestV1,
+    extensions: Vec<InstructionManifestV1>,
+    payout_input: PlanInputV1,
+}
+
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
+    let (origin, _source, decoded) = command_input(arguments, "wallet-terminal-payout-plan")?;
+    let selected = SelectedInputV1::parse(&decoded, LookupTableRequirementV1::Present)?;
+    let snapshot = finalized_snapshot(&origin, &selected)?;
+    stdout_json(&build_manifest(&selected, &snapshot)?)
+}
+
+pub(crate) fn run_alt(arguments: Vec<String>) -> Result<()> {
+    let (origin, source, decoded) = command_input(arguments, "wallet-terminal-payout-alt-plan")?;
+    let selected = SelectedInputV1::parse(&decoded, LookupTableRequirementV1::Absent)?;
+    let snapshot = finalized_snapshot(&origin, &selected)?;
+    let report = build_report(&selected, &snapshot)?;
+    stdout_json(&build_alt_plan(decoded, &source, &report)?)
+}
+
+fn command_input(
+    arguments: Vec<String>,
+    command: &str,
+) -> Result<(ClusterOriginV1, Vec<u8>, PlanInputV1)> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut input = None;
@@ -561,7 +645,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             "--input" => &mut input,
             _ => {
                 return Err(Error::new(format!(
-                    "unknown wallet-terminal-payout-plan argument: {argument}"
+                    "unknown {command} argument: {argument}"
                 )));
             }
         };
@@ -572,33 +656,46 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let rpc_url = rpc_url.ok_or_else(|| Error::new("--rpc-url is required"))?;
     let origin = ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?;
     let input_path = absolute(input, "--input")?;
-    let decoded: PlanInputV1 = serde_json::from_slice(&std::fs::read(input_path)?)?;
-    let selected = SelectedInputV1::parse(decoded)?;
+    let source = std::fs::read(input_path)?;
+    let decoded: PlanInputV1 = serde_json::from_slice(&source)?;
+    Ok((origin, source, decoded))
+}
+
+fn finalized_snapshot(
+    origin: &ClusterOriginV1,
+    selected: &SelectedInputV1,
+) -> Result<FinalizedSnapshotV1> {
     let addresses = selected.addresses();
-    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let mut rpc = Rpc::connect_cluster(origin, WritePolicyV1::ReadsOnly)?;
     let floor = rpc.finalized_slot()?;
     let (slot, values) = rpc.finalized_accounts(&addresses, floor)?;
-    let snapshot = FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &addresses, values)?;
-    let manifest = build_manifest(&selected, &snapshot)?;
+    FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &addresses, values)
+}
+
+fn stdout_json(value: &impl Serialize) -> Result<()> {
     let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
+    stdout.write_all(&serde_json::to_vec_pretty(value)?)?;
     stdout.write_all(b"\n")?;
     Ok(())
 }
 
 pub(crate) fn usage() -> &'static str {
-    "\n  dclutch-local-successor-bootstrap wallet-terminal-payout-plan --rpc-url URL \\
-     [--i-mean-devnet DEVNET_GENESIS_HASH] --input ABSOLUTE_JSON\n\nThis command is read-only. It \
-     reauthenticates one exact Market, Product/composition graph, current Claims/Core/Custody \
-     deployments, wallet Position, Custody and token prestates, and canonical lookup table at one \
-     finalized account observation; then Rust emits the exact payout manifest the SDK and web app \
-     can execute. Mainnet-beta is refused unconditionally."
+    "\n  dclutch-local-successor-bootstrap wallet-terminal-payout-alt-plan --rpc-url URL \\
+     [--i-mean-devnet DEVNET_GENESIS_HASH] --input ABSOLUTE_JSON\n  \
+     dclutch-local-successor-bootstrap wallet-terminal-payout-plan --rpc-url URL \\
+     [--i-mean-devnet DEVNET_GENESIS_HASH] --input ABSOLUTE_JSON\n\nThese commands are read-only. \
+     Each reauthenticates one exact Market, Product/composition graph, current \
+     Claims/Core/Custody deployments, wallet Position, Custody and token prestates at one finalized \
+     account observation. The first emits the owner-authorized create and ordered extensions for \
+     this payout's canonical lookup table. After finalization, the second verifies that table and \
+     emits the exact payout manifest the SDK and web app can execute. Mainnet-beta is refused \
+     unconditionally."
 }
 
-fn build_manifest(
+fn build_report(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
-) -> Result<WalletTerminalPayoutManifestV3> {
+) -> Result<WalletTerminalPayoutReportV3> {
     let rent_account = snapshot.required(sysvar::rent::ID, "Rent sysvar")?;
     let rent: Rent = bincode::deserialize(&rent_account.data)
         .map_err(|error| Error::new(format!("Rent sysvar: {error}")))?;
@@ -842,7 +939,18 @@ fn build_manifest(
         expected_position_revision: position_revision(&position_account.data)?,
     })
     .map_err(|error| Error::new(format!("wallet terminal payout builder: {error:?}")))?;
-    let table = snapshot.required(selected.lookup_table, "wallet payout lookup table")?;
+    Ok(report)
+}
+
+fn build_manifest(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+) -> Result<WalletTerminalPayoutManifestV3> {
+    let report = build_report(selected, snapshot)?;
+    let lookup_table = selected
+        .lookup_table
+        .ok_or_else(|| Error::new("lookupTable is required for a payout manifest"))?;
+    let table = snapshot.required(lookup_table, "wallet payout lookup table")?;
     let transaction = compile_wallet_terminal_payout_v0(
         report,
         selected.owner,
@@ -853,7 +961,61 @@ fn build_manifest(
     if transaction.required_signers.as_slice() != [selected.owner] {
         return Err(Error::new("wallet payout requires another signer"));
     }
-    Ok(manifest(&transaction.payout, selected))
+    Ok(manifest(&transaction.payout, lookup_table, selected))
+}
+
+fn build_alt_plan(
+    mut payout_input: PlanInputV1,
+    source: &[u8],
+    report: &WalletTerminalPayoutReportV3,
+) -> Result<WalletTerminalPayoutAltPlanV1> {
+    let addresses = canonical_wallet_terminal_payout_lookup_addresses_v3(report, report.owner)
+        .map_err(|error| Error::new(format!("wallet payout ALT addresses: {error:?}")))?;
+    let (create, lookup_table) =
+        create_lookup_table(report.owner, report.owner, report.observation.slot);
+    let extensions = addresses
+        .chunks(EXTEND_ADDRESSES_PER_TRANSACTION_V1)
+        .map(|page| {
+            instruction_manifest(extend_lookup_table(
+                lookup_table,
+                report.owner,
+                Some(report.owner),
+                page.to_vec(),
+            ))
+        })
+        .collect();
+    payout_input.lookup_table = Some(lookup_table.to_string());
+    Ok(WalletTerminalPayoutAltPlanV1 {
+        format: ALT_OUTPUT_FORMAT,
+        source_input_sha256: hex(&hash(source).to_bytes()),
+        observation_slot: report.observation.slot.to_string(),
+        payer: report.owner.to_string(),
+        authority: report.owner.to_string(),
+        lookup_table: lookup_table.to_string(),
+        addresses: addresses
+            .into_iter()
+            .map(|address| address.to_string())
+            .collect(),
+        create: instruction_manifest(create),
+        extensions,
+        payout_input,
+    })
+}
+
+fn instruction_manifest(instruction: Instruction) -> InstructionManifestV1 {
+    InstructionManifestV1 {
+        program_id: instruction.program_id.to_string(),
+        accounts: instruction
+            .accounts
+            .into_iter()
+            .map(|account| InstructionAccountV1 {
+                address: account.pubkey.to_string(),
+                signer: account.is_signer,
+                writable: account.is_writable,
+            })
+            .collect(),
+        data_base64: BASE64.encode(instruction.data),
+    }
 }
 
 fn terminal_scenario(
@@ -994,6 +1156,7 @@ fn authenticate_role(
 
 fn manifest(
     report: &WalletTerminalPayoutReportV3,
+    lookup_table: Pubkey,
     selected: &SelectedInputV1,
 ) -> WalletTerminalPayoutManifestV3 {
     let route = report.route;
@@ -1062,7 +1225,7 @@ fn manifest(
         },
         signed_packet_base64: BASE64.encode(&report.signed_packet),
         payout: report.payout.to_string(),
-        lookup_table: selected.lookup_table.to_string(),
+        lookup_table: lookup_table.to_string(),
     }
 }
 
@@ -1107,6 +1270,13 @@ fn canonical_u64(value: &str, label: &str, nonzero: bool) -> Result<u64> {
         return Err(Error::new(format!("{label} must be positive")));
     }
     Ok(parsed)
+}
+
+fn optional_lookup_table<'de, D>(deserializer: D) -> core::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Some)
 }
 
 fn nonzero_pubkey(value: &str, label: &str) -> Result<Pubkey> {
@@ -1206,7 +1376,7 @@ mod tests {
             parent_context: id(6),
             custody_context: id(7),
             release_set: id(8),
-            lookup_table: key(9),
+            lookup_table: Some(key(9)),
             programs: ProgramSelectorsV1 {
                 registry: key(10),
                 core: key(11),
@@ -1231,7 +1401,9 @@ mod tests {
 
     #[test]
     fn input_is_exact_and_derivations_are_stable() {
-        let selected = SelectedInputV1::parse(input()).expect("selected input");
+        let value = input();
+        let selected = SelectedInputV1::parse(&value, LookupTableRequirementV1::Present)
+            .expect("selected input");
         assert_eq!(selected.quantity, 7);
         assert_eq!(selected.position, programdata_free_position(&selected));
         assert_eq!(
@@ -1394,8 +1566,12 @@ mod tests {
     #[test]
     fn manifest_json_has_one_stable_golden_vector() {
         let report = payout_report();
-        let selected = SelectedInputV1::parse(input()).expect("selected input");
-        let encoded = serde_json::to_vec(&manifest(&report, &selected)).expect("manifest JSON");
+        let value = input();
+        let selected = SelectedInputV1::parse(&value, LookupTableRequirementV1::Present)
+            .expect("selected input");
+        let lookup_table = selected.lookup_table.expect("lookup table");
+        let encoded =
+            serde_json::to_vec(&manifest(&report, lookup_table, &selected)).expect("manifest JSON");
         assert_eq!(
             Sha256::digest(&encoded).as_slice(),
             &[
@@ -1411,28 +1587,82 @@ mod tests {
     }
 
     #[test]
+    fn alt_plan_preserves_first_use_order_and_patches_only_lookup_table() {
+        let mut report = payout_report();
+        report.instruction.accounts.swap(1, 2);
+        let mut payout_input = input();
+        payout_input.lookup_table = None;
+        payout_input.owner = report.owner.to_string();
+        payout_input.recipient_owner = report.owner.to_string();
+        let source = serde_json::to_vec(&payout_input).expect("source input");
+        let expected = canonical_wallet_terminal_payout_lookup_addresses_v3(&report, report.owner)
+            .expect("canonical addresses");
+        let mut sorted = expected.clone();
+        sorted.sort_unstable();
+        assert_ne!(
+            expected, sorted,
+            "fixture must detect a sorting substitution"
+        );
+
+        let plan = build_alt_plan(payout_input, &source, &report).expect("ALT plan");
+        assert_eq!(plan.format, ALT_OUTPUT_FORMAT);
+        assert_eq!(plan.source_input_sha256, hex(&hash(&source).to_bytes()));
+        assert_eq!(
+            plan.addresses,
+            expected.iter().map(ToString::to_string).collect::<Vec<_>>()
+        );
+        assert_eq!(plan.extensions.len(), 2);
+        assert_eq!(
+            plan.create.program_id,
+            lookup_table_program::id().to_string()
+        );
+        assert_eq!(
+            plan.payout_input.lookup_table.as_deref(),
+            Some(plan.lookup_table.as_str())
+        );
+        let encoded = serde_json::to_vec(&plan).expect("ALT plan JSON");
+        assert_eq!(
+            Sha256::digest(&encoded).as_slice(),
+            &[
+                163, 28, 105, 100, 50, 126, 24, 26, 198, 83, 240, 15, 112, 202, 43, 188, 166, 245,
+                230, 199, 91, 194, 19, 118, 226, 104, 103, 22, 233, 224, 148, 142,
+            ],
+            "update only after inspecting the exact ordered ALT-plan JSON vector",
+        );
+    }
+
+    #[test]
     fn hostile_zero_noncanonical_and_snapshot_slot_refuse() {
         let mut value = input();
         value.quantity = "07".into();
-        assert!(SelectedInputV1::parse(value).is_err());
+        assert!(SelectedInputV1::parse(&value, LookupTableRequirementV1::Present).is_err());
         let mut value = input();
         value.records.product = "00".repeat(32);
-        assert!(SelectedInputV1::parse(value).is_err());
+        assert!(SelectedInputV1::parse(&value, LookupTableRequirementV1::Present).is_err());
         let mut value = input();
         value.programs.claims = Pubkey::default().to_string();
-        assert!(SelectedInputV1::parse(value).is_err());
+        assert!(SelectedInputV1::parse(&value, LookupTableRequirementV1::Present).is_err());
         let mut value = input();
         value.recipient_owner = key(99);
-        assert!(SelectedInputV1::parse(value).is_err());
+        assert!(SelectedInputV1::parse(&value, LookupTableRequirementV1::Present).is_err());
         let mut value = input();
         value.transfer_index = 1;
-        assert!(SelectedInputV1::parse(value).is_err());
+        assert!(SelectedInputV1::parse(&value, LookupTableRequirementV1::Present).is_err());
+        let mut value = input();
+        value.lookup_table = None;
+        assert!(SelectedInputV1::parse(&value, LookupTableRequirementV1::Present).is_err());
+        assert!(SelectedInputV1::parse(&value, LookupTableRequirementV1::Absent).is_ok());
+        let mut json = serde_json::to_value(input()).expect("input JSON");
+        json["lookupTable"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<PlanInputV1>(json).is_err());
         assert!(FinalizedSnapshotV1::from_rpc(0, 1, &[], Vec::new()).is_err());
     }
 
     #[test]
     fn substituted_record_slot_and_alt_are_named_refusals() {
-        let selected = SelectedInputV1::parse(input()).expect("selected input");
+        let value = input();
+        let selected = SelectedInputV1::parse(&value, LookupTableRequirementV1::Present)
+            .expect("selected input");
         let observation = Observation {
             slot: 44,
             unix_timestamp: 1,

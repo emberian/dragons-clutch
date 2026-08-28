@@ -46,7 +46,7 @@ describe('unified chain-derived operator surface', () => {
     expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.action === 'Found common Core Market')).toMatchObject({
       implementation: 'browser-unsigned',
       workspace: '/found',
-      exactBoundary: expect.stringContaining('Found31'),
+      exactBoundary: expect.stringContaining('Found37'),
     });
     const direct = CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'direct.inline');
     expect(direct && evaluateCapabilityV1(direct, null)).toMatchObject({ status: 'needs-chain' });

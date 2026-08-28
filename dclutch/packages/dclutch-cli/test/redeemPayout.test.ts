@@ -1,15 +1,19 @@
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 import {
   parseWalletTerminalPayoutManifestV3,
   type WalletTerminalPayoutManifestV3,
 } from '@dclutch/sdk/walletTerminalPayoutV3';
-import { PublicKey } from '@solana/web3.js';
+import { AddressLookupTableProgram, PublicKey, type TransactionInstruction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { EMPTY_SESSION, type CliContext } from '../src/context';
 import {
   assertWalletTerminalPayoutMatchesPortfolioV3,
+  produceWalletTerminalPayoutAltPlanV1,
   produceWalletTerminalPayoutManifestV3,
   type SuccessorSpawn,
 } from '../src/commands/redeem';
@@ -79,7 +83,64 @@ function successfulSpawn(stdout: string, calls: Array<Readonly<{ binary: string;
   };
 }
 
+function instruction(value: TransactionInstruction) {
+  return {
+    programId: value.programId.toBase58(),
+    accounts: value.keys.map((meta) => ({ address: meta.pubkey.toBase58(), signer: meta.isSigner, writable: meta.isWritable })),
+    dataBase64: Buffer.from(value.data).toString('base64'),
+  };
+}
+
 describe('wallet terminal payout producer consumer', () => {
+  it('invokes the distinct read-only ALT planner and pins its source file byte-for-byte', () => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'dclutch-alt-test-'));
+    try {
+      const owner = key(2);
+      const source = {
+        format: 'dclutch-wallet-terminal-payout-plan-input-v1', market: key(1), owner,
+        recipientOwner: owner, recipient: key(3), collateralMint: key(4), tokenProgram: key(5),
+        quantity: '7', claimIndex: 1, transferIndex: 0, parentContext: identity(6),
+        custodyContext: identity(7), releaseSet: identity(8),
+        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13) },
+        records: {
+          realm: identity(20), product: identity(21), resultDomain: identity(22), portfolio: identity(23),
+          productBasis: identity(24), executionDescriptor: identity(25), compositionDescriptor: identity(26),
+          compositionGraph: identity(27), compositionTranslation: identity(28), compositionExposure: identity(29),
+          terminalRecord: identity(30),
+        },
+      };
+      const sourceBytes = Buffer.from(JSON.stringify(source));
+      const inputPath = resolve(directory, 'input.json');
+      writeFileSync(inputPath, sourceBytes);
+      const [create, lookupTable] = AddressLookupTableProgram.createLookupTable({
+        authority: new PublicKey(owner), payer: new PublicKey(owner), recentSlot: 44,
+      });
+      const addresses = [key(40)];
+      const extension = AddressLookupTableProgram.extendLookupTable({
+        lookupTable, authority: new PublicKey(owner), payer: new PublicKey(owner),
+        addresses: addresses.map((address) => new PublicKey(address)),
+      });
+      const output = {
+        format: 'dclutch-wallet-terminal-payout-alt-plan-v1',
+        sourceInputSha256: createHash('sha256').update(sourceBytes).digest('hex'), observationSlot: '44',
+        payer: owner, authority: owner, lookupTable: lookupTable.toBase58(), addresses,
+        create: instruction(create), extensions: [instruction(extension)],
+        payoutInput: { ...source, lookupTable: lookupTable.toBase58() },
+      };
+      const calls: Array<Readonly<{ binary: string; args: ReadonlyArray<string> }>> = [];
+      const produced = produceWalletTerminalPayoutAltPlanV1(
+        context(), {}, inputPath, DEVNET, successfulSpawn(JSON.stringify(output), calls),
+      );
+      expect(produced.plan.lookupTable).toBe(lookupTable.toBase58());
+      expect(calls[0]?.args).toEqual([
+        'wallet-terminal-payout-alt-plan', '--rpc-url', 'https://api.devnet.solana.com/',
+        '--i-mean-devnet', DEVNET, '--input', inputPath,
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('invokes only the read-only successor command with the explicit RPC, devnet identity, and absolute input', () => {
     const calls: Array<Readonly<{ binary: string; args: ReadonlyArray<string> }>> = [];
     const expected = parseWalletTerminalPayoutManifestV3(JSON.stringify(manifestValue()));

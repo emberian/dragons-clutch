@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import CoreFoundWorkspace from './CoreFoundWorkspace';
 
 describe('Core Found workspace', () => {
-  it('renders the real Found31 boundary without a fabricated Market or authority', () => {
+  it('renders the real Found37 boundary without a fabricated Market or authority', () => {
     const html = renderToStaticMarkup(<CoreFoundWorkspace />);
     expect(html).toContain('Found a');
     expect(html).toContain('downloads the two unsigned transactions that found it');
@@ -13,6 +13,9 @@ describe('Core Found workspace', () => {
     expect(html).toContain('No transaction has been constructed');
     expect(html).toContain('No signing or submission occurs in this UI');
     expect(html).toContain('Product Runtime V2 raw');
+    expect(html).toContain('SourceMaterialV3 raw');
+    expect(html).toContain('Linked basis raw');
+    expect(html).not.toContain('Execution release set raw');
     expect(html).not.toContain('Illustrative');
     expect(html).not.toContain('sample balance');
   });
