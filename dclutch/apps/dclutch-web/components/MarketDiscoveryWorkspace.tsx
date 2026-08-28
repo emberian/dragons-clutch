@@ -98,8 +98,8 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
 function EmptyMarkets({ deployment }: Readonly<{ deployment: DeploymentV1 }>) {
   if (deployment.cluster === 'devnet') {
     return <p className="market-empty">
-      No markets on devnet yet — the first, a SOL/USD range-protection market, is being founded against this
-      deployment right now. The moment its founding lands on chain, it appears here.{' '}
+      No markets on devnet at this finalized floor. The moment a founding lands on this deployment, it appears
+      here with zero configuration — the deployment evidence records the campaign for the first one.{' '}
       <Anchor href={docsHrefV1('evidence/DEPLOY_1.html', 'docs/evidence/DEPLOY_1.md')}>Read the deployment evidence →</Anchor>
     </p>;
   }
