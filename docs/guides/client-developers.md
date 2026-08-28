@@ -49,8 +49,11 @@ A card decodes fully or comes back as `refused` with a reason. A refusal
 here means the account did not match the layout exactly — treat it as "not
 a market I can use", not as an error to retry.
 
-All reads happen at one finalized slot, so the numbers you show a user are
-from a single consistent snapshot. `inspectMarketDetailV1`
+Each read starts from a finalized floor. A multi-account response is
+internally consistent at its returned slot, which may be later than that
+floor. A longer workflow is not one atomic snapshot: carry the returned
+slot forward as the minimum for the next dependent read, and recheck mutable
+facts before you ask for a signature. `inspectMarketDetailV1`
 (`@dclutch/sdk/marketDetail`) gives you one market in full;
 `inspectPortfolioV1` (`@dclutch/sdk/portfolio`) derives a user's positions
 directly from market addresses — no indexer involved.
@@ -112,9 +115,11 @@ JSON file format for handing intents between machines.
 
 ## Redeeming
 
-Redemption has two steps, and today your client can perform one of them.
-The step you can build: create the market's Claims-role Custody replay,
-which every payout needs to exist first.
+You can complete a wallet payout from the terminal client or the web app.
+The full flow has three separately finalized parts: create the market's
+payment record if it does not exist, publish and freeze the payout lookup
+table, then sign the payout itself. Do not combine those steps into one
+optimistic submit loop.
 
 ```ts
 import { inspectClaimsCustodyReplayV1 } from '@dclutch/sdk/claimsCustodyReplay';
@@ -125,15 +130,59 @@ const state = await inspectClaimsCustodyReplayV1(client, {
 });
 if (state.status === 'creatable') {
   state.plan.transaction.sign([myKeypair]);
-  await client.sendRawTransaction(state.plan.transaction.serialize());
+  await client.sendRawTransaction(state.plan.transaction.serialize(), { maxRetries: 0 });
 }
 ```
 
-The payout instruction itself is not yet callable from a wallet: the
-program only accepts it from Core or Trading
-([decision 0008](../decisions/0008-custody-namespace-owner.md)). Say that
-to your user rather than looping on a transaction that cannot land;
-`PLAIN_POSITION_PAYOUT_BLOCK_V1` in the same module is ready-made copy.
+After that payment record and the lookup table are finalized, prepare the
+payout from the current accounts. Save the unsigned plan before opening a
+wallet. After the wallet signs, save both the complete signed bytes and the
+transaction id before the only submission. If the RPC response is lost,
+poll that saved id; never rebuild, resign, or resend the payout.
+
+```ts
+import {
+  requestWalletTransactionSignatureV1,
+  requireSubmittedSignatureMatchV1,
+  submitSignedTransactionV1,
+  transactionSignatureV1,
+} from '@dclutch/sdk/walletHandoff';
+import {
+  finalizeWalletTerminalPayoutV3,
+  prepareWalletTerminalPayoutV3,
+} from '@dclutch/sdk/walletTerminalPayoutV3';
+
+const plan = await prepareWalletTerminalPayoutV3(client, manifest, owner);
+await saveUnsignedPlan(plan); // durable before the wallet opens
+
+const signed = await requestWalletTransactionSignatureV1(
+  client,
+  connectedWallet,
+  plan.transaction,
+  owner,
+);
+if (!signed.complete) throw new Error('the payout is not completely signed');
+const transactionId = transactionSignatureV1(signed.transaction.signatures[0]!);
+await saveSignedPacket(transactionId, signed.wireBytes); // durable before send
+
+const returned = await submitSignedTransactionV1(client, signed.wireBytes);
+requireSubmittedSignatureMatchV1(transactionId, returned);
+const completed = await finalizeWalletTerminalPayoutV3(
+  client,
+  transactionId,
+  plan,
+  signed.wireBytes,
+);
+```
+
+Your completion check must read the exact finalized transaction bytes,
+message, signatures, fee payer and lamport changes, Claims return receipt,
+and the five changed accounts. It starts its account read at a finalized
+floor at or above the transaction slot; the response may be at a later
+slot. The SDK finalizer performs those checks and refuses altered wire
+bytes, signatures, fees, return data, account order, or payout poststate.
+The `dclutch redeem` command adds a durable filesystem journal and is the
+reference for crash recovery.
 
 ## Founding a market
 
