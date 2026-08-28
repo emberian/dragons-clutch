@@ -269,6 +269,11 @@ pub(crate) struct SuccessorRunEvidence {
     /// seed: enough to say which seed produced a run's compute-unit numbers,
     /// not enough to sign as it.
     pub(crate) keypair_seed_sha256: Option<String>,
+    /// Exact founding action context persisted by the Claims/Custody join.
+    /// This is a routing hint for terminal planners; they re-derive and verify
+    /// it from the finalized founding aggregate before using it.
+    #[serde(rename = "foundingCustodyContext")]
+    pub(crate) founding_custody_context: String,
     pub(crate) completed: Vec<String>,
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,

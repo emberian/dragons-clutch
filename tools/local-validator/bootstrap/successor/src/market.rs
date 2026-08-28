@@ -26,6 +26,9 @@ use dclutch_custody_contract::{
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
+use dclutch_direct_codec::{
+    COMPILED_DIRECT_RELEASE_ID_V1, execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
+};
 use dclutch_market_core_codec::{
     Action, CoreState, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
     Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, ProjectFoundReceiptV2,
@@ -135,6 +138,7 @@ pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complet
 pub(crate) struct MarketExecutionEvidence {
     pub(crate) completed: Vec<String>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
+    pub(crate) founding_custody_context: String,
 }
 
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
@@ -645,8 +649,9 @@ pub(crate) fn execute_found_market(
     // The generic founding runs at its own generation against a Market that
     // does not exist yet: every projected-Custody stage asserts the inverse of
     // a live Market, so the Found37 Market above cannot be reused.
+    let mut founding_custody_context = None;
     for lane in [PrestateLaneV1::Founding, PrestateLaneV1::SourceAbort] {
-        execute_projected_custody_bootstrap(
+        let context = execute_projected_custody_bootstrap(
             rpc,
             plan,
             input,
@@ -663,10 +668,15 @@ pub(crate) fn execute_found_market(
             &mut accounts,
             &mut completed,
         )?;
+        if lane == PrestateLaneV1::Founding {
+            founding_custody_context = Some(context);
+        }
     }
     Ok(MarketExecutionEvidence {
         completed,
         accounts,
+        founding_custody_context: hex(&founding_custody_context
+            .ok_or_else(|| Error::new("founding lane omitted its custody context"))?),
     })
 }
 
@@ -1979,7 +1989,10 @@ struct FoundingCoordinates {
     source_replay: Pubkey,
     projected_replay: Pubkey,
     custody_authority: Pubkey,
+    context: [u8; 32],
     principal_cap_sets: u64,
+    capability_entry_count: u16,
+    capability_entry_index: u16,
     funding_ledgers: Vec<FoundingFundingLedgerV2>,
     found: GenericFoundingRequestV1,
     lock: ProjectedCustodyRequestV1,
@@ -1992,6 +2005,69 @@ struct FoundingFundingLedgerV2 {
     selected_mask: u16,
     bytes: Vec<u8>,
     required_lamports: u64,
+}
+
+fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
+    if entry_count == 0 || entry_count > u16::BITS as u16 {
+        return Err(Error::new(
+            "capability manifest entry mask width is invalid",
+        ));
+    }
+    if entry_count == u16::BITS as u16 {
+        Ok(u16::MAX)
+    } else {
+        1_u16
+            .checked_shl(u32::from(entry_count))
+            .and_then(|bound| bound.checked_sub(1))
+            .ok_or_else(|| Error::new("capability manifest entry mask overflow"))
+    }
+}
+
+fn direct_founding_controller_masks_v1(
+    manifest: CapabilityManifestV1<'_>,
+    resolution_release: [u8; 32],
+) -> Result<(u16, [u16; 2])> {
+    let mut direct_index = None;
+    let mut resolution_mask = 0_u16;
+    for entry_index in 0..manifest.entry_count() {
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
+        let bit = 1_u16
+            .checked_shl(u32::from(entry_index))
+            .ok_or_else(|| Error::new("capability entry mask overflow"))?;
+        if entry.kind_id().to_bytes() == DIRECT_SUCCESSOR_KIND_ID_V3 {
+            if direct_index.replace(entry_index).is_some()
+                || entry.release_id().to_bytes() == resolution_release
+            {
+                return Err(Error::new(
+                    "the founding manifest must contain exactly one non-Resolution Direct entry",
+                ));
+            }
+        } else if entry.release_id().to_bytes() == resolution_release {
+            resolution_mask |= bit;
+        } else {
+            return Err(Error::new(format!(
+                "manifest companion entry {entry_index} does not name the exact activated Resolution release"
+            )));
+        }
+    }
+    let direct_index = direct_index
+        .ok_or_else(|| Error::new("the founding manifest omitted its Direct capability entry"))?;
+    let trading_mask = 1_u16
+        .checked_shl(u32::from(direct_index))
+        .ok_or_else(|| Error::new("Direct capability entry mask overflow"))?;
+    let required_union = manifest_required_union_v1(manifest.entry_count())?;
+    if manifest.entry_count() != 4
+        || resolution_mask.count_ones() != 3
+        || resolution_mask & trading_mask != 0
+        || resolution_mask | trading_mask != required_union
+    {
+        return Err(Error::new(
+            "Direct founding requires one Direct entry and three exact Resolution companions",
+        ));
+    }
+    Ok((direct_index, [resolution_mask, trading_mask]))
 }
 
 /// Derive one founding's complete coordinate set from the finalized graph.
@@ -2134,37 +2210,16 @@ fn derive_founding_coordinates(
         .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
     let manifest_id = CapabilityContentId::new(records.manifest.digest)
         .map_err(|error| Error::new(format!("manifest identity: {error:?}")))?;
-    let controller_profiles = [
-        (
-            pubkey(&plan.resolution.program_id)?,
-            hex32(&plan.resolution.semantic_release_id)?,
-        ),
-        (trading, hex32(&plan.trading.semantic_release_id)?),
-    ];
-    let mut masks = [0_u16; 2];
-    for entry_index in 0..manifest.entry_count() {
-        let entry = manifest
-            .entry(entry_index)
-            .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        let bit = 1_u16
-            .checked_shl(u32::from(entry_index))
-            .ok_or_else(|| Error::new("capability entry mask overflow"))?;
-        let release = entry.release_id().to_bytes();
-        if release == controller_profiles[0].1 {
-            masks[0] |= bit;
-        } else if release == controller_profiles[1].1 {
-            masks[1] |= bit;
-        } else {
-            return Err(Error::new(format!(
-                "manifest entry {entry_index} is not controlled by the activated Resolution or Trading release"
-            )));
-        }
+    if hex32(&plan.trading.semantic_release_id)? != COMPILED_DIRECT_RELEASE_ID_V1 {
+        return Err(Error::new(
+            "the activated Trading artifact does not name the compiled Direct controller release",
+        ));
     }
-    let mut subsets: Vec<(u16, Pubkey)> = masks
-        .into_iter()
-        .zip(controller_profiles.map(|profile| profile.0))
-        .filter(|(mask, _)| *mask != 0)
-        .collect();
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let resolution_release = hex32(&plan.resolution.semantic_release_id)?;
+    let (capability_entry_index, [resolution_mask, trading_mask]) =
+        direct_founding_controller_masks_v1(manifest, resolution_release)?;
+    let mut subsets = vec![(resolution_mask, resolution), (trading_mask, trading)];
     subsets.sort_by_key(|(mask, _)| mask.trailing_zeros());
     let mut funding_ledgers = Vec::with_capacity(subsets.len());
     let mut funding_identities = Vec::new();
@@ -2248,7 +2303,7 @@ fn derive_founding_coordinates(
         market_rent,
         permit_rent,
         GENERIC_FOUNDING_PROJECTED_RESULTING_REVISION_V1,
-        0,
+        capability_entry_index,
     )
     .map_err(|error| Error::new(format!("founding artifact template: {error:?}")))?;
     let selection =
@@ -2336,7 +2391,10 @@ fn derive_founding_coordinates(
         source_replay,
         projected_replay,
         custody_authority,
+        context,
         principal_cap_sets,
+        capability_entry_count: manifest.entry_count(),
+        capability_entry_index,
         funding_ledgers,
         found,
         lock,
@@ -2554,12 +2612,17 @@ fn build_projected_custody_bootstrap_v2(
         .iter()
         .find(|ledger| ledger.controller == trading)
         .ok_or_else(|| Error::new("DCLTPCB2 omitted the Trading subset ledger"))?;
+    let trading_mask = 1_u16
+        .checked_shl(u32::from(coordinates.capability_entry_index))
+        .ok_or_else(|| Error::new("Direct capability entry mask overflow"))?;
+    let resolution_mask =
+        manifest_required_union_v1(coordinates.capability_entry_count)? ^ trading_mask;
     if coordinates.funding_ledgers.len() != 2
-        || resolution_ledger.selected_mask != 0b0111
-        || trading_ledger.selected_mask != 0b1000
+        || resolution_ledger.selected_mask != resolution_mask
+        || trading_ledger.selected_mask != trading_mask
     {
         return Err(Error::new(
-            "Direct DCLTPCB2 requires exact Resolution 0b0111 and Trading 0b1000 ledgers",
+            "Direct DCLTPCB2 requires the selected Direct bit and its exact Resolution complement",
         ));
     }
     let project_found = ProjectFoundRequestV2::new(Request::administrative(
@@ -2746,7 +2809,7 @@ fn execute_projected_custody_bootstrap(
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<[u8; 32]> {
     let registry = pubkey(&plan.registry.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
@@ -3153,7 +3216,8 @@ fn execute_projected_custody_bootstrap(
             accounts,
             completed,
         ),
-    }
+    }?;
+    Ok(coordinates.context)
 }
 
 /// Sole top-level projected-Custody founding-abort instruction.
@@ -5146,6 +5210,93 @@ fn pyth_market_input(params: PythMarketParamsV1<'_>) -> Result<MarketRunInput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn direct_controller_manifest(
+        direct_index: Option<usize>,
+        other_foreign: Option<usize>,
+    ) -> Vec<u8> {
+        use dclutch_capability_contract::{
+            ActivationPolicy, CAPABILITY_ENTRY_BYTES, CompartmentFundingV1, FundingAmountsV1,
+            FundingQuoteV1, MANIFEST_HEADER_BYTES,
+        };
+        let none = CompartmentFundingV1::not_applicable();
+        let quote = FundingQuoteV1::new(
+            FundingAmountsV1::new(none, none, none, none, none, none, none).expect("amounts"),
+            None,
+        )
+        .expect("quote");
+        let mut entries = Vec::new();
+        for index in 0_usize..4 {
+            let byte = u8::try_from(index).expect("bounded index");
+            let is_direct = direct_index == Some(index);
+            entries.push(
+                CapabilityEntryV1::new(
+                    CapabilityContentId::new(if is_direct {
+                        DIRECT_SUCCESSOR_KIND_ID_V3
+                    } else if direct_index.is_some_and(|selected| index < selected) {
+                        [0x10 + byte; 32]
+                    } else {
+                        [0x80 + byte; 32]
+                    })
+                    .expect("kind"),
+                    CapabilityContentId::new(if is_direct || other_foreign == Some(index) {
+                        [0x31; 32]
+                    } else {
+                        [0x30; 32]
+                    })
+                    .expect("release"),
+                    CapabilityContentId::new([0x40 + byte; 32]).expect("config"),
+                    CapabilityContentId::new([0x50 + byte; 32]).expect("capacity"),
+                    CapabilityContentId::new([0x60; 32]).expect("schema"),
+                    CapabilityContentId::new([0x70; 32]).expect("derivation"),
+                    ActivationPolicy::RequiredAtFounding,
+                    0,
+                    0,
+                    [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                    quote,
+                )
+                .expect("entry"),
+            );
+        }
+        let mut bytes = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("manifest");
+        bytes
+    }
+
+    #[test]
+    fn successor_controller_masks_follow_direct_identity_at_every_position() {
+        for direct_index in 0_usize..4 {
+            let bytes = direct_controller_manifest(Some(direct_index), None);
+            let direct_mask = 1_u16 << direct_index;
+            assert_eq!(
+                direct_founding_controller_masks_v1(
+                    CapabilityManifestV1::decode(&bytes).expect("manifest"),
+                    [0x30; 32],
+                )
+                .expect("partition"),
+                (
+                    u16::try_from(direct_index).expect("index"),
+                    [0b1111 ^ direct_mask, direct_mask],
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn successor_controller_masks_refuse_missing_or_ambiguous_direct_ownership() {
+        for bytes in [
+            direct_controller_manifest(None, None),
+            direct_controller_manifest(Some(3), Some(1)),
+        ] {
+            assert!(
+                direct_founding_controller_masks_v1(
+                    CapabilityManifestV1::decode(&bytes).expect("manifest"),
+                    [0x30; 32],
+                )
+                .is_err()
+            );
+        }
+    }
 
     fn projected_bootstrap_census_fixture_v2() -> (Pubkey, Instruction) {
         let payer = Pubkey::new_from_array([1; 32]);

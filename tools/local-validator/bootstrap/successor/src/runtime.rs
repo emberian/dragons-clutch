@@ -249,6 +249,7 @@ pub(crate) struct OpenMarketSessionV1 {
     pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, crate::model::AccountEvidence>,
     pub(crate) completed: Vec<String>,
+    pub(crate) founding_custody_context: String,
     /// The campaign's key source, kept so a post-Open campaign draws its keys
     /// from the same forge and inherits the same reproducibility.
     pub(crate) forge: KeyForge,
@@ -271,6 +272,7 @@ impl OpenMarketSessionV1 {
             // make that difference visible rather than let one bool cover both.
             keypair_derivation: self.forge.derivation_label().into(),
             keypair_seed_sha256: self.forge.seed_sha256(),
+            founding_custody_context: self.founding_custody_context.clone(),
             completed: self.completed.clone(),
             transactions: self.transactions.clone(),
             accounts: self.accounts.clone(),
@@ -510,6 +512,7 @@ pub(crate) fn found_through_open(
         transactions,
         accounts,
         completed,
+        founding_custody_context: market.founding_custody_context,
         forge,
     })
 }
