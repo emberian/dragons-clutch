@@ -22,6 +22,7 @@ mod core_effect;
 /// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
 /// compartment a deadline-driven terminal spends.
 pub mod funded;
+mod pre_market_funding_abort_v1;
 mod pre_market_funding_v1;
 mod provider_instruction_v3;
 mod provider_transport_v3;
@@ -154,8 +155,15 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if pre_market_funding_v1::is_pre_market_funding_v1(instruction_data) {
-        return pre_market_funding_v1::process_pre_market_funding_v1(
+    if pre_market_funding_abort_v1::is_pre_market_funding_abort_v1(instruction_data) {
+        return pre_market_funding_abort_v1::process_pre_market_funding_abort_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if pre_market_funding_v1::is_pre_market_funding_v2(instruction_data) {
+        return pre_market_funding_v1::process_pre_market_funding_v2(
             program_id,
             accounts,
             instruction_data,

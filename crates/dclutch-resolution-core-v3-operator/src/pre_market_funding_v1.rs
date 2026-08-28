@@ -4,11 +4,11 @@ use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::ProjectFoundRequestV2;
+use dclutch_market_core_codec::{ProjectFoundReceiptV2, ProjectFoundRequestV2};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
-    PreMarketFundingReceiptV1, PreMarketFundingRequestV1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
     pre_market_funding_prestate_digest_v1,
 };
 use solana_program::{
@@ -38,7 +38,7 @@ const FOUND_SYSTEM: usize = 29;
 
 /// Same-finalized inputs for one pre-Market Resolution ledger CPI.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PreMarketFundingSnapshotV1 {
+pub struct PreMarketFundingSnapshotV2 {
     /// Current Resolution program receiving the CPI.
     pub resolution_program: ObservedAccount,
     /// Release-selected Trading caller program.
@@ -57,13 +57,19 @@ pub struct PreMarketFundingSnapshotV1 {
 
 /// Exact initializer CPI, target funding, and expected return receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PreMarketFundingReportV1 {
+pub struct PreMarketFundingReportV2 {
     /// Instruction the Trading caller invokes with its PDA signer.
     pub instruction: Instruction,
     /// Canonical caller-authority PDA Trading must sign.
     pub caller_authority: Pubkey,
-    /// Exact lamports debited from `funding_source`.
-    pub exact_funding_lamports: u64,
+    /// Exact lamport shortfall debited from `funding_source`.
+    pub top_up_lamports: u64,
+    /// Harmless lamport dust observed in the exact ledger prestate.
+    pub observed_dust_lamports: u64,
+    /// Exact excess dust returned to canonical `rent_credit`.
+    pub refund_lamports: u64,
+    /// Exact initialized ledger lamport balance.
+    pub exact_post_lamports: u64,
     /// Exact initialized ledger Rent reserve.
     pub exact_rent_lamports: u64,
     /// Exact aggregate native principal.
@@ -71,14 +77,15 @@ pub struct PreMarketFundingReportV1 {
     /// Canonical three-row Resolution mask.
     pub selected_mask: u16,
     /// Exact expected return-data receipt.
-    pub expected_receipt: PreMarketFundingReceiptV1,
+    pub expected_receipt: PreMarketFundingReceiptV2,
 }
 
 /// Build one release-authenticated pre-Market Resolution ledger CPI.
-pub fn build_pre_market_funding_v1(
-    snapshot: &PreMarketFundingSnapshotV1,
+pub fn build_pre_market_funding_v2(
+    snapshot: &PreMarketFundingSnapshotV2,
     project_found: ProjectFoundRequestV2,
-) -> Result<PreMarketFundingReportV1, ResolutionCoreOperatorErrorV3> {
+    expected_project_found: ProjectFoundReceiptV2,
+) -> Result<PreMarketFundingReportV2, ResolutionCoreOperatorErrorV3> {
     authenticate_snapshot(snapshot)?;
     let found = &snapshot.project_found_accounts;
     let manifest_account = found
@@ -132,13 +139,35 @@ pub fn build_pre_market_funding_v1(
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let prestate_digest = prestate_digest(&snapshot.ledger)?;
-    let request = PreMarketFundingRequestV1 {
+    let found_request_digest = hash(
+        &project_found
+            .found
+            .encode()
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+    )
+    .to_bytes();
+    expected_project_found
+        .verify_found_request(found_request_digest)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    if expected_project_found.market.to_bytes() != market.to_bytes()
+        || expected_project_found.generation != generation
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
+    let expected_project_found_receipt_digest = hash(
+        &expected_project_found
+            .encode()
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+    )
+    .to_bytes();
+    let request = PreMarketFundingRequestV2 {
         project_found,
         manifest: manifest_digest,
         selected_mask,
         funding_source: snapshot.funding_source.key.to_bytes(),
         ledger: snapshot.ledger.key.to_bytes(),
         prestate_digest,
+        expected_project_found_receipt_digest,
     };
     let request_bytes = request
         .encode()
@@ -169,7 +198,7 @@ pub fn build_pre_market_funding_v1(
         || trading.release().program().to_bytes() != snapshot.caller_program.key.to_bytes()
         || resolution.release().program().to_bytes() != snapshot.resolution_program.key.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
-            != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V6
     {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
@@ -214,20 +243,15 @@ pub fn build_pre_market_funding_v1(
     )
     .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
     let exact_rent_lamports = rent.minimum_balance(width);
-    let exact_funding_lamports = exact_rent_lamports
+    let exact_post_lamports = exact_rent_lamports
         .checked_add(exact_native_principal)
         .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
-    if snapshot.funding_source.lamports < exact_funding_lamports {
+    let (top_up_lamports, refund_lamports) =
+        exact_dust_reconciliation(snapshot.ledger.lamports, exact_post_lamports);
+    if snapshot.funding_source.lamports < top_up_lamports {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    let found_request_digest = hash(
-        &project_found
-            .found
-            .encode()
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
-    )
-    .to_bytes();
-    let expected_receipt = PreMarketFundingReceiptV1 {
+    let expected_receipt = PreMarketFundingReceiptV2 {
         market: market.to_bytes(),
         generation,
         manifest: manifest_digest,
@@ -244,6 +268,11 @@ pub fn build_pre_market_funding_v1(
             .ok_or(ResolutionCoreOperatorErrorV3::Frame)?
             .key
             .to_bytes(),
+        project_found_receipt_digest: expected_project_found_receipt_digest,
+        observed_dust_lamports: snapshot.ledger.lamports,
+        top_up_lamports,
+        refund_lamports,
+        exact_post_lamports,
     };
     let mut accounts = Vec::with_capacity(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1);
     accounts.push(AccountMeta::new_readonly(caller_authority, true));
@@ -265,19 +294,24 @@ pub fn build_pre_market_funding_v1(
     ));
     accounts.push(AccountMeta::new(snapshot.funding_source.key, true));
     accounts.push(AccountMeta::new(snapshot.ledger.key, false));
-    accounts.extend(
-        found
-            .iter()
-            .map(|account| AccountMeta::new_readonly(account.key, false)),
-    );
-    Ok(PreMarketFundingReportV1 {
+    accounts.extend(found.iter().enumerate().map(|(index, account)| {
+        if index == FOUND_RENT_CREDIT {
+            AccountMeta::new(account.key, false)
+        } else {
+            AccountMeta::new_readonly(account.key, false)
+        }
+    }));
+    Ok(PreMarketFundingReportV2 {
         instruction: Instruction {
             program_id: snapshot.resolution_program.key,
             accounts,
             data: request_bytes.to_vec(),
         },
         caller_authority,
-        exact_funding_lamports,
+        top_up_lamports,
+        observed_dust_lamports: snapshot.ledger.lamports,
+        refund_lamports,
+        exact_post_lamports,
         exact_rent_lamports,
         exact_native_principal,
         selected_mask,
@@ -290,11 +324,11 @@ pub fn build_pre_market_funding_v1(
 /// The composing Trading program separately authenticates the return-data
 /// program id. This comparison binds every projected coordinate, including the
 /// future Core-owned RentCredit beneficiary, to the report it invoked.
-pub fn authenticate_pre_market_funding_receipt_v1(
+pub fn authenticate_pre_market_funding_receipt_v2(
     receipt_data: &[u8],
-    expected: PreMarketFundingReceiptV1,
-) -> Result<PreMarketFundingReceiptV1, ResolutionCoreOperatorErrorV3> {
-    let observed = PreMarketFundingReceiptV1::decode(receipt_data)
+    expected: PreMarketFundingReceiptV2,
+) -> Result<PreMarketFundingReceiptV2, ResolutionCoreOperatorErrorV3> {
+    let observed = PreMarketFundingReceiptV2::decode(receipt_data)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
     if observed != expected {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
@@ -303,7 +337,7 @@ pub fn authenticate_pre_market_funding_receipt_v1(
 }
 
 fn authenticate_snapshot(
-    snapshot: &PreMarketFundingSnapshotV1,
+    snapshot: &PreMarketFundingSnapshotV2,
 ) -> Result<(), ResolutionCoreOperatorErrorV3> {
     if snapshot.project_found_accounts.len() != PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1
         || !snapshot.resolution_program.executable
@@ -312,7 +346,6 @@ fn authenticate_snapshot(
         || snapshot.resolution_programdata.executable
         || snapshot.ledger.owner != system_program::ID
         || snapshot.ledger.executable
-        || snapshot.ledger.lamports != 0
         || !snapshot.ledger.data.is_empty()
         || snapshot.funding_source.executable
     {
@@ -400,7 +433,7 @@ fn resolution_mask(
             .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
             .release_id()
             .to_bytes()
-            == RESOLUTION_CONTROLLER_RELEASE_ID_V5
+            == RESOLUTION_CONTROLLER_RELEASE_ID_V6
         {
             mask |= 1_u16 << entry_index;
         }
@@ -422,6 +455,14 @@ fn prestate_digest(ledger: &ObservedAccount) -> Result<[u8; 32], ResolutionCoreO
     ))
 }
 
+fn exact_dust_reconciliation(observed: u64, target: u64) -> (u64, u64) {
+    if observed < target {
+        (target - observed, 0)
+    } else {
+        (0, observed - target)
+    }
+}
+
 #[cfg(test)]
 mod receipt_tests {
     use super::*;
@@ -431,8 +472,8 @@ mod receipt_tests {
     use dclutch_release_set_contract::ProgramIdentityV1;
     use solana_sdk_ids::bpf_loader_upgradeable;
 
-    fn receipt() -> PreMarketFundingReceiptV1 {
-        PreMarketFundingReceiptV1 {
+    fn receipt() -> PreMarketFundingReceiptV2 {
+        PreMarketFundingReceiptV2 {
             market: [1; 32],
             generation: 2,
             manifest: [3; 32],
@@ -445,6 +486,11 @@ mod receipt_tests {
             found_request_digest: [9; 32],
             funding_source: [10; 32],
             rent_credit: [11; 32],
+            project_found_receipt_digest: [12; 32],
+            observed_dust_lamports: 3,
+            top_up_lamports: 12,
+            refund_lamports: 0,
+            exact_post_lamports: 15,
         }
     }
 
@@ -453,14 +499,14 @@ mod receipt_tests {
         let expected = receipt();
         let exact = expected.encode().expect("receipt");
         assert_eq!(
-            authenticate_pre_market_funding_receipt_v1(&exact, expected),
+            authenticate_pre_market_funding_receipt_v2(&exact, expected),
             Ok(expected)
         );
         let mut substituted = expected;
         substituted.rent_credit = [12; 32];
         let bytes = substituted.encode().expect("substituted receipt");
         assert_eq!(
-            authenticate_pre_market_funding_receipt_v1(&bytes, expected),
+            authenticate_pre_market_funding_receipt_v2(&bytes, expected),
             Err(ResolutionCoreOperatorErrorV3::Funding)
         );
     }
@@ -476,7 +522,7 @@ mod receipt_tests {
         }
     }
 
-    fn snapshot() -> PreMarketFundingSnapshotV1 {
+    fn snapshot() -> PreMarketFundingSnapshotV2 {
         let observation = Observation {
             slot: 1,
             unix_timestamp: 1,
@@ -490,7 +536,7 @@ mod receipt_tests {
         }
         found[FOUND_RENT].key = solana_sdk_ids::sysvar::rent::ID;
         found[FOUND_SYSTEM].key = system_program::ID;
-        PreMarketFundingSnapshotV1 {
+        PreMarketFundingSnapshotV2 {
             resolution_program: ObservedAccount {
                 executable: true,
                 ..observed(1, observation)
@@ -556,6 +602,22 @@ mod receipt_tests {
         registry_not_executable.project_found_accounts[FOUND_REGISTRY_PROGRAM].executable = false;
         assert_eq!(
             authenticate_snapshot(&registry_not_executable),
+            Err(ResolutionCoreOperatorErrorV3::Frame)
+        );
+    }
+
+    #[test]
+    fn snapshot_accepts_dust_and_reconciliation_is_exact() {
+        let mut exact = snapshot();
+        exact.ledger.lamports = 17;
+        assert_eq!(authenticate_snapshot(&exact), Ok(()));
+        assert_eq!(exact_dust_reconciliation(17, 20), (3, 0));
+        assert_eq!(exact_dust_reconciliation(20, 20), (0, 0));
+        assert_eq!(exact_dust_reconciliation(23, 20), (0, 3));
+
+        exact.ledger.data.push(1);
+        assert_eq!(
+            authenticate_snapshot(&exact),
             Err(ResolutionCoreOperatorErrorV3::Frame)
         );
     }

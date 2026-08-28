@@ -13,6 +13,7 @@ mod generated_source_resolution;
 #[allow(missing_docs)]
 #[rustfmt::skip]
 mod generated_v2;
+mod pre_market_funding_abort_v1;
 mod pre_market_funding_v1;
 mod provider_transport_v3;
 mod provider_v3;
@@ -25,6 +26,7 @@ pub use generated_v2::{
     RESOLUTION_CERTIFICATE_VERSION_V2, SOURCE_CLOSURE_RECEIPT_BYTES_V2,
     SOURCE_CLOSURE_RECEIPT_MAGIC_V2, SOURCE_CLOSURE_RECEIPT_VERSION_V2,
 };
+pub use pre_market_funding_abort_v1::*;
 pub use pre_market_funding_v1::*;
 pub use provider_transport_v3::*;
 pub use provider_v3::{
@@ -114,6 +116,14 @@ pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5: &[u8] =
 pub const RESOLUTION_CONTROLLER_RELEASE_ID_V5: [u8; 32] = [
     0xaa, 0x5c, 0x14, 0x18, 0xab, 0xc9, 0xc6, 0x79, 0xb9, 0x69, 0xb5, 0xc6, 0xca, 0x79, 0xa9, 0x32,
     0x7f, 0xa9, 0xfb, 0xf9, 0xf3, 0x9c, 0x3b, 0xe0, 0x28, 0xae, 0xdb, 0x3f, 0x91, 0x44, 0x8c, 0x7a,
+];
+/// Closed semantic release preimage for durable Prepared funding and exact rollback.
+pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6: &[u8] =
+    b"dclutch/release/source-resolution-controller-prepared-funding-dust-tolerant-close-v6";
+/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6`].
+pub const RESOLUTION_CONTROLLER_RELEASE_ID_V6: [u8; 32] = [
+    0x38, 0x66, 0x47, 0xd9, 0x82, 0x0e, 0x50, 0x2d, 0x97, 0xd3, 0x50, 0xdc, 0x10, 0xaf, 0x78, 0x8a,
+    0x7e, 0x10, 0x29, 0x90, 0x33, 0xac, 0xff, 0x71, 0x3e, 0x99, 0xc8, 0x6d, 0x9d, 0x8e, 0x5b, 0xb0,
 ];
 /// Schema identity used only to finalize a canonical Pyth-release record.
 pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
@@ -2660,6 +2670,22 @@ mod tests {
         assert_ne!(
             RESOLUTION_CONTROLLER_RELEASE_ID_V4,
             RESOLUTION_CONTROLLER_RELEASE_ID_V5
+        );
+    }
+
+    #[test]
+    fn v6_prepared_funding_semantics_cannot_alias_the_v5_release() {
+        assert_eq!(
+            dclutch_sha256_adapter::digest(RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6),
+            RESOLUTION_CONTROLLER_RELEASE_ID_V6
+        );
+        assert_ne!(
+            RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5,
+            RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6
+        );
+        assert_ne!(
+            RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V6
         );
     }
 }

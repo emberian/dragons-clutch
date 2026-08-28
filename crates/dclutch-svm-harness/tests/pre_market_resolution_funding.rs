@@ -4,7 +4,7 @@
 //! a real Trading caller signs the universal CallerAuthority PDA, the current
 //! Resolution deployment projects Core's exact Found37 frame and creates its
 //! own Pending subset ledger, and ordinary Core Found later creates the Market.
-//! V5 CreateFund must then create only Source state while preserving the
+//! V6 CreateFund must then create only Source state while preserving the
 //! initializer-owned ledger byte-for-byte and lamport-for-lamport.
 
 use std::{env, fs, path::PathBuf};
@@ -12,14 +12,17 @@ use std::{env, fs, path::PathBuf};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
-    CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
-    FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+    CompartmentFundingV1, ContentId as CapabilityContentId,
+    ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointInputV1,
+    ControllerFundingCheckpointV1, FUNDING_STATE_BYTES, FundingAmountsV1, FundingLedgerStatusV2,
+    FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
-    Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    ProjectFoundRequestV2, Readiness, Request,
+    Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
+    PROJECT_FOUND_RECEIPT_BYTES_V2, Phase, ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness,
+    Request,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -43,6 +46,7 @@ use dclutch_registry_contract::{
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
+use dclutch_release_set_contract::CallerAuthoritySeedsV1;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
@@ -55,15 +59,17 @@ use dclutch_rent_contract::{
     },
 };
 use dclutch_resolution_codec::{
-    PRE_MARKET_FUNDING_RECEIPT_BYTES_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1, PRE_MARKET_FUNDING_RECEIPT_BYTES_V2,
+    PreMarketFundingAbortReceiptV1, PreMarketFundingAbortRequestV1,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V6, pre_market_funding_ledger_account_digest_v1,
 };
 use dclutch_resolution_core_v3_operator::{
     Finality, Observation, ObservedAccount, ResolutionCreateFundSnapshotV3,
     build_resolution_create_fund_v3,
     pre_market_funding_v1::{
         PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1, PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1,
-        PreMarketFundingSnapshotV1, authenticate_pre_market_funding_receipt_v1,
-        build_pre_market_funding_v1,
+        PreMarketFundingSnapshotV2, authenticate_pre_market_funding_receipt_v2,
+        build_pre_market_funding_v2,
     },
     validate_resolution_create_fund_report_v3,
 };
@@ -75,7 +81,7 @@ use dclutch_source_contract::{
     SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2,
     SourceSpecV1,
 };
-use solana_account::Account;
+use solana_account::{Account, AccountSharedData};
 use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
@@ -374,7 +380,7 @@ fn manifest(recovery_allocation: [u8; 32], recovery: [u8; 32], material: [u8; 32
     let mut entries = [recovery_allocation, recovery, material].map(|config| {
         CapabilityEntryV1::new(
             content(hash(&config).to_bytes()),
-            content(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
+            content(RESOLUTION_CONTROLLER_RELEASE_ID_V6),
             content(config),
             content([0x51; 32]),
             content([0x52; 32]),
@@ -425,7 +431,7 @@ fn fixture() -> Fixture {
     let caller_release = release(TRADING_CALLER_PROGRAM_ID, [0x64; 32], &elves.caller);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V6,
         &elves.resolution,
     );
     let release_set = ExecutionReleaseSetV1::new(
@@ -871,6 +877,43 @@ async fn submit(
         .expect("transaction commits");
 }
 
+async fn project_found_receipt(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    request: ProjectFoundRequestV2,
+) -> ProjectFoundReceiptV2 {
+    let instruction = Instruction {
+        program_id: CORE_PROGRAM_ID,
+        accounts: found_accounts(fixture, false),
+        data: request.encode().expect("ProjectFound request").to_vec(),
+    };
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    assert!(processed.result.is_ok(), "ProjectFound projection succeeds");
+    let returned = processed
+        .metadata
+        .expect("projection metadata")
+        .return_data
+        .expect("ProjectFound receipt");
+    assert_eq!(returned.program_id, CORE_PROGRAM_ID);
+    assert_eq!(returned.data.len(), PROJECT_FOUND_RECEIPT_BYTES_V2);
+    ProjectFoundReceiptV2::decode(&returned.data).expect("canonical ProjectFound receipt")
+}
+
 #[tokio::test]
 async fn initializer_found_and_create_preserve_the_resolution_ledger() {
     let mut fixture = fixture();
@@ -886,9 +929,10 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         CoreIdentity::new(fixture.market.to_bytes()).expect("Market"),
     ))
     .expect("ProjectFound");
+    let expected_project_found = project_found_receipt(&mut context, &fixture, found_request).await;
     let transaction_payer = context.payer.pubkey();
-    let initializer = build_pre_market_funding_v1(
-        &PreMarketFundingSnapshotV1 {
+    let initializer = build_pre_market_funding_v2(
+        &PreMarketFundingSnapshotV2 {
             resolution_program: required(&mut context, RESOLUTION_PROGRAM_ID).await,
             caller_program: required(&mut context, TRADING_CALLER_PROGRAM_ID).await,
             caller_programdata: required(&mut context, fixture.caller_programdata).await,
@@ -898,6 +942,7 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
             project_found_accounts: found_snapshot(&mut context, &fixture).await,
         },
         found_request,
+        expected_project_found,
     )
     .expect("chain-derived 44-account initializer");
     assert_eq!(
@@ -988,9 +1033,9 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         .return_data
         .expect("initializer receipt");
     assert_eq!(returned.program_id, TRADING_CALLER_PROGRAM_ID);
-    assert_eq!(returned.data.len(), PRE_MARKET_FUNDING_RECEIPT_BYTES_V1);
+    assert_eq!(returned.data.len(), PRE_MARKET_FUNDING_RECEIPT_BYTES_V2);
     let receipt =
-        authenticate_pre_market_funding_receipt_v1(&returned.data, initializer.expected_receipt)
+        authenticate_pre_market_funding_receipt_v2(&returned.data, initializer.expected_receipt)
             .expect("exact initializer receipt");
     assert_eq!(receipt, initializer.expected_receipt);
 
@@ -998,10 +1043,7 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         .await
         .expect("initialized Resolution ledger");
     assert_eq!(initialized_ledger.owner, RESOLUTION_PROGRAM_ID);
-    assert_eq!(
-        initialized_ledger.lamports,
-        initializer.exact_funding_lamports
-    );
+    assert_eq!(initialized_ledger.lamports, initializer.exact_post_lamports);
     let classified_lamports = receipt
         .exact_rent_lamports
         .checked_add(receipt.exact_native_principal)
@@ -1076,7 +1118,7 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         recovery_policy: required(&mut context, fixture.recovery.raw).await,
         recovery_policy_staging: vacant(fixture.recovery.staging),
     })
-    .expect("V5 CreateFund against initializer ledger");
+    .expect("V6 CreateFund against initializer ledger");
     validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
     let create_manifest =
         CapabilityManifestV1::decode(&fixture.manifest.data).expect("CreateFund manifest");
@@ -1127,4 +1169,395 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
     assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
     assert_eq!(source.market(), fixture.market.to_bytes());
     assert_eq!(source.generation(), GENERATION);
+}
+
+#[tokio::test]
+async fn expired_prepared_checkpoint_refunds_and_closes_resolution_ledger() {
+    let mut fixture = fixture();
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let found_request = ProjectFoundRequestV2::new(Request::administrative(
+        Action::Found,
+        GENERATION,
+        CoreIdentity::new(fixture.market.to_bytes()).expect("Market"),
+    ))
+    .expect("ProjectFound");
+    let projected = project_found_receipt(&mut context, &fixture, found_request).await;
+    let payer = context.payer.pubkey();
+    let initializer = build_pre_market_funding_v2(
+        &PreMarketFundingSnapshotV2 {
+            resolution_program: required(&mut context, RESOLUTION_PROGRAM_ID).await,
+            caller_program: required(&mut context, TRADING_CALLER_PROGRAM_ID).await,
+            caller_programdata: required(&mut context, fixture.caller_programdata).await,
+            resolution_programdata: required(&mut context, fixture.resolution_programdata).await,
+            funding_source: required(&mut context, payer).await,
+            ledger: vacant(fixture.ledger),
+            project_found_accounts: found_snapshot(&mut context, &fixture).await,
+        },
+        found_request,
+        projected,
+    )
+    .expect("initializer");
+    let mut create_accounts = initializer.instruction.accounts.clone();
+    create_accounts[0].is_signer = false;
+    submit(
+        &mut context,
+        &[Instruction {
+            program_id: TRADING_CALLER_PROGRAM_ID,
+            accounts: create_accounts,
+            data: initializer.instruction.data.clone(),
+        }],
+        &[],
+    )
+    .await;
+
+    let ledger_before = observed(&mut context, fixture.ledger)
+        .await
+        .expect("initialized ledger");
+    let rent_credit_before = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit");
+    let funding_list = [0x76; 32];
+    let trading_ledger = [0x77; 32];
+    let checkpoint_input = ControllerFundingCheckpointInputV1 {
+        release_set: projected.release_set.to_bytes(),
+        market: fixture.market.to_bytes(),
+        generation: GENERATION,
+        manifest: fixture.manifest.digest,
+        funding_list,
+        found_request_digest: initializer.expected_receipt.found_request_digest,
+        project_found_receipt_digest: initializer.expected_receipt.project_found_receipt_digest,
+        resolution_ledger: fixture.ledger.to_bytes(),
+        resolution_ledger_digest: hash(&ledger_before.data).to_bytes(),
+        trading_ledger,
+        trading_ledger_digest: [0x78; 32],
+        funding_source: payer.to_bytes(),
+        rent_credit: fixture.rent_credit.to_bytes(),
+        lock_request_digest: [0x79; 32],
+        expiry_slot: 2,
+        prepared_slot: 1,
+        resolution_mask: initializer.selected_mask,
+        trading_mask: 0b1_000,
+    };
+    let checkpoint =
+        ControllerFundingCheckpointV1::prepared(checkpoint_input).expect("Prepared checkpoint");
+    let checkpoint_data = checkpoint.encode();
+    let checkpoint_key = Pubkey::find_program_address(
+        &ControllerFundingCheckpointDerivationV1::new(
+            checkpoint_input.release_set,
+            checkpoint_input.market,
+            checkpoint_input.generation,
+            checkpoint_input.manifest,
+            checkpoint_input.funding_list,
+        )
+        .expect("checkpoint derivation")
+        .seed_components(),
+        &TRADING_CALLER_PROGRAM_ID,
+    )
+    .0;
+    context.set_account(
+        &checkpoint_key,
+        &AccountSharedData::from(Account {
+            lamports: Rent::default().minimum_balance(checkpoint_data.len()),
+            data: checkpoint_data.to_vec(),
+            owner: TRADING_CALLER_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        }),
+    );
+    context.warp_to_slot(3).expect("past checkpoint expiry");
+    let ledger_account_digest = pre_market_funding_ledger_account_digest_v1(
+        fixture.ledger.to_bytes(),
+        RESOLUTION_PROGRAM_ID.to_bytes(),
+        ledger_before.lamports,
+        &ledger_before.data,
+    );
+    let abort = PreMarketFundingAbortRequestV1 {
+        checkpoint_phase: checkpoint.phase() as u8,
+        checkpoint_revision: checkpoint.revision(),
+        release_set: checkpoint_input.release_set,
+        checkpoint: checkpoint_key.to_bytes(),
+        checkpoint_digest: hash(&checkpoint_data).to_bytes(),
+        market: checkpoint_input.market,
+        generation: checkpoint_input.generation,
+        manifest: checkpoint_input.manifest,
+        funding_list: checkpoint_input.funding_list,
+        selected_mask: checkpoint_input.resolution_mask,
+        ledger: checkpoint_input.resolution_ledger,
+        ledger_account_digest,
+        funding_source: checkpoint_input.funding_source,
+        rent_credit: checkpoint_input.rent_credit,
+        expiry_slot: checkpoint_input.expiry_slot,
+    };
+    let abort_bytes = abort.encode().expect("abort request");
+    let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
+        abort.release_set,
+        abort.market,
+        ExecutionRoleV1::Trading,
+        abort.manifest,
+        hash(&abort_bytes).to_bytes(),
+    )
+    .expect("abort authority");
+    let authority =
+        Pubkey::find_program_address(&authority_seeds.as_slices(), &TRADING_CALLER_PROGRAM_ID).0;
+    let abort_accounts = vec![
+        AccountMeta::new_readonly(authority, false),
+        AccountMeta::new_readonly(TRADING_CALLER_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.caller_programdata, false),
+        AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.resolution_programdata, false),
+        AccountMeta::new_readonly(checkpoint_key, false),
+        AccountMeta::new(fixture.ledger, false),
+        AccountMeta::new(payer, false),
+        AccountMeta::new(fixture.rent_credit, false),
+        AccountMeta::new_readonly(fixture.activation, false),
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.manifest.raw, false),
+        AccountMeta::new_readonly(fixture.manifest.staging, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let mut dusted = ledger_before.clone();
+    dusted.lamports = dusted
+        .lamports
+        .checked_add(1)
+        .expect("one hostile dust lamport");
+    context.set_account(&fixture.ledger, &AccountSharedData::from(dusted.clone()));
+    let dusted_abort = PreMarketFundingAbortRequestV1 {
+        ledger_account_digest: pre_market_funding_ledger_account_digest_v1(
+            fixture.ledger.to_bytes(),
+            RESOLUTION_PROGRAM_ID.to_bytes(),
+            dusted.lamports,
+            &dusted.data,
+        ),
+        ..abort
+    };
+    let dusted_bytes = dusted_abort.encode().expect("dusted abort request");
+    let dusted_seeds = CallerAuthoritySeedsV1::from_bytes(
+        dusted_abort.release_set,
+        dusted_abort.market,
+        ExecutionRoleV1::Trading,
+        dusted_abort.manifest,
+        hash(&dusted_bytes).to_bytes(),
+    )
+    .expect("dusted abort authority");
+    let mut dusted_accounts = abort_accounts.clone();
+    dusted_accounts[0].pubkey =
+        Pubkey::find_program_address(&dusted_seeds.as_slices(), &TRADING_CALLER_PROGRAM_ID).0;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let dusted_transaction = Transaction::new_signed_with_payer(
+        &[Instruction {
+            program_id: TRADING_CALLER_PROGRAM_ID,
+            accounts: dusted_accounts,
+            data: dusted_bytes.to_vec(),
+        }],
+        Some(&payer),
+        &[&context.payer],
+        blockhash,
+    );
+    let dusted_result = context
+        .banks_client
+        .process_transaction(dusted_transaction)
+        .await;
+    assert!(dusted_result.is_err(), "surplus ledger dust refuses");
+    let after_refusal = observed(&mut context, fixture.ledger)
+        .await
+        .expect("refused ledger remains");
+    assert_eq!(after_refusal, dusted, "dust refusal rolls back");
+    context.set_account(
+        &fixture.ledger,
+        &AccountSharedData::from(ledger_before.clone()),
+    );
+    let source_before = observed(&mut context, payer)
+        .await
+        .expect("post-refusal funding source");
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[Instruction {
+            program_id: TRADING_CALLER_PROGRAM_ID,
+            accounts: abort_accounts,
+            data: abort_bytes.to_vec(),
+        }],
+        Some(&payer),
+        &[&context.payer],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("Banks RPC");
+    assert!(processed.result.is_ok(), "expiry close succeeds");
+    let returned = processed
+        .metadata
+        .expect("abort metadata")
+        .return_data
+        .expect("abort receipt");
+    assert_eq!(returned.program_id, TRADING_CALLER_PROGRAM_ID);
+    assert_eq!(
+        returned.data.len(),
+        PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1
+    );
+    let receipt =
+        PreMarketFundingAbortReceiptV1::decode(&returned.data).expect("canonical abort receipt");
+    assert_eq!(receipt.ledger, fixture.ledger.to_bytes());
+    assert_eq!(receipt.total_refund_lamports, ledger_before.lamports);
+    assert!(observed(&mut context, fixture.ledger).await.is_none());
+    let source_after = observed(&mut context, payer).await.expect("funding source");
+    let rent_credit_after = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit");
+    assert_eq!(
+        source_after.lamports,
+        source_before
+            .lamports
+            .checked_add(receipt.native_principal_refund_lamports)
+            .expect("source refund")
+            .checked_sub(5_000)
+            .expect("transaction fee")
+    );
+    assert_eq!(
+        rent_credit_after.lamports,
+        rent_credit_before
+            .lamports
+            .checked_add(receipt.rent_refund_lamports)
+            .expect("rent refund")
+    );
+}
+
+#[tokio::test]
+async fn initializer_reconciles_system_owned_dust_below_and_above_target() {
+    for excess in [false, true] {
+        let mut fixture = fixture();
+        let mut context = fixture
+            .test
+            .take()
+            .expect("unstarted ProgramTest")
+            .start_with_context()
+            .await;
+        let found_request = ProjectFoundRequestV2::new(Request::administrative(
+            Action::Found,
+            GENERATION,
+            CoreIdentity::new(fixture.market.to_bytes()).expect("Market"),
+        ))
+        .expect("ProjectFound");
+        let projected = project_found_receipt(&mut context, &fixture, found_request).await;
+        let funding_keypair = Keypair::new();
+        let funding_source = funding_keypair.pubkey();
+        context.set_account(
+            &funding_source,
+            &AccountSharedData::from(Account {
+                lamports: 10_000_000_000,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            }),
+        );
+        let zero = build_pre_market_funding_v2(
+            &PreMarketFundingSnapshotV2 {
+                resolution_program: required(&mut context, RESOLUTION_PROGRAM_ID).await,
+                caller_program: required(&mut context, TRADING_CALLER_PROGRAM_ID).await,
+                caller_programdata: required(&mut context, fixture.caller_programdata).await,
+                resolution_programdata: required(&mut context, fixture.resolution_programdata)
+                    .await,
+                funding_source: required(&mut context, funding_source).await,
+                ledger: vacant(fixture.ledger),
+                project_found_accounts: found_snapshot(&mut context, &fixture).await,
+            },
+            found_request,
+            projected,
+        )
+        .expect("zero-dust projection");
+        let target = zero.exact_post_lamports;
+        let dust = if excess {
+            target.checked_add(1).expect("one excess lamport")
+        } else {
+            target.checked_sub(1).expect("one lamport short")
+        };
+        context.set_account(
+            &fixture.ledger,
+            &AccountSharedData::from(Account {
+                lamports: dust,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            }),
+        );
+        let initializer = build_pre_market_funding_v2(
+            &PreMarketFundingSnapshotV2 {
+                resolution_program: required(&mut context, RESOLUTION_PROGRAM_ID).await,
+                caller_program: required(&mut context, TRADING_CALLER_PROGRAM_ID).await,
+                caller_programdata: required(&mut context, fixture.caller_programdata).await,
+                resolution_programdata: required(&mut context, fixture.resolution_programdata)
+                    .await,
+                funding_source: required(&mut context, funding_source).await,
+                ledger: required(&mut context, fixture.ledger).await,
+                project_found_accounts: found_snapshot(&mut context, &fixture).await,
+            },
+            found_request,
+            projected,
+        )
+        .expect("dust-bound projection");
+        let source_before = observed(&mut context, funding_source)
+            .await
+            .expect("funding source");
+        let credit_before = observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit");
+        let mut caller_accounts = initializer.instruction.accounts.clone();
+        caller_accounts[0].is_signer = false;
+        submit(
+            &mut context,
+            &[Instruction {
+                program_id: TRADING_CALLER_PROGRAM_ID,
+                accounts: caller_accounts,
+                data: initializer.instruction.data.clone(),
+            }],
+            &[&funding_keypair],
+        )
+        .await;
+        let ledger = observed(&mut context, fixture.ledger)
+            .await
+            .expect("initialized ledger");
+        let source_after = observed(&mut context, funding_source)
+            .await
+            .expect("funding source");
+        let credit_after = observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit");
+        assert_eq!(ledger.owner, RESOLUTION_PROGRAM_ID);
+        assert_eq!(ledger.lamports, target);
+        assert_eq!(initializer.observed_dust_lamports, dust);
+        assert_eq!(
+            source_after.lamports,
+            source_before
+                .lamports
+                .checked_sub(initializer.top_up_lamports)
+                .expect("exact top-up")
+        );
+        assert_eq!(
+            credit_after.lamports,
+            credit_before
+                .lamports
+                .checked_add(initializer.refund_lamports)
+                .expect("exact dust refund")
+        );
+        assert_eq!(initializer.top_up_lamports, u64::from(!excess));
+        assert_eq!(initializer.refund_lamports, u64::from(excess));
+    }
 }

@@ -16,7 +16,9 @@ use alloc::vec::Vec;
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
-    PRE_MARKET_FUNDING_RECEIPT_BYTES_V1, PreMarketFundingReceiptV1, PreMarketFundingRequestV1,
+    PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1, PRE_MARKET_FUNDING_RECEIPT_BYTES_V2,
+    PreMarketFundingAbortReceiptV1, PreMarketFundingAbortRequestV1, PreMarketFundingReceiptV2,
+    PreMarketFundingRequestV2,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -30,6 +32,8 @@ use solana_program::{
 
 /// Exact production initializer frame forwarded by this caller.
 pub const TEST_PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1: usize = 44;
+/// Exact production expiry-close frame forwarded by this caller.
+pub const TEST_PRE_MARKET_FUNDING_ABORT_ACCOUNT_COUNT_V1: usize = 16;
 
 const CALLER_AUTHORITY: usize = 0;
 const CALLER_PROGRAM: usize = 1;
@@ -37,6 +41,7 @@ const RESOLUTION_PROGRAM: usize = 3;
 const FUNDING_SOURCE: usize = 5;
 const LEDGER: usize = 6;
 const FOUND_START: usize = 7;
+const FOUND_RENT_CREDIT: usize = FOUND_START + 2;
 const FOUND_ACTIVATION_CACHE: usize = FOUND_START + 24;
 const FOUND_REGISTRY_PROGRAM: usize = FOUND_START + 27;
 
@@ -49,10 +54,13 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if accounts.len() == TEST_PRE_MARKET_FUNDING_ABORT_ACCOUNT_COUNT_V1 {
+        return process_abort(program_id, accounts, instruction_data);
+    }
     if accounts.len() != TEST_PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
-    let request = PreMarketFundingRequestV1::decode(instruction_data)
+    let request = PreMarketFundingRequestV2::decode(instruction_data)
         .map_err(|_| ProgramError::InvalidInstructionData)?;
     let caller = account(accounts, CALLER_PROGRAM)?;
     let authority = account(accounts, CALLER_AUTHORITY)?;
@@ -116,7 +124,7 @@ pub fn process_instruction(
             AccountMeta::new_readonly(*value.key, true)
         } else if index == FUNDING_SOURCE {
             AccountMeta::new(*value.key, true)
-        } else if index == LEDGER {
+        } else if index == LEDGER || index == FOUND_RENT_CREDIT {
             AccountMeta::new(*value.key, false)
         } else {
             AccountMeta::new_readonly(*value.key, false)
@@ -151,12 +159,82 @@ pub fn process_instruction(
     )?;
     let (producer, receipt_bytes) = get_return_data().ok_or(ProgramError::InvalidAccountData)?;
     if producer != *resolution.key
-        || receipt_bytes.len() != PRE_MARKET_FUNDING_RECEIPT_BYTES_V1
-        || PreMarketFundingReceiptV1::decode(&receipt_bytes).is_err()
+        || receipt_bytes.len() != PRE_MARKET_FUNDING_RECEIPT_BYTES_V2
+        || PreMarketFundingReceiptV2::decode(&receipt_bytes).is_err()
     {
         return Err(ProgramError::InvalidAccountData);
     }
     set_return_data(&receipt_bytes);
+    Ok(())
+}
+
+fn process_abort(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let request = PreMarketFundingAbortRequestV1::decode(instruction_data)
+        .map_err(|_| ProgramError::InvalidInstructionData)?;
+    let caller = account(accounts, 1)?;
+    let authority = account(accounts, 0)?;
+    let resolution = account(accounts, 3)?;
+    if caller.key != program_id || !caller.executable || !resolution.executable {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+    let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
+        request.release_set,
+        request.market,
+        ExecutionRoleV1::Trading,
+        request.manifest,
+        hash(instruction_data).to_bytes(),
+    )
+    .map_err(|_| ProgramError::InvalidSeeds)?;
+    let (expected_authority, bump) =
+        Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+    if authority.key != &expected_authority {
+        return Err(ProgramError::InvalidSeeds);
+    }
+    let metas = accounts
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            if index == 0 {
+                AccountMeta::new_readonly(*value.key, true)
+            } else if matches!(index, 6 | 7 | 8) {
+                AccountMeta::new(*value.key, false)
+            } else {
+                AccountMeta::new_readonly(*value.key, false)
+            }
+        })
+        .collect();
+    let instruction = Instruction {
+        program_id: *resolution.key,
+        accounts: metas,
+        data: instruction_data.into(),
+    };
+    let bump_seed = [bump];
+    let [domain, release_set, market, role, context, digest] = authority_seeds.as_slices();
+    invoke_signed(
+        &instruction,
+        accounts,
+        &[&[
+            domain,
+            release_set,
+            market,
+            role,
+            context,
+            digest,
+            &bump_seed,
+        ]],
+    )?;
+    let (producer, receipt) = get_return_data().ok_or(ProgramError::InvalidAccountData)?;
+    if producer != *resolution.key
+        || receipt.len() != PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1
+        || PreMarketFundingAbortReceiptV1::decode(&receipt).is_err()
+    {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    set_return_data(&receipt);
     Ok(())
 }
 
