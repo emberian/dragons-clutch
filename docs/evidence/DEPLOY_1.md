@@ -259,4 +259,34 @@ cross-check.
 
 ## 8. What SMOKE-1 still needs
 
-**Status: collected during the run; closed at the lane's yield.**
+The durable substrate is up, activated, and permanent (§2–§3); the founding
+is wired, proven end-to-end on the local harness (DCLTGMF1 at 1,199,741 CU),
+and driven on devnet through DCLTPCB1 with the atomic founding gated only by
+devnet transport, now hardened (§7). What remains for the full three-market
+exchange:
+
+1. **The graduation market's `account_set_id` cross-check.** This lane and the
+   operated relayer daemon (INFRA-RELAY, on the Hetzner box) each derive the
+   watched-set identity independently; the daemon's `show-config` must print
+   the `63918468…` this lane derived before the market is founded against it.
+   Two authors, one number — deliberately gated, not blocked.
+2. **The relayer fee payer is funded** (`8Naox…`, 0.05 SOL) and its attestation
+   key (`7gAqs…`) is what the graduation input pins; when INFRA-RELAY arms the
+   box's `[submit]` block this lane hands it MARKET + GENERATION + the derived
+   vacancy.
+3. **The daemon's initial observation windows** run from this machine for the
+   mainnet-observer market once it founds (charter item 4), then the box owns
+   them standing.
+4. **The redemption ALTs** (PAYOUT's browser step-2 rider, DCLTSQ03) publish
+   per market once each is Open.
+5. **The N-trader life + conservation ledger** run against these markets;
+   `ledger-census` is the driver subcommand that runs the journey's seven-law
+   engine against the public chain, one census per boundary.
+6. **The web** un-dark-launches `/smoke` and `/bounty` with the real market
+   addresses (the one-record `lib/smokeMarkets.ts` flip) once they found; the
+   endpoint default already points at public devnet and names the cluster from
+   its genesis hash.
+
+**Status of this section: the substrate and the wiring are done and final; the
+markets and the life are the SMOKE-1 continuation, unblocked by everything
+above.**
