@@ -1527,9 +1527,9 @@ mod tests {
         )
         .expect("packet-safe payout");
         assert_eq!(plan.required_signers, vec![payer, key(17)]);
-        assert_eq!(plan.message.loaded_addresses, 33);
-        assert_eq!(plan.message.message.static_account_keys().len(), 2);
-        assert_eq!(plan.message.loaded_addresses + 2, 35);
+        assert_eq!(plan.message.loaded_addresses, 32);
+        assert_eq!(plan.message.message.static_account_keys().len(), 3);
+        assert_eq!(plan.message.loaded_addresses + 3, 35);
         assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
 
         let mut reordered = table.clone();
