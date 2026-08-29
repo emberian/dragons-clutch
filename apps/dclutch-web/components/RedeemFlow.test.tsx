@@ -50,4 +50,11 @@ describe('wallet redemption flow', () => {
     expect(html).toContain('it never submits it again');
     expect(html).toContain('Browser data is an untrusted projection');
   });
+
+  it('exposes the Rust artifact handoff without claiming browser authorship', () => {
+    expect(html).toContain('Rust payout plan file');
+    expect(html).toContain('This browser never creates or completes a payout plan');
+    expect(html).toContain('the checked Program and ProgramData generation');
+    expect(html).toContain('remain disabled until the payment record above is verified');
+  });
 });

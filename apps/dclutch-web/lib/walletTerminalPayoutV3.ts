@@ -60,10 +60,15 @@ import {
   CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
   CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1,
   CUSTODY_VAULT_PDA_DOMAIN_V1,
+  GRADED_BASIS_RECORD_SCHEMA_ID_V3,
   LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
   LIABILITY_BASIS_MARKET_REVISION_OFFSET,
   LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
   LIABILITY_BASIS_POSITION_REVISION_OFFSET,
+  PORTFOLIO_SCHEMA_ID_V2,
+  PRODUCT_RECORD_SCHEMA_ID_V2,
+  REALM_SCHEMA_RELEASE_ID_V1,
+  RESULT_DOMAIN_SCHEMA_ID_V2,
 } from './generated/coreFound';
 import {
   CUSTODY_POSTSTATE_DOMAIN_V1,
@@ -173,6 +178,22 @@ import {
   deriveClaimsAggregateAddressV2,
   deriveClaimsPositionAddressV2,
 } from './marketCoreV2';
+import { decodeCoreFoundProductGraphV2 } from './coreFound';
+import {
+  acquireOperatorSurfaceV1,
+  LIVE_DEVNET_OPERATOR_PRESET_V1,
+} from './operatorSurface';
+import { decodeRealmRecordV1 } from './realmRecord';
+import {
+  authenticateFinalizedRationalHotRecordV4,
+  authenticateRationalHotCoreV3,
+  authenticateRationalProductBasisRecordV3,
+} from './rationalRetireReceiptV4';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
+import {
+  bindTerminalResolutionCertificateV2,
+  decodeResolutionCertificateV2,
+} from './resolutionCertificateV2';
 import { type RpcAccount, type SolanaRpcClient, type TransactionMetaObservation } from './rpc';
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -192,6 +213,10 @@ const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 const REPLAY_LAST_REQUEST_OFFSET = CUSTODY_REPLAY_GENERATION_OFFSET_V1 + 8;
 const REPLAY_LAST_POSTSTATE_OFFSET = REPLAY_LAST_REQUEST_OFFSET + 32;
+const COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3 = new TextEncoder().encode(
+  'dclutch/schema/product-representation-exposure-bundle-v3',
+);
+const COMPOSITION_EXPOSURE_HEADER_BYTES_V3 = 304;
 
 const SIGNED_TABLE_DOMAIN = SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3;
 const SIGNED_POST_DOMAIN = SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3;
@@ -774,6 +799,16 @@ export type WalletTerminalPayoutManifestV3 = Readonly<{
   lookupTable: string;
 }>;
 
+export type CheckedLiveDevnetPayoutAdmissionV3 = Readonly<{
+  genesisHash: string;
+  observedSlot: string;
+  market: string;
+  position: string;
+  recipient: string;
+  releaseSet: string;
+  lookupTable: string;
+}>;
+
 function plain(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -828,6 +863,15 @@ export function parseWalletTerminalPayoutManifestV3(source: string): WalletTermi
   });
 }
 
+/**
+ * Accept the Rust producer's exact JSON file. Keeping this as a separate name
+ * makes the browser handoff explicit: a file is imported, never authored or
+ * completed from partial chain state here.
+ */
+export function importRustWalletTerminalPayoutArtifactV3(source: string): WalletTerminalPayoutManifestV3 {
+  return parseWalletTerminalPayoutManifestV3(source);
+}
+
 function material(account: RpcAccount | null, owner: string, field: string): RpcAccount {
   if (account === null || account.owner !== owner || account.executable || account.space !== account.data.length || decimal(account.lamports, `${field} lamports`) === 0n) throw new Error(`${field} is absent or has another owner, executable bit, space, or lamport shape`);
   return account;
@@ -835,16 +879,208 @@ function material(account: RpcAccount | null, owner: string, field: string): Rpc
 
 export type PreparedWalletTerminalPayoutV3 = WalletTerminalPayoutTransactionV3 & Readonly<{ lookupTable: string }>;
 
+function exactRouteDeploymentV3(manifest: WalletTerminalPayoutManifestV3, payer: string): void {
+  const preset = LIVE_DEVNET_OPERATOR_PRESET_V1;
+  const route = manifest.route; const request = manifest.request;
+  const pairs = [
+    [route.market, request.market, 'Market'],
+    [route.position, request.position, 'Position'],
+    [route.recipient, request.recipient, 'recipient token account'],
+    [route.collateralMint, request.collateralMint, 'collateral Mint'],
+    [route.tokenProgram, request.tokenProgram, 'token program'],
+    [route.claimsProgram, request.claimsProgram, 'Claims program'],
+    [route.custodyProgram, request.custodyProgram, 'Custody program'],
+    [route.registryProgram, preset.coordinates.registry, 'checked Registry program'],
+    [route.coreProgram, preset.coordinates.core, 'checked Core program'],
+    [route.claimsProgram, preset.coordinates.claims, 'checked Claims program'],
+    [route.custodyProgram, preset.coordinates.custody, 'checked Custody program'],
+    [route.resolutionProgram, preset.coordinates.resolution, 'checked Resolution program'],
+    [route.claimsProgramData, preset.evidence.claims.programData, 'checked Claims ProgramData'],
+    [route.coreProgramData, preset.evidence.core.programData, 'checked Core ProgramData'],
+    [route.resolutionProgramData, preset.evidence.resolution.programData, 'checked Resolution ProgramData'],
+    [route.activationCache, preset.activationCache, 'checked activation cache'],
+  ] as const;
+  for (const [observed, expected, field] of pairs) {
+    if (observed !== expected) throw new Error(`payout plan ${field} differs from the exact checked live-devnet coordinate`);
+  }
+  if (request.owner !== payer || request.recipientOwner !== payer) {
+    throw new Error('payout plan owner and recipient owner must both be the connected wallet');
+  }
+}
+
+function recordAddressesV3(
+  registry: string,
+  schema: Uint8Array,
+  digest: Uint8Array,
+  raw: string,
+  staging: string,
+  field: string,
+): void {
+  const expected = deriveFinalizedRecordAddressesV1(registry, schema, digest);
+  if (expected.record !== raw || expected.staging !== staging) {
+    throw new Error(`${field} does not use its exact content-derived Registry coordinates`);
+  }
+}
+
+function validateCompositionExposureHeaderV3(
+  bytes: Uint8Array,
+  request: WalletTerminalPayoutRequestV3,
+  domainDigest: Uint8Array,
+  productWidth: number,
+  representationWidth: number,
+): void {
+  if (bytes.length < COMPOSITION_EXPOSURE_HEADER_BYTES_V3
+      || !same(slice(bytes, 0, 8), new TextEncoder().encode('DCRCEX03'))
+      || u16(bytes, 8) !== 3) throw new Error('composition exposure has another exact ABI');
+  requireZero(bytes, 10, 6, 'composition exposure header');
+  requireZero(bytes, 256, 48, 'composition exposure tail');
+  if (!same(slice(bytes, 16, 32), key(request.market, 'Market').toBytes())
+      || !same(slice(bytes, 48, 32), domainDigest)
+      || !same(slice(bytes, 80, 32), requestIdentity(request.releaseSet, 'release set'))
+      || !same(slice(bytes, 144, 32), requestIdentity(request.semanticBasisId, 'semantic basis identity'))
+      || u32At(bytes, 240) !== productWidth
+      || u32At(bytes, 244) !== representationWidth
+      || u32At(bytes, 248) !== representationWidth) {
+    throw new Error('composition exposure differs from the Market, Product, release, or Claims basis');
+  }
+}
+
+/**
+ * Authenticate the imported Rust plan against the checked live-devnet
+ * deployment and its current terminal Market before any wallet handoff.
+ */
+export async function authenticateCheckedLiveDevnetPayoutPlanV3(
+  client: SolanaRpcClient,
+  manifest: WalletTerminalPayoutManifestV3,
+  payer: string,
+): Promise<CheckedLiveDevnetPayoutAdmissionV3> {
+  const canonicalPayer = key(payer, 'connected wallet').toBase58();
+  const cluster = await client.assertMutationCluster();
+  if (cluster.kind !== 'devnet') throw new Error('wallet terminal payout is enabled only on the exact checked live-devnet deployment');
+  exactRouteDeploymentV3(manifest, canonicalPayer);
+  const preset = LIVE_DEVNET_OPERATOR_PRESET_V1;
+  const deployment = await acquireOperatorSurfaceV1(client, {
+    ...preset.coordinates,
+    market: manifest.route.market,
+  }, preset);
+  if (deployment.deploymentPreset === null
+      || deployment.deploymentPreset.executionReleaseSetId !== manifest.request.releaseSet) {
+    throw new Error('payout plan release set differs from the checked activation cache');
+  }
+
+  const route = manifest.route; const request = manifest.request;
+  const addresses = [
+    route.market, route.terminalCertificate, route.aggregate,
+    route.productRaw, route.productStaging, route.resultDomainRaw, route.resultDomainStaging,
+    route.portfolioRaw, route.portfolioStaging, route.linkedBasisRaw, route.linkedBasisStaging,
+    route.exposureRaw, route.exposureStaging, route.realmRaw, route.realmStaging,
+  ];
+  const observation = await client.multipleAccounts(addresses, deployment.observedSlot);
+  if (BigInt(observation.slot) < BigInt(deployment.observedSlot)) {
+    throw new Error('payout-plan account observation predates the checked deployment');
+  }
+  const accounts = new Map(observation.accounts.map((entry) => [entry.address, entry.account] as const));
+  const marketAccount = material(accounts.get(route.market) ?? null, route.coreProgram, 'Core Market');
+  const market = authenticateRationalHotCoreV3(route.market, marketAccount, route.coreProgram);
+  if (market.phase !== 'Terminal' || market.readiness !== 'Consumed'
+      || market.registry !== route.registryProgram
+      || hex(market.releaseSet) !== request.releaseSet
+      || hex(market.realm) !== request.realm
+      || hex(market.productRecord) !== request.productRecordDigest
+      || market.generation.toString() !== request.generation
+      || hex(market.terminalReceipt) !== request.terminalRecordDigest) {
+    throw new Error('payout plan differs from the current terminal Market authority');
+  }
+
+  const productDigest = requestIdentity(request.productRecordDigest, 'Product record digest');
+  const productRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, route.registryProgram,
+    route.productRaw, route.productStaging, PRODUCT_RECORD_SCHEMA_ID_V2, productDigest, 'Product Runtime V2 root');
+  const domainDigest = slice(productRaw.data, 48, 32); const portfolioDigest = slice(productRaw.data, 80, 32);
+  const domainRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, route.registryProgram,
+    route.resultDomainRaw, route.resultDomainStaging, RESULT_DOMAIN_SCHEMA_ID_V2, domainDigest, 'Product result domain');
+  const portfolioRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, route.registryProgram,
+    route.portfolioRaw, route.portfolioStaging, PORTFOLIO_SCHEMA_ID_V2, portfolioDigest, 'Product portfolio');
+  const product = decodeCoreFoundProductGraphV2(productRaw.data, domainRaw.data, portfolioRaw.data, domainDigest, portfolioDigest);
+  if (!same(product.productId, market.productId)) throw new Error('payout Product identity differs from the current Market');
+
+  const aggregate = material(accounts.get(route.aggregate) ?? null, route.claimsProgram, 'Claims aggregate');
+  const aggregateView = decodeClaimsAggregateV2(route.aggregate, aggregate.data);
+  const basis = await authenticateRationalProductBasisRecordV3(client, accounts, {
+    registry: route.registryProgram, rawAddress: route.linkedBasisRaw, stagingAddress: route.linkedBasisStaging,
+    productId: product.productId, domainDigest, domainBytes: domainRaw.data,
+    representationWidth: aggregateView.claimCount,
+  });
+  if (hex(basis.digest) !== request.linkedBasisRecordDigest || hex(basis.semanticBasisId) !== request.semanticBasisId) {
+    throw new Error('payout Product basis differs from the Rust-authored request identities');
+  }
+  const realmRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, route.registryProgram,
+    route.realmRaw, route.realmStaging, REALM_SCHEMA_RELEASE_ID_V1,
+    requestIdentity(request.realm, 'Realm'), 'Realm');
+  const realm = decodeRealmRecordV1(realmRaw.data);
+  if (realm.tokenProgram !== request.tokenProgram || realm.collateralMint !== request.collateralMint) {
+    throw new Error('payout recipient asset differs from the immutable Realm collateral coordinates');
+  }
+  const exposureSchema = await sha256(COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3);
+  const exposureDigest = requestIdentity(request.exposureDigest, 'composition exposure digest');
+  const exposureRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, route.registryProgram,
+    route.exposureRaw, route.exposureStaging, exposureSchema, exposureDigest, 'composition exposure');
+  validateCompositionExposureHeaderV3(exposureRaw.data, request, domainDigest, product.outcomeCount, aggregateView.claimCount);
+
+  // Redundant PDA checks keep every imported Registry coordinate explicit in
+  // this admission report instead of relying on a helper's implementation.
+  for (const [schema, digest, raw, staging, field] of [
+    [PRODUCT_RECORD_SCHEMA_ID_V2, productDigest, route.productRaw, route.productStaging, 'Product'],
+    [RESULT_DOMAIN_SCHEMA_ID_V2, domainDigest, route.resultDomainRaw, route.resultDomainStaging, 'result domain'],
+    [PORTFOLIO_SCHEMA_ID_V2, portfolioDigest, route.portfolioRaw, route.portfolioStaging, 'portfolio'],
+    [GRADED_BASIS_RECORD_SCHEMA_ID_V3, basis.digest, route.linkedBasisRaw, route.linkedBasisStaging, 'Product basis'],
+    [REALM_SCHEMA_RELEASE_ID_V1, requestIdentity(request.realm, 'Realm'), route.realmRaw, route.realmStaging, 'Realm'],
+    [exposureSchema, exposureDigest, route.exposureRaw, route.exposureStaging, 'composition exposure'],
+  ] as const) recordAddressesV3(route.registryProgram, schema, digest, raw, staging, field);
+
+  const certificateAccount = material(accounts.get(route.terminalCertificate) ?? null, route.resolutionProgram, 'Resolution certificate');
+  const certificateRent = await client.minimumBalanceForRentExemption(certificateAccount.data.length);
+  if (BigInt(certificateAccount.lamports) < BigInt(certificateRent.lamports)) {
+    throw new Error('Resolution certificate is below its current exact rent minimum');
+  }
+  bindTerminalResolutionCertificateV2(decodeResolutionCertificateV2(certificateAccount.data), {
+    receiptAccount: key(route.terminalCertificate, 'Resolution certificate').toBytes(),
+    market: key(route.market, 'Market').toBytes(), sourceMaterial: market.resolutionPolicy,
+    productRecordDigest: market.productRecord, generation: market.generation,
+    selector: market.terminalWinner, outcomeCount: product.outcomeCount,
+  });
+  return Object.freeze({
+    genesisHash: cluster.genesisHash, observedSlot: observation.slot, market: route.market,
+    position: route.position, recipient: route.recipient, releaseSet: request.releaseSet,
+    lookupTable: manifest.lookupTable,
+  });
+}
+
+export type PreparedCheckedLiveDevnetPayoutV3 = PreparedWalletTerminalPayoutV3 & Readonly<{
+  admission: CheckedLiveDevnetPayoutAdmissionV3;
+}>;
+
+/** Authenticate checked devnet, then reuse the recoverable wallet transaction builder. */
+export async function prepareCheckedLiveDevnetWalletTerminalPayoutV3(
+  client: SolanaRpcClient,
+  manifest: WalletTerminalPayoutManifestV3,
+  payer: string,
+): Promise<PreparedCheckedLiveDevnetPayoutV3> {
+  const admission = await authenticateCheckedLiveDevnetPayoutPlanV3(client, manifest, payer);
+  const prepared = await prepareWalletTerminalPayoutV3(client, manifest, payer, admission.observedSlot);
+  return Object.freeze({ ...prepared, admission });
+}
+
 /** Reacquire every mutable pre-resource once and compile a fresh admitted message. */
 export async function prepareWalletTerminalPayoutV3(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'latestMutationBlockhash'>,
   manifest: WalletTerminalPayoutManifestV3,
   payer: string,
+  minimumFloor?: string,
 ): Promise<PreparedWalletTerminalPayoutV3> {
   const canonicalPayer = key(payer, 'fee payer').toBase58();
   if (canonicalPayer !== manifest.request.owner) throw new Error('the connected wallet is not the Position owner and sole payout authority');
   const addresses = [manifest.route.aggregate, manifest.route.position, manifest.route.custodyReplay, manifest.route.hoard, manifest.route.recipient, manifest.lookupTable];
-  const floor = await client.finalizedSlot();
+  const floor = minimumFloor ?? await client.finalizedSlot();
   const observation = await client.multipleAccounts(addresses, floor);
   const account = (address: string) => observation.accounts.find((entry) => entry.address === address)?.account ?? null;
   const aggregate = material(account(manifest.route.aggregate), manifest.route.claimsProgram, 'Claims aggregate');
