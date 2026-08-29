@@ -1655,6 +1655,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
+ "dclutch-resolution-core-v3-operator",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
  "solana-account 4.6.0",

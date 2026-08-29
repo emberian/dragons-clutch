@@ -27,6 +27,7 @@ dclutch-record-contract = { path = "../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../../crates/dclutch-release-set-contract" }
+dclutch-resolution-core-v3-operator = { path = "../../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-token-svm = { path = "../../../crates/dclutch-token-svm" }
 dclutch-trading-sbf = { path = "../../dclutch-trading-sbf", default-features = false, features = ["dealer-family", "series-family", "no-entrypoint"] }
 solana-account = "=4.6.0"
