@@ -46,8 +46,9 @@
 
 use dclutch_capability_program_contract::{
     set_v2::{
-        CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
-        SelectorWidthV2, encode_program_set_v2, encoded_program_set_bytes_v2,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
+        CapabilityProgramSetEntryV2, CapabilityProgramSetV2, SelectorWidthV2,
+        encode_program_set_v2, encoded_program_set_bytes_v2,
     },
     v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
@@ -357,7 +358,128 @@ pub struct GeneralSelectedReleaseV1 {
     pub publication: GeneralSelectedPublicationV1,
 }
 
+/// One record a publication chain must finalize in the Registry.
+///
+/// The `label` is for operators reading a plan; the `schema` and `body` are the
+/// two facts a raw-record PDA is keyed by.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralPublicationRecordV1<'a> {
+    /// Human-readable name of this record's role in the release.
+    pub label: &'static str,
+    /// Schema/release identity this record is finalized under.
+    pub schema: [u8; 32],
+    /// Exact semantic bytes.
+    pub body: &'a [u8],
+}
+
+impl GeneralPublicationRecordV1<'_> {
+    /// Content identity of the exact bytes.
+    #[must_use]
+    pub fn content_id(&self) -> [u8; 32] {
+        digest(self.body)
+    }
+}
+
 impl GeneralSelectedReleaseV1 {
+    /// Enumerate every record the Registry must hold for this release.
+    ///
+    /// Each record's schema is READ OFF the artifact that names it -- the
+    /// descriptor's own `ArtifactReferenceV4` schemas, the strategy's own
+    /// certificate and admission schemas, the descriptor's own `config_schema`,
+    /// and the set entry's own descriptor schema. Nothing here restates a schema
+    /// constant, so a publication plan cannot finalize a record under a schema
+    /// the release does not actually select. That is the same single-author rule
+    /// the seed contract enforces, applied to the publication chain.
+    pub fn publication_records(&self) -> Result<Vec<GeneralPublicationRecordV1<'_>>> {
+        let set = CapabilityProgramSetV2::decode(&self.program_set)
+            .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+        let first = CapabilityProgramV4::decode(
+            &self
+                .bundles
+                .first()
+                .ok_or(GeneralSelectedReleaseErrorV1::Release)?
+                .descriptor,
+        )
+        .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+
+        let mut records = Vec::new();
+        records.push(GeneralPublicationRecordV1 {
+            label: "program-set",
+            schema: CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            body: &self.program_set,
+        });
+        records.push(GeneralPublicationRecordV1 {
+            label: "config",
+            schema: first.config_schema().to_bytes(),
+            body: &self.config,
+        });
+
+        for (index, bundle) in self.bundles.iter().enumerate() {
+            let entry = set
+                .entry(u16::try_from(index).map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?)
+                .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+            let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
+                .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+            let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy)
+                .map_err(|_| GeneralSelectedReleaseErrorV1::Release)?;
+            let artifacts = descriptor.artifacts();
+            for (label, schema, body) in [
+                (
+                    "descriptor",
+                    entry.descriptor().schema().to_bytes(),
+                    &bundle.descriptor,
+                ),
+                (
+                    "account-profile",
+                    artifacts.account_profile.schema().to_bytes(),
+                    &bundle.account_profile,
+                ),
+                (
+                    "lifecycle-policy",
+                    artifacts.lifecycle.schema().to_bytes(),
+                    &bundle.lifecycle_policy,
+                ),
+                (
+                    "request-profile",
+                    artifacts.request_profile.schema().to_bytes(),
+                    &bundle.request_profile,
+                ),
+                (
+                    "strategy",
+                    artifacts.strategy.schema().to_bytes(),
+                    &bundle.strategy,
+                ),
+                (
+                    "certificate",
+                    strategy.certificate_schema().to_bytes(),
+                    &bundle.certificate,
+                ),
+                (
+                    "admission",
+                    strategy.admission_schema().to_bytes(),
+                    &bundle.admission,
+                ),
+                (
+                    "transition",
+                    artifacts.transition.schema().to_bytes(),
+                    &bundle.transition,
+                ),
+                (
+                    "effect",
+                    artifacts.effect.schema().to_bytes(),
+                    &bundle.effect,
+                ),
+            ] {
+                records.push(GeneralPublicationRecordV1 {
+                    label,
+                    schema,
+                    body,
+                });
+            }
+        }
+        Ok(records)
+    }
+
     /// Borrow the artifact selection an on-chain admission authenticates against.
     #[must_use]
     pub fn selection(&self) -> GeneralArtifactSelectionV3 {

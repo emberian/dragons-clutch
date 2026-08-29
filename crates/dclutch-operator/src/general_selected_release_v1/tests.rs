@@ -349,3 +349,57 @@ fn the_publication_width_is_derived_from_its_own_field_table() {
         PUBLICATION_IDENTITY_COUNT_V1
     );
 }
+
+/// The publication chain gets every record, and every schema is DERIVED.
+///
+/// This is the shape SEL-SEAM's capability-neutral seam reads. The property
+/// that matters is not that the list is complete but that no schema in it was
+/// typed here: each is read off the artifact that names it, so a plan cannot
+/// finalize a record under a schema the release does not actually select.
+#[test]
+fn the_publication_record_list_names_every_record_under_a_derived_schema() {
+    let release = general_selected_release_v1(input()).expect("release");
+    let records = release.publication_records().expect("records");
+
+    // program-set + config, then nine artifacts per action.
+    assert_eq!(records.len(), 2 + 9 * GENERAL_SELECTED_ACTION_COUNT_V1);
+    assert_eq!(records[0].label, "program-set");
+    assert_eq!(records[0].body, release.program_set.as_slice());
+    assert_eq!(records[1].label, "config");
+    assert_eq!(records[1].body, release.config.as_slice());
+
+    // No record may be finalized under the zero schema, and the content id must
+    // be the digest of the exact bytes the record carries.
+    for record in &records {
+        assert_ne!(record.schema, [0; 32], "{} has no schema", record.label);
+        assert!(!record.body.is_empty(), "{} is empty", record.label);
+        assert_eq!(record.content_id(), digest(record.body));
+    }
+
+    // The descriptor records are exactly the identities the publication names,
+    // so the seam can join the manifest entry to a record in this list.
+    let descriptors: Vec<[u8; 32]> = records
+        .iter()
+        .filter(|record| record.label == "descriptor")
+        .map(GeneralPublicationRecordV1::content_id)
+        .collect();
+    assert_eq!(descriptors.as_slice(), release.publication.descriptors);
+
+    // The config record's schema comes from the descriptor's own
+    // `config_schema`, which is what the on-chain activation route authenticates
+    // the config raw record under -- not a constant restated here.
+    let first = CapabilityProgramV4::decode(&release.bundles[0].descriptor).expect("descriptor");
+    assert_eq!(records[1].schema, first.config_schema().to_bytes());
+    assert_eq!(first.config_schema().to_bytes(), GENERAL_CONFIG_SCHEMA_ID_V3);
+
+    // And the lifecycle record travels under the V5 selected-lifecycle schema
+    // the descriptor names, which is the artifact carrying the seed order.
+    let lifecycle = records
+        .iter()
+        .find(|record| record.label == "lifecycle-policy")
+        .expect("lifecycle record");
+    assert_eq!(
+        lifecycle.schema,
+        first.artifacts().lifecycle.schema().to_bytes()
+    );
+}
