@@ -1116,3 +1116,29 @@ lesson from the same lane: two programs agreeing on a PDA by coincidence is not
 agreement — Trading and Custody derived the reservation batch under different
 seed counts, so give a cross-program address ONE supported derivation and pin it
 from both sides.
+
+## CYCLE 3 CHARTER — the coherently extrapolated platonic dClutch (2026-08-29 ~15:40 EDT, ember: "fold it all in")
+Extrapolate the protocol's own principles to completion. Spawned immediately:
+1. SELECTION COMPLETENESS (RAT-SEL): Rational selected release + publication +
+   founding via the neutral seam; Structured as its child campaign. The seam's
+   neutrality test: each family = config + publication, no new driver code.
+2. MULTI-CAPABILITY RULING (folded into SEL-SEAM): the manifest encoder
+   forbids two entries of one kind; does it PERMIT one entry each of several?
+   Read it off the codec, prove or weld shut deliberately.
+3. PERMISSIONLESS COMPLETION UNIVERSALIZED (LIVENESS): census every
+   "someone must act" point in every lifecycle; each gets a funded,
+   anyone-can-act path or a precisely named gap. The protocol's one-sentence
+   differentiator: no liveness dependency on any identified party.
+4. SINGLE-AUTHOR, MECHANIZED (SEAM-CI): SEAM's audit method as a standing
+   automated gate (pin-vs-census, derivation-vs-restatement, seed lengths,
+   default-pubkey, privilege-merge — across every program pair).
+5. UPGRADE-PROOF CLIENTS (ERA): frame selection by on-chain release/generation
+   identity — the era-coherence maze dissolved permanently.
+6. THE ECONOMY MADE COHERENT (LEDGER): one reconciliation answering "where
+   does every lamport come from and go" across fees, rent, bounties, permits.
+Gated on the devnet address (not spawned yet): the exchange story — observer
+market via relay, graduation/abandonment live, simulator as public heartbeat.
+Queued, scoped-not-spawned: Lean as single author of seam contracts (extend
+formal/ generation); Series prepare/expire through Trading; split-route live
+run; reaffirm implementation (approved, waits for quiet upgrade.rs);
+sccache/workspace consolidation (waits for cold gates).
