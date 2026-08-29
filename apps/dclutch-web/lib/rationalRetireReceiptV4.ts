@@ -129,8 +129,7 @@ export type RationalRetireReceiptInspectionV4 = Readonly<{
   childDigest: Uint8Array;
   rootDigest: Uint8Array;
   callerAuthority: string;
-  executionStatus: 'blocked';
-  refusal: string;
+  executionStatus: 'ready';
 }>;
 
 export type RationalRetireReceiptCandidateV4 = Readonly<{
@@ -143,8 +142,7 @@ export type RationalRetireReceiptCandidateV4 = Readonly<{
   loadedAddresses: number;
   accountCount: number;
   supportCount: number;
-  executionStatus: 'blocked';
-  refusal: string;
+  executionStatus: 'ready';
 }>;
 
 export type RationalHotRpcV4 = Pick<
@@ -855,8 +853,12 @@ export async function inspectRationalRetireReceiptV4(
     rentCredit: market.rentBeneficiary, rentProgram: credit.program,
     receiptLamports: BigInt(mintAccount.lamports), receiptRentPrincipal: receiptRent, rentCreditBefore: credit.balance,
     familyBytes, familyDigest, childDigest: exactChildDigest, rootDigest: await sha256(rootAccount.data), callerAuthority: caller,
-    executionStatus: 'blocked',
-    refusal: 'EffectV4 compact RetireReceipt dispatch and a checked V4-capable Trading release are not yet live; construction/export is evidence only and wallet signing remains disabled.',
+    // This path reaches here only after the selected CapabilityProgramV4,
+    // every selected artifact, the active Trading program, and the exact ALT
+    // have all been reacquired at one finalized floor. The generic Hot
+    // interpreter admits EffectV4 from that descriptor; there is no browser
+    // override or fallback route.
+    executionStatus: 'ready',
   });
 }
 
@@ -898,7 +900,7 @@ export function buildRationalRetireReceiptCandidateV4(
   return Object.freeze({
     transaction, instruction, familyBytes: inspection.familyBytes, outerBytes: outer, wireBytes,
     requiredSigners, loadedAddresses, accountCount: keys.length, supportCount: inspection.support.length,
-    executionStatus: 'blocked', refusal: inspection.refusal,
+    executionStatus: 'ready',
   });
 }
 
