@@ -12,6 +12,10 @@ use dclutch_capability_program_contract::hot_v3::{
 use dclutch_dealer_codec::scenario_checkpoint_v1::{
     DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
 };
+use dclutch_dealer_codec::scenario_custody_reservation_v1::{
+    DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1, DealerScenarioCustodyEffectManifestV1,
+    DealerScenarioCustodyEffectV1, DealerScenarioCustodyRequestKindV1,
+};
 use dclutch_dealer_codec::scenario_membership_manifest_v1::{
     DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1, DEALER_SCENARIO_MEMBERSHIP_PAGE_DOMAIN_V1,
     DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
@@ -19,6 +23,9 @@ use dclutch_dealer_codec::scenario_membership_manifest_v1::{
 use dclutch_dealer_codec::scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1;
 use dclutch_trading_sbf::dealer::v3_trade_profile::{
     DEALER_SCENARIO_PROFILE_SPANS_V4, dealer_scenario_logical_frame_v4,
+};
+use dclutch_trading_sbf::dealer::{
+    v3_composer::ScenarioCustodyEffectV3, v3_multi_lp::MultiLpCustodyRequestV3,
 };
 use dclutch_trading_sbf::dealer_scenario_checkpoint_v1::{
     DEALER_SCENARIO_CHECKPOINT_CLEANUP_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_CREATE_MAGIC_V1,
@@ -28,7 +35,7 @@ use dclutch_trading_sbf::dealer_scenario_checkpoint_v1::{
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
-    hash::hashv,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
@@ -152,6 +159,103 @@ pub struct DealerScenarioCanonicalMembershipPagesV1 {
     pub manifest: DealerScenarioMembershipManifestV1,
     /// Strictly increasing, deduplicated keys in six balanced pages.
     pub pages: [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1],
+}
+
+/// Exact evaluator-owned effect manifest and bodies.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerScenarioCustodyEffectArtifactsV1 {
+    /// Manifest body hashed by the evaluation receipt.
+    pub manifest: DealerScenarioCustodyEffectManifestV1,
+    /// Active canonical prefix; inactive suffix is absent.
+    pub effect_bodies: [Option<DealerScenarioCustodyEffectV1>; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+}
+
+/// Encode the semantic projection's one canonical Custody effect bank.
+pub fn encode_dealer_scenario_custody_effect_artifacts_v1(
+    producer_program: Pubkey,
+    checkpoint: Pubkey,
+    request_digest: [u8; 32],
+    effect_accounts: [Pubkey; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+    effects: &[Option<ScenarioCustodyEffectV3>; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+    effect_count: u8,
+) -> Result<DealerScenarioCustodyEffectArtifactsV1, DealerScenarioCheckpointOperatorErrorV1> {
+    let active = usize::from(effect_count);
+    if producer_program == Pubkey::default()
+        || checkpoint == Pubkey::default()
+        || request_digest == [0; 32]
+        || active == 0
+        || active > DEALER_SCENARIO_MAX_RESERVATIONS_V1
+        || effects.iter().skip(active).any(Option::is_some)
+        || effect_accounts
+            .iter()
+            .take(active)
+            .any(|account| *account == Pubkey::default())
+        || effect_accounts
+            .iter()
+            .skip(active)
+            .any(|account| *account != Pubkey::default())
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let mut effect_bodies = [None; DEALER_SCENARIO_MAX_RESERVATIONS_V1];
+    let mut effect_digests = [[0_u8; 32]; DEALER_SCENARIO_MAX_RESERVATIONS_V1];
+    for ordinal in 0..active {
+        let effect = effects
+            .get(ordinal)
+            .copied()
+            .flatten()
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+        let kind = match effect.request {
+            MultiLpCustodyRequestV3::Canonical(_) => DealerScenarioCustodyRequestKindV1::Canonical,
+            MultiLpCustodyRequestV3::Delegated(_) => DealerScenarioCustodyRequestKindV1::Delegated,
+        };
+        let mut request_payload = [0_u8; DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1];
+        effect
+            .request
+            .encode_into(
+                request_payload
+                    .get_mut(..effect.request.encoded_len())
+                    .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?,
+            )
+            .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+        let body = DealerScenarioCustodyEffectV1 {
+            kind,
+            ordinal: u8::try_from(ordinal)
+                .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+            effect_count,
+            producer_program: producer_program.to_bytes(),
+            checkpoint: checkpoint.to_bytes(),
+            request_digest,
+            source_after: effect.source_after,
+            destination_after: effect.destination_after,
+            request_payload,
+        };
+        let body_bytes = body
+            .encode()
+            .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+        *effect_digests
+            .get_mut(ordinal)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)? =
+            hash(&body_bytes).to_bytes();
+        *effect_bodies
+            .get_mut(ordinal)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)? = Some(body);
+    }
+    let manifest = DealerScenarioCustodyEffectManifestV1 {
+        effect_count,
+        producer_program: producer_program.to_bytes(),
+        checkpoint: checkpoint.to_bytes(),
+        request_digest,
+        effect_accounts: effect_accounts.map(|account| account.to_bytes()),
+        effect_digests,
+    };
+    manifest
+        .encode()
+        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    Ok(DealerScenarioCustodyEffectArtifactsV1 {
+        manifest,
+        effect_bodies,
+    })
 }
 
 /// Project the smallest one-transaction Claims/Custody effect topology.
