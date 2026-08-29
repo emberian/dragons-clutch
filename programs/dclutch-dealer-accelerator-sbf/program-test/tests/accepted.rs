@@ -2915,12 +2915,7 @@ async fn reserved_with_published_delta(
 }
 
 /// Build, table and submit one commit, returning what the chain reported.
-async fn submit_commit(
-    context: &mut ProgramTestContext,
-    scenario: &Scenario,
-    bank: DealerScenarioCommitAccountsV1,
-) -> solana_program_test::BanksTransactionResultWithMetadata {
-    let payer = context.payer.pubkey();
+fn commit_table_addresses(bank: &DealerScenarioCommitAccountsV1, payer: Pubkey) -> Vec<Pubkey> {
     let mut addresses = bank
         .claims_accounts
         .iter()
@@ -2947,6 +2942,18 @@ async fn submit_commit(
     addresses.retain(|key| *key != payer && *key != TRADING);
     addresses.sort_unstable_by_key(Pubkey::to_bytes);
     addresses.dedup();
+    addresses
+}
+
+/// Build, table and submit one commit, returning what the chain reported.
+async fn submit_commit(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+    bank: DealerScenarioCommitAccountsV1,
+) -> solana_program_test::BanksTransactionResultWithMetadata {
+    let _ = scenario;
+    let payer = context.payer.pubkey();
+    let addresses = commit_table_addresses(&bank, payer);
     let packet = build_dealer_scenario_commit_v1(
         bank,
         Hash::default(),
@@ -2957,7 +2964,6 @@ async fn submit_commit(
     )
     .expect("commit packet");
     let table = create_live_lookup_table(context, &addresses).await;
-    let _ = scenario;
     submit_v0(context, packet.instruction, table, &addresses)
         .await
         .expect("ProgramTest processing")
@@ -3063,4 +3069,145 @@ async fn position_balances(
     (0..scenario.fixture.outcome_count)
         .map(|claim| view.balance(&account.data, claim).expect("balance"))
         .collect()
+}
+
+
+/// Drive one scenario all the way to a committed checkpoint.
+///
+/// Returns the commit bank and the live table it was carried on, so a case can
+/// resubmit the very same transaction against the new state.
+async fn drive_to_committed(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+) -> (DealerScenarioCommitAccountsV1, Pubkey, Vec<Pubkey>) {
+    let (reservation, _, _) = evaluated_with_reservation_evidence(context, scenario).await;
+    let payer = context.payer.pubkey();
+    let instruction = reserve_instruction(
+        scenario,
+        payer,
+        &reservation,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+    );
+    submit(context, instruction, &[])
+        .await
+        .expect("ProgramTest processing")
+        .result
+        .expect("the reservation must be ingested");
+    let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
+        TRADING,
+        scenario.checkpoint,
+        scenario.request_digest,
+    );
+    let bank = commit_bank(scenario, payer, receipt_address, &reservation);
+    let addresses = commit_table_addresses(&bank, payer);
+    let packet = build_dealer_scenario_commit_v1(
+        bank.clone(),
+        Hash::default(),
+        &[OperatorLookupTable {
+            key: Pubkey::new_from_array([0x7b; 32]),
+            addresses: addresses.clone(),
+        }],
+    )
+    .expect("commit packet");
+    let table = create_live_lookup_table(context, &addresses).await;
+    submit_v0(context, packet.instruction, table, &addresses)
+        .await
+        .expect("ProgramTest processing")
+        .result
+        .expect("the commit must land");
+    (bank, table, addresses)
+}
+
+#[tokio::test]
+async fn a_committed_checkpoint_is_never_cleaned_back_to_its_beneficiary() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    drive_to_committed(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+    let committed = checkpoint_body(&mut context, &scenario).await;
+
+    // Expiry is reached and the beneficiary is the immutable one named at
+    // creation, so nothing about the cleanup frame is wrong. What refuses is
+    // the phase: a committed checkpoint is not abandoned state whose rent can
+    // be swept, because Custody delivery is a later permissionless effect that
+    // still refers to it. The abandonment path and the committed path are two
+    // different endings, and only one of them returns the rent.
+    context
+        .warp_to_slot(SCENARIO_EXPIRES_AT + 8)
+        .expect("warp past expiry");
+    let packet = build_dealer_scenario_checkpoint_cleanup_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        BENEFICIARY,
+        sysvar::clock::ID,
+        Hash::default(),
+        &[],
+    )
+    .expect("cleanup packet");
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "a committed checkpoint must refuse cleanup; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        committed,
+        "a refused cleanup must leave the committed checkpoint intact"
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(scenario.checkpoint)
+            .await
+            .expect("checkpoint query")
+            .is_some_and(|account| account.lamports > 0),
+        "the committed checkpoint keeps its rent"
+    );
+}
+
+#[tokio::test]
+async fn a_committed_checkpoint_refuses_a_replayed_commit() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let (bank, table, addresses) = drive_to_committed(&mut context, &scenario).await;
+    let committed = checkpoint_body(&mut context, &scenario).await;
+    let dealer_after = position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await;
+
+    // Byte-identical replay of the transaction that just landed. Nothing about
+    // its frame has changed; the checkpoint has.
+    let packet = build_dealer_scenario_commit_v1(
+        bank,
+        Hash::default(),
+        &[OperatorLookupTable {
+            key: Pubkey::new_from_array([0x7b; 32]),
+            addresses: addresses.clone(),
+        }],
+    )
+    .expect("commit packet");
+    let processed = submit_v0(&mut context, packet.instruction, table, &addresses)
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "a replayed commit must refuse on the phase; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        committed,
+        "a refused replay must leave the checkpoint intact"
+    );
+    assert_eq!(
+        position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await,
+        dealer_after,
+        "a refused replay must not move the Claims Positions a second time"
+    );
 }
