@@ -14,6 +14,8 @@ accepts that authorization and public devnet never accepts loopback affordances.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 import dataclasses
 import datetime as dt
@@ -41,6 +43,9 @@ PRIVATE_INDEX_SCHEMA = "dclutch-devnet-activity-private-wallet-index-v1"
 FUNDING_JOURNAL_SCHEMA = "dclutch-devnet-activity-funding-journal-v1"
 FUNDING_CLOSURE_SCHEMA = "dclutch-devnet-activity-funding-closure-v1"
 INITIAL_FUNDING_CLOSURE_SCHEMA = "dclutch-devnet-activity-initial-funding-closure-v1"
+POST_INIT_FUNDING_JOURNAL_SCHEMA = "dclutch-devnet-activity-post-init-funding-journal-v1"
+POST_INIT_FUNDING_CLOSURE_SCHEMA = "dclutch-devnet-activity-post-init-funding-closure-v1"
+FUNDING_LIFECYCLE_SCHEMA = "dclutch-devnet-activity-funding-lifecycle-v1"
 CAMPAIGN_FRESHNESS_SCHEMA = "dclutch-devnet-activity-campaign-freshness-v1"
 AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v1"
 BOUNDED_AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v2"
@@ -54,6 +59,7 @@ DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 DEVNET_MANIFEST_RPC_URL = "https://api.devnet.solana.com:443/"
 DEVNET_SUPERVISOR_RPC_URL = "https://api.devnet.solana.com/"
 MEMO_PREFIX = "dclutch-activity-fund-v1:"
+POST_INIT_MEMO_PREFIX = "dclutch-activity-post-init-fund-v1:"
 CAMPAIGN_IDENTITY_ROLES = (
     "campaign-payer",
     "collateral-mint",
@@ -110,6 +116,33 @@ def sha256_file(path: Path) -> str:
 
 def canonical_json(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+
+
+def base58_decode(value: str, label: str, expected_length: int) -> bytes:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    number = 0
+    try:
+        for character in value:
+            number = number * 58 + alphabet.index(character)
+    except (ValueError, binascii.Error) as error:
+        raise Refusal(f"{label} is not canonical base58") from error
+    body = b"" if number == 0 else number.to_bytes((number.bit_length() + 7) // 8, "big")
+    decoded = b"\0" * (len(value) - len(value.lstrip("1"))) + body
+    if len(decoded) != expected_length:
+        raise Refusal(f"{label} is not exactly {expected_length} bytes")
+    return decoded
+
+
+def shortvec(value: int) -> bytes:
+    if value < 0:
+        raise Refusal("shortvec value must be nonnegative")
+    output = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        output.append(byte | (0x80 if value else 0))
+        if not value:
+            return bytes(output)
 
 
 def compact_json(value: Any) -> bytes:
@@ -1374,7 +1407,7 @@ def authorization(path: Path, manifest: Manifest, *, allow_expired: bool = False
         now = dt.datetime.now(dt.timezone.utc)
         not_before = dt.datetime.fromisoformat(text(value["notBefore"], "authorization notBefore").replace("Z", "+00:00"))
         expires = dt.datetime.fromisoformat(text(value["expiresAt"], "authorization expiresAt").replace("Z", "+00:00"))
-    except ValueError as error:
+    except (ValueError, binascii.Error) as error:
         raise Refusal("live authorization timestamps are not RFC3339 timestamps") from error
     if not_before.tzinfo is None or expires.tzinfo is None or not_before >= expires or expires - not_before > dt.timedelta(hours=6):
         raise Refusal("live authorization is not one ordered at-most-six-hour window")
@@ -2044,6 +2077,227 @@ def authenticate_funding_closure(
         raise Refusal("funding closure fee total changed")
     text(value.get("closedAt"), "funding closure timestamp", 64)
     return value
+
+
+def post_init_funding_plan_rows(manifest: Manifest) -> list[dict[str, str]]:
+    if manifest.campaign is None:
+        return []
+    return [
+        {
+            "id": spec.journal_id,
+            "walletRef": spec.wallet_ref,
+            "transferLamports": str(spec.transfer_lamports),
+            "afterAdapter": spec.after_adapter_id,
+        }
+        for spec in manifest.campaign.post_init_funding
+    ]
+
+
+def post_init_funding_plan_sha256(manifest: Manifest) -> str:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no post-init funding plan")
+    return sha256_bytes(
+        canonical_json(
+            {
+                "manifestSha256": manifest.sha256,
+                "scenarioSha256": manifest.scenario.sha256,
+                "payerWalletRef": manifest.campaign.payer_wallet_ref,
+                "foundingAdapter": manifest.campaign.founding_adapter_id,
+                "rows": post_init_funding_plan_rows(manifest),
+            }
+        )
+    )
+
+
+def post_init_funding_journal_path(work: Path, journal_id: str) -> Path:
+    return work / "journals" / "post-init-funding" / f"{journal_id}.json"
+
+
+def new_post_init_funding_journal(
+    manifest: Manifest,
+    spec: PostInitFundingSpec,
+    payer_address: str,
+    wallet_address: str,
+    authorization_sha256: str | None,
+    initial_funding_closure_sha256: str,
+) -> dict[str, Any]:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no post-init funding")
+    if spec not in manifest.campaign.post_init_funding:
+        raise Refusal("post-init funding spec is not in the exact manifest plan")
+    operation_nonce = os.urandom(16).hex()
+    return {
+        "schema": POST_INIT_FUNDING_JOURNAL_SCHEMA,
+        "manifestSha256": manifest.sha256,
+        "scenarioSha256": manifest.scenario.sha256,
+        "clusterTarget": manifest.scenario.cluster_target,
+        "postInitFundingPlanSha256": post_init_funding_plan_sha256(manifest),
+        "initialFundingClosureSha256": digest_text(
+            initial_funding_closure_sha256,
+            "post-init initial funding closure digest",
+        ),
+        "journalId": spec.journal_id,
+        "afterAdapter": spec.after_adapter_id,
+        "payerWalletRef": manifest.campaign.payer_wallet_ref,
+        "funderAddress": pubkey_text(payer_address, "post-init payer address"),
+        "walletId": spec.wallet_ref,
+        "walletAddress": pubkey_text(wallet_address, "post-init wallet address"),
+        "transferLamports": str(spec.transfer_lamports),
+        "authorizationSha256": authorization_sha256,
+        "operationNonce": operation_nonce,
+        "memo": f"{POST_INIT_MEMO_PREFIX}{spec.journal_id}:{operation_nonce}",
+        "phase": "Planned",
+        "plannedAt": utc_now(),
+        "plannedStateSha256": None,
+        "preparedAt": None,
+        "recentBlockhash": None,
+        "lastValidBlockHeight": None,
+        "messageBase64": None,
+        "messageSha256": None,
+        "packetBase64": None,
+        "packetSha256": None,
+        "expectedSignature": None,
+        "dispatchAttemptedAt": None,
+        "preparedStateSha256": None,
+        "submittedAt": None,
+        "dispatchStateSha256": None,
+        "signature": None,
+        "finalizedAt": None,
+        "slot": None,
+        "feeLamports": None,
+        "funderPreLamports": None,
+        "funderPostLamports": None,
+        "walletPreLamports": None,
+        "walletPostLamports": None,
+        "transactionSha256": None,
+    }
+
+
+def prepare_post_init_funding_journal(
+    journal: Mapping[str, Any],
+    sign_only_output: Mapping[str, Any],
+    recent_blockhash: str,
+    last_valid_block_height: int,
+) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") != "Planned":
+        raise Refusal("only an exact Planned post-init journal may be prepared")
+    planned_state = digest_text(
+        journal.get("stateSha256"), "planned post-init journal state digest"
+    )
+    exact_keys(
+        sign_only_output,
+        {"blockhash", "signers", "absent", "badSig", "message"},
+        "post-init sign-only output",
+    )
+    blockhash = pubkey_text(recent_blockhash, "post-init recent blockhash")
+    if sign_only_output["blockhash"] != blockhash:
+        raise Refusal("post-init sign-only output substitutes the recent blockhash")
+    if sign_only_output["absent"] != [] or sign_only_output["badSig"] != []:
+        raise Refusal("post-init sign-only output has absent or bad signatures")
+    signer_rows = exact_list(sign_only_output["signers"], "post-init signers")
+    if len(signer_rows) != 1:
+        raise Refusal("post-init packet must have exactly one payer signature")
+    signer = text(signer_rows[0], "post-init signer", 256)
+    payer = pubkey_text(journal.get("funderAddress"), "post-init payer")
+    prefix = payer + "="
+    if not signer.startswith(prefix) or signer.count("=") != 1:
+        raise Refusal("post-init signer is not the exact campaign payer")
+    signature = signature_text(signer[len(prefix) :], "post-init expected signature")
+    message_base64 = text(sign_only_output["message"], "post-init message", 4096)
+    try:
+        message = base64.b64decode(message_base64, validate=True)
+    except ValueError as error:
+        raise Refusal("post-init message is not canonical base64") from error
+    if not message or len(message) > 1_168 or base64.b64encode(message).decode() != message_base64:
+        raise Refusal("post-init message is empty, oversized, or noncanonical")
+    packet = shortvec(1) + base58_decode(signature, "post-init signature", 64) + message
+    if len(packet) > 1_232:
+        raise Refusal("post-init signed packet exceeds the Solana packet bound")
+    if (
+        not isinstance(last_valid_block_height, int)
+        or isinstance(last_valid_block_height, bool)
+        or last_valid_block_height < 0
+    ):
+        raise Refusal("post-init last valid block height is not canonical")
+    prepared = dict(journal)
+    prepared.update(
+        {
+            "phase": "Prepared",
+            "plannedStateSha256": planned_state,
+            "preparedAt": utc_now(),
+            "recentBlockhash": blockhash,
+            "lastValidBlockHeight": str(last_valid_block_height),
+            "messageBase64": message_base64,
+            "messageSha256": sha256_bytes(message),
+            "packetBase64": base64.b64encode(packet).decode(),
+            "packetSha256": sha256_bytes(packet),
+            "expectedSignature": signature,
+        }
+    )
+    return prepared
+
+
+def dispatching_post_init_funding_journal(journal: Mapping[str, Any]) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") != "Prepared":
+        raise Refusal("only an exact Prepared post-init journal may enter Dispatching")
+    prepared_state = digest_text(
+        journal.get("stateSha256"), "prepared post-init journal state digest"
+    )
+    packet_base64 = text(journal.get("packetBase64"), "prepared post-init packet", 4096)
+    try:
+        packet = base64.b64decode(packet_base64, validate=True)
+    except ValueError as error:
+        raise Refusal("prepared post-init packet is not base64") from error
+    if sha256_bytes(packet) != journal.get("packetSha256"):
+        raise Refusal("prepared post-init packet digest changed")
+    dispatching = dict(journal)
+    dispatching.update(
+        {
+            "phase": "Dispatching",
+            "dispatchAttemptedAt": utc_now(),
+            "preparedStateSha256": prepared_state,
+        }
+    )
+    return dispatching
+
+
+def submitted_post_init_funding_journal(
+    journal: Mapping[str, Any], signature: str
+) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") != "Dispatching":
+        raise Refusal("only an exact Dispatching post-init journal may enter Submitted")
+    dispatch_state = digest_text(
+        journal.get("stateSha256"), "dispatching post-init journal state digest"
+    )
+    observed = signature_text(signature, "submitted post-init signature")
+    if observed != journal.get("expectedSignature"):
+        raise Refusal("post-init RPC returned another packet signature")
+    submitted = dict(journal)
+    submitted.update(
+        {
+            "phase": "Submitted",
+            "submittedAt": utc_now(),
+            "dispatchStateSha256": dispatch_state,
+            "signature": observed,
+        }
+    )
+    return submitted
+
+
+def finalize_post_init_funding_journal(
+    journal: Mapping[str, Any], transaction: Mapping[str, Any]
+) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") not in {"Dispatching", "Submitted"}:
+        raise Refusal("post-init finalization requires a durable dispatch-attempt marker")
+    signature = signature_text(
+        journal.get("expectedSignature"), "post-init expected signature"
+    )
+    if journal.get("phase") == "Submitted" and journal.get("signature") != signature:
+        raise Refusal("Submitted post-init journal substitutes its signature")
+    finalized = verify_funding_transaction(transaction, journal, signature)
+    finalized["phase"] = "Finalized"
+    finalized["signature"] = signature
+    return finalized
 
 
 def adapter_journal_path(work: Path, adapter_id: str) -> Path:

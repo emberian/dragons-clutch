@@ -9,6 +9,7 @@ appear in the public ledger or captured output.
 from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
+import base64
 import dataclasses
 import datetime as dt
 import hashlib
@@ -48,6 +49,16 @@ def write_json(path: Path, value: object) -> None:
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def base58_encode(value: bytes) -> str:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    number = int.from_bytes(value, "big")
+    output = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        output = alphabet[remainder] + output
+    return "1" * (len(value) - len(value.lstrip(b"\0"))) + (output or "1")
 
 
 def limits(target: str = "owned-loopback") -> dict[str, int]:
@@ -639,6 +650,69 @@ class ActivityTests(unittest.TestCase):
             state.multiple_accounts[3] = {"lamports": 1}
             with self.assertRaisesRegex(activity.Refusal, "not all absent"):
                 rpc.absent_accounts([str(index + 2) * 32 for index in range(5)])
+
+    def test_post_init_funding_is_sign_once_and_dispatch_marker_gated(self) -> None:
+        self.write_v3()
+        manifest = self.parsed()
+        assert manifest.campaign is not None
+        spec = manifest.campaign.post_init_funding[0]
+        path = activity.post_init_funding_journal_path(self.work, spec.journal_id)
+        planned = activity.new_post_init_funding_journal(
+            manifest,
+            spec,
+            FUNDER,
+            WALLET,
+            "a" * 64,
+            "b" * 64,
+        )
+        activity.atomic_write_json(path, planned)
+        planned = activity.authenticated_state(path, "planned post-init")
+        signature = base58_encode(b"\x01" * 64)
+        message = base64.b64encode(b"\x02" * 100).decode()
+        prepared = activity.prepare_post_init_funding_journal(
+            planned,
+            {
+                "blockhash": "B" * 32,
+                "signers": [f"{FUNDER}={signature}"],
+                "absent": [],
+                "badSig": [],
+                "message": message,
+            },
+            "B" * 32,
+            1234,
+        )
+        activity.atomic_write_json(path, prepared)
+        prepared = activity.authenticated_state(path, "prepared post-init")
+        self.assertEqual(prepared["phase"], "Prepared")
+        self.assertEqual(
+            prepared["packetSha256"],
+            hashlib.sha256(base64.b64decode(prepared["packetBase64"])).hexdigest(),
+        )
+        with self.assertRaisesRegex(activity.Refusal, "Dispatching"):
+            activity.submitted_post_init_funding_journal(prepared, signature)
+
+        dispatching = activity.dispatching_post_init_funding_journal(prepared)
+        activity.atomic_write_json(path, dispatching)
+        dispatching = activity.authenticated_state(path, "dispatching post-init")
+        with self.assertRaisesRegex(activity.Refusal, "another packet"):
+            activity.submitted_post_init_funding_journal(
+                dispatching, base58_encode(b"\x03" * 64)
+            )
+        submitted = activity.submitted_post_init_funding_journal(
+            dispatching, signature
+        )
+        activity.atomic_write_json(path, submitted)
+        submitted = activity.authenticated_state(path, "submitted post-init")
+        finalized = activity.finalize_post_init_funding_journal(
+            submitted,
+            funding_transaction(
+                amount=spec.transfer_lamports,
+                memo=submitted["memo"],
+            ),
+        )
+        self.assertEqual(finalized["phase"], "Finalized")
+        self.assertEqual(finalized["signature"], signature)
+        self.assertEqual(finalized["feeLamports"], "5000")
 
     def test_cycle_and_preflight_only_direct_refuse(self) -> None:
         changed = scenario_value()
