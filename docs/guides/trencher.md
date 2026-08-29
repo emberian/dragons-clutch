@@ -89,6 +89,11 @@ redeems their collateral back out. And **you get paid the bounty for
 sending it** — escrowed by the market at founding, so it's already there,
 not a promise.
 
+That is the design, and the bounty really is escrowed. **You cannot collect
+one today**: no market is open, and the command below previews the
+transaction without submitting it. The rest of this section is what the walk
+will look like when it opens.
+
 ```sh
 dclutch walk --book walk-book.json --generation 1 --terminal-sequence 1 \
     --keypair anyone.json --dry-run \
