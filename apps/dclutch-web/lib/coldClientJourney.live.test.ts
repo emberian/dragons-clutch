@@ -35,6 +35,13 @@ type JourneySessionV1 = Readonly<{
   wallet?: string;
   directTicket?: string;
   redeemPlanPath?: string;
+  /**
+   * Session-stated step expectations, overriding the complete-market
+   * defaults. A pre-Open devnet market REFUSES its Direct spine — that is
+   * the chain's honest answer, and a session for that chain says so here
+   * instead of the test pretending every chain is terminal.
+   */
+  expect?: Readonly<Partial<Record<string, 'ready' | 'refused' | 'unavailable' | 'incomplete'>>>;
 }>;
 
 const sessionPath = process.env.DCLUTCH_JOURNEY_SESSION;
@@ -65,32 +72,32 @@ describeLive('the cold-client journey against the live chain', () => {
       redeemPlan: session.redeemPlanPath === undefined ? undefined : readFileSync(session.redeemPlanPath, 'utf8'),
     }));
 
+    // Human-readable yield first, so even a refusing run leaves its table.
+    for (const step of report.steps) {
+      console.log(`${step.step.padEnd(24)} ${step.status.padEnd(12)} ${step.reason}`);
+    }
+
     expect(report.schema).toBe('dclutch/cold-client-journey/v1');
     expect(report.signingRequested).toBe(false);
     expect(report.submissionRequested).toBe(false);
     expect(report.steps.map((step) => step.step)).toEqual([...COLD_CLIENT_CHAIN_STEPS_V1]);
 
     const byStep = new Map(report.steps.map((step) => [step.step, step]));
+    const expected = (step: string, fallback: string): string => session.expect?.[step] ?? fallback;
     // The pure reading spine must be READY against a real chain, wallet or not.
     for (const step of ['market.discover', 'market.inspect', 'direct.inspect', 'resolution.inspect', 'retirement.inspect'] as const) {
-      expect(byStep.get(step)?.status, `${step}: ${byStep.get(step)?.reason}`).toBe('ready');
+      expect(byStep.get(step)?.status, `${step}: ${byStep.get(step)?.reason}`).toBe(expected(step, 'ready'));
     }
     // Wallet-scoped steps are ready exactly when a wallet identity was injected.
     for (const step of ['participant.inspect', 'redeem.inspect'] as const) {
-      const expected = session.wallet === undefined ? 'unavailable' : 'ready';
-      expect(byStep.get(step)?.status, `${step}: ${byStep.get(step)?.reason}`).toBe(expected);
+      expect(byStep.get(step)?.status, `${step}: ${byStep.get(step)?.reason}`)
+        .toBe(expected(step, session.wallet === undefined ? 'unavailable' : 'ready'));
     }
     // Builder steps are ready exactly when their evidence inputs exist.
-    expect(byStep.get('direct.preview-unsigned')?.status).toBe(
-      session.wallet !== undefined && session.directTicket !== undefined ? 'ready' : 'unavailable',
-    );
-    expect(byStep.get('redeem.prepare-unsigned')?.status).toBe(
-      session.wallet !== undefined && session.redeemPlanPath !== undefined ? 'ready' : 'unavailable',
-    );
+    expect(byStep.get('direct.preview-unsigned')?.status).toBe(expected('direct.preview-unsigned',
+      session.wallet !== undefined && session.directTicket !== undefined ? 'ready' : 'unavailable'));
+    expect(byStep.get('redeem.prepare-unsigned')?.status).toBe(expected('redeem.prepare-unsigned',
+      session.wallet !== undefined && session.redeemPlanPath !== undefined ? 'ready' : 'unavailable'));
 
-    // Human-readable yield, printed so a run leaves a table behind.
-    for (const step of report.steps) {
-      console.log(`${step.step.padEnd(24)} ${step.status.padEnd(12)} ${step.reason}`);
-    }
   }, 120_000);
 });
