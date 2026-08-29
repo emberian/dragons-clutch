@@ -2236,3 +2236,159 @@ async fn series_consume_late_hoard_refusal_rolls_back_found_and_all_replay_state
     );
     assert_series_found_rollback(&fixture, &context).await;
 }
+
+/// Emit the `series_consume` campaign as a bundle a live validator can run.
+///
+/// # Why this exists, and why it is a test rather than a tool
+///
+/// `series_consume` is the only executed Series route in the tree, and until
+/// now it had executed only inside `ProgramTest`. Moving it onto a real
+/// validator means reproducing roughly 1,250 lines of fixture — a batch of
+/// finalized Registry records, six loader-v3 program pairs, a projected-Custody
+/// lock, exact-rent vacant accounts — and porting that into a host tool is a
+/// multi-hour rewrite with a wide surface for silent divergence.
+///
+/// So it is not ported. The fixture stays exactly where it is and keeps its one
+/// author, and this test changes only the SINK: it builds the campaign the way
+/// every other Series test does, starts the genesis it would have run against,
+/// and then reads every account the instruction names straight back out of the
+/// banks client. What is written out is therefore what `ProgramTest` itself
+/// constructed, not a second reconstruction of it.
+///
+/// That reading is what disposes of the two hazards a hand-port would have hit:
+/// the exact-lamports rule (`series_consume` compares
+/// `market.lamports()` to `request.market_rent()` with `!=`, so a rent
+/// heuristic silently refuses) and the six loader-v3 Program/ProgramData pairs
+/// (whose deployment slot flows into the release-set digest and therefore into
+/// the Market PDA, making deploy-then-derive circular with genesis). Both are
+/// simply observed rather than recomputed.
+///
+/// It is `#[ignore]`d because it writes to a directory and is a build step for
+/// a validator run, not an assertion about the protocol. The assertions about
+/// the protocol are the four `series_consume_*` tests above, which are
+/// unchanged.
+///
+/// Run it as:
+///
+/// ```sh
+/// SBF_OUT_DIR=... DCLUTCH_SERIES_CAMPAIGN_DIR=/abs/dir \
+///   cargo test --manifest-path programs/dclutch-core-sbf/Cargo.toml \
+///   --test found_program_test -- --ignored emit_series_consume_validator_campaign
+/// ```
+#[tokio::test]
+#[ignore = "emits a genesis and instruction bundle for a live local validator"]
+async fn emit_series_consume_validator_campaign() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use std::collections::BTreeSet;
+
+    let directory = PathBuf::from(
+        env::var("DCLUTCH_SERIES_CAMPAIGN_DIR")
+            .expect("DCLUTCH_SERIES_CAMPAIGN_DIR is required to emit the campaign"),
+    );
+    let accounts_directory = directory.join("accounts");
+    fs::create_dir_all(&accounts_directory).expect("campaign account directory");
+
+    let mut fixture = series_fixture(SeriesFault::None);
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+    let context = test.start_with_context().await;
+
+    // Every key the transaction touches: the invoked program, every meta, the
+    // lookup table, and every address the table resolves. The table's addresses
+    // are a superset of the readonly metas, but taking their union rather than
+    // assuming that keeps this correct if the table's contents ever widen.
+    let mut keys: BTreeSet<Pubkey> = BTreeSet::new();
+    keys.insert(instruction.program_id);
+    keys.insert(lookup.key);
+    for meta in &instruction.accounts {
+        keys.insert(meta.pubkey);
+    }
+    for address in &lookup.addresses {
+        keys.insert(*address);
+    }
+
+    let mut written = 0_usize;
+    let mut absent = Vec::new();
+    for key in &keys {
+        let Some(account) = context
+            .banks_client
+            .get_account(*key)
+            .await
+            .expect("banks client")
+        else {
+            // A nonexistent readonly account is a real part of this frame:
+            // `funding_source` and `funding_source_replay` are passed as keys
+            // that were deliberately never created. Recording them keeps the
+            // emitted bundle honest about which accounts are absent BY DESIGN,
+            // rather than leaving a reader to wonder what went missing.
+            absent.push(key.to_string());
+            continue;
+        };
+        let body = serde_json::json!({
+            "pubkey": key.to_string(),
+            "account": {
+                "lamports": account.lamports,
+                "data": [BASE64.encode(&account.data), "base64"],
+                "owner": account.owner.to_string(),
+                "executable": account.executable,
+                "rentEpoch": account.rent_epoch,
+            }
+        });
+        fs::write(
+            accounts_directory.join(format!("{key}.json")),
+            serde_json::to_vec_pretty(&body).expect("account json"),
+        )
+        .expect("write genesis account");
+        written += 1;
+    }
+
+    let manifest = serde_json::json!({
+        "schema": "dclutch-series-consume-validator-campaign-v1",
+        "programId": instruction.program_id.to_string(),
+        "lookupTable": lookup.key.to_string(),
+        "dataBase64": BASE64.encode(&instruction.data),
+        "accounts": instruction
+            .accounts
+            .iter()
+            .map(|meta| serde_json::json!({
+                "pubkey": meta.pubkey.to_string(),
+                "isSigner": meta.is_signer,
+                "isWritable": meta.is_writable,
+            }))
+            .collect::<Vec<_>>(),
+        // Measured, not guessed: docs/reference/budgets.md records 722,142 CU
+        // for this route. ProgramTest hands out 1,400,000 globally and a real
+        // validator gives 200,000, so the limit has to travel with the bundle.
+        "computeUnitLimit": 900_000,
+        "genesisAccountCount": written,
+        "absentByDesign": absent,
+        // What a caller must check AFTER the transaction finalizes. These are
+        // the same facts `series_consume_accepts_258_outcomes_and_commits_found_with_permit`
+        // asserts, carried out to whoever submits the packet.
+        "expect": {
+            "outcomeCount": fixture.base.outcome_count,
+            "market": fixture.base.market.to_string(),
+            "marketOwner": CORE_PROGRAM_ID.to_string(),
+            "permit": fixture.permit.to_string(),
+            "permitOwner": CORE_PROGRAM_ID.to_string(),
+            "permitLamports": fixture.permit_lamports,
+        }
+    });
+    fs::write(
+        directory.join("campaign.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest json"),
+    )
+    .expect("write campaign manifest");
+
+    assert!(written > 0, "the campaign emitted no genesis accounts");
+    println!(
+        "series-consume campaign: {written} genesis accounts ({} absent by design), \
+         {} metas, {} data bytes, lookup table {} -> {}",
+        absent.len(),
+        instruction.accounts.len(),
+        instruction.data.len(),
+        lookup.key,
+        directory.display()
+    );
+}

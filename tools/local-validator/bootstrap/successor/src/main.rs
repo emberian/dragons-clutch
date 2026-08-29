@@ -17,6 +17,7 @@ mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
 mod family_hot_campaign;
 mod general_settlement_fixture;
+mod series_consume_campaign;
 mod flagship_resolution;
 mod funding_readiness;
 mod local_mutable;
@@ -149,6 +150,9 @@ fn run() -> Result<()> {
         Some("devnet-direct-trade-v1") => direct_trade::run_devnet(arguments.collect()),
         Some(command) if command == family_hot_campaign::GENERAL_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::General)
+        }
+        Some(command) if command == series_consume_campaign::SERIES_CONSUME_COMMAND_V1 => {
+            series_consume_campaign::run(arguments.collect())
         }
         Some(command) if command == family_hot_campaign::SERIES_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::Series)
