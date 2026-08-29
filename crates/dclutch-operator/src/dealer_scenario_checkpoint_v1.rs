@@ -48,7 +48,8 @@ use solana_program::{
 
 use crate::dealer_scenario_hot_v4::{
     DealerScenarioHotMetaStateV4, DealerScenarioTransactionLockCensusV1,
-    census_dealer_scenario_transaction_locks_v1, require_dealer_scenario_devnet_lock_limit_v1,
+    SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1, census_dealer_scenario_transaction_locks_v1,
+    require_dealer_scenario_devnet_lock_limit_v1,
 };
 
 /// Current serialized transaction packet ceiling.
@@ -1854,6 +1855,266 @@ impl DealerScenarioCheckpointJournalV1 {
         self.cleaned = true;
         Ok(())
     }
+}
+
+/// Producer-owned evidence one sealed evaluation names.
+///
+/// Every account here is readonly and owned by the evaluator program. Trading
+/// re-derives the receipt PDA and rejects any body whose digest differs from
+/// the one the receipt committed, so a caller cannot substitute an evaluation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerAcceptedEvaluationAccountsV4 {
+    /// Evaluator executable that owns the receipt and its evidence.
+    pub producer_program: Pubkey,
+    /// Producer-owned receipt PDA for this checkpoint and request.
+    pub evaluation_receipt: Pubkey,
+    /// Exact candidate register bank.
+    pub candidate_bank: Pubkey,
+    /// Exact candidate obligation body.
+    pub candidate_obligation: Pubkey,
+    /// Exact borrowed SignedDelta body.
+    pub claims_delta: Pubkey,
+    /// Complete Custody-effect manifest.
+    pub effects: Pubkey,
+}
+
+/// One Custody reservation ingestion in canonical effect order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerAcceptedReservationAccountsV4 {
+    /// Release-selected Custody program.
+    pub custody_program: Pubkey,
+    /// Custody ProgramData pinned by the release.
+    pub custody_programdata: Pubkey,
+    /// Registry activation cache.
+    pub activation_cache: Pubkey,
+    /// Registry executable.
+    pub registry_program: Pubkey,
+    /// Custody-owned reservation receipt.
+    pub reservation_receipt: Pubkey,
+    /// Custody-owned reservation state.
+    pub reservation_state: Pubkey,
+    /// Evaluator executable owning the effect bank.
+    pub effect_producer: Pubkey,
+    /// Complete effect manifest.
+    pub effect_manifest: Pubkey,
+    /// Exact single effect body.
+    pub effect_body: Pubkey,
+}
+
+/// Complete unsigned input for one accepted Dealer scenario transition.
+///
+/// This is a scenario accepted-transition transcript. It selects no price,
+/// quotes nothing, and holds no inventory: it is the ordered set of lock-bounded
+/// transactions a durable caller submits to carry one already-authenticated
+/// Dealer scenario request from checkpoint creation to a committed obligation.
+#[derive(Clone, Copy, Debug)]
+pub struct DealerAcceptedTranscriptInputV4<'a> {
+    /// Release-selected Trading program that owns every route.
+    pub trading_program: Pubkey,
+    /// Transaction fee payer; no protocol authority is inferred from it.
+    pub payer: Pubkey,
+    /// Dealer Claims Position owner, the one wallet signer creation requires.
+    pub dealer_authority: Pubkey,
+    /// Immutable rent beneficiary named at creation.
+    pub refund_beneficiary: Pubkey,
+    /// Exact immutable Dealer request account.
+    pub request: Pubkey,
+    /// Digest of the exact request body, which seeds the checkpoint PDA.
+    pub request_digest: [u8; 32],
+    /// Immutable Trading-owned Dealer child root.
+    pub root: Pubkey,
+    /// Canonical Trading-owned obligation PDA.
+    pub obligation: Pubkey,
+    /// Clock sysvar.
+    pub clock: Pubkey,
+    /// Rent sysvar.
+    pub rent: Pubkey,
+    /// System program.
+    pub system_program: Pubkey,
+    /// Producer that owns the canonical membership manifest.
+    pub manifest_producer: Pubkey,
+    /// Producer-owned membership manifest PDA.
+    pub membership_manifest: Pubkey,
+    /// The one canonical membership partition, in page order.
+    pub pages: &'a [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1],
+    /// Producer-owned evidence the evaluation seals.
+    pub evaluation: DealerAcceptedEvaluationAccountsV4,
+    /// Ordered Custody reservations, one per evaluated effect.
+    pub reservations: &'a [DealerAcceptedReservationAccountsV4],
+    /// Complete final commit bank.
+    pub commit: &'a DealerScenarioCommitAccountsV1,
+    /// Blockhash used only to measure the compiled packet width.
+    pub recent_blockhash: Hash,
+    /// Address tables a caller resolves the wide routes through.
+    pub lookup_tables: &'a [AddressLookupTableAccount],
+}
+
+/// One ordered, lock-bounded, packet-safe accepted-transition transcript.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerAcceptedTranscriptV4 {
+    /// Trading-owned checkpoint the whole transcript advances.
+    pub checkpoint: Pubkey,
+    /// Exact request digest every route re-derives.
+    pub request_digest: [u8; 32],
+    /// Planned durable journal, positioned before the first submission.
+    pub journal: DealerScenarioCheckpointJournalV1,
+    /// Canonical route order: create, six pages, evaluate, reservations, commit.
+    pub packets: Vec<DealerScenarioCheckpointPacketV1>,
+}
+
+impl DealerAcceptedTranscriptV4 {
+    /// Borrow the exact route order this transcript admits.
+    #[must_use]
+    pub fn routes(&self) -> Vec<DealerScenarioCheckpointRouteV1> {
+        self.packets.iter().map(|packet| packet.route).collect()
+    }
+
+    /// Largest resolved lock count any single transaction in the transcript takes.
+    #[must_use]
+    pub fn peak_account_lock_count(&self) -> usize {
+        self.packets
+            .iter()
+            .map(|packet| packet.lock_census.unique_account_lock_count)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// Build the one canonical accepted Dealer scenario transition transcript.
+///
+/// The unsplit admitted Hot instruction for the same scenario resolves 121
+/// account locks against a 64-lock runtime ceiling, which no address lookup
+/// table changes. This builder is the submittable form of the same transition:
+/// it emits the exact ordered checkpoint routes, and refuses the whole
+/// transcript unless every constituent transaction is independently
+/// lock-bounded and packet-safe.
+///
+/// It signs nothing and submits nothing. The returned journal is positioned
+/// before creation so a durable caller can only advance it in route order.
+pub fn build_dealer_accepted_transcript_v4(
+    input: DealerAcceptedTranscriptInputV4<'_>,
+) -> Result<DealerAcceptedTranscriptV4, DealerScenarioCheckpointOperatorErrorV1> {
+    let reservation_count = input.reservations.len();
+    if reservation_count == 0
+        || reservation_count > DEALER_SCENARIO_MAX_RESERVATIONS_V1
+        || usize::from(input.commit.effect_count) != reservation_count
+        || input.commit.trading_program != input.trading_program
+        || input.commit.checkpoint
+            != dealer_scenario_checkpoint_address_v1(input.trading_program, input.request_digest)
+        || input.commit.request != input.request
+        || input.commit.root != input.root
+        || input.commit.obligation != input.obligation
+        || input.commit.evaluation_receipt != input.evaluation.evaluation_receipt
+        || input.commit.candidate_bank != input.evaluation.candidate_bank
+        || input.commit.candidate_obligation != input.evaluation.candidate_obligation
+        || input.commit.claims_delta != input.evaluation.claims_delta
+        || input.commit.effects != input.evaluation.effects
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let journal =
+        DealerScenarioCheckpointJournalV1::planned(input.trading_program, input.request_digest)?;
+    let checkpoint = journal.checkpoint;
+    if input.membership_manifest
+        != dealer_scenario_membership_manifest_address_v1(
+            input.manifest_producer,
+            checkpoint,
+            input.request_digest,
+        )
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let mut packets = Vec::with_capacity(
+        DEALER_SCENARIO_MEMBERSHIP_PAGES_V1
+            .checked_add(reservation_count)
+            .and_then(|value| value.checked_add(3))
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+    );
+    packets.push(build_dealer_scenario_checkpoint_create_v1(
+        input.trading_program,
+        input.payer,
+        input.dealer_authority,
+        input.refund_beneficiary,
+        checkpoint,
+        input.request,
+        input.root,
+        input.obligation,
+        input.clock,
+        input.rent,
+        input.system_program,
+        input.manifest_producer,
+        input.membership_manifest,
+        input.recent_blockhash,
+        input.lookup_tables,
+    )?);
+    for (page_index, page) in input.pages.iter().enumerate() {
+        packets.push(build_dealer_scenario_checkpoint_page_v1(
+            input.trading_program,
+            input.payer,
+            checkpoint,
+            input.clock,
+            input.membership_manifest,
+            u8::try_from(page_index)
+                .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+            page,
+            input.recent_blockhash,
+            input.lookup_tables,
+        )?);
+    }
+    packets.push(build_dealer_scenario_checkpoint_evaluate_v1(
+        input.trading_program,
+        input.payer,
+        checkpoint,
+        input.clock,
+        input.evaluation.producer_program,
+        input.evaluation.evaluation_receipt,
+        input.evaluation.candidate_bank,
+        input.evaluation.candidate_obligation,
+        input.evaluation.claims_delta,
+        input.evaluation.effects,
+        input.recent_blockhash,
+        input.lookup_tables,
+    )?);
+    for (ordinal, reservation) in input.reservations.iter().enumerate() {
+        packets.push(build_dealer_scenario_checkpoint_reserve_v1(
+            input.trading_program,
+            input.payer,
+            checkpoint,
+            input.clock,
+            reservation.custody_program,
+            reservation.custody_programdata,
+            reservation.activation_cache,
+            reservation.registry_program,
+            reservation.reservation_receipt,
+            reservation.reservation_state,
+            reservation.effect_producer,
+            reservation.effect_manifest,
+            reservation.effect_body,
+            u8::try_from(ordinal)
+                .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+            input.recent_blockhash,
+            input.lookup_tables,
+        )?);
+    }
+    packets.push(build_dealer_scenario_commit_v1(
+        input.commit.clone(),
+        input.recent_blockhash,
+        input.lookup_tables,
+    )?);
+    for packet in &packets {
+        if packet.lock_census.unique_account_lock_count > SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1 {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::LockLimit);
+        }
+        if packet.wire_bytes > DEALER_SCENARIO_PACKET_BYTES_V1 {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Packet);
+        }
+    }
+    Ok(DealerAcceptedTranscriptV4 {
+        checkpoint,
+        request_digest: input.request_digest,
+        journal,
+        packets,
+    })
 }
 
 #[cfg(test)]
