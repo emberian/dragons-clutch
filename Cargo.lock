@@ -1614,6 +1614,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-representation-composition-v3-kernel",
  "dclutch-resolution-codec",
+ "dclutch-source-contract",
  "dclutch-structured-v2-kernel",
  "dclutch-structured-v2-operator",
  "dclutch-token-svm",

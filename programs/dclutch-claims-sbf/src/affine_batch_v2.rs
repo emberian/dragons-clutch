@@ -31,6 +31,7 @@ use dclutch_product_runtime_v2_svm_reader::{
     authenticate_product_basis_v3,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -271,11 +272,20 @@ fn execute_authenticated(
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| AffineBatchSbfErrorV2::ClaimsState)?;
     authenticate_market(program_id, accounts, plan, market)?;
-    if !parent_authenticated {
-        authenticate_product_and_basis(accounts, plan, market)?;
+    let principal_cap_sets = if !parent_authenticated {
+        authenticate_product_and_basis(accounts, plan, market)?
     } else {
         authenticate_parent_product_digests(accounts, plan)?;
-    }
+        authenticate_core_market_v3(
+            accounts.core_market,
+            accounts.core_program,
+            accounts.registry,
+            market,
+            plan.product_record_digest(),
+            CorePhase::Open,
+        )?
+    };
+    admit_principal_growth(plan, &market_before, principal_cap_sets)?;
     let (mut market_candidate, mut position_candidates) =
         build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
@@ -511,7 +521,7 @@ fn authenticate_product_and_basis(
     accounts: &AffineBatchAccountsV2<'_, '_>,
     plan: AffineBatchPlanV2<'_>,
     market: MarketViewV2,
-) -> Result<(), ProgramError> {
+) -> Result<u64, ProgramError> {
     authenticate_runtime_product_basis_core_v3(
         accounts.registry,
         accounts.rent,
@@ -563,7 +573,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     expected_product_record_digest: [u8; 32],
     expected_linked_basis_record_digest: [u8; 32],
     expected_core_phase: CorePhase,
-) -> Result<(), ProgramError> {
+) -> Result<u64, ProgramError> {
     let rent =
         Rent::from_account_info(rent_account).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
     let runtime = authenticate_product_runtime_v2(
@@ -592,6 +602,29 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     {
         return Err(AffineBatchSbfErrorV2::ProductBasis.into());
     }
+    authenticate_core_market_v3(
+        core_market,
+        core_program,
+        registry,
+        market,
+        expected_product_record_digest,
+        expected_core_phase,
+    )
+}
+
+/// Authenticate and return the sole Core-owned runtime principal cap.
+///
+/// Parent-authenticated Claims routes still call this boundary themselves:
+/// immutable Product bytes may be inherited from the parent, but a caller may
+/// never author or substitute the Market's persisted cap.
+pub(crate) fn authenticate_core_market_v3(
+    core_market: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    registry: &AccountInfo<'_>,
+    market: MarketViewV2,
+    expected_product_record_digest: [u8; 32],
+    expected_core_phase: CorePhase,
+) -> Result<u64, ProgramError> {
     let core_data = core_market
         .try_borrow_data()
         .map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
@@ -617,6 +650,37 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
         || core.identity.generation != market.generation
     {
         return Err(AffineBatchSbfErrorV2::ProductBasis.into());
+    }
+    Ok(core.principal_cap_sets)
+}
+
+/// Preflight every aggregate-credit row against Core's projected set cap.
+///
+/// Affine packets are canonical and duplicate-free by aggregate coordinate,
+/// so each positive aggregate delta names the exact complete-set growth for
+/// that outcome. This runs over the immutable prestate before any candidate or
+/// account byte is changed.
+fn admit_principal_growth(
+    plan: AffineBatchPlanV2<'_>,
+    market: &[u8],
+    principal_cap_sets: u64,
+) -> Result<(), ProgramError> {
+    let cap = MarketPrincipalCapSetsV1::read(principal_cap_sets);
+    for row_index in 0..plan.row_count() {
+        let row = plan
+            .row(row_index)
+            .map_err(|_| AffineBatchSbfErrorV2::Instruction)?;
+        let delta = row.aggregate_delta();
+        if delta.direction() != DeltaDirectionV2::Credit {
+            continue;
+        }
+        let offset = usize::try_from(row.outcome())
+            .ok()
+            .and_then(|outcome| outcome.checked_mul(SCALAR_BYTES))
+            .and_then(|relative| LIABILITY_BASIS_MARKET_HEADER_BYTES_V2.checked_add(relative))
+            .ok_or(AffineBatchSbfErrorV2::Candidate)?;
+        cap.admit_growth(read_u64(market, offset)?, delta.magnitude())
+            .map_err(|_| AffineBatchSbfErrorV2::Candidate)?;
     }
     Ok(())
 }
@@ -873,6 +937,79 @@ mod tests {
         )
         .expect("encode");
         bytes
+    }
+
+    fn aggregate_credit_plan_bytes(quantity: u64) -> Vec<u8> {
+        let positions = [AffineBatchPositionV2::new([7; 32], 4).expect("destination")];
+        let rows = [AffineBatchRowV2::new(
+            AffineBatchRowInputV2 {
+                source_present: false,
+                destination_present: true,
+                outcome: 0,
+                source_position_index: 0,
+                destination_position_index: 0,
+                aggregate_delta: delta(DeltaDirectionV2::Credit, quantity),
+                source_delta: delta(DeltaDirectionV2::Neutral, 0),
+                destination_delta: delta(DeltaDirectionV2::Credit, quantity),
+            },
+            1,
+            1,
+        )
+        .expect("complete-set credit")];
+        let mut bytes = vec![0; plan_bytes(1, 1).expect("width")];
+        AffineBatchPlanV2::encode_into(
+            AffineBatchPlanInputV2 {
+                caller_role: CallerRole::Trading,
+                release_set: [1; 32],
+                market: [2; 32],
+                request_id: [3; 32],
+                product_record_digest: [4; 32],
+                semantic_basis_id: [5; 32],
+                linked_basis_record_digest: [6; 32],
+                expected_market_revision: 3,
+                outcome_count: 1,
+            },
+            &positions,
+            &rows,
+            &mut bytes,
+        )
+        .expect("encode complete-set credit");
+        bytes
+    }
+
+    #[test]
+    fn aggregate_credit_cap_boundary_excess_and_overflow_preflight_without_mutation() {
+        let mut market = vec![0; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + SCALAR_BYTES];
+        put_u64(&mut market, LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, 7)
+            .expect("outstanding supply");
+        let before = market.clone();
+        let boundary_bytes = aggregate_credit_plan_bytes(3);
+        let boundary = AffineBatchPlanV2::decode(&boundary_bytes).expect("boundary plan");
+        assert_eq!(admit_principal_growth(boundary, &market, 10), Ok(()));
+        assert_eq!(market, before);
+
+        let excess_bytes = aggregate_credit_plan_bytes(4);
+        let excess = AffineBatchPlanV2::decode(&excess_bytes).expect("excess plan");
+        assert_eq!(
+            admit_principal_growth(excess, &market, 10),
+            Err(AffineBatchSbfErrorV2::Candidate.into())
+        );
+        assert_eq!(market, before, "cap refusal cannot mutate aggregate bytes");
+
+        put_u64(
+            &mut market,
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            u64::MAX,
+        )
+        .expect("maximum outstanding supply");
+        let overflow_before = market.clone();
+        let overflow_bytes = aggregate_credit_plan_bytes(1);
+        let overflow = AffineBatchPlanV2::decode(&overflow_bytes).expect("overflow plan");
+        assert_eq!(
+            admit_principal_growth(overflow, &market, u64::MAX),
+            Err(AffineBatchSbfErrorV2::Candidate.into())
+        );
+        assert_eq!(market, overflow_before);
     }
 
     #[test]

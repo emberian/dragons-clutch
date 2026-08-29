@@ -30,6 +30,7 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -39,7 +40,9 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use super::affine_batch_v2::authenticate_runtime_product_basis_core_v3;
+use super::affine_batch_v2::{
+    authenticate_core_market_v3, authenticate_runtime_product_basis_core_v3,
+};
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
@@ -294,11 +297,21 @@ fn execute_authenticated(
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
     authenticate_market(program_id, accounts, plan, market)?;
-    if parent_authenticated {
+    let principal_cap_sets = if parent_authenticated {
         authenticate_parent_product_digests(accounts, plan)?;
+        authenticate_core_market_v3(
+            accounts.core_market,
+            accounts.core_program,
+            accounts.registry,
+            market,
+            plan.product_record_digest(),
+            dclutch_market_core_codec::Phase::Open,
+        )
+        .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
     } else {
-        authenticate_product_and_basis(accounts, plan, market)?;
-    }
+        authenticate_product_and_basis(accounts, plan, market)?
+    };
+    admit_principal_growth(plan, &market_before, principal_cap_sets)?;
     let (mut market_candidate, mut position_candidates) =
         build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
@@ -616,8 +629,8 @@ fn authenticate_product_and_basis(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
     market: MarketViewV2,
-) -> Result<(), ProgramError> {
-    Ok(authenticate_runtime_product_basis_core_v3(
+) -> Result<u64, ProgramError> {
+    authenticate_runtime_product_basis_core_v3(
         accounts.registry,
         accounts.rent,
         accounts.core_market,
@@ -645,7 +658,33 @@ fn authenticate_product_and_basis(
         plan.linked_basis_record_digest(),
         dclutch_market_core_codec::Phase::Open,
     )
-    .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?)
+    .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis.into())
+}
+
+/// Preflight every positive aggregate delta against Core's set-denominated
+/// principal cap before any candidate or account byte is changed.
+fn admit_principal_growth(
+    plan: SignedDeltaPlanV3<'_>,
+    market: &[u8],
+    principal_cap_sets: u64,
+) -> Result<(), ProgramError> {
+    let cap = MarketPrincipalCapSetsV1::read(principal_cap_sets);
+    for outcome in 0..plan.claim_count() {
+        let delta = plan
+            .aggregate_delta(outcome)
+            .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
+        if delta.direction() != DeltaDirectionV3::Credit {
+            continue;
+        }
+        let offset = usize::try_from(outcome)
+            .ok()
+            .and_then(|outcome| outcome.checked_mul(SCALAR_BYTES))
+            .and_then(|relative| LIABILITY_BASIS_MARKET_HEADER_BYTES_V2.checked_add(relative))
+            .ok_or(SignedDeltaSbfErrorV3::Candidate)?;
+        cap.admit_growth(read_u64(market, offset)?, delta.magnitude())
+            .map_err(|_| SignedDeltaSbfErrorV3::Candidate)?;
+    }
+    Ok(())
 }
 
 /// Rejoin the exact Product and ProductBasisV3 raw digests already
@@ -908,6 +947,76 @@ mod tests {
         )
         .expect("encode");
         bytes
+    }
+
+    fn aggregate_credit_plan_bytes(quantity: u64) -> Vec<u8> {
+        let positions = [SignedDeltaPositionV3::new([7; 32], 4).expect("destination")];
+        let aggregates = [delta(DeltaDirectionV3::Credit, quantity)];
+        let rows = [PositionDeltaV3::new(
+            PositionDeltaInputV3 {
+                position_index: 0,
+                outcome: 0,
+                delta: delta(DeltaDirectionV3::Credit, quantity),
+            },
+            1,
+            1,
+        )
+        .expect("complete-set credit")];
+        let mut bytes = vec![0; plan_bytes(1, 1, 1).expect("width")];
+        SignedDeltaPlanV3::encode_into(
+            SignedDeltaPlanInputV3 {
+                caller_role: CallerRole::Trading,
+                release_set: [1; 32],
+                market: [2; 32],
+                request_id: [3; 32],
+                product_record_digest: [4; 32],
+                semantic_basis_id: [5; 32],
+                linked_basis_record_digest: [6; 32],
+                expected_market_revision: 3,
+                claim_count: 1,
+            },
+            &positions,
+            &aggregates,
+            &rows,
+            &mut bytes,
+        )
+        .expect("encode complete-set credit");
+        bytes
+    }
+
+    #[test]
+    fn aggregate_credit_cap_boundary_excess_and_overflow_preflight_without_mutation() {
+        let mut market = vec![0; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + SCALAR_BYTES];
+        put_u64(&mut market, LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, 7)
+            .expect("outstanding supply");
+        let before = market.clone();
+        let boundary_bytes = aggregate_credit_plan_bytes(3);
+        let boundary = SignedDeltaPlanV3::decode(&boundary_bytes).expect("boundary plan");
+        assert_eq!(admit_principal_growth(boundary, &market, 10), Ok(()));
+        assert_eq!(market, before);
+
+        let excess_bytes = aggregate_credit_plan_bytes(4);
+        let excess = SignedDeltaPlanV3::decode(&excess_bytes).expect("excess plan");
+        assert_eq!(
+            admit_principal_growth(excess, &market, 10),
+            Err(SignedDeltaSbfErrorV3::Candidate.into())
+        );
+        assert_eq!(market, before, "cap refusal cannot mutate aggregate bytes");
+
+        put_u64(
+            &mut market,
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            u64::MAX,
+        )
+        .expect("maximum outstanding supply");
+        let overflow_before = market.clone();
+        let overflow_bytes = aggregate_credit_plan_bytes(1);
+        let overflow = SignedDeltaPlanV3::decode(&overflow_bytes).expect("overflow plan");
+        assert_eq!(
+            admit_principal_growth(overflow, &market, u64::MAX),
+            Err(SignedDeltaSbfErrorV3::Candidate.into())
+        );
+        assert_eq!(market, overflow_before);
     }
 
     #[test]

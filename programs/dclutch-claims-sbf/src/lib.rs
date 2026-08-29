@@ -11,9 +11,9 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_economic_slice_kernel::{
     BasketAction, BasketFrame, MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as EconomicPhase,
-    SCALAR_BYTES, execute_basket, initialize_market, initialize_position, market_identity,
-    market_outcome_count, market_phase, market_registry_program, market_release_set_id,
-    market_revision, position_market_id, position_owner, position_revision,
+    SCALAR_BYTES, execute_basket, initialize_market, initialize_position, market_hoard,
+    market_identity, market_outcome_count, market_phase, market_registry_program,
+    market_release_set_id, market_revision, position_market_id, position_owner, position_revision,
 };
 use dclutch_market_core_codec::{
     CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1,
@@ -23,6 +23,7 @@ use dclutch_market_core_codec::{
 use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
 use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -338,7 +339,6 @@ fn process_generic_plan(
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(&accounts, plan, packet_digest)?;
     authenticate_releases(&accounts, plan)?;
-    authenticate_economic_accounts(program_id, &accounts, plan, false)?;
     let basket_action = match plan.action() {
         ClaimsAction::TransferNative => BasketAction::TransferNative,
         ClaimsAction::Materialize => BasketAction::Materialize,
@@ -349,6 +349,8 @@ fn process_generic_plan(
         ClaimsAction::MergeCompleteSet => BasketAction::MergeCompleteSet,
         ClaimsAction::InitializeCompleteSet => return Err(ClaimsSbfError::Instruction.into()),
     };
+    let core = authenticate_economic_accounts(program_id, &accounts, plan, false)?;
+    authenticate_complete_set_growth(&accounts, plan, basket_action, core)?;
     let applied = execute_plan_economics(&accounts, plan, basket_action)?;
     let receipt = ClaimsReceiptV1::new(
         plan,
@@ -447,7 +449,8 @@ fn process_core_effect(
             prepare_foundational_split(program_id, account_infos, &accounts, envelope, plan)?;
         apply_foundational_split(program_id, account_infos, &accounts, plan, creation)?;
     }
-    authenticate_economic_accounts(program_id, &accounts, plan, foundational)?;
+    let core = authenticate_economic_accounts(program_id, &accounts, plan, foundational)?;
+    authenticate_complete_set_growth(&accounts, plan, basket_action, core)?;
     let applied = execute_plan_economics(&accounts, plan, basket_action)?;
     let envelope_length = u32::try_from(envelope_bytes.len())
         .map_err(|_| ClaimsSbfError::Instruction)?
@@ -561,6 +564,12 @@ fn prepare_foundational_split(
     {
         return Err(ClaimsSbfError::Identity.into());
     }
+    MarketPrincipalCapSetsV1::read(core.principal_cap_sets)
+        .admit_growth(
+            0,
+            plan.quantity(0).map_err(|_| ClaimsSbfError::Instruction)?,
+        )
+        .map_err(|_| ClaimsSbfError::Economic)?;
     let rent = account_infos
         .get(FOUNDATIONAL_RENT_ACCOUNT)
         .ok_or(ClaimsSbfError::Accounts)?;
@@ -1029,7 +1038,7 @@ fn authenticate_economic_accounts(
     accounts: &GenericAccounts<'_, '_>,
     plan: ClaimsPlanV1<'_>,
     foundational: bool,
-) -> ProgramResult {
+) -> Result<CoreState, ProgramError> {
     let market = accounts.market;
     let core = authenticate_core_market(
         program_id,
@@ -1080,7 +1089,33 @@ fn authenticate_economic_accounts(
         plan.destination_owner(),
         plan.outcome_count(),
         plan.expected_destination_revision(),
-    )
+    )?;
+    Ok(core)
+}
+
+/// Enforce Core's sole runtime principal cap at the legacy complete-set owner.
+///
+/// This route stores outstanding principal as the Claims aggregate Hoard in
+/// complete-set units. Non-mint actions carry no principal growth and remain
+/// unaffected.
+fn authenticate_complete_set_growth(
+    accounts: &GenericAccounts<'_, '_>,
+    plan: ClaimsPlanV1<'_>,
+    action: BasketAction,
+    core: CoreState,
+) -> ProgramResult {
+    if action != BasketAction::MintCompleteSet {
+        return Ok(());
+    }
+    let market = accounts
+        .market
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let outstanding_sets = market_hoard(&market).map_err(|_| ClaimsSbfError::Economic)?;
+    let added_sets = plan.quantity(0).map_err(|_| ClaimsSbfError::Instruction)?;
+    MarketPrincipalCapSetsV1::read(core.principal_cap_sets)
+        .admit_growth(outstanding_sets, added_sets)
+        .map_err(|_| ClaimsSbfError::Economic.into())
 }
 
 pub(crate) fn authenticate_core_market(
@@ -1410,6 +1445,27 @@ mod tests {
         .map_err(|_| ClaimsSbfError::Instruction.into())
     }
 
+    fn complete_set_mint_plan<'a>(
+        release_set: [u8; 32],
+        quantities: &'a [u8],
+    ) -> Result<ClaimsPlanV1<'a>, ProgramError> {
+        ClaimsPlanV1::new(
+            ClaimsAction::MintCompleteSet,
+            CallerRole::Trading,
+            release_set,
+            [2; 32],
+            [3; 32],
+            [0; 32],
+            [5; 32],
+            1,
+            NO_POSITION_REVISION,
+            0,
+            3,
+            quantities,
+        )
+        .map_err(|_| ClaimsSbfError::Instruction.into())
+    }
+
     fn semantic_id(byte: u8) -> Result<Identity, ProgramError> {
         Identity::new([byte; 32]).map_err(|_| ClaimsSbfError::Identity.into())
     }
@@ -1486,6 +1542,56 @@ mod tests {
         assert_eq!(applied.post_source_revision, 2);
         assert_eq!(applied.post_destination_revision, 1);
         assert_eq!(applied.payout, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn migration_only_complete_set_growth_checks_core_cap_without_mutation()
+    -> Result<(), ProgramError> {
+        let (accounts, release) = fixture()?;
+        let view = GenericAccounts::parse(&accounts)?;
+        let quantities = quantities(&[3, 3, 3]);
+        let release_set: [u8; 32] = release
+            .as_slice()
+            .try_into()
+            .map_err(|_| ClaimsSbfError::Instruction)?;
+        let plan = complete_set_mint_plan(release_set, &quantities)?;
+        let mut core = core_state(semantic_id(2)?)?;
+        core.principal_cap_sets = 13;
+        let before_market = view
+            .market
+            .try_borrow_data()
+            .map_err(|_| ClaimsSbfError::Accounts)?
+            .to_vec();
+        let before_destination = view
+            .destination
+            .try_borrow_data()
+            .map_err(|_| ClaimsSbfError::Accounts)?
+            .to_vec();
+
+        assert_eq!(
+            authenticate_complete_set_growth(&view, plan, BasketAction::MintCompleteSet, core),
+            Ok(())
+        );
+        core.principal_cap_sets = 12;
+        assert_eq!(
+            authenticate_complete_set_growth(&view, plan, BasketAction::MintCompleteSet, core),
+            Err(ClaimsSbfError::Economic.into())
+        );
+        assert_eq!(
+            view.market
+                .try_borrow_data()
+                .map_err(|_| ClaimsSbfError::Accounts)?
+                .as_ref(),
+            before_market
+        );
+        assert_eq!(
+            view.destination
+                .try_borrow_data()
+                .map_err(|_| ClaimsSbfError::Accounts)?
+                .as_ref(),
+            before_destination
+        );
         Ok(())
     }
 

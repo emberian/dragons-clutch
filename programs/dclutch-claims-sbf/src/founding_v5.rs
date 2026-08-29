@@ -35,6 +35,7 @@ use dclutch_market_core_codec::{
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
@@ -746,6 +747,9 @@ fn authenticate_product_core(
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
     let core = CoreState::decode(&core_data).map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     drop(core_data);
+    MarketPrincipalCapSetsV1::read(core.principal_cap_sets)
+        .admit_growth(0, request.quantity())
+        .map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     let market = MarketViewV2 {
         claim_count: request.claim_count(),
         revision: request.post_aggregate_revision(),
