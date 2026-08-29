@@ -131,9 +131,17 @@ moment. The refusal is a pure extension fact and not a size fact. The assertion
 is load-bearing and is not a tautology.
 
 **Cost.** The added CPI consumes 1,067 CU inside Token-2022, ~2,321 with CPI
-overhead, per Mint. Committed legs: `activate_receipt` 254,337,
+overhead, per Mint. That figure is this change's own, read off the Token-2022
+instruction log, and is the only number here that belongs to this change alone.
+
+The committed-leg totals are not, and the difference is worth stating rather
+than averaging away. Measured at `f7c960b9`: `activate_receipt` 254,337,
 `activate_coordinate` 405,138, `retire_coordinate` 340,832, `retire_receipt`
-264,515 — all far under the 1,400,000 meter the campaign's census witness pins.
+264,515. Re-measured at `2e3257d6` an hour later: 237,836 / 448,637 / 343,831 /
+267,514. Concurrent lanes changed shared Claims code between the two runs, so
+neither set attributes to this fix — quote them only with the commit beside
+them. All eight are far under the 1,400,000 meter the campaign's census witness
+pins, which is the property that actually had to hold.
 
 ## Named debt, not fixed here
 
