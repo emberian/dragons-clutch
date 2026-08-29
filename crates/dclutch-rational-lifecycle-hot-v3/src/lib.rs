@@ -19,6 +19,7 @@ mod bundle;
 mod compact_artifacts_v4;
 mod compact_operator_v4;
 mod effect;
+mod lifecycle_policy_v5;
 mod operator;
 mod selected_bundle_v5;
 mod selected_bundle_v6;
@@ -45,6 +46,9 @@ pub use compact_operator_v4::{
 pub use effect::{
     RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3, lifecycle_claims_account_count_v3,
     lifecycle_logical_account_count_v3,
+};
+pub use lifecycle_policy_v5::{
+    RATIONAL_LIFECYCLE_POLICY_BYTES_V5, encode_rational_lifecycle_policy_v5,
 };
 pub use operator::{
     CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotInstructionV3,
