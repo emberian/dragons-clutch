@@ -104,10 +104,7 @@ pub(crate) fn build_checked_local_mutable_set_v1(
             role,
             Path::new(&pin.checked_candidate_elf_path),
         )?;
-        if validated.gate_sha256 != gate.sha256
-            || validated.source_revision != gate.source_revision
-            || validated.source_tree_sha256 != gate.source_tree_sha256
-        {
+        if validated.gate_sha256 != gate.sha256 {
             return Err(Error::new(
                 "checked local role projection changed the selected release gate",
             ));
@@ -235,7 +232,7 @@ fn build_local_checked_release_v1(
         || basis.deployment_slot() != 0
         || basis.upgrade_authority().is_some()
         || hex(&basis.source_digest()) != validated.source_tree_sha256
-        || basis.source_revision() != source_revision
+        || basis.source_revision() != validated.source_revision
         || basis.solana_version() != validated.solana_cli_version
         || basis.target_triple() != "sbpf-solana-solana"
         || basis.build_command() != checked_build_command_v1(role)?

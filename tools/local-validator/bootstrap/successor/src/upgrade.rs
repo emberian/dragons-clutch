@@ -67,14 +67,16 @@ use crate::{
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
 
-const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v6";
-const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v1";
+const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v8";
+const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v2";
 const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
+const CHECKED_MIXED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v2";
+const RELEASE_BATCH_PLAN_SCHEMA: &str = "dclutch-sbf-release-batch-plan-v1";
 const LINK_PROVENANCE_SCHEMA: &str = "dclutch-sbf-link-provenance-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
 const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v3";
-const SET_JOURNAL_SCHEMA: &str = "dclutch-devnet-deployment-set-journal-v2";
-const SET_AUDIT_SCHEMA: &str = "dclutch-devnet-deployment-set-audit-v2";
+const SET_JOURNAL_SCHEMA: &str = "dclutch-devnet-deployment-set-journal-v3";
+const SET_AUDIT_SCHEMA: &str = "dclutch-devnet-deployment-set-audit-v3";
 const CARRY_FORWARD_SNAPSHOT_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v1";
 pub(crate) const CHECKED_SET_PREPARE_SCHEMA: &str = "dclutch-checked-deployment-set-release-pin-v2";
 pub(crate) const SEMANTIC_DERIVATION_V1: &str =
@@ -84,10 +86,15 @@ const EXCLUSIVE_PAYER_ACK_FLAG: &str = "--i-kept-fee-payer-exclusive";
 const OPERATION_ACCOUNTING_SCOPE_V1: &str = "exclusive-payer-window-observed-net-v1";
 const OPERATION_COST_ATTRIBUTION_V1: &str =
     "buffer-upload-transactions-and-fees-exact;final-upgrade-transaction-fee-exact";
+const ADOPTED_OPERATION_ACCOUNTING_SCOPE_V1: &str =
+    "adopted-buffer-refund-adjusted-upgrade-window-v1";
+const ADOPTED_OPERATION_COST_ATTRIBUTION_V1: &str =
+    "preexisting-buffer-rent-refund-exact;final-upgrade-transaction-fee-exact";
 const EXTENSION_ACK_FLAG: &str = "--i-accept-extension";
 const DEPLOYMENT_SET_JOURNAL_FLAG: &str = "--deployment-set-journal";
 const BUFFER_PUBKEY_FLAG: &str = "--buffer-pubkey";
 const BUFFER_KEYPAIR_FLAG: &str = "--buffer-keypair";
+const ADOPT_BUFFER_FLAG: &str = "--adopt-existing-buffer";
 const BUFFER_METADATA_BYTES: usize = 37;
 const BUFFER_WRITER_LEASE_SCHEMA: &str = "dclutch-buffer-writer-lease-v2";
 const BUFFER_WRITER_PERMIT_SCHEMA: &str = "dclutch-buffer-writer-permit-v1";
@@ -211,6 +218,7 @@ struct UpgradeArgsV1 {
     receipt_path: PathBuf,
     dump_path: PathBuf,
     solana_cli: PathBuf,
+    expected_deployment_solana_cli_version: String,
     target_acknowledgment: String,
     exclusive_payer_window_acknowledgment: Option<String>,
     execute: bool,
@@ -218,6 +226,9 @@ struct UpgradeArgsV1 {
     /// Upload and authenticate the exact persistent Buffer, then return at the
     /// durable BufferReady phase without constructing a Loader Upgrade.
     stop_after_buffer_ready: bool,
+    /// Adopt a separately uploaded, authority-retained Buffer only after the
+    /// full checked gate and current Loader prestate authenticate it exactly.
+    adopt_existing_buffer: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -297,6 +308,8 @@ struct UpgradeSetJournalV1 {
     source_revision: String,
     source_tree_sha256: String,
     devnet_genesis_hash: String,
+    /// CLI used on the signer host to submit Loader transactions. The checked
+    /// gate separately owns the SBF build-tool CLI identity.
     solana_cli_version: String,
     retained_upgrade_authority: String,
     fee_payer: String,
@@ -487,11 +500,75 @@ struct CheckedUpgradeGateV1 {
     links: Vec<CheckedGateLinkV1>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CheckedGateLinkV2 {
+    #[serde(flatten)]
+    link: CheckedGateLinkV1,
+    disposition: String,
+    cohort: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CheckedGateCohortV2 {
+    name: String,
+    source_revision: String,
+    source_tree_sha256: String,
+    build_run_id: String,
+    source_tree_manifest: GateFileV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CheckedUpgradeGateV2 {
+    schema: String,
+    source_revision: String,
+    source_tree_sha256: String,
+    solana_cli_version: String,
+    link_count: u64,
+    source_tree_manifest: GateFileV1,
+    build_links_manifest: GateFileV1,
+    diagnostics_manifest: GateFileV1,
+    carry_forward_plan: GateFileV1,
+    cohorts: Vec<CheckedGateCohortV2>,
+    links: Vec<CheckedGateLinkV2>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseBatchPlanV1 {
+    schema: String,
+    base_revision: String,
+    base_source_tree_sha256: String,
+    candidate_revision: String,
+    candidate_source_tree_sha256: String,
+    link_count: u64,
+    changed_link_count: u64,
+    links: Vec<ReleaseBatchPlanLinkV1>,
+    qualification: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseBatchPlanLinkV1 {
+    label: String,
+    package: String,
+    artifact_stem: Option<String>,
+    base_input_digest: String,
+    candidate_input_digest: String,
+    requires_new_artifact: bool,
+    changed_inputs: Vec<String>,
+    consumers: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ValidatedUpgradeGateV1 {
     gate_sha256: String,
     source_revision: String,
     source_tree_sha256: String,
+    artifact_source_revision: String,
+    artifact_source_tree_sha256: String,
     solana_cli_version: String,
     raw_elf: Vec<u8>,
     raw_elf_sha256: String,
@@ -735,6 +812,7 @@ struct UpgradeReceiptV1 {
     raw_elf_sha256: String,
     live_elf_sha256: String,
     live_elf_padding_bytes: u64,
+    sbf_build_solana_cli_version: String,
     solana_cli_version: String,
     before_context_slot: u64,
     before: LoaderObservationV1,
@@ -742,6 +820,7 @@ struct UpgradeReceiptV1 {
     exclusive_payer_window_acknowledgment: String,
     buffer_pubkey: String,
     buffer_keypair_path: String,
+    buffer_adopted: bool,
     buffer_data_bytes: u64,
     buffer_rent_exempt_lamports: u64,
     buffer_write_armed_block_height: Option<u64>,
@@ -796,6 +875,7 @@ struct UpgradePreflightV1 {
     fee_payer: String,
     rpc_origin_redacted: String,
     genesis_hash: String,
+    sbf_build_solana_cli_version: String,
     solana_cli_version: String,
     source_revision: String,
     source_tree_sha256: String,
@@ -1706,10 +1786,14 @@ pub(crate) fn usage() -> &'static str {
      --expected-source-revision GIT_COMMIT --expected-source-tree-sha256 SHA256 \\
      --baseline ABSOLUTE_JSON \\
      --receipt ABSOLUTE_JSON --dump ABSOLUTE_SO \\
-     --solana-cli ABSOLUTE_EXECUTABLE --i-accept-upgrade ROLE:PUBKEY \
+     --solana-cli ABSOLUTE_EXECUTABLE \
+     --expected-deployment-solana-cli-version EXACT_STRING \
+     --i-accept-upgrade ROLE:PUBKEY \
      (--preflight | --i-kept-fee-payer-exclusive ROLE:PUBKEY:PAYER --execute \
-      [--stop-after-buffer-ready])\n\n\
-     With --preflight, you run the complete gate, source, baseline, CLI-version, devnet-genesis, \
+      [--stop-after-buffer-ready] [--adopt-existing-buffer])\n\n\
+     The checked gate owns the SBF build-tool CLI identity; the explicit deployment CLI pin owns \
+     the signer-host executable identity. With --preflight, you run the complete gate, source, \
+     baseline, both CLI identities, devnet-genesis, \
      and one-context Program/ProgramData/payer admission without opening either keypair path, \
      writing a receipt or dump, or invoking a program command. With --execute, you update exactly \
      one existing decision-0012 devnet program. Execute also requires the exact \
@@ -1849,6 +1933,7 @@ fn audit_set_journal_with_runner(
             receipt_path: PathBuf::from(&role.receipt.canonical_path),
             dump_path: PathBuf::from(&role.dump.canonical_path),
             solana_cli: args.solana_cli.clone(),
+            expected_deployment_solana_cli_version: journal.solana_cli_version.clone(),
             target_acknowledgment: format!("{}:{}", role.role, role.program_id),
             exclusive_payer_window_acknowledgment: Some(format!(
                 "{}:{}:{}",
@@ -1857,14 +1942,9 @@ fn audit_set_journal_with_runner(
             execute: false,
             preflight: true,
             stop_after_buffer_ready: false,
+            adopt_existing_buffer: false,
         };
         let admission = admit_upgrade(&role_args)?;
-        if admission.gate.solana_cli_version != journal.solana_cli_version {
-            return Err(Error::new(format!(
-                "deployment-set CLI identity {:?} differs from checked gate {:?}",
-                journal.solana_cli_version, admission.gate.solana_cli_version
-            )));
-        }
         let loaded_receipt = load_receipt(&role_args.receipt_path)?;
         let receipt_phase = loaded_receipt.as_ref().map(|receipt| receipt.phase.clone());
         if role.receipt.sha256.is_some() && loaded_receipt.is_none() {
@@ -3136,6 +3216,7 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             receipt_path: PathBuf::from(&role.receipt.canonical_path),
             dump_path: PathBuf::from(&role.dump.canonical_path),
             solana_cli: PathBuf::from("/offline-solana-not-run"),
+            expected_deployment_solana_cli_version: journal.solana_cli_version.clone(),
             target_acknowledgment: format!("{}:{}", role.role, role.program_id),
             exclusive_payer_window_acknowledgment: Some(format!(
                 "{}:{}:{}",
@@ -3144,14 +3225,9 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             execute: false,
             preflight: false,
             stop_after_buffer_ready: false,
+            adopt_existing_buffer: false,
         };
         let admission = admit_upgrade(&role_args)?;
-        if admission.gate.solana_cli_version != journal.solana_cli_version {
-            return Err(Error::new(format!(
-                "{} gate CLI identity differs from the deployment-set journal",
-                role.role
-            )));
-        }
         validate_receipt_binding(
             &role_args,
             &admission.gate,
@@ -3301,6 +3377,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
     let mut execute = false;
     let mut preflight = false;
     let mut stop_after_buffer_ready = false;
+    let mut adopt_existing_buffer = false;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         if argument == "--stop-after-buffer-ready" {
@@ -3310,6 +3387,15 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
                 ));
             }
             stop_after_buffer_ready = true;
+            continue;
+        }
+        if argument == ADOPT_BUFFER_FLAG {
+            if adopt_existing_buffer {
+                return Err(Error::new(
+                    "--adopt-existing-buffer may be supplied only once",
+                ));
+            }
+            adopt_existing_buffer = true;
             continue;
         }
         if matches!(argument.as_str(), "--execute" | "--preflight") {
@@ -3350,6 +3436,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
                 | "--receipt"
                 | "--dump"
                 | "--solana-cli"
+                | "--expected-deployment-solana-cli-version"
                 | TARGET_ACK_FLAG
                 | EXCLUSIVE_PAYER_ACK_FLAG
         ) {
@@ -3370,6 +3457,11 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
     if stop_after_buffer_ready && !execute {
         return Err(Error::new(
             "--stop-after-buffer-ready requires --execute because Buffer upload is a devnet mutation",
+        ));
+    }
+    if adopt_existing_buffer && !execute {
+        return Err(Error::new(
+            "--adopt-existing-buffer requires --execute and the full checked-release gate",
         ));
     }
     let take = |label: &str| {
@@ -3407,7 +3499,16 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         fee_payer: parse_pubkey(&take("--fee-payer")?, "--fee-payer")?,
         fee_payer_keypair: absolute(&take("--fee-payer-keypair")?, "--fee-payer-keypair")?,
         buffer_pubkey,
-        buffer_keypair: absolute(&take(BUFFER_KEYPAIR_FLAG)?, BUFFER_KEYPAIR_FLAG)?,
+        buffer_keypair: if adopt_existing_buffer {
+            if values.contains_key(BUFFER_KEYPAIR_FLAG) {
+                return Err(Error::new(
+                    "--adopt-existing-buffer refuses a Buffer keypair; only the retained Buffer authority is used",
+                ));
+            }
+            PathBuf::new()
+        } else {
+            absolute(&take(BUFFER_KEYPAIR_FLAG)?, BUFFER_KEYPAIR_FLAG)?
+        },
         deployment_set_journal_path: absolute(
             &take(DEPLOYMENT_SET_JOURNAL_FLAG)?,
             DEPLOYMENT_SET_JOURNAL_FLAG,
@@ -3424,11 +3525,13 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         receipt_path: absolute(&take("--receipt")?, "--receipt")?,
         dump_path: absolute(&take("--dump")?, "--dump")?,
         solana_cli: absolute(&take("--solana-cli")?, "--solana-cli")?,
+        expected_deployment_solana_cli_version: take("--expected-deployment-solana-cli-version")?,
         target_acknowledgment: take(TARGET_ACK_FLAG)?,
         exclusive_payer_window_acknowledgment: values.get(EXCLUSIVE_PAYER_ACK_FLAG).cloned(),
         execute,
         preflight,
         stop_after_buffer_ready,
+        adopt_existing_buffer,
     })
 }
 
@@ -3612,11 +3715,13 @@ fn extension_shadow_args(args: &ExtensionArgsV1) -> UpgradeArgsV1 {
         receipt_path: args.receipt_path.clone(),
         dump_path: PathBuf::from("/extension-has-no-dump"),
         solana_cli: args.solana_cli.clone(),
+        expected_deployment_solana_cli_version: args.expected_solana_cli_version.clone(),
         target_acknowledgment: String::new(),
         exclusive_payer_window_acknowledgment: None,
         execute: args.execute,
         preflight: false,
         stop_after_buffer_ready: false,
+        adopt_existing_buffer: false,
     }
 }
 
@@ -3674,10 +3779,10 @@ fn execute_with_runner(
 
     let cli_version = invoke(runner, args, &["--version".into()])?;
     let observed_cli_version = cli_version.stdout.trim();
-    if observed_cli_version != gate.solana_cli_version {
+    if observed_cli_version != args.expected_deployment_solana_cli_version {
         return Err(Error::new(format!(
-            "Solana CLI version is {observed_cli_version:?} but artifact evidence pins {:?}",
-            gate.solana_cli_version
+            "deployment Solana CLI version is {observed_cli_version:?} but the signer-host pin is {:?}; SBF build provenance remains independently pinned to {:?}",
+            args.expected_deployment_solana_cli_version, gate.solana_cli_version,
         )));
     }
     authenticate_devnet(runner, args)?;
@@ -3707,15 +3812,13 @@ fn execute_with_runner(
                      an Upgrade; refusing replay ambiguity",
                 ));
             }
-            if runner
-                .read_buffer(
-                    &args.origin,
-                    args.buffer_pubkey,
-                    args.expected_upgrade_authority,
-                    before.context_slot,
-                )?
-                .is_some()
-            {
+            let existing_buffer = runner.read_buffer(
+                &args.origin,
+                args.buffer_pubkey,
+                args.expected_upgrade_authority,
+                before.context_slot,
+            )?;
+            if existing_buffer.is_some() && !args.adopt_existing_buffer {
                 return Err(Error::new(
                     "persistent Buffer already exists without this operation receipt; provenance is ambiguous",
                 ));
@@ -3725,9 +3828,31 @@ fn execute_with_runner(
                 .map_err(|_| Error::new("Buffer width does not fit u64"))?;
             let buffer_rent_exempt_lamports =
                 runner.minimum_balance_for_rent_exemption(&args.origin, buffer_data_bytes)?;
+            let adopted = if args.adopt_existing_buffer {
+                let buffer = existing_buffer.ok_or_else(|| {
+                    Error::new("--adopt-existing-buffer found no exact persistent Buffer")
+                })?;
+                if buffer.data_bytes != buffer_data_bytes
+                    || buffer.lamports != buffer_rent_exempt_lamports
+                    || buffer.authority != args.expected_upgrade_authority.to_string()
+                    || buffer.payload_sha256 != gate.raw_elf_sha256
+                {
+                    return Err(Error::new(
+                        "adopted Buffer owner/state width, rent, authority, or full payload SHA-256 differs from the checked role",
+                    ));
+                }
+                Some(buffer)
+            } else {
+                None
+            };
+            let empty_transactions: Vec<Value> = Vec::new();
             let mut receipt = UpgradeReceiptV1 {
                 schema: SCHEMA.into(),
-                phase: ReceiptPhaseV1::Prepared,
+                phase: if adopted.is_some() {
+                    ReceiptPhaseV1::BufferReady
+                } else {
+                    ReceiptPhaseV1::Prepared
+                },
                 operation_id,
                 role: args.role.clone(),
                 program_id: args.program_id.to_string(),
@@ -3745,25 +3870,37 @@ fn execute_with_runner(
                 raw_elf_sha256: gate.raw_elf_sha256.clone(),
                 live_elf_sha256: live_elf_sha256.clone(),
                 live_elf_padding_bytes,
-                solana_cli_version: gate.solana_cli_version.clone(),
+                sbf_build_solana_cli_version: gate.solana_cli_version.clone(),
+                solana_cli_version: args.expected_deployment_solana_cli_version.clone(),
                 before_context_slot: before.context_slot,
                 before: before.loader.clone(),
                 wallet_before_lamports: before.wallet_lamports,
                 exclusive_payer_window_acknowledgment: exclusive_payer_ack,
                 buffer_pubkey: args.buffer_pubkey.to_string(),
-                buffer_keypair_path: path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?,
+                buffer_keypair_path: if adopted.is_some() {
+                    String::new()
+                } else {
+                    path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?
+                },
+                buffer_adopted: adopted.is_some(),
                 buffer_data_bytes,
                 buffer_rent_exempt_lamports,
                 buffer_write_armed_block_height: None,
                 buffer_write_expiry_block_height: None,
                 buffer_write_cli_output: None,
-                buffer_ready_context_slot: None,
-                buffer_ready_account_sha256: None,
-                buffer_ready_lamports: None,
-                buffer_upload_fee_lamports: None,
-                buffer_upload_transactions: None,
-                buffer_upload_transactions_sha256: None,
-                buffer_upload_wallet_after_lamports: None,
+                buffer_ready_context_slot: adopted.as_ref().map(|buffer| buffer.context_slot),
+                buffer_ready_account_sha256: adopted
+                    .as_ref()
+                    .map(|buffer| buffer.account_sha256.clone()),
+                buffer_ready_lamports: adopted.as_ref().map(|buffer| buffer.lamports),
+                buffer_upload_fee_lamports: adopted.as_ref().map(|_| 0),
+                buffer_upload_transactions: adopted.as_ref().map(|_| empty_transactions.clone()),
+                buffer_upload_transactions_sha256: adopted
+                    .as_ref()
+                    .map(|_| digest(&serde_json::to_vec(&empty_transactions).expect("empty JSON"))),
+                buffer_upload_wallet_after_lamports: adopted
+                    .as_ref()
+                    .map(|_| before.wallet_lamports),
                 buffer_write_attempts: Vec::new(),
                 expired_packets: Vec::new(),
                 unsigned_message_base64: None,
@@ -3784,6 +3921,9 @@ fn execute_with_runner(
                 receipt_sha256: String::new(),
             };
             write_receipt(&args.receipt_path, &mut receipt)?;
+            if args.stop_after_buffer_ready && receipt.phase == ReceiptPhaseV1::BufferReady {
+                return Ok(receipt);
+            }
             continue_upgrade(runner, args, gate, candidate_live, &mut receipt)
         }
         Some(mut receipt)
@@ -3884,11 +4024,12 @@ fn preflight_with_runner(
         ));
     }
     let cli_version = invoke(runner, args, &["--version".into()])?;
-    if cli_version.stdout.trim() != admission.gate.solana_cli_version {
+    if cli_version.stdout.trim() != args.expected_deployment_solana_cli_version {
         return Err(Error::new(format!(
-            "Solana CLI version is {:?} but artifact evidence pins {:?}",
+            "deployment Solana CLI version is {:?} but the signer-host pin is {:?}; SBF build provenance remains independently pinned to {:?}",
             cli_version.stdout.trim(),
-            admission.gate.solana_cli_version
+            args.expected_deployment_solana_cli_version,
+            admission.gate.solana_cli_version,
         )));
     }
     authenticate_devnet(runner, args)?;
@@ -3997,7 +4138,8 @@ fn preflight_with_runner(
         fee_payer: args.fee_payer.to_string(),
         rpc_origin_redacted: args.origin.redacted_url(),
         genesis_hash: DEVNET_GENESIS_HASH.into(),
-        solana_cli_version: admission.gate.solana_cli_version,
+        sbf_build_solana_cli_version: admission.gate.solana_cli_version,
+        solana_cli_version: args.expected_deployment_solana_cli_version.clone(),
         source_revision: admission.gate.source_revision,
         source_tree_sha256: admission.gate.source_tree_sha256,
         checked_release_gate_sha256: admission.gate.gate_sha256,
@@ -5109,31 +5251,68 @@ fn finish_submitted(
     let programdata_delta = i128::from(after.loader.programdata_lamports)
         .checked_sub(i128::from(receipt.before.programdata_lamports))
         .ok_or_else(|| Error::new("ProgramData lamport delta overflow"))?;
-    let operation_observed_net_spend_lamports = receipt
-        .wallet_before_lamports
-        .checked_sub(after.wallet_lamports)
-        .ok_or_else(|| Error::new("exclusive payer wallet increased across the deploy window"))?;
-    let unattributed_cli_net_cost_lamports = operation_observed_net_spend_lamports
-        .checked_sub(transaction.fee_lamports)
-        .ok_or_else(|| {
-            Error::new(
-                "operation-wide observed payer spend is smaller than the final Upgrade transaction fee",
-            )
-        })?;
-    if transaction.payer_pre_lamports
-        != receipt
-            .buffer_upload_wallet_after_lamports
-            .ok_or_else(|| Error::new("Buffer-ready receipt omitted payer post-upload balance"))?
-        || transaction.payer_post_lamports != after.wallet_lamports
-        || unattributed_cli_net_cost_lamports
-            != receipt
-                .buffer_upload_fee_lamports
-                .ok_or_else(|| Error::new("Buffer-ready receipt omitted upload fees"))?
-    {
-        return Err(Error::new(
-            "final Upgrade transaction does not bridge the exact Buffer-upload and operation wallet balances",
-        ));
-    }
+    let upload_wallet_after = receipt
+        .buffer_upload_wallet_after_lamports
+        .ok_or_else(|| Error::new("Buffer-ready receipt omitted payer post-upload balance"))?;
+    let buffer_upload_fee = receipt
+        .buffer_upload_fee_lamports
+        .ok_or_else(|| Error::new("Buffer-ready receipt omitted upload fees"))?;
+    let (
+        operation_observed_net_spend_lamports,
+        unattributed_cli_net_cost_lamports,
+        accounting_scope,
+        cost_attribution,
+    ) = if receipt.buffer_adopted {
+        let expected_post = transaction
+            .payer_pre_lamports
+            .checked_add(receipt.buffer_rent_exempt_lamports)
+            .and_then(|with_refund| with_refund.checked_sub(transaction.fee_lamports))
+            .ok_or_else(|| Error::new("adopted Buffer refund arithmetic overflow"))?;
+        if upload_wallet_after != receipt.wallet_before_lamports
+            || buffer_upload_fee != 0
+            || transaction.payer_pre_lamports != receipt.wallet_before_lamports
+            || transaction.payer_post_lamports != after.wallet_lamports
+            || transaction.payer_post_lamports != expected_post
+        {
+            return Err(Error::new(
+                "adopted Buffer Upgrade does not bridge the exact pre-existing Buffer refund, transaction fee, and payer balances",
+            ));
+        }
+        (
+            transaction.fee_lamports,
+            0,
+            ADOPTED_OPERATION_ACCOUNTING_SCOPE_V1,
+            ADOPTED_OPERATION_COST_ATTRIBUTION_V1,
+        )
+    } else {
+        let operation_spend = receipt
+            .wallet_before_lamports
+            .checked_sub(after.wallet_lamports)
+            .ok_or_else(|| {
+                Error::new("exclusive payer wallet increased across the deploy window")
+            })?;
+        let unattributed = operation_spend
+            .checked_sub(transaction.fee_lamports)
+            .ok_or_else(|| {
+                Error::new(
+                    "operation-wide observed payer spend is smaller than the final Upgrade transaction fee",
+                )
+            })?;
+        if transaction.payer_pre_lamports != upload_wallet_after
+            || transaction.payer_post_lamports != after.wallet_lamports
+            || unattributed != buffer_upload_fee
+        {
+            return Err(Error::new(
+                "final Upgrade transaction does not bridge the exact Buffer-upload and operation wallet balances",
+            ));
+        }
+        (
+            operation_spend,
+            unattributed,
+            OPERATION_ACCOUNTING_SCOPE_V1,
+            OPERATION_COST_ATTRIBUTION_V1,
+        )
+    };
 
     let (dump_sha256, dump_shape) = verify_dump(
         runner,
@@ -5159,8 +5338,8 @@ fn finish_submitted(
         operation_wallet_after_lamports: after.wallet_lamports,
         operation_observed_net_spend_lamports,
         unattributed_cli_net_cost_lamports,
-        accounting_scope: OPERATION_ACCOUNTING_SCOPE_V1.into(),
-        cost_attribution: OPERATION_COST_ATTRIBUTION_V1.into(),
+        accounting_scope: accounting_scope.into(),
+        cost_attribution: cost_attribution.into(),
     });
     receipt.dump_sha256 = Some(dump_sha256);
     receipt.dump_shape = Some(dump_shape);
@@ -5330,8 +5509,8 @@ pub(crate) fn authenticate_checked_release_gate_role_for_local_v1(
     })?;
     Ok(CheckedLocalGateRoleV1 {
         gate_sha256: validated.gate_sha256,
-        source_revision: validated.source_revision,
-        source_tree_sha256: validated.source_tree_sha256,
+        source_revision: validated.artifact_source_revision,
+        source_tree_sha256: validated.artifact_source_tree_sha256,
         solana_cli_version: validated.solana_cli_version,
         raw_elf_sha256: validated.raw_elf_sha256,
         checked_build_manifest_path: validated.checked_build_manifest_path,
@@ -5385,6 +5564,17 @@ fn validate_checked_release_gate_selection(
             "checked-release gate SHA-256 is {gate_sha256}, expected {}",
             args.expected_checked_release_gate_sha256
         )));
+    }
+    let schema = serde_json::from_slice::<Value>(&gate_bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("schema")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+    if schema.as_deref() == Some(CHECKED_MIXED_GATE_SCHEMA) {
+        return validate_checked_mixed_gate_selection(args, &gate_bytes, gate_sha256);
     }
     let gate: CheckedUpgradeGateV1 = serde_json::from_slice(&gate_bytes).map_err(|error| {
         Error::new(format!(
@@ -5623,6 +5813,293 @@ fn validate_checked_release_gate_selection(
         })?;
     Ok(ValidatedUpgradeGateV1 {
         gate_sha256,
+        artifact_source_revision: gate.source_revision.clone(),
+        artifact_source_tree_sha256: gate.source_tree_sha256.clone(),
+        source_revision: gate.source_revision,
+        source_tree_sha256: gate.source_tree_sha256,
+        solana_cli_version: gate.solana_cli_version,
+        raw_elf,
+        raw_elf_sha256,
+        checked_build_manifest_path,
+        checked_build_manifest_sha256,
+        checked_build_manifest,
+    })
+}
+
+fn validate_checked_mixed_gate_selection(
+    args: CheckedReleaseGateSelectionV1<'_>,
+    gate_bytes: &[u8],
+    gate_sha256: String,
+) -> Result<ValidatedUpgradeGateV1> {
+    let gate: CheckedUpgradeGateV2 = serde_json::from_slice(gate_bytes).map_err(|error| {
+        Error::new(format!(
+            "checked-release gate is not canonical mixed v2 JSON: {error}"
+        ))
+    })?;
+    if gate.schema != CHECKED_MIXED_GATE_SCHEMA
+        || gate.source_revision != args.expected_source_revision
+        || gate.source_tree_sha256 != args.expected_source_tree_sha256
+        || gate.solana_cli_version.trim().is_empty()
+        || gate.link_count != SHIPPED_LINKS.len() as u64
+        || gate.links.len() != SHIPPED_LINKS.len()
+    {
+        return Err(Error::new(
+            "mixed checked gate schema, candidate source, CLI, or all-13 width differs",
+        ));
+    }
+    require_lower_hex(
+        &gate.source_revision,
+        "mixed gate candidate revision",
+        40,
+        40,
+    )?;
+    require_digest(&gate.source_tree_sha256, "mixed gate candidate tree")?;
+    let gate_path = fs::canonicalize(args.checked_release_gate_path)?;
+    let root = gate_path
+        .parent()
+        .ok_or_else(|| Error::new("mixed checked gate has no evidence root"))?
+        .to_path_buf();
+    let source_tree = verify_gate_file(
+        &root,
+        &gate.source_tree_manifest,
+        "mixed candidate source tree manifest",
+    )?
+    .1;
+    if source_tree.is_empty() || gate.source_tree_manifest.sha256 != gate.source_tree_sha256 {
+        return Err(Error::new(
+            "mixed gate candidate source-tree evidence differs",
+        ));
+    }
+    let build_links = verify_gate_file(&root, &gate.build_links_manifest, "build-link manifest")?.1;
+    let expected_build_links = SHIPPED_LINKS
+        .iter()
+        .map(|(label, package, _)| format!("{label}\t{package}\n"))
+        .collect::<String>();
+    if build_links != expected_build_links.as_bytes() {
+        return Err(Error::new("mixed gate build-link order differs"));
+    }
+    let diagnostics =
+        verify_gate_file(&root, &gate.diagnostics_manifest, "diagnostics manifest")?.1;
+    let expected_diagnostics = SHIPPED_LINKS
+        .iter()
+        .map(|(label, _, _)| format!("{label}=0\n"))
+        .collect::<String>();
+    if diagnostics != expected_diagnostics.as_bytes() {
+        return Err(Error::new(
+            "mixed gate diagnostics are not exact all-zero rows",
+        ));
+    }
+    let plan_bytes = verify_gate_file(&root, &gate.carry_forward_plan, "carry-forward plan")?.1;
+    let plan: ReleaseBatchPlanV1 = serde_json::from_slice(&plan_bytes)
+        .map_err(|error| Error::new(format!("carry-forward plan JSON differs: {error}")))?;
+    if plan.schema != RELEASE_BATCH_PLAN_SCHEMA
+        || plan.link_count != SHIPPED_LINKS.len() as u64
+        || plan.changed_link_count != 1
+        || plan.links.len() != SHIPPED_LINKS.len()
+        || plan.candidate_revision != gate.source_revision
+        || plan.candidate_source_tree_sha256 != gate.source_tree_sha256
+        || plan.qualification.trim().is_empty()
+    {
+        return Err(Error::new(
+            "mixed gate carry-forward plan source, width, or changed count differs",
+        ));
+    }
+    let cohort_names = gate
+        .cohorts
+        .iter()
+        .map(|cohort| cohort.name.as_str())
+        .collect::<Vec<_>>();
+    if cohort_names != ["base", "candidate"] {
+        return Err(Error::new(
+            "mixed gate cohorts are not exact base,candidate order",
+        ));
+    }
+    let base = &gate.cohorts[0];
+    let candidate = &gate.cohorts[1];
+    if base.source_revision != plan.base_revision
+        || base.source_tree_sha256 != plan.base_source_tree_sha256
+        || candidate.source_revision != plan.candidate_revision
+        || candidate.source_tree_sha256 != plan.candidate_source_tree_sha256
+    {
+        return Err(Error::new(
+            "mixed gate cohort identities differ from carry-forward plan",
+        ));
+    }
+    for cohort in &gate.cohorts {
+        require_lower_hex(&cohort.source_revision, "mixed cohort revision", 40, 40)?;
+        require_digest(&cohort.source_tree_sha256, "mixed cohort tree")?;
+        require_digest(&cohort.build_run_id, "mixed cohort build run")?;
+        let bytes = verify_gate_file(
+            &root,
+            &cohort.source_tree_manifest,
+            &format!("{} source tree manifest", cohort.name),
+        )?
+        .1;
+        if bytes.is_empty() || cohort.source_tree_manifest.sha256 != cohort.source_tree_sha256 {
+            return Err(Error::new(format!(
+                "{} source tree manifest differs",
+                cohort.name
+            )));
+        }
+    }
+
+    let mut selected = None;
+    let mut selected_cohort = None;
+    let mut selected_manifest = None;
+    for (((mixed_link, plan_link), (expected_label, expected_package, produces_artifact)), index) in
+        gate.links
+            .iter()
+            .zip(&plan.links)
+            .zip(SHIPPED_LINKS)
+            .zip(0usize..)
+    {
+        let link = &mixed_link.link;
+        if link.label != *expected_label
+            || link.package != *expected_package
+            || plan_link.label != *expected_label
+            || plan_link.package != *expected_package
+            || link.elf.is_some() != *produces_artifact
+            || link.checked_manifest.is_some() != *produces_artifact
+            || link.sbf_diagnostics_count != 0
+            || link.frame_count == 0
+            || link.frame_bound_bytes != 4096
+            || link.frames_at_or_over_bound != 0
+            || link.deepest_frame_bytes >= link.frame_bound_bytes
+        {
+            return Err(Error::new(format!(
+                "mixed gate link {index} identity/artifact/frame shape differs"
+            )));
+        }
+        require_digest(&plan_link.base_input_digest, "base closure digest")?;
+        require_digest(
+            &plan_link.candidate_input_digest,
+            "candidate closure digest",
+        )?;
+        if plan_link.consumers.is_empty() || plan_link.artifact_stem.is_some() != *produces_artifact
+        {
+            return Err(Error::new(format!(
+                "mixed plan {} consumer/artifact shape differs",
+                link.label
+            )));
+        }
+        let rebuilt = plan_link.requires_new_artifact;
+        if rebuilt {
+            if link.label != "claims"
+                || mixed_link.disposition != "rebuilt"
+                || mixed_link.cohort != "candidate"
+                || plan_link.changed_inputs.is_empty()
+                || plan_link.base_input_digest == plan_link.candidate_input_digest
+            {
+                return Err(Error::new(
+                    "mixed gate rebuilt row is not exact Claims candidate",
+                ));
+            }
+        } else if mixed_link.disposition != "carry-forward"
+            || mixed_link.cohort != "base"
+            || !plan_link.changed_inputs.is_empty()
+            || plan_link.base_input_digest != plan_link.candidate_input_digest
+        {
+            return Err(Error::new(format!(
+                "mixed gate {} carry-forward closure differs",
+                link.label
+            )));
+        }
+        let cohort = if rebuilt { candidate } else { base };
+        let provenance_bytes = verify_gate_file(
+            &root,
+            &link.artifact_provenance,
+            &format!("{} artifact provenance", link.label),
+        )?
+        .1;
+        let cohort_gate = CheckedUpgradeGateV1 {
+            schema: CHECKED_GATE_SCHEMA.into(),
+            source_revision: cohort.source_revision.clone(),
+            source_tree_sha256: cohort.source_tree_sha256.clone(),
+            solana_cli_version: gate.solana_cli_version.clone(),
+            build_run_id: cohort.build_run_id.clone(),
+            link_count: 0,
+            source_tree_manifest: cohort.source_tree_manifest.clone(),
+            build_links_manifest: gate.build_links_manifest.clone(),
+            build_run_manifest: gate.build_links_manifest.clone(),
+            diagnostics_manifest: gate.diagnostics_manifest.clone(),
+            links: Vec::new(),
+        };
+        let provenance = validate_link_provenance(&root, &cohort_gate, link, &provenance_bytes)?;
+        let build_log =
+            verify_gate_file(&root, &link.build_log, &format!("{} build log", link.label))?.1;
+        validate_compile_log(
+            &build_log,
+            &format!("dclutch-sbf-build-run-v1={}", cohort.build_run_id),
+            &format!(
+                "dclutch-sbf-build-invocation-v1={}",
+                provenance.plain_build.invocation
+            ),
+            &link.package,
+            &link.compile_marker,
+            &format!("{} build log", link.label),
+        )?;
+        let frame_log = verify_gate_file(
+            &root,
+            &link.frame_build_log,
+            &format!("{} frame log", link.label),
+        )?
+        .1;
+        validate_compile_log(
+            &frame_log,
+            &format!("dclutch-sbf-frame-run-v1={}", cohort.build_run_id),
+            &format!(
+                "dclutch-sbf-frame-invocation-v1={}",
+                provenance.frame_measurement.invocation
+            ),
+            &link.package,
+            &link.frame_compile_marker,
+            &format!("{} frame log", link.label),
+        )?;
+        let frame_report = verify_gate_file(
+            &root,
+            &link.frame_report,
+            &format!("{} frame report", link.label),
+        )?
+        .1;
+        validate_frame_report(&cohort_gate, link, &frame_report)?;
+        if let Some(manifest) = &link.checked_manifest {
+            let (path, bytes) =
+                verify_gate_file(&root, manifest, &format!("{} checked manifest", link.label))?;
+            if link.label == args.role {
+                selected_manifest = Some((path, manifest.sha256.clone(), bytes));
+            }
+        }
+        if let Some(elf) = &link.elf {
+            let (path, bytes) = verify_gate_file(&root, elf, &format!("{} ELF", link.label))?;
+            if bytes.get(..4) != Some(b"\x7fELF") {
+                return Err(Error::new(format!(
+                    "mixed gate {} file is not ELF",
+                    link.label
+                )));
+            }
+            if link.label == args.role {
+                if fs::canonicalize(args.elf_path)? != path {
+                    return Err(Error::new("selected ELF path differs from mixed gate role"));
+                }
+                selected = Some((bytes, elf.sha256.clone()));
+                selected_cohort = Some((
+                    cohort.source_revision.clone(),
+                    cohort.source_tree_sha256.clone(),
+                ));
+            }
+        }
+    }
+    let (raw_elf, raw_elf_sha256) = selected
+        .ok_or_else(|| Error::new(format!("mixed gate omitted selected {} ELF", args.role)))?;
+    let (checked_build_manifest_path, checked_build_manifest_sha256, checked_build_manifest) =
+        selected_manifest
+            .ok_or_else(|| Error::new("mixed gate omitted selected checked manifest"))?;
+    let (artifact_source_revision, artifact_source_tree_sha256) =
+        selected_cohort.ok_or_else(|| Error::new("mixed gate omitted selected artifact cohort"))?;
+    Ok(ValidatedUpgradeGateV1 {
+        gate_sha256,
+        artifact_source_revision,
+        artifact_source_tree_sha256,
         source_revision: gate.source_revision,
         source_tree_sha256: gate.source_tree_sha256,
         solana_cli_version: gate.solana_cli_version,
@@ -7309,7 +7786,7 @@ fn validate_buffer_write_attempts(
     gate: &ValidatedUpgradeGateV1,
     receipt: &UpgradeReceiptV1,
 ) -> Result<()> {
-    let command_sha256 = (args.buffer_pubkey != Pubkey::default())
+    let command_sha256 = (args.buffer_pubkey != Pubkey::default() && !receipt.buffer_adopted)
         .then(|| buffer_write_arguments(args, gate))
         .transpose()?
         .map(|arguments| buffer_write_command_sha256(args, &arguments))
@@ -7419,13 +7896,17 @@ fn validate_receipt_binding(
         || receipt.raw_elf_sha256 != gate.raw_elf_sha256
         || receipt.live_elf_sha256 != live_elf_sha256
         || receipt.live_elf_padding_bytes != live_elf_padding_bytes
-        || receipt.solana_cli_version != gate.solana_cli_version
+        || receipt.sbf_build_solana_cli_version != gate.solana_cli_version
+        || receipt.solana_cli_version != args.expected_deployment_solana_cli_version
         || receipt.exclusive_payer_window_acknowledgment
             != format!("{}:{}:{}", args.role, args.program_id, args.fee_payer)
         || (args.buffer_pubkey != Pubkey::default()
             && (receipt.buffer_pubkey != args.buffer_pubkey.to_string()
-                || receipt.buffer_keypair_path
-                    != path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?))
+                || (!receipt.buffer_adopted
+                    && receipt.buffer_keypair_path
+                        != path_argument(&args.buffer_keypair, BUFFER_KEYPAIR_FLAG)?)
+                || (receipt.buffer_adopted && !receipt.buffer_keypair_path.is_empty())))
+        || receipt.buffer_adopted != args.adopt_existing_buffer
         || receipt.buffer_data_bytes
             != u64::try_from(BUFFER_METADATA_BYTES + gate.raw_elf.len())
                 .map_err(|_| Error::new("Buffer width does not fit u64"))?
@@ -7533,11 +8014,13 @@ fn validate_receipt_binding(
             }
         }
         ReceiptPhaseV1::BufferReady => {
-            if receipt.buffer_write_attempts.is_empty()
-                || receipt
-                    .buffer_write_attempts
-                    .last()
-                    .is_none_or(|attempt| attempt.exit_observed_finalized_block_height.is_none())
+            let writer_shape_invalid = (!receipt.buffer_adopted
+                && (receipt.buffer_write_attempts.is_empty()
+                    || receipt.buffer_write_attempts.last().is_none_or(|attempt| {
+                        attempt.exit_observed_finalized_block_height.is_none()
+                    })))
+                || (receipt.buffer_adopted && !receipt.buffer_write_attempts.is_empty());
+            if writer_shape_invalid
                 || !has_buffer_ready
                 || !no_unsigned
                 || !no_signed
@@ -7650,47 +8133,62 @@ fn validate_complete_receipt_shape(receipt: &UpgradeReceiptV1) -> Result<()> {
     let upload_wallet_after = receipt
         .buffer_upload_wallet_after_lamports
         .ok_or_else(|| Error::new("complete Upgrade receipt omitted upload wallet balance"))?;
-    let operation_spend = arithmetic
-        .operation_wallet_before_lamports
-        .checked_sub(arithmetic.operation_wallet_after_lamports)
-        .ok_or_else(|| Error::new("complete Upgrade operation wallet increased"))?;
-    let unattributed = operation_spend
-        .checked_sub(arithmetic.transaction_fee_lamports)
-        .ok_or_else(|| {
-            Error::new("complete Upgrade operation spend is smaller than final transaction fee")
-        })?;
-    let expected_upload_spend = receipt
-        .buffer_rent_exempt_lamports
-        .checked_add(buffer_fee)
-        .ok_or_else(|| Error::new("complete Buffer upload spend overflow"))?;
-    let upload_spend = receipt
-        .wallet_before_lamports
-        .checked_sub(upload_wallet_after)
-        .ok_or_else(|| Error::new("complete Buffer upload wallet increased"))?;
     let expected_transaction_post = arithmetic
         .transaction_payer_pre_lamports
         .checked_add(receipt.buffer_rent_exempt_lamports)
         .and_then(|with_refund| with_refund.checked_sub(arithmetic.transaction_fee_lamports))
         .ok_or_else(|| Error::new("complete Upgrade refund arithmetic overflow"))?;
+    let accounting_invalid = if receipt.buffer_adopted {
+        buffer_fee != 0
+            || upload_wallet_after != receipt.wallet_before_lamports
+            || arithmetic.transaction_payer_pre_lamports != receipt.wallet_before_lamports
+            || arithmetic.operation_wallet_before_lamports != receipt.wallet_before_lamports
+            || arithmetic.operation_wallet_after_lamports
+                != arithmetic.transaction_payer_post_lamports
+            || arithmetic.operation_observed_net_spend_lamports
+                != arithmetic.transaction_fee_lamports
+            || arithmetic.unattributed_cli_net_cost_lamports != 0
+            || arithmetic.accounting_scope != ADOPTED_OPERATION_ACCOUNTING_SCOPE_V1
+            || arithmetic.cost_attribution != ADOPTED_OPERATION_COST_ATTRIBUTION_V1
+    } else {
+        let operation_spend = arithmetic
+            .operation_wallet_before_lamports
+            .checked_sub(arithmetic.operation_wallet_after_lamports)
+            .ok_or_else(|| Error::new("complete Upgrade operation wallet increased"))?;
+        let unattributed = operation_spend
+            .checked_sub(arithmetic.transaction_fee_lamports)
+            .ok_or_else(|| {
+                Error::new("complete Upgrade operation spend is smaller than final transaction fee")
+            })?;
+        let expected_upload_spend = receipt
+            .buffer_rent_exempt_lamports
+            .checked_add(buffer_fee)
+            .ok_or_else(|| Error::new("complete Buffer upload spend overflow"))?;
+        let upload_spend = receipt
+            .wallet_before_lamports
+            .checked_sub(upload_wallet_after)
+            .ok_or_else(|| Error::new("complete Buffer upload wallet increased"))?;
+        arithmetic.transaction_payer_pre_lamports != upload_wallet_after
+            || arithmetic.operation_wallet_before_lamports != receipt.wallet_before_lamports
+            || upload_spend != expected_upload_spend
+            || arithmetic.operation_observed_net_spend_lamports != operation_spend
+            || arithmetic.unattributed_cli_net_cost_lamports != unattributed
+            || unattributed != buffer_fee
+            || arithmetic.accounting_scope != OPERATION_ACCOUNTING_SCOPE_V1
+            || arithmetic.cost_attribution != OPERATION_COST_ATTRIBUTION_V1
+    };
     if after.deployment_slot <= receipt.before.deployment_slot
         || after.upgrade_authority != receipt.retained_upgrade_authority
         || after.live_elf_sha256 != receipt.live_elf_sha256
         || after.programdata_lamports != receipt.before.programdata_lamports
         || arithmetic.transaction_fee_lamports == 0
         || arithmetic.payer_fee_delta_lamports != arithmetic.transaction_fee_lamports
-        || arithmetic.transaction_payer_pre_lamports != upload_wallet_after
         || arithmetic.transaction_payer_post_lamports != expected_transaction_post
         || arithmetic.transaction_payer_post_lamports != arithmetic.operation_wallet_after_lamports
         || arithmetic.programdata_before_lamports != receipt.before.programdata_lamports
         || arithmetic.programdata_after_lamports != after.programdata_lamports
         || arithmetic.programdata_delta_lamports != 0
-        || arithmetic.operation_wallet_before_lamports != receipt.wallet_before_lamports
-        || upload_spend != expected_upload_spend
-        || arithmetic.operation_observed_net_spend_lamports != operation_spend
-        || arithmetic.unattributed_cli_net_cost_lamports != unattributed
-        || unattributed != buffer_fee
-        || arithmetic.accounting_scope != OPERATION_ACCOUNTING_SCOPE_V1
-        || arithmetic.cost_attribution != OPERATION_COST_ATTRIBUTION_V1
+        || accounting_invalid
         || receipt.exclusive_payer_window_acknowledgment
             != format!(
                 "{}:{}:{}",
@@ -8549,9 +9047,11 @@ mod tests {
         extension_fee_lamports: u64,
         extension_instruction_bytes: Option<u64>,
         buffer_pubkey: Pubkey,
+        buffer_authority: Pubkey,
         buffer_written: bool,
         buffer_payload: Vec<u8>,
         buffer_rent_lamports: u64,
+        minimum_buffer_rent_lamports: u64,
         buffer_upload_fee_lamports: u64,
         finalized_height: u64,
         authority_signer: Keypair,
@@ -8602,9 +9102,11 @@ mod tests {
                 extension_fee_lamports: 5_000,
                 extension_instruction_bytes: None,
                 buffer_pubkey: fixture.args.buffer_pubkey,
+                buffer_authority: fixture.authority,
                 buffer_written: false,
                 buffer_payload: fixture.raw_elf.clone(),
                 buffer_rent_lamports: 100_000,
+                minimum_buffer_rent_lamports: 100_000,
                 buffer_upload_fee_lamports: 0,
                 finalized_height: 1_000,
                 authority_signer: fixture.authority_signer.insecure_clone(),
@@ -9006,14 +9508,14 @@ mod tests {
             let mut data = vec![0_u8; BUFFER_METADATA_BYTES];
             data[..4].copy_from_slice(&1_u32.to_le_bytes());
             data[4] = 1;
-            data[5..BUFFER_METADATA_BYTES].copy_from_slice(authority.as_ref());
+            data[5..BUFFER_METADATA_BYTES].copy_from_slice(self.buffer_authority.as_ref());
             data.extend_from_slice(&self.buffer_payload);
             Ok(Some(BufferObservationV1 {
                 context_slot: self.before_context_slot + 1,
                 lamports: self.buffer_rent_lamports,
                 data_bytes: u64::try_from(data.len()).expect("fake Buffer width"),
                 account_sha256: digest(&data),
-                authority: authority.to_string(),
+                authority: self.buffer_authority.to_string(),
                 payload_sha256: digest(&data[BUFFER_METADATA_BYTES..]),
             }))
         }
@@ -9023,7 +9525,7 @@ mod tests {
             _origin: &ClusterOriginV1,
             _data_bytes: u64,
         ) -> Result<u64> {
-            Ok(self.buffer_rent_lamports)
+            Ok(self.minimum_buffer_rent_lamports)
         }
 
         fn authenticate_buffer_upload(
@@ -9496,11 +9998,13 @@ mod tests {
                 receipt_path: directory.0.join("receipt.json"),
                 dump_path: directory.0.join("dump.so"),
                 solana_cli: directory.0.join("missing-solana-cli"),
+                expected_deployment_solana_cli_version: solana_cli_version.clone(),
                 target_acknowledgment: format!("custody:{program}"),
                 exclusive_payer_window_acknowledgment: Some(format!("custody:{program}:{payer}")),
                 execute: true,
                 preflight: false,
                 stop_after_buffer_ready: false,
+                adopt_existing_buffer: false,
             };
             let carry_path = directory.0.join("carry-forward.json");
             fs::write(&carry_path, b"{}\n").expect("write carry placeholder");
@@ -10055,6 +10559,7 @@ mod tests {
                         raw_elf_sha256: digest(&raw_elf),
                         live_elf_sha256: digest(&raw_elf),
                         live_elf_padding_bytes: 0,
+                        sbf_build_solana_cli_version: fixture.solana_cli_version.clone(),
                         solana_cli_version: fixture.solana_cli_version.clone(),
                         before_context_slot: context_slot,
                         before: before.clone(),
@@ -10062,6 +10567,7 @@ mod tests {
                         exclusive_payer_window_acknowledgment: format!("{role}:{program}:{payer}"),
                         buffer_pubkey: receipt_buffer.to_string(),
                         buffer_keypair_path: format!("mixed-set/{role}-buffer-keypair.json"),
+                        buffer_adopted: false,
                         buffer_data_bytes: u64::try_from(BUFFER_METADATA_BYTES + raw_elf.len())
                             .expect("buffer width"),
                         buffer_rent_exempt_lamports: 1,
@@ -11096,7 +11602,7 @@ mod tests {
         replay.deployed = true;
         replay.version.push_str(" drift");
         let error = execute_with_runner(&cli.args, &mut replay).expect_err("CLI drift");
-        assert!(error.to_string().contains("artifact evidence pins"));
+        assert!(error.to_string().contains("signer-host pin"));
 
         let payload = Fixture::new();
         let mut first = FakeRunner::new(&payload);
@@ -11907,6 +12413,117 @@ mod tests {
                 .contains("already crossed the Loader Upgrade construction boundary")
         );
         assert!(forbidden.calls.is_empty());
+    }
+
+    #[test]
+    fn adopted_buffer_is_no_write_stage_and_refund_adjusted_upgrade() {
+        let mut fixture = Fixture::new();
+        fixture.args.adopt_existing_buffer = true;
+        fixture.args.buffer_keypair = PathBuf::new();
+        fixture.args.stop_after_buffer_ready = true;
+        fixture.args.expected_deployment_solana_cli_version =
+            "solana-cli 4.0.2 (deployment-test)".into();
+        let mut runner = FakeRunner::new(&fixture);
+        runner.version = fixture.args.expected_deployment_solana_cli_version.clone();
+        runner.buffer_written = true;
+        // The standard CLI upload predates this operation. Model the current
+        // signer wallet as one million lamports despite the retained Buffer.
+        runner.before_wallet = 1_100_000;
+
+        let staged = execute_with_runner(&fixture.args, &mut runner)
+            .expect("exact pre-existing Buffer is adopted without a writer");
+        assert_eq!(staged.phase, ReceiptPhaseV1::BufferReady);
+        assert!(staged.buffer_adopted);
+        assert!(staged.buffer_keypair_path.is_empty());
+        assert_eq!(staged.wallet_before_lamports, 1_000_000);
+        assert_eq!(staged.buffer_upload_wallet_after_lamports, Some(1_000_000));
+        assert_eq!(staged.buffer_upload_fee_lamports, Some(0));
+        assert_eq!(staged.buffer_upload_transactions, Some(Vec::new()));
+        assert_eq!(runner.prepare_count, 0);
+        assert_eq!(runner.sign_count, 0);
+        assert_eq!(runner.send_count, 0);
+        assert!(
+            runner
+                .calls
+                .iter()
+                .all(|call| { call.first().map(String::as_str) != Some("program") })
+        );
+
+        let mut resume_args = fixture.args.clone();
+        resume_args.stop_after_buffer_ready = false;
+        let mut resume = FakeRunner::new(&fixture);
+        resume.version = resume_args.expected_deployment_solana_cli_version.clone();
+        resume.buffer_written = true;
+        resume.before_wallet = 1_100_000;
+        resume.after_wallet = 1_085_000;
+        let complete = execute_with_runner(&resume_args, &mut resume)
+            .expect("adopted Buffer Upgrade refunds exact rent minus final fee");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(resume.send_count, 1);
+        let arithmetic = complete.arithmetic.expect("adopted arithmetic");
+        assert_eq!(arithmetic.transaction_payer_pre_lamports, 1_000_000);
+        assert_eq!(arithmetic.transaction_payer_post_lamports, 1_085_000);
+        assert_eq!(arithmetic.transaction_fee_lamports, 15_000);
+        assert_eq!(arithmetic.operation_observed_net_spend_lamports, 15_000);
+        assert_eq!(arithmetic.unattributed_cli_net_cost_lamports, 0);
+        assert_eq!(
+            arithmetic.accounting_scope,
+            ADOPTED_OPERATION_ACCOUNTING_SCOPE_V1
+        );
+        assert_eq!(
+            arithmetic.cost_attribution,
+            ADOPTED_OPERATION_COST_ATTRIBUTION_V1
+        );
+        assert_eq!(
+            complete.sbf_build_solana_cli_version,
+            fixture.solana_cli_version
+        );
+        assert_eq!(
+            complete.solana_cli_version,
+            resume_args.expected_deployment_solana_cli_version
+        );
+    }
+
+    #[test]
+    fn adopted_buffer_refuses_payload_rent_and_authority_substitution_before_send() {
+        let configure = |fixture: &mut Fixture| {
+            fixture.args.adopt_existing_buffer = true;
+            fixture.args.buffer_keypair = PathBuf::new();
+            fixture.args.stop_after_buffer_ready = true;
+        };
+
+        let mut payload = Fixture::new();
+        configure(&mut payload);
+        let mut payload_runner = FakeRunner::new(&payload);
+        payload_runner.buffer_written = true;
+        payload_runner.before_wallet = 1_100_000;
+        payload_runner.buffer_payload[4] ^= 1;
+        let error = execute_with_runner(&payload.args, &mut payload_runner)
+            .expect_err("substituted payload must refuse");
+        assert!(error.to_string().contains("full payload SHA-256"));
+        assert_eq!(payload_runner.send_count, 0);
+
+        let mut rent = Fixture::new();
+        configure(&mut rent);
+        let mut rent_runner = FakeRunner::new(&rent);
+        rent_runner.buffer_written = true;
+        rent_runner.before_wallet = 1_100_000;
+        rent_runner.buffer_rent_lamports += 1;
+        let error = execute_with_runner(&rent.args, &mut rent_runner)
+            .expect_err("substituted rent must refuse");
+        assert!(error.to_string().contains("width, rent, authority"));
+        assert_eq!(rent_runner.send_count, 0);
+
+        let mut authority = Fixture::new();
+        configure(&mut authority);
+        let mut authority_runner = FakeRunner::new(&authority);
+        authority_runner.buffer_written = true;
+        authority_runner.before_wallet = 1_100_000;
+        authority_runner.buffer_authority = Pubkey::new_unique();
+        let error = execute_with_runner(&authority.args, &mut authority_runner)
+            .expect_err("substituted authority must refuse");
+        assert!(error.to_string().contains("authority"));
+        assert_eq!(authority_runner.send_count, 0);
     }
 
     #[test]
