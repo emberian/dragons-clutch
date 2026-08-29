@@ -70,17 +70,29 @@ function domain(source, name) {
   return match[1];
 }
 
+/**
+ * Rust visibility, which this emitter reads past rather than depending on.
+ *
+ * How widely a constant is exported says nothing about the wire. When the
+ * founding route was split into two outers the raw-request indices had to
+ * become `pub(crate)` so the new stage module could import them, and every
+ * emitter that matched a bare `const` stopped finding constants whose value had
+ * not changed by a single byte. An ABI mirror must key off the name and the
+ * value, never the keyword in front of them.
+ */
+const VISIBILITY = '(?:pub(?:\\((?:crate|super|self|in [a-z_:]+)\\))? )?';
+
 /** Resolve a plain `const NAME: usize = <decimal>;` from either Rust source. */
 function namedUsize(name) {
   for (const key of ['route', 'codec']) {
-    const match = sources[key].match(new RegExp(`\\n(?:pub )?const ${name}: usize = ([0-9]+);`));
+    const match = sources[key].match(new RegExp(`\\n${VISIBILITY}const ${name}: usize = ([0-9]+);`));
     if (match) return Number(match[1]);
   }
   throw new Error(`missing Rust usize constant ${name}`);
 }
 
 /**
- * Read a private `const NAME: usize = …;` inside the route module.
+ * Read a `const NAME: usize = …;` inside the route module.
  *
  * Literals first, then the one derived form the route uses: `NAMED ± k`, where
  * NAMED is a frame count the codec publishes. Route indices started as bare
@@ -93,9 +105,9 @@ function namedUsize(name) {
  * this parser.
  */
 function routeIndex(name, expected) {
-  const literal = sources.route.match(new RegExp(`\\nconst ${name}: usize = ([0-9]+);`));
+  const literal = sources.route.match(new RegExp(`\\n${VISIBILITY}const ${name}: usize = ([0-9]+);`));
   if (literal) return Number(literal[1]);
-  const expression = sources.route.match(new RegExp(`\\nconst ${name}: usize = ([^;]+);`));
+  const expression = sources.route.match(new RegExp(`\\n${VISIBILITY}const ${name}: usize = ([^;]+);`));
   if (!expression) throw new Error(`missing Rust route index ${name}`);
   const derived = expression[1].trim().match(/^([A-Z0-9_]+) ([+-]) ([0-9]+)$/);
   if (!derived) throw new Error(`unparsable Rust route index ${name}: ${expression[1].trim()}`);
