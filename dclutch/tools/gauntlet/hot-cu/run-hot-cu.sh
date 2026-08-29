@@ -96,6 +96,8 @@ SEEDS=20
 SUBSTRATE="immutable"
 CHECKED_GATE=""
 CHECKED_GATE_SHA256=""
+MIXED_GATE_SELECTION=""
+MIXED_GATE_SELECTION_SHA256=""
 PROBE="false"
 # The harness paths whose dirtiness the DIRTY flag cannot speak for: `--commit`
 # archives the BUILD, but the fixture derivation -- keys, substrate, staged
@@ -124,6 +126,12 @@ usage: tools/gauntlet/hot-cu/run-hot-cu.sh [options]
                    all-13 checked gate and each link's provenance descriptor.
   --checked-gate-sha256 HEX64
                    required out-of-band digest for --checked-gate.
+  --mixed-gate-selection PATH
+                   bounded v2 bridge: consume the exact Trading role projection
+                   already emitted by compose-mixed-gate.py verify. This never
+                   parses a mixed gate independently and preserves the v1 path.
+  --mixed-gate-selection-sha256 HEX64
+                   required out-of-band digest for --mixed-gate-selection.
   --probe          explicitly allow working-tree, --elf-dir, --trading-elf, or
                    a seed count other than 20. Probe output is never M-61 and
                    its JSON mean_cu remains null.
@@ -156,6 +164,8 @@ while [ "$#" -gt 0 ]; do
         --trading-elf) TRADING_ELF_OVERRIDE="${2:?--trading-elf needs a value}"; shift 2 ;;
         --checked-gate) CHECKED_GATE="${2:?--checked-gate needs a value}"; shift 2 ;;
         --checked-gate-sha256) CHECKED_GATE_SHA256="${2:?--checked-gate-sha256 needs a value}"; shift 2 ;;
+        --mixed-gate-selection) MIXED_GATE_SELECTION="${2:?--mixed-gate-selection needs a value}"; shift 2 ;;
+        --mixed-gate-selection-sha256) MIXED_GATE_SELECTION_SHA256="${2:?--mixed-gate-selection-sha256 needs a value}"; shift 2 ;;
         --probe) PROBE="true"; shift ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --seeds) SEEDS="${2:?--seeds needs a value}"; shift 2 ;;
@@ -168,6 +178,12 @@ done
 case "$WORK" in /*) ;; *) echo "hot-cu: --work must be absolute" >&2; exit 2 ;; esac
 case "$SEEDS" in ''|*[!0-9]*) echo "hot-cu: --seeds must be a decimal count" >&2; exit 2 ;; esac
 [ "$SEEDS" -gt 0 ] || { echo "hot-cu: --seeds must be positive" >&2; exit 2; }
+if [ -n "$MIXED_GATE_SELECTION" ] || [ -n "$MIXED_GATE_SELECTION_SHA256" ]; then
+    [ -n "$MIXED_GATE_SELECTION" ] && [ -n "$MIXED_GATE_SELECTION_SHA256" ] \
+        || { echo "hot-cu: --mixed-gate-selection and --mixed-gate-selection-sha256 are one required pair" >&2; exit 2; }
+    [ -n "$CHECKED_GATE" ] && [ -n "$CHECKED_GATE_SHA256" ] \
+        || { echo "hot-cu: mixed-gate projection requires --checked-gate + --checked-gate-sha256" >&2; exit 2; }
+fi
 if [ -n "$CHECKED_GATE" ] || [ -n "$CHECKED_GATE_SHA256" ]; then
     [ -n "$CHECKED_GATE" ] && [ -n "$CHECKED_GATE_SHA256" ] \
         || { echo "hot-cu: --checked-gate and --checked-gate-sha256 are one required pair" >&2; exit 2; }
@@ -193,11 +209,19 @@ die() { echo "hot-cu: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 PROVENANCE_TOOL="$REPO/tools/release/artifact_provenance.py"
+MIXED_GATE_TOOL="$REPO/tools/release/compose-mixed-gate.py"
+MIXED_GATE_ADAPTER="$REPO/tools/gauntlet/hot-cu/mixed-gate-selection.py"
 
 command -v cargo >/dev/null 2>&1 || die "cargo not found"
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
     || die "not a repository: $REPO"
 [ -x "$PROVENANCE_TOOL" ] || die "artifact provenance selector is not executable: $PROVENANCE_TOOL"
+if [ -n "$MIXED_GATE_SELECTION" ]; then
+    [ -f "$MIXED_GATE_TOOL" ] && [ ! -L "$MIXED_GATE_TOOL" ] \
+        || die "mixed-gate semantic owner is not one regular file: $MIXED_GATE_TOOL"
+    [ -f "$MIXED_GATE_ADAPTER" ] && [ ! -L "$MIXED_GATE_ADAPTER" ] \
+        || die "mixed-gate Hot CU adapter is not one regular file: $MIXED_GATE_ADAPTER"
+fi
 if [ -n "$TRADING_ELF_OVERRIDE" ]; then
     case "$TRADING_ELF_OVERRIDE" in
         /*) ;;
@@ -222,6 +246,7 @@ mkdir -p "$WORK" "$LOGS" "$SWEEP"
 rm -f "$SWEEP"/seed*.log
 
 GATE_MODE="false"
+MIXED_GATE_MODE="false"
 GATE_SELECTION_DIR="$WORK/gate-role-selections"
 GATE_SOURCE_TREE_SHA256=""
 CHECKED_GATE_SHA_JSON=null
@@ -242,29 +267,61 @@ if not isinstance(field, str) or not field:
 print(field)
 PY
 }
+json_role_path() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import pathlib
+import sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+field = value["role_elf_paths"][sys.argv[2]]
+if not isinstance(field, str) or not field:
+    raise SystemExit(f"selection role {sys.argv[2]} is not nonempty text")
+print(field)
+PY
+}
 if [ -n "$CHECKED_GATE" ]; then
     case "$CHECKED_GATE" in /*) ;; *) die "--checked-gate must be absolute" ;; esac
     rm -rf "$GATE_SELECTION_DIR"
     mkdir -p "$GATE_SELECTION_DIR"
-    for role in registry trading core claims custody; do
-        python3 "$PROVENANCE_TOOL" select-gate-role \
+    if [ -n "$MIXED_GATE_SELECTION" ]; then
+        case "$MIXED_GATE_SELECTION" in /*) ;; *) die "--mixed-gate-selection must be absolute" ;; esac
+        python3 "$MIXED_GATE_ADAPTER" \
+            --repo "$REPO" \
             --gate "$CHECKED_GATE" \
             --gate-sha256 "$CHECKED_GATE_SHA256" \
-            --role "$role" > "$GATE_SELECTION_DIR/$role.json" \
-            || die "checked gate did not authenticate the exact $role role"
-    done
-    REVISION="$(json_field "$GATE_SELECTION_DIR/trading.json" source_revision)"
-    GATE_SOURCE_TREE_SHA256="$(json_field "$GATE_SELECTION_DIR/trading.json" source_tree_sha256)"
-    for role in registry core claims custody; do
-        [ "$(json_field "$GATE_SELECTION_DIR/$role.json" source_revision)" = "$REVISION" ] \
-            && [ "$(json_field "$GATE_SELECTION_DIR/$role.json" source_tree_sha256)" = "$GATE_SOURCE_TREE_SHA256" ] \
-            || die "checked role selections do not share one source revision/tree"
-    done
-    REGISTRY_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/registry.json" elf_path)"
-    TRADING_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/trading.json" elf_path)"
-    CORE_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/core.json" elf_path)"
-    CLAIMS_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/claims.json" elf_path)"
-    CUSTODY_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/custody.json" elf_path)"
+            --selection "$MIXED_GATE_SELECTION" \
+            --selection-sha256 "$MIXED_GATE_SELECTION_SHA256" \
+            --output "$GATE_SELECTION_DIR/mixed.json" \
+            || die "mixed-gate projection did not authenticate the exact Hot CU role closure"
+        REVISION="$(json_field "$GATE_SELECTION_DIR/mixed.json" source_revision)"
+        GATE_SOURCE_TREE_SHA256="$(json_field "$GATE_SELECTION_DIR/mixed.json" source_tree_sha256)"
+        REGISTRY_ELF_PATH="$(json_role_path "$GATE_SELECTION_DIR/mixed.json" registry)"
+        TRADING_ELF_PATH="$(json_role_path "$GATE_SELECTION_DIR/mixed.json" trading)"
+        CORE_ELF_PATH="$(json_role_path "$GATE_SELECTION_DIR/mixed.json" core)"
+        CLAIMS_ELF_PATH="$(json_role_path "$GATE_SELECTION_DIR/mixed.json" claims)"
+        CUSTODY_ELF_PATH="$(json_role_path "$GATE_SELECTION_DIR/mixed.json" custody)"
+        MIXED_GATE_MODE="true"
+    else
+        for role in registry trading core claims custody; do
+            python3 "$PROVENANCE_TOOL" select-gate-role \
+                --gate "$CHECKED_GATE" \
+                --gate-sha256 "$CHECKED_GATE_SHA256" \
+                --role "$role" > "$GATE_SELECTION_DIR/$role.json" \
+                || die "checked gate did not authenticate the exact $role role"
+        done
+        REVISION="$(json_field "$GATE_SELECTION_DIR/trading.json" source_revision)"
+        GATE_SOURCE_TREE_SHA256="$(json_field "$GATE_SELECTION_DIR/trading.json" source_tree_sha256)"
+        for role in registry core claims custody; do
+            [ "$(json_field "$GATE_SELECTION_DIR/$role.json" source_revision)" = "$REVISION" ] \
+                && [ "$(json_field "$GATE_SELECTION_DIR/$role.json" source_tree_sha256)" = "$GATE_SOURCE_TREE_SHA256" ] \
+                || die "checked role selections do not share one source revision/tree"
+        done
+        REGISTRY_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/registry.json" elf_path)"
+        TRADING_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/trading.json" elf_path)"
+        CORE_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/core.json" elf_path)"
+        CLAIMS_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/claims.json" elf_path)"
+        CUSTODY_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/custody.json" elf_path)"
+    fi
     GATE_MODE="true"
     CHECKED_GATE_SHA_JSON="\"$CHECKED_GATE_SHA256\""
 else
@@ -336,12 +393,54 @@ if [ "$GATE_MODE" = "true" ]; then
     git -C "$REPO" ls-tree -r --full-tree "$REVISION" > "$WORK/gate-source-tree.txt"
     [ "$(sha256 "$WORK/gate-source-tree.txt")" = "$GATE_SOURCE_TREE_SHA256" ] \
         || die "local source revision does not reproduce the checked gate source-tree digest"
-    cmp -s "$REPO/tools/gauntlet/hot-cu/run-hot-cu.sh" \
-        "$BUILD_ROOT/tools/gauntlet/hot-cu/run-hot-cu.sh" \
-        || die "Hot CU selector differs from the checked gate source revision"
-    cmp -s "$PROVENANCE_TOOL" "$BUILD_ROOT/tools/release/artifact_provenance.py" \
-        || die "artifact provenance selector differs from the checked gate source revision"
-    PROVENANCE_TOOL="$BUILD_ROOT/tools/release/artifact_provenance.py"
+    # `waist::elves` consumes the explicit authenticated paths above, but
+    # ProgramTest's `add_upgradeable_program_to_genesis(name, ..)` separately
+    # resolves `name.so` below SBF_OUT_DIR before the fixture replaces the
+    # ProgramData bytes.  Stage byte-identical regular copies under those five
+    # canonical loader names; an empty selector directory makes every seed fail
+    # before Hot, while pointing SBF_OUT_DIR at a mixed gate is insufficient
+    # because its evidence filenames are role.so rather than package names.
+    stage_checked_elf() {
+        source=$1
+        name=$2
+        target="$ELF_DIR/$name"
+        cp "$source" "$target"
+        cmp -s "$source" "$target" \
+            || die "work-local checked ELF staging differs: $name"
+    }
+    stage_checked_elf "$REGISTRY_ELF_PATH" dclutch_registry_sbf.so
+    stage_checked_elf "$TRADING_ELF_PATH" dclutch_trading_sbf.so
+    stage_checked_elf "$CORE_ELF_PATH" dclutch_core_sbf.so
+    stage_checked_elf "$CLAIMS_ELF_PATH" dclutch_claims_sbf.so
+    stage_checked_elf "$CUSTODY_ELF_PATH" dclutch_custody_sbf.so
+    if [ "$MIXED_GATE_MODE" = "true" ]; then
+        # The mixed projection is the bounded bridge: the archived candidate
+        # predates the v2 composer, so it cannot own this selector.  Require all
+        # four bridge/semantic-owner files to equal the current committed tree;
+        # the adapter then replays the composer byte-for-byte.  The v1 branch
+        # below retains its original candidate-source equality unchanged.
+        BRIDGE_REVISION="$(git -C "$REPO" rev-parse HEAD)"
+        for relative in \
+            tools/gauntlet/hot-cu/run-hot-cu.sh \
+            tools/gauntlet/hot-cu/mixed-gate-selection.py \
+            tools/release/compose-mixed-gate.py \
+            tools/release/artifact_provenance.py
+        do
+            archived="$WORK/bridge-$(basename "$relative")"
+            git -C "$REPO" show "$BRIDGE_REVISION:$relative" > "$archived" \
+                || die "mixed-gate bridge source is absent from committed revision $BRIDGE_REVISION: $relative"
+            cmp -s "$REPO/$relative" "$archived" \
+                || die "mixed-gate bridge source differs from committed revision $BRIDGE_REVISION: $relative"
+        done
+        PROVENANCE="$PROVENANCE; mixed projection $MIXED_GATE_SELECTION_SHA256 via bridge $BRIDGE_REVISION"
+    else
+        cmp -s "$REPO/tools/gauntlet/hot-cu/run-hot-cu.sh" \
+            "$BUILD_ROOT/tools/gauntlet/hot-cu/run-hot-cu.sh" \
+            || die "Hot CU selector differs from the checked gate source revision"
+        cmp -s "$PROVENANCE_TOOL" "$BUILD_ROOT/tools/release/artifact_provenance.py" \
+            || die "artifact provenance selector differs from the checked gate source revision"
+        PROVENANCE_TOOL="$BUILD_ROOT/tools/release/artifact_provenance.py"
+    fi
 elif [ -n "$ELF_DIR" ]; then
     case "$ELF_DIR" in /*) ;; *) die "--elf-dir must be absolute" ;; esac
     [ -d "$ELF_DIR" ] || die "--elf-dir does not exist: $ELF_DIR"
@@ -492,6 +591,34 @@ HARNESS_TARGET="$WORK/harness-target-${HARNESS_REVISION:0:12}"
 
 reauth_gate_roles() {
     [ "$GATE_MODE" = "true" ] || return 0
+    for row in \
+        "$REGISTRY_ELF_PATH:$ELF_DIR/dclutch_registry_sbf.so" \
+        "$TRADING_ELF_PATH:$ELF_DIR/dclutch_trading_sbf.so" \
+        "$CORE_ELF_PATH:$ELF_DIR/dclutch_core_sbf.so" \
+        "$CLAIMS_ELF_PATH:$ELF_DIR/dclutch_claims_sbf.so" \
+        "$CUSTODY_ELF_PATH:$ELF_DIR/dclutch_custody_sbf.so"
+    do
+        source=${row%%:*}
+        target=${row#*:}
+        cmp -s "$source" "$target" \
+            || die "work-local checked ELF staging changed before/during CU consumption: $(basename "$target")"
+    done
+    if [ "$MIXED_GATE_MODE" = "true" ]; then
+        check="$GATE_SELECTION_DIR/mixed.check.json"
+        rm -f "$check"
+        python3 "$MIXED_GATE_ADAPTER" \
+            --repo "$REPO" \
+            --gate "$CHECKED_GATE" \
+            --gate-sha256 "$CHECKED_GATE_SHA256" \
+            --selection "$MIXED_GATE_SELECTION" \
+            --selection-sha256 "$MIXED_GATE_SELECTION_SHA256" \
+            --output "$check" \
+            || die "mixed-gate role closure changed before/during CU consumption"
+        cmp -s "$GATE_SELECTION_DIR/mixed.json" "$check" \
+            || die "mixed-gate normalized selection changed before/during CU consumption"
+        rm -f "$check"
+        return 0
+    fi
     for role in registry trading core claims custody; do
         check="$GATE_SELECTION_DIR/$role.check.json"
         python3 "$PROVENANCE_TOOL" select-gate-role \
@@ -510,19 +637,27 @@ SELECTION_MANIFEST="$WORK/cu-artifact-selection.json"
 SELECTION_MANIFEST_SHA_JSON=null
 if [ "$GATE_MODE" = "true" ]; then
     SELECTION_ROOT="$GATE_SELECTION_DIR" SELECTION_GATE_SHA="$CHECKED_GATE_SHA256" \
+        SELECTION_MIXED="$MIXED_GATE_MODE" \
         SELECTION_OUTPUT="$SELECTION_MANIFEST" python3 - <<'PY'
 import json
 import os
 from pathlib import Path
 
 root = Path(os.environ["SELECTION_ROOT"])
-value = {
-    "schema": "dclutch-m61-artifact-selection-v1",
-    "checked_upgrade_gate_sha256": os.environ["SELECTION_GATE_SHA"],
-    "roles": [json.loads((root / f"{role}.json").read_text()) for role in (
-        "registry", "trading", "core", "claims", "custody"
-    )],
-}
+if os.environ["SELECTION_MIXED"] == "true":
+    value = {
+        "schema": "dclutch-m61-artifact-selection-v2",
+        "checked_upgrade_gate_sha256": os.environ["SELECTION_GATE_SHA"],
+        "mixed_gate_selection": json.loads((root / "mixed.json").read_text()),
+    }
+else:
+    value = {
+        "schema": "dclutch-m61-artifact-selection-v1",
+        "checked_upgrade_gate_sha256": os.environ["SELECTION_GATE_SHA"],
+        "roles": [json.loads((root / f"{role}.json").read_text()) for role in (
+            "registry", "trading", "core", "claims", "custody"
+        )],
+    }
 Path(os.environ["SELECTION_OUTPUT"]).write_text(
     json.dumps(value, indent=2, sort_keys=True) + "\n"
 )

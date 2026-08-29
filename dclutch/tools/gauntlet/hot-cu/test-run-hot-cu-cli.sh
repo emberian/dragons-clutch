@@ -45,6 +45,17 @@ expect_refusal "checked gate requires its out-of-band digest" \
     "are one required pair" \
     "$RUNNER" --work "$SCRATCH/work-gate-pair" --checked-gate "$SCRATCH/gate.json"
 
+expect_refusal "mixed projection requires its out-of-band digest" \
+    "are one required pair" \
+    "$RUNNER" --work "$SCRATCH/work-mixed-pair" \
+        --mixed-gate-selection "$SCRATCH/selection.json"
+
+expect_refusal "mixed projection requires its checked gate" \
+    "requires --checked-gate + --checked-gate-sha256" \
+    "$RUNNER" --work "$SCRATCH/work-mixed-gate" \
+        --mixed-gate-selection "$SCRATCH/selection.json" \
+        --mixed-gate-selection-sha256 "$(printf '0%.0s' $(seq 1 64))"
+
 # These are deliberately literal source seams, not this test script's values.
 # shellcheck disable=SC2016
 if grep -Fq 'cargo build-sbf --manifest-path "$1" --sbf-out-dir "$ELF_DIR" -- --locked --offline' "$RUNNER" \
@@ -52,6 +63,16 @@ if grep -Fq 'cargo build-sbf --manifest-path "$1" --sbf-out-dir "$ELF_DIR" -- --
     ok "SBF builds and ProgramTest require locked offline graphs"
 else
     not_ok "Hot CU runner lost locked-offline admission"
+fi
+
+if grep -Fq 'stage_checked_elf "$REGISTRY_ELF_PATH" dclutch_registry_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$TRADING_ELF_PATH" dclutch_trading_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$CORE_ELF_PATH" dclutch_core_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$CLAIMS_ELF_PATH" dclutch_claims_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$CUSTODY_ELF_PATH" dclutch_custody_sbf.so' "$RUNNER"; then
+    ok "checked ELFs are staged under ProgramTest loader names"
+else
+    not_ok "checked ELF ProgramTest loader-name staging is incomplete"
 fi
 
 mkdir -p "$SCRATCH/bin" "$SCRATCH/elf"
