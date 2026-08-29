@@ -17,6 +17,7 @@ mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
 mod family_hot_campaign;
 mod fractional_market;
+mod general_market;
 mod general_settlement_fixture;
 mod series_consume_campaign;
 mod flagship_resolution;
