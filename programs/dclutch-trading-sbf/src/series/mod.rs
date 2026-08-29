@@ -27,6 +27,8 @@ pub mod execute_v3;
 pub mod instruction;
 /// Content-to-Solana/Core conversion at the explicit adapter boundary.
 mod kernel_adapter;
+/// The Series `StateLifecyclePolicyV5`: root-only, derived, lamport-silent.
+pub mod lifecycle_policy_v5;
 /// Commit-last occurrence, funding, and terminal plans for recurring Series V3.
 ///
 /// This module is deliberately NOT named "lifecycle": the protocol-wide term
