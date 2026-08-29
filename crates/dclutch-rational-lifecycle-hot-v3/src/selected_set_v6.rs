@@ -237,7 +237,7 @@ fn descriptor_reference(bytes: &[u8]) -> Result<CapabilityDescriptorReferenceV2>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::{
         HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
@@ -245,7 +245,9 @@ mod tests {
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
-    use dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2;
+    use dclutch_rational_representation_v2_lifecycle_contract::{
+        LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
+    };
     use dclutch_token_svm::{TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2};
 
     use crate::{
@@ -256,13 +258,13 @@ mod tests {
     };
 
     /// Ordered representation the fixtures retire: support at outcomes 0 and 2.
-    const COEFFICIENTS: [u64; 3] = [2, 0, 5];
+    pub(crate) const COEFFICIENTS: [u64; 3] = [2, 0, 5];
 
-    fn id(value: u8) -> [u8; 32] {
+    pub(crate) fn id(value: u8) -> [u8; 32] {
         [value; 32]
     }
 
-    fn basis() -> [u8; BASIS_HEADER_BYTES_V3] {
+    pub(crate) fn basis() -> [u8; BASIS_HEADER_BYTES_V3] {
         let mut output = [0_u8; BASIS_HEADER_BYTES_V3];
         compile_basis_v3(
             BasisInputV3 {
@@ -285,7 +287,7 @@ mod tests {
         output
     }
 
-    fn lifecycle_policy() -> Vec<u8> {
+    pub(crate) fn lifecycle_policy() -> Vec<u8> {
         let mut scratch = vec![0_u8; LIFECYCLE_HEADER_BYTES];
         let mut output = vec![0_u8; LIFECYCLE_HEADER_BYTES];
         encode_lifecycle_policy_v5_atomic(&[], &[], &[], &[], &[], &[], &mut scratch, &mut output)
@@ -298,14 +300,14 @@ mod tests {
         dclutch_rational_representation_v2_kernel::DESCRIPTOR_HEADER_BYTES + COEFFICIENTS.len() * 8
     }
 
-    fn selection() -> TokenBehaviorSelectionV2 {
+    pub(crate) fn selection() -> TokenBehaviorSelectionV2 {
         // Realm and release set: both known before any Market exists. The
         // Realm is in fact a SEED of the Market PDA, so it strictly precedes
         // the address rather than merely being available early.
         TokenBehaviorSelectionV2::new(id(18), id(15)).expect("pre-Market selection")
     }
 
-    fn selected(
+    pub(crate) fn selected(
         action: LifecycleActionV2,
         basis: &[u8],
         lifecycle: &[u8],
@@ -327,7 +329,7 @@ mod tests {
                 product_basis: basis,
             },
             token_behavior_selection: selection(),
-            kind: id(41),
+            kind: RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
             root_schema: id(42),
             lifecycle_policy: lifecycle,
             capacity_profile: id(43),
@@ -336,7 +338,7 @@ mod tests {
         .expect("V6 bundle")
     }
 
-    fn compact(basis: &[u8], lifecycle: &[u8]) -> RationalLifecycleCompactBundleV4 {
+    pub(crate) fn compact(basis: &[u8], lifecycle: &[u8]) -> RationalLifecycleCompactBundleV4 {
         let support = COEFFICIENTS
             .iter()
             .filter(|coefficient| **coefficient != 0)
@@ -355,7 +357,7 @@ mod tests {
                 product_basis: basis,
                 coefficients: &COEFFICIENTS,
             },
-            kind: id(41),
+            kind: RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
             token_behavior_selection: selection(),
             root_schema: id(42),
             lifecycle_policy: lifecycle,
@@ -532,7 +534,7 @@ mod tests {
                     product_basis: &basis,
                 },
                 token_behavior_selection: other_selection,
-                kind: id(41),
+                kind: RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1,
                 root_schema: id(42),
                 lifecycle_policy: &lifecycle,
                 capacity_profile: id(43),

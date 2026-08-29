@@ -21,6 +21,7 @@ mod compact_operator_v4;
 mod effect;
 mod lifecycle_policy_v5;
 mod operator;
+mod release_v1;
 mod selected_bundle_v5;
 mod selected_bundle_v6;
 mod selected_operator_v5;
@@ -53,6 +54,10 @@ pub use lifecycle_policy_v5::{
 pub use operator::{
     CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotInstructionV3,
     RationalLifecycleHotStateV3,
+};
+pub use release_v1::{
+    RationalActionArtifactBytesV1, RationalArtifactReleaseBytesV1, RationalArtifactSelectionV1,
+    RationalJoinedReleaseV1, authenticate_rational_release_v1,
 };
 pub use selected_bundle_v5::{
     RATIONAL_LIFECYCLE_SELECTED_DESCRIPTOR_BYTES_V5, RATIONAL_LIFECYCLE_SELECTED_STRATEGY_BYTES_V5,
