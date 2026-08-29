@@ -12,12 +12,14 @@ use dclutch_market_core_codec::{
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_resolution_codec::{
-    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V5, RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2,
-    RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
-    ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2,
-    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
-    SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2, SourceClosureReceiptV3,
+    FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+    FundingActivationReceiptV1, FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2, RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2,
+    ResolutionCertificateKindV2, ResolutionCertificateV2, ResolutionCoreActionV1,
+    ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
+    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2,
+    SourceClosureReceiptV3, funding_lifecycle_account_digest_v1,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -26,8 +28,12 @@ use dclutch_source_contract::{
     SourceResolutionStateV2,
 };
 use solana_program::{
-    account_info::AccountInfo, hash::hashv, program_error::ProgramError, pubkey::Pubkey,
-    rent::Rent, sysvar::SysvarSerialize,
+    account_info::AccountInfo,
+    hash::{hash, hashv},
+    program_error::ProgramError,
+    pubkey::Pubkey,
+    rent::Rent,
+    sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -53,7 +59,7 @@ pub const RESOLUTION_CORE_INSTRUCTION_BYTES_V1: usize = dclutch_market_core_code
 /// Exact outer account count for Source/Funding creation.
 pub const RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1: usize = 18;
 /// Exact outer account count for Source/Funding readiness.
-pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 19;
+pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 20;
 /// Exact child and outer account count for terminal admission, including the
 /// three Product Runtime V2 finalized record pairs reauthenticated by both
 /// Resolution and Core.
@@ -77,8 +83,9 @@ const CREATE_RECOVERY_POLICY_STAGING: usize = 17;
 const VERIFY_BENEFICIARY: usize = 14;
 const VERIFY_CLOCK: usize = 15;
 const VERIFY_RENT: usize = 16;
-const VERIFY_RECOVERY_POLICY: usize = 17;
-const VERIFY_RECOVERY_POLICY_STAGING: usize = 18;
+const VERIFY_ACTIVATION_RECEIPT: usize = 17;
+const VERIFY_RECOVERY_POLICY: usize = 18;
+const VERIFY_RECOVERY_POLICY_STAGING: usize = 19;
 const ADMIT_CERTIFICATE: usize = 14;
 const ADMIT_RENT: usize = 15;
 const ADMIT_PRODUCT: usize = 16;
@@ -127,6 +134,12 @@ pub(crate) fn process(
             .ok_or(CoreSbfError::Instruction)?,
     )
     .map_err(|_| CoreSbfError::Instruction)?;
+    if resolution_request.action == ResolutionCoreActionV1::CloseFund {
+        // V7 closes directly in Resolution. Retaining the composed Core CPI
+        // would preserve the exact duplicate-authentication route that exceeds
+        // the transaction compute ceiling.
+        return Err(CoreSbfError::Instruction.into());
+    }
     if funding_header.selected_mask()
         != resolution_request
             .funding_entry_mask()
@@ -153,6 +166,31 @@ pub(crate) fn process(
             resolution_request,
             resolution_request.action,
         )?;
+    }
+    if resolution_request.action == ResolutionCoreActionV1::VerifyFundReady {
+        authenticate_activation_accept(
+            &frame,
+            accounts,
+            *authenticated.state,
+            resolution_request,
+            *authenticated.target_admission,
+        )?;
+        require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
+        if authenticated.state.phase == Phase::Founding
+            && authenticated.state.readiness == Readiness::Prepaid
+        {
+            let mut candidate = *authenticated.state;
+            verify_readiness(
+                request,
+                &mut candidate,
+                *authenticated.core_admission,
+                true,
+                complete_child_effect(),
+            )
+            .map_err(|_| CoreSbfError::Transition)?;
+            persist_state(frame.market(), candidate)?;
+        }
+        return Ok(());
     }
     let admit_projection = if resolution_request.action == ResolutionCoreActionV1::AdmitTerminal {
         Some(authenticate_admit_projection(
@@ -203,28 +241,7 @@ pub(crate) fn process(
     let mut candidate = *authenticated.state;
     match resolution_request.action {
         ResolutionCoreActionV1::CreateFund => {}
-        ResolutionCoreActionV1::VerifyFundReady => {
-            // `Readiness::Ready` is the Founding lane's record that this
-            // Market's Resolution Fund is active, and it exists so that
-            // `open_market` can refuse to open a Market whose Fund is not.
-            // An atomically founded Market consumed its readiness at the
-            // commit-last Open and has no such lane left to record into; the
-            // Fund's activation is owned by the three selected rows in the
-            // child-owned subset ledger, and `AdmitTerminal` reauthenticates
-            // exactly those. Writing nothing here keeps one
-            // semantic owner for that fact instead of minting a second.
-            if candidate.phase == Phase::Founding {
-                verify_readiness(
-                    request,
-                    &mut candidate,
-                    *authenticated.core_admission,
-                    true,
-                    complete_child_effect(),
-                )
-                .map_err(|_| CoreSbfError::Transition)?;
-                persist_state(frame.market(), candidate)?;
-            }
-        }
+        ResolutionCoreActionV1::VerifyFundReady => return Err(CoreSbfError::Instruction.into()),
         ResolutionCoreActionV1::AdmitTerminal => {
             let projection = admit_projection.ok_or(CoreSbfError::Transition)?;
             admit_terminal(
@@ -344,9 +361,13 @@ fn authenticate_request_coordinates(
         return Err(CoreSbfError::Reference);
     }
     let valid_phase = match request.action {
-        ResolutionCoreActionV1::CreateFund | ResolutionCoreActionV1::VerifyFundReady => {
-            resolution_fund_prestate_admissible(state)
-        }
+        ResolutionCoreActionV1::CreateFund => resolution_fund_prestate_admissible(state),
+        ResolutionCoreActionV1::VerifyFundReady => matches!(
+            (state.phase, state.readiness),
+            (Phase::Founding, Readiness::Prepaid)
+                | (Phase::Founding, Readiness::Ready)
+                | (Phase::Open, Readiness::Consumed)
+        ),
         ResolutionCoreActionV1::AdmitTerminal => {
             state.phase == Phase::Open && state.readiness == Readiness::Consumed
         }
@@ -394,6 +415,139 @@ const fn resolution_fund_prestate_admissible(state: CoreState) -> bool {
         )
 }
 
+/// Authenticate the immutable V7 activation receipt and its exact live Active ledger.
+#[inline(never)]
+fn authenticate_activation_accept(
+    frame: &FixedRoleAccountsV1<'_, '_>,
+    accounts: &[AccountInfo<'_>],
+    state: CoreState,
+    request: ResolutionRoleRequestV2,
+    target_admission: dclutch_market_core_codec::Admission,
+) -> Result<(), CoreSbfError> {
+    let rent = read_rent(account(accounts, VERIFY_RENT)?)?;
+    authenticate_live_poststate(
+        frame,
+        accounts,
+        state,
+        request,
+        ResolutionCoreActionV1::VerifyFundReady,
+        &rent,
+        false,
+    )?;
+    let receipt_account = account(accounts, VERIFY_ACTIVATION_RECEIPT)?;
+    let generation_seed = state.identity.generation.to_le_bytes();
+    let expected_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            frame.market().key.as_ref(),
+            &generation_seed,
+        ],
+        frame.target_program().key,
+    )
+    .0;
+    if receipt_account.key != &expected_receipt
+        || receipt_account.owner != frame.target_program().key
+        || receipt_account.data_len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
+        || !rent.is_exempt(
+            receipt_account.lamports(),
+            FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
+        )
+        || target_admission
+            .receipt
+            .observed
+            .semantic_release
+            .to_bytes()
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    {
+        return Err(CoreSbfError::Reference);
+    }
+    let receipt_data = receipt_account
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Reference)?;
+    let receipt =
+        FundingActivationReceiptV1::decode(&receipt_data).map_err(|_| CoreSbfError::Reference)?;
+    let market_data = frame
+        .market()
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Market)?;
+    let source_data = account(accounts, SOURCE_STATE)?
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Reference)?;
+    let ledger_account = account(accounts, FUNDING_LEDGER)?;
+    let ledger_data = ledger_account
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Funding)?;
+    let manifest_data = account(accounts, CAPABILITY_MANIFEST)?
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::FinalizedRecord)?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
+    let manifest_id =
+        CapabilityContentId::new(request.capability_manifest).map_err(|_| CoreSbfError::Funding)?;
+    let active = FundingLedgerV2::decode(&ledger_data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .map_err(|_| CoreSbfError::Funding)?;
+    let remaining_native_principal_lamports = active
+        .remaining_native_lamports_total()
+        .map_err(|_| CoreSbfError::Funding)?;
+    let ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES);
+    // The receipt binds the exact Prepaid Market observed by Resolution. Once
+    // Core commits Ready, a repeated Accept must reauthenticate that immutable
+    // predecessor instead of treating the current Ready bytes as a new
+    // activation request. This makes crash recovery suffix-only and does not
+    // weaken CreateFund or direct activation admission.
+    let market_state_digest = activation_receipt_market_digest(state, &market_data)?;
+    let source_state_digest = hash(&source_data).to_bytes();
+    let active_ledger_digest = funding_lifecycle_account_digest_v1(
+        ledger_account.owner.to_bytes(),
+        ledger_account.key.to_bytes(),
+        ledger_account.lamports(),
+        &ledger_data,
+    );
+    let activation_request = FundingActivationRequestV1 {
+        release_set: state.identity.selected_release_set.to_bytes(),
+        market: frame.market().key.to_bytes(),
+        generation: state.identity.generation,
+        role: request,
+        expected_market_state_digest: market_state_digest,
+        expected_source_state_digest: source_state_digest,
+        expected_pending_ledger_digest: receipt.pending_ledger_digest,
+        receipt: receipt_account.key.to_bytes(),
+    };
+    if receipt.request_digest
+        != activation_request
+            .digest()
+            .map_err(|_| CoreSbfError::Reference)?
+        || receipt.release_set != state.identity.selected_release_set.to_bytes()
+        || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+        || receipt.market != frame.market().key.to_bytes()
+        || receipt.generation != state.identity.generation
+        || receipt.role != request
+        || receipt.market_state_digest != market_state_digest
+        || receipt.source_state_digest != source_state_digest
+        || receipt.active_ledger_digest != active_ledger_digest
+        || receipt.ledger_rent_lamports != ledger_rent_lamports
+        || receipt.remaining_native_principal_lamports != remaining_native_principal_lamports
+        || receipt.post_ledger_lamports != ledger_account.lamports()
+        || receipt.producer != frame.target_program().key.to_bytes()
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    Ok(())
+}
+
+fn activation_receipt_market_digest(
+    state: CoreState,
+    current_bytes: &[u8],
+) -> Result<[u8; 32], CoreSbfError> {
+    if state.phase == Phase::Founding && state.readiness == Readiness::Ready {
+        let mut predecessor = state;
+        predecessor.readiness = Readiness::Prepaid;
+        return Ok(hash(&predecessor.encode().map_err(|_| CoreSbfError::Transition)?).to_bytes());
+    }
+    Ok(hash(current_bytes).to_bytes())
+}
+
 #[inline(never)]
 fn validate_outer_frame(
     program_id: &Pubkey,
@@ -431,7 +585,7 @@ fn validate_outer_frame(
     }
     let expected_writable = match action {
         ResolutionCoreActionV1::CreateFund => [true, false],
-        ResolutionCoreActionV1::VerifyFundReady => [false, true],
+        ResolutionCoreActionV1::VerifyFundReady => [false, false],
         ResolutionCoreActionV1::AdmitTerminal => [false, false],
         ResolutionCoreActionV1::CloseFund => [true, true],
     };
@@ -458,7 +612,12 @@ fn validate_outer_frame(
         }
         ResolutionCoreActionV1::VerifyFundReady => {
             let beneficiary = account(accounts, VERIFY_BENEFICIARY)?;
-            if !beneficiary.is_writable || beneficiary.executable {
+            let receipt = account(accounts, VERIFY_ACTIVATION_RECEIPT)?;
+            if beneficiary.is_writable
+                || beneficiary.executable
+                || receipt.is_writable
+                || receipt.executable
+            {
                 return Err(CoreSbfError::AccountFrame);
             }
             require_sysvar(account(accounts, VERIFY_CLOCK)?, sysvar::clock::ID)?;
@@ -616,7 +775,7 @@ fn authenticate_recovery_policy(
                     .entry(entry_index)
                     .map_err(|_| CoreSbfError::Funding)?;
                 if entry.config_id().to_bytes() != expected_config
-                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
                 {
                     return Err(CoreSbfError::Funding);
                 }
@@ -660,7 +819,7 @@ fn authenticate_no_recovery_entries(
         let entry = manifest
             .entry(entry_index)
             .map_err(|_| CoreSbfError::Funding)?;
-        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
             return Err(CoreSbfError::Funding);
         }
         if let Some(config) = configs.get_mut(slot) {

@@ -43,7 +43,7 @@ use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -623,7 +623,7 @@ fn authenticate_activation_and_caller(
         if role == ExecutionRoleV1::Resolution
             && (program.key != program_id
                 || activated.release().semantic_release_id().to_bytes()
-                    != RESOLUTION_CONTROLLER_RELEASE_ID_V5)
+                    != RESOLUTION_CONTROLLER_RELEASE_ID_V7)
         {
             return Err(ResolutionError::ResolutionRelease.into());
         }

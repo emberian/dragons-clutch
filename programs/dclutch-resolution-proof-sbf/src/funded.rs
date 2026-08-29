@@ -56,7 +56,7 @@ pub(crate) const RESOLUTION_FUNDING_LEDGER_BYTES_V2: usize =
 use dclutch_product_runtime_v2::ResultDomainV2;
 use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
 use dclutch_resolution_codec::{
-    RESOLUTION_CONTROLLER_RELEASE_ID_V6, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, SourceMaterialV3, SourceResolutionStateV2, WindowSpecV1,
@@ -166,7 +166,7 @@ fn plan_funding_release(
         .entry(escrow.entry_index)
         .map_err(|_| FundedWalkErrorV1::Funding)?;
     if entry.config_id().to_bytes() != material_id.to_bytes()
-        || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V6
+        || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
         return Err(FundedWalkErrorV1::Funding);
     }

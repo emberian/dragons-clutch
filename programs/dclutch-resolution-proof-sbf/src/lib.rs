@@ -174,6 +174,20 @@ pub fn process_instruction(
             instruction_data,
         );
     }
+    if core_effect::is_direct_funding_activation_v1(instruction_data) {
+        return core_effect::process_direct_funding_activation_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if core_effect::is_direct_funding_close_v1(instruction_data) {
+        return core_effect::process_direct_funding_close_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     if core_effect::is_core_effect(instruction_data) {
         return core_effect::process_core_effect(program_id, accounts, instruction_data);
     }
@@ -684,7 +698,9 @@ fn authenticate_activation_cache<'a>(
 
 #[allow(clippy::too_many_arguments)]
 #[cfg(any())]
-fn authenticate_resolution_release(
+/// Frozen authenticator for the removed V1/V5 dispatch. It is deliberately
+/// compiled out; current routes authenticate V6 in their owning modules.
+fn authenticate_resolution_release_v5_legacy(
     program_id: &Pubkey,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,

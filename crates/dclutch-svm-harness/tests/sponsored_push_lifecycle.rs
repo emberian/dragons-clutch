@@ -47,7 +47,7 @@ mod sponsored_campaign {
     };
     use dclutch_resolution_codec::{
         RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V6, ResolutionCertificateKindV2, ResolutionCertificateV2,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
         SPONSORED_PUSH_CANDIDATE_BYTES_V1, SPONSORED_PUSH_CANDIDATE_PDA_DOMAIN_V1,
         SPONSORED_PUSH_HEAD_PDA_DOMAIN_V1, SPONSORED_PUSH_RECEIPT_PDA_DOMAIN_V1,
         SponsoredPushActionV1, SponsoredPushCandidateV1, SponsoredPushHeadV1,
@@ -434,7 +434,7 @@ mod sponsored_campaign {
         let core_release = artifact(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
         let resolution_release = artifact(
             PROGRAM_ID,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             &elves.resolution,
         );
         let (release_set, activation_bytes) = activation(core_release, resolution_release);
@@ -994,7 +994,7 @@ mod sponsored_campaign {
             let (manifest, manifest_bytes) = add_sponsored_manifest(
                 test,
                 graph.material_id,
-                RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+                RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             );
             let manifest_view =
                 CapabilityManifestV1::decode(&manifest_bytes).expect("sponsored manifest view");
@@ -1009,7 +1009,7 @@ mod sponsored_campaign {
             let core_release = artifact(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
             let resolution_release = artifact(
                 PROGRAM_ID,
-                RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+                RESOLUTION_CONTROLLER_RELEASE_ID_V7,
                 &elves.resolution,
             );
             let (selected_release_set, _) = activation(core_release, resolution_release);

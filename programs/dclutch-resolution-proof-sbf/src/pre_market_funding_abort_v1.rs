@@ -11,7 +11,7 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
     PRE_MARKET_FUNDING_ABORT_REQUEST_BYTES_V1, PRE_MARKET_FUNDING_ABORT_REQUEST_MAGIC_V1,
     PreMarketFundingAbortReceiptV1, PreMarketFundingAbortRequestV1,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V6, pre_market_funding_ledger_account_digest_v1,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, pre_market_funding_ledger_account_digest_v1,
 };
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
@@ -404,7 +404,7 @@ fn authenticate_release_and_caller(
     if trading.release().program().to_bytes() != caller.key.to_bytes()
         || resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
-            != RESOLUTION_CONTROLLER_RELEASE_ID_V6
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }

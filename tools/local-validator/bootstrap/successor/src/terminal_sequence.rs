@@ -47,7 +47,7 @@ use dclutch_operator::{
         DirectBeginRetiringPlanV1, DirectBeginRetiringSnapshotV1,
         derive_direct_begin_retiring_meta_closure_v1, plan_direct_begin_retiring_v1,
     },
-    resolution_core_v3::{ResolutionCloseFundSnapshotV3, build_resolution_close_fund_v3},
+    resolution_core_v3::{ResolutionCloseFundSnapshotV3, build_resolution_direct_close_fund_v1},
     terminal_retirement_v1::{
         DirectNativeCloseCoordinateInputV1, DirectNativeCloseSnapshotV1,
         RetirementReplayHandoffCoordinateInputV1, RetirementReplayHandoffSnapshotV1,
@@ -594,12 +594,9 @@ pub(crate) fn core_begin_retiring_meta_closure_v1(
     }
 }
 
-/// Immutable identities and the role-request commitment needed to derive
-/// Resolution CloseFund's request-bound Core caller PDA.
+/// Immutable identities for V7's direct permissionless Resolution close.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResolutionCloseMetaCoordinatesV1 {
-    pub(crate) release_set: [u8; 32],
-    pub(crate) role_request_digest: [u8; 32],
+pub(crate) struct ResolutionCloseMetaCoordinatesV2 {
     pub(crate) market: Pubkey,
     pub(crate) activation_cache: Pubkey,
     pub(crate) registry_program: Pubkey,
@@ -622,24 +619,12 @@ pub(crate) struct ResolutionCloseMetaCoordinatesV1 {
     pub(crate) recovery_policy: Option<(Pubkey, Pubkey)>,
 }
 
-/// Exact Resolution CloseFund coordinate closure. The caller authority is
-/// derived here from the immutable request commitment, never supplied as a
-/// hand-curated address.
-pub(crate) fn resolution_close_meta_closure_v1(
-    coordinates: &ResolutionCloseMetaCoordinatesV1,
+/// Exact V7 direct Resolution CloseFund coordinate closure.
+pub(crate) fn resolution_close_meta_closure_v2(
+    coordinates: &ResolutionCloseMetaCoordinatesV2,
 ) -> Result<TerminalMetaClosureV1> {
-    let seeds = CallerAuthoritySeedsV1::from_bytes(
-        coordinates.release_set,
-        coordinates.market.to_bytes(),
-        ExecutionRoleV1::Core,
-        coordinates.source_state.to_bytes(),
-        coordinates.role_request_digest,
-    )
-    .map_err(|error| Error::new(format!("Resolution close caller seeds: {error:?}")))?;
-    let authority = Pubkey::find_program_address(&seeds.as_slices(), &coordinates.core_program).0;
     let mut accounts = vec![
-        AccountMeta::new_readonly(authority, false),
-        AccountMeta::new(coordinates.market, false),
+        AccountMeta::new_readonly(coordinates.market, false),
         AccountMeta::new_readonly(coordinates.activation_cache, false),
         AccountMeta::new_readonly(coordinates.registry_program, false),
         AccountMeta::new_readonly(coordinates.core_program, false),
@@ -665,16 +650,15 @@ pub(crate) fn resolution_close_meta_closure_v1(
     }
     Ok(TerminalMetaClosureV1 {
         stage: TerminalStageV1::ResolutionCloseFund,
-        program_id: coordinates.core_program,
+        program_id: coordinates.resolution_program,
         program_class: TerminalAddressClassV1::InlineProgram,
-        classes: resolution_close_meta_classes_v1(coordinates.recovery_policy.is_some()),
+        classes: resolution_close_meta_classes_v2(coordinates.recovery_policy.is_some()),
         accounts,
     })
 }
 
-fn resolution_close_meta_classes_v1(has_recovery_policy: bool) -> Vec<TerminalAddressClassV1> {
+fn resolution_close_meta_classes_v2(has_recovery_policy: bool) -> Vec<TerminalAddressClassV1> {
     let mut classes = vec![
-        TerminalAddressClassV1::InlineRequestBound,
         TerminalAddressClassV1::LookupStable,
         TerminalAddressClassV1::LookupStable,
         TerminalAddressClassV1::InlineProgram,
@@ -3833,11 +3817,7 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
             prestate,
         });
     }
-    let report = build_resolution_close_fund_v3(&close_snapshot)
-        .map_err(|error| Error::new(format!("Resolution CloseFund: {error:?}")))?;
-    let closure = resolution_close_meta_closure_v1(&ResolutionCloseMetaCoordinatesV1 {
-        release_set: hex32(&plan.release_set_id)?,
-        role_request_digest: report.role_request_digest,
+    let closure = resolution_close_meta_closure_v2(&ResolutionCloseMetaCoordinatesV2 {
         market: market_key,
         activation_cache: activation,
         registry_program: registry,
@@ -3947,7 +3927,7 @@ pub(crate) fn plan_resolution_close_caller_v1(
     snapshot: &ResolutionCloseFundSnapshotV3,
     persisted_closure: &TerminalMetaClosureV1,
 ) -> Result<TerminalSemanticMutationV1> {
-    let report = build_resolution_close_fund_v3(snapshot)
+    let report = build_resolution_direct_close_fund_v1(snapshot)
         .map_err(|error| Error::new(format!("Resolution CloseFund: {error:?}")))?;
     let facts = report.expected_retirement_facts;
     let receipt = SourceClosureReceiptV3 {
@@ -3975,11 +3955,10 @@ pub(crate) fn plan_resolution_close_caller_v1(
     .map_err(|error| Error::new(format!("Resolution closure receipt: {error:?}")))?
     .to_vec();
     if report.closure_receipt != snapshot.closure_destination.key
-        || report.expected_refund_lamports != facts.refund_lamports
         || snapshot
             .beneficiary
             .lamports
-            .checked_add(report.expected_refund_lamports)
+            .checked_add(facts.refund_lamports)
             .is_none()
     {
         return Err(refusal(
@@ -3989,18 +3968,18 @@ pub(crate) fn plan_resolution_close_caller_v1(
     let expected_beneficiary_lamports = snapshot
         .beneficiary
         .lamports
-        .checked_add(report.expected_refund_lamports)
+        .checked_add(facts.refund_lamports)
         .ok_or_else(|| refusal("Resolution close beneficiary overflowed"))?;
     let fresh_closure = TerminalMetaClosureV1 {
         stage: TerminalStageV1::ResolutionCloseFund,
         program_id: report.instruction.program_id,
         program_class: TerminalAddressClassV1::InlineProgram,
         classes: match report.instruction.accounts.len() {
-            20 => resolution_close_meta_classes_v1(false),
-            22 => resolution_close_meta_classes_v1(true),
+            19 => resolution_close_meta_classes_v2(false),
+            21 => resolution_close_meta_classes_v2(true),
             _ => {
                 return Err(refusal(
-                    "Resolution close fresh frame has another width than 20 or 22",
+                    "Resolution close fresh frame has another width than 19 or 21",
                 ));
             }
         },
@@ -4061,10 +4040,7 @@ pub(crate) fn plan_resolution_close_caller_v1(
                 -i128::from(snapshot.funding_ledger.lamports),
             ),
             (snapshot.closure_destination.key, 0),
-            (
-                snapshot.beneficiary.key,
-                i128::from(report.expected_refund_lamports),
-            ),
+            (snapshot.beneficiary.key, i128::from(facts.refund_lamports)),
         ]),
     })
 }
@@ -5321,9 +5297,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
         rent_sysvar: sysvar::rent::ID,
         refund_wallet,
     })?;
-    let resolution_close = resolution_close_meta_closure_v1(&ResolutionCloseMetaCoordinatesV1 {
-        release_set,
-        role_request_digest: [3; 32],
+    let resolution_close = resolution_close_meta_closure_v2(&ResolutionCloseMetaCoordinatesV2 {
         market,
         activation_cache: activation,
         registry_program: registry,
@@ -9690,10 +9664,8 @@ mod tests {
     }
 
     #[test]
-    fn resolution_close_closure_derives_request_bound_authority_and_exact_frame() {
-        let coordinates = ResolutionCloseMetaCoordinatesV1 {
-            release_set: [3; 32],
-            role_request_digest: [4; 32],
+    fn resolution_close_closure_is_the_exact_direct_v7_frame() {
+        let coordinates = ResolutionCloseMetaCoordinatesV2 {
             market: key(10),
             activation_cache: key(11),
             registry_program: key(12),
@@ -9715,12 +9687,12 @@ mod tests {
             system_program: key(28),
             recovery_policy: Some((key(29), key(30))),
         };
-        let closure = resolution_close_meta_closure_v1(&coordinates).expect("closure");
-        assert_eq!(closure.accounts.len(), 22);
-        assert_eq!(closure.accounts[1].pubkey, coordinates.market);
-        assert_eq!(closure.accounts[15].pubkey, coordinates.closure_receipt);
-        assert_eq!(closure.accounts[20].pubkey, key(29));
-        assert_eq!(closure.accounts[21].pubkey, key(30));
+        let closure = resolution_close_meta_closure_v2(&coordinates).expect("closure");
+        assert_eq!(closure.accounts.len(), 21);
+        assert_eq!(closure.accounts[0].pubkey, coordinates.market);
+        assert_eq!(closure.accounts[14].pubkey, coordinates.closure_receipt);
+        assert_eq!(closure.accounts[19].pubkey, key(29));
+        assert_eq!(closure.accounts[20].pubkey, key(30));
         assert_eq!(
             closure
                 .accounts
@@ -9728,12 +9700,12 @@ mod tests {
                 .enumerate()
                 .filter_map(|(index, account)| account.is_writable.then_some(index))
                 .collect::<Vec<_>>(),
-            vec![1, 12, 13, 15, 16]
+            vec![11, 12, 14, 15]
         );
 
         let mut another = coordinates;
-        another.role_request_digest[0] ^= 1;
-        let another = resolution_close_meta_closure_v1(&another).expect("other request");
+        another.market = key(31);
+        let another = resolution_close_meta_closure_v2(&another).expect("other market");
         assert_ne!(closure.accounts[0].pubkey, another.accounts[0].pubkey);
     }
 

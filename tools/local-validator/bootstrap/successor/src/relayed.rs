@@ -46,7 +46,6 @@ use dclutch_relay_contract::{
     },
 };
 use dclutch_release_set_contract::ProgramIdentityV1;
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
 use dclutch_source_contract::{
     BONDING_CURVE_FLOOR_DERIVATION_ID_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
     CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1, CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
@@ -481,7 +480,10 @@ pub(crate) fn relayed_market_input(
     .map_err(|error| Error::new(format!("funding amounts: {error:?}")))?;
     let quote = FundingQuoteV1::new(amounts, None)
         .map_err(|error| Error::new(format!("funding quote: {error:?}")))?;
-    let release = capability_content(RESOLUTION_CONTROLLER_RELEASE_ID_V4)?;
+    // The checked Direct compiler is the semantic owner for the activated
+    // Resolution role. Reuse that exact release identity so the relayed
+    // controller ledger cannot drift behind the selected executable.
+    let release = capability_content(direct.resolution_release)?;
     let mut entries_input: Vec<([u8; 32], [u8; 32])> = vec![
         (
             demo_id("relayed/capability/recovery-companion", &[&set_id]),
@@ -646,4 +648,61 @@ fn product_content(bytes: [u8; 32]) -> Result<dclutch_product_runtime_v2::Conten
 fn capability_content(bytes: [u8; 32]) -> Result<CapabilityContentId> {
     CapabilityContentId::new(bytes)
         .map_err(|error| Error::new(format!("capability identity: {error:?}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direct_market::{DirectDeploymentWidthsV1, DirectMarketCompilerOwnedV1};
+
+    #[test]
+    fn relayed_manifest_uses_the_authenticated_resolution_release() {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test deployment widths"),
+        );
+        let compiler = direct.compiler();
+        let facts = relayed_market_input(
+            registry,
+            [0x42; 32],
+            &WindowChoiceV1 {
+                start_unix_seconds: 1_800_000_000,
+                end_unix_seconds: 1_800_003_600,
+                max_age_seconds: 900,
+            },
+            &RelayedVenueFactsV1 {
+                program: [0x51; 32],
+                programdata: [0x52; 32],
+                pool: [0x53; 32],
+                elf_digest: [0x54; 32],
+                deployment_slot: 99,
+                upgrade_authority: [0x55; 32],
+            },
+            compiler,
+        )
+        .expect("relayed market input");
+        let manifest = CapabilityManifestV1::decode(&facts.manifest_bytes)
+            .expect("relayed capability manifest");
+        assert_eq!(manifest.entry_count(), 3);
+        for entry_index in 0..manifest.entry_count() {
+            assert_eq!(
+                manifest
+                    .entry(entry_index)
+                    .expect("controller entry")
+                    .release_id()
+                    .to_bytes(),
+                compiler.resolution_release,
+            );
+            assert_ne!(
+                manifest
+                    .entry(entry_index)
+                    .expect("controller entry")
+                    .release_id()
+                    .to_bytes(),
+                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            );
+        }
+    }
 }

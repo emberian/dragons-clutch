@@ -37,7 +37,7 @@ use dclutch_release_set_contract::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
     SourceSemanticRoleV1, source_semantic_release_preimage_v1,
 };
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6;
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
@@ -3009,7 +3009,7 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
 pub(crate) fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
     let fixed = match role {
         "trading" => Some(COMPILED_DIRECT_RELEASE_ID_V1),
-        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V6),
+        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
         _ => None,
     };
     if let Some(release_id) = fixed {
@@ -10223,7 +10223,7 @@ mod tests {
         );
         assert_eq!(
             pin.roles[3].semantic_release_id,
-            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V6)
+            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V7)
         );
         let mut substituted = pin;
         substituted.roles[0].semantic_release_id = "11".repeat(32);

@@ -66,18 +66,19 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
-    ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
+    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_resolution_core_v3_operator::{
-    Finality, Observation, ObservedAccount, ResolutionAdmitTerminalSnapshotV3,
-    ResolutionCloseFundReportV3, ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
-    ResolutionVerifyFundReadySnapshotV3, build_resolution_admit_terminal_v3,
-    build_resolution_close_fund_v3, build_resolution_create_fund_v3,
-    build_resolution_verify_fund_ready_v3, validate_resolution_close_fund_report_v3,
+    Finality, Observation, ObservedAccount, ResolutionActivateFundSnapshotV1,
+    ResolutionAdmitTerminalSnapshotV3, ResolutionCloseFundSnapshotV3,
+    ResolutionCreateFundSnapshotV3, ResolutionDirectCloseFundReportV1,
+    ResolutionVerifyFundReadySnapshotV3, build_resolution_activate_fund_v1,
+    build_resolution_admit_terminal_v3, build_resolution_create_fund_v3,
+    build_resolution_direct_close_fund_v1, build_resolution_verify_fund_ready_v3,
     validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
@@ -167,6 +168,7 @@ struct Fixture {
     portfolio: RecordPair,
     source: Pubkey,
     funding: Pubkey,
+    activation_receipt: Pubkey,
     certificate: Pubkey,
     closure: Pubkey,
     rent_credit: Pubkey,
@@ -617,7 +619,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         &elves.resolution,
     );
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
@@ -855,7 +857,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     .map(|(seed, config)| {
         CapabilityEntryV1::new(
             id([seed; 32]),
-            id(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
+            id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
             id(config),
             id([0xa4; 32]),
             id([0xa5; 32]),
@@ -1009,6 +1011,25 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     } else {
         add_pending_funding(&mut test, market, manifest_id, manifest, [0, 1, 2])
     };
+    let activation_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
+    test.add_account(
+        activation_receipt,
+        Account {
+            lamports: 1,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -1157,6 +1178,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         portfolio,
         source,
         funding,
+        activation_receipt,
         certificate,
         closure,
         rent_credit,
@@ -1372,6 +1394,7 @@ async fn verify_snapshot(
         beneficiary: required_observed(context, fixture.rent_credit).await,
         clock_sysvar: required_observed(context, sysvar::clock::ID).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
+        activation_receipt: observed_or_vacant(context, fixture.activation_receipt).await,
         recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
         recovery_policy_staging: vacant_observed(fixture.recovery_policy.staging),
     }
@@ -1467,6 +1490,7 @@ fn core_open_instruction(fixture: &Fixture, payer: Pubkey, operation: OperationV
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new(fixture.rent_credit, false),
         ]),
         OperationV1::OpenVault => accounts.extend([
             AccountMeta::new_readonly(fixture.mint, false),
@@ -1563,7 +1587,7 @@ async fn retirement_snapshot(
 
 fn assert_exhaustive_closure_receipt(
     receipt: SourceClosureReceiptV3,
-    close: &ResolutionCloseFundReportV3,
+    close: &ResolutionDirectCloseFundReportV1,
 ) {
     let facts = close.expected_retirement_facts;
     assert_eq!(
@@ -1591,14 +1615,14 @@ fn assert_exhaustive_closure_receipt(
         },
         "the persisted V3 closure receipt must reproduce every chain-derived retirement fact"
     );
-    assert_eq!(receipt.source_refund_lamports, close.source_refund_lamports);
+    assert_eq!(receipt.source_refund_lamports, facts.source_refund_lamports);
     assert_eq!(
         receipt.ledger_remaining_native_principal,
-        close.ledger_remaining_native_principal
+        facts.ledger_remaining_native_principal
     );
-    assert_eq!(receipt.ledger_rent_lamports, close.ledger_rent_lamports);
-    assert_eq!(receipt.ledger_lamport_surplus, close.ledger_lamport_surplus);
-    assert_eq!(receipt.refund_lamports, close.expected_refund_lamports);
+    assert_eq!(receipt.ledger_rent_lamports, facts.ledger_rent_lamports);
+    assert_eq!(receipt.ledger_lamport_surplus, facts.ledger_lamport_surplus);
+    assert_eq!(receipt.refund_lamports, facts.refund_lamports);
     assert_eq!(
         receipt
             .source_refund_lamports
@@ -1725,22 +1749,76 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     );
     assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Pending).await;
 
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("chain-derived direct activation");
+    let beneficiary_before = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    activation_instructions.push(activation.instruction);
+    submit(&mut context, &activation_instructions)
+        .await
+        .expect("activate exact three-row Resolution funding ledger");
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        beneficiary_before + activation.expected_beneficiary_credit_lamports
+    );
+
+    let after_activation = retirement_snapshot(&mut context, &fixture).await;
+    let activation_receipt_after_activation = observed(&mut context, fixture.activation_receipt)
+        .await
+        .expect("durable activation receipt");
+    let activation_replay = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("receipt-authenticated activation replay");
+    assert_eq!(activation_replay.receipt_top_up_lamports, 0);
+    assert_eq!(activation_replay.expected_beneficiary_credit_lamports, 0);
+    assert_eq!(activation_replay.request_digest, activation.request_digest);
+    submit(&mut context, &[activation_replay.instruction])
+        .await
+        .expect("completed activation replays without mutation");
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        after_activation,
+        "activation replay preserves every mutable lifecycle account"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.activation_receipt).await,
+        Some(activation_receipt_after_activation),
+        "activation replay preserves the immutable receipt"
+    );
+
     let verify =
         build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
-            .expect("chain-derived VerifyFundReady");
+            .expect("chain-derived no-CPI VerifyFundReady acceptance");
     validate_resolution_verify_fund_ready_report_v3(&verify).expect("exact VerifyFundReady report");
     let before_privilege_refusal = retirement_snapshot(&mut context, &fixture).await;
-    let mut read_only_beneficiary = verify.instruction.clone();
-    read_only_beneficiary
+    let mut writable_beneficiary = verify.instruction.clone();
+    writable_beneficiary
         .accounts
         .get_mut(14)
         .expect("beneficiary account")
-        .is_writable = false;
+        .is_writable = true;
     assert!(
-        submit(&mut context, &[read_only_beneficiary])
-            .await
-            .is_err(),
-        "read-only beneficiary privilege must refuse"
+        submit(&mut context, &[writable_beneficiary]).await.is_err(),
+        "surplus writable beneficiary privilege must refuse"
     );
     assert_eq!(
         retirement_snapshot(&mut context, &fixture).await,
@@ -1748,13 +1826,9 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         "privilege refusal preserves Source, Funds, Core, and RentCredit"
     );
 
-    let beneficiary_before = observed(&mut context, fixture.rent_credit)
-        .await
-        .expect("RentCredit")
-        .lamports;
     submit(&mut context, &[verify.instruction])
         .await
-        .expect("activate exact three-row Resolution funding ledger");
+        .expect("accept the durable activation receipt into Core readiness");
     let ready = CoreState::decode(
         &observed(&mut context, fixture.market)
             .await
@@ -1772,6 +1846,27 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         beneficiary_before + verify.expected_beneficiary_credit_lamports
     );
     assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+
+    let after_accept = retirement_snapshot(&mut context, &fixture).await;
+    let activation_receipt_after_accept = observed(&mut context, fixture.activation_receipt)
+        .await
+        .expect("accepted activation receipt");
+    let accept_replay =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("Ready replay authenticates the Prepaid predecessor receipt");
+    submit(&mut context, &[accept_replay.instruction])
+        .await
+        .expect("completed Core Accept replays without mutation");
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        after_accept,
+        "Core Accept replay preserves every mutable lifecycle account"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.activation_receipt).await,
+        Some(activation_receipt_after_accept),
+        "Core Accept replay preserves the immutable receipt"
+    );
 
     let beneficiary_after_readiness = observed(&mut context, fixture.rent_credit)
         .await
@@ -2175,9 +2270,9 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     )
     .await
     .expect("prepay the same-lineage closure receipt");
-    let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture).await)
-        .expect("chain-derived same-lineage CloseFund");
-    validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived same-lineage CloseFund");
     submit(&mut context, &[close.instruction.clone()])
         .await
         .expect("close all three rows in the provider-resolution subset ledger");
@@ -2249,9 +2344,9 @@ async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() 
     )
     .await
     .expect("prepay canonical closure receipt");
-    let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture).await)
-        .expect("chain-derived CloseFund");
-    validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived CloseFund");
 
     let before_refusal = retirement_snapshot(&mut context, &fixture).await;
     let mut substituted_release = begin_retiring_instruction(&fixture);

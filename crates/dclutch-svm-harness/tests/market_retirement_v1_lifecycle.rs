@@ -116,7 +116,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let trading_release = release(TRADING_PROGRAM_ID, [0x46; 32], &trading_elf);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         &elves.resolution,
     );
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);

@@ -84,7 +84,7 @@ use dclutch_release_set_contract::{
 };
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V5, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_source_contract::{
@@ -404,7 +404,7 @@ fn funding_entry(config: [u8; 32]) -> CapabilityEntryV1 {
     .expect("funding quote");
     CapabilityEntryV1::new(
         capability_id(hashv(&[b"dclutch/relayed/capability/", &config]).to_bytes()),
-        capability_id(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
+        capability_id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
         capability_id(config),
         capability_id([0xa4; 32]),
         capability_id([0xa5; 32]),
@@ -436,7 +436,7 @@ fn funding_ledger_key(
     Pubkey::find_program_address(&derivation.seed_components(), &PROGRAM_ID).0
 }
 
-/// Install the one V5 Resolution subset ledger with all three rows Active.
+/// Install the one V6 Resolution subset ledger with all three rows Active.
 fn add_active_funding_ledger(
     test: &mut ProgramTest,
     market: Pubkey,
@@ -998,7 +998,7 @@ fn fixture_with_venue(
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
     let resolution_release = release(
         PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         &elves.resolution,
     );
     let (release_set, activation_data) = activation(core_release, resolution_release);
@@ -1042,7 +1042,7 @@ fn fixture_with_venue(
     );
 
     // The capability manifest, and the reason the deadline walk has a bounty at
-    // all. Three `RESOLUTION_CONTROLLER_RELEASE_ID_V5` entries in the order
+    // all. Three `RESOLUTION_CONTROLLER_RELEASE_ID_V7` entries in the order
     // `core_effect`'s `authenticate_funding_entries` fixes them -- recovery
     // allocation, recovery policy, then THIS MARKET'S OWN Source material -- so
     // the explicit-failure compartment is identified by what its manifest entry
@@ -3242,7 +3242,7 @@ async fn the_bounty_cannot_be_collected_twice() {
 #[tokio::test]
 async fn a_live_ledger_for_another_generation_cannot_stand_in_for_the_escrow() {
     // The substitute is byte-identical, Resolution-owned, fully funded, and has
-    // all three V5 rows Active. Its PDA is canonical for generation+1, not for
+    // all three V6 rows Active. Its PDA is canonical for generation+1, not for
     // this Market generation. Shape and custody therefore pass while the exact
     // controller/Market/generation/manifest/mask authority binding refuses.
     let mut fixture = fixture(1, &[]);

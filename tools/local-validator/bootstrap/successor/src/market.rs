@@ -9077,8 +9077,15 @@ mod tests {
         let input = demo_market_input(registry, direct.compiler()).expect("demo market input");
         let bytes = decode_hex(&input.capability_manifest_hex).expect("manifest bytes");
         let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
-        let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6;
+        let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
         assert!(direct_founding_controller_masks_v1(manifest, expected).is_ok());
+        assert!(
+            direct_founding_controller_masks_v1(
+                manifest,
+                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            )
+            .is_err()
+        );
         assert!(direct_founding_controller_masks_v1(manifest, [0x5a; 32]).is_err());
     }
 

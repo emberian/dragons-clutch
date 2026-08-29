@@ -104,7 +104,7 @@ use dclutch_relay_contract::{
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
@@ -1380,7 +1380,7 @@ fn authenticate_failure_funding<'a>(
             let entry = manifest
                 .entry(entry_index)
                 .map_err(|_| ResolutionError::Funding)?;
-            if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V6
+            if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
                 || authenticated
                     .slot(entry_index)
                     .map_err(|_| ResolutionError::Funding)?

@@ -61,7 +61,7 @@ use dclutch_rent_contract::{
 use dclutch_resolution_codec::{
     PRE_MARKET_FUNDING_ABORT_RECEIPT_BYTES_V1, PRE_MARKET_FUNDING_RECEIPT_BYTES_V2,
     PreMarketFundingAbortReceiptV1, PreMarketFundingAbortRequestV1,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V6, pre_market_funding_ledger_account_digest_v1,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, pre_market_funding_ledger_account_digest_v1,
 };
 use dclutch_resolution_core_v3_operator::{
     Finality, Observation, ObservedAccount, ResolutionCreateFundSnapshotV3,
@@ -380,7 +380,7 @@ fn manifest(recovery_allocation: [u8; 32], recovery: [u8; 32], material: [u8; 32
     let mut entries = [recovery_allocation, recovery, material].map(|config| {
         CapabilityEntryV1::new(
             content(hash(&config).to_bytes()),
-            content(RESOLUTION_CONTROLLER_RELEASE_ID_V6),
+            content(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
             content(config),
             content([0x51; 32]),
             content([0x52; 32]),
@@ -431,7 +431,7 @@ fn fixture() -> Fixture {
     let caller_release = release(TRADING_CALLER_PROGRAM_ID, [0x64; 32], &elves.caller);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         &elves.resolution,
     );
     let release_set = ExecutionReleaseSetV1::new(

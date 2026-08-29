@@ -1,5 +1,6 @@
 //! Canonical Market-Core effect route for Source creation, readiness, terminal admission, and close.
 
+use alloc::boxed::Box;
 use core::convert::TryFrom;
 
 use dclutch_capability_contract::{
@@ -25,12 +26,17 @@ use dclutch_registry_contract::{
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
+    DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DIRECT_FUNDING_CLOSE_REQUEST_MAGIC_V1,
+    DirectFundingCloseRequestV1, FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, FUNDING_ACTIVATION_REQUEST_BYTES_V1,
+    FUNDING_ACTIVATION_REQUEST_MAGIC_V1, FundingActivationReceiptV1, FundingActivationRequestV1,
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V5, RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2,
     RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
     ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2,
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
     SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2, SourceClosureReceiptV3,
+    funding_lifecycle_account_digest_v1,
 };
 use dclutch_source_contract::{
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -66,6 +72,10 @@ pub(crate) const VERIFY_FUND_ACCOUNT_COUNT: usize = 19;
 pub(crate) const ADMIT_TERMINAL_ACCOUNT_COUNT: usize = 22;
 /// Close: common fourteen, certificate/closure/beneficiary/Clock/Rent/System, and recovery pair.
 pub(crate) const CLOSE_FUND_ACCOUNT_COUNT: usize = 22;
+/// Direct activation: fixed eighteen accounts and optional finalized RecoveryPolicy pair.
+pub(crate) const DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1: usize = 20;
+/// Direct close: fixed nineteen accounts and optional finalized RecoveryPolicy pair.
+pub(crate) const DIRECT_FUNDING_CLOSE_ACCOUNT_COUNT_V1: usize = 21;
 
 const RESOLUTION_FUNDING_LEDGER_BYTES: usize =
     FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
@@ -93,11 +103,1266 @@ struct AuthenticatedCore {
     full_effect_digest: Identity,
 }
 
+#[derive(Clone, Copy)]
+struct DirectFundingAccounts<'a, 'info> {
+    market: &'a AccountInfo<'info>,
+    activated_release_set: &'a AccountInfo<'info>,
+    registry_program: &'a AccountInfo<'info>,
+    core_program: &'a AccountInfo<'info>,
+    core_programdata: &'a AccountInfo<'info>,
+    resolution_program: &'a AccountInfo<'info>,
+    resolution_programdata: &'a AccountInfo<'info>,
+    source_material: &'a AccountInfo<'info>,
+    source_material_staging: &'a AccountInfo<'info>,
+    capability_manifest: &'a AccountInfo<'info>,
+    capability_manifest_staging: &'a AccountInfo<'info>,
+    source_state: &'a AccountInfo<'info>,
+    funding_ledger: &'a AccountInfo<'info>,
+    beneficiary: &'a AccountInfo<'info>,
+    receipt: &'a AccountInfo<'info>,
+    clock: &'a AccountInfo<'info>,
+    rent: &'a AccountInfo<'info>,
+    system: &'a AccountInfo<'info>,
+}
+
+#[derive(Clone, Copy)]
+struct DirectCloseAccounts<'a, 'info> {
+    market: &'a AccountInfo<'info>,
+    activated_release_set: &'a AccountInfo<'info>,
+    registry_program: &'a AccountInfo<'info>,
+    core_program: &'a AccountInfo<'info>,
+    core_programdata: &'a AccountInfo<'info>,
+    resolution_program: &'a AccountInfo<'info>,
+    resolution_programdata: &'a AccountInfo<'info>,
+    source_material: &'a AccountInfo<'info>,
+    source_material_staging: &'a AccountInfo<'info>,
+    capability_manifest: &'a AccountInfo<'info>,
+    capability_manifest_staging: &'a AccountInfo<'info>,
+    source_state: &'a AccountInfo<'info>,
+    funding_ledger: &'a AccountInfo<'info>,
+    certificate: &'a AccountInfo<'info>,
+    closure: &'a AccountInfo<'info>,
+    beneficiary: &'a AccountInfo<'info>,
+    clock: &'a AccountInfo<'info>,
+    rent: &'a AccountInfo<'info>,
+    system: &'a AccountInfo<'info>,
+}
+
 /// Return whether bytes select the one canonical Core effect route.
 pub(crate) fn is_core_effect(instruction_data: &[u8]) -> bool {
     instruction_data.len() == CORE_EFFECT_INSTRUCTION_BYTES
         && instruction_data.get(..8)
             == Some(dclutch_market_core_codec::CORE_EFFECT_MAGIC_V1.as_slice())
+}
+
+/// Return whether bytes select the V7 permissionless activation route.
+pub(crate) fn is_direct_funding_activation_v1(instruction_data: &[u8]) -> bool {
+    instruction_data.len() == FUNDING_ACTIVATION_REQUEST_BYTES_V1
+        && instruction_data.get(..8) == Some(FUNDING_ACTIVATION_REQUEST_MAGIC_V1.as_slice())
+}
+
+/// Return whether bytes select the V7 permissionless terminal-close route.
+pub(crate) fn is_direct_funding_close_v1(instruction_data: &[u8]) -> bool {
+    instruction_data.len() == DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1
+        && instruction_data.get(..8) == Some(DIRECT_FUNDING_CLOSE_REQUEST_MAGIC_V1.as_slice())
+}
+
+/// Activate one exact Pending ledger and persist the immutable receipt last.
+#[inline(never)]
+pub(crate) fn process_direct_funding_activation_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let request = Box::new(
+        FundingActivationRequestV1::decode(instruction_data)
+            .map_err(|_| ResolutionError::Instruction)?,
+    );
+    let direct = parse_direct_funding_accounts(program_id, accounts, request.as_ref())?;
+    let rent = authenticate_rent(direct.rent)?;
+    let clock = authenticate_clock(direct.clock)?;
+    if clock.slot == 0 {
+        return Err(ResolutionError::Sysvar.into());
+    }
+    let state = authenticate_direct_market(direct, request.as_ref())?;
+    authenticate_direct_activation(program_id, direct, request.as_ref())?;
+    authenticate_direct_source_records(direct, request.as_ref(), &rent)?;
+    let material_data = direct
+        .source_material
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::SourceMaterial)?;
+    let material =
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let manifest_data = direct
+        .capability_manifest
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
+    let recovery_policy = authenticate_direct_recovery_policy(
+        direct,
+        accounts.get(18),
+        accounts.get(19),
+        material,
+        &rent,
+    )?;
+    authenticate_funding_entries(material, recovery_policy, manifest, request.role)?;
+    authenticate_direct_source(program_id, direct, request.as_ref(), state)?;
+    let manifest_id = CapabilityContentId::new(request.role.capability_manifest)
+        .map_err(|_| ResolutionError::Funding)?;
+    let request_digest = request.digest().map_err(|_| ResolutionError::Instruction)?;
+
+    commit_direct_activation(
+        program_id,
+        direct,
+        request.as_ref(),
+        request_digest,
+        state.identity.generation,
+        manifest_id,
+        manifest,
+        clock.slot,
+        &rent,
+    )
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn commit_direct_activation(
+    program_id: &Pubkey,
+    direct: DirectFundingAccounts<'_, '_>,
+    request: &FundingActivationRequestV1,
+    request_digest: [u8; 32],
+    generation: u64,
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'_>,
+    activation_slot: u64,
+    rent: &Rent,
+) -> ProgramResult {
+    if direct.receipt.owner == program_id {
+        return authenticate_completed_activation(
+            program_id,
+            direct,
+            *request,
+            request_digest,
+            manifest_id,
+            manifest,
+            rent,
+        );
+    }
+
+    require_prepaid_output(
+        direct.receipt,
+        rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1),
+    )?;
+    let mut ledger_bytes = Box::new(copy_ledger_bytes(direct.funding_ledger)?);
+    let pending_digest = funding_lifecycle_account_digest_v1(
+        direct.funding_ledger.owner.to_bytes(),
+        direct.funding_ledger.key.to_bytes(),
+        direct.funding_ledger.lamports(),
+        ledger_bytes.as_ref(),
+    );
+    if pending_digest != request.expected_pending_ledger_digest {
+        return Err(ResolutionError::Funding.into());
+    }
+    authenticate_direct_ledger(
+        program_id,
+        direct,
+        generation,
+        manifest_id,
+        manifest,
+        request.role,
+        FundingLedgerStatusV2::Pending,
+        ledger_bytes.as_ref(),
+        direct.funding_ledger.lamports(),
+        &rent,
+        false,
+    )?;
+    let mut beneficiary_credit = 0_u64;
+    for entry_index in [
+        request.role.recovery_entry_index,
+        request.role.exhaustion_entry_index,
+        request.role.failure_entry_index,
+    ] {
+        let debit = FundingLedgerV2::activate_in_place(
+            ledger_bytes.as_mut(),
+            manifest_id,
+            manifest,
+            entry_index,
+            activation_slot,
+        )
+        .map_err(|_| ResolutionError::Funding)?;
+        beneficiary_credit = beneficiary_credit
+            .checked_add(debit.rent_lamports())
+            .and_then(|value| value.checked_add(debit.creation_lamports()))
+            .ok_or(ResolutionError::Arithmetic)?;
+    }
+    let post_ledger_lamports = direct
+        .funding_ledger
+        .lamports()
+        .checked_sub(beneficiary_credit)
+        .ok_or(ResolutionError::Arithmetic)?;
+    let beneficiary_lamports = direct
+        .beneficiary
+        .lamports()
+        .checked_add(beneficiary_credit)
+        .ok_or(ResolutionError::Arithmetic)?;
+    authenticate_direct_ledger(
+        program_id,
+        direct,
+        generation,
+        manifest_id,
+        manifest,
+        request.role,
+        FundingLedgerStatusV2::Active,
+        ledger_bytes.as_ref(),
+        post_ledger_lamports,
+        &rent,
+        false,
+    )?;
+    let active = FundingLedgerV2::decode(ledger_bytes.as_ref())
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .map_err(|_| ResolutionError::Funding)?;
+    let ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES);
+    let remaining_native_principal_lamports = active
+        .remaining_native_lamports_total()
+        .map_err(|_| ResolutionError::Funding)?;
+    let active_ledger_digest = funding_lifecycle_account_digest_v1(
+        program_id.to_bytes(),
+        direct.funding_ledger.key.to_bytes(),
+        post_ledger_lamports,
+        ledger_bytes.as_ref(),
+    );
+    let receipt = FundingActivationReceiptV1 {
+        request_digest,
+        release_set: request.release_set,
+        resolution_release: RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+        market: request.market,
+        generation: request.generation,
+        role: request.role,
+        market_state_digest: request.expected_market_state_digest,
+        source_state_digest: request.expected_source_state_digest,
+        pending_ledger_digest: pending_digest,
+        active_ledger_digest,
+        activation_slot,
+        beneficiary_credit_lamports: beneficiary_credit,
+        ledger_rent_lamports,
+        remaining_native_principal_lamports,
+        post_ledger_lamports,
+        producer: program_id.to_bytes(),
+    };
+    let receipt_bytes = Box::new(receipt.encode().map_err(|_| ResolutionError::OutputState)?);
+    commit_activated_ledger(
+        direct.funding_ledger,
+        ledger_bytes.as_ref(),
+        post_ledger_lamports,
+        direct.beneficiary,
+        beneficiary_lamports,
+    )?;
+    initialize_activation_receipt(
+        program_id,
+        direct.market,
+        direct.receipt,
+        request.generation,
+        direct.system,
+        &rent,
+    )?;
+    write_state(direct.receipt, receipt_bytes.as_ref())?;
+    set_return_data(receipt_bytes.as_ref());
+    Ok(())
+}
+
+/// Close one exact Retiring/Consumed terminal Source and ledger without a Core CPI.
+#[inline(never)]
+pub(crate) fn process_direct_funding_close_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let request = Box::new(
+        DirectFundingCloseRequestV1::decode(instruction_data)
+            .map_err(|_| ResolutionError::Instruction)?,
+    );
+    let direct = parse_direct_close_accounts(program_id, accounts, request.as_ref())?;
+    let rent = authenticate_rent(direct.rent)?;
+    let clock = authenticate_clock(direct.clock)?;
+    if clock.unix_timestamp <= 0 {
+        return Err(ResolutionError::Sysvar.into());
+    }
+    let state = authenticate_direct_close_market(direct, request.as_ref())?;
+    authenticate_direct_close_release(program_id, direct, request.as_ref())?;
+    authenticate_direct_close_records(direct, request.as_ref(), &rent)?;
+    let material_data = direct
+        .source_material
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::SourceMaterial)?;
+    let material =
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let recovery_policy = authenticate_direct_close_recovery_policy(
+        direct,
+        accounts.get(19),
+        accounts.get(20),
+        material,
+        &rent,
+    )?;
+    let manifest_data = direct
+        .capability_manifest
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
+    authenticate_funding_entries(material, recovery_policy, manifest, request.role)?;
+    let manifest_id = CapabilityContentId::new(request.role.capability_manifest)
+        .map_err(|_| ResolutionError::Funding)?;
+
+    commit_direct_close(
+        program_id,
+        direct,
+        request.as_ref(),
+        state,
+        manifest_id,
+        manifest,
+        clock.unix_timestamp,
+        &rent,
+    )
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn commit_direct_close(
+    program_id: &Pubkey,
+    direct: DirectCloseAccounts<'_, '_>,
+    request: &DirectFundingCloseRequestV1,
+    state: CoreState,
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'_>,
+    close_time: i64,
+    rent: &Rent,
+) -> ProgramResult {
+    let source_data = direct
+        .source_state
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if hash(&source_data).to_bytes() != request.source_state_digest {
+        return Err(ResolutionError::Transition.into());
+    }
+    let mut source =
+        SourceResolutionStateV2::decode(&source_data).map_err(|_| ResolutionError::OutputState)?;
+    authenticate_state_account_v2(program_id, direct.source_state, source)?;
+    if !matches!(
+        source.phase(),
+        SourceResolutionPhaseV1::Resolved | SourceResolutionPhaseV1::FailureCommitted
+    ) || source.market() != request.market
+        || source.generation() != request.generation
+        || source.material_id().to_bytes() != request.role.source_material
+        || source.rent_beneficiary() != request.role.beneficiary
+    {
+        return Err(ResolutionError::Transition.into());
+    }
+    let terminal = source
+        .terminal_projection()
+        .map_err(|_| ResolutionError::Transition)?;
+    if terminal.selector() != state.terminal_winner
+        || terminal
+            .terminal_sequence()
+            .checked_add(1)
+            .ok_or(ResolutionError::Arithmetic)?
+            != request.role.receipt_sequence
+    {
+        return Err(ResolutionError::Transition.into());
+    }
+    source
+        .retire(state.identity.generation, close_time, 1, 1)
+        .map_err(|_| ResolutionError::Transition)?;
+
+    let mut closed_ledger = Box::new(copy_ledger_bytes(direct.funding_ledger)?);
+    let ledger_account_digest = funding_lifecycle_account_digest_v1(
+        direct.funding_ledger.owner.to_bytes(),
+        direct.funding_ledger.key.to_bytes(),
+        direct.funding_ledger.lamports(),
+        closed_ledger.as_ref(),
+    );
+    if ledger_account_digest != request.funding_ledger_digest {
+        return Err(ResolutionError::Funding.into());
+    }
+    authenticate_direct_close_ledger(
+        program_id,
+        direct,
+        state.identity.generation,
+        manifest_id,
+        manifest,
+        request.role,
+        FundingLedgerStatusV2::Active,
+        closed_ledger.as_ref(),
+        direct.funding_ledger.lamports(),
+        rent,
+        true,
+    )?;
+    let funding_set_digest = funding_set_digest(closed_ledger.as_ref());
+    let mut ledger_can_close = false;
+    let mut planned_ledger_lamports = direct.funding_ledger.lamports();
+    let mut ledger_remaining_native_principal = 0_u64;
+    let mut ledger_rent_lamports = 0_u64;
+    let mut ledger_lamport_surplus = 0_u64;
+    for entry_index in [
+        request.role.recovery_entry_index,
+        request.role.exhaustion_entry_index,
+        request.role.failure_entry_index,
+    ] {
+        let plan = FundingLedgerV2::close_slot_in_place(
+            closed_ledger.as_mut(),
+            manifest_id,
+            manifest,
+            entry_index,
+            FundingLedgerCloseCustodyV2::native_only(
+                planned_ledger_lamports,
+                rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES),
+                request.role.beneficiary,
+            )
+            .map_err(|_| ResolutionError::Funding)?,
+        )
+        .map_err(|_| ResolutionError::Funding)?;
+        if plan.native_rent_credit() != request.role.beneficiary
+            || plan.remaining_realm_collateral() != 0
+            || plan.realm_token_beneficiary().is_some()
+        {
+            return Err(ResolutionError::Funding.into());
+        }
+        ledger_remaining_native_principal = ledger_remaining_native_principal
+            .checked_add(plan.remaining_native_lamports())
+            .ok_or(ResolutionError::Arithmetic)?;
+        if plan.ledger_can_close() {
+            ledger_rent_lamports = plan.ledger_rent_lamports();
+            ledger_lamport_surplus = plan.ledger_lamport_donation();
+        } else if plan.ledger_rent_lamports() != 0 || plan.ledger_lamport_donation() != 0 {
+            return Err(ResolutionError::Funding.into());
+        }
+        planned_ledger_lamports = plan.expected_post_ledger_lamports();
+        ledger_can_close = plan.ledger_can_close();
+    }
+    if !ledger_can_close || planned_ledger_lamports != 0 {
+        return Err(ResolutionError::Funding.into());
+    }
+
+    let certificate_data = direct
+        .certificate
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if hash(&certificate_data).to_bytes() != request.certificate_digest {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let terminal_kind = if terminal.route() == SourceResolutionRouteV1::Failure {
+        ResolutionCoreReceiptKindV1::TerminalFailure
+    } else {
+        ResolutionCoreReceiptKindV1::TerminalSuccess
+    };
+    authenticate_admitted_terminal_certificate_v2(
+        program_id,
+        direct.source_state,
+        direct.certificate,
+        terminal_kind,
+        terminal.terminal_sequence(),
+        request.role.source_material,
+        request.market,
+        state.identity.product_record.to_bytes(),
+        request.generation,
+        terminal.selector(),
+        &certificate_data,
+        rent,
+    )?;
+    let ledger_refund = direct.funding_ledger.lamports();
+    let source_refund = direct.source_state.lamports();
+    if source_refund < rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2)
+        || ledger_remaining_native_principal
+            .checked_add(ledger_rent_lamports)
+            .and_then(|value| value.checked_add(ledger_lamport_surplus))
+            != Some(ledger_refund)
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    let refund_lamports = source_refund
+        .checked_add(ledger_remaining_native_principal)
+        .and_then(|value| value.checked_add(ledger_rent_lamports))
+        .and_then(|value| value.checked_add(ledger_lamport_surplus))
+        .ok_or(ResolutionError::Arithmetic)?;
+    let beneficiary_lamports = direct
+        .beneficiary
+        .lamports()
+        .checked_add(refund_lamports)
+        .ok_or(ResolutionError::Arithmetic)?;
+    let closure = SourceClosureReceiptV3 {
+        market: request.market,
+        source_state: direct.source_state.key.to_bytes(),
+        source_material: request.role.source_material,
+        capability_manifest: request.role.capability_manifest,
+        terminal_certificate: direct.certificate.key.to_bytes(),
+        receipt_account: direct.closure.key.to_bytes(),
+        beneficiary: request.role.beneficiary,
+        source_state_digest: request.source_state_digest,
+        terminal_certificate_digest: request.certificate_digest,
+        funding_set_digest,
+        generation: request.generation,
+        terminal_sequence: terminal.terminal_sequence(),
+        selector: terminal.selector(),
+        source_refund_lamports: source_refund,
+        ledger_remaining_native_principal,
+        ledger_rent_lamports,
+        ledger_lamport_surplus,
+        refund_lamports,
+        closed_at: u64::try_from(close_time).map_err(|_| ResolutionError::Arithmetic)?,
+    };
+    let closure_bytes = Box::new(
+        closure
+            .to_bytes()
+            .map_err(|_| ResolutionError::OutputState)?,
+    );
+    drop(certificate_data);
+    drop(source_data);
+    initialize_closure_output(
+        program_id,
+        direct.source_state,
+        direct.closure,
+        request.role.receipt_sequence,
+        direct.system,
+        rent,
+    )?;
+    write_state(direct.closure, closure_bytes.as_ref())?;
+    commit_refund(
+        direct.source_state,
+        direct.funding_ledger,
+        direct.beneficiary,
+        beneficiary_lamports,
+    )?;
+    set_return_data(closure_bytes.as_ref());
+    Ok(())
+}
+
+fn parse_direct_funding_accounts<'a, 'info>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'info>],
+    request: &FundingActivationRequestV1,
+) -> Result<DirectFundingAccounts<'a, 'info>, ProgramError> {
+    if accounts.len() != DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1
+        && accounts.len() != DIRECT_FUNDING_ACTIVATION_ACCOUNT_COUNT_V1.saturating_sub(2)
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    for (index, account) in accounts.iter().enumerate() {
+        if account.is_signer
+            || accounts
+                .iter()
+                .skip(index.checked_add(1).ok_or(ResolutionError::Arithmetic)?)
+                .any(|other| other.key == account.key)
+        {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
+    let direct = DirectFundingAccounts {
+        market: accounts.first().ok_or(ResolutionError::AccountFrame)?,
+        activated_release_set: accounts.get(1).ok_or(ResolutionError::AccountFrame)?,
+        registry_program: accounts.get(2).ok_or(ResolutionError::AccountFrame)?,
+        core_program: accounts.get(3).ok_or(ResolutionError::AccountFrame)?,
+        core_programdata: accounts.get(4).ok_or(ResolutionError::AccountFrame)?,
+        resolution_program: accounts.get(5).ok_or(ResolutionError::AccountFrame)?,
+        resolution_programdata: accounts.get(6).ok_or(ResolutionError::AccountFrame)?,
+        source_material: accounts.get(7).ok_or(ResolutionError::AccountFrame)?,
+        source_material_staging: accounts.get(8).ok_or(ResolutionError::AccountFrame)?,
+        capability_manifest: accounts.get(9).ok_or(ResolutionError::AccountFrame)?,
+        capability_manifest_staging: accounts.get(10).ok_or(ResolutionError::AccountFrame)?,
+        source_state: accounts.get(11).ok_or(ResolutionError::AccountFrame)?,
+        funding_ledger: accounts.get(12).ok_or(ResolutionError::AccountFrame)?,
+        beneficiary: accounts.get(13).ok_or(ResolutionError::AccountFrame)?,
+        receipt: accounts.get(14).ok_or(ResolutionError::AccountFrame)?,
+        clock: accounts.get(15).ok_or(ResolutionError::AccountFrame)?,
+        rent: accounts.get(16).ok_or(ResolutionError::AccountFrame)?,
+        system: accounts.get(17).ok_or(ResolutionError::AccountFrame)?,
+    };
+    if direct.market.is_writable
+        || direct.market.executable
+        || direct.activated_release_set.is_writable
+        || direct.activated_release_set.executable
+        || !direct.registry_program.executable
+        || direct.registry_program.is_writable
+        || !direct.core_program.executable
+        || direct.core_program.is_writable
+        || direct.core_programdata.is_writable
+        || direct.core_programdata.executable
+        || direct.resolution_program.key != program_id
+        || !direct.resolution_program.executable
+        || direct.resolution_program.is_writable
+        || direct.resolution_programdata.is_writable
+        || direct.resolution_programdata.executable
+        || direct.source_material.is_writable
+        || direct.source_material.executable
+        || direct.source_material_staging.is_writable
+        || direct.source_material_staging.executable
+        || direct.capability_manifest.is_writable
+        || direct.capability_manifest.executable
+        || direct.capability_manifest_staging.is_writable
+        || direct.capability_manifest_staging.executable
+        || direct.source_state.is_writable
+        || direct.source_state.executable
+        || !direct.funding_ledger.is_writable
+        || direct.funding_ledger.executable
+        || !direct.beneficiary.is_writable
+        || direct.beneficiary.executable
+        || !direct.receipt.is_writable
+        || direct.receipt.executable
+        || direct.clock.is_writable
+        || direct.clock.executable
+        || direct.rent.is_writable
+        || direct.rent.executable
+        || direct.system.key != &system_program::ID
+        || !direct.system.executable
+        || direct.system.is_writable
+        || direct.market.key.to_bytes() != request.market
+        || direct.source_state.key.to_bytes() != request.role.source_state
+        || direct.funding_ledger.key.to_bytes() != request.role.funding_ledger
+        || direct.beneficiary.key.to_bytes() != request.role.beneficiary
+        || direct.receipt.key.to_bytes() != request.receipt
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    for account in accounts.iter().skip(18) {
+        if account.is_writable || account.executable {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
+    Ok(direct)
+}
+
+fn parse_direct_close_accounts<'a, 'info>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'info>],
+    request: &DirectFundingCloseRequestV1,
+) -> Result<DirectCloseAccounts<'a, 'info>, ProgramError> {
+    if accounts.len() != DIRECT_FUNDING_CLOSE_ACCOUNT_COUNT_V1
+        && accounts.len() != DIRECT_FUNDING_CLOSE_ACCOUNT_COUNT_V1.saturating_sub(2)
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    for (index, account) in accounts.iter().enumerate() {
+        if account.is_signer
+            || accounts
+                .iter()
+                .skip(index.checked_add(1).ok_or(ResolutionError::Arithmetic)?)
+                .any(|other| other.key == account.key)
+        {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
+    let direct = DirectCloseAccounts {
+        market: accounts.first().ok_or(ResolutionError::AccountFrame)?,
+        activated_release_set: accounts.get(1).ok_or(ResolutionError::AccountFrame)?,
+        registry_program: accounts.get(2).ok_or(ResolutionError::AccountFrame)?,
+        core_program: accounts.get(3).ok_or(ResolutionError::AccountFrame)?,
+        core_programdata: accounts.get(4).ok_or(ResolutionError::AccountFrame)?,
+        resolution_program: accounts.get(5).ok_or(ResolutionError::AccountFrame)?,
+        resolution_programdata: accounts.get(6).ok_or(ResolutionError::AccountFrame)?,
+        source_material: accounts.get(7).ok_or(ResolutionError::AccountFrame)?,
+        source_material_staging: accounts.get(8).ok_or(ResolutionError::AccountFrame)?,
+        capability_manifest: accounts.get(9).ok_or(ResolutionError::AccountFrame)?,
+        capability_manifest_staging: accounts.get(10).ok_or(ResolutionError::AccountFrame)?,
+        source_state: accounts.get(11).ok_or(ResolutionError::AccountFrame)?,
+        funding_ledger: accounts.get(12).ok_or(ResolutionError::AccountFrame)?,
+        certificate: accounts.get(13).ok_or(ResolutionError::AccountFrame)?,
+        closure: accounts.get(14).ok_or(ResolutionError::AccountFrame)?,
+        beneficiary: accounts.get(15).ok_or(ResolutionError::AccountFrame)?,
+        clock: accounts.get(16).ok_or(ResolutionError::AccountFrame)?,
+        rent: accounts.get(17).ok_or(ResolutionError::AccountFrame)?,
+        system: accounts.get(18).ok_or(ResolutionError::AccountFrame)?,
+    };
+    if direct.market.is_writable
+        || direct.market.executable
+        || direct.activated_release_set.is_writable
+        || direct.activated_release_set.executable
+        || !direct.registry_program.executable
+        || direct.registry_program.is_writable
+        || !direct.core_program.executable
+        || direct.core_program.is_writable
+        || direct.core_programdata.is_writable
+        || direct.core_programdata.executable
+        || direct.resolution_program.key != program_id
+        || !direct.resolution_program.executable
+        || direct.resolution_program.is_writable
+        || direct.resolution_programdata.is_writable
+        || direct.resolution_programdata.executable
+        || direct.source_material.is_writable
+        || direct.source_material.executable
+        || direct.source_material_staging.is_writable
+        || direct.source_material_staging.executable
+        || direct.capability_manifest.is_writable
+        || direct.capability_manifest.executable
+        || direct.capability_manifest_staging.is_writable
+        || direct.capability_manifest_staging.executable
+        || !direct.source_state.is_writable
+        || direct.source_state.executable
+        || !direct.funding_ledger.is_writable
+        || direct.funding_ledger.executable
+        || direct.certificate.is_writable
+        || direct.certificate.executable
+        || !direct.closure.is_writable
+        || direct.closure.executable
+        || !direct.beneficiary.is_writable
+        || direct.beneficiary.executable
+        || direct.clock.is_writable
+        || direct.clock.executable
+        || direct.rent.is_writable
+        || direct.rent.executable
+        || direct.system.key != &system_program::ID
+        || !direct.system.executable
+        || direct.system.is_writable
+        || direct.market.key.to_bytes() != request.market
+        || direct.source_state.key.to_bytes() != request.role.source_state
+        || direct.funding_ledger.key.to_bytes() != request.role.funding_ledger
+        || direct.closure.key.to_bytes() != request.role.receipt
+        || direct.beneficiary.key.to_bytes() != request.role.beneficiary
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    for account in accounts.iter().skip(19) {
+        if account.is_writable || account.executable {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
+    let closure_data = direct
+        .closure
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if direct.closure.owner != &system_program::ID
+        || !closure_data.is_empty()
+        || funding_lifecycle_account_digest_v1(
+            direct.closure.owner.to_bytes(),
+            direct.closure.key.to_bytes(),
+            direct.closure.lamports(),
+            &closure_data,
+        ) != request.closure_prestate_digest
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(direct)
+}
+
+fn authenticate_direct_close_market(
+    direct: DirectCloseAccounts<'_, '_>,
+    request: &DirectFundingCloseRequestV1,
+) -> Result<CoreState, ProgramError> {
+    if direct.market.owner != direct.core_program.key {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    let market_data = direct
+        .market
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::MarketAuthority)?;
+    if hash(&market_data).to_bytes() != request.market_state_digest {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    let state = CoreState::decode(&market_data).map_err(|_| ResolutionError::MarketAuthority)?;
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
+    if state.identity.market_id.to_bytes() != request.market
+        || state.identity.generation != request.generation
+        || state.identity.registry_program.to_bytes() != direct.registry_program.key.to_bytes()
+        || state.identity.selected_release_set.to_bytes() != request.release_set
+        || state.identity.resolution_policy.to_bytes() != request.role.source_material
+        || state.identity.capability_manifest.to_bytes() != request.role.capability_manifest
+        || state.phase != CorePhase::Retiring
+        || state.readiness != CoreReadiness::Consumed
+        || state.terminal_receipt.map(|value| value.to_bytes())
+            != Some(direct.certificate.key.to_bytes())
+        || state.rent_beneficiary.to_bytes() != request.role.beneficiary
+        || Pubkey::find_program_address(&seeds.as_slices(), direct.core_program.key).0
+            != *direct.market.key
+    {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    Ok(state)
+}
+
+fn authenticate_direct_close_release(
+    program_id: &Pubkey,
+    direct: DirectCloseAccounts<'_, '_>,
+    request: &DirectFundingCloseRequestV1,
+) -> ProgramResult {
+    if direct.activated_release_set.owner != direct.registry_program.key {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    let activation_data = direct
+        .activated_release_set
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    if activation_data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let release_set_id = activated
+        .execution_release_set_id()
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let core = activated
+        .role(ExecutionRoleV1::Core)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let resolution = activated
+        .role(ExecutionRoleV1::Resolution)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    if release_set_id.to_bytes() != request.release_set
+        || Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
+            direct.registry_program.key,
+        )
+        .0 != *direct.activated_release_set.key
+        || core.release().program().to_bytes() != direct.core_program.key.to_bytes()
+        || resolution.release().program().to_bytes() != program_id.to_bytes()
+        || resolution.release().semantic_release_id().to_bytes()
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    core.authenticate_current_deployment(deployment_observation(
+        direct.core_program,
+        direct.core_programdata,
+        core.release().programdata(),
+    )?)
+    .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    resolution
+        .authenticate_current_deployment(deployment_observation(
+            direct.resolution_program,
+            direct.resolution_programdata,
+            resolution.release().programdata(),
+        )?)
+        .map_err(|_| ResolutionError::ResolutionDeployment.into())
+}
+
+fn authenticate_direct_close_records(
+    direct: DirectCloseAccounts<'_, '_>,
+    request: &DirectFundingCloseRequestV1,
+    rent: &Rent,
+) -> ProgramResult {
+    let material_data = direct
+        .source_material
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        *direct.registry_program.key,
+        direct.source_material,
+        direct.source_material_staging,
+        rent,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        request.role.source_material,
+        &material_data,
+        RecordKind::SourceMaterialV3,
+    )?;
+    let manifest_data = direct
+        .capability_manifest
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        *direct.registry_program.key,
+        direct.capability_manifest,
+        direct.capability_manifest_staging,
+        rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        request.role.capability_manifest,
+        &manifest_data,
+        RecordKind::CapabilityManifest,
+    )
+}
+
+fn authenticate_direct_close_recovery_policy(
+    direct: DirectCloseAccounts<'_, '_>,
+    raw: Option<&AccountInfo<'_>>,
+    staging: Option<&AccountInfo<'_>>,
+    material: SourceMaterialV3,
+    rent: &Rent,
+) -> Result<Option<RecoveryPolicyV2>, ProgramError> {
+    match (material.recovery_policy(), raw, staging) {
+        (Some(policy_id), Some(raw), Some(staging)) => {
+            let policy_data = raw
+                .try_borrow_data()
+                .map_err(|_| ResolutionError::FinalizedRecord)?;
+            authenticate_finalized_record(
+                *direct.registry_program.key,
+                raw,
+                staging,
+                rent,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
+                policy_id.to_bytes(),
+                &policy_data,
+                RecordKind::RecoveryPolicyV2,
+            )?;
+            RecoveryPolicyV2::decode(&policy_data)
+                .map(Some)
+                .map_err(|_| ResolutionError::SourceMaterial.into())
+        }
+        (None, None, None) => Ok(None),
+        _ => Err(ResolutionError::AccountFrame.into()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_direct_close_ledger(
+    program_id: &Pubkey,
+    direct: DirectCloseAccounts<'_, '_>,
+    generation: u64,
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'_>,
+    request: ResolutionRoleRequestV2,
+    expected_status: FundingLedgerStatusV2,
+    bytes: &[u8],
+    observed_lamports: u64,
+    rent: &Rent,
+    admit_donations: bool,
+) -> ProgramResult {
+    if direct.funding_ledger.owner != program_id
+        || direct.funding_ledger.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    authenticate_ledger_value(
+        program_id,
+        direct.market,
+        direct.funding_ledger,
+        generation,
+        manifest_id,
+        manifest,
+        request,
+        expected_status,
+        bytes,
+        observed_lamports,
+        rent,
+        admit_donations,
+    )
+}
+
+fn authenticate_direct_market(
+    direct: DirectFundingAccounts<'_, '_>,
+    request: &FundingActivationRequestV1,
+) -> Result<CoreState, ProgramError> {
+    if direct.market.owner != direct.core_program.key {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    let market_data = direct
+        .market
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::MarketAuthority)?;
+    if hash(&market_data).to_bytes() != request.expected_market_state_digest {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    let state = CoreState::decode(&market_data).map_err(|_| ResolutionError::MarketAuthority)?;
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
+    if state.identity.market_id.to_bytes() != request.market
+        || state.identity.generation != request.generation
+        || state.identity.registry_program.to_bytes() != direct.registry_program.key.to_bytes()
+        || state.identity.selected_release_set.to_bytes() != request.release_set
+        || state.identity.resolution_policy.to_bytes() != request.role.source_material
+        || state.identity.capability_manifest.to_bytes() != request.role.capability_manifest
+        || state.terminal_receipt.is_some()
+        || !matches!(
+            (state.phase, state.readiness),
+            (CorePhase::Founding, CoreReadiness::Prepaid)
+                | (CorePhase::Open, CoreReadiness::Consumed)
+        )
+        || Pubkey::find_program_address(&seeds.as_slices(), direct.core_program.key).0
+            != *direct.market.key
+    {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    Ok(state)
+}
+
+fn authenticate_direct_activation(
+    program_id: &Pubkey,
+    direct: DirectFundingAccounts<'_, '_>,
+    request: &FundingActivationRequestV1,
+) -> ProgramResult {
+    if direct.activated_release_set.owner != direct.registry_program.key {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    let activation_data = direct
+        .activated_release_set
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    if activation_data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let release_set_id = activated
+        .execution_release_set_id()
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let core = activated
+        .role(ExecutionRoleV1::Core)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let resolution = activated
+        .role(ExecutionRoleV1::Resolution)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    if release_set_id.to_bytes() != request.release_set
+        || Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
+            direct.registry_program.key,
+        )
+        .0 != *direct.activated_release_set.key
+        || core.release().program().to_bytes() != direct.core_program.key.to_bytes()
+        || resolution.release().program().to_bytes() != program_id.to_bytes()
+        || resolution.release().semantic_release_id().to_bytes()
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    core.authenticate_current_deployment(deployment_observation(
+        direct.core_program,
+        direct.core_programdata,
+        core.release().programdata(),
+    )?)
+    .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    resolution
+        .authenticate_current_deployment(deployment_observation(
+            direct.resolution_program,
+            direct.resolution_programdata,
+            resolution.release().programdata(),
+        )?)
+        .map_err(|_| ResolutionError::ResolutionDeployment.into())
+}
+
+fn authenticate_direct_source_records(
+    direct: DirectFundingAccounts<'_, '_>,
+    request: &FundingActivationRequestV1,
+    rent: &Rent,
+) -> ProgramResult {
+    let material_data = direct
+        .source_material
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        *direct.registry_program.key,
+        direct.source_material,
+        direct.source_material_staging,
+        rent,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        request.role.source_material,
+        &material_data,
+        RecordKind::SourceMaterialV3,
+    )?;
+    let manifest_data = direct
+        .capability_manifest
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        *direct.registry_program.key,
+        direct.capability_manifest,
+        direct.capability_manifest_staging,
+        rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        request.role.capability_manifest,
+        &manifest_data,
+        RecordKind::CapabilityManifest,
+    )
+}
+
+fn authenticate_direct_recovery_policy(
+    direct: DirectFundingAccounts<'_, '_>,
+    raw: Option<&AccountInfo<'_>>,
+    staging: Option<&AccountInfo<'_>>,
+    material: SourceMaterialV3,
+    rent: &Rent,
+) -> Result<Option<RecoveryPolicyV2>, ProgramError> {
+    match (material.recovery_policy(), raw, staging) {
+        (Some(policy_id), Some(raw), Some(staging)) => {
+            let policy_data = raw
+                .try_borrow_data()
+                .map_err(|_| ResolutionError::FinalizedRecord)?;
+            authenticate_finalized_record(
+                *direct.registry_program.key,
+                raw,
+                staging,
+                rent,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
+                policy_id.to_bytes(),
+                &policy_data,
+                RecordKind::RecoveryPolicyV2,
+            )?;
+            RecoveryPolicyV2::decode(&policy_data)
+                .map(Some)
+                .map_err(|_| ResolutionError::SourceMaterial.into())
+        }
+        (None, None, None) => Ok(None),
+        _ => Err(ResolutionError::AccountFrame.into()),
+    }
+}
+
+fn authenticate_direct_source(
+    program_id: &Pubkey,
+    direct: DirectFundingAccounts<'_, '_>,
+    request: &FundingActivationRequestV1,
+    state: CoreState,
+) -> ProgramResult {
+    let source_data = direct
+        .source_state
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if hash(&source_data).to_bytes() != request.expected_source_state_digest {
+        return Err(ResolutionError::Transition.into());
+    }
+    let source =
+        SourceResolutionStateV2::decode(&source_data).map_err(|_| ResolutionError::OutputState)?;
+    authenticate_state_account_v2(program_id, direct.source_state, source)?;
+    if source.phase() != SourceResolutionPhaseV1::Primary
+        || source.market() != request.market
+        || source.generation() != request.generation
+        || source.material_id().to_bytes() != request.role.source_material
+        || source.rent_beneficiary() != state.rent_beneficiary.to_bytes()
+        || source.rent_beneficiary() != request.role.beneficiary
+    {
+        return Err(ResolutionError::Transition.into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_direct_ledger(
+    program_id: &Pubkey,
+    direct: DirectFundingAccounts<'_, '_>,
+    generation: u64,
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'_>,
+    request: ResolutionRoleRequestV2,
+    expected_status: FundingLedgerStatusV2,
+    bytes: &[u8],
+    observed_lamports: u64,
+    rent: &Rent,
+    admit_donations: bool,
+) -> ProgramResult {
+    if direct.funding_ledger.owner != program_id
+        || direct.funding_ledger.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    authenticate_ledger_value(
+        program_id,
+        direct.market,
+        direct.funding_ledger,
+        generation,
+        manifest_id,
+        manifest,
+        request,
+        expected_status,
+        bytes,
+        observed_lamports,
+        rent,
+        admit_donations,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_completed_activation(
+    program_id: &Pubkey,
+    direct: DirectFundingAccounts<'_, '_>,
+    request: FundingActivationRequestV1,
+    request_digest: [u8; 32],
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'_>,
+    rent: &Rent,
+) -> ProgramResult {
+    let receipt_data = direct
+        .receipt
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if direct.receipt.data_len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
+        || direct.receipt.lamports() < rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1)
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let receipt = FundingActivationReceiptV1::decode(&receipt_data)
+        .map_err(|_| ResolutionError::OutputState)?;
+    let ledger_bytes = copy_ledger_bytes(direct.funding_ledger)?;
+    authenticate_direct_ledger(
+        program_id,
+        direct,
+        request.generation,
+        manifest_id,
+        manifest,
+        request.role,
+        FundingLedgerStatusV2::Active,
+        &ledger_bytes,
+        direct.funding_ledger.lamports(),
+        rent,
+        false,
+    )?;
+    let active_digest = funding_lifecycle_account_digest_v1(
+        program_id.to_bytes(),
+        direct.funding_ledger.key.to_bytes(),
+        direct.funding_ledger.lamports(),
+        &ledger_bytes,
+    );
+    if receipt.request_digest != request_digest
+        || receipt.release_set != request.release_set
+        || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+        || receipt.market != request.market
+        || receipt.generation != request.generation
+        || receipt.role != request.role
+        || receipt.market_state_digest != request.expected_market_state_digest
+        || receipt.source_state_digest != request.expected_source_state_digest
+        || receipt.pending_ledger_digest != request.expected_pending_ledger_digest
+        || receipt.active_ledger_digest != active_digest
+        || receipt.post_ledger_lamports != direct.funding_ledger.lamports()
+        || receipt.producer != program_id.to_bytes()
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    set_return_data(&receipt_data);
+    Ok(())
+}
+
+fn initialize_activation_receipt<'info>(
+    program_id: &Pubkey,
+    market: &AccountInfo<'info>,
+    output: &AccountInfo<'info>,
+    generation: u64,
+    system: &AccountInfo<'info>,
+    rent: &Rent,
+) -> ProgramResult {
+    let generation_seed = generation.to_le_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            market.key.as_ref(),
+            &generation_seed,
+        ],
+        program_id,
+    );
+    if output.key != &expected {
+        return Err(ResolutionError::OutputState.into());
+    }
+    require_prepaid_output(
+        output,
+        rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1),
+    )?;
+    let bump_seed = [bump];
+    let signer: [&[u8]; 4] = [
+        FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+        market.key.as_ref(),
+        &generation_seed,
+        &bump_seed,
+    ];
+    let space = u64::try_from(FUNDING_ACTIVATION_RECEIPT_BYTES_V1)
+        .map_err(|_| ResolutionError::Arithmetic)?;
+    invoke_signed(
+        &allocate(output.key, space),
+        &[output.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| ResolutionError::OutputState)?;
+    invoke_signed(
+        &assign(output.key, program_id),
+        &[output.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| ResolutionError::OutputState)?;
+    if output.owner != program_id
+        || output.data_len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
+        || output.lamports() < rent.minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1)
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(())
 }
 
 /// Execute one Core-owned envelope through the sole Resolution semantic request.
@@ -131,6 +1396,14 @@ pub(crate) fn process_core_effect(
         CoreEffectEnvelopeV1::decode(envelope_bytes).map_err(|_| ResolutionError::Instruction)?;
     let request =
         ResolutionRoleRequestV2::decode(request_bytes).map_err(|_| ResolutionError::Instruction)?;
+    if matches!(
+        request.action,
+        ResolutionCoreActionV1::VerifyFundReady | ResolutionCoreActionV1::CloseFund
+    ) {
+        // V7 owns both mutations as direct permissionless routes. No Core PDA
+        // can re-enable the superseded composed paths.
+        return Err(ResolutionError::Instruction.into());
+    }
     authenticate_action(envelope, request)?;
     authenticate_funding_header(funding_header, request)?;
     let expected_accounts = match request.action {
@@ -523,7 +1796,7 @@ fn authenticate_activation(
     if core.release().program().to_bytes() != common.core_program.key.to_bytes()
         || resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
-            != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
@@ -652,7 +1925,7 @@ fn process_create<'info>(
     .map_err(|_| ResolutionError::Transition)?;
     let source = source_plan.state();
 
-    // V5 has exactly one ledger initialization authority: the pre-Market
+    // V6 has exactly one ledger initialization authority: the pre-Market
     // initializer. CreateFund consumes that already-owned Pending ledger and
     // must not allocate, assign, rewrite, or change its aggregate custody.
     let ledger_bytes = copy_ledger_bytes(common.funding_ledger)?;
@@ -1223,7 +2496,7 @@ fn authenticate_funding_entries(
                     .entry(index)
                     .map_err(|_| ResolutionError::Funding)?;
                 if entry.config_id().to_bytes() != expected_config
-                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
                 {
                     return Err(ResolutionError::Funding.into());
                 }
@@ -1257,7 +2530,7 @@ fn authenticate_funding_entries(
                 let entry = manifest
                     .entry(index)
                     .map_err(|_| ResolutionError::Funding)?;
-                if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+                if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
                     return Err(ResolutionError::Funding.into());
                 }
                 if let Some(config) = configs.get_mut(slot) {
@@ -1379,7 +2652,8 @@ fn authenticate_live_ledger(
     }
     authenticate_ledger_value(
         program_id,
-        common,
+        common.market,
+        common.funding_ledger,
         generation,
         manifest_id,
         manifest,
@@ -1395,7 +2669,8 @@ fn authenticate_live_ledger(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_ledger_value(
     program_id: &Pubkey,
-    common: CommonAccounts<'_, '_>,
+    market: &AccountInfo<'_>,
+    funding_ledger: &AccountInfo<'_>,
     generation: u64,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
@@ -1443,14 +2718,14 @@ fn authenticate_ledger_value(
         .map_err(|_| ResolutionError::Funding)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         program_id.to_bytes(),
-        common.market.key.to_bytes(),
+        market.key.to_bytes(),
         generation,
         manifest_id,
         ledger,
     )
     .map_err(|_| ResolutionError::Funding)?;
     if Pubkey::find_program_address(&derivation.seed_components(), program_id).0
-        != *common.funding_ledger.key
+        != *funding_ledger.key
     {
         return Err(ResolutionError::Funding.into());
     }
@@ -1985,9 +3260,9 @@ mod tests {
         CoreEffectActionV1, CoreEffectEnvelopeV1, Identity, Role,
     };
     use dclutch_resolution_codec::{
-        RESOLUTION_CONTROLLER_RELEASE_ID_V5, RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2,
-        RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2, ResolutionCoreActionV1, ResolutionCoreReceiptKindV1,
-        ResolutionRoleRequestV2,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V6, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+        RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2, RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2,
+        ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2,
     };
     use dclutch_source_contract::{
         ContentId as SourceContentId, RecoveryAttemptV2, RecoveryPolicyV2, SourceMaterialV3,
@@ -2228,7 +3503,7 @@ mod tests {
         ];
         let mut entries = [CapabilityEntryV1::new(
             capability_id(30),
-            capability_id(RESOLUTION_CONTROLLER_RELEASE_ID_V5[0]),
+            capability_id(RESOLUTION_CONTROLLER_RELEASE_ID_V7[0]),
             capability_id(31),
             capability_id(32),
             capability_id(33),
@@ -2243,7 +3518,7 @@ mod tests {
         for (index, (entry, config)) in entries.iter_mut().zip(configs).enumerate() {
             *entry = CapabilityEntryV1::new(
                 capability_id(u8::try_from(40 + index).expect("bounded")),
-                CapabilityContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V5).expect("release"),
+                CapabilityContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V7).expect("release"),
                 CapabilityContentId::new(config).expect("config"),
                 capability_id(50),
                 capability_id(51),
@@ -2260,6 +3535,33 @@ mod tests {
         let manifest = CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("manifest");
         let exact = request(ResolutionCoreActionV1::CreateFund);
         authenticate_funding_entries(material, Some(policy), manifest, exact).expect("exact join");
+
+        let mut v6_entries = entries;
+        for (index, (entry, config)) in v6_entries.iter_mut().zip(configs).enumerate() {
+            *entry = CapabilityEntryV1::new(
+                capability_id(u8::try_from(40 + index).expect("bounded")),
+                CapabilityContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V6)
+                    .expect("legacy release"),
+                CapabilityContentId::new(config).expect("config"),
+                capability_id(50),
+                capability_id(51),
+                capability_id(52),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quote,
+            )
+            .expect("legacy entry");
+        }
+        let mut v6_bytes = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let v6_manifest =
+            CapabilityManifestV1::encode_into(&v6_entries, &mut v6_bytes).expect("V6 manifest");
+        assert_eq!(
+            authenticate_funding_entries(material, Some(policy), v6_manifest, exact),
+            Err(ResolutionError::Funding.into()),
+            "the V7 program must not activate a V6 controller ledger"
+        );
 
         let substituted_policy = RecoveryPolicyV2::new(
             source_id(25),
