@@ -24,10 +24,10 @@ can drift apart with nothing to catch it), or **benign**.
 
 | # | seam | verdict | what disagrees |
 |---|---|---|---|
-| [1](#1) | Claims internal (SignedDeltaV3) | **always-admits** | `CallerRole::Core` authenticates nothing at coordinates 14/15 while deriving the route's authority from coordinate 14 |
-| [2](#2) | Token-2022 writer ↔ readers | **always-refuses** | the protocol writes a 202-byte mint; every reader of that mint requires ≥238 with an extension nothing ever initializes |
+| [1](#1) | Claims internal (SignedDeltaV3) | **always-admits** — *fixed, `fb4b5ad8`* | `CallerRole::Core` authenticated nothing at coordinates 14/15 while the route's authority was derived from coordinate 14 |
+| [2](#2) | Token-2022 writer ↔ readers | **always-refuses** — *verdict: the writer is wrong* | the protocol writes a 202-byte mint; every reader requires ≥238 with an extension nothing initializes — and the terminal path really does burn through it |
 | [3](#3) | Trading ↔ Registry | **always-refuses** — *fixed, `9a9f1b5c`* | Trading authenticated ten Registry records with a 2-seed derivation; the Registry creates them with 3 |
-| [12](#12) | Core ↔ Trading (capability) | **always-refuses** | `ActivateCapability` runs a global no-duplicate census over a frame that structurally requires seven repeats |
+| [12](#12) | Core ↔ Trading (capability) | **always-refuses** — *fixed, `3b98ea3a`* | `ActivateCapability` ran a global no-duplicate census over a frame that structurally requires seven repeats |
 | [13](#13) | Core ↔ Trading (founding) | **always-refuses** ×3 | `5ca145e8` made the funding source the fee payer; three consumers that pin it *by identity* did not follow |
 | [4](#4) | Token-2022 operator ↔ program | **always-refuses** | the wallet-facing builder pins a mint at exactly 82 bytes that the program requires to be ≥238 |
 | [5](#5) | Token-2022 ATA ↔ account reader | **always-refuses** | builders derive canonical Token-2022 ATAs (170 bytes); the reader gate is exactly 165 |
@@ -39,8 +39,9 @@ can drift apart with nothing to catch it), or **benign**.
 | [11](#11) | assorted | latent / benign | see [Latent](#latent-hazards) and [Benign](#benign-verified) |
 
 **Nine always-refuses routes and one always-admits, across six seams, none of
-which had a failing test.** Two were fixed in this lane; the rest are posted to
-their owners with probes.
+which had a failing test.** Four were fixed in this lane (`fb076ec6`,
+`9a9f1b5c`, `fb4b5ad8`, `3b98ea3a`); the rest are posted to their owners with
+probes.
 
 Two seams came back **clean on their own terms** and that is worth stating
 plainly rather than padding: the **Core↔Resolution provider frame** after
@@ -123,9 +124,25 @@ only (`:200,216,220-227`). Flip the plan's role byte and the seeds' role from
 `Trading` to `Core` and leave 14/15 alone: today that transaction is accepted;
 it must refuse `SignedDeltaSbfErrorV3::Release`.
 
-**Not fixed here, deliberately.** This lane's remit was to fix only clearly
-always-refuses defects; a missing authentication on a live route is the opposite
-class and belongs to whoever owns Claims, with the probe above run first.
+**Fixed in `fb4b5ad8`** (authorized after the finding was posted; Claims is
+unowned since FRAC closed). The caller coordinate now has a **type** rather than
+another `if`: `CallerCoordinateV3` says, per role, which coordinate must hold the
+caller program — its own (`Trading`, the only role that brings an external
+program), or Core's, or Claims'. There is no variant meaning "unpinned and
+unauthenticated", which is what `Core` silently was, and a fourth role cannot be
+added without choosing one.
+
+The test derives its expectation from the **authority** side — `execution_role`,
+the role that actually enters the seeds — and never from the pin under test, so
+it cannot agree with a wrong pin by construction. It reads as one sentence:
+*whatever program the authority is derived under must be a program the Registry
+authenticated for exactly the role in that authority's seeds.*
+
+**Control.** Modelling the pre-fix mapping with a fourth `Unpinned` variant, the
+new assertion fails for `Core` and still passes for `Claims` and `Trading` — one
+failing branch, and the right one. No live route changes behaviour: nothing
+builds a `Core`-role plan, so this closes decodable-but-unbuilt surface.
+`cargo test -p dclutch-claims-sbf --lib` → 32 passed, 0 failed.
 
 ---
 
@@ -186,10 +203,84 @@ This is defect class 5 in its purest form: **each side's fixture invents exactly
 the bytes that side expects, so both sides are green and the composition is
 dead.**
 
-**Closing gate.** One test in the existing `rational-lifecycle` program-test
-feeding the post-`ActivateReceipt` mint bytes to
+**Verdict: the readers are protocol-correct and the writer is wrong.** The
+question "which side is right" is settled by what the terminal path actually
+needs, not by taste — **the protocol really does burn through the extension.**
+Three on-chain sites emit `permissioned_burn_instruction::burn_checked`:
+`fractional_atomic_v3.rs:958` and `:1003` (`WholeUnwrap`), and
+`rational_representation_v2.rs:1364` (`BurnReceipt` / `BurnShard`). A permissioned
+burn is impossible on a mint that never initialized `PermissionedBurn`, so a
+reader demanding it demands exactly what the route requires. The protocol says so
+in its own committed behaviour preimage too
+(`behavior_profile_v2.rs:27`): `mint-required=MintCloseAuthority+PermissionedBurn`,
+`instructions=…,permissioned-burn-checked,…`. And the authority passed to the burn
+is `base.representation_authority` = PDA of
+`(RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, descriptor)` — the two-role authority
+the Structured seeds module describes.
+
+So `initialize_closeable_mint` builds a mint its own terminal path cannot burn.
+
+**Not fixed here, and the reason is a real one rather than caution.** The
+writer-side change is a parser rewrite plus a wire-visible economic change:
+`crates/dclutch-token-svm/src/closeable_mint.rs` is written for exactly one TLV at
+hardcoded offsets (`TLV_TYPE_OFFSET` 166 / length 168 / value 170, exact-202
+length check at `:62`, module doc at `:3-6`), so a second TLV means new layout
+constants, a second parse and rebuilt tests; and 202 → 238 moves rent, because
+`TOKEN_2022_CLOSEABLE_MINT_BYTES_V2` feeds `rent.minimum_balance` at
+`rational_lifecycle_v2.rs:663` and `:697`, which are compared **for exact
+equality** against `header.receipt_rent_principal` and `row.shard_rent_principal`
+— wire fields. Four `authenticate_closeable_mint` call sites, two allocation
+sites, and the program-test's own rent computation
+(`program-test/rational-lifecycle/tests/lifecycle.rs:531`) follow. It also needs
+the lifecycle campaign re-run against the real v11 ELF to be worth anything —
+which is precisely the join that has never been tested.
+
+**Blast radius, scoped — and it does not reach founding.** Extensions are
+init-time-only, so a mint written 202-byte is broken permanently and no upgrade
+repairs it. That makes "which mints" the load-bearing question, and the answer is
+narrow:
+
+- `initialize_closeable_mint` creates **exactly two families** — the receipt mint
+  (`rational_lifecycle_v2.rs:671-683`) and the shard mints (`:715-731`), both
+  Claims PDAs, both reachable only through `claims/lib.rs:349 →
+  rational_lifecycle_v2::process`. **The collateral mint is not among them.**
+- **The flagship founding ladder never goes there.** No reference to
+  `rational_lifecycle`, `ActivateReceipt` or `activate_coordinate` exists anywhere
+  under `tools/local-validator/bootstrap/successor/src/`, `tools/devnet-activity/`
+  or `tools/release/`. Its collateral mint is an ordinary externally-keyed
+  Token-2022 mint from the bootstrap forge (`market.rs:2129`), governed by
+  `CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer()`
+  (`market.rs:3036`) whose storage policy is
+  `ExtensionStoragePolicy::ExactBaseWidthsOnly` (`token-svm/release.rs:198`) —
+  zero extensions by declaration. The fresh mint each staged attempt creates
+  cannot be written broken.
+- **The Direct family does not need the extension.** It creates no mint (no
+  `initialize_mint`/`initialize_mint2` anywhere in `src/direct/` or
+  `direct_token_setup_v1.rs`) and burns nothing — a burn sweep across the whole
+  Direct family and `dclutch-direct-codec` returns one hit,
+  `successor.rs:1966`, and it is prose about Sell records burning "one complete
+  set", not a token instruction. Direct authenticates collateral through the same
+  zero-extension profile (`direct_token_setup_v1.rs:520-545`) and moves value by
+  transfer.
+
+So the defect is confined to the rational/structured **representation** family.
+No permanent debt has been minted yet, because nothing under `tools/` drives that
+route — it accrues the first time a campaign does.
+
+**The fix is smaller than first stated, and the correction matters.** The
+representation readers need no change at all:
+`behavior_profile_v2::check_mint` **already** demands both TLVs, so a 238-byte
+writer agrees with them immediately — that half is forward-compatible, not
+breaking. The real coupling is only the lifecycle's *own* post-create reader,
+`closeable_mint::check_mint`, which requires exactly 202
+(`closeable_mint.rs:62`) and is called at `rational_lifecycle_v2.rs:683`, `:758`,
+`:773` and `:801`. Writer plus `closeable_mint.rs` plus the two rent principals
+move together; nothing else does.
+
+**Closing gate for whoever takes it.** One test in the existing
+`rational-lifecycle` program-test feeding the post-`ActivateReceipt` mint bytes to
 `Token2022BehaviorProfileV2::check_mint`. That campaign already loads and
-digest-checks the real v11 ELF.
+digest-checks the real v11 ELF. It fails today.
 
 ---
 
@@ -590,10 +681,21 @@ warns that `require_distinct` is global — without noticing the seven existing
 aliases already collide. **The route is not undriven for want of a builder; it
 cannot be driven.**
 
-**Cheapest probe — pure unit, no SBF build.** `canonical_close_frame()` already
-exists at `capability.rs:1025-1035` and `require_distinct` is already imported at
-`:43`: assert `require_distinct(&canonical_close_frame()) ==
-Err(CoreSbfError::AccountFrame)`.
+**Fixed in `3b98ea3a`,** in the shape HARDEN established on Custody this morning
+— never a blanket relaxation. Both arms now run the alias-aware census, which
+pins each of the seven **positively** first (required to be the specific account
+the frame says it is) and only then excuses that exact pair from the all-pairs
+duplicate check. A third copy of an aliased account, a cross-pair swap, a shifted
+pair and every other collision still refuse, and the pre-existing close test
+already covers each. The function is renamed for what it checks rather than for
+the one action that used to call it.
+
+**The probe, and it is the finding stated as an assertion:** the new test says
+the canonical frame is exactly what the alias census demands **and** exactly what
+`require_distinct` refuses — two halves of one frame. That second assertion is
+what would have failed before this commit, and it is why the route was not
+undriven for want of a builder. `cargo test -p dclutch-core-sbf --lib` → 24
+passed, 0 failed.
 
 ---
 
