@@ -13,7 +13,7 @@ use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::CoreState;
+use dclutch_market_core_codec::{CoreState, Phase};
 use dclutch_product_runtime_v2::ResultDomainV2;
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -26,9 +26,11 @@ use dclutch_relay_contract::{
 };
 use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2};
 use dclutch_resolution_core_v3_operator::{
-    ObservedAccount, ResolutionCreateFundSnapshotV3, ResolutionVerifyFundReadySnapshotV3,
+    ObservedAccount, ResolutionAdmitTerminalSnapshotV3, ResolutionCreateFundSnapshotV3,
+    ResolutionVerifyFundReadySnapshotV3, build_resolution_admit_terminal_v3,
     build_resolution_create_fund_v3, build_resolution_verify_fund_ready_v3,
-    validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
+    validate_resolution_admit_terminal_report_v3, validate_resolution_create_fund_report_v3,
+    validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -1167,7 +1169,7 @@ fn success_walk(
 fn failure_walk(
     session: &mut RelaySessionV1,
     facts: &RelayedMarketFactsV1,
-    _authority: &Keypair,
+    authority: &Keypair,
     book_template: impl Fn(Pubkey, u8) -> RelayAddressBookV1,
     generation: u64,
     ledger: &mut ConservationLedgerV1,
@@ -1293,17 +1295,80 @@ fn failure_walk(
              Product's pre-disclosed failure cell with route and provider evidence zero."
         ),
     });
+    // ------------------------- the walked market ENDS TERMINAL, live
+    // The exact next instruction the ProgramTest campaign proved
+    // (walked_to_failure, resolution_core_v3_lifecycle.rs), now against the
+    // live validator: chain-derived, validated, then asserted three ways.
+    let admit = build_resolution_admit_terminal_v3(&terminal_snapshot(
+        &mut session.rpc,
+        &walker_book,
+        pubkey(&session.plan.registry.program_id)?,
+        pubkey(&session.plan.core.programdata_id)?,
+        pubkey(&session.plan.resolution.programdata_id)?,
+    )?)
+    .map_err(|error| Error::new(format!("chain-derived AdmitTerminal: {error:?}")))?;
+    validate_resolution_admit_terminal_report_v3(&admit)
+        .map_err(|error| Error::new(format!("AdmitTerminal report: {error:?}")))?;
+    session.transactions.push(session.rpc.send(
+        "relayed vertical: the walked market ends terminal on its pre-disclosed failure terms",
+        std::slice::from_ref(&admit.instruction),
+        authority,
+    )?);
+    let admitted = CoreState::decode(
+        &session
+            .rpc
+            .required_account(walker_book.market, "terminal Market")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("terminal Market: {error:?}")))?;
+    let expected_certificate = walker_book.certificate_of(RESOLUTION_FAILURE_KIND);
+    if !matches!(admitted.phase, Phase::Terminal) {
+        return Err(Error::new(format!(
+            "the walked market did not end Terminal: phase {:?}",
+            admitted.phase
+        )));
+    }
+    if admitted.terminal_receipt.map(|value| value.to_bytes())
+        != Some(expected_certificate.to_bytes())
+    {
+        return Err(Error::new(
+            "the Market did not commit to the FAILURE certificate's own address — the seat a \
+             provider-resolved terminal writes is a different PDA, and neither may occupy the \
+             other's",
+        ));
+    }
+    if admitted.terminal_winner != domain.failure_selector() {
+        return Err(Error::new(format!(
+            "terminal_winner {} is not the Product's pre-disclosed failure selector {}",
+            admitted.terminal_winner,
+            domain.failure_selector()
+        )));
+    }
+    stages.push(StageV1 {
+        stage: "the walked market ends terminal".into(),
+        outcome: "executed".into(),
+        note: format!(
+            "AdmitTerminal, chain-derived from the FailureCommitted Source, executed against the \
+             live validator. The Market is Terminal, committed to the failure certificate's own \
+             address (a different PDA from a provider-resolved terminal's seat), and \
+             terminal_winner {} is the selector the Source's own failure decision carried.",
+            admitted.terminal_winner
+        ),
+    });
     ledger.observe(
         &mut session.rpc,
         "market terminalized (failure walk)",
         0,
         0,
         LamportClaimV1::inapplicable(
-            "the walk moves the disclosed bounty from the watched escrow to the walker; the \
-             stage's own assertions carry the exact lamport deltas",
+            "the walk moves the disclosed bounty from the watched escrow to the walker, and the \
+             terminal admission moves no collateral; the stage's own assertions carry the exact \
+             lamport deltas",
         ),
     )?;
     Ok(serde_json::json!({
+        "terminal_phase": "Terminal",
+        "terminal_winner": admitted.terminal_winner,
         "walk_wire_bytes": extent,
         "walker": walker.pubkey().to_string(),
         "bounty_paid_lamports": WALK_BOUNTY_LAMPORTS,
@@ -1473,6 +1538,71 @@ fn verify_snapshot(
         activation_receipt: vacant(observation, activation_receipt),
         recovery_policy: at(7)?,
         recovery_policy_staging: vacant(observation, material.staging),
+    })
+}
+
+/// Same-finalized snapshot for the terminal admission of a walked market.
+///
+/// Every address comes off the campaign's own book; the five staging cursors
+/// are vacant by construction on a chain whose records were published in
+/// transactions and never staged again.
+fn terminal_snapshot(
+    rpc: &mut Rpc,
+    book: &RelayAddressBookV1,
+    registry_program: Pubkey,
+    core_programdata: Pubkey,
+    resolution_programdata: Pubkey,
+) -> Result<ResolutionAdmitTerminalSnapshotV3> {
+    let certificate = book.certificate_of(RESOLUTION_FAILURE_KIND);
+    let (observation, present) = rpc.finalized_observed_accounts(
+        &[
+            book.market,
+            book.activation,
+            registry_program,
+            book.core_program,
+            core_programdata,
+            book.resolution_program,
+            resolution_programdata,
+            book.material.raw,
+            book.manifest.raw,
+            book.source_state,
+            book.failure_funding,
+            certificate,
+            sysvar::rent::ID,
+            book.product.raw,
+            book.result_domain.raw,
+            book.portfolio.raw,
+        ],
+        0,
+    )?;
+    let at = |index: usize| -> Result<ObservedAccount> {
+        present
+            .get(index)
+            .cloned()
+            .ok_or_else(|| Error::new("finalized observation lost an account"))
+    };
+    Ok(ResolutionAdmitTerminalSnapshotV3 {
+        market: at(0)?,
+        activation_cache: at(1)?,
+        registry_program: at(2)?,
+        core_program: at(3)?,
+        core_programdata: at(4)?,
+        resolution_program: at(5)?,
+        resolution_programdata: at(6)?,
+        source_material: at(7)?,
+        source_material_staging: vacant(observation, book.material.staging),
+        capability_manifest: at(8)?,
+        capability_manifest_staging: vacant(observation, book.manifest.staging),
+        source_state: at(9)?,
+        funding_ledger: at(10)?,
+        certificate: at(11)?,
+        rent_sysvar: at(12)?,
+        product_raw: at(13)?,
+        product_staging: vacant(observation, book.product.staging),
+        result_domain_raw: at(14)?,
+        result_domain_staging: vacant(observation, book.result_domain.staging),
+        portfolio_raw: at(15)?,
+        portfolio_staging: vacant(observation, book.portfolio.staging),
     })
 }
 
