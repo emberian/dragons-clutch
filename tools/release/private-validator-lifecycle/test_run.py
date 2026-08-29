@@ -112,22 +112,225 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
 
     def test_campaign_flags_are_owned_by_the_rust_prepare_report(self) -> None:
         report = {
-            "campaign_keypairs": {
-                "founding-founder": "/owned/founder.json",
-                "substituted-founder": "/owned/substituted.json",
-            }
+            "campaign_administration_keypairs": {
+                "core-upgrade-authority": "/owned/core.json",
+            },
+            "campaign_founding_keypairs": {
+                "campaign-payer": "/owned/payer.json",
+                "collateral-mint": "/owned/mint.json",
+            },
         }
         self.assertEqual(
             MODULE.key_flags(report),
             [
-                "--keypair-founding-founder",
-                "/owned/founder.json",
-                "--keypair-substituted-founder",
-                "/owned/substituted.json",
+                "--keypair-campaign-payer",
+                "/owned/payer.json",
+                "--keypair-collateral-mint",
+                "/owned/mint.json",
             ],
         )
+        self.assertEqual(
+            MODULE.key_flags(report, "campaign_administration_keypairs"),
+            ["--keypair-core-upgrade-authority", "/owned/core.json"],
+        )
         with self.assertRaisesRegex(MODULE.Refusal, "Rust-owned"):
-            MODULE.key_flags({"keypairs": report["campaign_keypairs"]})
+            MODULE.key_flags({"campaign_keypairs": {"wrong": "/wrong"}})
+        with self.assertRaisesRegex(MODULE.Refusal, "frozen mode"):
+            MODULE.key_flags(report, "campaign_keypairs")
+
+    def test_campaign_public_identities_are_exact_distinct_and_key_free(self) -> None:
+        founder = base58(bytes([7]) * 32)
+        substituted = base58(bytes([8]) * 32)
+        report = {
+            "campaign_public_identities": {
+                "founding-founder": founder,
+                "substituted-founder": substituted,
+            }
+        }
+        self.assertEqual(MODULE.campaign_public_identities(report), report["campaign_public_identities"])
+        with self.assertRaisesRegex(MODULE.Refusal, "exact two"):
+            MODULE.campaign_public_identities(
+                {"campaign_public_identities": {"founding-founder": founder}}
+            )
+        with self.assertRaisesRegex(MODULE.Refusal, "alias"):
+            MODULE.campaign_public_identities(
+                {
+                    "campaign_public_identities": {
+                        "founding-founder": founder,
+                        "substituted-founder": founder,
+                    }
+                }
+            )
+
+    def test_campaign_mode_argv_is_disjoint_and_uses_owned_projections(self) -> None:
+        founder = base58(bytes([7]) * 32)
+        substituted = base58(bytes([8]) * 32)
+        report = {
+            "campaign_administration_keypairs": {
+                "core-upgrade-authority": "/owned/core.json",
+            },
+            "campaign_founding_keypairs": {
+                "campaign-payer": "/owned/payer.json",
+                "collateral-mint": "/owned/mint.json",
+            },
+            "campaign_public_identities": {
+                "founding-founder": founder,
+                "substituted-founder": substituted,
+            },
+        }
+        admin = MODULE.administration_campaign_argv(
+            Path("/bootstrap"),
+            "http://127.0.0.1:8899",
+            Path("/plan.json"),
+            Path("/administration.json"),
+            report,
+        )
+        founding = MODULE.founding_campaign_argv(
+            Path("/bootstrap"),
+            "http://127.0.0.1:8899",
+            Path("/plan.json"),
+            Path("/market.json"),
+            Path("/founding.json"),
+            report,
+        )
+        self.assertNotIn("--founding-only", admin)
+        self.assertIn("--keypair-core-upgrade-authority", admin)
+        self.assertNotIn("--keypair-campaign-payer", admin)
+        self.assertIn("--founding-only", founding)
+        self.assertIn("--keypair-campaign-payer", founding)
+        self.assertNotIn("--keypair-core-upgrade-authority", founding)
+        self.assertEqual(founding[founding.index("--founding-founder") + 1], founder)
+        self.assertEqual(
+            founding[founding.index("--substituted-founder") + 1], substituted
+        )
+
+    def test_campaign_completion_binds_mode_and_six_founding_mutations(self) -> None:
+        plan = Path("/plan.json")
+        market_path = Path("/market.json")
+        admin = {
+            "schema": "dclutch-successor-campaign-report-v1",
+            "cluster": "owned-loopback",
+            "mode": "execute",
+            "execution_intent": {
+                "authorized_mutation": True,
+                "campaign_mode": "administration",
+                "through_stage": "activation",
+                "plan": str(plan),
+                "market": None,
+            },
+            "execution": {"completed": True, "market": None, "transactions": []},
+        }
+        self.assertIs(
+            MODULE.authenticate_campaign_completion(
+                admin, "administration", plan, None
+            ),
+            admin["execution"],
+        )
+        ledger = {"address": PUBKEY_A}
+        founding = {
+            **admin,
+            "rpc_url": "http://127.0.0.1:8899",
+            "plan_sha256": "11" * 32,
+            "market_sha256": "22" * 32,
+            "evidence_output": "/founding.json",
+            "payer": PUBKEY_C,
+            "execution_intent": {
+                **admin["execution_intent"],
+                "campaign_mode": "founding-only",
+                "through_stage": "founding",
+                "market": str(market_path),
+            },
+            "execution": {
+                "completed": True,
+                "recoveredFinalizedFounding": False,
+                "transactions": [
+                    {
+                        "label": label,
+                        "signature": SIGNATURES[index],
+                        "slot": index + 1,
+                        "fee_lamports": 5_000,
+                        "compute_units_consumed": 100_000 + index,
+                        "error": None,
+                        "transaction_metadata_available": True,
+                    }
+                    for index, label in enumerate(MODULE.FOUNDING_SUCCESS_MUTATIONS)
+                ],
+                "market": {"accounts": {"resolution_funding_ledger": ledger}},
+            },
+            "foundingSubmissionJournals": [
+                {
+                    "schema": MODULE.FOUNDING_JOURNAL_SCHEMA,
+                    "cluster": "loopback",
+                    "genesisHash": PUBKEY_A,
+                    "evidencePath": "/founding.json",
+                    "rpcUrl": "http://127.0.0.1:8899",
+                    "planSha256": "11" * 32,
+                    "marketSha256": "22" * 32,
+                    "payer": PUBKEY_C,
+                    "operation": operation,
+                    "phase": "finalized",
+                    "expectedSignature": SIGNATURES[index],
+                    "finalizedSlot": index + 1,
+                    "feeLamports": 5_000,
+                    "computeUnitsConsumed": 100_000 + index,
+                    "intentSha256": "31" * 32,
+                    "signedPacketSha256": "32" * 32,
+                    "transactionSha256": "33" * 32,
+                    "finalizedPoststatesSha256": "34" * 32,
+                    "stateSha256": "35" * 32,
+                }
+                for index, operation in enumerate(MODULE.FOUNDING_JOURNAL_OPERATIONS)
+            ],
+        }
+        self.assertIs(
+            MODULE.authenticate_campaign_completion(
+                founding, "founding-only", plan, market_path
+            ),
+            founding["execution"],
+        )
+        self.assertEqual(
+            MODULE.founding_compute_units(founding),
+            {
+                metric: 100_000 + index
+                for index, metric in enumerate(MODULE.FOUNDING_COMPUTE_LABELS)
+            },
+        )
+        hostile = {
+            **founding,
+            "execution": {
+                **founding["execution"],
+                "transactions": list(reversed(founding["execution"]["transactions"])),
+            },
+        }
+        with self.assertRaisesRegex(MODULE.Refusal, "six-mutation"):
+            MODULE.authenticate_campaign_completion(
+                hostile, "founding-only", plan, market_path
+            )
+        missing_ledger = {
+            **founding,
+            "execution": {
+                **founding["execution"],
+                "market": {"accounts": {}},
+            },
+        }
+        with self.assertRaisesRegex(MODULE.Refusal, "Resolution funding ledger"):
+            MODULE.authenticate_campaign_completion(
+                missing_ledger, "founding-only", plan, market_path
+            )
+        wrong_journal = {
+            **founding,
+            "foundingSubmissionJournals": [
+                *founding["foundingSubmissionJournals"][:5],
+                {
+                    **founding["foundingSubmissionJournals"][5],
+                    "phase": "submitted",
+                },
+            ],
+        }
+        with self.assertRaisesRegex(MODULE.Refusal, "does not join"):
+            MODULE.authenticate_campaign_completion(
+                wrong_journal, "founding-only", plan, market_path
+            )
 
     def test_external_rpc_is_structurally_refused(self) -> None:
         with self.assertRaisesRegex(MODULE.Refusal, "escaped loopback"):
@@ -378,18 +581,252 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
     def test_funding_never_precreates_protocol_accounts(self) -> None:
         self.assertEqual(MODULE.LOCAL_AIRDROP_ROLES, ())
         self.assertEqual(MODULE.VALIDATOR_MINT_ROLE, "core-upgrade-authority")
+        self.assertEqual(MODULE.CAMPAIGN_PAYER_ROLE, "campaign-payer")
         self.assertEqual(
             MODULE.DEVELOPMENT_FEE_RECIPIENT_ROLE, "founding-source-funder"
         )
         self.assertEqual(
             MODULE.PROTOCOL_CREATED_KEY_ROLES,
-            ("collateral-mint", "collateral-wallet", "founding-source-funder"),
+            (
+                "collateral-mint",
+                "collateral-wallet",
+                "founding-beneficiary",
+                "founding-projection-witness",
+                "founding-source-funder",
+            ),
         )
         self.assertTrue(
             set(MODULE.LOCAL_AIRDROP_ROLES).isdisjoint(
                 MODULE.PROTOCOL_CREATED_KEY_ROLES
             )
         )
+
+    def test_local_bankroll_is_one_exact_non_airdrop_transfer(self) -> None:
+        argv = MODULE.local_bankroll_transfer_argv(
+            Path("/solana"),
+            "http://127.0.0.1:8899",
+            Path("/genesis.json"),
+            PUBKEY_B,
+        )
+        self.assertIn("transfer", argv)
+        self.assertNotIn("airdrop", argv)
+        self.assertEqual(argv[argv.index("transfer") + 1 : argv.index("--from")], [PUBKEY_B, "100"])
+        self.assertEqual(argv[argv.index("--from") + 1], "/genesis.json")
+        self.assertEqual(argv[argv.index("--fee-payer") + 1], "/genesis.json")
+        self.assertIn("--allow-unfunded-recipient", argv)
+
+    def test_local_bankroll_snapshot_is_one_finalized_vacancy_closure(self) -> None:
+        rows = [
+            {
+                "owner": MODULE.SYSTEM_PROGRAM_ADDRESS,
+                "executable": False,
+                "data": ["", "base64"],
+                "lamports": MODULE.LOCAL_TEST_BANKROLL_LAMPORTS + 50_000,
+            },
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+        vacant = tuple(
+            (role, base58(bytes([20 + index]) * 32))
+            for index, role in enumerate(MODULE.PROTOCOL_CREATED_KEY_ROLES)
+        )
+        with mock.patch.object(
+            MODULE,
+            "rpc",
+            return_value={"context": {"slot": 11}, "value": rows},
+        ):
+            snapshot = MODULE.local_bankroll_snapshot(
+                "http://127.0.0.1:8899", PUBKEY_A, PUBKEY_B, vacant
+            )
+        self.assertEqual(snapshot["finalizedSlot"], "11")
+        self.assertIsNone(snapshot["campaignPayerLamports"])
+        self.assertEqual(
+            snapshot["sourceLamports"],
+            str(MODULE.LOCAL_TEST_BANKROLL_LAMPORTS + 50_000),
+        )
+        self.assertEqual(
+            snapshot["vacantProtocolRoles"],
+            [{"role": role, "address": address} for role, address in vacant],
+        )
+        rows[-1] = {
+            "owner": MODULE.SYSTEM_PROGRAM_ADDRESS,
+            "executable": False,
+            "data": ["", "base64"],
+            "lamports": 1,
+        }
+        with mock.patch.object(
+            MODULE,
+            "rpc",
+            return_value={"context": {"slot": 11}, "value": rows},
+        ), self.assertRaisesRegex(MODULE.Refusal, "already exists"):
+            MODULE.local_bankroll_snapshot(
+                "http://127.0.0.1:8899", PUBKEY_A, PUBKEY_B, vacant
+            )
+
+    def test_local_bankroll_transaction_binds_instruction_fee_cu_and_deltas(self) -> None:
+        signature = SIGNATURES[0]
+        fee = 5_000
+        source_post = 123_456
+        source_pre = source_post + MODULE.LOCAL_TEST_BANKROLL_LAMPORTS + fee
+        value = {
+            "slot": 12,
+            "transaction": {
+                "signatures": [signature],
+                "message": {
+                    "accountKeys": [
+                        {
+                            "pubkey": PUBKEY_A,
+                            "signer": True,
+                            "writable": True,
+                        },
+                        {
+                            "pubkey": PUBKEY_B,
+                            "signer": False,
+                            "writable": True,
+                        },
+                        {
+                            "pubkey": MODULE.SYSTEM_PROGRAM_ADDRESS,
+                            "signer": False,
+                            "writable": False,
+                        },
+                    ],
+                    "instructions": [
+                        {
+                            "program": "system",
+                            "programId": MODULE.SYSTEM_PROGRAM_ADDRESS,
+                            "parsed": {
+                                "type": "transfer",
+                                "info": {
+                                    "source": PUBKEY_A,
+                                    "destination": PUBKEY_B,
+                                    "lamports": MODULE.LOCAL_TEST_BANKROLL_LAMPORTS,
+                                },
+                            },
+                        }
+                    ],
+                },
+            },
+            "meta": {
+                "err": None,
+                "fee": fee,
+                "computeUnitsConsumed": 150,
+                "innerInstructions": None,
+                "preBalances": [source_pre, 0, 1],
+                "postBalances": [
+                    source_post,
+                    MODULE.LOCAL_TEST_BANKROLL_LAMPORTS,
+                    1,
+                ],
+            },
+        }
+        with mock.patch.object(MODULE, "rpc", return_value=value):
+            fact = MODULE.finalized_local_bankroll_transaction(
+                "http://127.0.0.1:8899", signature, PUBKEY_A, PUBKEY_B
+            )
+        self.assertEqual(fact["feeLamports"], str(fee))
+        self.assertEqual(fact["computeUnitsConsumed"], "150")
+        hostile = {
+            **value,
+            "meta": {
+                **value["meta"],
+                "postBalances": [source_post + 1, MODULE.LOCAL_TEST_BANKROLL_LAMPORTS, 1],
+            },
+        }
+        with mock.patch.object(MODULE, "rpc", return_value=hostile), self.assertRaisesRegex(
+            MODULE.Refusal, "conservation"
+        ):
+            MODULE.finalized_local_bankroll_transaction(
+                "http://127.0.0.1:8899", signature, PUBKEY_A, PUBKEY_B
+            )
+
+    def test_local_bankroll_receipt_is_create_new(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            (root / "provisioning-poststate.json").write_text("{}")
+            with self.assertRaisesRegex(MODULE.Refusal, "already exists"):
+                MODULE.provision_disposable_funding(
+                    root,
+                    None,  # refusal precedes all tool/key access
+                    {},
+                    "http://127.0.0.1:8899",
+                )
+
+    def test_local_bankroll_owner_writes_one_finalized_joined_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            solana = root / "solana"
+            solana.write_bytes(b"pinned-solana")
+            key_roles = (
+                MODULE.VALIDATOR_MINT_ROLE,
+                MODULE.CAMPAIGN_PAYER_ROLE,
+                *MODULE.PROTOCOL_CREATED_KEY_ROLES,
+            )
+            report = {
+                "keypairs": {role: str(root / f"{role}.json") for role in key_roles}
+            }
+            addresses = {
+                role: base58(bytes([30 + index]) * 32)
+                for index, role in enumerate(key_roles)
+            }
+            vacant = [
+                {"role": role, "address": addresses[role]}
+                for role in MODULE.PROTOCOL_CREATED_KEY_ROLES
+            ]
+            pre = {
+                "finalizedSlot": "10",
+                "sourceLamports": "100000010000",
+                "campaignPayerLamports": None,
+                "vacantProtocolRoles": vacant,
+            }
+            transaction = {
+                "signature": SIGNATURES[0],
+                "finalizedSlot": "11",
+                "feeLamports": "5000",
+                "computeUnitsConsumed": "150",
+                "sourcePreLamports": "100000010000",
+                "sourcePostLamports": "5000",
+                "campaignPayerPreLamports": "0",
+                "campaignPayerPostLamports": "100000000000",
+            }
+            post = {
+                "finalizedSlot": "12",
+                "sourceLamports": "5000",
+                "campaignPayerLamports": "100000000000",
+                "vacantProtocolRoles": vacant,
+            }
+            paths = mock.Mock(solana=solana)
+
+            def address_for(_solana: Path, keypair: Path) -> str:
+                return addresses[keypair.stem]
+
+            completed = mock.Mock(stdout=(
+                '{"signature":"' + SIGNATURES[0] + '"}\n'
+            ).encode())
+            with mock.patch.object(MODULE, "key_address", side_effect=address_for), mock.patch.object(
+                MODULE, "local_bankroll_snapshot", side_effect=[pre, post]
+            ), mock.patch.object(MODULE, "run_stage", return_value=completed) as run_stage, mock.patch.object(
+                MODULE, "finalized_local_bankroll_transaction", return_value=transaction
+            ), mock.patch.object(MODULE, "rpc", return_value=PUBKEY_C):
+                receipt = MODULE.provision_disposable_funding(
+                    root, paths, report, "http://127.0.0.1:8899"
+                )
+            self.assertEqual(receipt["schema"], MODULE.LOCAL_TEST_BANKROLL_SCHEMA)
+            self.assertEqual(receipt["amountLamports"], "100000000000")
+            self.assertEqual(receipt["transaction"], transaction)
+            self.assertEqual(receipt["prestate"], pre)
+            self.assertEqual(receipt["poststate"], post)
+            self.assertFalse(receipt["externalWrites"])
+            self.assertEqual(run_stage.call_args.args[1:3], (3, "local-test-bankroll"))
+            self.assertEqual(
+                MODULE.read_unique_json(
+                    root / "provisioning-poststate.json", "test bankroll receipt"
+                ),
+                receipt,
+            )
         self.assertNotIn(MODULE.VALIDATOR_MINT_ROLE, MODULE.PROTOCOL_CREATED_KEY_ROLES)
 
     def test_pyth_owner_has_exact_eight_action_journal_prefix(self) -> None:
@@ -600,7 +1037,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.Refusal, "canonical"):
                 MODULE.accepted_direct_payout_schedule(hostile, evidence)
 
-    def test_resolution_v2_requires_three_cu_bound_mutating_receipts(self) -> None:
+    def test_resolution_v3_requires_four_cu_bound_mutating_receipts(self) -> None:
         receipts = [
             {
                 "stage": stage,
@@ -609,7 +1046,14 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 "feeLamports": 5_000,
                 "computeUnitsConsumed": 100_000 + index,
             }
-            for index, stage in enumerate(("submit", "execute", "reclaim"))
+            for index, stage in enumerate(
+                (
+                    "submit",
+                    "resolution-provider-execute-v1",
+                    "core-terminal-accept-v1",
+                    "reclaim",
+                )
+            )
         ]
         checkpoint = {
             "format": MODULE.RESOLUTION_CHECKPOINT_SCHEMA,
@@ -618,7 +1062,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             "receipts": receipts,
             "verifiedTerminal": True,
         }
-        self.assertEqual(len(MODULE.authenticate_resolution_checkpoint(checkpoint)), 3)
+        self.assertEqual(len(MODULE.authenticate_resolution_checkpoint(checkpoint)), 4)
         with self.assertRaisesRegex(MODULE.Refusal, "owned-loopback|verified terminal"):
             MODULE.authenticate_resolution_checkpoint(
                 {
@@ -640,12 +1084,22 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     ],
                 }
             )
-        with self.assertRaisesRegex(MODULE.Refusal, "submit/execute/reclaim"):
+        with self.assertRaisesRegex(MODULE.Refusal, "provider-execute/Core-accept"):
             MODULE.authenticate_resolution_checkpoint(
                 {**checkpoint, "receipts": receipts[:2]}
             )
+        with self.assertRaisesRegex(MODULE.Refusal, "advance slots"):
+            MODULE.authenticate_resolution_checkpoint(
+                {
+                    **checkpoint,
+                    "receipts": [
+                        {**row, "slot": 100 if index == 2 else row["slot"]}
+                        for index, row in enumerate(receipts)
+                    ],
+                }
+            )
 
-    def test_resolution_table_v2_refuses_old_schema_and_missing_cu(self) -> None:
+    def test_resolution_table_v3_refuses_old_schema_and_missing_cu(self) -> None:
         receipt = {
             "signature": SIGNATURES[0],
             "slot": 10,
@@ -674,7 +1128,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             MODULE.authenticate_resolution_table_journal(
                 {
                     **journal,
-                    "format": "dclutch-owned-loopback-flagship-resolution-alt-journal-v1",
+                    "format": "dclutch-owned-loopback-flagship-resolution-alt-journal-v2",
                 },
                 require_complete=True,
             )
@@ -727,7 +1181,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 {**document, "claimIndex": 2}, target, PUBKEY_C
             )
 
-    def test_terminal_completion_checks_mutation_order_and_exact_arithmetic(
+    def test_terminal_completion_refuses_packet_inadmissible_monolith_until_split_freezes(
         self,
     ) -> None:
         kinds = [
@@ -766,21 +1220,23 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             "transactionFeesLamports": str(6 * 5000),
             "computeUnitsConsumed": str(sum(range(100, 106))),
         }
-        self.assertEqual(
+        with self.assertRaisesRegex(MODULE.Refusal, "packet-inadmissible"):
             MODULE.authenticate_terminal_completion(
                 completion, market=PUBKEY_B, payer=PUBKEY_C
-            ),
-            completion,
-        )
-        with self.assertRaisesRegex(MODULE.Refusal, "six protocol mutations"):
-            MODULE.authenticate_terminal_completion(
-                {**completion, "journals": list(reversed(journals))},
-                market=PUBKEY_B,
-                payer=PUBKEY_C,
             )
-        with self.assertRaisesRegex(MODULE.Refusal, "arithmetic"):
+        pending_split = {
+            **completion,
+            "journals": [
+                *journals[:-1],
+                {
+                    **journals[-1],
+                    "mutation": {"kind": "aggregate-retirement-prepare"},
+                },
+            ],
+        }
+        with self.assertRaisesRegex(MODULE.Refusal, "four-phase"):
             MODULE.authenticate_terminal_completion(
-                {**completion, "computeUnitsConsumed": "616"},
+                pending_split,
                 market=PUBKEY_B,
                 payer=PUBKEY_C,
             )

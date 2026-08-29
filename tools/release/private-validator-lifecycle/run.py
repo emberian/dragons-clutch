@@ -76,10 +76,10 @@ DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v1"
 DIRECT_PAYOUT_SCHEDULE_SCHEMA = "dclutch-owned-loopback-direct-payout-schedule-v1"
 PYTH_JOURNAL_SCHEMA = "dclutch-owned-loopback-pyth-prerequisite-transaction-v1"
 RESOLUTION_PRODUCER_SCHEMA = "dclutch-owned-loopback-flagship-resolution-producer-v1"
-RESOLUTION_TABLE_SCHEMA = "dclutch-owned-loopback-flagship-resolution-alt-journal-v2"
+RESOLUTION_TABLE_SCHEMA = "dclutch-owned-loopback-flagship-resolution-alt-journal-v3"
 RESOLUTION_INPUT_SCHEMA = "dclutch-owned-loopback-flagship-resolution-input-v1"
 RESOLUTION_CHECKPOINT_SCHEMA = (
-    "dclutch-owned-loopback-flagship-resolution-checkpoint-v2"
+    "dclutch-owned-loopback-flagship-resolution-checkpoint-v3"
 )
 PAYOUT_INPUT_SCHEMA = "dclutch-wallet-terminal-payout-plan-input-v1"
 PAYOUT_EVIDENCE_SCHEMA = (
@@ -119,13 +119,44 @@ DEVELOPMENT_FEE_BASIS_POINTS = 50
 FEE_BASIS_POINTS_DENOMINATOR = 10_000
 PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS = 100_000_000
 VALIDATOR_MINT_ROLE = "core-upgrade-authority"
+CAMPAIGN_PAYER_ROLE = "campaign-payer"
+LOCAL_TEST_BANKROLL_LAMPORTS = 100_000_000_000
+LOCAL_TEST_BANKROLL_SCHEMA = "dclutch-private-validator-local-test-bankroll-v1"
+SYSTEM_PROGRAM_ADDRESS = "11111111111111111111111111111111"
 DEVELOPMENT_FEE_RECIPIENT_ROLE = "founding-source-funder"
 PARTICIPANT_ROLE = "participant"
 PARTICIPANT_FIXTURE_SOURCE_ROLE = "direct-buyer"
+FOUNDING_SUCCESS_MUTATIONS = (
+    "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
+    "stage projected custody against prepared controller funding (DCLTPCB2)",
+    "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
+    "core-funding-create-v1",
+    "resolution-funding-activate-v1",
+    "core-funding-accept-v1",
+)
+FOUNDING_COMPUTE_LABELS = (
+    "founding-dcltcfq1",
+    "founding-dcltpcb2",
+    "founding-dcltgmf2",
+    "founding-core-funding-create",
+    "founding-resolution-funding-activate",
+    "founding-core-funding-accept",
+)
+FOUNDING_JOURNAL_SCHEMA = "dclutch-public-founding-submission-journal-v1"
+FOUNDING_JOURNAL_OPERATIONS = (
+    "dcltcfq1",
+    "dcltpcb2",
+    "dcltgmf2",
+    "core-funding-create-v1",
+    "resolution-funding-activate-v1",
+    "core-funding-accept-v1",
+)
 LOCAL_AIRDROP_ROLES: tuple[str, ...] = ()
 PROTOCOL_CREATED_KEY_ROLES = (
     "collateral-mint",
     "collateral-wallet",
+    "founding-beneficiary",
+    "founding-projection-witness",
     "founding-source-funder",
 )
 CANONICAL_RESOLUTION_GATE_LABEL = "resolution"
@@ -914,18 +945,30 @@ def key_address(solana: Path, keypair: Path) -> str:
     ).strip()
 
 
-def funding_argv(solana: Path, url: str, address: str) -> list[str]:
+def local_bankroll_transfer_argv(
+    solana: Path,
+    url: str,
+    source_keypair: Path,
+    payer_address: str,
+) -> list[str]:
     return [
         str(solana),
         "--config",
         "/dev/null",
         "--url",
         url,
-        "airdrop",
+        "transfer",
+        payer_address,
         "100",
-        address,
+        "--from",
+        str(source_keypair),
+        "--fee-payer",
+        str(source_keypair),
+        "--allow-unfunded-recipient",
         "--commitment",
         "finalized",
+        "--output",
+        "json-compact",
     ]
 
 
@@ -990,57 +1033,255 @@ def balance_lamports(url: str, address: str) -> int:
     return value
 
 
+def local_bankroll_snapshot(
+    url: str,
+    source: str,
+    payer: str,
+    vacant_roles: Sequence[tuple[str, str]],
+) -> dict[str, Any]:
+    addresses = [source, payer, *(address for _, address in vacant_roles)]
+    if len(set(addresses)) != len(addresses):
+        raise Refusal("local bankroll identities alias")
+    observed = rpc(
+        url,
+        "getMultipleAccounts",
+        [addresses, {"commitment": "finalized", "encoding": "base64"}],
+    )
+    context = observed.get("context") if isinstance(observed, dict) else None
+    values = observed.get("value") if isinstance(observed, dict) else None
+    slot = context.get("slot") if isinstance(context, dict) else None
+    if not isinstance(slot, int) or slot < 0 or not isinstance(values, list) or len(values) != len(addresses):
+        raise Refusal("local bankroll snapshot was not one complete finalized observation")
+
+    def system_wallet(value: Any, label: str) -> int:
+        data = value.get("data") if isinstance(value, dict) else None
+        lamports = value.get("lamports") if isinstance(value, dict) else None
+        if (
+            not isinstance(value, dict)
+            or value.get("owner") != SYSTEM_PROGRAM_ADDRESS
+            or value.get("executable") is not False
+            or data != ["", "base64"]
+            or not isinstance(lamports, int)
+            or lamports < 0
+        ):
+            raise Refusal(f"{label} was not one exact System wallet")
+        return lamports
+
+    source_lamports = system_wallet(values[0], "local bankroll source")
+    payer_lamports = None if values[1] is None else system_wallet(values[1], "campaign payer")
+    vacant = []
+    for (role, address), value in zip(vacant_roles, values[2:], strict=True):
+        if value is not None:
+            raise Refusal(f"protocol-created disposable role {role} already exists")
+        vacant.append({"role": role, "address": address})
+    return {
+        "finalizedSlot": str(slot),
+        "sourceLamports": str(source_lamports),
+        "campaignPayerLamports": (
+            None if payer_lamports is None else str(payer_lamports)
+        ),
+        "vacantProtocolRoles": vacant,
+    }
+
+
+def finalized_local_bankroll_transaction(
+    url: str,
+    signature: str,
+    source: str,
+    payer: str,
+) -> dict[str, Any]:
+    value = rpc(
+        url,
+        "getTransaction",
+        [
+            signature,
+            {
+                "commitment": "finalized",
+                "encoding": "jsonParsed",
+                "maxSupportedTransactionVersion": 0,
+            },
+        ],
+    )
+    if not isinstance(value, dict):
+        raise Refusal("local bankroll transaction was not finalized")
+    slot = value.get("slot")
+    meta = value.get("meta")
+    transaction = value.get("transaction")
+    message = transaction.get("message") if isinstance(transaction, dict) else None
+    signatures = transaction.get("signatures") if isinstance(transaction, dict) else None
+    instructions = message.get("instructions") if isinstance(message, dict) else None
+    keys = message.get("accountKeys") if isinstance(message, dict) else None
+    if (
+        not isinstance(slot, int)
+        or slot <= 0
+        or not isinstance(meta, dict)
+        or meta.get("err") is not None
+        or not isinstance(signatures, list)
+        or signatures != [signature]
+        or not isinstance(instructions, list)
+        or len(instructions) != 1
+        or not isinstance(keys, list)
+    ):
+        raise Refusal("local bankroll transaction changed its finalized envelope")
+    key_rows = [
+        row.get("pubkey") if isinstance(row, dict) else row
+        for row in keys
+    ]
+    if key_rows.count(source) != 1 or key_rows.count(payer) != 1 or key_rows[0] != source:
+        raise Refusal("local bankroll transaction changed its source, payer, or fee payer")
+    instruction = instructions[0]
+    parsed = instruction.get("parsed") if isinstance(instruction, dict) else None
+    info = parsed.get("info") if isinstance(parsed, dict) else None
+    if (
+        not isinstance(instruction, dict)
+        or instruction.get("programId") != SYSTEM_PROGRAM_ADDRESS
+        or not isinstance(parsed, dict)
+        or parsed.get("type") != "transfer"
+        or not isinstance(info, dict)
+        or info.get("source") != source
+        or info.get("destination") != payer
+        or info.get("lamports") != LOCAL_TEST_BANKROLL_LAMPORTS
+        or meta.get("innerInstructions") not in (None, [])
+    ):
+        raise Refusal("local bankroll transaction was not the exact System transfer")
+    fee = meta.get("fee")
+    compute = meta.get("computeUnitsConsumed")
+    pre = meta.get("preBalances")
+    post = meta.get("postBalances")
+    if (
+        not isinstance(fee, int)
+        or fee <= 0
+        or not isinstance(compute, int)
+        or compute <= 0
+        or not isinstance(pre, list)
+        or not isinstance(post, list)
+        or len(pre) != len(keys)
+        or len(post) != len(keys)
+    ):
+        raise Refusal("local bankroll transaction omitted exact fee, CU, or balances")
+    source_index = key_rows.index(source)
+    payer_index = key_rows.index(payer)
+    source_key = keys[source_index]
+    payer_key = keys[payer_index]
+    if (
+        not isinstance(source_key, dict)
+        or source_key.get("signer") is not True
+        or source_key.get("writable") is not True
+        or not isinstance(payer_key, dict)
+        or payer_key.get("signer") is not False
+        or payer_key.get("writable") is not True
+        or pre[source_index] - post[source_index]
+        != LOCAL_TEST_BANKROLL_LAMPORTS + fee
+        or post[payer_index] - pre[payer_index] != LOCAL_TEST_BANKROLL_LAMPORTS
+        or pre[payer_index] != 0
+    ):
+        raise Refusal("local bankroll transaction changed exact transfer and fee conservation")
+    return {
+        "signature": signature,
+        "finalizedSlot": str(slot),
+        "feeLamports": str(fee),
+        "computeUnitsConsumed": str(compute),
+        "sourcePreLamports": str(pre[source_index]),
+        "sourcePostLamports": str(post[source_index]),
+        "campaignPayerPreLamports": str(pre[payer_index]),
+        "campaignPayerPostLamports": str(post[payer_index]),
+    }
+
+
 def provision_disposable_funding(
     run: Path,
     paths: Paths,
     report: dict[str, Any],
     url: str,
 ) -> dict[str, Any]:
-    funded: list[dict[str, Any]] = []
-    for offset, role in enumerate(LOCAL_AIRDROP_ROLES):
-        key = require_role_key(report, role)
-        address = key_address(paths.solana, key)
-        run_stage(
-            run,
-            3 + offset,
-            f"fund-{role}",
-            funding_argv(paths.solana, url, address),
+    if LOCAL_AIRDROP_ROLES:
+        raise Refusal("local lifecycle has no admitted airdrop role")
+    receipt_path = run / "provisioning-poststate.json"
+    if receipt_path.exists() or receipt_path.is_symlink():
+        raise Refusal("local test-bankroll receipt already exists")
+    source_key = require_role_key(report, VALIDATOR_MINT_ROLE)
+    payer_key = require_role_key(report, CAMPAIGN_PAYER_ROLE)
+    source = canonical_pubkey(
+        key_address(paths.solana, source_key), "local bankroll source"
+    )
+    payer = canonical_pubkey(
+        key_address(paths.solana, payer_key), "campaign payer"
+    )
+    vacant_roles = tuple(
+        (
+            role,
+            canonical_pubkey(
+                key_address(paths.solana, require_role_key(report, role)),
+                f"protocol-created role {role}",
+            ),
         )
-        lamports = balance_lamports(url, address)
-        if lamports == 0:
-            raise Refusal(f"local faucet left disposable payer role {role} unfunded")
-        funded.append({"role": role, "address": address, "lamports": lamports})
+        for role in PROTOCOL_CREATED_KEY_ROLES
+    )
+    prestate = local_bankroll_snapshot(url, source, payer, vacant_roles)
+    if prestate["campaignPayerLamports"] is not None:
+        raise Refusal("campaign payer was not absent before its one local bankroll transfer")
+    source_before = canonical_decimal(
+        prestate["sourceLamports"], "local bankroll source prestate"
+    )
+    if source_before <= LOCAL_TEST_BANKROLL_LAMPORTS:
+        raise Refusal("validator genesis wallet cannot cover the local test bankroll plus fee")
 
-    genesis_key = require_role_key(report, VALIDATOR_MINT_ROLE)
-    genesis_address = key_address(paths.solana, genesis_key)
-    genesis_lamports = balance_lamports(url, genesis_address)
-    if genesis_lamports == 0:
-        raise Refusal(
-            "fresh validator did not fund its owned development payer identity"
-        )
-
-    vacant: list[dict[str, str]] = []
-    for role in PROTOCOL_CREATED_KEY_ROLES:
-        key = require_role_key(report, role)
-        address = key_address(paths.solana, key)
-        if not account_is_absent(url, address):
-            raise Refusal(
-                f"protocol-created disposable role {role} already exists before founding"
-            )
-        vacant.append({"role": role, "address": address})
-    poststate = {
-        "schema": "dclutch-private-validator-disposable-funding-v1",
-        "funded_by_local_faucet": funded,
-        "funded_by_validator_genesis": {
-            "role": VALIDATOR_MINT_ROLE,
-            "address": genesis_address,
-            "lamports": genesis_lamports,
-        },
-        "protocol_created_roles_proved_vacant": vacant,
-        "external_writes": False,
+    transfer = run_stage(
+        run,
+        3,
+        "local-test-bankroll",
+        local_bankroll_transfer_argv(
+            paths.solana,
+            url,
+            source_key,
+            payer,
+        ),
+    )
+    try:
+        transfer_stdout = json.loads(transfer.stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise Refusal(f"local bankroll transfer stdout was not JSON: {error}") from error
+    if not isinstance(transfer_stdout, dict) or set(transfer_stdout) != {"signature"}:
+        raise Refusal("local bankroll transfer stdout changed its exact shape")
+    signature = canonical_signature(
+        transfer_stdout["signature"], "local bankroll transfer signature"
+    )
+    transaction = finalized_local_bankroll_transaction(url, signature, source, payer)
+    poststate = local_bankroll_snapshot(url, source, payer, vacant_roles)
+    pre_slot = canonical_decimal(prestate["finalizedSlot"], "bankroll prestate slot", positive=False)
+    tx_slot = canonical_decimal(transaction["finalizedSlot"], "bankroll transaction slot")
+    post_slot = canonical_decimal(poststate["finalizedSlot"], "bankroll poststate slot", positive=False)
+    if not pre_slot <= tx_slot <= post_slot:
+        raise Refusal("local bankroll snapshots do not bound the finalized transaction")
+    if (
+        prestate["sourceLamports"] != transaction["sourcePreLamports"]
+        or transaction["sourcePostLamports"] != poststate["sourceLamports"]
+        or transaction["campaignPayerPreLamports"] != "0"
+        or poststate["campaignPayerLamports"]
+        != transaction["campaignPayerPostLamports"]
+        or poststate["campaignPayerLamports"] != str(LOCAL_TEST_BANKROLL_LAMPORTS)
+        or prestate["vacantProtocolRoles"] != poststate["vacantProtocolRoles"]
+    ):
+        raise Refusal("local bankroll prestate, transaction, and poststate do not join")
+    receipt = {
+        "schema": LOCAL_TEST_BANKROLL_SCHEMA,
+        "cluster": "owned-loopback",
+        "genesisHash": canonical_pubkey(rpc(url, "getGenesisHash"), "local genesis"),
+        "status": "finalized",
+        "classification": (
+            "exact 100 SOL local-validator test bankroll; not a projected minimum or devnet arithmetic"
+        ),
+        "amountLamports": str(LOCAL_TEST_BANKROLL_LAMPORTS),
+        "source": {"role": VALIDATOR_MINT_ROLE, "address": source},
+        "campaignPayer": {"role": CAMPAIGN_PAYER_ROLE, "address": payer},
+        "prestate": prestate,
+        "transaction": transaction,
+        "poststate": poststate,
+        "solanaBinarySha256": sha256_file(paths.solana),
+        "externalWrites": False,
     }
-    write_json_new(run / "provisioning-poststate.json", poststate)
-    return poststate
+    write_json_new(receipt_path, receipt)
+    return receipt
 
 
 def run_pyth_provisioning(
@@ -1348,18 +1589,21 @@ def authenticate_resolution_checkpoint(document: Any) -> list[dict[str, Any]]:
     receipts = checkpoint.get("receipts")
     if not isinstance(receipts, list) or [row.get("stage") for row in receipts] != [
         "submit",
-        "execute",
+        "resolution-provider-execute-v1",
+        "core-terminal-accept-v1",
         "reclaim",
     ]:
-        raise Refusal("Resolution checkpoint omitted submit/execute/reclaim receipts")
+        raise Refusal(
+            "Resolution checkpoint omitted submit/provider-execute/Core-accept/reclaim receipts"
+        )
     facts = [
         finalized_fact(row, f"Resolution {row.get('stage')} receipt")
         for row in receipts
     ]
     if len({fact["signature"] for fact in facts}) != len(facts) or any(
-        left["slot"] > right["slot"] for left, right in zip(facts, facts[1:])
+        left["slot"] >= right["slot"] for left, right in zip(facts, facts[1:])
     ):
-        raise Refusal("Resolution receipts repeat a signature or regress slots")
+        raise Refusal("Resolution receipts repeat a signature or do not advance slots")
     return facts
 
 
@@ -1539,62 +1783,14 @@ def authenticate_terminal_completion(
     journals = completion.get("journals")
     if not isinstance(journals, list) or not journals:
         raise Refusal("terminal retirement completion omitted finalized journals")
-    fixed_tail = [
-        "core-begin-retiring",
-        "direct-begin-retiring",
-        "resolution-close-fund",
-        "direct-close-capability",
-        "retirement-replay-handoff",
-        "aggregate-retirement",
-    ]
     kinds = [row.get("mutation", {}).get("kind") for row in journals]
-    if kinds[-len(fixed_tail) :] != fixed_tail:
+    if kinds[-1:] == ["aggregate-retirement"]:
         raise Refusal(
-            "terminal retirement completion omitted the exact six protocol mutations"
+            "monolithic aggregate-retirement is packet-inadmissible; the exact four-phase checkpoint exterior is required"
         )
-    facts: list[dict[str, Any]] = []
-    prior_slot = 0
-    signatures: set[str] = set()
-    total_fees = 0
-    total_compute = 0
-    for index, row in enumerate(journals):
-        if (
-            row.get("schema") != TERMINAL_JOURNAL_SCHEMA
-            or row.get("phase") != "finalized"
-        ):
-            raise Refusal(
-                "terminal completion references a nonfinal or substituted journal"
-            )
-        fact = finalized_fact(
-            row,
-            f"terminal journal {index}",
-            slot_key="finalizedSlot",
-            fee_key="transactionFeeLamports",
-            decimal_text=True,
-        )
-        if fact["signature"] in signatures or fact["slot"] < prior_slot:
-            raise Refusal("terminal journal signatures repeat or slots regress")
-        signatures.add(fact["signature"])
-        prior_slot = fact["slot"]
-        total_fees += fact["fee_lamports"]
-        total_compute += fact["compute_units_consumed"]
-        facts.append(fact)
-    if (
-        canonical_decimal(completion.get("finalizedSlot"), "terminal finalized slot")
-        != max(fact["slot"] for fact in facts)
-        or canonical_decimal(
-            completion.get("transactionFeesLamports"), "terminal fee total"
-        )
-        != total_fees
-        or canonical_decimal(
-            completion.get("computeUnitsConsumed"), "terminal CU total"
-        )
-        != total_compute
-    ):
-        raise Refusal(
-            "terminal completion aggregate slot, fee, or compute arithmetic changed"
-        )
-    return completion
+    raise Refusal(
+        "four-phase AggregateRetirement caller schema is not frozen in this runner revision"
+    )
 
 
 def authenticate_terminal_stdout(
@@ -2499,16 +2695,238 @@ def named_seed(index: int) -> tuple[str, str]:
     return name, hashlib.sha256(SEED_DOMAIN + name.encode()).hexdigest()
 
 
-def key_flags(report: dict[str, Any]) -> list[str]:
+def key_flags(
+    report: dict[str, Any],
+    projection: str = "campaign_founding_keypairs",
+) -> list[str]:
+    if projection not in (
+        "campaign_administration_keypairs",
+        "campaign_founding_keypairs",
+    ):
+        raise Refusal("campaign keypair projection is not one frozen mode")
     flags: list[str] = []
-    campaign_keypairs = report.get("campaign_keypairs")
+    campaign_keypairs = report.get(projection)
     if not isinstance(campaign_keypairs, dict) or not campaign_keypairs:
         raise Refusal(
-            "local mutable preparation omitted its Rust-owned campaign keypair projection"
+            f"local mutable preparation omitted its Rust-owned {projection} projection"
         )
     for role, path in sorted(campaign_keypairs.items()):
+        if not isinstance(role, str) or not role or not isinstance(path, str) or not path:
+            raise Refusal("Rust-owned campaign keypair projection changed shape")
         flags.extend((f"--keypair-{role}", path))
     return flags
+
+
+def campaign_public_identities(report: dict[str, Any]) -> dict[str, str]:
+    identities = report.get("campaign_public_identities")
+    if not isinstance(identities, dict) or set(identities) != {
+        "founding-founder",
+        "substituted-founder",
+    }:
+        raise Refusal(
+            "local mutable preparation omitted its exact two public founding identities"
+        )
+    founder = canonical_pubkey(identities["founding-founder"], "founding founder")
+    substituted = canonical_pubkey(
+        identities["substituted-founder"], "substituted founder"
+    )
+    if founder == substituted:
+        raise Refusal("public founding identities alias")
+    return {
+        "founding-founder": founder,
+        "substituted-founder": substituted,
+    }
+
+
+def administration_campaign_argv(
+    bootstrap: Path,
+    url: str,
+    plan: Path,
+    evidence: Path,
+    report: dict[str, Any],
+) -> list[str]:
+    return [
+        str(bootstrap),
+        "campaign",
+        "--rpc-url",
+        url,
+        "--plan",
+        str(plan),
+        "--evidence",
+        str(evidence),
+        "--through",
+        "activation",
+        "--execute",
+        *key_flags(report, "campaign_administration_keypairs"),
+    ]
+
+
+def founding_campaign_argv(
+    bootstrap: Path,
+    url: str,
+    plan: Path,
+    market: Path,
+    evidence: Path,
+    report: dict[str, Any],
+) -> list[str]:
+    identities = campaign_public_identities(report)
+    return [
+        str(bootstrap),
+        "campaign",
+        "--founding-only",
+        "--rpc-url",
+        url,
+        "--plan",
+        str(plan),
+        "--market",
+        str(market),
+        "--evidence",
+        str(evidence),
+        "--through",
+        "founding",
+        "--founding-founder",
+        identities["founding-founder"],
+        "--substituted-founder",
+        identities["substituted-founder"],
+        "--execute",
+        *key_flags(report, "campaign_founding_keypairs"),
+    ]
+
+
+def authenticate_campaign_completion(
+    document: Any,
+    expected_mode: str,
+    expected_plan: Path,
+    expected_market: Path | None,
+) -> dict[str, Any]:
+    if not isinstance(document, dict):
+        raise Refusal("campaign evidence was not an object")
+    intent = document.get("execution_intent")
+    execution = document.get("execution")
+    if (
+        document.get("schema") != "dclutch-successor-campaign-report-v1"
+        or document.get("cluster") != "owned-loopback"
+        or document.get("mode") != "execute"
+        or not isinstance(intent, dict)
+        or intent.get("campaign_mode") != expected_mode
+        or intent.get("plan") != str(expected_plan)
+        or intent.get("market")
+        != (str(expected_market) if expected_market is not None else None)
+        or intent.get("authorized_mutation") is not True
+        or not isinstance(execution, dict)
+        or execution.get("completed") is not True
+    ):
+        raise Refusal("campaign completion changed its exact mode, inputs, or status")
+    if expected_mode == "administration":
+        if (
+            intent.get("through_stage") != "activation"
+            or execution.get("market") is not None
+        ):
+            raise Refusal("administration campaign escaped its infrastructure-only boundary")
+        return execution
+    if expected_mode != "founding-only" or expected_market is None:
+        raise Refusal("campaign completion expected an unsupported mode")
+    if (
+        intent.get("through_stage") != "founding"
+        or execution.get("recoveredFinalizedFounding") is not False
+    ):
+        raise Refusal("founding campaign was not one fresh finalized founding")
+    transactions = execution.get("transactions")
+    if not isinstance(transactions, list):
+        raise Refusal("founding campaign omitted its finalized transaction history")
+    labels = [
+        row.get("label")
+        for row in transactions
+        if isinstance(row, dict) and row.get("label") in FOUNDING_SUCCESS_MUTATIONS
+    ]
+    if labels != list(FOUNDING_SUCCESS_MUTATIONS):
+        raise Refusal("founding campaign changed its exact six-mutation success order")
+    market = execution.get("market")
+    accounts = market.get("accounts") if isinstance(market, dict) else None
+    ledger = accounts.get("resolution_funding_ledger") if isinstance(accounts, dict) else None
+    if not isinstance(ledger, dict):
+        raise Refusal("founding campaign omitted its stable Resolution funding ledger")
+    canonical_pubkey(ledger.get("address"), "Resolution funding ledger")
+    rows = {
+        row["label"]: row
+        for row in transactions
+        if isinstance(row, dict) and row.get("label") in FOUNDING_SUCCESS_MUTATIONS
+    }
+    for label in FOUNDING_SUCCESS_MUTATIONS:
+        row = rows[label]
+        canonical_signature(row.get("signature"), f"{label} signature")
+        positive_integer(row.get("slot"), f"{label} finalized slot")
+        positive_integer(row.get("fee_lamports"), f"{label} fee")
+        positive_integer(row.get("compute_units_consumed"), f"{label} CU")
+        if row.get("error") is not None or row.get("transaction_metadata_available") is not True:
+            raise Refusal("founding campaign mutation omitted exact finalized metadata")
+    journals = document.get("foundingSubmissionJournals")
+    if (
+        not isinstance(journals, list)
+        or [row.get("operation") for row in journals if isinstance(row, dict)]
+        != list(FOUNDING_JOURNAL_OPERATIONS)
+    ):
+        raise Refusal("founding campaign omitted its exact six durable journal owners")
+    journal_genesis: str | None = None
+    for index, (journal, label) in enumerate(
+        zip(journals, FOUNDING_SUCCESS_MUTATIONS, strict=True)
+    ):
+        row = rows[label]
+        genesis = canonical_pubkey(journal.get("genesisHash"), "founding journal genesis")
+        if journal_genesis is None:
+            journal_genesis = genesis
+        if (
+            journal.get("schema") != FOUNDING_JOURNAL_SCHEMA
+            or journal.get("cluster") != "loopback"
+            or journal.get("phase") != "finalized"
+            or journal.get("evidencePath") != document.get("evidence_output")
+            or journal.get("rpcUrl") != document.get("rpc_url")
+            or journal.get("planSha256") != document.get("plan_sha256")
+            or journal.get("marketSha256") != document.get("market_sha256")
+            or journal.get("payer") != document.get("payer")
+            or genesis != journal_genesis
+            or journal.get("expectedSignature") != row.get("signature")
+            or journal.get("finalizedSlot") != row.get("slot")
+            or journal.get("feeLamports") != row.get("fee_lamports")
+            or journal.get("computeUnitsConsumed")
+            != row.get("compute_units_consumed")
+        ):
+            raise Refusal(
+                f"founding durable journal {index} does not join its finalized transaction"
+            )
+        for field in (
+            "intentSha256",
+            "signedPacketSha256",
+            "transactionSha256",
+            "finalizedPoststatesSha256",
+            "stateSha256",
+        ):
+            lowercase_sha256(journal.get(field), f"founding journal {index} {field}")
+    return execution
+
+
+def founding_compute_units(document: Any) -> dict[str, int]:
+    execution = document.get("execution") if isinstance(document, dict) else None
+    transactions = execution.get("transactions") if isinstance(execution, dict) else None
+    if not isinstance(transactions, list):
+        raise Refusal("founding evidence omitted transaction CU history")
+    rows = {
+        row.get("label"): row
+        for row in transactions
+        if isinstance(row, dict) and row.get("label") in FOUNDING_SUCCESS_MUTATIONS
+    }
+    if set(rows) != set(FOUNDING_SUCCESS_MUTATIONS):
+        raise Refusal("founding evidence omitted one exact success-mutation CU")
+    return {
+        metric: positive_integer(
+            rows[label].get("compute_units_consumed"), f"{label} CU"
+        )
+        for metric, label in zip(
+            FOUNDING_COMPUTE_LABELS,
+            FOUNDING_SUCCESS_MUTATIONS,
+            strict=True,
+        )
+    }
 
 
 def authenticate_participant_fixture_liquidity(
@@ -2562,17 +2980,6 @@ def authenticate_participant_fixture_liquidity(
             "authority-removed local participant liquidity receipt"
         )
     return fixture
-
-
-def dcltgmf2_metric(evidence: Path) -> int:
-    document = read_unique_json(evidence, "founding evidence")
-    transactions = document.get("execution", {}).get("transactions", [])
-    rows = [row for row in transactions if "DCLTGMF2" in row.get("label", "")]
-    if len(rows) != 1 or not isinstance(rows[0].get("compute_units_consumed"), int):
-        raise Refusal(
-            "founding evidence does not carry one exact DCLTGMF2 compute measurement"
-        )
-    return rows[0]["compute_units_consumed"]
 
 
 def run_one(
@@ -2693,12 +3100,32 @@ def run_one(
             },
         )
 
+        administration = run / "administration.json"
+        run_stage(
+            run,
+            4,
+            "administration",
+            administration_campaign_argv(
+                paths.bootstrap,
+                url,
+                plan,
+                administration,
+                report,
+            ),
+        )
+        authenticate_campaign_completion(
+            read_unique_json(administration, "finalized administration evidence"),
+            "administration",
+            plan,
+            None,
+        )
+
         market = run / "market.json"
         fee_recipient_key = require_role_key(report, DEVELOPMENT_FEE_RECIPIENT_ROLE)
         fee_recipient = key_address(paths.solana, fee_recipient_key)
         market_stage = run_stage(
             run,
-            4,
+            5,
             "market-input",
             [
                 str(paths.bootstrap),
@@ -2717,24 +3144,16 @@ def run_one(
         evidence = run / "founding.json"
         run_stage(
             run,
-            5,
+            6,
             "founding",
-            [
-                str(paths.bootstrap),
-                "campaign",
-                "--rpc-url",
+            founding_campaign_argv(
+                paths.bootstrap,
                 url,
-                "--plan",
-                str(plan),
-                "--market",
-                str(market),
-                "--evidence",
-                str(evidence),
-                "--through",
-                "founding",
-                "--execute",
-                *key_flags(report),
-            ],
+                plan,
+                market,
+                evidence,
+                report,
+            ),
         )
 
         participant = run / "participant.json"
@@ -2743,6 +3162,12 @@ def run_one(
         participant_address = key_address(paths.solana, participant_key)
         fixture_source_address = key_address(paths.solana, fixture_source_key)
         campaign_report = read_unique_json(evidence, "finalized founding evidence")
+        authenticate_campaign_completion(
+            campaign_report,
+            "founding-only",
+            plan,
+            market,
+        )
         market_report = read_unique_json(market, "market input")
         fixture_liquidity = authenticate_participant_fixture_liquidity(
             campaign_report,
@@ -2758,7 +3183,7 @@ def run_one(
             )
         run_stage(
             run,
-            6,
+            7,
             "participant",
             [
                 str(paths.bootstrap),
@@ -2817,7 +3242,12 @@ def run_one(
                 "100,000,000-atom collateral preparation"
             )
 
-        metric = dcltgmf2_metric(evidence)
+        founding_metrics = founding_compute_units(campaign_report)
+        metric = founding_metrics["founding-dcltgmf2"]
+        bankroll_compute_units = canonical_decimal(
+            funding_poststate["transaction"]["computeUnitsConsumed"],
+            "local test-bankroll CU",
+        )
         fee_profile = {
             "basis_points_numerator": DEVELOPMENT_FEE_BASIS_POINTS,
             "basis_points_denominator": FEE_BASIS_POINTS_DENOMINATOR,
@@ -2845,10 +3275,19 @@ def run_one(
                 "status": "passed",
                 "finalized_stages": ["founding", "participant"],
                 "dcltgmf2_compute_units": metric,
-                "compute_units": {"founding-dcltgmf2": metric},
+                "compute_units": {
+                    "local-test-bankroll": bankroll_compute_units,
+                    **founding_metrics,
+                },
                 "fee_profile": fee_profile,
                 "participant_fixture_liquidity": fixture_liquidity,
                 "plan": str(plan),
+                "administration_evidence": str(administration),
+                "administration_evidence_sha256": sha256_file(administration),
+                "provisioning_evidence": str(run / "provisioning-poststate.json"),
+                "provisioning_evidence_sha256": sha256_file(
+                    run / "provisioning-poststate.json"
+                ),
                 "founding_evidence": str(evidence),
                 "participant_evidence": str(participant),
                 "validator_log": str(run / "validator.log"),
@@ -2878,7 +3317,7 @@ def run_one(
             evidence,
             participant,
             prepare_work / "keys",
-            7,
+            8,
         )
         post_direct, _next_ordinal = run_post_direct_lifecycle(
             run,
@@ -2898,12 +3337,19 @@ def run_one(
             "status": "passed",
             "dcltgmf2_compute_units": metric,
             "compute_units": {
-                "founding-dcltgmf2": metric,
+                "local-test-bankroll": bankroll_compute_units,
+                **founding_metrics,
                 **direct["compute_units"],
                 **post_direct["compute_units"],
             },
             "fee_profile": fee_profile,
             "plan": str(plan),
+            "administration_evidence": str(administration),
+            "administration_evidence_sha256": sha256_file(administration),
+            "provisioning_evidence": str(run / "provisioning-poststate.json"),
+            "provisioning_evidence_sha256": sha256_file(
+                run / "provisioning-poststate.json"
+            ),
             "founding_evidence": str(evidence),
             "participant_evidence": str(participant),
             "direct": direct,
