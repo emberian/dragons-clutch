@@ -158,8 +158,28 @@ function isStrictLoopbackOrigin(endpoint: string): boolean {
     && octets[0] === '127';
 }
 
+/**
+ * What a person reads when the node says no.
+ *
+ * The public devnet endpoint throttles hard, and a bounded program scan is
+ * exactly the shape it throttles first -- so "RPC HTTP status 429" is a
+ * message real readers of the public site will meet. It named the status and
+ * nothing they could act on. These say what happened and what to do; every
+ * other status keeps its number, because an unknown failure should not be
+ * dressed up as a understood one.
+ */
+export function httpFailureReasonV1(status: number): string {
+  if (status === 429) {
+    return 'the endpoint is rate-limiting this browser (HTTP 429). Public test-network endpoints throttle bulk reads; wait a few seconds and read again, or point the cluster picker at your own endpoint.';
+  }
+  if (status === 503 || status === 502 || status === 504) {
+    return `the endpoint is unavailable right now (HTTP ${status}). Nothing is wrong with the chain or with what you asked for; try again shortly.`;
+  }
+  return `RPC HTTP status ${status}`;
+}
+
 async function boundedJson(response: Response, maximumBytes = MAX_RPC_RESPONSE_BYTES): Promise<unknown> {
-  if (!response.ok) throw new Error(`RPC HTTP status ${response.status}`);
+  if (!response.ok) throw new Error(httpFailureReasonV1(response.status));
   const declared = response.headers.get('content-length');
   if (declared !== null && exactUnsigned(Number(declared), 'RPC Content-Length') > maximumBytes) throw new Error('RPC response exceeds the browser byte bound');
   const reader = response.body?.getReader();
