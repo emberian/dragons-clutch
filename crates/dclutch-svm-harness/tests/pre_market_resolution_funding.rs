@@ -2,7 +2,7 @@
 //!
 //! This focused fixture keeps the three authority boundaries separate:
 //! a real Trading caller signs the universal CallerAuthority PDA, the current
-//! Resolution deployment projects Core's exact Found37 frame and creates its
+//! Resolution deployment projects Core's exact ProjectFound36 frame and creates its
 //! own Pending subset ledger, and ordinary Core Found later creates the Market.
 //! V6 CreateFund must then create only Source state while preserving the
 //! initializer-owned ledger byte-for-byte and lamport-for-lamport.
@@ -20,7 +20,8 @@ use dclutch_capability_contract::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
-    Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity,
+    Action, CoreState, FOUND_RENT_SYSVAR_INDEX_V3, Identity as CoreIdentity,
+    MarketCoreStateSeedsV2, MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2,
     PROJECT_FOUND_RECEIPT_BYTES_V2, Phase, ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness,
     Request,
 };
@@ -838,7 +839,7 @@ async fn found_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
 ) -> Vec<ObservedAccount> {
-    let keys = found_accounts(fixture, false)
+    let keys = project_found_accounts(fixture)
         .into_iter()
         .map(|meta| meta.pubkey)
         .collect::<Vec<_>>();
@@ -850,6 +851,13 @@ async fn found_snapshot(
         });
     }
     output
+}
+
+fn project_found_accounts(fixture: &Fixture) -> Vec<AccountMeta> {
+    let mut accounts = found_accounts(fixture, false);
+    accounts.remove(FOUND_RENT_SYSVAR_INDEX_V3);
+    assert_eq!(accounts.len(), PROJECT_FOUND_ACCOUNT_COUNT_V2);
+    accounts
 }
 
 async fn submit(
@@ -884,7 +892,7 @@ async fn project_found_receipt(
 ) -> ProjectFoundReceiptV2 {
     let instruction = Instruction {
         program_id: CORE_PROGRAM_ID,
-        accounts: found_accounts(fixture, false),
+        accounts: project_found_accounts(fixture),
         data: request.encode().expect("ProjectFound request").to_vec(),
     };
     let blockhash = context
@@ -939,17 +947,18 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
             resolution_programdata: required(&mut context, fixture.resolution_programdata).await,
             funding_source: required(&mut context, transaction_payer).await,
             ledger: vacant(fixture.ledger),
+            rent: required(&mut context, sysvar::rent::ID).await,
             project_found_accounts: found_snapshot(&mut context, &fixture).await,
         },
         found_request,
         expected_project_found,
     )
-    .expect("chain-derived 44-account initializer");
+    .expect("chain-derived 43-account initializer");
     assert_eq!(
         initializer.instruction.accounts.len(),
         PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1
     );
-    assert_eq!(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1, 44);
+    assert_eq!(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1, 43);
     for (index, account) in initializer.instruction.accounts.iter().enumerate() {
         for other in initializer.instruction.accounts.iter().skip(index + 1) {
             assert_ne!(account.pubkey, other.pubkey, "initializer address alias");
@@ -995,7 +1004,7 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         .expect("hostile Banks RPC");
     assert!(
         aliased.result.is_err(),
-        "Core refuses an internal Found37 alias"
+        "Core refuses an internal ProjectFound36 alias"
     );
     assert_eq!(
         observed(&mut context, fixture.ledger).await,
@@ -1196,6 +1205,7 @@ async fn expired_prepared_checkpoint_refunds_and_closes_resolution_ledger() {
             resolution_programdata: required(&mut context, fixture.resolution_programdata).await,
             funding_source: required(&mut context, payer).await,
             ledger: vacant(fixture.ledger),
+            rent: required(&mut context, sysvar::rent::ID).await,
             project_found_accounts: found_snapshot(&mut context, &fixture).await,
         },
         found_request,
@@ -1476,6 +1486,7 @@ async fn initializer_reconciles_system_owned_dust_below_and_above_target() {
                     .await,
                 funding_source: required(&mut context, funding_source).await,
                 ledger: vacant(fixture.ledger),
+                rent: required(&mut context, sysvar::rent::ID).await,
                 project_found_accounts: found_snapshot(&mut context, &fixture).await,
             },
             found_request,
@@ -1507,6 +1518,7 @@ async fn initializer_reconciles_system_owned_dust_below_and_above_target() {
                     .await,
                 funding_source: required(&mut context, funding_source).await,
                 ledger: required(&mut context, fixture.ledger).await,
+                rent: required(&mut context, sysvar::rent::ID).await,
                 project_found_accounts: found_snapshot(&mut context, &fixture).await,
             },
             found_request,

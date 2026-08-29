@@ -56,8 +56,8 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3, GENERIC_FOUNDING_REQUEST_BYTES_V1,
-    GenericFoundingRequestV1, GenericFoundingStageV1, Identity, ProjectFoundRequestV2, Request,
-    generic_founding_funding_list_id_v1,
+    GenericFoundingRequestV1, GenericFoundingStageV1, Identity, PROJECT_FOUND_ACCOUNT_COUNT_V2,
+    ProjectFoundRequestV2, Request, generic_founding_funding_list_id_v1,
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -112,9 +112,8 @@ const PREPARE_TRADING_PROGRAMDATA: usize = 7;
 const PREPARE_RESOLUTION_LEDGER: usize = 8;
 const PREPARE_TRADING_LEDGER: usize = 9;
 const PREPARE_CHECKPOINT: usize = 10;
-const PREPARE_CLOCK: usize = 11;
-const PREPARE_FOUND_START: usize = 12;
-const PREPARE_FOUND_ACCOUNT_COUNT: usize = 37;
+const PREPARE_FOUND_START: usize = 11;
+const PREPARE_FOUND_ACCOUNT_COUNT: usize = PROJECT_FOUND_ACCOUNT_COUNT_V2;
 
 /// Exact separate controller-funding preparation frame.
 pub const CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1: usize =
@@ -332,8 +331,7 @@ pub fn process_controller_funding_prepare_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let rent =
-        Rent::from_account_info(account(found, 28)?).map_err(|_| TradingSbfError::Content)?;
+    let rent = Rent::get().map_err(|_| TradingSbfError::Content)?;
     let project_found = ProjectFoundRequestV2::new(Request::administrative(
         Action::Found,
         facts.generation,
@@ -357,15 +355,14 @@ pub fn process_controller_funding_prepare_v1(
         trading_ledger,
         account(found, 0)?,
         account(found, 2)?,
-        account(found, 29)?,
+        account(found, 28)?,
         manifest,
         manifest_id,
         &facts,
         trading_mask,
         &rent,
     )?;
-    let clock = Clock::from_account_info(account(accounts, PREPARE_CLOCK)?)
-        .map_err(|_| TradingSbfError::Content)?;
+    let clock = Clock::get().map_err(|_| TradingSbfError::Content)?;
     let found_request_bytes = project_found
         .found
         .encode()
@@ -397,7 +394,7 @@ pub fn process_controller_funding_prepare_v1(
         account(accounts, PREPARE_CHECKPOINT)?,
         account(found, 0)?,
         account(found, 2)?,
-        account(found, 29)?,
+        account(found, 28)?,
         &rent,
         checkpoint,
     )?;
@@ -2588,7 +2585,7 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
     if expected_authority != *authority.key {
         return Err(TradingSbfError::Release.into());
     }
-    let mut metas = Vec::with_capacity(44);
+    let mut metas = Vec::with_capacity(43);
     metas.extend([
         AccountMeta::new_readonly(*authority.key, true),
         AccountMeta::new_readonly(*caller_program.key, false),
@@ -2608,7 +2605,7 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
         accounts: metas,
         data: request_bytes.to_vec(),
     };
-    let mut infos = Vec::with_capacity(44);
+    let mut infos = Vec::with_capacity(43);
     infos.extend([
         authority.clone(),
         caller_program.clone(),
@@ -3106,8 +3103,8 @@ mod tests {
             b'D', b'C', b'L', b'T', b'P', b'C', b'B', b'2', 0
         ]));
         assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTION_BYTES_V2, 8);
-        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNT_COUNT_V2, 85);
-        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNT_COUNT_V2, 88);
+        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNT_COUNT_V2, 84);
+        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNT_COUNT_V2, 87);
         assert_eq!(
             PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V2,
             PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V2
@@ -3126,9 +3123,9 @@ mod tests {
             b'D', b'C', b'L', b'T', b'C', b'F', b'Q', b'1', 0
         ]));
         assert_eq!(CONTROLLER_FUNDING_PREPARE_INSTRUCTION_BYTES_V1, 8);
-        assert_eq!(CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1, 49);
-        assert_eq!(PREPARE_FOUND_START, 12);
-        assert_eq!(PREPARE_FOUND_ACCOUNT_COUNT, 37);
+        assert_eq!(CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1, 47);
+        assert_eq!(PREPARE_FOUND_START, 11);
+        assert_eq!(PREPARE_FOUND_ACCOUNT_COUNT, 36);
     }
 
     #[test]

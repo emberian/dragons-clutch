@@ -60,7 +60,7 @@ impl FoundingSubmissionOperationV1 {
 
     pub(crate) const fn exact_unique_accounts(self) -> usize {
         match self {
-            Self::Dcltcfq1 => 51,
+            Self::Dcltcfq1 => 49,
             Self::Dcltpcb2 | Self::Dcltgmf2 => 60,
             // Canonical V7 frames are pairwise distinct and carry their own
             // program key as a frame account. The bounded inline v0 packet

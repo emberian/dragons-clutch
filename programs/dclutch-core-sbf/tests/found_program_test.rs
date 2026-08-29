@@ -1510,6 +1510,13 @@ fn project_found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruc
         AccountMeta::new_readonly(fixture.payer.pubkey(), false);
     *instruction.accounts.get_mut(1).expect("Market") =
         AccountMeta::new_readonly(fixture.market, false);
+    instruction
+        .accounts
+        .remove(dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3);
+    assert_eq!(
+        instruction.accounts.len(),
+        dclutch_market_core_codec::PROJECT_FOUND_ACCOUNT_COUNT_V2
+    );
     let found = Request::administrative(
         Action::Found,
         GENERATION,
@@ -1914,7 +1921,7 @@ async fn real_found37_accepts_258_outcomes_after_pinned_infrastructure_auth() {
 }
 
 #[tokio::test]
-async fn project_found37_authenticates_without_signature_or_market_mutation() {
+async fn project_found36_authenticates_without_signature_or_market_mutation() {
     let fixture = fixture(false);
     let instruction = project_found_instruction(&fixture, false);
     let payer = instruction.accounts.first().expect("projection payer meta");
@@ -1939,9 +1946,33 @@ async fn project_found37_authenticates_without_signature_or_market_mutation() {
 }
 
 #[tokio::test]
-async fn projected_found37_refuses_swapped_infrastructure_without_market_mutation() {
+async fn projected_found36_refuses_swapped_infrastructure_without_market_mutation() {
     let fixture = fixture(false);
     let instruction = project_found_instruction(&fixture, true);
+    let (fixture, context, accepted) = execute_project(fixture, instruction).await;
+    assert!(!accepted);
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+}
+
+#[tokio::test]
+async fn superseded_project_found37_frame_refuses_without_market_mutation() {
+    let fixture = fixture(false);
+    let mut instruction = project_found_instruction(&fixture, false);
+    instruction.accounts.insert(
+        dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3,
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+    );
+    assert_eq!(
+        instruction.accounts.len(),
+        dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3
+    );
     let (fixture, context, accepted) = execute_project(fixture, instruction).await;
     assert!(!accepted);
     let market = context

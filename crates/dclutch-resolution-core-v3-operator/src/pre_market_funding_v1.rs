@@ -4,7 +4,9 @@ use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{ProjectFoundReceiptV2, ProjectFoundRequestV2};
+use dclutch_market_core_codec::{
+    PROJECT_FOUND_ACCOUNT_COUNT_V2, ProjectFoundReceiptV2, ProjectFoundRequestV2,
+};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
@@ -23,7 +25,7 @@ use crate::{
 };
 
 /// Exact Core ProjectFound frame width consumed by the initializer CPI.
-pub const PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1: usize = 37;
+pub const PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1: usize = PROJECT_FOUND_ACCOUNT_COUNT_V2;
 /// Exact complete pre-Market initializer CPI frame width.
 pub const PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1: usize =
     7 + PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1;
@@ -33,8 +35,7 @@ const FOUND_RENT_CREDIT: usize = 2;
 const FOUND_ACTIVATION_CACHE: usize = 24;
 const FOUND_CORE_PROGRAM: usize = 25;
 const FOUND_REGISTRY_PROGRAM: usize = 27;
-const FOUND_RENT: usize = 28;
-const FOUND_SYSTEM: usize = 29;
+const FOUND_SYSTEM: usize = 28;
 
 /// Same-finalized inputs for one pre-Market Resolution ledger CPI.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +52,11 @@ pub struct PreMarketFundingSnapshotV2 {
     pub funding_source: ObservedAccount,
     /// Vacant canonical Resolution ledger PDA.
     pub ledger: ObservedAccount,
+    /// Same-finalized Rent sysvar observation used only for host-side arithmetic.
+    ///
+    /// The runtime supplies this value to both onchain programs; it is never an
+    /// instruction meta in the ProjectFound or pre-Market funding frames.
+    pub rent: ObservedAccount,
     /// Exact read-only Core ProjectFound frame in Core ABI order.
     pub project_found_accounts: Vec<ObservedAccount>,
 }
@@ -236,12 +242,7 @@ pub fn build_pre_market_funding_v2(
     {
         return Err(ResolutionCoreOperatorErrorV3::Frame);
     }
-    let rent = decode_rent(
-        found
-            .get(FOUND_RENT)
-            .ok_or(ResolutionCoreOperatorErrorV3::Frame)?,
-    )
-    .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let rent = decode_rent(&snapshot.rent).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
     let exact_rent_lamports = rent.minimum_balance(width);
     let exact_post_lamports = exact_rent_lamports
         .checked_add(exact_native_principal)
@@ -348,6 +349,8 @@ fn authenticate_snapshot(
         || snapshot.ledger.executable
         || !snapshot.ledger.data.is_empty()
         || snapshot.funding_source.executable
+        || snapshot.rent.key != solana_sdk_ids::sysvar::rent::ID
+        || snapshot.rent.executable
     {
         return Err(ResolutionCoreOperatorErrorV3::Frame);
     }
@@ -358,6 +361,7 @@ fn authenticate_snapshot(
         || snapshot.resolution_programdata.observation != observation
         || snapshot.funding_source.observation != observation
         || snapshot.ledger.observation != observation
+        || snapshot.rent.observation != observation
         || snapshot
             .project_found_accounts
             .iter()
@@ -405,12 +409,6 @@ fn authenticate_snapshot(
         .get(FOUND_CORE_PROGRAM)
         .ok_or(ResolutionCoreOperatorErrorV3::Frame)?;
     if core_program.key == snapshot.resolution_program.key
-        || snapshot
-            .project_found_accounts
-            .get(FOUND_RENT)
-            .ok_or(ResolutionCoreOperatorErrorV3::Frame)?
-            .key
-            != solana_sdk_ids::sysvar::rent::ID
         || snapshot
             .project_found_accounts
             .get(FOUND_SYSTEM)
@@ -528,13 +526,12 @@ mod receipt_tests {
             unix_timestamp: 1,
             finality: Finality::Finalized,
         };
-        let mut found: Vec<_> = (40_u8..77)
+        let mut found: Vec<_> = (40_u8..76)
             .map(|index| observed(index, observation))
             .collect();
         for index in [3, FOUND_CORE_PROGRAM, FOUND_REGISTRY_PROGRAM, FOUND_SYSTEM] {
             found[index].executable = true;
         }
-        found[FOUND_RENT].key = solana_sdk_ids::sysvar::rent::ID;
         found[FOUND_SYSTEM].key = system_program::ID;
         PreMarketFundingSnapshotV2 {
             resolution_program: ObservedAccount {
@@ -549,13 +546,17 @@ mod receipt_tests {
             resolution_programdata: observed(4, observation),
             funding_source: observed(5, observation),
             ledger: observed(6, observation),
+            rent: ObservedAccount {
+                key: solana_sdk_ids::sysvar::rent::ID,
+                ..observed(7, observation)
+            },
             project_found_accounts: found,
         }
     }
 
     #[test]
     fn snapshot_refuses_every_cross_prefix_alias_and_executable_substitution() {
-        assert_eq!(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1, 44);
+        assert_eq!(PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1, 43);
         let exact = snapshot();
         assert_eq!(authenticate_snapshot(&exact), Ok(()));
 

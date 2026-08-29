@@ -138,7 +138,7 @@ pub const SERIES_PREPARE_ESCROW_LOCK_OFFSET_V3: usize =
 pub const SERIES_PREPARE_IR_REQUEST_BYTES_V3: usize =
     2 * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3 + 3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
 /// Exact Projected Initialize child frame, including internal ProjectFound.
-pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 48;
+pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 47;
 /// Exact Projected OpenHoard child frame.
 pub const SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3: u16 = 15;
 
@@ -1085,8 +1085,7 @@ mod tests {
         }
     }
 
-    fn account_profile(action: SeriesActionV3) -> Vec<u8> {
-        let fixed_accounts = fixture_fixed_accounts(action);
+    fn account_profile_with_fixed_accounts(fixed_accounts: u16) -> Vec<u8> {
         let mut output = vec![
             0_u8;
             dclutch_account_profile_contract::v2::HEADER_BYTES
@@ -1200,7 +1199,10 @@ mod tests {
         output
     }
 
-    fn effect(action: SeriesActionV3) -> Vec<u8> {
+    fn effect_with_prepare_initialize_count(
+        action: SeriesActionV3,
+        prepare_initialize_count: u16,
+    ) -> Vec<u8> {
         let request_bytes = match action {
             SeriesActionV3::Prepare => SERIES_PREPARE_IR_REQUEST_BYTES_V3,
             SeriesActionV3::Consume => SERIES_CONSUME_IR_REQUEST_BYTES_V3,
@@ -1214,7 +1216,7 @@ mod tests {
                     (
                         FixedRole::Custody,
                         SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-                        SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3,
+                        prepare_initialize_count,
                         false,
                         &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
                     ),
@@ -1352,9 +1354,14 @@ mod tests {
             + request_bytes;
         let mut scratch = vec![0_u8; output_bytes];
         let mut output = vec![0_u8; output_bytes];
+        let fixed_accounts = if action == SeriesActionV3::Prepare {
+            prepare_initialize_count
+        } else {
+            fixture_fixed_accounts(action)
+        };
         encode_effect_program_v4_atomic(
             EffectGeometryV3 {
-                fixed_accounts: fixture_fixed_accounts(action),
+                fixed_accounts,
                 item_account_stride: 0,
                 common_scalars: FIXTURE_SCALARS,
                 item_scalar_stride: 0,
@@ -1424,11 +1431,26 @@ mod tests {
     }
 
     fn fixture(action: SeriesActionV3) -> Fixture {
+        fixture_with_prepare_initialize_count(
+            action,
+            SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3,
+        )
+    }
+
+    fn fixture_with_prepare_initialize_count(
+        action: SeriesActionV3,
+        prepare_initialize_count: u16,
+    ) -> Fixture {
         let template = id([41; 32]);
-        let account = account_profile(action);
+        let fixed_accounts = if action == SeriesActionV3::Prepare {
+            prepare_initialize_count
+        } else {
+            fixture_fixed_accounts(action)
+        };
+        let account = account_profile_with_fixed_accounts(fixed_accounts);
         let request_profile = request_profile(action);
         let transition = transition();
-        let effect = effect(action);
+        let effect = effect_with_prepare_initialize_count(action, prepare_initialize_count);
         let strategy = ExecutionStrategyProgramV2::new(
             StrategyDispositionV2::Interpreted,
             id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
@@ -1586,6 +1608,29 @@ mod tests {
             );
             let _ = projected_scalars(&fixture, joined);
         }
+    }
+
+    #[test]
+    fn prepare_profile_rejects_the_superseded_project_found37_child_width() {
+        let exact = fixture(SeriesActionV3::Prepare);
+        let legacy = fixture_with_prepare_initialize_count(SeriesActionV3::Prepare, 48);
+        assert_ne!(digest(&exact.effect), digest(&legacy.effect));
+        assert_eq!(
+            EffectProgramV3::decode(&exact.effect)
+                .expect("current Prepare effect")
+                .route(0)
+                .expect("Initialize route")
+                .fixed_account_count(),
+            SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3
+        );
+        assert_eq!(
+            authenticate_series_artifacts_v3(
+                legacy.selection(),
+                legacy.artifacts(),
+                &legacy.request,
+            ),
+            Err(SeriesArtifactErrorV3::Effect)
+        );
     }
 
     #[test]

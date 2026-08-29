@@ -6,7 +6,9 @@ use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::{PROJECT_FOUND_RECEIPT_BYTES_V2, ProjectFoundReceiptV2};
+use dclutch_market_core_codec::{
+    PROJECT_FOUND_ACCOUNT_COUNT_V2, PROJECT_FOUND_RECEIPT_BYTES_V2, ProjectFoundReceiptV2,
+};
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
@@ -21,20 +23,19 @@ use solana_program::{
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke, invoke_signed, set_return_data},
     pubkey::Pubkey,
+    rent::Rent,
+    sysvar::Sysvar,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
-use crate::{
-    RecordKind, ResolutionError, authenticate_finalized_record, authenticate_rent,
-    deployment_observation,
-};
+use crate::{RecordKind, ResolutionError, authenticate_finalized_record, deployment_observation};
 
 /// Fixed deployment-authenticated accounts before Core's ProjectFound frame.
 pub const PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1: usize = 7;
 /// Exact total account count for pre-Market subset-ledger initialization.
 pub const PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1: usize =
-    PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 + 37;
+    PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 + PROJECT_FOUND_ACCOUNT_COUNT_V2;
 
 const CALLER_AUTHORITY: usize = 0;
 const CALLER_PROGRAM: usize = 1;
@@ -51,8 +52,7 @@ const FOUND_MANIFEST_STAGING: usize = 23;
 const FOUND_ACTIVATION_CACHE: usize = 24;
 const FOUND_CORE_PROGRAM: usize = 25;
 const FOUND_REGISTRY_PROGRAM: usize = 27;
-const FOUND_RENT: usize = 28;
-const FOUND_SYSTEM: usize = 29;
+const FOUND_SYSTEM: usize = 28;
 
 /// Return whether bytes select the pre-Market subset-ledger initializer.
 pub fn is_pre_market_funding_v2(instruction_data: &[u8]) -> bool {
@@ -103,11 +103,10 @@ pub fn process_pre_market_funding_v2(
     let registry_program = found
         .get(FOUND_REGISTRY_PROGRAM)
         .ok_or(ResolutionError::AccountFrame)?;
-    let rent_account = found.get(FOUND_RENT).ok_or(ResolutionError::AccountFrame)?;
     let system = found
         .get(FOUND_SYSTEM)
         .ok_or(ResolutionError::AccountFrame)?;
-    let rent = authenticate_rent(rent_account)?;
+    let rent = Rent::get().map_err(|_| ResolutionError::Sysvar)?;
     let manifest_data = manifest_raw
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
@@ -298,7 +297,7 @@ fn authenticate_frame(
         }
     }
     // Core's successful ProjectFound receipt is the semantic-owner proof that
-    // this exact Found37 slice has no internal aliases. Resolution must still
+    // this exact ProjectFound36 slice has no internal aliases. Resolution must still
     // own the outer flags because the CPI projection deliberately downgrades
     // every child meta to readonly/non-signer. It also rejects every prefix
     // alias and prefix-to-Found alias. Repeating Core's 666 internal pairwise
@@ -321,11 +320,6 @@ fn authenticate_frame(
             .ok_or(ResolutionError::AccountFrame)?
             .key
             != &system_program::ID
-        || accounts
-            .get(FOUND_START + FOUND_RENT)
-            .ok_or(ResolutionError::AccountFrame)?
-            .key
-            != &sysvar::rent::ID
     {
         return Err(ResolutionError::AccountFrame.into());
     }

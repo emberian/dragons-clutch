@@ -47,9 +47,10 @@ use dclutch_direct_codec::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
-    FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
-    MarketCoreStateSeedsV2, MarketIdentity, Phase, ProjectFoundReceiptV2, ProjectFoundRequestV2,
-    Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
+    Identity, MarketCoreStateSeedsV2, MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2, Phase,
+    ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness, Request,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
     generic_founding_funding_list_id_v1,
 };
 use dclutch_market_founding_v1_operator::{
@@ -3839,6 +3840,24 @@ fn found_snapshot_keys(
     Ok(keys)
 }
 
+/// Complete ordinary ProjectFound V2 graph with runtime Rent supplied by Core.
+fn ordinary_project_found_snapshot_keys_v2(
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+    market: Pubkey,
+    credit: Pubkey,
+    records: &MarketRecords,
+) -> Result<Vec<Pubkey>> {
+    let mut keys = found_snapshot_keys(plan, payer, market, credit, records)?;
+    keys.remove(FOUND_RENT_SYSVAR_INDEX_V3);
+    if keys.len() != PROJECT_FOUND_ACCOUNT_COUNT_V2 {
+        return Err(Error::new(
+            "ordinary ProjectFound36 runtime-sysvar erasure drifted",
+        ));
+    }
+    Ok(keys)
+}
+
 /// The compact ProjectedFound V2 prefix consumed inside DCLTGMF2.
 ///
 /// Realm, SourceMaterial, SourceSpec, capacity profile, manipulation floor,
@@ -4104,17 +4123,17 @@ const PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2: [u8; 8] = *b"DCLTPCB2";
 /// transaction's heap grant from that sysvar and scans the instruction's own
 /// account list to find it, so a frame without it keeps the compile-time
 /// 32 KiB ceiling this route was measured exhausting at stage three.
-const PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNTS_V2: usize = 85;
-const PROJECTED_CUSTODY_BOOTSTRAP_CHECKPOINT_V2: usize = 85;
-const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_LEDGER_V2: usize = 86;
-const PROJECTED_CUSTODY_BOOTSTRAP_TRADING_LEDGER_V2: usize = 87;
-const PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNTS_V2: usize = 88;
+const PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNTS_V2: usize = 84;
+const PROJECTED_CUSTODY_BOOTSTRAP_CHECKPOINT_V2: usize = 84;
+const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_LEDGER_V2: usize = 85;
+const PROJECTED_CUSTODY_BOOTSTRAP_TRADING_LEDGER_V2: usize = 86;
+const PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNTS_V2: usize = 87;
 const PROJECTED_CUSTODY_BOOTSTRAP_COMPLETE_KEYS_V2: usize = 60;
 const DEVNET_ACCOUNT_LOCK_LIMIT_V1: usize = 64;
 
 const CONTROLLER_FUNDING_PREPARE_MAGIC_V1: [u8; 8] = *b"DCLTCFQ1";
-const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 49;
-const CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1: usize = 51;
+const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 47;
+const CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1: usize = 49;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompiledMessageGeometryV1 {
@@ -4831,9 +4850,8 @@ fn build_controller_funding_prepare_v1(
         AccountMeta::new(resolution_ledger.address, false),
         AccountMeta::new(trading_ledger.address, false),
         AccountMeta::new(coordinates.controller_funding_checkpoint, false),
-        AccountMeta::new_readonly(sysvar::clock::ID, false),
     ];
-    for (index, key) in found_snapshot_keys(
+    for (index, key) in ordinary_project_found_snapshot_keys_v2(
         plan,
         projection_witness,
         coordinates.market,
@@ -4851,7 +4869,7 @@ fn build_controller_funding_prepare_v1(
     }
     if accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 {
         return Err(Error::new(
-            "assembled controller-funding prepare frame did not match 49 accounts",
+            "assembled controller-funding prepare frame did not match 47 accounts",
         ));
     }
     Ok(Instruction {
@@ -5132,7 +5150,7 @@ fn build_projected_custody_bootstrap_v2(
     accounts.push(AccountMeta::new_readonly(custody, false));
 
     // Initialize: the seven shared projected coordinates, four Initialize
-    // coordinates, then Core's own 37-account ProjectFound sub-frame verbatim.
+    // coordinates, then Core's exact ProjectFound36 sub-frame verbatim.
     let common = |caller: Pubkey| {
         vec![
             AccountMeta::new_readonly(caller, false),
@@ -5153,7 +5171,7 @@ fn build_projected_custody_bootstrap_v2(
     accounts.push(AccountMeta::new(payer, true));
     accounts.push(AccountMeta::new_readonly(sysvar::rent::ID, false));
     accounts.push(AccountMeta::new_readonly(system_program::ID, false));
-    for key in found_snapshot_keys(
+    for key in ordinary_project_found_snapshot_keys_v2(
         plan,
         projection_witness,
         coordinates.market,
@@ -5202,7 +5220,7 @@ fn build_projected_custody_bootstrap_v2(
 
     if accounts.len() != PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNTS_V2 {
         return Err(Error::new(
-            "assembled DCLTPCB2 common frame did not have 85 accounts",
+            "assembled DCLTPCB2 common frame did not have 84 accounts",
         ));
     }
     let resolution = pubkey(&plan.resolution.program_id)?;
@@ -5755,11 +5773,11 @@ fn execute_projected_custody_bootstrap(
         projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &controller_funding_prepare)?;
     let controller_funding_prepare_admitted = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&controller_funding_prepare, 13),
+        &append_distinct_census_accounts_v1(&controller_funding_prepare, 15),
     )?;
     let controller_funding_prepare_refused = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&controller_funding_prepare, 14),
+        &append_distinct_census_accounts_v1(&controller_funding_prepare, 16),
     )?;
     if controller_funding_prepare_geometry.complete_keys
         != CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1
@@ -5767,7 +5785,7 @@ fn execute_projected_custody_bootstrap(
         || controller_funding_prepare_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
     {
         return Err(Error::new(format!(
-            "DCLTCFQ1 census refused: base {} keys, +13 {} keys, +14 {} keys; expected exactly {}, {}, {}",
+            "DCLTCFQ1 census refused: base {} keys, +15 {} keys, +16 {} keys; expected exactly {}, {}, {}",
             controller_funding_prepare_geometry.complete_keys,
             controller_funding_prepare_admitted.complete_keys,
             controller_funding_prepare_refused.complete_keys,
@@ -10691,7 +10709,7 @@ mod tests {
         let mut accounts = (0_u8..CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 as u8)
             .map(|index| {
                 let key = Pubkey::new_from_array([index.saturating_add(1); 32]);
-                if matches!(index, 8 | 9 | 10 | 14) {
+                if matches!(index, 8 | 9 | 10 | 13) {
                     AccountMeta::new(key, false)
                 } else {
                     AccountMeta::new_readonly(key, false)
@@ -10699,7 +10717,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         accounts[6].pubkey = program_id;
-        accounts[12] = AccountMeta::new(projection_witness, true);
+        accounts[11] = AccountMeta::new(projection_witness, true);
         (
             payer,
             Instruction {
@@ -11039,17 +11057,17 @@ mod tests {
     }
 
     #[test]
-    fn controller_funding_prepare_compiler_census_pins_the_51_64_65_wall() {
+    fn controller_funding_prepare_compiler_census_pins_the_49_64_65_wall() {
         let (payer, prepare) = controller_funding_prepare_census_fixture_v1();
         let base = projected_bootstrap_compiled_geometry_v2(payer, &prepare).expect("base census");
         let admitted = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&prepare, 13),
+            &append_distinct_census_accounts_v1(&prepare, 15),
         )
         .expect("64-key census");
         let refused = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&prepare, 14),
+            &append_distinct_census_accounts_v1(&prepare, 16),
         )
         .expect("65-key census");
         assert_eq!(
@@ -11059,9 +11077,9 @@ mod tests {
         assert_eq!(base.required_signatures, 2);
         assert_eq!(base.static_keys, 4);
         assert_eq!(base.loaded_writable, 4);
-        assert_eq!(base.loaded_readonly, 43);
-        assert_eq!(base.message_bytes, 336);
-        assert_eq!(base.packet_bytes, 465);
+        assert_eq!(base.loaded_readonly, 41);
+        assert_eq!(base.message_bytes, 332);
+        assert_eq!(base.packet_bytes, 461);
         assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
         assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
     }
@@ -11134,14 +11152,14 @@ mod tests {
         assert_eq!(base_geometry.static_keys, 4);
         assert_eq!(base_geometry.loaded_writable, 7);
         assert_eq!(base_geometry.loaded_readonly, 49);
-        assert_eq!(base_geometry.message_bytes, 384);
-        assert_eq!(base_geometry.packet_bytes, 513);
+        assert_eq!(base_geometry.message_bytes, 383);
+        assert_eq!(base_geometry.packet_bytes, 512);
         assert_eq!(admitted.complete_keys, 64);
-        assert_eq!(admitted.message_bytes, 392);
-        assert_eq!(admitted.packet_bytes, 521);
+        assert_eq!(admitted.message_bytes, 391);
+        assert_eq!(admitted.packet_bytes, 520);
         assert_eq!(refused.complete_keys, 65);
-        assert_eq!(refused.message_bytes, 394);
-        assert_eq!(refused.packet_bytes, 523);
+        assert_eq!(refused.message_bytes, 393);
+        assert_eq!(refused.packet_bytes, 522);
     }
 
     #[test]
