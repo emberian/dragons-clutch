@@ -108,7 +108,11 @@ fn execute_signed_delta_boxed(
     parent: AuthenticatedSignedDeltaParentV3,
 ) -> Result<Box<SignedDeltaReceiptV3>, ProgramError> {
     Ok(Box::new(execute_parent_authenticated(
-        program_id, accounts, packet, parent,
+        program_id,
+        accounts,
+        packet,
+        parent,
+        dclutch_market_core_codec::Phase::Open,
     )?))
 }
 

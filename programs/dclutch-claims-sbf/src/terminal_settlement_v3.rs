@@ -403,6 +403,11 @@ fn execute(
             parent_context: input.parent_context,
             parent_request_digest: request_digest,
         },
+        // A terminal settlement necessarily runs on a resolved Market, so the
+        // enclosed signed delta must expect Phase::Terminal. Expecting Open here
+        // is unsatisfiable: CoreState only carries the terminal receipt this
+        // route requires once the Market has left Open.
+        dclutch_market_core_codec::Phase::Terminal,
     )?;
     let packet_digest = hash(&prepared.packet).to_bytes();
     if signed_receipt.packet_digest() != packet_digest
