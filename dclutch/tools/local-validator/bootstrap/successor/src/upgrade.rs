@@ -3045,22 +3045,55 @@ fn require_fresh_carry_forward(
 
 fn set_role_elf_path(gate_path: &Path, role: &str) -> Result<PathBuf> {
     let bytes = read_regular_reference(gate_path, "set checked-release gate")?;
-    let gate: CheckedUpgradeGateV1 = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::new(format!(
-            "set checked-release gate is not canonical v1 JSON: {error}"
-        ))
-    })?;
-    let matches = gate
-        .links
-        .iter()
-        .filter(|link| link.label == role)
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
+    let schema = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("schema")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| Error::new("set checked-release gate omitted its schema"))?;
+    let elf = if schema == CHECKED_MIXED_GATE_SCHEMA {
+        let gate: CheckedUpgradeGateV2 = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::new(format!(
+                "set checked-release gate is not canonical mixed v2 JSON: {error}"
+            ))
+        })?;
+        let matches = gate
+            .links
+            .iter()
+            .filter(|link| link.link.label == role)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(Error::new(format!(
+                "set checked-release gate does not contain one exact {role} link"
+            )));
+        }
+        matches[0].link.elf.clone()
+    } else if schema == CHECKED_GATE_SCHEMA {
+        let gate: CheckedUpgradeGateV1 = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::new(format!(
+                "set checked-release gate is not canonical v1 JSON: {error}"
+            ))
+        })?;
+        let matches = gate
+            .links
+            .iter()
+            .filter(|link| link.label == role)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(Error::new(format!(
+                "set checked-release gate does not contain one exact {role} link"
+            )));
+        }
+        matches[0].elf.clone()
+    } else {
         return Err(Error::new(format!(
-            "set checked-release gate does not contain one exact {role} link"
+            "set checked-release gate schema {schema:?} is not admitted"
         )));
     }
-    let elf = matches[0].elf.as_ref().ok_or_else(|| {
+    .ok_or_else(|| {
         Error::new(format!(
             "set checked-release gate role {role} has no deployable ELF"
         ))
