@@ -566,6 +566,10 @@ previous one produced, and the whole chain is derived natively — in
 `general_settlement_fixture.rs` — before a single transaction is signed. A
 broken chain therefore fails on the host, which is where it should.
 
+The same eleven steps are accepted at `--outcome-count 4` (CU 31,516–61,379,
+packets unchanged at 797–920 bytes, because the register bank travels in
+scratch pages rather than in the packet). The fixture is not width-one.
+
 **The width is not a preference.** Six of the seven serialise past Solana's
 1,232-byte legacy ceiling at N=258, so a campaign claiming that width would be
 recording routes no validator would accept. N=1 is where the packet clause
