@@ -178,6 +178,54 @@ export function httpFailureReasonV1(status: number): string {
   return `RPC HTTP status ${status}`;
 }
 
+/**
+ * How many heavy reads this origin may have in flight against one endpoint.
+ *
+ * Measured against api.devnet.solana.com on 2026-08-29, and the shape of the
+ * limit is the surprise: it is CONCURRENCY, not volume. Twelve sequential
+ * light reads all pass; six sequential getProgramAccounts scans all pass; six
+ * of the same scans issued AT THE SAME TIME return two 429s. Our reading
+ * surface fans its discovery join out in parallel across registry, claims and
+ * custody per market, so it sat on the wrong side of that limit by
+ * construction -- the cold-client journey could not finish a single page load
+ * against the public endpoint, five attempts over twenty minutes.
+ *
+ * Two, not one: sequential is demonstrably safe, so this keeps a little
+ * parallelism and still leaves margin under the measured cliff. It bounds
+ * in-flight requests, never total ones, so nothing is dropped or retried --
+ * a read that would have raced now simply waits its turn.
+ */
+export const MAX_IN_FLIGHT_READS_PER_ENDPOINT_V1 = 2;
+
+type EndpointGateV1 = { inFlight: number; waiting: Array<() => void> };
+
+const endpointGates = new Map<string, EndpointGateV1>();
+
+function gateForEndpointV1(endpoint: string): EndpointGateV1 {
+  const existing = endpointGates.get(endpoint);
+  if (existing !== undefined) return existing;
+  const created: EndpointGateV1 = { inFlight: 0, waiting: [] };
+  endpointGates.set(endpoint, created);
+  return created;
+}
+
+async function acquireEndpointSlotV1(endpoint: string): Promise<void> {
+  const gate = gateForEndpointV1(endpoint);
+  if (gate.inFlight < MAX_IN_FLIGHT_READS_PER_ENDPOINT_V1) {
+    gate.inFlight += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => gate.waiting.push(resolve));
+  gate.inFlight += 1;
+}
+
+function releaseEndpointSlotV1(endpoint: string): void {
+  const gate = gateForEndpointV1(endpoint);
+  gate.inFlight -= 1;
+  const next = gate.waiting.shift();
+  if (next !== undefined) next();
+}
+
 async function boundedJson(response: Response, maximumBytes = MAX_RPC_RESPONSE_BYTES): Promise<unknown> {
   if (!response.ok) throw new Error(httpFailureReasonV1(response.status));
   const declared = response.headers.get('content-length');
@@ -256,6 +304,7 @@ export class SolanaRpcClient {
   async #request(method: string, params: ReadonlyArray<unknown>): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
+    await acquireEndpointSlotV1(this.endpoint);
     try {
       const init: PortableRequestInit = {
         method: 'POST',
@@ -282,6 +331,7 @@ export class SolanaRpcClient {
       throw error;
     } finally {
       clearTimeout(timeout);
+      releaseEndpointSlotV1(this.endpoint);
     }
   }
 
