@@ -1,10 +1,11 @@
-//! Typed producer for one owned-loopback ordinary Direct session.
+//! Typed producers for ordinary Direct sessions.
 //!
 //! This module consumes the campaign and participant parsers owned by their
 //! respective exteriors. It never parses either report into a parallel DTO.
-//! All public coordinates are derived before any private key file is opened;
-//! key access is the final step and is used only to prove the four expected
-//! identities and sign the two exact `CompactIntentV2` preimages.
+//! The owned-loopback fixture opens seeded keys only after deriving all public
+//! coordinates. The devnet producer instead verifies caller-owned portable
+//! tickets and records only the runtime payer keypair path; it never opens a
+//! wallet, signs a packet, or submits a transaction.
 
 use std::{
     collections::BTreeMap,
@@ -49,7 +50,7 @@ use sha2::{Digest as _, Sha256};
 use solana_program::{hash::hash, rent::Rent};
 use solana_sdk::{
     pubkey::Pubkey,
-    signature::{Keypair, Signer as _},
+    signature::{Keypair, Signature, Signer as _},
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -81,6 +82,11 @@ pub(crate) const DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1: &str =
     "dclutch-devnet-direct-trade-session-producer-journal-v1";
 pub(crate) const DEVNET_SESSION_PRODUCER_COMMAND_V1: &str =
     "devnet-direct-trade-session-produce-v1";
+pub(crate) const DEVNET_DIRECT_PRODUCER_COMMAND_V1: &str = "devnet-direct-trade-produce-v1";
+const DEVNET_PUBLIC_MANIFEST_SCHEMA_V1: &str = "dclutch-devnet-direct-trade-public-manifest-v1";
+const DEVNET_DIRECT_PRODUCER_JOURNAL_SCHEMA_V1: &str =
+    "dclutch-devnet-direct-trade-producer-journal-v1";
+const PORTABLE_DIRECT_TICKET_KIND_V1: &str = "dclutch/direct-intent-ticket/v1";
 
 const FILL_ATOMS_V1: u64 = 100_000_000;
 const EXECUTION_PRICE_V1: u64 = 500_000;
@@ -116,6 +122,97 @@ struct DevnetDirectSessionProducerArgumentsV1 {
     evidence_file: PathBuf,
     session: PathBuf,
     producer_journal: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DevnetDirectProducerArgumentsV1 {
+    rpc_url: String,
+    plan: PathBuf,
+    expected_plan_sha256: String,
+    market_input: PathBuf,
+    expected_market_input_sha256: String,
+    campaign_report: PathBuf,
+    expected_campaign_report_sha256: String,
+    buyer_participant: PathBuf,
+    expected_buyer_participant_sha256: String,
+    checked_execution_release: PathBuf,
+    expected_checked_execution_release_sha256: String,
+    seller_ticket: PathBuf,
+    expected_seller_ticket_sha256: String,
+    buyer_ticket: PathBuf,
+    expected_buyer_ticket_sha256: String,
+    payer: Pubkey,
+    payer_keypair: PathBuf,
+    output_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PortableDirectTicketIntentV1 {
+    side: u8,
+    lifecycle: u8,
+    outcome: u32,
+    market: String,
+    generation: String,
+    nonce: String,
+    valid_from: String,
+    valid_through: String,
+    maximum_fill: String,
+    limit_price: String,
+    fee_basis_points: u16,
+    collateral_account: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PortableDirectTicketV1 {
+    kind: String,
+    maker: String,
+    signature: String,
+    intent: PortableDirectTicketIntentV1,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum DevnetDirectProducerPhaseV1 {
+    Prepared,
+    Finalized,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DevnetDirectProducerJournalV1 {
+    schema: String,
+    phase: DevnetDirectProducerPhaseV1,
+    cluster: String,
+    genesis_hash: String,
+    plan: String,
+    plan_sha256: String,
+    market_input: String,
+    market_input_sha256: String,
+    campaign_report: String,
+    campaign_report_sha256: String,
+    buyer_participant: String,
+    buyer_participant_sha256: String,
+    checked_execution_release: String,
+    checked_execution_release_sha256: String,
+    seller_ticket: String,
+    seller_ticket_sha256: String,
+    buyer_ticket: String,
+    buyer_ticket_sha256: String,
+    payer: String,
+    payer_keypair: String,
+    observation_slot: u64,
+    public_manifest: String,
+    public_manifest_sha256: String,
+    public_manifest_base64: String,
+    private_session: String,
+    private_session_sha256: String,
+    private_session_base64: String,
+    journal_dir: String,
+    evidence_file: String,
+    previous_state_sha256: Option<String>,
+    state_sha256: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -391,6 +488,14 @@ struct MakerFactsV1 {
     rent_beneficiary: Pubkey,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectTradeTermsV1 {
+    outcome: u32,
+    fill: u64,
+    execution_price: u64,
+    fee_basis_points: u16,
+}
+
 #[derive(Clone)]
 struct PreparedPublicFactsV1 {
     plan_sha256: String,
@@ -433,97 +538,56 @@ struct PreparedPublicFactsV1 {
     participant: user_position_admission::FinalizedDirectParticipantEvidenceV1,
 }
 
-/// Produce the two manifests and the explicit setup receipt.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn produce_owned_loopback_direct_trade_v1(
-    arguments: OwnedLoopbackDirectProducerArgumentsV1,
-) -> Result<OwnedLoopbackDirectProducerReceiptV1> {
-    let validated = validate_paths_v1(arguments)?;
-    let plan_bytes = fs::read(&validated.arguments.plan)?;
-    let market_bytes = fs::read(&validated.arguments.market_input)?;
-    let campaign_bytes = fs::read(&validated.arguments.campaign_report)?;
-    let participant_bytes = fs::read(&validated.arguments.participant_report)?;
-    require_unique_json_v1(&plan_bytes, "Direct successor plan")?;
-    require_unique_json_v1(&market_bytes, "Direct Market input")?;
-    let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
-    let market_input: MarketRunInput = serde_json::from_slice(&market_bytes)?;
-    let origin = ClusterOriginV1::parse(&validated.arguments.rpc_url, None)?;
-    ExpectedClusterV1::OwnedLoopback.authenticate(&origin)?;
-    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
-    let campaign = campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
-        &campaign_bytes,
-        ExpectedClusterV1::OwnedLoopback,
-    )?;
-    let participant = user_position_admission::parse_finalized_direct_participant_evidence_v1(
-        &participant_bytes,
-        &mut rpc,
-    )?;
-    let public = prepare_public_facts_v1(
-        &mut rpc,
-        &plan,
-        &market_input,
-        &campaign,
-        participant,
-        sha256_hex(&plan_bytes),
-        sha256_hex(&market_bytes),
-        sha256_hex(&campaign_bytes),
-        sha256_hex(&participant_bytes),
-    )?;
-
-    // No secret-bearing file is opened above this line.
-    let payer = read_keypair_v1(&validated.payer_keypair, "Direct payer")?;
-    let seller = read_keypair_v1(&validated.seller_keypair, "Direct seller")?;
-    let buyer = read_keypair_v1(&validated.buyer_keypair, "Direct buyer")?;
-    if payer.pubkey() != public.payer
-        || seller.pubkey() != public.seller
-        || buyer.pubkey() != public.buyer
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn assemble_public_manifest_v1(
+    public: &PreparedPublicFactsV1,
+    plan: &SuccessorPlan,
+    market_input: &MarketRunInput,
+    seller_signed: SignedDirectIntentV3,
+    buyer_signed: SignedDirectIntentV3,
+    terms: DirectTradeTermsV1,
+    schema: &str,
+    cluster: ExpectedClusterV1,
+) -> Result<ProducedDirectTradePublicManifestV1> {
+    if seller_signed.maker != public.seller
+        || buyer_signed.maker != public.buyer
+        || seller_signed.intent.side != 0
+        || buyer_signed.intent.side != 1
+        || seller_signed.intent.lifecycle != 0
+        || buyer_signed.intent.lifecycle != 0
+        || seller_signed.intent.outcome != terms.outcome
+        || buyer_signed.intent.outcome != terms.outcome
+        || seller_signed.intent.market != public.market.to_bytes()
+        || buyer_signed.intent.market != public.market.to_bytes()
+        || seller_signed.intent.generation != market_input.generation
+        || buyer_signed.intent.generation != market_input.generation
+        || seller_signed.intent.nonce != public.seller_facts.next_nonce
+        || buyer_signed.intent.nonce != public.buyer_facts.next_nonce
+        || seller_signed.intent.valid_from > public.observation_slot
+        || buyer_signed.intent.valid_from > public.observation_slot
+        || seller_signed.intent.valid_through < public.observation_slot
+        || buyer_signed.intent.valid_through < public.observation_slot
+        || seller_signed.intent.maximum_fill != terms.fill
+        || buyer_signed.intent.maximum_fill != terms.fill
+        || seller_signed.intent.limit_price != terms.execution_price
+        || buyer_signed.intent.limit_price != terms.execution_price
+        || seller_signed.intent.fee_basis_points != terms.fee_basis_points
+        || buyer_signed.intent.fee_basis_points != terms.fee_basis_points
+        || seller_signed.intent.collateral_account != public.seller_token.to_bytes()
+        || buyer_signed.intent.collateral_account
+            != public.participant.collateral_account.to_bytes()
     {
         return Err(refusal(
-            "a private key file did not expand to its evidence-derived public identity",
+            "caller-owned Direct tickets differ from the finalized seller, buyer, nonce, validity, collateral, or exact trade terms",
         ));
     }
-
-    let valid_through = public
-        .observation_slot
-        .checked_add(INTENT_LIFETIME_SLOTS_V1)
-        .ok_or_else(|| refusal("Direct signed-intent validity range overflowed"))?;
-    let seller_intent = CompactIntentV2 {
-        side: 0,
-        lifecycle: 0,
-        outcome: public.outcome,
-        market: public.market.to_bytes(),
-        generation: market_input.generation,
-        nonce: public.seller_facts.next_nonce,
-        valid_from: public.observation_slot,
-        valid_through,
-        maximum_fill: FILL_ATOMS_V1,
-        limit_price: EXECUTION_PRICE_V1,
-        fee_basis_points: FEE_BASIS_POINTS_V1,
-        collateral_account: public.seller_token.to_bytes(),
-    };
-    let buyer_intent = CompactIntentV2 {
-        side: 1,
-        lifecycle: 0,
-        outcome: public.outcome,
-        market: public.market.to_bytes(),
-        generation: market_input.generation,
-        nonce: public.buyer_facts.next_nonce,
-        valid_from: public.observation_slot,
-        valid_through,
-        maximum_fill: FILL_ATOMS_V1,
-        limit_price: EXECUTION_PRICE_V1,
-        fee_basis_points: FEE_BASIS_POINTS_V1,
-        collateral_account: public.participant.collateral_account.to_bytes(),
-    };
-    let seller_signed = signed_intent_v1(&seller, seller_intent)?;
-    let buyer_signed = signed_intent_v1(&buyer, buyer_intent)?;
     let context = dclutch_direct_codec::ordinary_v3::DirectOrdinaryAuthenticatedContextV3 {
         parent_request_digest: hash(
             &compile_direct_inline_request_v3(
                 seller_signed,
                 buyer_signed,
-                FILL_ATOMS_V1,
-                EXECUTION_PRICE_V1,
+                terms.fill,
+                terms.execution_price,
             )
             .map_err(|error| Error::new(format!("Direct request: {error:?}")))?,
         )
@@ -583,30 +647,28 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
     let child = derive_direct_inline_child_authorities_v3(
         seller_signed,
         buyer_signed,
-        FILL_ATOMS_V1,
-        EXECUTION_PRICE_V1,
+        terms.fill,
+        terms.execution_price,
         context,
         &public.account_profile_bytes,
         &public.transition_bytes,
         &public.effect_bytes,
     )
     .map_err(|error| Error::new(format!("Direct child authority projection: {error:?}")))?;
-    let mut route = public.route_without_children;
+    let mut route = public.route_without_children.clone();
     route.claims.caller_authority = child.claims_authority.to_string();
     route.custody.caller_authorities = child.custody_authorities.map(|key| key.to_string());
-
-    let token_setup = public.token_setup.clone();
-    let public_manifest = ProducedDirectTradePublicManifestV1 {
-        schema: OWNED_PUBLIC_MANIFEST_SCHEMA_V1.into(),
-        cluster: ExpectedClusterV1::OwnedLoopback.evidence_label().into(),
-        genesis_hash: public.genesis_hash,
+    Ok(ProducedDirectTradePublicManifestV1 {
+        schema: schema.into(),
+        cluster: cluster.evidence_label().into(),
+        genesis_hash: public.genesis_hash.clone(),
         plan_sha256: public.plan_sha256.clone(),
         market_input_sha256: public.market_sha256.clone(),
         market: public.market.to_string(),
         payer: public.payer.to_string(),
-        fill: FILL_ATOMS_V1,
-        execution_price: EXECUTION_PRICE_V1,
-        fee_basis_points: FEE_BASIS_POINTS_V1,
+        fill: terms.fill,
+        execution_price: terms.execution_price,
+        fee_basis_points: terms.fee_basis_points,
         fee_recipient: public.fee_recipient.to_string(),
         checked_execution_release_set_base64: BASE64.encode(&public.checked_release),
         seller: signed_manifest_v1(seller_signed)?,
@@ -647,8 +709,130 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
                 .to_string(),
         },
         replay_setup: public.replay_setup.clone(),
-        token_setup: token_setup.clone(),
+        token_setup: public.token_setup.clone(),
+    })
+}
+
+/// Produce the two manifests and the explicit setup receipt.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn produce_owned_loopback_direct_trade_v1(
+    arguments: OwnedLoopbackDirectProducerArgumentsV1,
+) -> Result<OwnedLoopbackDirectProducerReceiptV1> {
+    let validated = validate_paths_v1(arguments)?;
+    let plan_bytes = fs::read(&validated.arguments.plan)?;
+    let market_bytes = fs::read(&validated.arguments.market_input)?;
+    let campaign_bytes = fs::read(&validated.arguments.campaign_report)?;
+    let participant_bytes = fs::read(&validated.arguments.participant_report)?;
+    require_unique_json_v1(&plan_bytes, "Direct successor plan")?;
+    require_unique_json_v1(&market_bytes, "Direct Market input")?;
+    let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
+    let market_input: MarketRunInput = serde_json::from_slice(&market_bytes)?;
+    let origin = ClusterOriginV1::parse(&validated.arguments.rpc_url, None)?;
+    ExpectedClusterV1::OwnedLoopback.authenticate(&origin)?;
+    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let campaign = campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
+        &campaign_bytes,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    let participant = user_position_admission::parse_finalized_direct_participant_evidence_v1(
+        &participant_bytes,
+        &mut rpc,
+    )?;
+    local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)?;
+    let payer_identity = plan
+        .core
+        .upgrade_authority
+        .as_deref()
+        .ok_or_else(|| refusal("owned-loopback Direct plan revoked its retained payer"))
+        .and_then(pubkey)?;
+    let checked_release = local_mutable::checked_execution_release_set_bytes_v1(&plan)?.to_vec();
+    let public = prepare_public_facts_v1(
+        &mut rpc,
+        &plan,
+        &market_input,
+        &campaign,
+        participant,
+        sha256_hex(&plan_bytes),
+        sha256_hex(&market_bytes),
+        sha256_hex(&campaign_bytes),
+        sha256_hex(&participant_bytes),
+        payer_identity,
+        checked_release,
+        None,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    if public.config.price_scale() != EXPECTED_PRICE_SCALE_V1
+        || public.config.fee_basis_points() != FEE_BASIS_POINTS_V1
+    {
+        return Err(refusal(
+            "owned-loopback Direct producer requires the exact 1,000,000 scale and 50-bps config",
+        ));
+    }
+
+    // No secret-bearing file is opened above this line.
+    let payer = read_keypair_v1(&validated.payer_keypair, "Direct payer")?;
+    let seller = read_keypair_v1(&validated.seller_keypair, "Direct seller")?;
+    let buyer = read_keypair_v1(&validated.buyer_keypair, "Direct buyer")?;
+    if payer.pubkey() != public.payer
+        || seller.pubkey() != public.seller
+        || buyer.pubkey() != public.buyer
+    {
+        return Err(refusal(
+            "a private key file did not expand to its evidence-derived public identity",
+        ));
+    }
+
+    let valid_through = public
+        .observation_slot
+        .checked_add(INTENT_LIFETIME_SLOTS_V1)
+        .ok_or_else(|| refusal("Direct signed-intent validity range overflowed"))?;
+    let seller_intent = CompactIntentV2 {
+        side: 0,
+        lifecycle: 0,
+        outcome: public.outcome,
+        market: public.market.to_bytes(),
+        generation: market_input.generation,
+        nonce: public.seller_facts.next_nonce,
+        valid_from: public.observation_slot,
+        valid_through,
+        maximum_fill: FILL_ATOMS_V1,
+        limit_price: EXECUTION_PRICE_V1,
+        fee_basis_points: FEE_BASIS_POINTS_V1,
+        collateral_account: public.seller_token.to_bytes(),
     };
+    let buyer_intent = CompactIntentV2 {
+        side: 1,
+        lifecycle: 0,
+        outcome: public.outcome,
+        market: public.market.to_bytes(),
+        generation: market_input.generation,
+        nonce: public.buyer_facts.next_nonce,
+        valid_from: public.observation_slot,
+        valid_through,
+        maximum_fill: FILL_ATOMS_V1,
+        limit_price: EXECUTION_PRICE_V1,
+        fee_basis_points: FEE_BASIS_POINTS_V1,
+        collateral_account: public.participant.collateral_account.to_bytes(),
+    };
+    let seller_signed = signed_intent_v1(&seller, seller_intent)?;
+    let buyer_signed = signed_intent_v1(&buyer, buyer_intent)?;
+    let terms = DirectTradeTermsV1 {
+        outcome: public.outcome,
+        fill: FILL_ATOMS_V1,
+        execution_price: EXECUTION_PRICE_V1,
+        fee_basis_points: FEE_BASIS_POINTS_V1,
+    };
+    let public_manifest = assemble_public_manifest_v1(
+        &public,
+        &plan,
+        &market_input,
+        seller_signed,
+        buyer_signed,
+        terms,
+        OWNED_PUBLIC_MANIFEST_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    let token_setup = public.token_setup.clone();
     let public_path = validated
         .arguments
         .output_dir
@@ -744,6 +928,35 @@ pub(crate) fn devnet_session_usage() -> &'static str {
      --producer-journal ABSOLUTE_JSON"
 }
 
+pub(crate) fn devnet_direct_usage() -> &'static str {
+    "dclutch-local-successor-bootstrap devnet-direct-trade-produce-v1 \
+     --rpc-url DEVNET_HTTPS_URL \
+     --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+     --plan ABSOLUTE_JSON --expected-plan-sha256 HEX64 \
+     --market-input ABSOLUTE_JSON --expected-market-input-sha256 HEX64 \
+     --campaign-report ABSOLUTE_JSON --expected-campaign-report-sha256 HEX64 \
+     --buyer-participant ABSOLUTE_JSON --expected-buyer-participant-sha256 HEX64 \
+     --checked-execution-release ABSOLUTE_JSON \
+     --expected-checked-execution-release-sha256 HEX64 \
+     --seller-ticket ABSOLUTE_JSON --expected-seller-ticket-sha256 HEX64 \
+     --buyer-ticket ABSOLUTE_JSON --expected-buyer-ticket-sha256 HEX64 \
+     --payer PUBKEY --payer-keypair ABSOLUTE_RUNTIME_KEYPAIR_JSON \
+     --output-dir ABSOLUTE_EXISTING_EMPTY_DIRECTORY"
+}
+
+/// Build the existing public manifest and private-session wires from one
+/// finalized founding seller, one finalized admitted buyer, and two portable
+/// caller-owned tickets. This command reads devnet state but never opens the
+/// payer keypair, signs a transaction, or submits a packet.
+pub(crate) fn run_devnet_direct(arguments: Vec<String>) -> Result<()> {
+    let parsed = parse_devnet_direct_arguments_v1(arguments)?;
+    let journal = produce_devnet_direct_trade_v1(parsed)?;
+    let mut stdout = std::io::stdout();
+    serde_json::to_writer_pretty(&mut stdout, &journal)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
 /// Produce only the existing devnet Direct private-session wire. The caller
 /// supplies already signed tickets through the immutable public manifest and a
 /// freshly created payer-keypair path; this function never opens that path and
@@ -755,6 +968,604 @@ pub(crate) fn run_devnet_session(arguments: Vec<String>) -> Result<()> {
     serde_json::to_writer_pretty(&mut stdout, &journal)?;
     stdout.write_all(b"\n")?;
     Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn produce_devnet_direct_trade_v1(
+    arguments: DevnetDirectProducerArgumentsV1,
+) -> Result<DevnetDirectProducerJournalV1> {
+    let plan = accepted_regular_v1(
+        &arguments.plan,
+        &arguments.expected_plan_sha256,
+        "Direct successor plan",
+    )?;
+    let market_input = accepted_regular_v1(
+        &arguments.market_input,
+        &arguments.expected_market_input_sha256,
+        "Direct Market input",
+    )?;
+    let campaign_report = accepted_regular_v1(
+        &arguments.campaign_report,
+        &arguments.expected_campaign_report_sha256,
+        "Direct campaign report",
+    )?;
+    let buyer_participant = accepted_regular_v1(
+        &arguments.buyer_participant,
+        &arguments.expected_buyer_participant_sha256,
+        "Direct buyer participant report",
+    )?;
+    let checked_execution_release = accepted_regular_v1(
+        &arguments.checked_execution_release,
+        &arguments.expected_checked_execution_release_sha256,
+        "Direct checked execution release",
+    )?;
+    let seller_ticket = accepted_regular_v1(
+        &arguments.seller_ticket,
+        &arguments.expected_seller_ticket_sha256,
+        "Direct seller ticket",
+    )?;
+    let buyer_ticket = accepted_regular_v1(
+        &arguments.buyer_ticket,
+        &arguments.expected_buyer_ticket_sha256,
+        "Direct buyer ticket",
+    )?;
+    let payer_keypair = canonical_runtime_keypair_path_v1(&arguments.payer_keypair)?;
+    let output_dir = canonical_directory_v1(&arguments.output_dir, "Direct output directory")?;
+    let producer_journal = output_dir.join("direct-trade-producer.json");
+    let public_manifest = output_dir.join("direct-trade-public.json");
+    let private_session = output_dir.join("direct-trade-session.json");
+    let journal_dir = output_dir.join("direct-trade-journal");
+    let setup_journal_dir = journal_dir.join("setup");
+    let evidence_file = output_dir.join("direct-trade-finalized.json");
+
+    if let Some(existing) = load_devnet_direct_producer_journal_v1(&producer_journal)? {
+        authenticate_devnet_direct_producer_inputs_v1(
+            &existing,
+            &arguments,
+            &plan,
+            &market_input,
+            &campaign_report,
+            &buyer_participant,
+            &checked_execution_release,
+            &seller_ticket,
+            &buyer_ticket,
+            &payer_keypair,
+            &public_manifest,
+            &private_session,
+            &journal_dir,
+            &evidence_file,
+        )?;
+        return recover_devnet_direct_producer_v1(
+            existing,
+            &producer_journal,
+            &public_manifest,
+            &private_session,
+            &journal_dir,
+            &setup_journal_dir,
+            &plan,
+            &market_input,
+        );
+    }
+    for path in [
+        &public_manifest,
+        &private_session,
+        &journal_dir,
+        &evidence_file,
+    ] {
+        if path.exists() {
+            return Err(refusal(format!(
+                "Direct producer target exists without its write-ahead journal: {}",
+                path.display()
+            )));
+        }
+    }
+
+    let plan_bytes = fs::read(&plan)?;
+    let market_bytes = fs::read(&market_input)?;
+    let campaign_bytes = fs::read(&campaign_report)?;
+    let participant_bytes = fs::read(&buyer_participant)?;
+    require_unique_json_v1(&plan_bytes, "Direct successor plan")?;
+    require_unique_json_v1(&market_bytes, "Direct Market input")?;
+    let plan_value: SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
+    let market_value: MarketRunInput = serde_json::from_slice(&market_bytes)?;
+    let campaign = campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
+        &campaign_bytes,
+        ExpectedClusterV1::Devnet,
+    )?;
+    let origin = ClusterOriginV1::parse(&arguments.rpc_url, Some(DEVNET_GENESIS_HASH))?;
+    ExpectedClusterV1::Devnet.authenticate(&origin)?;
+    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let participant =
+        user_position_admission::parse_finalized_direct_participant_evidence_for_cluster_v1(
+            &participant_bytes,
+            &mut rpc,
+            ExpectedClusterV1::Devnet,
+        )?;
+    let seller_signed = parse_portable_direct_ticket_v1(&fs::read(&seller_ticket)?, "seller")?;
+    let buyer_signed = parse_portable_direct_ticket_v1(&fs::read(&buyer_ticket)?, "buyer")?;
+    let terms = exact_ticket_pair_terms_v1(&seller_signed, &buyer_signed)?;
+    let public = prepare_public_facts_v1(
+        &mut rpc,
+        &plan_value,
+        &market_value,
+        &campaign,
+        participant,
+        arguments.expected_plan_sha256.clone(),
+        arguments.expected_market_input_sha256.clone(),
+        arguments.expected_campaign_report_sha256.clone(),
+        arguments.expected_buyer_participant_sha256.clone(),
+        arguments.payer,
+        fs::read(&checked_execution_release)?,
+        Some(terms),
+        ExpectedClusterV1::Devnet,
+    )?;
+    let public_value = assemble_public_manifest_v1(
+        &public,
+        &plan_value,
+        &market_value,
+        seller_signed,
+        buyer_signed,
+        terms,
+        DEVNET_PUBLIC_MANIFEST_SCHEMA_V1,
+        ExpectedClusterV1::Devnet,
+    )?;
+    let public_bytes = pretty_json_bytes_v1(&public_value)?;
+    let source =
+        authenticate_devnet_direct_session_source_v1(&public_bytes, &plan_bytes, &market_bytes)?;
+    if source.payer != arguments.payer
+        || source.seller != public.seller
+        || source.buyer != public.buyer
+        || source.public_manifest_sha256 != sha256_hex(&public_bytes)
+        || source.checked_execution_release_sha256
+            != arguments.expected_checked_execution_release_sha256
+    {
+        return Err(refusal(
+            "assembled Direct manifest changed payer, founding seller, admitted buyer, or canonical bytes",
+        ));
+    }
+    let public_sha256 = sha256_hex(&public_bytes);
+    let mut private_value = ProducedDirectTradePrivateSessionV1 {
+        schema: DEVNET_PRIVATE_SESSION_SCHEMA_V1.into(),
+        public_manifest: public_manifest.display().to_string(),
+        public_manifest_sha256: public_sha256.clone(),
+        plan: plan.display().to_string(),
+        market_input: market_input.display().to_string(),
+        payer_keypair: payer_keypair.display().to_string(),
+        journal_dir: journal_dir.display().to_string(),
+        evidence_file: evidence_file.display().to_string(),
+        session_sha256: String::new(),
+    };
+    private_value.session_sha256 = private_session_sha256_v1(&private_value)?;
+    let private_bytes = pretty_json_bytes_v1(&private_value)?;
+    let mut prepared = DevnetDirectProducerJournalV1 {
+        schema: DEVNET_DIRECT_PRODUCER_JOURNAL_SCHEMA_V1.into(),
+        phase: DevnetDirectProducerPhaseV1::Prepared,
+        cluster: ExpectedClusterV1::Devnet.evidence_label().into(),
+        genesis_hash: DEVNET_GENESIS_HASH.into(),
+        plan: plan.display().to_string(),
+        plan_sha256: arguments.expected_plan_sha256,
+        market_input: market_input.display().to_string(),
+        market_input_sha256: arguments.expected_market_input_sha256,
+        campaign_report: campaign_report.display().to_string(),
+        campaign_report_sha256: arguments.expected_campaign_report_sha256,
+        buyer_participant: buyer_participant.display().to_string(),
+        buyer_participant_sha256: arguments.expected_buyer_participant_sha256,
+        checked_execution_release: checked_execution_release.display().to_string(),
+        checked_execution_release_sha256: arguments.expected_checked_execution_release_sha256,
+        seller_ticket: seller_ticket.display().to_string(),
+        seller_ticket_sha256: arguments.expected_seller_ticket_sha256,
+        buyer_ticket: buyer_ticket.display().to_string(),
+        buyer_ticket_sha256: arguments.expected_buyer_ticket_sha256,
+        payer: arguments.payer.to_string(),
+        payer_keypair: payer_keypair.display().to_string(),
+        observation_slot: public.observation_slot,
+        public_manifest: public_manifest.display().to_string(),
+        public_manifest_sha256: public_sha256,
+        public_manifest_base64: BASE64.encode(&public_bytes),
+        private_session: private_session.display().to_string(),
+        private_session_sha256: sha256_hex(&private_bytes),
+        private_session_base64: BASE64.encode(&private_bytes),
+        journal_dir: journal_dir.display().to_string(),
+        evidence_file: evidence_file.display().to_string(),
+        previous_state_sha256: None,
+        state_sha256: String::new(),
+    };
+    prepared.state_sha256 = devnet_direct_producer_state_sha256_v1(&prepared)?;
+    write_create_new_durable_v1(&producer_journal, &pretty_json_bytes_v1(&prepared)?)?;
+    recover_devnet_direct_producer_v1(
+        prepared,
+        &producer_journal,
+        &public_manifest,
+        &private_session,
+        &journal_dir,
+        &setup_journal_dir,
+        &plan,
+        &market_input,
+    )
+}
+
+fn parse_portable_direct_ticket_v1(bytes: &[u8], label: &str) -> Result<SignedDirectIntentV3> {
+    if bytes.is_empty() || bytes.len() > 4_096 {
+        return Err(refusal(format!(
+            "{label} Direct ticket is outside the 1..4096 byte bound"
+        )));
+    }
+    require_unique_json_v1(bytes, &format!("{label} Direct ticket"))?;
+    let value = parse_json_without_duplicate_keys_v1(bytes)?;
+    let ticket: PortableDirectTicketV1 = serde_json::from_value(value.clone())
+        .map_err(|error| Error::new(format!("{label} Direct ticket shape: {error}")))?;
+    if serde_json::to_value(&ticket)? != value || ticket.kind != PORTABLE_DIRECT_TICKET_KIND_V1 {
+        return Err(refusal(format!(
+            "{label} Direct ticket kind, field set, or canonical JSON values changed"
+        )));
+    }
+    let maker = canonical_ticket_pubkey_v1(&ticket.maker, &format!("{label} maker"))?;
+    let market = canonical_ticket_pubkey_v1(&ticket.intent.market, &format!("{label} Market"))?;
+    let collateral = canonical_ticket_pubkey_v1(
+        &ticket.intent.collateral_account,
+        &format!("{label} collateral account"),
+    )?;
+    if maker == Pubkey::default()
+        || market == Pubkey::default()
+        || collateral == Pubkey::default()
+        || ticket.intent.side > 1
+        || ticket.intent.lifecycle > 1
+        || ticket.intent.fee_basis_points > 10_000
+    {
+        return Err(refusal(format!(
+            "{label} Direct ticket has an invalid identity, enum, or fee width"
+        )));
+    }
+    let signature_bytes = decode_hex_v1(&ticket.signature, &format!("{label} signature"))?;
+    let signature: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| refusal(format!("{label} signature is not exactly 64 bytes")))?;
+    if signature.iter().all(|byte| *byte == 0) {
+        return Err(refusal(format!("{label} signature is all zero")));
+    }
+    let intent = CompactIntentV2 {
+        side: ticket.intent.side,
+        lifecycle: ticket.intent.lifecycle,
+        outcome: ticket.intent.outcome,
+        market: market.to_bytes(),
+        generation: canonical_ticket_u64_v1(&ticket.intent.generation, "generation")?,
+        nonce: canonical_ticket_u64_v1(&ticket.intent.nonce, "nonce")?,
+        valid_from: canonical_ticket_u64_v1(&ticket.intent.valid_from, "validFrom")?,
+        valid_through: canonical_ticket_u64_v1(&ticket.intent.valid_through, "validThrough")?,
+        maximum_fill: canonical_ticket_u64_v1(&ticket.intent.maximum_fill, "maximumFill")?,
+        limit_price: canonical_ticket_u64_v1(&ticket.intent.limit_price, "limitPrice")?,
+        fee_basis_points: ticket.intent.fee_basis_points,
+        collateral_account: collateral.to_bytes(),
+    };
+    let encoded = intent
+        .encode()
+        .map_err(|error| Error::new(format!("{label} Direct intent encode: {error:?}")))?;
+    if CompactIntentV2::decode(&encoded)
+        .map_err(|error| Error::new(format!("{label} Direct intent decode: {error:?}")))?
+        != intent
+    {
+        return Err(refusal(format!(
+            "{label} Direct ticket intent failed canonical codec roundtrip"
+        )));
+    }
+    let preimage = intent
+        .signed_preimage()
+        .map_err(|error| Error::new(format!("{label} Direct signed preimage: {error:?}")))?;
+    if !Signature::from(signature).verify(maker.as_ref(), &preimage) {
+        return Err(refusal(format!(
+            "{label} Direct ticket detached signature did not verify"
+        )));
+    }
+    Ok(SignedDirectIntentV3 {
+        maker,
+        signature,
+        intent,
+    })
+}
+
+fn canonical_ticket_pubkey_v1(value: &str, label: &str) -> Result<Pubkey> {
+    let key = pubkey(value)?;
+    if key.to_string() != value {
+        return Err(refusal(format!("{label} is not canonical base58 text")));
+    }
+    Ok(key)
+}
+
+fn canonical_ticket_u64_v1(value: &str, label: &str) -> Result<u64> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| refusal(format!("Direct ticket {label} is not a u64")))?;
+    if parsed.to_string() != value {
+        return Err(refusal(format!(
+            "Direct ticket {label} is not canonical decimal text"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn exact_ticket_pair_terms_v1(
+    seller: &SignedDirectIntentV3,
+    buyer: &SignedDirectIntentV3,
+) -> Result<DirectTradeTermsV1> {
+    if seller.maker == buyer.maker
+        || seller.intent.side != 0
+        || buyer.intent.side != 1
+        || seller.intent.lifecycle != 0
+        || buyer.intent.lifecycle != 0
+        || seller.intent.outcome != buyer.intent.outcome
+        || seller.intent.market != buyer.intent.market
+        || seller.intent.generation != buyer.intent.generation
+        || seller.intent.maximum_fill == 0
+        || seller.intent.maximum_fill != buyer.intent.maximum_fill
+        || seller.intent.limit_price == 0
+        || seller.intent.limit_price != buyer.intent.limit_price
+        || seller.intent.fee_basis_points != buyer.intent.fee_basis_points
+    {
+        return Err(refusal(
+            "portable Direct tickets do not form one exact, distinct-maker fill-or-kill crossing",
+        ));
+    }
+    Ok(DirectTradeTermsV1 {
+        outcome: seller.intent.outcome,
+        fill: seller.intent.maximum_fill,
+        execution_price: seller.intent.limit_price,
+        fee_basis_points: seller.intent.fee_basis_points,
+    })
+}
+
+fn devnet_direct_producer_state_sha256_v1(
+    journal: &DevnetDirectProducerJournalV1,
+) -> Result<String> {
+    let mut canonical = journal.clone();
+    canonical.state_sha256.clear();
+    Ok(sha256_hex(&serde_json::to_vec(&canonical)?))
+}
+
+fn load_devnet_direct_producer_journal_v1(
+    path: &Path,
+) -> Result<Option<DevnetDirectProducerJournalV1>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path)?;
+    require_unique_json_v1(&bytes, "Direct full producer journal")?;
+    let value = parse_json_without_duplicate_keys_v1(&bytes)?;
+    let journal: DevnetDirectProducerJournalV1 = serde_json::from_value(value.clone())?;
+    if serde_json::to_value(&journal)? != value
+        || journal.schema != DEVNET_DIRECT_PRODUCER_JOURNAL_SCHEMA_V1
+        || journal.cluster != ExpectedClusterV1::Devnet.evidence_label()
+        || journal.genesis_hash != DEVNET_GENESIS_HASH
+        || journal.observation_slot == 0
+        || journal.state_sha256 != devnet_direct_producer_state_sha256_v1(&journal)?
+    {
+        return Err(refusal(
+            "Direct full producer journal identity, fields, or self digest changed",
+        ));
+    }
+    let mut prepared = journal.clone();
+    prepared.phase = DevnetDirectProducerPhaseV1::Prepared;
+    prepared.previous_state_sha256 = None;
+    prepared.state_sha256.clear();
+    let prepared_digest = devnet_direct_producer_state_sha256_v1(&prepared)?;
+    match journal.phase {
+        DevnetDirectProducerPhaseV1::Prepared if journal.previous_state_sha256.is_some() => {
+            return Err(refusal(
+                "prepared Direct full producer journal unexpectedly names a predecessor",
+            ));
+        }
+        DevnetDirectProducerPhaseV1::Finalized
+            if journal.previous_state_sha256.as_deref() != Some(prepared_digest.as_str()) =>
+        {
+            return Err(refusal(
+                "finalized Direct full producer journal changed its exact prepared predecessor",
+            ));
+        }
+        _ => {}
+    }
+    Ok(Some(journal))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_devnet_direct_producer_inputs_v1(
+    journal: &DevnetDirectProducerJournalV1,
+    arguments: &DevnetDirectProducerArgumentsV1,
+    plan: &Path,
+    market_input: &Path,
+    campaign_report: &Path,
+    buyer_participant: &Path,
+    checked_execution_release: &Path,
+    seller_ticket: &Path,
+    buyer_ticket: &Path,
+    payer_keypair: &Path,
+    public_manifest: &Path,
+    private_session: &Path,
+    journal_dir: &Path,
+    evidence_file: &Path,
+) -> Result<()> {
+    let expected = [
+        (
+            &journal.plan,
+            plan,
+            &journal.plan_sha256,
+            &arguments.expected_plan_sha256,
+        ),
+        (
+            &journal.market_input,
+            market_input,
+            &journal.market_input_sha256,
+            &arguments.expected_market_input_sha256,
+        ),
+        (
+            &journal.campaign_report,
+            campaign_report,
+            &journal.campaign_report_sha256,
+            &arguments.expected_campaign_report_sha256,
+        ),
+        (
+            &journal.buyer_participant,
+            buyer_participant,
+            &journal.buyer_participant_sha256,
+            &arguments.expected_buyer_participant_sha256,
+        ),
+        (
+            &journal.checked_execution_release,
+            checked_execution_release,
+            &journal.checked_execution_release_sha256,
+            &arguments.expected_checked_execution_release_sha256,
+        ),
+        (
+            &journal.seller_ticket,
+            seller_ticket,
+            &journal.seller_ticket_sha256,
+            &arguments.expected_seller_ticket_sha256,
+        ),
+        (
+            &journal.buyer_ticket,
+            buyer_ticket,
+            &journal.buyer_ticket_sha256,
+            &arguments.expected_buyer_ticket_sha256,
+        ),
+    ];
+    if expected
+        .iter()
+        .any(|(stored_path, path, stored_digest, digest)| {
+            stored_path.as_str() != path.to_string_lossy() || stored_digest != digest
+        })
+        || journal.payer != arguments.payer.to_string()
+        || journal.payer_keypair != payer_keypair.display().to_string()
+        || journal.public_manifest != public_manifest.display().to_string()
+        || journal.private_session != private_session.display().to_string()
+        || journal.journal_dir != journal_dir.display().to_string()
+        || journal.evidence_file != evidence_file.display().to_string()
+    {
+        return Err(refusal(
+            "Direct producer recovery arguments differ from the prepared immutable inputs or outputs",
+        ));
+    }
+    let public_bytes = decode_canonical_base64_producer_v1(
+        &journal.public_manifest_base64,
+        "Direct prepared public manifest",
+    )?;
+    let private_bytes = decode_canonical_base64_producer_v1(
+        &journal.private_session_base64,
+        "Direct prepared private session",
+    )?;
+    if sha256_hex(&public_bytes) != journal.public_manifest_sha256
+        || sha256_hex(&private_bytes) != journal.private_session_sha256
+    {
+        return Err(refusal(
+            "Direct producer embedded output bytes changed from their digests",
+        ));
+    }
+    let plan_bytes = fs::read(plan)?;
+    let market_bytes = fs::read(market_input)?;
+    let source =
+        authenticate_devnet_direct_session_source_v1(&public_bytes, &plan_bytes, &market_bytes)?;
+    let public: ProducedDirectTradePublicManifestV1 = serde_json::from_slice(&public_bytes)?;
+    let seller = parse_portable_direct_ticket_v1(&fs::read(seller_ticket)?, "seller")?;
+    let buyer = parse_portable_direct_ticket_v1(&fs::read(buyer_ticket)?, "buyer")?;
+    if public.seller != signed_manifest_v1(seller)?
+        || public.buyer != signed_manifest_v1(buyer)?
+        || BASE64
+            .decode(&public.checked_execution_release_set_base64)
+            .ok()
+            .as_deref()
+            != Some(fs::read(checked_execution_release)?.as_slice())
+        || source.payer != arguments.payer
+        || source.checked_execution_release_sha256
+            != arguments.expected_checked_execution_release_sha256
+    {
+        return Err(refusal(
+            "Direct producer recovery tickets, checked release, or payer differ from the embedded public manifest",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_devnet_direct_producer_v1(
+    prepared_or_finalized: DevnetDirectProducerJournalV1,
+    producer_journal: &Path,
+    public_manifest: &Path,
+    private_session: &Path,
+    journal_dir: &Path,
+    setup_journal_dir: &Path,
+    plan: &Path,
+    market_input: &Path,
+) -> Result<DevnetDirectProducerJournalV1> {
+    let public_bytes = decode_canonical_base64_producer_v1(
+        &prepared_or_finalized.public_manifest_base64,
+        "Direct prepared public manifest",
+    )?;
+    let private_bytes = decode_canonical_base64_producer_v1(
+        &prepared_or_finalized.private_session_base64,
+        "Direct prepared private session",
+    )?;
+    authenticate_devnet_direct_session_source_v1(
+        &public_bytes,
+        &fs::read(plan)?,
+        &fs::read(market_input)?,
+    )?;
+    write_or_authenticate_exact_v1(public_manifest, &public_bytes, "Direct public manifest")?;
+    write_or_authenticate_exact_v1(private_session, &private_bytes, "Direct private session")?;
+    if prepared_or_finalized.phase == DevnetDirectProducerPhaseV1::Prepared {
+        create_or_authenticate_empty_directory_v1(journal_dir, "Direct journal directory")?;
+        create_or_authenticate_empty_directory_v1(
+            setup_journal_dir,
+            "Direct setup journal directory",
+        )?;
+        let mut finalized = prepared_or_finalized.clone();
+        finalized.phase = DevnetDirectProducerPhaseV1::Finalized;
+        finalized.previous_state_sha256 = Some(prepared_or_finalized.state_sha256.clone());
+        finalized.state_sha256 = devnet_direct_producer_state_sha256_v1(&finalized)?;
+        replace_json_durable_v1(producer_journal, &prepared_or_finalized, &finalized)?;
+        return Ok(finalized);
+    }
+    if prepared_or_finalized.previous_state_sha256.is_none()
+        || !journal_dir.is_dir()
+        || !setup_journal_dir.is_dir()
+    {
+        return Err(refusal(
+            "finalized Direct producer omitted its prepared predecessor or executor journal directories",
+        ));
+    }
+    Ok(prepared_or_finalized)
+}
+
+fn decode_canonical_base64_producer_v1(value: &str, label: &str) -> Result<Vec<u8>> {
+    let bytes = BASE64
+        .decode(value)
+        .map_err(|error| Error::new(format!("{label} base64: {error}")))?;
+    if BASE64.encode(&bytes) != value {
+        return Err(refusal(format!("{label} is not canonical base64")));
+    }
+    Ok(bytes)
+}
+
+fn write_or_authenticate_exact_v1(path: &Path, bytes: &[u8], label: &str) -> Result<()> {
+    if path.exists() {
+        if fs::read(path)? != bytes {
+            return Err(refusal(format!(
+                "existing {label} differs from its prepared exact bytes"
+            )));
+        }
+        return Ok(());
+    }
+    write_create_new_durable_v1(path, bytes)
+}
+
+fn create_or_authenticate_empty_directory_v1(path: &Path, label: &str) -> Result<()> {
+    if path.exists() {
+        canonical_directory_v1(path, label)?;
+        if fs::read_dir(path)?.next().is_some() {
+            return Err(refusal(format!(
+                "{label} is not empty before producer finalization"
+            )));
+        }
+        return Ok(());
+    }
+    fs::create_dir(path)?;
+    sync_parent_v1(path)
 }
 
 fn produce_devnet_direct_session_v1(
@@ -996,8 +1807,11 @@ fn prepare_public_facts_v1(
     market_sha256: String,
     campaign_sha256: String,
     participant_sha256: String,
+    payer: Pubkey,
+    checked_release: Vec<u8>,
+    requested_terms: Option<DirectTradeTermsV1>,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<PreparedPublicFactsV1> {
-    local_mutable::authenticate_checked_local_mutable_plan_v1(plan)?;
     crate::market::validate_market_input(market_input)?;
     if campaign.plan_sha256 != plan_sha256 || campaign.market_sha256 != market_sha256 {
         return Err(refusal(
@@ -1037,12 +1851,9 @@ fn prepare_public_facts_v1(
         return Err(refusal("Direct participant token program changed"));
     }
     let lifecycle_rent_credit = campaign_address_v1(campaign, "founding_lifecycle_rent_credit")?;
-    let payer = plan
-        .core
-        .upgrade_authority
-        .as_deref()
-        .ok_or_else(|| refusal("owned-loopback Direct plan revoked its retained payer"))
-        .and_then(|value| pubkey(value))?;
+    if payer == Pubkey::default() {
+        return Err(refusal("Direct payer is the default public key"));
+    }
     let registry = pubkey(&plan.registry.program_id)?;
     let trading = pubkey(&plan.trading.program_id)?;
     let claims = pubkey(&plan.claims.program_id)?;
@@ -1106,15 +1917,10 @@ fn prepare_public_facts_v1(
     let config =
         DirectExecutionConfigV1::decode_selected(config_digest, config_digest, &config_bytes)
             .map_err(|error| Error::new(format!("Direct execution config: {error:?}")))?;
-    if config.fee_basis_points() != FEE_BASIS_POINTS_V1
-        || config.price_scale() != EXPECTED_PRICE_SCALE_V1
-    {
-        return Err(refusal(
-            "owned-loopback Direct producer requires the exact 1,000,000 scale and 50-bps config",
-        ));
+    if config.price_scale() == 0 {
+        return Err(refusal("Direct selected config has a zero price scale"));
     }
     let fee_recipient = Pubkey::new_from_array(config.fee_recipient());
-    let checked_release = local_mutable::checked_execution_release_set_bytes_v1(plan)?.to_vec();
 
     let snapshot = finalized_snapshot(
         rpc,
@@ -1217,13 +2023,39 @@ fn prepare_public_facts_v1(
         return Err(refusal("Direct Position PDA coordinate changed"));
     }
     let seller = Pubkey::new_from_array(seller_position_view.owner);
-    let outcome = first_funded_outcome_v1(
-        seller_position_view,
-        &seller_position_account.data,
-        FILL_ATOMS_V1,
-    )?;
-    let gross = exact_quote_v1(FILL_ATOMS_V1, EXECUTION_PRICE_V1, config.price_scale())?;
-    let fee = fee_floor_v1(gross, FEE_BASIS_POINTS_V1)?;
+    let outcome = match requested_terms {
+        Some(terms) => {
+            if terms.fill == 0
+                || terms.execution_price == 0
+                || terms.fee_basis_points != config.fee_basis_points()
+                || terms.outcome >= aggregate_view.claim_count
+                || seller_position_view
+                    .balance(&seller_position_account.data, terms.outcome)
+                    .map_err(|error| {
+                        Error::new(format!("seller claim balance {}: {error:?}", terms.outcome))
+                    })?
+                    < terms.fill
+            {
+                return Err(refusal(
+                    "caller-owned Direct terms exceed the finalized seller claim balance or selected config",
+                ));
+            }
+            terms.outcome
+        }
+        None => first_funded_outcome_v1(
+            seller_position_view,
+            &seller_position_account.data,
+            FILL_ATOMS_V1,
+        )?,
+    };
+    let terms = requested_terms.unwrap_or(DirectTradeTermsV1 {
+        outcome,
+        fill: FILL_ATOMS_V1,
+        execution_price: EXECUTION_PRICE_V1,
+        fee_basis_points: FEE_BASIS_POINTS_V1,
+    });
+    let gross = exact_quote_v1(terms.fill, terms.execution_price, config.price_scale())?;
+    let fee = fee_floor_v1(gross, terms.fee_basis_points)?;
     let required_buyer_collateral = gross
         .checked_add(fee)
         .ok_or_else(|| refusal("Direct buyer reserve overflowed"))?;
@@ -1485,8 +2317,13 @@ fn prepare_public_facts_v1(
     let genesis_hash = rpc
         .call("getGenesisHash", &json!([]))?
         .as_str()
-        .ok_or_else(|| refusal("owned-loopback genesis hash was not a string"))?
+        .ok_or_else(|| refusal("Direct genesis hash was not a string"))?
         .to_owned();
+    if expected_cluster == ExpectedClusterV1::Devnet && genesis_hash != DEVNET_GENESIS_HASH {
+        return Err(refusal(
+            "Direct devnet producer observed another genesis hash",
+        ));
+    }
     Ok(PreparedPublicFactsV1 {
         plan_sha256,
         market_sha256,
@@ -1970,6 +2807,80 @@ fn parse_devnet_session_arguments_v1(
     })
 }
 
+fn parse_devnet_direct_arguments_v1(
+    arguments: Vec<String>,
+) -> Result<DevnetDirectProducerArgumentsV1> {
+    let mut values = BTreeMap::<String, String>::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if !matches!(
+            argument.as_str(),
+            DEVNET_ACKNOWLEDGMENT_FLAG
+                | "--rpc-url"
+                | "--plan"
+                | "--expected-plan-sha256"
+                | "--market-input"
+                | "--expected-market-input-sha256"
+                | "--campaign-report"
+                | "--expected-campaign-report-sha256"
+                | "--buyer-participant"
+                | "--expected-buyer-participant-sha256"
+                | "--checked-execution-release"
+                | "--expected-checked-execution-release-sha256"
+                | "--seller-ticket"
+                | "--expected-seller-ticket-sha256"
+                | "--buyer-ticket"
+                | "--expected-buyer-ticket-sha256"
+                | "--payer"
+                | "--payer-keypair"
+                | "--output-dir"
+        ) {
+            return Err(Error::new(format!(
+                "unknown devnet Direct producer argument: {argument}"
+            )));
+        }
+        if values.insert(argument.clone(), value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let take = |label: &str| {
+        values
+            .get(label)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("{label} is required")))
+    };
+    if take(DEVNET_ACKNOWLEDGMENT_FLAG)? != DEVNET_GENESIS_HASH {
+        return Err(refusal(
+            "devnet Direct producer requires the exact public-devnet genesis acknowledgment",
+        ));
+    }
+    Ok(DevnetDirectProducerArgumentsV1 {
+        rpc_url: take("--rpc-url")?,
+        plan: PathBuf::from(take("--plan")?),
+        expected_plan_sha256: take("--expected-plan-sha256")?,
+        market_input: PathBuf::from(take("--market-input")?),
+        expected_market_input_sha256: take("--expected-market-input-sha256")?,
+        campaign_report: PathBuf::from(take("--campaign-report")?),
+        expected_campaign_report_sha256: take("--expected-campaign-report-sha256")?,
+        buyer_participant: PathBuf::from(take("--buyer-participant")?),
+        expected_buyer_participant_sha256: take("--expected-buyer-participant-sha256")?,
+        checked_execution_release: PathBuf::from(take("--checked-execution-release")?),
+        expected_checked_execution_release_sha256: take(
+            "--expected-checked-execution-release-sha256",
+        )?,
+        seller_ticket: PathBuf::from(take("--seller-ticket")?),
+        expected_seller_ticket_sha256: take("--expected-seller-ticket-sha256")?,
+        buyer_ticket: PathBuf::from(take("--buyer-ticket")?),
+        expected_buyer_ticket_sha256: take("--expected-buyer-ticket-sha256")?,
+        payer: pubkey(&take("--payer")?)?,
+        payer_keypair: PathBuf::from(take("--payer-keypair")?),
+        output_dir: PathBuf::from(take("--output-dir")?),
+    })
+}
+
 fn authenticate_devnet_direct_participant_pair_v1(
     source: &AuthenticatedDevnetDirectSessionSourceV1,
     seller: &user_position_admission::FinalizedDirectParticipantEvidenceV1,
@@ -2313,16 +3224,19 @@ mod tests {
     };
 
     use super::{
-        CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1,
-        DevnetDirectParticipantSourceV1, DevnetDirectSessionProducerJournalV1,
-        DevnetDirectSessionProducerPhaseV1, EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
-        OwnedLoopbackDirectProducerReceiptV1, ProducedDirectTradePrivateSessionV1,
-        ProducedReplaySetupV1, ProducedTokenSetupV1,
+        CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_DIRECT_PRODUCER_COMMAND_V1,
+        DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1, DevnetDirectParticipantSourceV1,
+        DevnetDirectSessionProducerJournalV1, DevnetDirectSessionProducerPhaseV1,
+        EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
+        OwnedLoopbackDirectProducerReceiptV1, PortableDirectTicketIntentV1, PortableDirectTicketV1,
+        ProducedDirectTradePrivateSessionV1, ProducedReplaySetupV1, ProducedTokenSetupV1,
         authenticate_devnet_direct_participant_pair_v1,
         authenticate_devnet_session_producer_recovery_v1, derive_capability_seal_v1,
-        devnet_session_producer_state_sha256_v1, devnet_session_usage, exact_quote_v1,
-        fee_floor_v1, parse_devnet_session_arguments_v1, private_session_sha256_v1,
-        producer_receipt_sha256_v1, require_distinct_v1, signed_intent_v1,
+        devnet_direct_usage, devnet_session_producer_state_sha256_v1, devnet_session_usage,
+        exact_quote_v1, exact_ticket_pair_terms_v1, fee_floor_v1, parse_devnet_direct_arguments_v1,
+        parse_devnet_session_arguments_v1, parse_portable_direct_ticket_v1,
+        private_session_sha256_v1, producer_receipt_sha256_v1, require_distinct_v1,
+        signed_intent_v1,
     };
     use crate::{
         cluster::{DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
@@ -2681,6 +3595,155 @@ mod tests {
             assert!(usage.contains(flag), "usage omitted {flag}");
         }
         assert!(usage.contains(DEVNET_GENESIS_HASH));
+        for forbidden in ["--seller-keypair", "--buyer-keypair", "--secret-key"] {
+            assert!(!usage.contains(forbidden), "usage exposed {forbidden}");
+        }
+    }
+
+    fn portable_ticket_bytes(
+        signed: &dclutch_operator::direct_inline_v3::SignedDirectIntentV3,
+    ) -> Vec<u8> {
+        let signature = signed
+            .signature
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        serde_json::to_vec(&PortableDirectTicketV1 {
+            kind: super::PORTABLE_DIRECT_TICKET_KIND_V1.into(),
+            maker: signed.maker.to_string(),
+            signature,
+            intent: PortableDirectTicketIntentV1 {
+                side: signed.intent.side,
+                lifecycle: signed.intent.lifecycle,
+                outcome: signed.intent.outcome,
+                market: Pubkey::new_from_array(signed.intent.market).to_string(),
+                generation: signed.intent.generation.to_string(),
+                nonce: signed.intent.nonce.to_string(),
+                valid_from: signed.intent.valid_from.to_string(),
+                valid_through: signed.intent.valid_through.to_string(),
+                maximum_fill: signed.intent.maximum_fill.to_string(),
+                limit_price: signed.intent.limit_price.to_string(),
+                fee_basis_points: signed.intent.fee_basis_points,
+                collateral_account: Pubkey::new_from_array(signed.intent.collateral_account)
+                    .to_string(),
+            },
+        })
+        .expect("ticket")
+    }
+
+    #[test]
+    fn portable_tickets_reopen_exact_sdk_wire_and_form_one_crossing() -> crate::Result<()> {
+        let market = Pubkey::new_unique();
+        let seller_key = Keypair::new();
+        let buyer_key = Keypair::new();
+        let intent = |side, collateral| CompactIntentV2 {
+            side,
+            lifecycle: 0,
+            outcome: 3,
+            market: market.to_bytes(),
+            generation: 7,
+            nonce: 9 + u64::from(side),
+            valid_from: 11,
+            valid_through: 22,
+            maximum_fill: 100,
+            limit_price: 500_000,
+            fee_basis_points: 50,
+            collateral_account: collateral,
+        };
+        let seller = signed_intent_v1(&seller_key, intent(0, Pubkey::new_unique().to_bytes()))?;
+        let buyer = signed_intent_v1(&buyer_key, intent(1, Pubkey::new_unique().to_bytes()))?;
+        let decoded_seller =
+            parse_portable_direct_ticket_v1(&portable_ticket_bytes(&seller), "seller")?;
+        let decoded_buyer =
+            parse_portable_direct_ticket_v1(&portable_ticket_bytes(&buyer), "buyer")?;
+        assert_eq!(decoded_seller, seller);
+        assert_eq!(decoded_buyer, buyer);
+        let terms = exact_ticket_pair_terms_v1(&decoded_seller, &decoded_buyer)?;
+        assert_eq!(terms.outcome, 3);
+        assert_eq!(terms.fill, 100);
+        assert_eq!(terms.execution_price, 500_000);
+        Ok(())
+    }
+
+    #[test]
+    fn portable_ticket_refuses_unknown_noncanonical_and_changed_signature_fields() {
+        let key = Keypair::new();
+        let signed = signed_intent_v1(
+            &key,
+            CompactIntentV2 {
+                side: 0,
+                lifecycle: 0,
+                outcome: 0,
+                market: Pubkey::new_unique().to_bytes(),
+                generation: 1,
+                nonce: 2,
+                valid_from: 3,
+                valid_through: 4,
+                maximum_fill: 5,
+                limit_price: 6,
+                fee_basis_points: 7,
+                collateral_account: Pubkey::new_unique().to_bytes(),
+            },
+        )
+        .expect("signed");
+        let bytes = portable_ticket_bytes(&signed);
+        let mut unknown: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        unknown.as_object_mut().expect("object").insert(
+            "authority".into(),
+            serde_json::json!(key.pubkey().to_string()),
+        );
+        assert!(
+            parse_portable_direct_ticket_v1(
+                &serde_json::to_vec(&unknown).expect("unknown"),
+                "seller"
+            )
+            .is_err()
+        );
+        let mut noncanonical: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        noncanonical["intent"]["generation"] = serde_json::json!("01");
+        assert!(
+            parse_portable_direct_ticket_v1(
+                &serde_json::to_vec(&noncanonical).expect("noncanonical"),
+                "seller"
+            )
+            .is_err()
+        );
+        let mut changed: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        changed["intent"]["nonce"] = serde_json::json!("3");
+        assert!(
+            parse_portable_direct_ticket_v1(
+                &serde_json::to_vec(&changed).expect("changed"),
+                "seller"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn devnet_full_producer_parser_and_usage_expose_no_maker_secret_paths() {
+        assert!(
+            parse_devnet_direct_arguments_v1(vec![
+                DEVNET_ACKNOWLEDGMENT_FLAG.into(),
+                "another-genesis".into(),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_devnet_direct_arguments_v1(vec!["--seller-keypair".into(), "x".into()]).is_err()
+        );
+        let usage = devnet_direct_usage();
+        assert!(usage.contains(DEVNET_DIRECT_PRODUCER_COMMAND_V1));
+        for required in [
+            "--campaign-report",
+            "--buyer-participant",
+            "--checked-execution-release",
+            "--seller-ticket",
+            "--buyer-ticket",
+            "--payer-keypair",
+            "--output-dir",
+        ] {
+            assert!(usage.contains(required), "usage omitted {required}");
+        }
         for forbidden in ["--seller-keypair", "--buyer-keypair", "--secret-key"] {
             assert!(!usage.contains(forbidden), "usage exposed {forbidden}");
         }

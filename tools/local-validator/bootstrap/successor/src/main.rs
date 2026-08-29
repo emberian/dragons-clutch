@@ -154,6 +154,9 @@ fn run() -> Result<()> {
         Some(command) if command == direct_trade_producer::DEVNET_SESSION_PRODUCER_COMMAND_V1 => {
             direct_trade_producer::run_devnet_session(arguments.collect())
         }
+        Some(command) if command == direct_trade_producer::DEVNET_DIRECT_PRODUCER_COMMAND_V1 => {
+            direct_trade_producer::run_devnet_direct(arguments.collect())
+        }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
         Some(command) if command == source_abort_exterior::COMMAND_V1 => {
@@ -1566,6 +1569,7 @@ fn usage() {
     println!("{}", direct_trade::usage());
     println!("{}", direct_trade_producer::usage());
     println!("{}", direct_trade_producer::devnet_session_usage());
+    println!("{}", direct_trade_producer::devnet_direct_usage());
     println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \
