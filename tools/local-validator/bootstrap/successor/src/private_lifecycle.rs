@@ -452,7 +452,6 @@ fn project_direct_mutations_v1(
                 || row.completion_value != "finalized"
                 || row.slot == 0
                 || row.slot > authenticated.finalized_slot
-                || row.fee_lamports == 0
                 || row.compute_units_consumed == 0
                 || !signatures.insert(row.signature.clone())
             {
@@ -460,6 +459,8 @@ fn project_direct_mutations_v1(
                     "authenticated Direct mutation sequence is not finalized and unique",
                 ));
             }
+            ExpectedClusterV1::OwnedLoopback
+                .authenticate_finalized_fee(row.fee_lamports, "owned-loopback Direct mutation")?;
             exact_lower_hex(&row.sha256, 64, "Direct mutation journal SHA-256")?;
             exact_lower_hex(&row.intent_sha256, 64, "Direct mutation intent SHA-256")?;
             parse_pubkey(&row.fee_payer, "Direct mutation fee payer")?;
@@ -1577,6 +1578,14 @@ mod tests {
         assert_eq!(claims[3].owner, receipt.buyer_owner.to_string());
         assert_eq!(claims[3].claim_index, "1");
         assert!(claims.iter().all(|row| row.quantity_atoms != "0"));
+
+        let mut zero_fee = receipt.clone();
+        zero_fee.mutations[0].fee_lamports = 0;
+        assert_eq!(
+            project_direct_mutations_v1(&zero_fee).expect("owned-loopback zero fee is exact")[0]
+                .fee_lamports,
+            "0"
+        );
     }
 
     #[test]

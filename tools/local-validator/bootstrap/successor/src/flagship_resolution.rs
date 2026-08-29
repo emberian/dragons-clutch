@@ -5603,6 +5603,8 @@ fn finish_provider_stage(
     finalized: ProviderFinalizedTransactionV1,
     expected_cluster: ExpectedClusterV1,
 ) -> Result<StageReceiptV1> {
+    expected_cluster
+        .authenticate_finalized_fee(finalized.fee_lamports, "Resolution finalized transaction")?;
     let post = observe(rpc, selected, plan.stage, finalized.slot)?;
     let return_bytes = BASE64
         .decode(&finalized.return_data_base64)
@@ -5946,7 +5948,7 @@ fn run_with_expected_cluster(
             authenticate_current_deployments(&selected, &snapshot)?;
             authenticate_selected_pyth_release(&selected, &snapshot, false, expected_cluster)?;
             verify_terminal(&selected, &snapshot)?;
-            require_terminal_receipts(&checkpoint)?;
+            require_terminal_receipts(&checkpoint, expected_cluster)?;
             checkpoint.verified_terminal = true;
             write_checkpoint(&checkpoint_path, &checkpoint)?;
             println!("{}", serde_json::to_string_pretty(&checkpoint)?);
@@ -5995,11 +5997,14 @@ fn load_checkpoint(
     if let Some(plan) = &checkpoint.stage_plan {
         plan.validate()?;
     }
-    authenticate_receipt_prefix(&checkpoint)?;
+    authenticate_receipt_prefix(&checkpoint, expected_cluster)?;
     Ok(checkpoint)
 }
 
-fn authenticate_receipt_prefix(checkpoint: &CheckpointV1) -> Result<()> {
+fn authenticate_receipt_prefix(
+    checkpoint: &CheckpointV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
     let expected = [
         ReceiptStageV1::Submit,
         ReceiptStageV1::ProviderExecute,
@@ -6020,7 +6025,6 @@ fn authenticate_receipt_prefix(checkpoint: &CheckpointV1) -> Result<()> {
                 receipt.stage != expected_stage
                     || receipt.signature.is_empty()
                     || receipt.slot == 0
-                    || receipt.fee_lamports == 0
                     || receipt.compute_units_consumed == 0
                     || hex32(&receipt.signed_transaction_sha256).is_err()
                     || hex32(&receipt.return_data_sha256).is_err()
@@ -6040,11 +6044,18 @@ fn authenticate_receipt_prefix(checkpoint: &CheckpointV1) -> Result<()> {
             "checkpoint receipts are missing, substituted, out of order, or disagree with terminal completion",
         ));
     }
+    for receipt in &checkpoint.receipts {
+        expected_cluster
+            .authenticate_finalized_fee(receipt.fee_lamports, "Resolution finalized mutation")?;
+    }
     Ok(())
 }
 
-fn require_terminal_receipts(checkpoint: &CheckpointV1) -> Result<()> {
-    authenticate_receipt_prefix(checkpoint)?;
+fn require_terminal_receipts(
+    checkpoint: &CheckpointV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    authenticate_receipt_prefix(checkpoint, expected_cluster)?;
     if checkpoint.receipts.len() != 4 || checkpoint.stage_plan.is_some() {
         return Err(Error::new(
             "Core terminal state cannot finalize an incomplete four-mutation checkpoint",
@@ -7175,24 +7186,31 @@ mod tests {
             receipts: receipts.clone(),
             verified_terminal: true,
         };
-        assert!(authenticate_receipt_prefix(&complete).is_ok());
-        assert!(require_terminal_receipts(&complete).is_ok());
+        assert!(authenticate_receipt_prefix(&complete, ExpectedClusterV1::Devnet).is_ok());
+        assert!(require_terminal_receipts(&complete, ExpectedClusterV1::Devnet).is_ok());
+
+        let mut zero_fee = complete.clone();
+        zero_fee.receipts[0].fee_lamports = 0;
+        assert!(authenticate_receipt_prefix(&zero_fee, ExpectedClusterV1::OwnedLoopback).is_ok());
+        assert!(authenticate_receipt_prefix(&zero_fee, ExpectedClusterV1::Devnet).is_err());
 
         let mut duplicate_signature = complete.clone();
         duplicate_signature.receipts[2].signature =
             duplicate_signature.receipts[1].signature.clone();
-        assert!(authenticate_receipt_prefix(&duplicate_signature).is_err());
+        assert!(
+            authenticate_receipt_prefix(&duplicate_signature, ExpectedClusterV1::Devnet).is_err()
+        );
         let mut same_slot = complete.clone();
         same_slot.receipts[2].slot = same_slot.receipts[1].slot;
-        assert!(authenticate_receipt_prefix(&same_slot).is_err());
+        assert!(authenticate_receipt_prefix(&same_slot, ExpectedClusterV1::Devnet).is_err());
         let mut reordered = complete.clone();
         reordered.receipts.swap(1, 2);
-        assert!(authenticate_receipt_prefix(&reordered).is_err());
+        assert!(authenticate_receipt_prefix(&reordered, ExpectedClusterV1::Devnet).is_err());
         let mut missing_accept = complete.clone();
         missing_accept.receipts.remove(2);
         missing_accept.verified_terminal = false;
-        assert!(authenticate_receipt_prefix(&missing_accept).is_err());
-        assert!(require_terminal_receipts(&missing_accept).is_err());
+        assert!(authenticate_receipt_prefix(&missing_accept, ExpectedClusterV1::Devnet).is_err());
+        assert!(require_terminal_receipts(&missing_accept, ExpectedClusterV1::Devnet).is_err());
     }
 
     #[test]

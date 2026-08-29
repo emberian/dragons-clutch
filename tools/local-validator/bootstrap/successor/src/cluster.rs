@@ -186,6 +186,24 @@ impl ExpectedClusterV1 {
             Self::OwnedLoopback => "owned-loopback",
         }
     }
+
+    /// Authenticate one exact finalized transaction fee after the caller has
+    /// authenticated this cluster's origin and genesis hash.
+    ///
+    /// Agave's owned local validator may finalize System transactions with a
+    /// present `fee: 0`. That is an exact observation, not an absent fee. The
+    /// public devnet path retains the stricter policy that every finalized
+    /// transaction fee is positive. Keeping this decision on the already
+    /// authenticated cluster type prevents a permissive numeric parser from
+    /// silently widening public evidence.
+    pub(crate) fn authenticate_finalized_fee(self, fee_lamports: u64, label: &str) -> Result<()> {
+        if self == Self::Devnet && fee_lamports == 0 {
+            return Err(Error::new(format!(
+                "{label} reported an exact zero fee on public devnet; zero is admitted only for an authenticated owned-loopback genesis and is never a substitute for a missing fee"
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl ClusterOriginV1 {
@@ -534,6 +552,22 @@ mod tests {
         assert_ne!(
             ExpectedClusterV1::Devnet.evidence_label(),
             ExpectedClusterV1::OwnedLoopback.evidence_label()
+        );
+
+        assert!(
+            ExpectedClusterV1::OwnedLoopback
+                .authenticate_finalized_fee(0, "local System transaction")
+                .is_ok()
+        );
+        assert!(
+            ExpectedClusterV1::Devnet
+                .authenticate_finalized_fee(0, "public transaction")
+                .is_err()
+        );
+        assert!(
+            ExpectedClusterV1::Devnet
+                .authenticate_finalized_fee(5_000, "public transaction")
+                .is_ok()
         );
     }
 

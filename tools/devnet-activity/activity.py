@@ -287,6 +287,24 @@ def decimal(value: Any, label: str, *, positive: bool = False) -> int:
     return number
 
 
+def devnet_fee_decimal(value: Any, label: str) -> int:
+    """Parse a present canonical fee for this exact-devnet-only tool."""
+    return decimal(value, label, positive=True)
+
+
+def devnet_fee_integer(value: Any, label: str) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
+        or value > 2**64 - 1
+    ):
+        raise Refusal(
+            f"{label} must be a positive exact public-devnet transaction fee"
+        )
+    return value
+
+
 def signed_decimal(value: Any, label: str) -> int:
     candidate = text(value, label, 33)
     if SIGNED_DECIMAL_RE.fullmatch(candidate) is None or candidate == "-0":
@@ -2001,13 +2019,9 @@ class Rpc:
             not isinstance(slot, int)
             or isinstance(slot, bool)
             or slot < 0
-            or not isinstance(fee, int)
-            or isinstance(fee, bool)
-            or fee < 0
-            or fee > 2**64 - 1
         ):
             raise Refusal("getFeeForMessage returned another finalized fee shape")
-        return slot, fee
+        return slot, devnet_fee_integer(fee, "getFeeForMessage fee")
 
     def send_transaction(self, packet_base64: str) -> str:
         return signature_text(
@@ -2534,9 +2548,7 @@ def verify_funding_transaction(transaction: Mapping[str, Any], journal: Mapping[
     funder_index = keys.index(funder)
     wallet_index = keys.index(wallet)
     amount = decimal(journal.get("transferLamports"), "funding journal amount", positive=True)
-    fee = meta.get("fee")
-    if not isinstance(fee, int) or fee < 0:
-        raise Refusal("funding transaction has another fee shape")
+    fee = devnet_fee_integer(meta.get("fee"), "funding transaction fee")
     if post[wallet_index] - pre[wallet_index] != amount:
         raise Refusal("funding transaction did not credit the exact wallet amount")
     if pre[funder_index] - post[funder_index] != amount + fee:
@@ -2767,7 +2779,7 @@ def funding_closure_rows(
             f"funding journal {wallet.wallet_id} transfer",
             positive=True,
         )
-        fee = decimal(
+        fee = devnet_fee_decimal(
             journal.get("feeLamports"),
             f"funding journal {wallet.wallet_id} fee",
         )
@@ -3079,12 +3091,9 @@ def quote_post_init_funding_fee(
         not isinstance(slot, int)
         or isinstance(slot, bool)
         or slot < 0
-        or not isinstance(fee_lamports, int)
-        or isinstance(fee_lamports, bool)
-        or fee_lamports < 0
-        or fee_lamports > 2**64 - 1
     ):
         raise Refusal("post-init fee quote has another finalized shape")
+    fee_lamports = devnet_fee_integer(fee_lamports, "post-init fee quote")
     quoted = dict(journal)
     quoted.update(
         {
@@ -3109,7 +3118,7 @@ def dispatching_post_init_funding_journal(journal: Mapping[str, Any]) -> dict[st
     if sha256_bytes(packet) != journal.get("packetSha256"):
         raise Refusal("prepared post-init packet digest changed")
     decimal(journal.get("feeQuoteSlot"), "prepared post-init fee quote slot")
-    decimal(journal.get("quotedFeeLamports"), "prepared post-init fee quote")
+    devnet_fee_decimal(journal.get("quotedFeeLamports"), "prepared post-init fee quote")
     dispatching = dict(journal)
     dispatching.update(
         {
@@ -3321,7 +3330,7 @@ def post_init_funding_closure_rows(
             f"post-init funding {spec.journal_id} transfer",
             positive=True,
         )
-        fee = decimal(
+        fee = devnet_fee_decimal(
             journal.get("feeLamports"), f"post-init funding {spec.journal_id} fee"
         )
         if decimal(journal.get("walletPreLamports"), "post-init wallet prebalance") != 0:
@@ -3422,13 +3431,15 @@ def write_funding_lifecycle(
     initial_transfer = decimal(
         initial_closure.get("totalTransferLamports"), "initial funding transfer total"
     )
-    initial_fee = decimal(
+    initial_fee = devnet_fee_decimal(
         initial_closure.get("totalFundingFeeLamports"), "initial funding fee total"
     )
     post_transfer = decimal(
         post_init_closure.get("totalTransferLamports"), "post-init transfer total"
     )
-    post_fee = decimal(post_init_closure.get("totalFeeLamports"), "post-init fee total")
+    post_fee = devnet_fee_decimal(
+        post_init_closure.get("totalFeeLamports"), "post-init fee total"
+    )
     expected = {
         "schema": FUNDING_LIFECYCLE_SCHEMA,
         "manifestSha256": manifest.sha256,
@@ -3607,7 +3618,7 @@ def run_post_init_funding(
             if (
                 decimal(journal.get("feeQuoteSlot"), "post-init fee quote slot")
                 != fee_slot
-                or decimal(journal.get("quotedFeeLamports"), "post-init fee quote")
+                or devnet_fee_decimal(journal.get("quotedFeeLamports"), "post-init fee quote")
                 != fee_lamports
             ):
                 raise Refusal("post-init funding changed its finalized fee quote")
@@ -3672,7 +3683,7 @@ def run_post_init_funding(
                 f"post-init funding {spec.journal_id} finalized transfer",
                 positive=True,
             )
-            finalized_fee += decimal(
+            finalized_fee += devnet_fee_decimal(
                 journal.get("feeLamports"),
                 f"post-init funding {spec.journal_id} finalized fee",
             )
@@ -3980,9 +3991,7 @@ def transaction_evidence(
         raise Refusal(f"required activity signature {signature} failed")
     if signature not in transaction_signatures(transaction):
         raise Refusal(f"RPC transaction substitutes activity signature {signature}")
-    fee = meta.get("fee")
-    if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
-        raise Refusal("activity transaction fee has another shape")
+    fee = devnet_fee_integer(meta.get("fee"), "activity transaction fee")
     keys = account_keys(transaction)
     pre = exact_list(meta.get("preBalances"), "activity preBalances")
     post = exact_list(meta.get("postBalances"), "activity postBalances")
@@ -4760,7 +4769,7 @@ def reconcile_activity(
             wallet_signature_sets[payer_ref].add(signature)
             wallet_signature_sets[spec.wallet_ref].add(signature)
             transfer = decimal(final["transferLamports"], "post-init transfer", positive=True)
-            fee = decimal(final["feeLamports"], "post-init fee")
+            fee = devnet_fee_decimal(final["feeLamports"], "post-init fee")
             wallet_funding_deltas[payer_ref] -= transfer + fee
             funding_by_wallet[spec.wallet_ref] = {
                 "kind": "post-init",
@@ -5082,7 +5091,7 @@ def reconciled_post_init_funding_totals(
             f"reconciliation post-init funding {index} transfer",
             positive=True,
         )
-        fee = decimal(
+        fee = devnet_fee_decimal(
             row.get("feeLamports"),
             f"reconciliation post-init funding {index} fee",
         )
@@ -5123,7 +5132,7 @@ def reconciled_activity_fee_lamports(value: Mapping[str, Any]) -> int:
                 raw_transaction,
                 f"reconciliation activity {activity_index} transaction {transaction_index}",
             )
-            total += decimal(
+            total += devnet_fee_decimal(
                 transaction.get("feeLamports"),
                 f"reconciliation activity {activity_index} transaction {transaction_index} fee",
             )
@@ -5425,7 +5434,7 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
                 lifecycle.get("postInitTransferLamports"),
                 "supervisor post-init transfer total",
             )
-            post_fee = decimal(
+            post_fee = devnet_fee_decimal(
                 lifecycle.get("postInitFeeLamports"),
                 "supervisor post-init fee total",
             )

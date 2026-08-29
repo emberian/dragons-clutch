@@ -1429,6 +1429,24 @@ class ActivityTests(unittest.TestCase):
         with self.assertRaisesRegex(activity.Refusal, "exact wallet amount"):
             activity.verify_funding_transaction(hostile, journal, SIGNATURE)
 
+        zero_fee = funding_transaction(memo=journal["memo"])
+        zero_fee["meta"]["fee"] = 0  # type: ignore[index]
+        zero_fee["meta"]["postBalances"][0] = 90_000  # type: ignore[index]
+        with self.assertRaisesRegex(activity.Refusal, "positive exact public-devnet"):
+            activity.verify_funding_transaction(zero_fee, journal, SIGNATURE)
+        for substituted in (None, False, -1, "0"):
+            malformed = funding_transaction(memo=journal["memo"])
+            malformed["meta"]["fee"] = substituted  # type: ignore[index]
+            with self.assertRaisesRegex(activity.Refusal, "positive exact public-devnet"):
+                activity.verify_funding_transaction(malformed, journal, SIGNATURE)
+        self.assertEqual(activity.devnet_fee_decimal("5000", "fee"), 5_000)
+        for substituted in (None, False, -1, 0, "0", "00", "-1"):
+            with self.assertRaises(activity.Refusal):
+                if isinstance(substituted, str) or substituted is None:
+                    activity.devnet_fee_decimal(substituted, "fee")
+                else:
+                    activity.devnet_fee_integer(substituted, "fee")
+
         devnet_scenario = dataclasses.replace(manifest.scenario, cluster_target="devnet")
         devnet = dataclasses.replace(
             manifest,

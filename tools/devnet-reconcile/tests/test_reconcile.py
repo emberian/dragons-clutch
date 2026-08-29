@@ -1078,6 +1078,37 @@ class ReconcileTest(unittest.TestCase):
         with self.assertRaisesRegex(reconcile.Refusal, "public cluster genesis|not admitted"):
             reconcile.reconcile_owned_loopback(manifest, rpc, {})
 
+    def test_zero_fee_is_exact_owned_loopback_only_and_never_missing(self):
+        public, _ = fixture()
+        public["events"][0]["feeLamports"] = "0"
+        with self.assertRaisesRegex(reconcile.Refusal, "exact zero on public devnet"):
+            reconcile.validate_manifest(public)
+
+        for hostile in (None, False, -1, "00", "-1"):
+            substituted, _ = fixture()
+            substituted["events"][0]["feeLamports"] = hostile
+            with self.assertRaises(reconcile.Refusal):
+                reconcile.validate_manifest(substituted)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, capture, _, _, _, _, _ = owned_loopback_fixture(
+                pathlib.Path(directory)
+            )
+            event = manifest["events"][0]
+            event["feeLamports"] = "0"
+            event["lamportDeltas"] = []
+            transaction = capture["transactions"][event["signature"]]
+            transaction["meta"]["fee"] = 0
+            transaction["meta"]["postBalances"][0] = transaction["meta"][
+                "preBalances"
+            ][0]
+            dossier = reconcile.reconcile_owned_loopback(
+                manifest, reconcile.OwnedLoopbackCapturedRpc(capture), {}
+            )
+            projected = dossier["events"][0]
+            self.assertEqual(projected["transactionFeeLamports"], "0")
+            self.assertEqual(projected["lamportObservations"], [])
+
     def test_public_devnet_manifest_refuses_private_two_position_extension(self):
         manifest, capture = fixture()
         manifest["events"][2]["positions"] = []

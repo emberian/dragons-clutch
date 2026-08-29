@@ -17,7 +17,7 @@ use solana_sdk::{
 
 use crate::{
     Error, Result,
-    cluster::{DEVNET_GENESIS_HASH, MAINNET_BETA_GENESIS_HASH},
+    cluster::{DEVNET_GENESIS_HASH, ExpectedClusterV1, MAINNET_BETA_GENESIS_HASH},
     model::AccountEvidence,
 };
 
@@ -268,10 +268,10 @@ pub(crate) fn plan_founding_submission_v1(
     plan: FoundingSubmissionPlanV1,
 ) -> Result<FoundingSubmissionJournalV1> {
     authenticate_binding_v1(binding)?;
-    if plan.last_valid_block_height == 0 || plan.exact_fee_lamports == 0 {
-        return Err(refusal(
-            "founding journal requires positive validity and exact fee",
-        ));
+    expected_cluster_v1(binding)?
+        .authenticate_finalized_fee(plan.exact_fee_lamports, "founding planned transaction")?;
+    if plan.last_valid_block_height == 0 {
+        return Err(refusal("founding journal requires positive validity"));
     }
     for (value, label) in [
         (&plan.resolved_accounts_sha256, "resolved-account digest"),
@@ -610,12 +610,13 @@ pub(crate) fn authenticate_founding_submission_v1(
         || journal.intent_sha256 != intent_digest_v1(journal)?
         || journal.state_sha256 != state_digest_v1(journal)?
         || journal.last_valid_block_height == 0
-        || journal.exact_fee_lamports == 0
         || journal.exact_unique_message_accounts != journal.operation.exact_unique_accounts()
         || journal.expected_signers.len() != journal.operation.exact_required_signatures()
     {
         return Err(refusal("founding journal identity or state digest changed"));
     }
+    expected_cluster_v1(binding)?
+        .authenticate_finalized_fee(journal.exact_fee_lamports, "founding durable transaction")?;
     for (value, label) in [
         (&journal.message_sha256, "message digest"),
         (&journal.resolved_accounts_sha256, "resolved-account digest"),
@@ -965,6 +966,14 @@ fn authenticate_binding_v1(binding: &FoundingSubmissionBindingV1) -> Result<()> 
     require_sha256_v1(&binding.plan_sha256, "plan digest")?;
     require_sha256_v1(&binding.market_sha256, "Market digest")?;
     Ok(())
+}
+
+fn expected_cluster_v1(binding: &FoundingSubmissionBindingV1) -> Result<ExpectedClusterV1> {
+    match binding.cluster.as_str() {
+        "devnet" => Ok(ExpectedClusterV1::Devnet),
+        "loopback" => Ok(ExpectedClusterV1::OwnedLoopback),
+        _ => Err(refusal("founding journal cluster is not admitted")),
+    }
 }
 
 fn parse_account_list_v1(values: &[String], label: &str) -> Result<Vec<Pubkey>> {
@@ -1379,7 +1388,7 @@ mod tests {
                 operation: local_operation,
                 message: message(&[payer.pubkey()], local_operation),
                 last_valid_block_height: 900,
-                exact_fee_lamports: 5_000,
+                exact_fee_lamports: 0,
                 expected_signers: vec![payer.pubkey()],
                 resolved_accounts_sha256: digest(3),
                 prestate_accounts: vec![Pubkey::new_unique()],
@@ -1391,8 +1400,26 @@ mod tests {
         )
         .expect("loopback plan");
         assert_eq!(local_plan.cluster, "loopback");
+        assert_eq!(local_plan.exact_fee_lamports, 0);
         assert_eq!(local_plan.genesis_hash, local_binding.genesis_hash);
         assert!(authenticate_founding_submission_v1(&local_binding, &local_plan).is_ok());
+        let public_zero = plan_founding_submission_v1(
+            &binding,
+            FoundingSubmissionPlanV1 {
+                operation: local_operation,
+                message: message(&[payer.pubkey()], local_operation),
+                last_valid_block_height: 900,
+                exact_fee_lamports: 0,
+                expected_signers: vec![payer.pubkey()],
+                resolved_accounts_sha256: digest(3),
+                prestate_accounts: vec![Pubkey::new_unique()],
+                prestate_sha256: digest(4),
+                completion_accounts: vec![Pubkey::new_unique()],
+                completion_contract_sha256: digest(5),
+                recovery_payload: b"recovery".to_vec(),
+            },
+        );
+        assert!(public_zero.is_err());
         let wrong = plan_founding_submission_v1(
             &binding,
             FoundingSubmissionPlanV1 {

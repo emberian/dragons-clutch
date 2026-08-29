@@ -165,6 +165,18 @@ def decimal(value: Any, label: str, signed: bool = False) -> int:
     return result
 
 
+def authenticated_transaction_fee(value: Any, label: str, cluster_kind: str) -> int:
+    """Parse a present canonical fee under an already-authenticated cluster."""
+    fee = decimal(value, label)
+    if cluster_kind == "devnet" and fee == 0:
+        refuse(
+            f"{label} is exact zero on public devnet; zero is admitted only for an authenticated owned-loopback genesis"
+        )
+    if cluster_kind != "owned-loopback" and cluster_kind != "devnet":
+        refuse(f"{label} has no authenticated cluster fee policy")
+    return fee
+
+
 def digest(value: Any, label: str) -> str:
     encoded = text(value, label)
     if len(encoded) != 64 or any(ch not in "0123456789abcdef" for ch in encoded):
@@ -562,7 +574,9 @@ def validate_manifest_for(
         fee_ref = text(event["feePayer"], f"event {event_id} fee payer")
         if fee_ref not in accounts or accounts[fee_ref]["kind"] != "wallet":
             refuse(f"event {event_id} fee payer is not a declared wallet")
-        decimal(event["feeLamports"], f"event {event_id} fee")
+        authenticated_transaction_fee(
+            event["feeLamports"], f"event {event_id} fee", cluster_kind
+        )
         if decimal(event["computeUnitsConsumed"], f"event {event_id} compute units") == 0:
             refuse(f"event {event_id} compute units must be positive")
         source_path = text(event["sourcePath"], f"event {event_id} sourcePath")
@@ -711,7 +725,13 @@ def authenticate_owned_loopback_sources(
     authenticate_sources_for(manifest, journal_root, validate_owned_loopback_manifest)
 
 
-def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], rpc: Any, collateral_mint: str) -> dict[str, Any]:
+def reconcile_event(
+    event: dict[str, Any],
+    accounts: dict[str, dict[str, Any]],
+    rpc: Any,
+    collateral_mint: str,
+    cluster_kind: str,
+) -> dict[str, Any]:
     result = rpc.transaction(event["signature"])
     if result is None or not isinstance(result, dict):
         refuse(f"finalized transaction {event['signature']} is absent")
@@ -722,7 +742,16 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     if not isinstance(meta, dict) or meta.get("err") is not None:
         refuse(f"transaction {event['signature']} is absent, failed, or not finalized")
     fee = meta.get("fee")
-    if not isinstance(fee, int) or fee != decimal(event["feeLamports"], "event fee"):
+    expected_fee = authenticated_transaction_fee(
+        event["feeLamports"], "event fee", cluster_kind
+    )
+    if (
+        not isinstance(fee, int)
+        or isinstance(fee, bool)
+        or fee < 0
+        or fee != expected_fee
+        or (cluster_kind == "devnet" and fee == 0)
+    ):
         refuse(f"transaction {event['signature']} has a substituted fee")
     compute = meta.get("computeUnitsConsumed")
     if not isinstance(compute, int) or compute != decimal(
@@ -993,7 +1022,10 @@ def reconcile_for(
         if cluster_kind == "devnet":
             refuse(f"RPC genesis {genesis!r} is not exact Solana devnet")
         refuse(f"RPC genesis {genesis!r} is not exact owned-loopback genesis")
-    projections = [reconcile_event(event, accounts, rpc, collateral_mint) for event in events]
+    projections = [
+        reconcile_event(event, accounts, rpc, collateral_mint, cluster_kind)
+        for event in events
+    ]
     last_lamports: dict[str, int] = {}
     last_tokens: dict[str, int] = {}
     last_positions: dict[str, dict[str, Any]] = {}
