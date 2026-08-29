@@ -10,7 +10,7 @@ describe('LandingPulse', () => {
     expect(html).toContain('Collateral in listed markets');
     expect(html).toContain('Resolutions in listed markets');
     expect(html.split('>—</strong>').length - 1).toBe(3);
-    expect(html).toContain('Reading finalized state from the active deployment…');
+    expect(html).toContain('Reading live from the chain…');
     expect(html).not.toContain('>0</strong>');
   });
 
