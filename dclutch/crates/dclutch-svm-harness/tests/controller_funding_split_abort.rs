@@ -31,7 +31,7 @@ use dclutch_release_set_contract::{
     ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_resolution_codec::{
-    PreMarketFundingAbortRequestV1, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+    PreMarketFundingAbortRequestV1, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_ledger_account_digest_v1,
 };
 use solana_account::{Account, AccountSharedData};
@@ -73,6 +73,7 @@ struct Snapshot {
 
 struct Fixture {
     test: Option<ProgramTest>,
+    trading_program: Pubkey,
     checkpoint: Pubkey,
     checkpoint_data: Vec<u8>,
     resolution_ledger: Pubkey,
@@ -85,6 +86,15 @@ struct Fixture {
     rent_credit: Pubkey,
     instruction: Instruction,
     trading_closes_first: bool,
+}
+
+#[derive(Clone, Copy)]
+enum SlotPinHostile {
+    LaterTradingDeployment,
+    LaterResolutionDeployment,
+    TradingUpgradeAuthority,
+    ResolutionUpgradeAuthority,
+    ActivationCache,
 }
 
 fn artifacts() -> Elves {
@@ -109,18 +119,32 @@ fn programdata(program: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
 }
 
-fn immutable_programdata(elf: &[u8]) -> Vec<u8> {
+fn programdata_body(
+    elf: &[u8],
+    deployment_slot: u64,
+    upgrade_authority: Option<[u8; 32]>,
+) -> Vec<u8> {
     let mut bytes = vec![0_u8; 45 + elf.len()];
     bytes[0..4].copy_from_slice(&3_u32.to_le_bytes());
-    bytes[4..12].copy_from_slice(&0_u64.to_le_bytes());
-    bytes[12] = 0;
+    bytes[4..12].copy_from_slice(&deployment_slot.to_le_bytes());
+    if let Some(authority) = upgrade_authority {
+        bytes[12] = 1;
+        bytes[13..45].copy_from_slice(&authority);
+    }
     bytes[45..].copy_from_slice(elf);
     bytes
 }
 
-fn add_program(test: &mut ProgramTest, name: &'static str, program: Pubkey, elf: &[u8]) {
+fn add_program(
+    test: &mut ProgramTest,
+    name: &'static str,
+    program: Pubkey,
+    elf: &[u8],
+    deployment_slot: u64,
+    upgrade_authority: Option<[u8; 32]>,
+) {
     test.add_upgradeable_program_to_genesis(name, &program);
-    let data = immutable_programdata(elf);
+    let data = programdata_body(elf, deployment_slot, upgrade_authority);
     test.add_account(
         programdata(program),
         Account {
@@ -214,7 +238,7 @@ fn manifest(trading_index: usize) -> Vec<u8> {
                 CapabilityContentId::new(if usize::from(index) == trading_index {
                     TRADING_SEMANTIC_RELEASE_ID
                 } else {
-                    RESOLUTION_CONTROLLER_RELEASE_ID_V6
+                    RESOLUTION_CONTROLLER_RELEASE_ID_V7
                 })
                 .expect("controller release"),
                 CapabilityContentId::new([0x20 + index; 32]).expect("config"),
@@ -283,53 +307,100 @@ fn fixture_with_slot_pin_hostile(
     slot_pin_hostile: Option<SlotPinHostile>,
 ) -> Fixture {
     let elves = artifacts();
+    // ProgramTest's loaded-program cache is process-global. Each deliberately
+    // different ProgramData body therefore gets a distinct program identity;
+    // otherwise one hostile test would be testing cache replacement in the
+    // harness rather than release authentication in the transaction.
+    let nonce = match slot_pin_hostile {
+        None => 0,
+        Some(SlotPinHostile::LaterTradingDeployment) => 1,
+        Some(SlotPinHostile::LaterResolutionDeployment) => 2,
+        Some(SlotPinHostile::TradingUpgradeAuthority) => 3,
+        Some(SlotPinHostile::ResolutionUpgradeAuthority) => 4,
+        Some(SlotPinHostile::ActivationCache) => 5,
+    };
+    let trading_program = if nonce == 0 {
+        TRADING_PROGRAM_ID
+    } else {
+        Pubkey::new_from_array([0x80 + nonce; 32])
+    };
+    let resolution_program = if nonce == 0 {
+        RESOLUTION_PROGRAM_ID
+    } else {
+        Pubkey::new_from_array([0x90 + nonce; 32])
+    };
+    let registry_program = if nonce == 0 {
+        REGISTRY_PROGRAM_ID
+    } else {
+        Pubkey::new_from_array([0xA0 + nonce; 32])
+    };
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.set_compute_max_units(1_400_000);
     add_program(
         &mut test,
         "dclutch_trading_sbf",
-        TRADING_PROGRAM_ID,
+        trading_program,
         &elves.trading,
+        0,
+        None,
     );
     add_program(
         &mut test,
         "dclutch_resolution_proof_sbf",
-        RESOLUTION_PROGRAM_ID,
+        resolution_program,
         &elves.resolution,
+        0,
+        None,
     );
     add_program(
         &mut test,
         "dclutch_registry_sbf",
-        REGISTRY_PROGRAM_ID,
+        registry_program,
         &elves.registry,
+        0,
+        None,
     );
 
-    let trading_release = release(
-        TRADING_PROGRAM_ID,
-        TRADING_SEMANTIC_RELEASE_ID,
-        &elves.trading,
-    );
+    let trading_release = match slot_pin_hostile {
+        Some(SlotPinHostile::LaterTradingDeployment) => release_with_pin(
+            trading_program,
+            TRADING_SEMANTIC_RELEASE_ID,
+            &elves.trading,
+            1,
+            ArtifactUpgradePolicyV1::Immutable,
+            None,
+        ),
+        Some(SlotPinHostile::TradingUpgradeAuthority) => release_with_pin(
+            trading_program,
+            TRADING_SEMANTIC_RELEASE_ID,
+            &elves.trading,
+            0,
+            ArtifactUpgradePolicyV1::ExactAuthority,
+            Some([0xA4; 32]),
+        ),
+        _ => release(trading_program, TRADING_SEMANTIC_RELEASE_ID, &elves.trading),
+    };
     let resolution_release = match slot_pin_hostile {
-        Some(SlotPinHostile::DeploymentSlot) => release_with_pin(
-            RESOLUTION_PROGRAM_ID,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+        Some(SlotPinHostile::LaterResolutionDeployment) => release_with_pin(
+            resolution_program,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             &elves.resolution,
             1,
             ArtifactUpgradePolicyV1::Immutable,
             None,
         ),
-        Some(SlotPinHostile::UpgradeAuthority) => release_with_pin(
-            RESOLUTION_PROGRAM_ID,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+        Some(SlotPinHostile::ResolutionUpgradeAuthority) => release_with_pin(
+            resolution_program,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             &elves.resolution,
             0,
             ArtifactUpgradePolicyV1::ExactAuthority,
             Some([0xA5; 32]),
         ),
         _ => release(
-            RESOLUTION_PROGRAM_ID,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+            resolution_program,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             &elves.resolution,
         ),
     };
@@ -366,7 +437,7 @@ fn fixture_with_slot_pin_hostile(
     }
     let activation = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
-        &REGISTRY_PROGRAM_ID,
+        &registry_program,
     )
     .0;
     test.add_account(
@@ -374,7 +445,7 @@ fn fixture_with_slot_pin_hostile(
         Account {
             lamports: Rent::default().minimum_balance(activation_data.len()),
             data: activation_data,
-            owner: REGISTRY_PROGRAM_ID,
+            owner: registry_program,
             executable: false,
             rent_epoch: 0,
         },
@@ -388,7 +459,7 @@ fn fixture_with_slot_pin_hostile(
             &CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             &manifest_digest,
         ],
-        &REGISTRY_PROGRAM_ID,
+        &registry_program,
     )
     .0;
     let manifest_staging = Pubkey::find_program_address(
@@ -397,7 +468,7 @@ fn fixture_with_slot_pin_hostile(
             &CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             &manifest_digest,
         ],
-        &REGISTRY_PROGRAM_ID,
+        &registry_program,
     )
     .0;
     test.add_account(
@@ -405,7 +476,7 @@ fn fixture_with_slot_pin_hostile(
         Account {
             lamports: Rent::default().minimum_balance(manifest_data.len()),
             data: manifest_data.clone(),
-            owner: REGISTRY_PROGRAM_ID,
+            owner: registry_program,
             executable: false,
             rent_epoch: 0,
         },
@@ -415,14 +486,10 @@ fn fixture_with_slot_pin_hostile(
     let rent_credit = Pubkey::new_from_array([0x63; 32]);
     let trading_mask = 1_u16 << trading_index;
     let resolution_mask = 0b1111 ^ trading_mask;
-    let (resolution_ledger, resolution_data, resolution_lamports, resolution_principal) = ledger(
-        RESOLUTION_PROGRAM_ID,
-        market,
-        &manifest_data,
-        resolution_mask,
-    );
+    let (resolution_ledger, resolution_data, resolution_lamports, resolution_principal) =
+        ledger(resolution_program, market, &manifest_data, resolution_mask);
     let (trading_ledger, trading_data, trading_lamports, trading_principal) =
-        ledger(TRADING_PROGRAM_ID, market, &manifest_data, trading_mask);
+        ledger(trading_program, market, &manifest_data, trading_mask);
     let ordered_ledgers = if resolution_mask.trailing_zeros() < trading_mask.trailing_zeros() {
         [resolution_ledger, trading_ledger]
     } else {
@@ -473,7 +540,7 @@ fn fixture_with_slot_pin_hostile(
         )
         .expect("checkpoint derivation")
         .seed_components(),
-        &TRADING_PROGRAM_ID,
+        &trading_program,
     )
     .0;
     let checkpoint_lamports = Rent::default().minimum_balance(checkpoint_data.len());
@@ -483,7 +550,7 @@ fn fixture_with_slot_pin_hostile(
             Account {
                 lamports: checkpoint_lamports,
                 data: checkpoint_data.clone(),
-                owner: TRADING_PROGRAM_ID,
+                owner: trading_program,
                 executable: false,
                 rent_epoch: 0,
             },
@@ -493,7 +560,7 @@ fn fixture_with_slot_pin_hostile(
             Account {
                 lamports: resolution_lamports,
                 data: resolution_data.clone(),
-                owner: RESOLUTION_PROGRAM_ID,
+                owner: resolution_program,
                 executable: false,
                 rent_epoch: 0,
             },
@@ -503,7 +570,7 @@ fn fixture_with_slot_pin_hostile(
             Account {
                 lamports: trading_lamports,
                 data: trading_data.clone(),
-                owner: TRADING_PROGRAM_ID,
+                owner: trading_program,
                 executable: false,
                 rent_epoch: 0,
             },
@@ -557,7 +624,7 @@ fn fixture_with_slot_pin_hostile(
         ledger: resolution_ledger.to_bytes(),
         ledger_account_digest: pre_market_funding_ledger_account_digest_v1(
             resolution_ledger.to_bytes(),
-            RESOLUTION_PROGRAM_ID.to_bytes(),
+            resolution_program.to_bytes(),
             resolution_lamports,
             &resolution_data,
         ),
@@ -574,20 +641,19 @@ fn fixture_with_slot_pin_hostile(
         hash(&abort_bytes).to_bytes(),
     )
     .expect("abort authority");
-    let authority =
-        Pubkey::find_program_address(&authority_seeds.as_slices(), &TRADING_PROGRAM_ID).0;
+    let authority = Pubkey::find_program_address(&authority_seeds.as_slices(), &trading_program).0;
     let accounts = vec![
         AccountMeta::new_readonly(authority, false),
-        AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
-        AccountMeta::new_readonly(programdata(TRADING_PROGRAM_ID), false),
-        AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
-        AccountMeta::new_readonly(programdata(RESOLUTION_PROGRAM_ID), false),
+        AccountMeta::new_readonly(trading_program, false),
+        AccountMeta::new_readonly(programdata(trading_program), false),
+        AccountMeta::new_readonly(resolution_program, false),
+        AccountMeta::new_readonly(programdata(resolution_program), false),
         AccountMeta::new(checkpoint, false),
         AccountMeta::new(resolution_ledger, false),
         AccountMeta::new(funding_source, false),
         AccountMeta::new(rent_credit, false),
         AccountMeta::new_readonly(activation, false),
-        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(registry_program, false),
         AccountMeta::new_readonly(manifest_raw, false),
         AccountMeta::new_readonly(manifest_staging, false),
         AccountMeta::new_readonly(sysvar::rent::ID, false),
@@ -597,13 +663,14 @@ fn fixture_with_slot_pin_hostile(
     ];
     assert_eq!(accounts.len(), CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1);
     let instruction = Instruction {
-        program_id: TRADING_PROGRAM_ID,
+        program_id: trading_program,
         accounts,
         data: CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1.to_vec(),
     };
 
     Fixture {
         test: Some(test),
+        trading_program,
         checkpoint,
         checkpoint_data,
         resolution_ledger,
@@ -720,7 +787,7 @@ fn cleanup_instruction(fixture: &Fixture, snapshot: &Snapshot, magic: [u8; 8]) -
         hash(&request_bytes).to_bytes(),
     )
     .expect("cleanup authority seeds");
-    let authority = Pubkey::find_program_address(&seeds.as_slices(), &TRADING_PROGRAM_ID).0;
+    let authority = Pubkey::find_program_address(&seeds.as_slices(), &fixture.trading_program).0;
     let mut instruction = fixture.instruction.clone();
     instruction.accounts[0].pubkey = authority;
     instruction.data = magic.to_vec();
@@ -928,13 +995,6 @@ async fn prepared_cleanup_cannot_consume_a_custody_staged_checkpoint() {
     );
 }
 
-#[derive(Clone, Copy)]
-enum SlotPinHostile {
-    DeploymentSlot,
-    UpgradeAuthority,
-    ActivationCache,
-}
-
 async fn assert_slot_pin_hostile_refuses(hostile: SlotPinHostile) {
     let mut fixture = fixture_with_slot_pin_hostile(3, false, Some(hostile));
     let mut context = fixture
@@ -955,17 +1015,108 @@ async fn assert_slot_pin_hostile_refuses(hostile: SlotPinHostile) {
     assert_same(&before, &after, "slot-pin substitution rollback");
 }
 
+fn seed_snapshot(test: &mut ProgramTest, keys: [Pubkey; 5], snapshot: &Snapshot) {
+    let closed = Account {
+        lamports: 0,
+        data: Vec::new(),
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    };
+    for (key, account) in [
+        (keys[0], snapshot.checkpoint.as_ref()),
+        (keys[1], snapshot.resolution_ledger.as_ref()),
+        (keys[2], snapshot.trading_ledger.as_ref()),
+        (keys[3], Some(&snapshot.funding_source)),
+        (keys[4], Some(&snapshot.rent_credit)),
+    ] {
+        test.add_account(key, account.unwrap_or(&closed).clone());
+    }
+}
+
+async fn assert_suffix_slot_pin_hostile_refuses(hostile: SlotPinHostile) {
+    let mut fixture = fixture(0, false);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    context
+        .warp_to_slot(EXPIRY_SLOT + 1)
+        .expect("past checkpoint expiry");
+    assert!(
+        process(&mut context, fixture.instruction.clone()).await,
+        "the honest first cleanup prefix persists"
+    );
+    let prefix = snapshot(&mut context, &fixture).await;
+
+    // Start a fresh bank from that exact finalized prefix with the live
+    // ProgramData/cache hostile present at genesis. Replacing ProgramData in
+    // a running ProgramTest bank exercises its loader cache rather than the
+    // transaction's release authentication.
+    let mut hostile_fixture = fixture_with_slot_pin_hostile(0, false, Some(hostile));
+    let hostile_keys = [
+        hostile_fixture.checkpoint,
+        hostile_fixture.resolution_ledger,
+        hostile_fixture.trading_ledger,
+        hostile_fixture.funding_source,
+        hostile_fixture.rent_credit,
+    ];
+    seed_snapshot(
+        hostile_fixture.test.as_mut().expect("hostile ProgramTest"),
+        hostile_keys,
+        &prefix,
+    );
+    let mut hostile_context = hostile_fixture
+        .test
+        .take()
+        .expect("unstarted hostile ProgramTest")
+        .start_with_context()
+        .await;
+    hostile_context
+        .warp_to_slot(EXPIRY_SLOT + 1)
+        .expect("past checkpoint expiry");
+    let before = snapshot(&mut hostile_context, &hostile_fixture).await;
+    let suffix = cleanup_instruction(
+        &hostile_fixture,
+        &before,
+        CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
+    );
+    assert!(
+        !process(&mut hostile_context, suffix).await,
+        "the suffix must reauthenticate the current deployment before closing anything"
+    );
+    let after = snapshot(&mut hostile_context, &hostile_fixture).await;
+    assert_same(&before, &after, "slot-pin suffix substitution rollback");
+}
+
 #[tokio::test]
 async fn cleanup_refuses_substituted_deployment_slot_pin() {
-    assert_slot_pin_hostile_refuses(SlotPinHostile::DeploymentSlot).await;
+    assert_slot_pin_hostile_refuses(SlotPinHostile::LaterTradingDeployment).await;
+    assert_slot_pin_hostile_refuses(SlotPinHostile::LaterResolutionDeployment).await;
 }
 
 #[tokio::test]
 async fn cleanup_refuses_substituted_upgrade_authority() {
-    assert_slot_pin_hostile_refuses(SlotPinHostile::UpgradeAuthority).await;
+    assert_slot_pin_hostile_refuses(SlotPinHostile::TradingUpgradeAuthority).await;
+    assert_slot_pin_hostile_refuses(SlotPinHostile::ResolutionUpgradeAuthority).await;
 }
 
 #[tokio::test]
 async fn cleanup_refuses_substituted_activation_cache() {
     assert_slot_pin_hostile_refuses(SlotPinHostile::ActivationCache).await;
+}
+
+#[tokio::test]
+async fn cleanup_suffix_reauthenticates_trading_and_resolution_slot_pins() {
+    for hostile in [
+        SlotPinHostile::LaterTradingDeployment,
+        SlotPinHostile::LaterResolutionDeployment,
+        SlotPinHostile::TradingUpgradeAuthority,
+        SlotPinHostile::ResolutionUpgradeAuthority,
+        SlotPinHostile::ActivationCache,
+    ] {
+        assert_suffix_slot_pin_hostile_refuses(hostile).await;
+    }
 }

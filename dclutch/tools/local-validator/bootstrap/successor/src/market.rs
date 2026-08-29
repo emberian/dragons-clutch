@@ -85,21 +85,23 @@ use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
 use dclutch_resolution_codec::{
-    PreMarketFundingAbortRequestV1, PreMarketFundingRequestV2,
-    pre_market_funding_ledger_account_digest_v1, pre_market_funding_prestate_digest_v1,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PreMarketFundingAbortRequestV1,
+    PreMarketFundingRequestV2, pre_market_funding_ledger_account_digest_v1,
+    pre_market_funding_prestate_digest_v1,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
     RecoveryPolicyV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceCapacityProfileV1,
-    SourceMaterialV3, SourceSpecV1, WINDOW_SPEC_SCHEMA_ID_V1,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use dclutch_token_svm::{
     ACCOUNT_BYTES, AccountState, CollateralAdapterReleaseV1, MINT_BYTES, Mint,
     TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use sha2::{Digest as _, Sha256};
+use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_sdk::{
     hash::Hash,
     instruction::{AccountMeta, Instruction},
@@ -112,7 +114,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{create_account, transfer};
 
 use dclutch_versioned_message_operator::{
-    Observation, ObservedAccount, build_lookup_table_creation_v1,
+    Observation, ObservedAccount, build_lookup_table_creation_v1, build_lookup_table_freeze,
 };
 
 use crate::{
@@ -120,6 +122,12 @@ use crate::{
     direct_market::{
         DirectMarketCompilerInputV1, attach_direct_market_capability_v1,
         validate_direct_market_capability_v1,
+    },
+    funding_readiness::{
+        FundingReadinessCoordinatesV1, FundingReadinessInstructionPlanV1, FundingReadinessPlanV1,
+        FundingReadinessPrepayV1, FundingReadinessRecordCoordinatesV1,
+        FundingReadinessRoutedPlanV1, funding_readiness_routing_addresses_v1,
+        plan_funding_readiness_from_rpc_v1, plan_funding_readiness_with_routing_from_rpc_v1,
     },
     model::{AccountEvidence, MarketRunInput, SuccessorPlan, TransactionEvidence},
     plan::{hex, hex32, pubkey},
@@ -131,7 +139,8 @@ use crate::{
 use founding_submission_journal::{
     FoundingFinalizationV1, FoundingPreSendProjectionV1, FoundingSubmissionBindingV1,
     FoundingSubmissionJournalV1, FoundingSubmissionOperationV1, FoundingSubmissionPhaseV1,
-    FoundingSubmissionPlanV1, FoundingSubmissionRecoveryV1, authenticate_founding_packet_fresh_v1,
+    FoundingSubmissionPlanV1, FoundingSubmissionRecoveryV1,
+    authenticate_bound_founding_submission_prefix_v1, authenticate_founding_packet_fresh_v1,
     authenticate_founding_submission_v1, dispatch_founding_submission_v1,
     finalize_founding_submission_v1, founding_submission_finalized_poststates_v1,
     founding_submission_message_v1, founding_submission_packet_v1,
@@ -268,6 +277,19 @@ struct Dcltcfq1RecoveryPayloadV1 {
     completion_accounts: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FundingReadinessRecoveryPayloadV1 {
+    schema: String,
+    operation: FoundingSubmissionOperationV1,
+    market: String,
+    source_state: String,
+    funding_ledger: String,
+    beneficiary: String,
+    activation_receipt: String,
+    expected_next_route: String,
+}
+
 pub(crate) const DCLTCFQ1_RECOVERY_PAYLOAD_SCHEMA_V1: &str =
     "dclutch-market-dcltcfq1-recovery-payload-v1";
 pub(crate) const DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1: &str =
@@ -275,6 +297,8 @@ pub(crate) const DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1: &str =
 pub(crate) const DCLTPCB2_RECOVERY_PAYLOAD_SCHEMA_V1: &str =
     "dclutch-market-dcltpcb2-recovery-payload-v1";
 pub(crate) const DCLTPCB2_CHECKPOINT_SCHEMA_V1: &str = "dclutch-market-dcltpcb2-checkpoint-v1";
+pub(crate) const FUNDING_READINESS_RECOVERY_PAYLOAD_SCHEMA_V1: &str =
+    "dclutch-market-funding-readiness-recovery-payload-v1";
 
 /// The campaign report owns the filesystem and its exclusive lease; this
 /// adapter lets each split founding send advance its embedded journal without
@@ -291,9 +315,8 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
         journals: &'a mut BTreeMap<FoundingSubmissionOperationV1, FoundingSubmissionJournalV1>,
         persist: &'a mut dyn FnMut(&[FoundingSubmissionJournalV1]) -> Result<()>,
     ) -> Result<Self> {
-        for journal in journals.values() {
-            authenticate_founding_submission_v1(&binding, journal)?;
-        }
+        let ordered = journals.values().cloned().collect::<Vec<_>>();
+        authenticate_bound_founding_submission_prefix_v1(&binding, &ordered)?;
         Ok(Self {
             binding,
             journals,
@@ -310,8 +333,16 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
 
     fn write(&mut self, journal: FoundingSubmissionJournalV1) -> Result<()> {
         authenticate_founding_submission_v1(&self.binding, &journal)?;
+        let mut ordered = self
+            .journals
+            .values()
+            .filter(|existing| existing.operation != journal.operation)
+            .cloned()
+            .collect::<Vec<_>>();
+        ordered.push(journal.clone());
+        ordered.sort_by_key(|row| row.operation);
+        authenticate_bound_founding_submission_prefix_v1(&self.binding, &ordered)?;
         self.journals.insert(journal.operation, journal);
-        let ordered = self.journals.values().cloned().collect::<Vec<_>>();
         (self.persist)(&ordered)
     }
 
@@ -321,6 +352,147 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
     ) -> Result<FoundingPreSendProjectionV1> {
         visit_founding_pre_send_boundary_v1(&self.binding, journal, &mut |_| Ok(()))
     }
+}
+
+fn compile_current_founding_message_v1(
+    label: &str,
+    payer: Pubkey,
+    instructions: &[Instruction],
+    observation: Observation,
+    tables: &[ObservedAccount],
+    heap_frame_bytes: Option<u32>,
+    blockhash: Hash,
+) -> Result<VersionedMessage> {
+    let bounded = bounded_instructions(instructions, heap_frame_bytes)
+        .map_err(|error| Error::new(format!("{label}: {error}")))?;
+    let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+        payer,
+        &bounded,
+        solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+        observation,
+        tables,
+    )
+    .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+    Ok(plan.message)
+}
+
+fn authenticate_resolved_founding_message_v1(
+    operation: FoundingSubmissionOperationV1,
+    message: &VersionedMessage,
+    tables: &[ObservedAccount],
+) -> Result<()> {
+    let mut resolved = std::collections::BTreeSet::new();
+    let (static_keys, lookups) = match message {
+        VersionedMessage::Legacy(message) => (message.account_keys.as_slice(), &[][..]),
+        VersionedMessage::V0(message) => (
+            message.account_keys.as_slice(),
+            message.address_table_lookups.as_slice(),
+        ),
+    };
+    if static_keys.iter().any(|key| !resolved.insert(*key)) {
+        return Err(Error::new(
+            "founding compiled message duplicated a static account",
+        ));
+    }
+    let mut used_tables = std::collections::BTreeSet::new();
+    for lookup in lookups {
+        if !used_tables.insert(lookup.account_key) {
+            return Err(Error::new(
+                "founding compiled message duplicated a lookup table",
+            ));
+        }
+        let table = tables
+            .iter()
+            .find(|table| table.key == lookup.account_key)
+            .ok_or_else(|| Error::new("founding compiled message omitted its lookup body"))?;
+        let decoded = AddressLookupTable::deserialize(&table.data)
+            .map_err(|error| Error::new(format!("founding lookup table: {error:?}")))?;
+        for index in lookup
+            .writable_indexes
+            .iter()
+            .chain(&lookup.readonly_indexes)
+        {
+            let address = decoded
+                .addresses
+                .get(usize::from(*index))
+                .ok_or_else(|| Error::new("founding lookup index exceeded its exact body"))?;
+            if !resolved.insert(*address) {
+                return Err(Error::new(
+                    "founding resolved accounts aliased a static or loaded account",
+                ));
+            }
+        }
+    }
+    if resolved.len() != operation.exact_unique_accounts() {
+        return Err(Error::new(format!(
+            "{} resolved account count changed: expected {}, observed {}",
+            operation.label(),
+            operation.exact_unique_accounts(),
+            resolved.len()
+        )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_current_founding_intent_v1(
+    label: &str,
+    operation: FoundingSubmissionOperationV1,
+    instructions: &[Instruction],
+    expected_signers: &[Pubkey],
+    observation: Observation,
+    tables: &[ObservedAccount],
+    resolved_accounts_sha256: &str,
+    prestate_addresses: &[Pubkey],
+    completion_addresses: &[Pubkey],
+    recovery_payload: &[u8],
+    heap_frame_bytes: Option<u32>,
+    binding: &FoundingSubmissionBindingV1,
+    current: &FoundingSubmissionJournalV1,
+) -> Result<()> {
+    let persisted = founding_submission_message_v1(binding, current)?;
+    let blockhash = match &persisted {
+        VersionedMessage::Legacy(message) => message.recent_blockhash,
+        VersionedMessage::V0(message) => message.recent_blockhash,
+    };
+    let recomputed = compile_current_founding_message_v1(
+        label,
+        binding.payer,
+        instructions,
+        observation,
+        tables,
+        heap_frame_bytes,
+        blockhash,
+    )?;
+    authenticate_resolved_founding_message_v1(operation, &recomputed, tables)?;
+    let expected_signers = expected_signers
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let expected_prestate_accounts = prestate_addresses
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let expected_completion_accounts = completion_addresses
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if current.operation != operation
+        || recomputed.serialize() != persisted.serialize()
+        || current.expected_signers != expected_signers
+        || current.resolved_accounts_sha256 != resolved_accounts_sha256
+        || current.prestate_accounts != expected_prestate_accounts
+        || current.completion_accounts != expected_completion_accounts
+        || current.completion_contract_sha256
+            != founding_completion_contract_v1(operation, completion_addresses)?
+        || founding_submission_recovery_payload_v1(binding, current)? != recovery_payload
+    {
+        return Err(Error::new(format!(
+            "{} durable journal does not match the freshly derived instruction, routing, signer, prestate, completion, or recovery intent",
+            operation.label()
+        )));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -336,6 +508,7 @@ fn send_durable_founding_v1(
     prestate_addresses: &[Pubkey],
     completion_addresses: &[Pubkey],
     recovery_payload: Vec<u8>,
+    heap_frame_bytes: Option<u32>,
     recorder: &mut FoundingSubmissionRecorderV1<'_>,
     authenticate_completion: &mut dyn FnMut(&mut Rpc) -> Result<()>,
 ) -> Result<TransactionEvidence> {
@@ -368,17 +541,17 @@ fn send_durable_founding_v1(
             .get("lastValidBlockHeight")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| Error::new("founding blockhash omitted last-valid height"))?;
-        let bounded = bounded_instructions(instructions, Some(FOUNDING_HEAP_FRAME_BYTES))
-            .map_err(|error| Error::new(format!("{label}: {error}")))?;
-        let plan = dclutch_versioned_message_operator::compile_v0_message(
+        let message = compile_current_founding_message_v1(
+            label,
             payer.pubkey(),
-            &bounded,
-            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            instructions,
             observation,
             tables,
-        )
-        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
-        let message_bytes = plan.message.serialize();
+            heap_frame_bytes,
+            blockhash,
+        )?;
+        authenticate_resolved_founding_message_v1(operation, &message, tables)?;
+        let message_bytes = message.serialize();
         let exact_fee_lamports = rpc
             .call(
                 "getFeeForMessage",
@@ -391,21 +564,40 @@ fn send_durable_founding_v1(
             &recorder.binding,
             FoundingSubmissionPlanV1 {
                 operation,
-                message: plan.message,
+                message,
                 last_valid_block_height,
                 exact_fee_lamports,
-                expected_signers,
-                resolved_accounts_sha256,
+                expected_signers: expected_signers.clone(),
+                resolved_accounts_sha256: resolved_accounts_sha256.clone(),
                 prestate_accounts: prestate_addresses.to_vec(),
                 prestate_sha256: expected_prestate.clone(),
                 completion_accounts: completion_addresses.to_vec(),
                 completion_contract_sha256: completion_contract_sha256.clone(),
-                recovery_payload,
+                recovery_payload: recovery_payload.clone(),
             },
         )?;
         // Key-free, self-authenticated Planned review is durable first.
         recorder.write(journal)?;
     }
+
+    let current = recorder
+        .current(operation)
+        .ok_or_else(|| Error::new("durable founding journal disappeared before intent join"))?;
+    authenticate_current_founding_intent_v1(
+        label,
+        operation,
+        instructions,
+        &expected_signers,
+        observation,
+        tables,
+        &resolved_accounts_sha256,
+        prestate_addresses,
+        completion_addresses,
+        &recovery_payload,
+        heap_frame_bytes,
+        &recorder.binding,
+        current,
+    )?;
 
     loop {
         let current = recorder
@@ -769,6 +961,87 @@ pub(crate) fn authenticate_completed_founding_submission_v1(
     Ok(finalized.evidence)
 }
 
+/// Reopen one immutable finalized transaction after a later suffix has
+/// legitimately changed its completion accounts.
+///
+/// The Finalized journal already captured those poststates at the adjacent
+/// transition. Recovery therefore reauthenticates the journal and immutable
+/// chain packet/metadata, but deliberately does not pretend the old
+/// poststates should still be the live terminal state.
+fn authenticate_historical_founding_transaction_v1(
+    rpc: &mut Rpc,
+    label: &str,
+    operation: FoundingSubmissionOperationV1,
+    recorder: &FoundingSubmissionRecorderV1<'_>,
+) -> Result<TransactionEvidence> {
+    let journal = recorder
+        .current(operation)
+        .ok_or_else(|| Error::new(format!("{} durable journal is absent", operation.label())))?;
+    authenticate_founding_submission_v1(&recorder.binding, journal)?;
+    if journal.operation != operation || journal.phase != FoundingSubmissionPhaseV1::Finalized {
+        return Err(Error::new(format!(
+            "{} historical recovery requires its exact Finalized journal",
+            operation.label()
+        )));
+    }
+    let signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("Finalized historical journal omitted signature"))?
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("Finalized historical signature: {error}")))?;
+    let finalized = rpc
+        .finalized_signed_packet(label, signature, false)?
+        .ok_or_else(|| Error::new("persisted historical transaction disappeared"))?;
+    let packet_sha256 = hex(&Sha256::digest(&finalized.packet));
+    if journal.finalized_slot != Some(finalized.evidence.slot)
+        || journal.transaction_sha256.as_deref() != Some(packet_sha256.as_str())
+        || journal.fee_lamports != finalized.evidence.fee_lamports
+        || journal.compute_units_consumed != finalized.evidence.compute_units_consumed
+    {
+        return Err(Error::new(
+            "persisted historical slot, packet, fee, or compute units changed from chain",
+        ));
+    }
+    Ok(finalized.evidence)
+}
+
+fn finalized_founding_routing_table_keys_v1(
+    recorder: &FoundingSubmissionRecorderV1<'_>,
+    operation: FoundingSubmissionOperationV1,
+) -> Result<Vec<Pubkey>> {
+    let journal = recorder
+        .current(operation)
+        .ok_or_else(|| Error::new(format!("{} journal is absent", operation.label())))?;
+    authenticate_founding_submission_v1(&recorder.binding, journal)?;
+    if journal.phase != FoundingSubmissionPhaseV1::Finalized {
+        return Err(Error::new(format!(
+            "{} routing recovery requires its Finalized journal",
+            operation.label()
+        )));
+    }
+    let VersionedMessage::V0(message) = founding_submission_message_v1(&recorder.binding, journal)?
+    else {
+        return Err(Error::new(
+            "founding routing recovery requires a v0 message",
+        ));
+    };
+    let keys = message
+        .address_table_lookups
+        .iter()
+        .map(|lookup| lookup.account_key)
+        .collect::<Vec<_>>();
+    let mut unique = keys.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    if keys.len() != 1 || unique != keys {
+        return Err(Error::new(
+            "founding routing recovery requires one exact nonaliased table",
+        ));
+    }
+    Ok(keys)
+}
+
 pub(crate) fn founding_account_set_digest_v1(
     rpc: &mut Rpc,
     addresses: &[Pubkey],
@@ -829,6 +1102,39 @@ fn founding_instruction_account_digest_v1(payer: Pubkey, instruction: &Instructi
     for account in &instruction.accounts {
         hasher.update(account.pubkey.as_ref());
         hasher.update([u8::from(account.is_signer), u8::from(account.is_writable)]);
+    }
+    hex(&hasher.finalize())
+}
+
+fn funding_readiness_instruction_digest_v1(
+    payer: Pubkey,
+    instructions: &[Instruction],
+    routing_tables: &[ObservedAccount],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/funding-readiness-resolved-instructions/v1");
+    hasher.update(payer.as_ref());
+    hasher.update((instructions.len() as u64).to_le_bytes());
+    for instruction in instructions {
+        hasher.update(instruction.program_id.as_ref());
+        hasher.update((instruction.accounts.len() as u64).to_le_bytes());
+        for account in &instruction.accounts {
+            hasher.update(account.pubkey.as_ref());
+            hasher.update([u8::from(account.is_signer), u8::from(account.is_writable)]);
+        }
+        hasher.update((instruction.data.len() as u64).to_le_bytes());
+        hasher.update(&instruction.data);
+    }
+    hasher.update((routing_tables.len() as u64).to_le_bytes());
+    for table in routing_tables {
+        hasher.update(table.key.as_ref());
+        hasher.update(table.owner.as_ref());
+        hasher.update(table.lamports.to_le_bytes());
+        hasher.update([u8::from(table.executable)]);
+        hasher.update((table.data.len() as u64).to_le_bytes());
+        hasher.update(Sha256::digest(&table.data));
+        hasher.update(table.observation.slot.to_le_bytes());
+        hasher.update(table.observation.unix_timestamp.to_le_bytes());
     }
     hex(&hasher.finalize())
 }
@@ -2226,7 +2532,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     actors: FoundingActorsV1,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
-    submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
     if checkpoint.schema != DCLTPCB2_CHECKPOINT_SCHEMA_V1 {
         return Err(Error::new(
@@ -2260,7 +2566,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
         context.mint,
     )?;
-    if let Some(recorder) = submission_recorder {
+    if let Some(recorder) = submission_recorder.as_deref_mut() {
         let coordinates = &context.coordinates;
         let core = pubkey(&plan.core.program_id)?;
         let claims = pubkey(&plan.claims.program_id)?;
@@ -2311,6 +2617,26 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     completed.push(
         "executed DCLTGMF2: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
     );
+    let routing_table_keys = finalized_founding_routing_table_keys_v1(
+        submission_recorder
+            .as_deref()
+            .ok_or_else(|| Error::new("completed public recovery omitted its journal owner"))?,
+        FoundingSubmissionOperationV1::Dcltgmf2,
+    )?;
+    let minimum_slot = rpc.finalized_slot()?;
+    execute_funding_readiness_suffix_v1(
+        rpc,
+        plan,
+        &context.records,
+        &context.coordinates,
+        payer,
+        transactions,
+        &mut accounts,
+        &mut completed,
+        minimum_slot,
+        &routing_table_keys,
+        submission_recorder.as_deref_mut(),
+    )?;
     Ok(MarketExecutionEvidence {
         completed,
         accounts,
@@ -3095,6 +3421,67 @@ pub(crate) fn publish_routing_table(
     await_finalized_slot(rpc, minimum_slot)?;
     let (observation, tables) =
         rpc.finalized_observed_accounts(&[plan.lookup_table], minimum_slot)?;
+    Ok((observation, tables))
+}
+
+fn publish_frozen_founding_routing_table_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    label: &str,
+    instructions: &[Instruction],
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(Observation, Vec<ObservedAccount>)> {
+    let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions);
+    let recent_slot = rpc.finalized_slot()?;
+    let plan =
+        build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
+            .map_err(|error| Error::new(format!("{label} frozen routing plan: {error:?}")))?;
+    transactions.push(rpc.send(
+        &format!("create {label} frozen routing address lookup table"),
+        std::slice::from_ref(&plan.create),
+        payer,
+    )?);
+    for (index, extension) in plan.extensions.iter().enumerate() {
+        transactions.push(rpc.send(
+            &format!("extend {label} frozen routing table page {index}"),
+            std::slice::from_ref(extension),
+            payer,
+        )?);
+    }
+    transactions.push(rpc.send(
+        &format!("freeze {label} routing table after its one complete extension plan"),
+        std::slice::from_ref(&build_lookup_table_freeze(
+            plan.lookup_table,
+            payer.pubkey(),
+        )),
+        payer,
+    )?);
+    let frozen_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .ok_or_else(|| Error::new("frozen routing publication omitted a finalized slot"))?;
+    let minimum_slot = frozen_slot
+        .checked_add(1)
+        .ok_or_else(|| Error::new("frozen routing activation slot overflow"))?;
+    await_finalized_slot(rpc, minimum_slot)?;
+    let (observation, tables) =
+        rpc.finalized_observed_accounts(&[plan.lookup_table], minimum_slot)?;
+    let table = tables
+        .first()
+        .ok_or_else(|| Error::new("frozen routing observation omitted its table"))?;
+    let decoded = AddressLookupTable::deserialize(&table.data)
+        .map_err(|error| Error::new(format!("frozen routing table bytes: {error:?}")))?;
+    if table.owner != solana_address_lookup_table_interface::program::ID
+        || table.executable
+        || decoded.meta.authority.is_some()
+        || decoded.meta.deactivation_slot != u64::MAX
+        || decoded.meta.last_extended_slot >= observation.slot
+        || decoded.addresses.as_ref() != plan.addresses.as_slice()
+    {
+        return Err(Error::new(
+            "founding routing table was not exact, frozen, active, and activated",
+        ));
+    }
     Ok((observation, tables))
 }
 
@@ -5513,6 +5900,7 @@ fn execute_projected_custody_bootstrap(
                     &prepare_accounts,
                     &prepare_accounts,
                     recovery_payload,
+                    Some(FOUNDING_HEAP_FRAME_BYTES),
                     recorder,
                     &mut completion,
                 )?
@@ -5857,6 +6245,7 @@ fn execute_projected_custody_bootstrap(
                     &prestate_addresses,
                     &completion_addresses,
                     recovery_payload,
+                    Some(FOUNDING_HEAP_FRAME_BYTES),
                     recorder,
                     &mut completion,
                 )?
@@ -6014,12 +6403,13 @@ fn execute_projected_custody_bootstrap(
 /// utility does not depend on an SBF program crate.
 const PROJECTED_CUSTODY_ABORT_MAGIC_V1: [u8; 8] = *b"DCLTPCA1";
 
-/// Exact `DCLTPCA1` frame width: one raw request, Custody, and its own frame.
-const PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1: usize = 18;
+/// Exact `DCLTPCA1` frame width: one raw request, Custody's checked Loader
+/// pair, and Custody's own frame.
+const PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1: usize = 19;
 const CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1: usize = 17;
 const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize =
     PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1 + CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1;
-const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 32;
+const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 33;
 const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 19;
 const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
 const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
@@ -6066,18 +6456,18 @@ fn execute_source_abort_v1(
     let abort_geometry = projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &abort)?;
     let abort_admitted = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&abort, 32),
+        &append_distinct_census_accounts_v1(&abort, 31),
     )?;
     let abort_refused = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&abort, 33),
+        &append_distinct_census_accounts_v1(&abort, 32),
     )?;
     if abort_geometry.complete_keys != PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1
         || abort_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
         || abort_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
     {
         return Err(Error::new(format!(
-            "DCLTPCA1 census refused: base {}, +32 {}, +33 {}",
+            "DCLTPCA1 census refused: base {}, +31 {}, +32 {}",
             abort_geometry.complete_keys, abort_admitted.complete_keys, abort_refused.complete_keys,
         )));
     }
@@ -6306,7 +6696,7 @@ fn execute_source_abort_v1(
     Ok(())
 }
 
-/// Build the exact 35-account staged `DCLTPCA1` frame.
+/// Build the exact 36-account staged `DCLTPCA1` frame.
 fn build_projected_custody_abort_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
@@ -6319,6 +6709,7 @@ fn build_projected_custody_abort_v1(
 ) -> Result<Instruction> {
     let trading = pubkey(&plan.trading.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
+    let custody_programdata = pubkey(&plan.custody.programdata_id)?;
     let cache = pubkey(&plan.activation)?;
     let registry = pubkey(&plan.registry.program_id)?;
     let trading_programdata = pubkey(&plan.trading.programdata_id)?;
@@ -6344,6 +6735,7 @@ fn build_projected_custody_abort_v1(
     let mut accounts = vec![
         AccountMeta::new_readonly(lock_raw_account, false),
         AccountMeta::new_readonly(custody, false),
+        AccountMeta::new_readonly(custody_programdata, false),
         // Custody's own sixteen-account abort frame.
         AccountMeta::new_readonly(caller, false),
         AccountMeta::new(coordinates.projected_replay, false),
@@ -6378,7 +6770,7 @@ fn build_projected_custody_abort_v1(
     )?);
     if accounts.len() != PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1 {
         return Err(Error::new(
-            "assembled staged abort frame did not match 35 accounts",
+            "assembled staged abort frame did not match 36 accounts",
         ));
     }
     Ok(Instruction {
@@ -6550,9 +6942,10 @@ fn authenticate_source_abort_custody_poststate_v1(
     destination_before: u64,
     principal: u64,
 ) -> Result<()> {
-    if token_amount(rpc, destination, "abort refund destination")?
-        != destination_before.saturating_add(principal)
-    {
+    let expected_destination = destination_before
+        .checked_add(principal)
+        .ok_or_else(|| Error::new("source-abort token refund overflow"))?;
+    if token_amount(rpc, destination, "abort refund destination")? != expected_destination {
         return Err(Error::new(
             "the abort did not return exactly the source principal to its supplier",
         ));
@@ -7651,6 +8044,651 @@ fn build_generic_market_founding_v2(
     })
 }
 
+fn funding_readiness_coordinates_v1(
+    plan: &SuccessorPlan,
+    records: &MarketRecords,
+    coordinates: &FoundingCoordinates,
+) -> Result<FundingReadinessCoordinatesV1> {
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let funding_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == resolution)
+        .ok_or_else(|| Error::new("founding omitted the Resolution FundingLedgerV2"))?
+        .address;
+    let source_state = Pubkey::find_program_address(
+        &[
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            coordinates.market.as_ref(),
+            &coordinates.generation.to_le_bytes(),
+        ],
+        &resolution,
+    )
+    .0;
+    let activation_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            coordinates.market.as_ref(),
+            &coordinates.generation.to_le_bytes(),
+        ],
+        &resolution,
+    )
+    .0;
+    Ok(FundingReadinessCoordinatesV1 {
+        market: coordinates.market,
+        source_material: FundingReadinessRecordCoordinatesV1 {
+            raw: records.source.raw,
+            staging: records.source.staging,
+        },
+        capability_manifest: FundingReadinessRecordCoordinatesV1 {
+            raw: records.manifest.raw,
+            staging: records.manifest.staging,
+        },
+        recovery_policy: records
+            .recovery
+            .map(|record| FundingReadinessRecordCoordinatesV1 {
+                raw: record.raw,
+                staging: record.staging,
+            }),
+        source_state,
+        funding_ledger,
+        beneficiary: coordinates.credit,
+        activation_receipt,
+    })
+}
+
+fn funding_readiness_compiled_geometry_v1(
+    payer: Pubkey,
+    instructions: &[Instruction],
+    routing_tables: &[ObservedAccount],
+) -> Result<CompiledMessageGeometryV1> {
+    let bounded = bounded_instructions(instructions, None)?;
+    let lookup_tables = routing_tables
+        .iter()
+        .map(|account| {
+            let table = AddressLookupTable::deserialize(&account.data).map_err(|error| {
+                Error::new(format!("funding-readiness routing table: {error:?}"))
+            })?;
+            Ok(AddressLookupTableAccount {
+                key: account.key,
+                addresses: table.addresses.to_vec(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let message = v0::Message::try_compile(
+        &payer,
+        &bounded,
+        &lookup_tables,
+        Hash::new_from_array([0x73; 32]),
+    )
+    .map_err(|error| Error::new(format!("funding-readiness v0 compile: {error}")))?;
+    let static_keys = message.account_keys.len();
+    let loaded_writable = message
+        .address_table_lookups
+        .iter()
+        .map(|lookup| lookup.writable_indexes.len())
+        .sum::<usize>();
+    let loaded_readonly = message
+        .address_table_lookups
+        .iter()
+        .map(|lookup| lookup.readonly_indexes.len())
+        .sum::<usize>();
+    let complete_keys = static_keys
+        .checked_add(loaded_writable)
+        .and_then(|value| value.checked_add(loaded_readonly))
+        .ok_or_else(|| Error::new("funding-readiness complete-key census overflow"))?;
+    let required_signatures = usize::from(message.header.num_required_signatures);
+    let versioned_message = VersionedMessage::V0(message);
+    let message_bytes = versioned_message.serialize().len();
+    let packet_bytes = bincode::serialize(&VersionedTransaction {
+        signatures: vec![Signature::default(); required_signatures],
+        message: versioned_message,
+    })
+    .map_err(|error| Error::new(format!("funding-readiness packet geometry: {error}")))?
+    .len();
+    Ok(CompiledMessageGeometryV1 {
+        complete_keys,
+        required_signatures,
+        static_keys,
+        loaded_writable,
+        loaded_readonly,
+        message_bytes,
+        packet_bytes,
+    })
+}
+
+fn append_distinct_funding_readiness_accounts_v1(
+    instructions: &[Instruction],
+    count: usize,
+) -> Result<Vec<Instruction>> {
+    let mut expanded = instructions.to_vec();
+    let target = expanded
+        .last_mut()
+        .ok_or_else(|| Error::new("funding-readiness instruction set was empty"))?;
+    let original = target.accounts.len();
+    let mut counter = 0_u64;
+    while target.accounts.len() < original.saturating_add(count) {
+        let mut hasher = Sha256::new();
+        hasher.update(b"dclutch/census/funding-readiness/distinct-key-v1");
+        hasher.update(counter.to_le_bytes());
+        let candidate = Pubkey::new_from_array(hasher.finalize().into());
+        counter = counter
+            .checked_add(1)
+            .ok_or_else(|| Error::new("funding-readiness census counter overflow"))?;
+        if candidate != target.program_id
+            && !target.accounts.iter().any(|meta| meta.pubkey == candidate)
+        {
+            target
+                .accounts
+                .push(AccountMeta::new_readonly(candidate, false));
+        }
+    }
+    Ok(expanded)
+}
+
+fn authenticate_funding_readiness_compiled_geometry_v1(
+    payer: Pubkey,
+    operation: FoundingSubmissionOperationV1,
+    instructions: &[Instruction],
+    observation: Observation,
+    routing_tables: &[ObservedAccount],
+) -> Result<CompiledMessageGeometryV1> {
+    let base = funding_readiness_compiled_geometry_v1(payer, instructions, routing_tables)?;
+    let compiled = dclutch_versioned_message_operator::compile_v0_message(
+        payer,
+        &bounded_instructions(instructions, None)?,
+        solana_hash::Hash::new_from_array([0x73; 32]),
+        observation,
+        routing_tables,
+    )
+    .map_err(|error| {
+        Error::new(format!(
+            "{} routed v0 compile: {error:?}",
+            operation.label()
+        ))
+    })?;
+    authenticate_resolved_founding_message_v1(operation, &compiled.message, routing_tables)?;
+    let plus_one = funding_readiness_compiled_geometry_v1(
+        payer,
+        &append_distinct_funding_readiness_accounts_v1(instructions, 1)?,
+        routing_tables,
+    )?;
+    let plus_two = funding_readiness_compiled_geometry_v1(
+        payer,
+        &append_distinct_funding_readiness_accounts_v1(instructions, 2)?,
+        routing_tables,
+    )?;
+    let admitted_delta = DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        .checked_sub(base.complete_keys)
+        .ok_or_else(|| Error::new("funding-readiness base exceeds the 64-key ceiling"))?;
+    let admitted = funding_readiness_compiled_geometry_v1(
+        payer,
+        &append_distinct_funding_readiness_accounts_v1(instructions, admitted_delta)?,
+        routing_tables,
+    )?;
+    let refused = funding_readiness_compiled_geometry_v1(
+        payer,
+        &append_distinct_funding_readiness_accounts_v1(
+            instructions,
+            admitted_delta.saturating_add(1),
+        )?,
+        routing_tables,
+    )?;
+    if base.complete_keys != operation.exact_unique_accounts()
+        || base.required_signatures != operation.exact_required_signatures()
+        || plus_one.complete_keys != base.complete_keys.saturating_add(1)
+        || plus_two.complete_keys != base.complete_keys.saturating_add(2)
+        || admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        || refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
+        || compiled.wire_bytes != base.packet_bytes
+        || usize::from(compiled.required_signatures) != base.required_signatures
+        || base.packet_bytes > 1_232
+    {
+        return Err(Error::new(format!(
+            "{} compiled geometry refused: base {}/{}, +1 {}, +2 {}, boundary {}/{}",
+            operation.label(),
+            base.complete_keys,
+            base.packet_bytes,
+            plus_one.complete_keys,
+            plus_two.complete_keys,
+            admitted.complete_keys,
+            refused.complete_keys,
+        )));
+    }
+    Ok(base)
+}
+
+fn funding_readiness_instructions_v1(
+    payer: Pubkey,
+    protocol: Instruction,
+    prepay: Option<FundingReadinessPrepayV1>,
+) -> Vec<Instruction> {
+    let mut instructions = Vec::with_capacity(2);
+    if let Some(prepay) = prepay.filter(|value| value.lamports != 0) {
+        instructions.push(transfer(&payer, &prepay.destination, prepay.lamports));
+    }
+    instructions.push(protocol);
+    instructions
+}
+
+fn authenticate_funding_readiness_route_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    coordinates: FundingReadinessCoordinatesV1,
+    minimum_slot: u64,
+    expected: &str,
+) -> Result<()> {
+    let observed = plan_funding_readiness_from_rpc_v1(rpc, plan, coordinates, minimum_slot)?;
+    if observed.route_name() != expected {
+        return Err(Error::new(format!(
+            "funding-readiness completion selected {} instead of {expected}",
+            observed.route_name()
+        )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_one_funding_readiness_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    coordinates: FundingReadinessCoordinatesV1,
+    minimum_slot: u64,
+    operation: FoundingSubmissionOperationV1,
+    label: &str,
+    expected_next_route: &str,
+    instruction: Instruction,
+    observation: Observation,
+    routing_tables: &[ObservedAccount],
+    prepay: Option<FundingReadinessPrepayV1>,
+    protocol_writable: Vec<Pubkey>,
+    completion_accounts: Vec<Pubkey>,
+    payer: &Keypair,
+    submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
+) -> Result<(TransactionEvidence, CompiledMessageGeometryV1)> {
+    let instructions = funding_readiness_instructions_v1(payer.pubkey(), instruction, prepay);
+    let geometry = authenticate_funding_readiness_compiled_geometry_v1(
+        payer.pubkey(),
+        operation,
+        &instructions,
+        observation,
+        routing_tables,
+    )?;
+    let mut prestate_accounts = protocol_writable;
+    if let Some(prepay) = prepay
+        && !prestate_accounts.contains(&prepay.destination)
+    {
+        prestate_accounts.push(prepay.destination);
+    }
+    prestate_accounts.sort_unstable();
+    prestate_accounts.dedup();
+    let recovery_payload = serde_json::to_vec(&FundingReadinessRecoveryPayloadV1 {
+        schema: FUNDING_READINESS_RECOVERY_PAYLOAD_SCHEMA_V1.into(),
+        operation,
+        market: coordinates.market.to_string(),
+        source_state: coordinates.source_state.to_string(),
+        funding_ledger: coordinates.funding_ledger.to_string(),
+        beneficiary: coordinates.beneficiary.to_string(),
+        activation_receipt: coordinates.activation_receipt.to_string(),
+        expected_next_route: expected_next_route.into(),
+    })?;
+    let mut completion = |rpc: &mut Rpc| {
+        authenticate_funding_readiness_route_v1(
+            rpc,
+            plan,
+            coordinates,
+            minimum_slot,
+            expected_next_route,
+        )
+    };
+    let evidence = match submission_recorder {
+        Some(recorder) => send_durable_founding_v1(
+            rpc,
+            label,
+            operation,
+            &instructions,
+            &[payer],
+            observation,
+            routing_tables,
+            funding_readiness_instruction_digest_v1(payer.pubkey(), &instructions, routing_tables),
+            &prestate_accounts,
+            &completion_accounts,
+            recovery_payload,
+            None,
+            recorder,
+            &mut completion,
+        )?,
+        None => {
+            let evidence = rpc.send_v0(label, &instructions, payer, observation, routing_tables)?;
+            completion(rpc)?;
+            evidence
+        }
+    };
+    Ok((evidence, geometry))
+}
+
+fn push_transaction_once_v1(
+    transactions: &mut Vec<TransactionEvidence>,
+    evidence: TransactionEvidence,
+) {
+    if !transactions
+        .iter()
+        .any(|existing| existing.signature == evidence.signature)
+    {
+        transactions.push(evidence);
+    }
+}
+
+fn recover_readiness_prefix_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    coordinates: FundingReadinessCoordinatesV1,
+    minimum_slot: u64,
+    expected_route: &str,
+    label: &str,
+    operation: FoundingSubmissionOperationV1,
+    recorder: &mut FoundingSubmissionRecorderV1<'_>,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<()> {
+    if transactions.iter().any(|evidence| {
+        recorder
+            .current(operation)
+            .and_then(|journal| journal.expected_signature.as_ref())
+            == Some(&evidence.signature)
+    }) {
+        return Ok(());
+    }
+    let phase = recorder
+        .current(operation)
+        .ok_or_else(|| Error::new(format!("{} durable journal is absent", operation.label())))?
+        .phase;
+    let evidence = if phase == FoundingSubmissionPhaseV1::Finalized {
+        authenticate_historical_founding_transaction_v1(rpc, label, operation, recorder)?
+    } else {
+        let mut completion = |rpc: &mut Rpc| {
+            authenticate_funding_readiness_route_v1(
+                rpc,
+                plan,
+                coordinates,
+                minimum_slot,
+                expected_route,
+            )
+        };
+        finalize_existing_founding_submission_v1(rpc, label, operation, recorder, &mut completion)?
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "{} advanced chain state had no recoverable durable journal",
+                    operation.label()
+                ))
+            })?
+    };
+    push_transaction_once_v1(transactions, evidence);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_funding_readiness_suffix_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    records: &MarketRecords,
+    founding: &FoundingCoordinates,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+    accounts: &mut BTreeMap<String, AccountEvidence>,
+    completed: &mut Vec<String>,
+    minimum_slot: u64,
+    routing_table_keys: &[Pubkey],
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
+) -> Result<()> {
+    let coordinates = funding_readiness_coordinates_v1(plan, records, founding)?;
+
+    let FundingReadinessRoutedPlanV1 {
+        plan: current,
+        routing_tables,
+    } = plan_funding_readiness_with_routing_from_rpc_v1(
+        rpc,
+        plan,
+        coordinates,
+        minimum_slot,
+        routing_table_keys,
+    )?;
+    match current {
+        FundingReadinessPlanV1::Create(FundingReadinessInstructionPlanV1 {
+            report,
+            prepay,
+            accounts: sets,
+            ..
+        }) => {
+            let (evidence, geometry) = execute_one_funding_readiness_v1(
+                rpc,
+                plan,
+                coordinates,
+                minimum_slot,
+                FoundingSubmissionOperationV1::CoreFundingCreateV1,
+                "core-funding-create-v1",
+                "activate",
+                report.instruction,
+                report.observation,
+                &routing_tables,
+                prepay,
+                sets.protocol_writable,
+                sets.completion,
+                payer,
+                submission_recorder.as_deref_mut(),
+            )?;
+            push_transaction_once_v1(transactions, evidence);
+            completed.push(format!(
+                "executed core-funding-create-v1: {} complete keys, {} signatures, {} message bytes, {} packet bytes; +1/+2 are {}/{} and +{} reaches 64 while +{} refuses at 65",
+                geometry.complete_keys,
+                geometry.required_signatures,
+                geometry.message_bytes,
+                geometry.packet_bytes,
+                geometry.complete_keys + 1,
+                geometry.complete_keys + 2,
+                DEVNET_ACCOUNT_LOCK_LIMIT_V1 - geometry.complete_keys,
+                DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1 - geometry.complete_keys,
+            ));
+        }
+        FundingReadinessPlanV1::Activate(_)
+        | FundingReadinessPlanV1::Accept(_)
+        | FundingReadinessPlanV1::Complete(_) => {
+            let recorder = submission_recorder.as_deref_mut().ok_or_else(|| {
+                Error::new("CreateFund chain state was advanced without a durable public journal")
+            })?;
+            recover_readiness_prefix_v1(
+                rpc,
+                plan,
+                coordinates,
+                minimum_slot,
+                "activate",
+                "core-funding-create-v1",
+                FoundingSubmissionOperationV1::CoreFundingCreateV1,
+                recorder,
+                transactions,
+            )?;
+        }
+    }
+
+    let FundingReadinessRoutedPlanV1 {
+        plan: current,
+        routing_tables,
+    } = plan_funding_readiness_with_routing_from_rpc_v1(
+        rpc,
+        plan,
+        coordinates,
+        minimum_slot,
+        routing_table_keys,
+    )?;
+    match current {
+        FundingReadinessPlanV1::Activate(FundingReadinessInstructionPlanV1 {
+            report,
+            prepay,
+            accounts: sets,
+            ..
+        }) => {
+            let (evidence, geometry) = execute_one_funding_readiness_v1(
+                rpc,
+                plan,
+                coordinates,
+                minimum_slot,
+                FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+                "resolution-funding-activate-v1",
+                "accept",
+                report.instruction,
+                report.observation,
+                &routing_tables,
+                prepay,
+                sets.protocol_writable,
+                sets.completion,
+                payer,
+                submission_recorder.as_deref_mut(),
+            )?;
+            push_transaction_once_v1(transactions, evidence);
+            completed.push(format!(
+                "executed resolution-funding-activate-v1: {} complete keys, {} signatures, {} message bytes, {} packet bytes; +1/+2 are {}/{} and +{} reaches 64 while +{} refuses at 65",
+                geometry.complete_keys,
+                geometry.required_signatures,
+                geometry.message_bytes,
+                geometry.packet_bytes,
+                geometry.complete_keys + 1,
+                geometry.complete_keys + 2,
+                DEVNET_ACCOUNT_LOCK_LIMIT_V1 - geometry.complete_keys,
+                DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1 - geometry.complete_keys,
+            ));
+        }
+        FundingReadinessPlanV1::Accept(_) | FundingReadinessPlanV1::Complete(_) => {
+            let recorder = submission_recorder.as_deref_mut().ok_or_else(|| {
+                Error::new("ActivateFund chain state was advanced without a durable public journal")
+            })?;
+            recover_readiness_prefix_v1(
+                rpc,
+                plan,
+                coordinates,
+                minimum_slot,
+                "accept",
+                "resolution-funding-activate-v1",
+                FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+                recorder,
+                transactions,
+            )?;
+        }
+        FundingReadinessPlanV1::Create(_) => {
+            return Err(Error::new(
+                "CreateFund finalized without selecting the adjacent Activate route",
+            ));
+        }
+    }
+
+    let FundingReadinessRoutedPlanV1 {
+        plan: current,
+        routing_tables,
+    } = plan_funding_readiness_with_routing_from_rpc_v1(
+        rpc,
+        plan,
+        coordinates,
+        minimum_slot,
+        routing_table_keys,
+    )?;
+    match current {
+        FundingReadinessPlanV1::Accept(FundingReadinessInstructionPlanV1 {
+            report,
+            prepay,
+            accounts: sets,
+            ..
+        }) => {
+            if submission_recorder.as_deref().is_some_and(|recorder| {
+                recorder
+                    .current(FoundingSubmissionOperationV1::CoreFundingAcceptV1)
+                    .is_some_and(|journal| journal.phase == FoundingSubmissionPhaseV1::Finalized)
+            }) {
+                let recorder = submission_recorder
+                    .as_deref_mut()
+                    .ok_or_else(|| Error::new("Accept recovery recorder disappeared"))?;
+                recover_readiness_prefix_v1(
+                    rpc,
+                    plan,
+                    coordinates,
+                    minimum_slot,
+                    "accept",
+                    "core-funding-accept-v1",
+                    FoundingSubmissionOperationV1::CoreFundingAcceptV1,
+                    recorder,
+                    transactions,
+                )?;
+            } else {
+                let (evidence, geometry) = execute_one_funding_readiness_v1(
+                    rpc,
+                    plan,
+                    coordinates,
+                    minimum_slot,
+                    FoundingSubmissionOperationV1::CoreFundingAcceptV1,
+                    "core-funding-accept-v1",
+                    "accept",
+                    report.instruction,
+                    report.observation,
+                    &routing_tables,
+                    prepay,
+                    sets.protocol_writable,
+                    sets.completion,
+                    payer,
+                    submission_recorder.as_deref_mut(),
+                )?;
+                push_transaction_once_v1(transactions, evidence);
+                completed.push(format!(
+                    "executed core-funding-accept-v1: {} complete keys, {} signatures, {} message bytes, {} packet bytes; +1/+2 are {}/{} and +{} reaches 64 while +{} refuses at 65",
+                    geometry.complete_keys,
+                    geometry.required_signatures,
+                    geometry.message_bytes,
+                    geometry.packet_bytes,
+                    geometry.complete_keys + 1,
+                    geometry.complete_keys + 2,
+                    DEVNET_ACCOUNT_LOCK_LIMIT_V1 - geometry.complete_keys,
+                    DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1 - geometry.complete_keys,
+                ));
+            }
+        }
+        FundingReadinessPlanV1::Complete(_) => {
+            let recorder = submission_recorder.as_deref_mut().ok_or_else(|| {
+                Error::new("Ready funding state omitted the durable Accept journal")
+            })?;
+            recover_readiness_prefix_v1(
+                rpc,
+                plan,
+                coordinates,
+                minimum_slot,
+                "complete",
+                "core-funding-accept-v1",
+                FoundingSubmissionOperationV1::CoreFundingAcceptV1,
+                recorder,
+                transactions,
+            )?;
+        }
+        FundingReadinessPlanV1::Create(_) | FundingReadinessPlanV1::Activate(_) => {
+            return Err(Error::new(
+                "ActivateFund finalized without selecting the adjacent Accept route",
+            ));
+        }
+    }
+
+    authenticate_funding_readiness_route_v1(rpc, plan, coordinates, minimum_slot, "accept")?;
+    for (label, key) in [
+        ("resolution_source_state", coordinates.source_state),
+        ("resolution_funding_ledger", coordinates.funding_ledger),
+        (
+            "resolution_funding_activation_receipt",
+            coordinates.activation_receipt,
+        ),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        accounts.insert(label.into(), account_evidence(key, &account));
+    }
+    completed.push(
+        "completed the post-Open V7 funding readiness suffix in exact order: core-funding-create-v1, resolution-funding-activate-v1, core-funding-accept-v1"
+            .into(),
+    );
+    Ok(())
+}
+
 /// Found the Market atomically on a real validator: `DCLTGMF2`.
 ///
 /// Five stages in one rollback domain against the prestate `DCLTPCB2` left.
@@ -7676,7 +8714,7 @@ fn execute_generic_market_founding(
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
-    submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<()> {
     let registry = pubkey(&plan.registry.program_id)?;
     let core = pubkey(&plan.core.program_id)?;
@@ -7892,11 +8930,23 @@ fn execute_generic_market_founding(
         hex(&founding_census.key_privilege_digest),
     );
     let founding = prepared_founding.instruction;
-    let (routing, tables) = publish_routing_table(
+    let readiness_coordinates = funding_readiness_coordinates_v1(plan, records, coordinates)?;
+    let readiness_routing = Instruction {
+        // This instruction is never submitted. It gives the one pre-Open ALT
+        // plan an exhaustive address scope for the three packet-heavy V7
+        // suffixes without inventing another mutable routing lifecycle.
+        program_id: system_program::ID,
+        accounts: funding_readiness_routing_addresses_v1(plan, readiness_coordinates)?
+            .into_iter()
+            .map(|key| AccountMeta::new_readonly(key, false))
+            .collect(),
+        data: Vec::new(),
+    };
+    let (routing, tables) = publish_frozen_founding_routing_table_v1(
         rpc,
         payer,
         "DCLTGMF2",
-        std::slice::from_ref(&founding),
+        &[founding.clone(), readiness_routing],
         transactions,
     )?;
 
@@ -8000,7 +9050,7 @@ fn execute_generic_market_founding(
         derive_founding_poststate_expectation_v1(plan, coordinates, actors.founder, claim_count)?;
     let founding_label =
         "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)";
-    let honest = match submission_recorder {
+    let honest = match submission_recorder.as_deref_mut() {
         Some(recorder) => {
             let mut prestate_addresses = created.iter().map(|(_, key)| *key).collect::<Vec<_>>();
             prestate_addresses.extend([coordinates.source_vault, coordinates.projected_replay]);
@@ -8037,6 +9087,7 @@ fn execute_generic_market_founding(
                 &prestate_addresses,
                 &completion_addresses,
                 b"dclutch-market-dcltgmf2-recovery-payload-v1".to_vec(),
+                Some(FOUNDING_HEAP_FRAME_BYTES),
                 recorder,
                 &mut completion,
             )?
@@ -8050,6 +9101,7 @@ fn execute_generic_market_founding(
             &tables,
         )?,
     };
+    let open_slot = honest.slot;
     transactions.push(honest);
 
     authenticate_open_market_poststate_v1(
@@ -8061,6 +9113,19 @@ fn execute_generic_market_founding(
         custody,
         token_program,
         mint,
+    )?;
+    execute_funding_readiness_suffix_v1(
+        rpc,
+        plan,
+        records,
+        coordinates,
+        payer,
+        transactions,
+        accounts,
+        completed,
+        open_slot,
+        &tables.iter().map(|table| table.key).collect::<Vec<_>>(),
+        submission_recorder.as_deref_mut(),
     )?;
     for (label, key) in [
         ("founding_market", coordinates.market),
@@ -9216,7 +10281,7 @@ mod tests {
         let payer = Pubkey::new_from_array([0xe1; 32]);
         let beneficiary = Pubkey::new_from_array([0xe2; 32]);
         let program_id = Pubkey::new_from_array([0xe3; 32]);
-        let distinct = (0_u8..30)
+        let distinct = (0_u8..31)
             .map(|index| Pubkey::new_from_array([index.saturating_add(1); 32]))
             .collect::<Vec<_>>();
         let mut accounts = distinct
@@ -9230,8 +10295,8 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        accounts[6].pubkey = program_id;
-        accounts[13] = AccountMeta::new_readonly(beneficiary, true);
+        accounts[7].pubkey = program_id;
+        accounts[14] = AccountMeta::new_readonly(beneficiary, true);
         let unique_width = accounts.len();
         while accounts.len() < PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1 {
             accounts.push(accounts[accounts.len() % unique_width].clone());
@@ -9244,6 +10309,276 @@ mod tests {
                 data: PROJECTED_CUSTODY_ABORT_MAGIC_V1.to_vec(),
             },
         )
+    }
+
+    fn funding_readiness_census_fixture_v1(
+        account_count: usize,
+        program_index: usize,
+        system_index: Option<usize>,
+        writable: &[usize],
+        data_len: usize,
+    ) -> (Pubkey, Instruction) {
+        let payer = Pubkey::new_from_array([0xb1; 32]);
+        let mut accounts = (0..account_count)
+            .map(|index| {
+                let key = Pubkey::new_from_array(
+                    [u8::try_from(index + 1).expect("fixture key fits u8"); 32],
+                );
+                if writable.contains(&index) {
+                    AccountMeta::new(key, false)
+                } else {
+                    AccountMeta::new_readonly(key, false)
+                }
+            })
+            .collect::<Vec<_>>();
+        let program_id = accounts[program_index].pubkey;
+        if let Some(system_index) = system_index {
+            accounts[system_index].pubkey = system_program::ID;
+        }
+        // Keep the destination writable exactly as the real optional System
+        // prepay does; System itself is already in every canonical frame.
+        accounts[program_index].is_writable = false;
+        (
+            payer,
+            Instruction {
+                program_id,
+                accounts,
+                data: vec![0x5a; data_len],
+            },
+        )
+    }
+
+    fn frozen_funding_readiness_table_v1(
+        payer: Pubkey,
+        instructions: &[Instruction],
+    ) -> ObservedAccount {
+        use std::borrow::Cow;
+
+        use solana_address_lookup_table_interface::state::LookupTableMeta;
+
+        let addresses = canonical_routing_addresses_v1(payer, instructions);
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                deactivation_slot: u64::MAX,
+                last_extended_slot: 1,
+                last_extended_slot_start_index: 0,
+                authority: None,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(addresses),
+        };
+        ObservedAccount {
+            observation: Observation {
+                slot: 2,
+                unix_timestamp: 1,
+                finality: dclutch_versioned_message_operator::Finality::Finalized,
+            },
+            key: Pubkey::new_from_array([0xb2; 32]),
+            owner: solana_address_lookup_table_interface::program::ID,
+            lamports: 1,
+            executable: false,
+            data: table.serialize_for_tests().expect("table bytes"),
+        }
+    }
+
+    #[test]
+    fn funding_readiness_routed_geometry_pins_packet_and_64_65_walls() {
+        for (
+            operation,
+            account_count,
+            program_index,
+            system_index,
+            writable,
+            data_len,
+            expected_message_bytes,
+            expected_packet_bytes,
+        ) in [
+            (
+                FoundingSubmissionOperationV1::CoreFundingCreateV1,
+                18,
+                4,
+                Some(15),
+                &[1_usize, 12][..],
+                72 + 280 + 224,
+                852,
+                917,
+            ),
+            (
+                FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+                20,
+                5,
+                Some(17),
+                &[12_usize, 13, 14][..],
+                440,
+                720,
+                785,
+            ),
+            (
+                FoundingSubmissionOperationV1::CoreFundingAcceptV1,
+                20,
+                4,
+                None,
+                &[1_usize][..],
+                72 + 280 + 224,
+                808,
+                873,
+            ),
+        ] {
+            let (payer, instruction) = funding_readiness_census_fixture_v1(
+                account_count,
+                program_index,
+                system_index,
+                writable,
+                data_len,
+            );
+            let destination = match operation {
+                FoundingSubmissionOperationV1::CoreFundingCreateV1 => {
+                    Some(instruction.accounts[12].pubkey)
+                }
+                FoundingSubmissionOperationV1::ResolutionFundingActivateV1 => {
+                    Some(instruction.accounts[14].pubkey)
+                }
+                FoundingSubmissionOperationV1::CoreFundingAcceptV1 => None,
+                _ => unreachable!("readiness fixture operation"),
+            };
+            let instructions = funding_readiness_instructions_v1(
+                payer,
+                instruction,
+                destination.map(|destination| FundingReadinessPrepayV1 {
+                    destination,
+                    lamports: 1,
+                }),
+            );
+            let table = frozen_funding_readiness_table_v1(payer, &instructions);
+            let geometry = authenticate_funding_readiness_compiled_geometry_v1(
+                payer,
+                operation,
+                &instructions,
+                table.observation,
+                std::slice::from_ref(&table),
+            )
+            .expect("routed geometry");
+            assert_eq!(geometry.complete_keys, operation.exact_unique_accounts());
+            assert_eq!(geometry.required_signatures, 1);
+            assert_eq!(geometry.message_bytes, expected_message_bytes);
+            assert_eq!(geometry.packet_bytes, expected_packet_bytes);
+        }
+    }
+
+    #[test]
+    fn durable_recovery_rejoins_fresh_instruction_routing_and_completion_intent() {
+        let operation = FoundingSubmissionOperationV1::CoreFundingCreateV1;
+        let (payer, instruction) =
+            funding_readiness_census_fixture_v1(18, 4, Some(15), &[1_usize, 12], 72 + 280 + 224);
+        let destination = instruction.accounts[12].pubkey;
+        let instructions = funding_readiness_instructions_v1(
+            payer,
+            instruction,
+            Some(FundingReadinessPrepayV1 {
+                destination,
+                lamports: 1,
+            }),
+        );
+        let table = frozen_funding_readiness_table_v1(payer, &instructions);
+        let blockhash = Hash::new_from_array([0x73; 32]);
+        let message = compile_current_founding_message_v1(
+            operation.label(),
+            payer,
+            &instructions,
+            table.observation,
+            std::slice::from_ref(&table),
+            None,
+            blockhash,
+        )
+        .expect("current message");
+        let binding = FoundingSubmissionBindingV1::new(
+            "devnet",
+            crate::cluster::DEVNET_GENESIS_HASH,
+            std::path::Path::new("/tmp/dclutch-readiness-intent.json"),
+            "https://api.devnet.solana.com/",
+            "11".repeat(32),
+            "22".repeat(32),
+            payer,
+        )
+        .expect("binding");
+        let resolved_digest = "33".repeat(32);
+        let prestate = vec![destination];
+        let completion = vec![destination];
+        let recovery = b"exact readiness recovery".to_vec();
+        let journal = plan_founding_submission_v1(
+            &binding,
+            FoundingSubmissionPlanV1 {
+                operation,
+                message,
+                last_valid_block_height: 900,
+                exact_fee_lamports: 5_000,
+                expected_signers: vec![payer],
+                resolved_accounts_sha256: resolved_digest.clone(),
+                prestate_accounts: prestate.clone(),
+                prestate_sha256: "44".repeat(32),
+                completion_accounts: completion.clone(),
+                completion_contract_sha256: founding_completion_contract_v1(operation, &completion)
+                    .expect("completion"),
+                recovery_payload: recovery.clone(),
+            },
+        )
+        .expect("journal");
+        let authenticate = |instructions: &[Instruction],
+                            resolved: &str,
+                            completion: &[Pubkey],
+                            recovery: &[u8]| {
+            authenticate_current_founding_intent_v1(
+                operation.label(),
+                operation,
+                instructions,
+                &[payer],
+                table.observation,
+                std::slice::from_ref(&table),
+                resolved,
+                &prestate,
+                completion,
+                recovery,
+                None,
+                &binding,
+                &journal,
+            )
+        };
+        authenticate(&instructions, &resolved_digest, &completion, &recovery)
+            .expect("exact current intent");
+
+        let mut changed_instruction = instructions.clone();
+        changed_instruction
+            .last_mut()
+            .expect("protocol instruction")
+            .data[0] ^= 1;
+        assert!(
+            authenticate(
+                &changed_instruction,
+                &resolved_digest,
+                &completion,
+                &recovery
+            )
+            .is_err()
+        );
+        assert!(authenticate(&instructions, &"55".repeat(32), &completion, &recovery).is_err());
+        assert!(
+            authenticate(
+                &instructions,
+                &resolved_digest,
+                &[Pubkey::new_unique()],
+                &recovery
+            )
+            .is_err()
+        );
+        assert!(
+            authenticate(
+                &instructions,
+                &resolved_digest,
+                &completion,
+                b"substituted recovery"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -9296,18 +10631,18 @@ mod tests {
     }
 
     #[test]
-    fn staged_abort_compiler_census_pins_the_32_64_65_wall() {
+    fn staged_abort_compiler_census_pins_the_33_64_65_wall() {
         let (payer, instruction) = staged_abort_census_fixture_v1();
         let base = projected_bootstrap_compiled_geometry_v2(payer, &instruction)
             .expect("staged abort base census");
         let admitted = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&instruction, 32),
+            &append_distinct_census_accounts_v1(&instruction, 31),
         )
         .expect("64-key staged abort census");
         let refused = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&instruction, 33),
+            &append_distinct_census_accounts_v1(&instruction, 32),
         )
         .expect("65-key staged abort census");
         assert_eq!(base.complete_keys, PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1);

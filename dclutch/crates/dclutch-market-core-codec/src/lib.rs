@@ -35,6 +35,7 @@ mod found_frame_v3;
 mod generic_founding_v1;
 mod physical;
 mod project_found;
+mod retirement_checkpoint_v1;
 mod retirement_v1;
 mod series_permit;
 
@@ -57,5 +58,6 @@ pub use generated_physical::{
 pub use generic_founding_v1::*;
 pub use physical::*;
 pub use project_found::*;
+pub use retirement_checkpoint_v1::*;
 pub use retirement_v1::*;
 pub use series_permit::*;

@@ -1,4 +1,4 @@
-//! Durable public-devnet submission semantics for the split founding ladder.
+//! Durable submission semantics for the split founding ladder.
 //!
 //! The campaign report is the filesystem owner. This module owns the smaller
 //! semantic fact embedded in it: one exact founding packet moves through
@@ -11,11 +11,15 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{
-    message::VersionedMessage, pubkey::Pubkey, signature::Signature,
+    hash::Hash, message::VersionedMessage, pubkey::Pubkey, signature::Signature,
     transaction::VersionedTransaction,
 };
 
-use crate::{Error, Result, cluster::DEVNET_GENESIS_HASH, model::AccountEvidence};
+use crate::{
+    Error, Result,
+    cluster::{DEVNET_GENESIS_HASH, MAINNET_BETA_GENESIS_HASH},
+    model::AccountEvidence,
+};
 
 pub(crate) const FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V1: &str =
     "dclutch-public-founding-submission-journal-v1";
@@ -28,30 +32,90 @@ pub(crate) enum FoundingSubmissionOperationV1 {
     Dcltcfq1,
     Dcltpcb2,
     Dcltgmf2,
+    CoreFundingCreateV1,
+    ResolutionFundingActivateV1,
+    CoreFundingAcceptV1,
 }
 
 impl FoundingSubmissionOperationV1 {
+    pub(crate) const ORDER: [Self; 6] = [
+        Self::Dcltcfq1,
+        Self::Dcltpcb2,
+        Self::Dcltgmf2,
+        Self::CoreFundingCreateV1,
+        Self::ResolutionFundingActivateV1,
+        Self::CoreFundingAcceptV1,
+    ];
+
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Dcltcfq1 => "DCLTCFQ1",
             Self::Dcltpcb2 => "DCLTPCB2",
             Self::Dcltgmf2 => "DCLTGMF2",
+            Self::CoreFundingCreateV1 => "core-funding-create-v1",
+            Self::ResolutionFundingActivateV1 => "resolution-funding-activate-v1",
+            Self::CoreFundingAcceptV1 => "core-funding-accept-v1",
         }
     }
 
-    const fn exact_unique_accounts(self) -> usize {
+    pub(crate) const fn exact_unique_accounts(self) -> usize {
         match self {
             Self::Dcltcfq1 => 51,
             Self::Dcltpcb2 | Self::Dcltgmf2 => 60,
+            // Canonical V7 frames are pairwise distinct and carry their own
+            // program key as a frame account. The bounded inline v0 packet
+            // adds exactly the disposable payer and ComputeBudget program.
+            Self::CoreFundingCreateV1 => 20,
+            Self::ResolutionFundingActivateV1 | Self::CoreFundingAcceptV1 => 22,
         }
     }
 
-    const fn exact_required_signatures(self) -> usize {
+    pub(crate) const fn exact_required_signatures(self) -> usize {
         match self {
             Self::Dcltcfq1 | Self::Dcltpcb2 => 2,
-            Self::Dcltgmf2 => 1,
+            Self::Dcltgmf2
+            | Self::CoreFundingCreateV1
+            | Self::ResolutionFundingActivateV1
+            | Self::CoreFundingAcceptV1 => 1,
         }
     }
+}
+
+/// Authenticate the campaign-owned collection, not only each row. A durable
+/// run may contain exactly one canonical prefix of the six mutation owners.
+/// Every row before the tail must already be Finalized; only the tail may be
+/// armed or ambiguous. This makes a missing/reordered predecessor a refusal at
+/// load time rather than relying on a later live-state detector to notice it.
+pub(crate) fn authenticate_founding_submission_prefix_v1(
+    journals: &[FoundingSubmissionJournalV1],
+) -> Result<()> {
+    if journals.len() > FoundingSubmissionOperationV1::ORDER.len() {
+        return Err(refusal("founding journal collection exceeded six rows"));
+    }
+    for (index, journal) in journals.iter().enumerate() {
+        if journal.operation != FoundingSubmissionOperationV1::ORDER[index] {
+            return Err(refusal(
+                "founding journals were not one exact canonical operation prefix",
+            ));
+        }
+        if index + 1 != journals.len() && journal.phase != FoundingSubmissionPhaseV1::Finalized {
+            return Err(refusal(
+                "a nonterminal founding journal predecessor was not Finalized",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn authenticate_bound_founding_submission_prefix_v1(
+    binding: &FoundingSubmissionBindingV1,
+    journals: &[FoundingSubmissionJournalV1],
+) -> Result<()> {
+    authenticate_founding_submission_prefix_v1(journals)?;
+    for journal in journals {
+        authenticate_founding_submission_v1(binding, journal)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -92,6 +156,8 @@ pub(crate) struct FoundingPreSendProjectionV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FoundingSubmissionBindingV1 {
+    pub(crate) cluster: String,
+    pub(crate) genesis_hash: String,
     pub(crate) evidence_path: String,
     pub(crate) rpc_url: String,
     pub(crate) plan_sha256: String,
@@ -101,6 +167,8 @@ pub(crate) struct FoundingSubmissionBindingV1 {
 
 impl FoundingSubmissionBindingV1 {
     pub(crate) fn new(
+        cluster: impl Into<String>,
+        genesis_hash: impl Into<String>,
         evidence_path: &Path,
         rpc_url: impl Into<String>,
         plan_sha256: impl Into<String>,
@@ -111,6 +179,8 @@ impl FoundingSubmissionBindingV1 {
             return Err(refusal("founding journal evidence path must be absolute"));
         }
         let binding = Self {
+            cluster: cluster.into(),
+            genesis_hash: genesis_hash.into(),
             evidence_path: evidence_path
                 .to_str()
                 .ok_or_else(|| refusal("founding journal evidence path must be UTF-8"))?
@@ -242,8 +312,8 @@ pub(crate) fn plan_founding_submission_v1(
     }
     let mut journal = FoundingSubmissionJournalV1 {
         schema: FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V1.into(),
-        cluster: "devnet".into(),
-        genesis_hash: DEVNET_GENESIS_HASH.into(),
+        cluster: binding.cluster.clone(),
+        genesis_hash: binding.genesis_hash.clone(),
         evidence_path: binding.evidence_path.clone(),
         rpc_url: binding.rpc_url.clone(),
         plan_sha256: binding.plan_sha256.clone(),
@@ -530,8 +600,8 @@ pub(crate) fn authenticate_founding_submission_v1(
 ) -> Result<()> {
     authenticate_binding_v1(binding)?;
     if journal.schema != FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V1
-        || journal.cluster != "devnet"
-        || journal.genesis_hash != DEVNET_GENESIS_HASH
+        || journal.cluster != binding.cluster
+        || journal.genesis_hash != binding.genesis_hash
         || journal.evidence_path != binding.evidence_path
         || journal.rpc_url != binding.rpc_url
         || journal.plan_sha256 != binding.plan_sha256
@@ -873,6 +943,19 @@ fn authenticate_binding_v1(binding: &FoundingSubmissionBindingV1) -> Result<()> 
     {
         return Err(refusal("founding journal binding was incomplete"));
     }
+    let genesis = binding
+        .genesis_hash
+        .parse::<Hash>()
+        .map_err(|error| Error::new(format!("founding genesis hash: {error}")))?;
+    if genesis == Hash::default()
+        || binding.genesis_hash == MAINNET_BETA_GENESIS_HASH
+        || !matches!(binding.cluster.as_str(), "devnet" | "loopback")
+        || (binding.cluster == "devnet" && binding.genesis_hash != DEVNET_GENESIS_HASH)
+    {
+        return Err(refusal(
+            "founding journal cluster/genesis identity was not an admitted devnet or loopback chain",
+        ));
+    }
     let rpc_url = binding.rpc_url.to_ascii_lowercase();
     if rpc_url.contains("mainnet") || rpc_url.contains("testnet") {
         return Err(refusal(
@@ -991,6 +1074,8 @@ mod tests {
 
     fn binding(payer: Pubkey) -> FoundingSubmissionBindingV1 {
         FoundingSubmissionBindingV1::new(
+            "devnet",
+            DEVNET_GENESIS_HASH,
             Path::new("/tmp/founding-evidence.json"),
             "https://api.devnet.solana.com/",
             digest(1),
@@ -998,6 +1083,19 @@ mod tests {
             payer,
         )
         .expect("binding")
+    }
+
+    fn loopback_binding(payer: Pubkey) -> FoundingSubmissionBindingV1 {
+        FoundingSubmissionBindingV1::new(
+            "loopback",
+            Hash::new_unique().to_string(),
+            Path::new("/tmp/loopback-founding-evidence.json"),
+            "http://127.0.0.1:43210/",
+            digest(1),
+            digest(2),
+            payer,
+        )
+        .expect("loopback binding")
     }
 
     fn message(signers: &[Pubkey], operation: FoundingSubmissionOperationV1) -> VersionedMessage {
@@ -1096,6 +1194,9 @@ mod tests {
             FoundingSubmissionOperationV1::Dcltcfq1,
             FoundingSubmissionOperationV1::Dcltpcb2,
             FoundingSubmissionOperationV1::Dcltgmf2,
+            FoundingSubmissionOperationV1::CoreFundingCreateV1,
+            FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+            FoundingSubmissionOperationV1::CoreFundingAcceptV1,
         ] {
             let payer = Keypair::new();
             let beneficiary = Keypair::new();
@@ -1104,7 +1205,10 @@ mod tests {
                 | FoundingSubmissionOperationV1::Dcltpcb2 => {
                     vec![&payer, &beneficiary]
                 }
-                FoundingSubmissionOperationV1::Dcltgmf2 => vec![&payer],
+                FoundingSubmissionOperationV1::Dcltgmf2
+                | FoundingSubmissionOperationV1::CoreFundingCreateV1
+                | FoundingSubmissionOperationV1::ResolutionFundingActivateV1
+                | FoundingSubmissionOperationV1::CoreFundingAcceptV1 => vec![&payer],
             };
             let (binding, prepared) = prepared(&signers, operation);
             assert_eq!(
@@ -1267,6 +1371,28 @@ mod tests {
     fn operation_geometry_and_mainnet_or_relative_path_bindings_refuse() {
         let payer = Keypair::new();
         let binding = binding(payer.pubkey());
+        let local_binding = loopback_binding(payer.pubkey());
+        let local_operation = FoundingSubmissionOperationV1::CoreFundingCreateV1;
+        let local_plan = plan_founding_submission_v1(
+            &local_binding,
+            FoundingSubmissionPlanV1 {
+                operation: local_operation,
+                message: message(&[payer.pubkey()], local_operation),
+                last_valid_block_height: 900,
+                exact_fee_lamports: 5_000,
+                expected_signers: vec![payer.pubkey()],
+                resolved_accounts_sha256: digest(3),
+                prestate_accounts: vec![Pubkey::new_unique()],
+                prestate_sha256: digest(4),
+                completion_accounts: vec![Pubkey::new_unique()],
+                completion_contract_sha256: digest(5),
+                recovery_payload: b"recovery".to_vec(),
+            },
+        )
+        .expect("loopback plan");
+        assert_eq!(local_plan.cluster, "loopback");
+        assert_eq!(local_plan.genesis_hash, local_binding.genesis_hash);
+        assert!(authenticate_founding_submission_v1(&local_binding, &local_plan).is_ok());
         let wrong = plan_founding_submission_v1(
             &binding,
             FoundingSubmissionPlanV1 {
@@ -1289,6 +1415,8 @@ mod tests {
         assert!(wrong.is_err());
         assert!(
             FoundingSubmissionBindingV1::new(
+                "devnet",
+                DEVNET_GENESIS_HASH,
                 Path::new("relative.json"),
                 "https://api.mainnet-beta.solana.com/",
                 digest(1),
@@ -1299,6 +1427,8 @@ mod tests {
         );
         assert!(
             FoundingSubmissionBindingV1::new(
+                "devnet",
+                DEVNET_GENESIS_HASH,
                 Path::new("/tmp/mainnet-refusal.json"),
                 "https://api.mainnet-beta.solana.com/",
                 digest(1),
@@ -1307,5 +1437,38 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            FoundingSubmissionBindingV1::new(
+                "devnet",
+                Hash::new_unique().to_string(),
+                Path::new("/tmp/wrong-devnet-genesis.json"),
+                "https://api.devnet.solana.com/",
+                digest(1),
+                digest(2),
+                payer.pubkey(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn journal_collection_is_one_canonical_finalized_prefix() {
+        let payer = Keypair::new();
+        let witness = Keypair::new();
+        let (_, mut first) = planned(&[&payer, &witness], FoundingSubmissionOperationV1::Dcltcfq1);
+        let (_, second) = planned(&[&payer, &witness], FoundingSubmissionOperationV1::Dcltpcb2);
+        first.phase = FoundingSubmissionPhaseV1::Finalized;
+        assert!(
+            authenticate_founding_submission_prefix_v1(&[first.clone(), second.clone()]).is_ok()
+        );
+
+        let mut nonfinal_predecessor = first.clone();
+        nonfinal_predecessor.phase = FoundingSubmissionPhaseV1::Dispatching;
+        assert!(
+            authenticate_founding_submission_prefix_v1(&[nonfinal_predecessor, second.clone()])
+                .is_err()
+        );
+        assert!(authenticate_founding_submission_prefix_v1(std::slice::from_ref(&second)).is_err());
+        assert!(authenticate_founding_submission_prefix_v1(&[second, first]).is_err());
     }
 }

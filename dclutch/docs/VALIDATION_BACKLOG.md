@@ -394,3 +394,33 @@ ELF SHA-256; do not report one draw or an observed minimum as a margin.
 - Redeploy the Sites mirror from the same accepted web source and repeat the
   public navigation/smoke checks there. Record the project/deployment identity
   separately from GitHub Pages; one host passing does not prove the other.
+
+## AggregateRetirement checkpoint split
+
+The packet-bounded four-transaction AggregateRetirement state machine has a
+focused exact-terminal-prestate real-SBF lifecycle, packet/key census, ordered
+phase refusals, and lamport-conservation test. Before it joins a checked release,
+converge these deferred obligations together rather than serializing ongoing
+architecture on each one:
+
+- run the complete pre-genesis-to-retirement lifecycle through the current
+  production caller instead of the exact-terminal-prestate seed fixture;
+- add durable caller journals for prepare, close-vault, close-replay, and finish,
+  with `Dispatching` poll-first/identical-resend and suffix-only recovery from
+  every persisted checkpoint phase;
+- run chaos kills at every authenticated dispatch boundary and after every
+  durable phase; prove replay, phase skip, owner substitution, checkpoint
+  reassignment, refund substitution, and receipt substitution cannot advance or
+  strand lamports;
+- retain the exact v0 packet and resolved-lock census in the final caller,
+  including +1/+2 hostile accounts and address-lookup-table lifecycle checks;
+- run the frame-diagnostic gate over every final changed SBF link, then the
+  all-program build and immutable lockfile census;
+- run M-61 independently for all four exact final transactions and report each
+  20-seed pass count and arithmetic mean beside the exact ELF hashes; do not
+  promote focused single-run diagnostics to margins;
+- run the complete private-validator retirement campaign with the final checked
+  release manifest, source receipt, caller journals, and terminal activity
+  dossier; and
+- carry the same four-phase activity order into SDK, CLI, and public status
+  surfaces without presenting a static projection as onchain completion.
