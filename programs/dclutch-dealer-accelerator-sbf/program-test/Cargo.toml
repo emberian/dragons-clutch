@@ -16,6 +16,7 @@ dclutch-dealer-codec = { path = "../../../crates/dclutch-dealer-codec" }
 dclutch-dealer-accelerator-test-caller-sbf = { path = "../test-programs/dealer-caller", features = ["no-entrypoint"] }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../../crates/dclutch-execution-strategy-contract" }
+dclutch-fractional-atomic-program-test = { path = "../../dclutch-claims-sbf/program-test/fractional-atomic" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
 dclutch-operator = { path = "../../../crates/dclutch-operator" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }

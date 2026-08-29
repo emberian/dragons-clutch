@@ -26,6 +26,14 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
 };
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
+use dclutch_claims_svm::liability_basis_state_v2::{
+    LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionInputV2,
+    LiabilityBasisPositionViewV2, encode_liability_basis_market_into_v2,
+    encode_liability_basis_position_into_v2,
+};
+use dclutch_fractional_atomic_program_test::narrow_fixture::{
+    NarrowFixtureInputV2, NarrowFixtureV2, NarrowPositionV2, compile_narrow_fixture_v2,
+};
 use dclutch_claims_svm::signed_delta_v3::SignedDeltaPlanV3;
 use dclutch_custody_contract::{CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_dealer_codec::{
@@ -166,6 +174,24 @@ const CLAIMS_SIGNED_DELTA_STATE: u32 = 0x5204;
 
 /// Runtime Product outcome width this scenario transitions.
 const WIDTH: u32 = 3;
+/// Representation coordinate the Claims graph funds and this scenario trades at.
+const FUNDED_COORDINATE: usize = 0;
+/// Immutable Realm identity the Claims graph is founded under.
+const SCENARIO_REALM: [u8; 32] = [0xb6; 32];
+/// Immutable Custody replay namespace for this Market.
+const SCENARIO_CUSTODY_CONTEXT: [u8; 32] = [0xbb; 32];
+/// Market generation every layer of this scenario restates.
+const SCENARIO_GENERATION: u64 = 17;
+/// Claims aggregate revision this scenario trades against.
+///
+/// The narrow fixture plants the pre-founding revision zero, which is right for
+/// a founding campaign and unreachable for this one: the Dealer projection
+/// refuses a Position at revision zero, because a Dealer trade is against
+/// Positions that have already been transacted. The graph is re-encoded through
+/// the supported Claims encoders at a live revision rather than byte-patched.
+const LIVE_CLAIMS_REVISION: u64 = 4;
+/// Position revision both Claims Positions carry.
+const LIVE_POSITION_REVISION: u64 = 3;
 /// Last slot at which this scenario's checkpoint may still be advanced.
 ///
 /// Commit admits only a live checkpoint, and building the address lookup table
@@ -552,6 +578,9 @@ struct Scenario {
     membership: Vec<Pubkey>,
     frame_accounts: Vec<(Pubkey, Account)>,
     candidate_obligation_bytes: Vec<u8>,
+    fixture: NarrowFixtureV2,
+    live: LiveClaimsGraph,
+    core_market: Pubkey,
     unsplit_account_lock_count: usize,
     waist: ReleaseWaist,
 }
@@ -560,10 +589,39 @@ struct Scenario {
 fn scenario() -> Scenario {
     let waist = release_waist();
     let dealer = Keypair::new();
+    // The Claims aggregate graph is compiled by the Fractional narrow fixture,
+    // which is parameterized by outcome width precisely so a second campaign can
+    // consume it. This is that second campaign; nothing here re-derives a Claims
+    // coordinate of its own.
+    let fixture = compile_narrow_fixture_v2(NarrowFixtureInputV2 {
+        outcome_count: usize::try_from(WIDTH).expect("small width"),
+        registry_program: waist.registry,
+        core_program: waist.core_program,
+        claims_program: waist.claims_program,
+        release_set: waist.release_set_id,
+        realm_id: SCENARIO_REALM,
+        custody_context: SCENARIO_CUSTODY_CONTEXT,
+        generation: SCENARIO_GENERATION,
+        actor_owner: dealer.pubkey(),
+        reserve_owner: COUNTERPARTY,
+        funded_coordinate: FUNDED_COORDINATE,
+        funded_balance: 100,
+        reserve_balance: 100,
+        terminal: None,
+        rent_beneficiary: BENEFICIARY,
+        graph_id: [0xb9; 32],
+        exposure_id: [0xba; 32],
+    })
+    .expect("canonical Claims graph");
+    let live = live_claims_graph(&fixture);
+    let claims_market_view =
+        LiabilityBasisMarketViewV2::decode(&live.market).expect("claims aggregate decodes");
+    let dealer_inventory = live.dealer_balances.clone();
+    let counterparty_inventory = live.counterparty_balances.clone();
     let dealer_owner = dealer.pubkey().to_bytes();
-    let market = MARKET.to_bytes();
-    let product = [0xb1; 32];
-    let basis = [0xb2; 32];
+    let market = fixture.core_market.to_bytes();
+    let product = fixture.product_id;
+    let basis = fixture.semantic_basis_id;
     let child = CHILD_ROOT.to_bytes();
     let obligation_state = obligation_bytes(market, product, basis, dealer_owner, child, 7, &[
         12, 20, 10,
@@ -571,8 +629,6 @@ fn scenario() -> Scenario {
     let current_obligation =
         DealerObligationProjectionV3::decode(&obligation_state).expect("canonical obligation");
     let obligation = Pubkey::find_program_address(&[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child], &TRADING).0;
-    let dealer_inventory = [2, 10, 0];
-    let counterparty_inventory = [20, 5, 9];
     let chain = ScenarioTradeChainProjectionV3 {
         trading_program: TRADING.to_bytes(),
         release_set: waist.release_set_id,
@@ -585,7 +641,7 @@ fn scenario() -> Scenario {
             product_id: product,
             liability_basis_id: basis,
             position_owner: dealer_owner,
-            revision: 9,
+            revision: LIVE_POSITION_REVISION,
             inventory: &dealer_inventory,
         },
         counterparty_position: ClaimsInventoryObservation {
@@ -593,26 +649,34 @@ fn scenario() -> Scenario {
             product_id: product,
             liability_basis_id: basis,
             position_owner: COUNTERPARTY.to_bytes(),
-            revision: 11,
+            revision: LIVE_POSITION_REVISION,
             inventory: &counterparty_inventory,
         },
-        product_record_digest: [0xb4; 32],
-        linked_basis_record_digest: [0xb5; 32],
+        product_record_digest: fixture.product.digest,
+        linked_basis_record_digest: fixture.linked_basis.digest,
         counterparty_account: COUNTERPARTY_ACCOUNT.to_bytes(),
         principal_balance: 100,
         locked_capital_floor: 0,
-        claims_revision: 8,
-        generation: 17,
+        claims_revision: claims_market_view.revision,
+        generation: SCENARIO_GENERATION,
         now: 20,
         expires_at: SCENARIO_EXPIRES_AT,
         terminal: false,
     };
+    // The narrow fixture funds ONE representation coordinate per Position, so
+    // this first executed commit trades at that coordinate. Dealer scenarios are
+    // not restricted to one coordinate in general; the campaign is.
+    let mut acquired = vec![0_u64; usize::try_from(WIDTH).expect("small width")];
+    let mut delivered = vec![0_u64; usize::try_from(WIDTH).expect("small width")];
+    // Acquired and delivered must be disjoint per coordinate, and the graph
+    // funds exactly one, so this trade moves value one way at that coordinate.
+    *acquired.get_mut(FUNDED_COORDINATE).expect("funded coordinate") = 10;
     let intent = ScenarioTradeIntentV3 {
         direction: ScenarioTradeDirectionV3::CounterpartyPaysDealer,
         principal: 10,
         realized_fee: 1,
-        acquired: &[3, 0, 4],
-        delivered: &[0, 1, 0],
+        acquired: &acquired,
+        delivered: &delivered,
         candidate_obligations: &[10, 19, 13],
     };
     let set_bytes = program_set_bytes();
@@ -661,13 +725,13 @@ fn scenario() -> Scenario {
             custody_program: waist.custody_program.to_bytes(),
             release_set: waist.release_set_id,
             market,
-            realm: [0xb6; 32],
+            realm: SCENARIO_REALM,
             child_root: child,
             obligation_account: obligation.to_bytes(),
             mint: [0xb7; 32],
             token_program: [0xb8; 32],
             parent_request_digest: request_digest,
-            generation: 17,
+            generation: SCENARIO_GENERATION,
             custody_replay_revision: 7,
             locked_capital_floor: 0,
         },
@@ -699,7 +763,7 @@ fn scenario() -> Scenario {
         .get_mut(HOT_MARKET_ACCOUNT_V3)
         .expect("market coordinate")
         .account
-        .key = MARKET;
+        .key = fixture.core_market;
     fixed_accounts
         .get_mut(HOT_ROOT_ACCOUNT_V3)
         .expect("root coordinate")
@@ -778,8 +842,123 @@ fn scenario() -> Scenario {
         membership,
         frame_accounts,
         candidate_obligation_bytes,
+        core_market: fixture.core_market,
+        live,
+        fixture,
         unsplit_account_lock_count: unsplit.unique_account_lock_count,
         waist,
+    }
+}
+
+/// The compiled Claims graph re-encoded at a revision Dealer can trade against.
+struct LiveClaimsGraph {
+    market: Vec<u8>,
+    dealer_position: Vec<u8>,
+    counterparty_position: Vec<u8>,
+    dealer_balances: Vec<u64>,
+    counterparty_balances: Vec<u64>,
+}
+
+/// Re-encode the compiled graph at a live revision through supported encoders.
+fn live_claims_graph(fixture: &NarrowFixtureV2) -> LiveClaimsGraph {
+    let market_view =
+        LiabilityBasisMarketViewV2::decode(&fixture.claims_market_bytes).expect("aggregate decodes");
+    let supplies = (0..fixture.outcome_count)
+        .map(|claim| {
+            market_view
+                .supply(&fixture.claims_market_bytes, claim)
+                .expect("supply")
+        })
+        .collect::<Vec<_>>();
+    let mut market = vec![0_u8; fixture.claims_market_bytes.len()];
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: LIVE_CLAIMS_REVISION,
+            logical_market: market_view.logical_market,
+            release_set: market_view.release_set,
+            registry_program: market_view.registry_program,
+            product_instance_id: market_view.product_instance_id,
+            basis_id: market_view.basis_id,
+            realm_id: market_view.realm_id,
+            custody_context: market_view.custody_context,
+            generation: market_view.generation,
+        },
+        &supplies,
+        &mut market,
+    )
+    .expect("live aggregate encodes");
+    let relive = |position: &NarrowPositionV2| {
+        let view = LiabilityBasisPositionViewV2::decode(&position.bytes).expect("position decodes");
+        let balances = (0..fixture.outcome_count)
+            .map(|claim| view.balance(&position.bytes, claim).expect("balance"))
+            .collect::<Vec<_>>();
+        let mut bytes = vec![0_u8; position.bytes.len()];
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: LIVE_POSITION_REVISION,
+                market_account: view.market_account,
+                owner: view.owner,
+                basis_id: view.basis_id,
+            },
+            &balances,
+            &mut bytes,
+        )
+        .expect("live position encodes");
+        (bytes, balances)
+    };
+    let (dealer_position, dealer_balances) = relive(&fixture.actor_position);
+    let (counterparty_position, counterparty_balances) = relive(&fixture.reserve_position);
+    LiveClaimsGraph {
+        market,
+        dealer_position,
+        counterparty_position,
+        dealer_balances,
+        counterparty_balances,
+    }
+}
+
+impl Scenario {
+    /// Every account the compiled Claims graph owns, with its owner and body.
+    ///
+    /// A vacant staging cursor is a real protocol state: system-owned and
+    /// exactly zero bytes. Installing it as anything else would make the
+    /// finalized record beside it unreadable.
+    fn claims_graph_accounts(&self) -> Vec<(Pubkey, Pubkey, Vec<u8>)> {
+        let fixture = &self.fixture;
+        let claims = self.waist.claims_program;
+        let mut accounts = vec![
+            (fixture.core_market, self.waist.core_program, fixture.core_state.clone()),
+            (fixture.claims_market, claims, self.live.market.clone()),
+            (
+                fixture.actor_position.account,
+                claims,
+                self.live.dealer_position.clone(),
+            ),
+            (
+                fixture.reserve_position.account,
+                claims,
+                self.live.counterparty_position.clone(),
+            ),
+        ];
+        for record in [
+            &fixture.product,
+            &fixture.result_domain,
+            &fixture.portfolio,
+            &fixture.linked_basis,
+            &fixture.exposure,
+        ] {
+            accounts.push((record.raw, record.owner, record.bytes.clone()));
+            accounts.push((record.staging, system_program::ID, Vec::new()));
+        }
+        accounts
+    }
+
+    /// Just the identities, for exclusion from the derived membership frame.
+    fn claims_graph_keys(&self) -> Vec<Pubkey> {
+        self.claims_graph_accounts()
+            .into_iter()
+            .map(|(key, _, _)| key)
+            .collect()
     }
 }
 
@@ -802,10 +981,7 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         data_account(MANIFEST_PRODUCER, scenario.manifest_bytes.clone()),
     );
     test.add_account(BENEFICIARY, data_account(system_program::ID, Vec::new()));
-    test.add_account(
-        COUNTERPARTY,
-        data_account(system_program::ID, Vec::new()),
-    );
+    test.add_account(COUNTERPARTY, data_account(system_program::ID, Vec::new()));
     test.add_account(
         COUNTERPARTY_ACCOUNT,
         data_account(system_program::ID, Vec::new()),
@@ -833,7 +1009,7 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
     // Install the frame exactly as the projection observed it: same identities,
     // same owners, same widths. The pages carry these accounts, so what the
     // campaign pages is the frame itself and not a stand-in for it.
-    let reserved = [
+    let mut reserved = vec![
         TRADING,
         REQUEST,
         CHILD_ROOT,
@@ -853,15 +1029,29 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         BENEFICIARY,
         COUNTERPARTY,
         COUNTERPARTY_ACCOUNT,
-        MARKET,
+        scenario.core_market,
     ];
+    reserved.extend(scenario.claims_graph_keys());
     for (key, account) in &scenario.frame_accounts {
         if reserved.contains(key) {
             continue;
         }
         test.add_account(*key, account.clone());
     }
-    test.add_account(MARKET, data_account(system_program::ID, vec![0x22; 32]));
+    // The Claims aggregate graph, installed exactly as the fixture compiled it.
+    for (key, owner, body) in scenario.claims_graph_accounts() {
+        if body.is_empty() {
+            test.add_account(key, Account {
+                lamports: Rent::default().minimum_balance(0).max(1),
+                data: Vec::new(),
+                owner,
+                executable: false,
+                rent_epoch: 0,
+            });
+        } else {
+            test.add_account(key, data_account(owner, body));
+        }
+    }
     test
 }
 
@@ -2039,8 +2229,8 @@ fn reservation_evidence(
         reserved_count: 1,
         rollback_count: 0,
         release_set: scenario.waist.release_set_id,
-        market: MARKET.to_bytes(),
-        realm: [0xb6; 32],
+        market: scenario.core_market.to_bytes(),
+        realm: SCENARIO_REALM,
         trading_program: TRADING.to_bytes(),
         checkpoint: scenario.checkpoint.to_bytes(),
         request_digest: scenario.request_digest,
@@ -2049,7 +2239,7 @@ fn reservation_evidence(
         replay_prestate_digest: [0xfd; 32],
         refund_beneficiary: BENEFICIARY.to_bytes(),
         expires_at: SCENARIO_EXPIRES_AT,
-        generation: 17,
+        generation: SCENARIO_GENERATION,
         reservation_states: core::array::from_fn(|index| {
             if index == 0 {
                 reservation_state.to_bytes()
@@ -2119,7 +2309,7 @@ fn reserve_instruction(
 async fn evaluated_with_reservation_evidence(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
-) -> (ReservationEvidence, Vec<u8>) {
+) -> (ReservationEvidence, Vec<u8>, DealerScenarioCheckpointJournalV1) {
     evaluated_with_published_delta(context, scenario, None).await
 }
 
@@ -2128,9 +2318,9 @@ async fn evaluated_with_published_delta(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
     published_delta: Option<Vec<u8>>,
-) -> (ReservationEvidence, Vec<u8>) {
-    let mut journal = prepare_through_evaluation_with_delta(context, scenario, published_delta.clone()).await;
-    let _ = &mut journal;
+) -> (ReservationEvidence, Vec<u8>, DealerScenarioCheckpointJournalV1) {
+    let mut journal =
+        prepare_through_evaluation_with_delta(context, scenario, published_delta.clone()).await;
     let after_evaluation = checkpoint_body(context, scenario).await;
     let evidence = evaluation_evidence_with_delta(scenario, &after_evaluation, published_delta);
     let reservation = reservation_evidence(
@@ -2145,14 +2335,15 @@ async fn evaluated_with_published_delta(
             &AccountSharedData::from(data_account(scenario.waist.custody_program, body.clone())),
         );
     }
-    (reservation, after_evaluation)
+    (reservation, after_evaluation, journal)
 }
 
 #[tokio::test]
 async fn a_reservation_from_an_unactivated_producer_refuses_on_the_release_waist() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
-    let (reservation, before) = evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let (reservation, before, _) =
+        evaluated_with_reservation_evidence(&mut context, &scenario).await;
     let payer = context.payer.pubkey();
 
     // A real executable program that the activated release set never named as
@@ -2195,7 +2386,8 @@ async fn a_reservation_from_an_unactivated_producer_refuses_on_the_release_waist
 async fn a_valid_activation_cache_for_another_release_set_refuses() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
-    let (reservation, before) = evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let (reservation, before, _) =
+        evaluated_with_reservation_evidence(&mut context, &scenario).await;
     let payer = context.payer.pubkey();
 
     // A perfectly well-formed activation cache -- correct owner, correct width,
@@ -2239,7 +2431,8 @@ async fn a_valid_activation_cache_for_another_release_set_refuses() {
 async fn locked_value_blocks_the_abandonment_path_until_it_is_rolled_back() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
-    let (reservation, _) = evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let (reservation, _, _) =
+        evaluated_with_reservation_evidence(&mut context, &scenario).await;
     let payer = context.payer.pubkey();
     let instruction = reserve_instruction(
         &scenario,
@@ -2361,9 +2554,21 @@ fn commit_claims_frame(scenario: &Scenario) -> Vec<AccountMeta> {
     (0..count)
         .map(|index| {
             let account = spec.account(index).expect("frame account");
+            let fixture = &scenario.fixture;
+            let ordered = fixture.ordered_positions();
             let key = match account.role() {
                 ClaimsFrameRoleV1::CallerAuthority => authority,
+                ClaimsFrameRoleV1::ClaimsMarket => fixture.claims_market,
+                ClaimsFrameRoleV1::BasisRecord => fixture.linked_basis.raw,
+                ClaimsFrameRoleV1::BasisStaging => fixture.linked_basis.staging,
+                ClaimsFrameRoleV1::ProductRecord => fixture.product.raw,
+                ClaimsFrameRoleV1::ProductStaging => fixture.product.staging,
+                ClaimsFrameRoleV1::ResultDomainRecord => fixture.result_domain.raw,
+                ClaimsFrameRoleV1::ResultDomainStaging => fixture.result_domain.staging,
+                ClaimsFrameRoleV1::PortfolioRecord => fixture.portfolio.raw,
+                ClaimsFrameRoleV1::PortfolioStaging => fixture.portfolio.staging,
                 ClaimsFrameRoleV1::RentSysvar => sysvar::rent::ID,
+                ClaimsFrameRoleV1::CoreMarket => fixture.core_market,
                 ClaimsFrameRoleV1::ActivationCache => scenario.waist.activation_cache,
                 ClaimsFrameRoleV1::RegistryProgram => scenario.waist.registry,
                 ClaimsFrameRoleV1::CallerProgram => TRADING,
@@ -2372,12 +2577,13 @@ fn commit_claims_frame(scenario: &Scenario) -> Vec<AccountMeta> {
                 ClaimsFrameRoleV1::ClaimsProgramData => scenario.waist.claims_programdata,
                 ClaimsFrameRoleV1::CoreProgram => scenario.waist.core_program,
                 ClaimsFrameRoleV1::CoreProgramData => scenario.waist.core_programdata,
-                _ => {
-                    let mut seed = [0_u8; 32];
-                    seed[0] = 0x5c;
-                    seed[1] = u8::try_from(index).expect("small frame index");
-                    Pubkey::new_from_array(seed)
+                ClaimsFrameRoleV1::SignedDeltaPosition(position) => {
+                    ordered
+                        .get(usize::from(position))
+                        .expect("the frame names exactly the Position table")
+                        .account
                 }
+                other => panic!("the signed-delta frame named an unexpected role: {other:?}"),
             };
             if account.privileges().writable() {
                 AccountMeta::new(key, false)
@@ -2427,10 +2633,10 @@ fn commit_bank(
 }
 
 #[tokio::test]
-async fn the_commit_authenticates_whole_and_reaches_the_real_claims_program() {
+async fn the_commit_lands_the_signed_delta_and_moves_the_claims_positions() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
-    let (reservation, after_evaluation) =
+    let (reservation, after_evaluation, mut journal) =
         evaluated_with_reservation_evidence(&mut context, &scenario).await;
     let payer = context.payer.pubkey();
     let instruction = reserve_instruction(
@@ -2441,13 +2647,28 @@ async fn the_commit_authenticates_whole_and_reaches_the_real_claims_program() {
         scenario.waist.custody_programdata,
         scenario.waist.activation_cache,
     );
-    submit(&mut context, instruction, &[])
+    let ingested = submit(&mut context, instruction, &[])
         .await
-        .expect("ProgramTest processing")
+        .expect("ProgramTest processing");
+    ingested
         .result
+        .as_ref()
         .expect("the reservation must be ingested");
     let reserved = checkpoint_body(&mut context, &scenario).await;
     assert_ne!(reserved, after_evaluation, "the checkpoint is now reserved");
+    let reserved_receipt = ingested
+        .metadata
+        .as_ref()
+        .and_then(|value| value.return_data.as_ref())
+        .map(|value| value.data.clone())
+        .expect("reservation returns its receipt digest");
+    journal
+        .record_reservation(
+            0,
+            <[u8; 32]>::try_from(reserved_receipt.as_slice()).expect("32-byte receipt digest"),
+            hash(&reserved).to_bytes(),
+        )
+        .expect("journal records the reservation it observed");
 
     let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
         TRADING,
@@ -2500,36 +2721,81 @@ async fn the_commit_authenticates_whole_and_reaches_the_real_claims_program() {
         .await
         .expect("ProgramTest processing");
 
-    // Everything Trading owns about this commit is satisfied, and the proof is
-    // that control leaves Trading at all: the checkpoint phase, the account
-    // count and privileges, the multi-role release waist, the evaluation
-    // artifacts, the re-derived candidate obligation, the locked Custody batch
-    // at the address Custody signs, both Custody bodies, and the request-scoped
-    // caller authority. Trading then CPIs the real Claims program at depth two.
-    //
-    // Claims refuses on its own aggregate state. That is the named next wall:
-    // the LBV2 Claims Market and its Position table are not staged here, and no
-    // Dealer fixture has ever built them. It is the same Product-graph waist
-    // tests/frontier.rs stops at, reached from the other side.
+    // The commit succeeds, which means Trading authenticated the whole frame and
+    // the real Claims program accepted the SignedDelta at CPI depth two.
     let logs = processed
         .metadata
         .as_ref()
         .map(|value| value.log_messages.clone())
         .unwrap_or_default();
     assert!(
+        processed.result.is_ok(),
+        "the commit must land; observed {:?} logs {logs:?}",
+        processed.result
+    );
+    assert!(
         logs.iter().any(|line| line.contains("invoke [2]")),
-        "commit must reach the child Claims invocation; logs {logs:?}"
+        "the SignedDelta must be executed by the Claims program itself; logs {logs:?}"
     );
+
+    // Conservation, not acceptance. The trade acquires at the funded
+    // coordinate, so exactly that much leaves the counterparty and arrives at
+    // the dealer, every other coordinate is untouched, and the two sides net to
+    // zero. A transaction that merely succeeded would tell us none of this.
+    let dealer_after = position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await;
+    let counterparty_after =
+        position_balances(&mut context, &scenario, scenario.fixture.reserve_position.account).await;
+    let acquired = 10_u64;
+    for claim in 0..usize::try_from(WIDTH).expect("small width") {
+        let dealer_before = *scenario.live.dealer_balances.get(claim).expect("before");
+        let counterparty_before =
+            *scenario.live.counterparty_balances.get(claim).expect("before");
+        let dealer_now = *dealer_after.get(claim).expect("after");
+        let counterparty_now = *counterparty_after.get(claim).expect("after");
+        if claim == FUNDED_COORDINATE {
+            assert_eq!(
+                dealer_now,
+                dealer_before + acquired,
+                "the dealer must receive exactly what it acquired"
+            );
+            assert_eq!(
+                counterparty_now,
+                counterparty_before - acquired,
+                "the counterparty must part with exactly that much"
+            );
+        } else {
+            assert_eq!(dealer_now, dealer_before, "coordinate {claim} must not move");
+            assert_eq!(
+                counterparty_now, counterparty_before,
+                "coordinate {claim} must not move"
+            );
+        }
+        assert_eq!(
+            dealer_now + counterparty_now,
+            dealer_before + counterparty_before,
+            "the two Positions must conserve value at coordinate {claim}"
+        );
+    }
+
+    // The obligation is replaced by exactly the candidate the request named.
+    let obligation_after = context
+        .banks_client
+        .get_account(scenario.obligation)
+        .await
+        .expect("obligation query")
+        .expect("obligation exists")
+        .data;
     assert_eq!(
-        custom_code(&processed.result),
-        Some(CLAIMS_SIGNED_DELTA_STATE),
-        "the Claims aggregate state is the wall, not anything Trading owns; logs {logs:?}"
+        obligation_after, scenario.candidate_obligation_bytes,
+        "the committed obligation is the candidate the request committed to"
     );
-    assert_eq!(
-        checkpoint_body(&mut context, &scenario).await,
-        reserved,
-        "a commit that does not complete must not advance the checkpoint"
-    );
+
+    // And the checkpoint is terminal for this route.
+    let committed = checkpoint_body(&mut context, &scenario).await;
+    assert_ne!(committed, reserved, "the commit advances the checkpoint");
+    journal
+        .record_committed(hash(&committed).to_bytes())
+        .expect("journal records the commit it observed");
 }
 
 
@@ -2623,7 +2889,7 @@ async fn reserved_with_published_delta(
     scenario: &Scenario,
     published_delta: Option<Vec<u8>>,
 ) -> (ReservationEvidence, Pubkey, Vec<u8>) {
-    let (reservation, _) =
+    let (reservation, _, _journal) =
         evaluated_with_published_delta(context, scenario, published_delta).await;
     let payer = context.payer.pubkey();
     let instruction = reserve_instruction(
@@ -2778,4 +3044,23 @@ async fn a_commit_refuses_a_locked_batch_that_names_another_receipt() {
         reserved,
         "a refused commit must not advance the checkpoint"
     );
+}
+
+
+/// Read one Claims Position's balance vector back off the chain.
+async fn position_balances(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+    position: Pubkey,
+) -> Vec<u64> {
+    let account = context
+        .banks_client
+        .get_account(position)
+        .await
+        .expect("position query")
+        .expect("position exists");
+    let view = LiabilityBasisPositionViewV2::decode(&account.data).expect("position decodes");
+    (0..scenario.fixture.outcome_count)
+        .map(|claim| view.balance(&account.data, claim).expect("balance"))
+        .collect()
 }
