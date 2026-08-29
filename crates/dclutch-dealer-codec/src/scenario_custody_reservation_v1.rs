@@ -20,6 +20,8 @@ pub const DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1: usize = 9;
 pub const DEALER_SCENARIO_RESERVE_MAGIC_V1: [u8; 8] = *b"DCLTCRS1";
 /// Roll one expired escrow back to its original source.
 pub const DEALER_SCENARIO_ROLLBACK_MAGIC_V1: [u8; 8] = *b"DCLTCRB1";
+/// Activate every ordered escrow in one bounded Custody transaction.
+pub const DEALER_SCENARIO_ACTIVATE_MAGIC_V1: [u8; 8] = *b"DCLTCAC1";
 
 /// Encode one exact reserve/rollback instruction.
 pub fn encode_dealer_scenario_reservation_instruction_v1(
@@ -61,6 +63,34 @@ pub fn decode_dealer_scenario_reservation_instruction_v1(
     Ok((action, ordinal))
 }
 
+/// Encode one exact all-effect activation instruction.
+pub fn encode_dealer_scenario_activation_instruction_v1(
+    effect_count: u8,
+) -> Result<[u8; DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1]> {
+    if effect_count == 0 || usize::from(effect_count) > DEALER_SCENARIO_MAX_RESERVATIONS_V1 {
+        return Err(Error::InvalidPhase);
+    }
+    let mut output = [0_u8; DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1];
+    output[..8].copy_from_slice(&DEALER_SCENARIO_ACTIVATE_MAGIC_V1);
+    output[8] = effect_count;
+    Ok(output)
+}
+
+/// Hostile-decode one exact all-effect activation instruction.
+pub fn decode_dealer_scenario_activation_instruction_v1(input: &[u8]) -> Result<u8> {
+    if input.len() != DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1 {
+        return Err(Error::InvalidLength);
+    }
+    if input.get(..8) != Some(DEALER_SCENARIO_ACTIVATE_MAGIC_V1.as_slice()) {
+        return Err(Error::InvalidMagic);
+    }
+    let effect_count = byte_at(input, 8)?;
+    if effect_count == 0 || usize::from(effect_count) > DEALER_SCENARIO_MAX_RESERVATIONS_V1 {
+        return Err(Error::InvalidPhase);
+    }
+    Ok(effect_count)
+}
+
 /// Canonical Custody V1 request width carried by an effect envelope.
 pub const DEALER_SCENARIO_CANONICAL_CUSTODY_REQUEST_BYTES_V1: usize = 672;
 /// Canonical delegated Custody V2 request width carried by an effect envelope.
@@ -100,6 +130,9 @@ pub const DEALER_SCENARIO_RESERVATION_ESCROW_PDA_DOMAIN_V1: &[u8] =
     b"dclutch:dealer-reservation-escrow:v1";
 /// Domain for one request-specific Trading caller authority.
 pub const DEALER_SCENARIO_RESERVATION_CALL_DOMAIN_V1: &[u8] = b"dclutch:dealer-reservation-call:v1";
+/// Custody-owned durable activation-receipt PDA domain.
+pub const DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1: &[u8] =
+    b"dclutch:dealer-activation-receipt:v1";
 
 const VERSION_OFFSET: usize = 8;
 const TAG_OFFSET: usize = 10;
@@ -779,8 +812,9 @@ pub struct DealerScenarioReservationStateV1 {
     pub source_prestate_digest: [u8; 32],
     /// Destination token account prestate digest.
     pub destination_prestate_digest: [u8; 32],
-    /// Escrow token account post-reserve digest.
-    pub escrow_poststate_digest: [u8; 32],
+    /// Status-specific effect account digest: escrow while active, returned
+    /// source after rollback, or final destination after activation.
+    pub effect_poststate_digest: [u8; 32],
     /// Source token account post-reserve digest.
     ///
     /// The state cannot carry its own receipt digest: the receipt commits this
@@ -845,7 +879,7 @@ impl DealerScenarioReservationStateV1 {
             token_program: array_at(bytes, STATE_TOKEN_PROGRAM_OFFSET)?,
             source_prestate_digest: array_at(bytes, STATE_SOURCE_PRESTATE_OFFSET)?,
             destination_prestate_digest: array_at(bytes, STATE_DESTINATION_PRESTATE_OFFSET)?,
-            escrow_poststate_digest: array_at(bytes, STATE_ESCROW_POSTSTATE_OFFSET)?,
+            effect_poststate_digest: array_at(bytes, STATE_ESCROW_POSTSTATE_OFFSET)?,
             source_poststate_digest: array_at(bytes, STATE_SOURCE_POSTSTATE_OFFSET)?,
             amount: u64_at(bytes, STATE_AMOUNT_OFFSET)?,
             source_after: u64_at(bytes, STATE_SOURCE_AFTER_OFFSET)?,
@@ -880,7 +914,7 @@ impl DealerScenarioReservationStateV1 {
                 STATE_DESTINATION_PRESTATE_OFFSET,
                 self.destination_prestate_digest,
             ),
-            (STATE_ESCROW_POSTSTATE_OFFSET, self.escrow_poststate_digest),
+            (STATE_ESCROW_POSTSTATE_OFFSET, self.effect_poststate_digest),
             (STATE_SOURCE_POSTSTATE_OFFSET, self.source_poststate_digest),
         ] {
             put(&mut bytes, offset, &value)?;
@@ -919,7 +953,7 @@ impl DealerScenarioReservationStateV1 {
                 self.token_program,
                 self.source_prestate_digest,
                 self.destination_prestate_digest,
-                self.escrow_poststate_digest,
+                self.effect_poststate_digest,
                 self.source_poststate_digest,
             ]
             .contains(&[0; 32])
@@ -1154,6 +1188,41 @@ mod tests {
         assert_eq!(duplicate.encode(), Err(Error::IdentityMismatch));
     }
 
+    #[test]
+    fn instruction_families_refuse_wrong_width_tags_and_counts() {
+        for action in [
+            DealerScenarioReservationActionV1::Reserve,
+            DealerScenarioReservationActionV1::Rollback,
+        ] {
+            let bytes = encode_dealer_scenario_reservation_instruction_v1(action, 3)
+                .expect("reservation instruction");
+            assert_eq!(
+                decode_dealer_scenario_reservation_instruction_v1(&bytes),
+                Ok((action, 3))
+            );
+            assert_eq!(
+                decode_dealer_scenario_reservation_instruction_v1(&bytes[..8]),
+                Err(Error::InvalidLength)
+            );
+        }
+        let activation =
+            encode_dealer_scenario_activation_instruction_v1(4).expect("activation instruction");
+        assert_eq!(
+            decode_dealer_scenario_activation_instruction_v1(&activation),
+            Ok(4)
+        );
+        let mut hostile = activation;
+        hostile[8] = 0;
+        assert_eq!(
+            decode_dealer_scenario_activation_instruction_v1(&hostile),
+            Err(Error::InvalidPhase)
+        );
+        assert_eq!(
+            decode_dealer_scenario_reservation_instruction_v1(&activation),
+            Err(Error::InvalidMagic)
+        );
+    }
+
     fn batch() -> DealerScenarioReservationBatchV1 {
         DealerScenarioReservationBatchV1::new(
             2,
@@ -1185,6 +1254,11 @@ mod tests {
         let full = first
             .append_reserve(11, 1, id(23), id(24), id(25))
             .expect("reserve one");
+        assert_eq!(full.activate(21, id(26)), Err(Error::InvalidPhase));
+        assert_eq!(
+            full.activate(20, id(26)).map(|value| value.status),
+            Ok(DealerScenarioReservationBatchStatusV1::Activated)
+        );
         assert_eq!(
             full.append_rollback(20, 1, id(26), id(25), id(27)),
             Err(Error::InvalidPhase)
@@ -1221,7 +1295,7 @@ mod tests {
             token_program: id(10),
             source_prestate_digest: id(11),
             destination_prestate_digest: id(12),
-            escrow_poststate_digest: id(13),
+            effect_poststate_digest: id(13),
             source_poststate_digest: id(14),
             amount: 5,
             source_after: 6,

@@ -12,7 +12,8 @@ use alloc::{boxed::Box, vec};
 use core::convert::TryFrom;
 
 use dclutch_custody_contract::{
-    CompartmentV1, CustodyRequestV1, CustodyVaultSeedsV1, DelegatedCustodyRequestV2, OperationV1,
+    CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1,
+    OperationV1,
 };
 use dclutch_dealer_codec::{
     scenario_checkpoint_v1::{
@@ -21,14 +22,18 @@ use dclutch_dealer_codec::{
         DealerScenarioCheckpointV1,
     },
     scenario_custody_reservation_v1::{
-        DEALER_SCENARIO_CUSTODY_EFFECT_BYTES_V1, DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1,
+        DEALER_SCENARIO_ACTIVATION_RECEIPT_BYTES_V1,
+        DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, DEALER_SCENARIO_CUSTODY_EFFECT_BYTES_V1,
+        DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1,
         DEALER_SCENARIO_RESERVATION_BATCH_BYTES_V1,
         DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1,
         DEALER_SCENARIO_RESERVATION_STATE_BYTES_V1,
-        DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1, DealerScenarioCustodyEffectManifestV1,
-        DealerScenarioCustodyEffectV1, DealerScenarioCustodyRequestKindV1,
+        DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1, DealerScenarioActivationReceiptV1,
+        DealerScenarioCustodyEffectManifestV1, DealerScenarioCustodyEffectV1,
+        DealerScenarioCustodyRequestKindV1, DealerScenarioReservationBatchStatusV1,
         DealerScenarioReservationBatchV1, DealerScenarioReservationStateStatusV1,
-        DealerScenarioReservationStateV1, decode_dealer_scenario_reservation_instruction_v1,
+        DealerScenarioReservationStateV1, decode_dealer_scenario_activation_instruction_v1,
+        decode_dealer_scenario_reservation_instruction_v1,
     },
     scenario_reservation_receipt_v1::{
         DEALER_SCENARIO_RESERVATION_RECEIPT_BYTES_V1,
@@ -51,9 +56,10 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
 use crate::{
-    CustodySbfError, TransferAccounts, account, authenticate_calling_release, authenticate_market,
-    authenticate_realm, authenticate_replay_identity, authenticate_transfer_accounts, create_vault,
-    initialize_vault, invoke_close, invoke_exact_transfer, read_replay, validate_custody_authority,
+    CustodySbfError, PoststateProjection, TransferAccounts, account, authenticate_calling_release,
+    authenticate_market, authenticate_realm, authenticate_replay_identity,
+    authenticate_transfer_accounts, create_vault, initialize_vault, invoke_close,
+    invoke_exact_transfer, poststate_commitment, read_replay, validate_custody_authority,
     validate_token_program_and_mint, validate_vault_key,
 };
 
@@ -87,6 +93,23 @@ const CLOCK: usize = 23;
 const RENT: usize = 24;
 const SYSTEM: usize = 25;
 
+const ACT_COMMON_ACCOUNT_COUNT: usize = 21;
+const ACT_EFFECT_ACCOUNT_COUNT: usize = 4;
+const ACT_REPLAY: usize = 7;
+const ACT_CHECKPOINT: usize = 8;
+const ACT_EFFECT_PRODUCER: usize = 9;
+const ACT_MANIFEST: usize = 10;
+const ACT_BATCH: usize = 11;
+const ACT_RECEIPT: usize = 12;
+const ACT_MINT: usize = 13;
+const ACT_CUSTODY_AUTHORITY: usize = 14;
+const ACT_TOKEN_PROGRAM: usize = 15;
+const ACT_PAYER: usize = 16;
+const ACT_REFUND: usize = 17;
+const ACT_CLOCK: usize = 18;
+const ACT_RENT: usize = 19;
+const ACT_SYSTEM: usize = 20;
+
 struct AuthenticatedEffectV1 {
     input: DealerScenarioCheckpointInputV1,
     checkpoint_reservation_receipt: [u8; 32],
@@ -97,7 +120,6 @@ struct AuthenticatedEffectV1 {
     effect_digest: [u8; 32],
     effects_digest: [u8; 32],
     custody: CustodyRequestV1,
-    delegated: Option<Box<DelegatedCustodyRequestV2>>,
     slot: u64,
 }
 
@@ -123,13 +145,14 @@ struct DecodedEffectV1 {
     source_after: u64,
     destination_after: u64,
     effect_digest: [u8; 32],
+    request_wire_digest: [u8; 32],
     custody: CustodyRequestV1,
-    delegated: Option<Box<DelegatedCustodyRequestV2>>,
 }
 
 /// Recognize only this exact instruction family.
 pub(crate) fn is_instruction(data: &[u8]) -> bool {
     decode_dealer_scenario_reservation_instruction_v1(data).is_ok()
+        || decode_dealer_scenario_activation_instruction_v1(data).is_ok()
 }
 
 /// Execute one exact reserve or reverse rollback transition.
@@ -139,6 +162,9 @@ pub(crate) fn process(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
+    if let Ok(effect_count) = decode_dealer_scenario_activation_instruction_v1(instruction_data) {
+        return activate_batch(program_id, accounts, effect_count);
+    }
     let (action, ordinal) = decode_dealer_scenario_reservation_instruction_v1(instruction_data)
         .map_err(|_| CustodySbfError::Instruction)?;
     require_frame(accounts, action)?;
@@ -305,7 +331,6 @@ fn authenticate_effect(
         effect_digest: effect.effect_digest,
         effects_digest: manifest.effects_digest,
         custody,
-        delegated: effect.delegated,
         slot,
     }))
 }
@@ -426,25 +451,23 @@ fn read_effect_facts(
     {
         return Err(CustodySbfError::Release.into());
     }
-    let (custody, delegated) = match effect.kind {
-        DealerScenarioCustodyRequestKindV1::Canonical => (
+    let custody = match effect.kind {
+        DealerScenarioCustodyRequestKindV1::Canonical => {
             CustodyRequestV1::decode(effect.request_bytes())
-                .map_err(|_| CustodySbfError::Instruction)?,
-            None,
-        ),
+                .map_err(|_| CustodySbfError::Instruction)?
+        }
         DealerScenarioCustodyRequestKindV1::Delegated => {
-            let delegated = DelegatedCustodyRequestV2::decode(effect.request_bytes())
-                .map_err(|_| CustodySbfError::Instruction)?;
-            (delegated.custody, Some(Box::new(delegated)))
+            return Err(CustodySbfError::Instruction.into());
         }
     };
+    require_reversible_staged_source(effect.kind, custody)?;
     Ok(Box::new(DecodedEffectV1 {
         effect_count,
         source_after: effect.source_after,
         destination_after: effect.destination_after,
         effect_digest,
+        request_wire_digest: hash(effect.request_bytes()).to_bytes(),
         custody,
-        delegated,
     }))
 }
 
@@ -618,13 +641,6 @@ fn execute_reserve_token_effect(
     {
         return Err(CustodySbfError::Postcondition.into());
     }
-    require_delegated_prestate(
-        source,
-        token_program,
-        realm.profile,
-        authenticated.delegated.as_deref().copied(),
-        authority.key.to_bytes(),
-    )?;
     let reserve_request = Box::new(reserve_request(
         original,
         *account(accounts, RESERVATION_STATE)?.key,
@@ -664,12 +680,6 @@ fn execute_reserve_token_effect(
     )?;
     let after =
         authenticate_transfer_accounts(reserve_accounts, *reserve_request, realm.profile, false)?;
-    require_delegated_poststate(
-        source,
-        token_program,
-        realm.profile,
-        authenticated.delegated.as_deref().copied(),
-    )?;
     if after.source != authenticated.source_after
         || after.destination != original.amount
         || before.destination != 0
@@ -693,7 +703,7 @@ fn execute_reserve_token_effect(
         token_program: token_program.key.to_bytes(),
         source_prestate_digest,
         destination_prestate_digest,
-        escrow_poststate_digest: account_digest(escrow)?,
+        effect_poststate_digest: account_digest(escrow)?,
         source_poststate_digest: account_digest(source)?,
         amount: original.amount,
         source_after: after.source,
@@ -871,9 +881,544 @@ fn execute_rollback_token_effect(
     }
     state.status = DealerScenarioReservationStateStatusV1::RolledBack;
     state.source_poststate_digest = account_digest(source)?;
-    state.escrow_poststate_digest = account_digest(escrow)?;
+    state.effect_poststate_digest = account_digest(source)?;
     state.escrow_after = 0;
     Ok(state)
+}
+
+/// Atomically deliver every reserved effect, close every temporary escrow,
+/// advance the standard Custody replay cursor, and persist one typed receipt.
+#[inline(never)]
+fn activate_batch(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    effect_count: u8,
+) -> Result<(), ProgramError> {
+    require_activation_frame(accounts, effect_count)?;
+    let trading = account(accounts, TRADING_PROGRAM)?;
+    let checkpoint_account = account(accounts, ACT_CHECKPOINT)?;
+    let first_checkpoint = read_checkpoint_facts(trading.key, checkpoint_account, 0)?;
+    if first_checkpoint.phase != DealerScenarioCheckpointPhaseV1::Reserved
+        || first_checkpoint.effect_count != effect_count
+        || first_checkpoint.reservation_count != effect_count
+        || first_checkpoint.rollback_count != 0
+    {
+        return Err(CustodySbfError::Replay.into());
+    }
+    let checkpoint_key = checkpoint_account.key.to_bytes();
+    let (batch, batch_prestate_digest) =
+        read_batch(program_id, account(accounts, ACT_BATCH)?, checkpoint_key)?;
+    let slot = Clock::from_account_info(account(accounts, ACT_CLOCK)?)
+        .map_err(|_| CustodySbfError::AccountFrame)?
+        .slot;
+    if batch.status != DealerScenarioReservationBatchStatusV1::Reserved
+        || batch.effect_count != effect_count
+        || batch.reserved_count != effect_count
+        || batch.rollback_count != 0
+        || batch.release_set != first_checkpoint.input.release_set
+        || batch.market != first_checkpoint.input.market
+        || batch.trading_program != trading.key.to_bytes()
+        || batch.request_digest != first_checkpoint.input.request_digest
+        || batch.effects_digest != first_checkpoint.effects_digest
+        || batch.replay != account(accounts, ACT_REPLAY)?.key.to_bytes()
+        || batch.refund_beneficiary != account(accounts, ACT_REFUND)?.key.to_bytes()
+        || batch.expires_at != first_checkpoint.input.expires_at
+        || batch.generation != first_checkpoint.input.generation
+        || slot > batch.expires_at
+    {
+        return Err(CustodySbfError::Replay.into());
+    }
+    require_activation_identities(program_id, accounts, first_checkpoint.input.request_digest)?;
+    require_vacant(account(accounts, ACT_RECEIPT)?)?;
+
+    let first_effect = read_activation_effect(
+        accounts,
+        checkpoint_account.key,
+        first_checkpoint.input.request_digest,
+        effect_count,
+        0,
+    )?;
+    authenticate_activation_release(program_id, accounts, &first_checkpoint, &first_effect)?;
+    let replay_account = account(accounts, ACT_REPLAY)?;
+    let replay_data = replay_account
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Replay)?;
+    let replay_prestate_digest = hash(&replay_data).to_bytes();
+    drop(replay_data);
+    if replay_prestate_digest != batch.replay_prestate_digest {
+        return Err(CustodySbfError::Replay.into());
+    }
+    let mut replay = Box::new(read_replay(replay_account)?);
+
+    for ordinal in 0..effect_count {
+        let checkpoint = read_checkpoint_facts(trading.key, checkpoint_account, ordinal)?;
+        let effect = read_activation_effect(
+            accounts,
+            checkpoint_account.key,
+            first_checkpoint.input.request_digest,
+            effect_count,
+            ordinal,
+        )?;
+        require_activation_effect_join(
+            accounts,
+            &first_checkpoint,
+            &checkpoint,
+            &batch,
+            &effect,
+            ordinal,
+        )?;
+        let poststate = activate_one_effect(program_id, accounts, &effect, ordinal)?;
+        *replay = replay
+            .advance(effect.custody, effect.request_wire_digest, poststate)
+            .map_err(|_| CustodySbfError::Replay)?;
+    }
+
+    finish_activation(
+        program_id,
+        accounts,
+        slot,
+        &first_checkpoint,
+        batch,
+        batch_prestate_digest,
+        replay,
+        replay_prestate_digest,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn finish_activation(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    slot: u64,
+    checkpoint: &CheckpointFactsV1,
+    batch: Box<DealerScenarioReservationBatchV1>,
+    batch_prestate_digest: [u8; 32],
+    replay: Box<CustodyReplayV1>,
+    replay_prestate_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let replay_account = account(accounts, ACT_REPLAY)?;
+    let replay_bytes = replay.to_bytes().map_err(|_| CustodySbfError::Replay)?;
+    if replay_bytes.len() != CUSTODY_REPLAY_BYTES_V1 {
+        return Err(CustodySbfError::Commit.into());
+    }
+    write_exact(replay_account, &replay_bytes)?;
+    let replay_poststate_digest = hash(&replay_bytes).to_bytes();
+    let activated = Box::new(
+        batch
+            .activate(slot, batch_prestate_digest)
+            .map_err(|_| CustodySbfError::Replay)?,
+    );
+    let batch_poststate_digest = write_batch_value(account(accounts, ACT_BATCH)?, &activated)?;
+    let receipt = Box::new(DealerScenarioActivationReceiptV1 {
+        producer_program: program_id.to_bytes(),
+        checkpoint: account(accounts, ACT_CHECKPOINT)?.key.to_bytes(),
+        checkpoint_prestate_digest: checkpoint.digest,
+        request_digest: checkpoint.input.request_digest,
+        effects_digest: checkpoint.effects_digest,
+        batch: account(accounts, ACT_BATCH)?.key.to_bytes(),
+        batch_prestate_digest,
+        batch_poststate_digest,
+        replay_prestate_digest,
+        replay_poststate_digest,
+    });
+    let rent = Rent::from_account_info(account(accounts, ACT_RENT)?)
+        .map_err(|_| CustodySbfError::Create)?;
+    create_activation_receipt_account(
+        program_id,
+        accounts,
+        checkpoint.input.request_digest,
+        &rent,
+    )?;
+    let receipt_bytes = receipt.encode().map_err(|_| CustodySbfError::Commit)?;
+    write_exact(account(accounts, ACT_RECEIPT)?, &receipt_bytes)?;
+    set_return_data(&receipt_bytes);
+    Ok(())
+}
+
+#[inline(never)]
+fn require_activation_frame(
+    accounts: &[AccountInfo<'_>],
+    effect_count: u8,
+) -> Result<(), ProgramError> {
+    let expected = ACT_COMMON_ACCOUNT_COUNT
+        .checked_add(
+            usize::from(effect_count)
+                .checked_mul(ACT_EFFECT_ACCOUNT_COUNT)
+                .ok_or(CustodySbfError::AccountFrame)?,
+        )
+        .ok_or(CustodySbfError::AccountFrame)?;
+    if accounts.len() != expected {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    let common_writable = [ACT_REPLAY, ACT_BATCH, ACT_RECEIPT, ACT_PAYER, ACT_REFUND];
+    let common_executable = [
+        REGISTRY,
+        TRADING_PROGRAM,
+        ACT_EFFECT_PRODUCER,
+        ACT_TOKEN_PROGRAM,
+        ACT_SYSTEM,
+    ];
+    for (index, current) in accounts.iter().enumerate() {
+        let effect_offset = index.checked_sub(ACT_COMMON_ACCOUNT_COUNT);
+        let effect_role = effect_offset.map(|offset| offset % ACT_EFFECT_ACCOUNT_COUNT);
+        let expected_writable =
+            common_writable.contains(&index) || matches!(effect_role, Some(1 | 2 | 3));
+        let expected_signer = index == ACT_PAYER;
+        let expected_executable = common_executable.contains(&index);
+        if current.is_writable != expected_writable
+            || current.is_signer != expected_signer
+            || current.executable != expected_executable
+        {
+            return Err(CustodySbfError::AccountFrame.into());
+        }
+    }
+    if account(accounts, ACT_CLOCK)?.key != &sysvar::clock::ID
+        || account(accounts, ACT_RENT)?.key != &sysvar::rent::ID
+        || account(accounts, ACT_SYSTEM)?.key != &system_program::ID
+        || account(accounts, REGISTRY)?.key == account(accounts, TRADING_PROGRAM)?.key
+        || has_duplicate_keys(accounts)
+    {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    Ok(())
+}
+
+fn activation_effect_index(ordinal: u8) -> Result<usize, ProgramError> {
+    ACT_COMMON_ACCOUNT_COUNT
+        .checked_add(
+            usize::from(ordinal)
+                .checked_mul(ACT_EFFECT_ACCOUNT_COUNT)
+                .ok_or(CustodySbfError::AccountFrame)?,
+        )
+        .ok_or_else(|| CustodySbfError::AccountFrame.into())
+}
+
+#[inline(never)]
+fn read_activation_effect(
+    accounts: &[AccountInfo<'_>],
+    checkpoint: &Pubkey,
+    request_digest: [u8; 32],
+    effect_count: u8,
+    ordinal: u8,
+) -> Result<Box<DecodedEffectV1>, ProgramError> {
+    let effect_index = activation_effect_index(ordinal)?;
+    let producer = account(accounts, ACT_EFFECT_PRODUCER)?;
+    let manifest = read_manifest_facts(
+        producer,
+        account(accounts, ACT_MANIFEST)?,
+        account(accounts, effect_index)?,
+        checkpoint,
+        request_digest,
+        ordinal,
+    )?;
+    if manifest.effect_count != effect_count {
+        return Err(CustodySbfError::Release.into());
+    }
+    read_effect_facts(
+        producer,
+        account(accounts, effect_index)?,
+        checkpoint,
+        request_digest,
+        ordinal,
+        effect_count,
+        manifest.effect_digest,
+    )
+}
+
+#[inline(never)]
+fn authenticate_activation_release(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    checkpoint: &CheckpointFactsV1,
+    effect: &DecodedEffectV1,
+) -> Result<(), ProgramError> {
+    let request = effect.custody;
+    if request.operation != OperationV1::Transfer
+        || request.caller_role != ExecutionRoleV1::Trading
+        || request.caller_program != account(accounts, TRADING_PROGRAM)?.key.to_bytes()
+        || request.release_set != checkpoint.input.release_set
+        || request.market != checkpoint.input.market
+        || request.semantic.parent_request_digest != checkpoint.input.request_digest
+        || request.semantic.generation != checkpoint.input.generation
+    {
+        return Err(CustodySbfError::Release.into());
+    }
+    let release_frame = vec![
+        account(accounts, ACT_CHECKPOINT)?.clone(),
+        account(accounts, MARKET)?.clone(),
+        account(accounts, CACHE)?.clone(),
+        account(accounts, REGISTRY)?.clone(),
+        account(accounts, TRADING_PROGRAM)?.clone(),
+        account(accounts, TRADING_PROGRAMDATA)?.clone(),
+        account(accounts, REALM)?.clone(),
+        account(accounts, REALM_STAGING)?.clone(),
+        account(accounts, ACT_REPLAY)?.clone(),
+    ];
+    let market = authenticate_market(&release_frame, request)?;
+    authenticate_calling_release(program_id, &release_frame, request, None, market.cache_bump)?;
+    let realm = authenticate_realm(program_id, &release_frame, request, market.state)?;
+    authenticate_replay_identity(program_id, account(accounts, ACT_REPLAY)?, request)?;
+    validate_token_program_and_mint(
+        account(accounts, ACT_MINT)?,
+        account(accounts, ACT_TOKEN_PROGRAM)?,
+        request,
+        realm,
+    )?;
+    validate_custody_authority(
+        program_id,
+        account(accounts, ACT_CUSTODY_AUTHORITY)?,
+        request,
+    )?;
+    Ok(())
+}
+
+fn require_activation_effect_join(
+    accounts: &[AccountInfo<'_>],
+    first_checkpoint: &CheckpointFactsV1,
+    checkpoint: &CheckpointFactsV1,
+    batch: &DealerScenarioReservationBatchV1,
+    effect: &DecodedEffectV1,
+    ordinal: u8,
+) -> Result<(), ProgramError> {
+    let state_index = activation_effect_index(ordinal)?
+        .checked_add(1)
+        .ok_or(CustodySbfError::AccountFrame)?;
+    let original = effect.custody;
+    let reservation_state = batch
+        .reservation_states
+        .get(usize::from(ordinal))
+        .copied()
+        .ok_or(CustodySbfError::Replay)?;
+    let receipt_digest = batch
+        .receipt_digests
+        .get(usize::from(ordinal))
+        .copied()
+        .ok_or(CustodySbfError::Replay)?;
+    if checkpoint.input != first_checkpoint.input
+        || checkpoint.digest != first_checkpoint.digest
+        || checkpoint.phase != DealerScenarioCheckpointPhaseV1::Reserved
+        || checkpoint.reservation_count != batch.effect_count
+        || checkpoint.rollback_count != 0
+        || checkpoint.reservation_receipt != receipt_digest
+        || effect.effect_count != batch.effect_count
+        || original.release_set != batch.release_set
+        || original.market != batch.market
+        || original.realm != batch.realm
+        || original.caller_program != batch.trading_program
+        || original.semantic.parent_request_digest != batch.request_digest
+        || original.semantic.generation != batch.generation
+        || original.semantic.transfer_index != u16::from(ordinal)
+        || original.mint != account(accounts, ACT_MINT)?.key.to_bytes()
+        || original.token_program != account(accounts, ACT_TOKEN_PROGRAM)?.key.to_bytes()
+        || account(accounts, state_index)?.key.to_bytes() != reservation_state
+    {
+        return Err(CustodySbfError::Replay.into());
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn activate_one_effect(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    effect: &DecodedEffectV1,
+    ordinal: u8,
+) -> Result<[u8; 32], ProgramError> {
+    let effect_index = activation_effect_index(ordinal)?;
+    let state = account(accounts, effect_index + 1)?;
+    let escrow = account(accounts, effect_index + 2)?;
+    let destination = account(accounts, effect_index + 3)?;
+    let state_data = state
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Replay)?;
+    let mut reservation = Box::new(
+        DealerScenarioReservationStateV1::decode(&state_data)
+            .map_err(|_| CustodySbfError::Replay)?,
+    );
+    drop(state_data);
+    let original = effect.custody;
+    if state.owner != program_id
+        || reservation.status != DealerScenarioReservationStateStatusV1::Active
+        || reservation.ordinal != ordinal
+        || reservation.effect_count != effect.effect_count
+        || reservation.batch != account(accounts, ACT_BATCH)?.key.to_bytes()
+        || reservation.checkpoint != account(accounts, ACT_CHECKPOINT)?.key.to_bytes()
+        || reservation.request_digest != original.semantic.parent_request_digest
+        || reservation.effects_digest
+            != hash(
+                &account(accounts, ACT_MANIFEST)?
+                    .try_borrow_data()
+                    .map_err(|_| CustodySbfError::Release)?,
+            )
+            .to_bytes()
+        || reservation.effect_digest != effect.effect_digest
+        || reservation.source != original.source
+        || reservation.destination != destination.key.to_bytes()
+        || reservation.escrow != escrow.key.to_bytes()
+        || reservation.mint != account(accounts, ACT_MINT)?.key.to_bytes()
+        || reservation.token_program != account(accounts, ACT_TOKEN_PROGRAM)?.key.to_bytes()
+        || reservation.effect_poststate_digest != account_digest(escrow)?
+    {
+        return Err(CustodySbfError::Replay.into());
+    }
+    let request = activate_request(original, *state.key, *escrow.key);
+    request
+        .validate()
+        .map_err(|_| CustodySbfError::Instruction)?;
+    let mint = account(accounts, ACT_MINT)?;
+    let authority = account(accounts, ACT_CUSTODY_AUTHORITY)?;
+    let token_program = account(accounts, ACT_TOKEN_PROGRAM)?;
+    validate_vault_key(program_id, escrow, request, true)?;
+    if original.destination_compartment != CompartmentV1::External {
+        validate_vault_key(program_id, destination, request, false)?;
+    }
+    let authority_bump = validate_custody_authority(program_id, authority, request)?;
+    let transfer_accounts = TransferAccounts {
+        source: escrow,
+        destination,
+        mint,
+        authority,
+        token_program,
+    };
+    let realm_frame = vec![
+        account(accounts, ACT_CHECKPOINT)?.clone(),
+        account(accounts, MARKET)?.clone(),
+        account(accounts, CACHE)?.clone(),
+        account(accounts, REGISTRY)?.clone(),
+        account(accounts, TRADING_PROGRAM)?.clone(),
+        account(accounts, TRADING_PROGRAMDATA)?.clone(),
+        account(accounts, REALM)?.clone(),
+        account(accounts, REALM_STAGING)?.clone(),
+        account(accounts, ACT_REPLAY)?.clone(),
+    ];
+    let market = authenticate_market(&realm_frame, original)?;
+    let realm = authenticate_realm(program_id, &realm_frame, original, market.state)?;
+    let before = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, true)?;
+    if before.source != reservation.amount
+        || before.destination != reservation.destination_before
+        || account_digest(destination)? != reservation.destination_prestate_digest
+    {
+        return Err(CustodySbfError::Postcondition.into());
+    }
+    invoke_exact_transfer(transfer_accounts, request, before.decimals, authority_bump)?;
+    let after = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, false)?;
+    if after.source != 0
+        || after.destination.checked_sub(reservation.amount) != Some(reservation.destination_before)
+    {
+        return Err(CustodySbfError::Postcondition.into());
+    }
+    let escrow_lamports = escrow.lamports();
+    let refund = account(accounts, ACT_REFUND)?;
+    let refund_before = refund.lamports();
+    let mut close_request = request;
+    close_request.rent_refund = refund.key.to_bytes();
+    invoke_close(
+        escrow,
+        refund,
+        authority,
+        token_program,
+        close_request,
+        authority_bump,
+    )?;
+    if escrow.lamports() != 0
+        || refund.lamports()
+            != refund_before
+                .checked_add(escrow_lamports)
+                .ok_or(CustodySbfError::Postcondition)?
+    {
+        return Err(CustodySbfError::Postcondition.into());
+    }
+    reservation.status = DealerScenarioReservationStateStatusV1::Activated;
+    reservation.effect_poststate_digest = account_digest(destination)?;
+    reservation.escrow_after = 0;
+    write_state_value(state, &reservation)?;
+    Ok(poststate_commitment(PoststateProjection {
+        request_digest: effect.request_wire_digest,
+        source: original.source,
+        destination: original.destination,
+        source_before: reservation
+            .source_after
+            .checked_add(reservation.amount)
+            .ok_or(CustodySbfError::Postcondition)?,
+        source_after: reservation.source_after,
+        destination_before: reservation.destination_before,
+        destination_after: after.destination,
+        rent_lamports: 0,
+    }))
+}
+
+fn require_activation_identities(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let checkpoint = account(accounts, ACT_CHECKPOINT)?;
+    let expected_batch = Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1,
+            checkpoint.key.as_ref(),
+        ],
+        program_id,
+    )
+    .0;
+    let expected_receipt = Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            checkpoint.key.as_ref(),
+            &request_digest,
+        ],
+        program_id,
+    )
+    .0;
+    if account(accounts, ACT_BATCH)?.key != &expected_batch
+        || account(accounts, ACT_RECEIPT)?.key != &expected_receipt
+    {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    Ok(())
+}
+
+fn create_activation_receipt_account(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request_digest: [u8; 32],
+    rent: &Rent,
+) -> Result<(), ProgramError> {
+    let checkpoint = account(accounts, ACT_CHECKPOINT)?;
+    let bump = Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            checkpoint.key.as_ref(),
+            &request_digest,
+        ],
+        program_id,
+    )
+    .1;
+    let bump_seed = [bump];
+    create_program_account(
+        program_id,
+        account(accounts, ACT_PAYER)?,
+        account(accounts, ACT_RECEIPT)?,
+        account(accounts, ACT_SYSTEM)?,
+        rent,
+        DEALER_SCENARIO_ACTIVATION_RECEIPT_BYTES_V1,
+        &[
+            DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            checkpoint.key.as_ref(),
+            &request_digest,
+            bump_seed.as_slice(),
+        ],
+    )
+}
+
+fn activate_request(request: CustodyRequestV1, state: Pubkey, escrow: Pubkey) -> CustodyRequestV1 {
+    let mut activated = request;
+    activated.source = escrow.to_bytes();
+    activated.source_compartment = CompartmentV1::RecoveryReserve;
+    activated.source_vault_context = state.to_bytes();
+    activated.semantic.source_owner = [0; 32];
+    activated
 }
 
 fn reserve_request(
@@ -1199,56 +1744,17 @@ fn vacant_digest() -> [u8; 32] {
     hash(b"dclutch:dealer-vacant-account:v1").to_bytes()
 }
 
-fn require_delegated_prestate(
-    source: &AccountInfo<'_>,
-    token_program: &AccountInfo<'_>,
-    profile: dclutch_token_svm::ExactTransferProfileV1,
-    delegated: Option<DelegatedCustodyRequestV2>,
-    authority: [u8; 32],
+fn require_reversible_staged_source(
+    kind: DealerScenarioCustodyRequestKindV1,
+    request: CustodyRequestV1,
 ) -> Result<(), ProgramError> {
-    let Some(request) = delegated else {
-        return Ok(());
-    };
-    let data = source
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let token = profile
-        .check_transfer_account(token_program.key.to_bytes(), &data)
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let delegate = match token.delegate {
-        dclutch_token_svm::COption::None => [0; 32],
-        dclutch_token_svm::COption::Some(value) => value,
-    };
-    if delegate != authority
-        || delegate != request.delegate_before
-        || token.delegated_amount != request.allowance_before
+    if kind != DealerScenarioCustodyRequestKindV1::Canonical
+        || request.source_compartment == CompartmentV1::External
     {
-        return Err(CustodySbfError::TokenState.into());
-    }
-    Ok(())
-}
-
-fn require_delegated_poststate(
-    source: &AccountInfo<'_>,
-    token_program: &AccountInfo<'_>,
-    profile: dclutch_token_svm::ExactTransferProfileV1,
-    delegated: Option<DelegatedCustodyRequestV2>,
-) -> Result<(), ProgramError> {
-    let Some(request) = delegated else {
-        return Ok(());
-    };
-    let data = source
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let token = profile
-        .check_transfer_account(token_program.key.to_bytes(), &data)
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let delegate = match token.delegate {
-        dclutch_token_svm::COption::None => [0; 32],
-        dclutch_token_svm::COption::Some(value) => value,
-    };
-    if delegate != request.delegate_after || token.delegated_amount != request.allowance_after {
-        return Err(CustodySbfError::Postcondition.into());
+        // External delegated debits consume allowance which Custody cannot
+        // recreate during permissionless rollback. Deposit to an internal
+        // TradingPrincipal vault first, then stage that canonical movement.
+        return Err(CustodySbfError::Instruction.into());
     }
     Ok(())
 }
@@ -1310,6 +1816,30 @@ mod tests {
     #[test]
     fn reserve_and_rollback_preserve_original_compartment_semantics() {
         let original = transfer();
+        assert!(
+            require_reversible_staged_source(
+                DealerScenarioCustodyRequestKindV1::Canonical,
+                original
+            )
+            .is_ok()
+        );
+        let mut external = original;
+        external.source_compartment = CompartmentV1::External;
+        external.semantic.source_owner = [22; 32];
+        assert!(
+            require_reversible_staged_source(
+                DealerScenarioCustodyRequestKindV1::Canonical,
+                external
+            )
+            .is_err()
+        );
+        assert!(
+            require_reversible_staged_source(
+                DealerScenarioCustodyRequestKindV1::Delegated,
+                original
+            )
+            .is_err()
+        );
         let reserve = reserve_request(
             original,
             Pubkey::new_from_array([20; 32]),
@@ -1334,5 +1864,18 @@ mod tests {
         );
         assert_eq!(rollback.destination, original.source);
         assert!(rollback.validate().is_ok());
+        let activation = activate_request(
+            original,
+            Pubkey::new_from_array([20; 32]),
+            Pubkey::new_from_array([21; 32]),
+        );
+        assert_eq!(
+            activation.source_compartment,
+            CompartmentV1::RecoveryReserve
+        );
+        assert_eq!(activation.destination_compartment, CompartmentV1::FeeVault);
+        assert_eq!(activation.destination, original.destination);
+        assert_eq!(activation.amount, original.amount);
+        assert!(activation.validate().is_ok());
     }
 }

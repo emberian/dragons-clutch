@@ -15,6 +15,7 @@ use dclutch_dealer_codec::scenario_checkpoint_v1::{
 use dclutch_dealer_codec::scenario_custody_reservation_v1::{
     DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1, DealerScenarioCustodyEffectManifestV1,
     DealerScenarioCustodyEffectV1, DealerScenarioCustodyRequestKindV1,
+    encode_dealer_scenario_activation_instruction_v1,
     encode_dealer_scenario_reservation_instruction_v1,
 };
 use dclutch_dealer_codec::scenario_membership_manifest_v1::{
@@ -169,6 +170,89 @@ pub struct DealerScenarioReservationBundlePacketV1 {
     pub lock_census: DealerScenarioTransactionLockCensusV1,
 }
 
+/// Exact per-effect account quartet consumed by Custody batch activation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DealerScenarioActivationEffectAccountsV1 {
+    /// Evaluator-owned exact effect body.
+    pub effect_body: Pubkey,
+    /// Custody-owned active reservation state.
+    pub reservation_state: Pubkey,
+    /// Custody RecoveryReserve token escrow.
+    pub escrow: Pubkey,
+    /// Exact original destination token account.
+    pub destination: Pubkey,
+}
+
+/// Complete common and ordered effect account bank for Custody activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerScenarioActivationAccountsV1 {
+    /// Release-selected Custody program.
+    pub custody_program: Pubkey,
+    /// Core Market.
+    pub market: Pubkey,
+    /// Registry activation cache.
+    pub activation_cache: Pubkey,
+    /// Registry executable.
+    pub registry_program: Pubkey,
+    /// Release-selected Trading executable.
+    pub trading_program: Pubkey,
+    /// Trading ProgramData pinned by the release.
+    pub trading_programdata: Pubkey,
+    /// Immutable Realm.
+    pub realm: Pubkey,
+    /// Vacant Realm staging cursor.
+    pub realm_staging: Pubkey,
+    /// Writable standard Custody replay cursor.
+    pub custody_replay: Pubkey,
+    /// Reserved Trading checkpoint.
+    pub checkpoint: Pubkey,
+    /// Evaluator executable owning the effect bank.
+    pub effect_producer: Pubkey,
+    /// Complete evaluator-owned effect manifest.
+    pub effect_manifest: Pubkey,
+    /// Custody reservation batch PDA.
+    pub batch: Pubkey,
+    /// Vacant Custody activation receipt PDA.
+    pub activation_receipt: Pubkey,
+    /// Realm-selected collateral Mint.
+    pub mint: Pubkey,
+    /// Custody transfer authority.
+    pub custody_authority: Pubkey,
+    /// Realm-selected Token or Token-2022 program.
+    pub token_program: Pubkey,
+    /// Rent payer and transaction signer.
+    pub payer: Pubkey,
+    /// Immutable escrow-rent beneficiary.
+    pub refund_beneficiary: Pubkey,
+    /// Clock sysvar.
+    pub clock: Pubkey,
+    /// Rent sysvar.
+    pub rent: Pubkey,
+    /// System program.
+    pub system_program: Pubkey,
+    /// Active ordered prefix; inactive suffix must be all-default.
+    pub effects: [DealerScenarioActivationEffectAccountsV1; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+    /// Exact active effect count.
+    pub effect_count: u8,
+}
+
+/// One real escrow-inclusive Custody activation packet and census.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerScenarioActivationPacketV1 {
+    /// Exact Custody activation instruction.
+    pub instruction: Instruction,
+    /// Unsigned v0 message.
+    pub message: VersionedMessage,
+    /// Exact fully-signed transaction width.
+    pub wire_bytes: usize,
+    /// Number of addresses loaded from lookup tables.
+    pub loaded_addresses: usize,
+    /// Exact ordered signer set.
+    pub required_signers: Vec<Pubkey>,
+    /// Resolved payer/meta/program lock census.
+    pub lock_census: DealerScenarioTransactionLockCensusV1,
+}
+
 /// Stable builder or journal refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerScenarioCheckpointOperatorErrorV1 {
@@ -292,7 +376,12 @@ pub fn encode_dealer_scenario_custody_effect_artifacts_v1(
             .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
         let kind = match effect.request {
             MultiLpCustodyRequestV3::Canonical(_) => DealerScenarioCustodyRequestKindV1::Canonical,
-            MultiLpCustodyRequestV3::Delegated(_) => DealerScenarioCustodyRequestKindV1::Delegated,
+            MultiLpCustodyRequestV3::Delegated(_) => {
+                // A staged rollback cannot restore delegated allowance. The
+                // caller must first deposit external value into an internal
+                // TradingPrincipal vault and evaluate canonical effects.
+                return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+            }
         };
         let mut request_payload = [0_u8; DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1];
         effect
@@ -1114,6 +1203,135 @@ pub fn build_dealer_scenario_reservation_bundle_v1(
     })
 }
 
+/// Build the one bounded transaction that delivers every reserved escrow.
+///
+/// The caller normally supplies an ALT because four effects resolve 38 locks
+/// and do not fit the 1,232-byte packet ceiling as static addresses. The lock
+/// census always counts the fully resolved accounts, never compressed bytes.
+pub fn build_dealer_scenario_activation_v1(
+    accounts: DealerScenarioActivationAccountsV1,
+    recent_blockhash: Hash,
+    lookup_tables: &[AddressLookupTableAccount],
+) -> Result<DealerScenarioActivationPacketV1, DealerScenarioCheckpointOperatorErrorV1> {
+    let active = usize::from(accounts.effect_count);
+    if active == 0 || active > DEALER_SCENARIO_MAX_RESERVATIONS_V1 {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let default_effect = DealerScenarioActivationEffectAccountsV1::default();
+    if accounts.effects.iter().take(active).any(|effect| {
+        [
+            effect.effect_body,
+            effect.reservation_state,
+            effect.escrow,
+            effect.destination,
+        ]
+        .contains(&Pubkey::default())
+    }) || accounts
+        .effects
+        .iter()
+        .skip(active)
+        .any(|effect| *effect != default_effect)
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let mut metas = vec![
+        AccountMeta::new_readonly(accounts.market, false),
+        AccountMeta::new_readonly(accounts.activation_cache, false),
+        AccountMeta::new_readonly(accounts.registry_program, false),
+        AccountMeta::new_readonly(accounts.trading_program, false),
+        AccountMeta::new_readonly(accounts.trading_programdata, false),
+        AccountMeta::new_readonly(accounts.realm, false),
+        AccountMeta::new_readonly(accounts.realm_staging, false),
+        AccountMeta::new(accounts.custody_replay, false),
+        AccountMeta::new_readonly(accounts.checkpoint, false),
+        AccountMeta::new_readonly(accounts.effect_producer, false),
+        AccountMeta::new_readonly(accounts.effect_manifest, false),
+        AccountMeta::new(accounts.batch, false),
+        AccountMeta::new(accounts.activation_receipt, false),
+        AccountMeta::new_readonly(accounts.mint, false),
+        AccountMeta::new_readonly(accounts.custody_authority, false),
+        AccountMeta::new_readonly(accounts.token_program, false),
+        AccountMeta::new(accounts.payer, true),
+        AccountMeta::new(accounts.refund_beneficiary, false),
+        AccountMeta::new_readonly(accounts.clock, false),
+        AccountMeta::new_readonly(accounts.rent, false),
+        AccountMeta::new_readonly(accounts.system_program, false),
+    ];
+    for effect in accounts.effects.iter().take(active) {
+        metas.extend([
+            AccountMeta::new_readonly(effect.effect_body, false),
+            AccountMeta::new(effect.reservation_state, false),
+            AccountMeta::new(effect.escrow, false),
+            AccountMeta::new(effect.destination, false),
+        ]);
+    }
+    let keys = metas.iter().map(|meta| meta.pubkey).collect::<Vec<_>>();
+    if accounts.custody_program == Pubkey::default()
+        || keys.contains(&Pubkey::default())
+        || has_duplicate_keys(&keys)
+        || keys.contains(&accounts.custody_program)
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let instruction = Instruction {
+        program_id: accounts.custody_program,
+        accounts: metas,
+        data: encode_dealer_scenario_activation_instruction_v1(accounts.effect_count)
+            .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?
+            .to_vec(),
+    };
+    let census = census_dealer_scenario_transaction_locks_v1(
+        accounts.payer,
+        core::slice::from_ref(&instruction),
+    );
+    require_dealer_scenario_devnet_lock_limit_v1(
+        accounts.payer,
+        core::slice::from_ref(&instruction),
+    )
+    .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::LockLimit)?;
+    let required_signers = signer_set(accounts.payer, &instruction);
+    let message = v0::Message::try_compile(
+        &accounts.payer,
+        core::slice::from_ref(&instruction),
+        lookup_tables,
+        recent_blockhash,
+    )
+    .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Message)?;
+    if usize::from(message.header.num_required_signatures) != required_signers.len() {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let loaded_addresses = message
+        .address_table_lookups
+        .iter()
+        .try_fold(0_usize, |total, lookup| {
+            total
+                .checked_add(lookup.writable_indexes.len())
+                .and_then(|value| value.checked_add(lookup.readonly_indexes.len()))
+        })
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+    let versioned = VersionedMessage::V0(message);
+    let signature_count = required_signers.len();
+    let wire_bytes = short_vec_prefix_bytes(signature_count)
+        .checked_add(
+            signature_count
+                .checked_mul(64)
+                .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+        )
+        .and_then(|value| value.checked_add(versioned.serialize().len()))
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+    if wire_bytes > DEALER_SCENARIO_PACKET_BYTES_V1 {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Packet);
+    }
+    Ok(DealerScenarioActivationPacketV1 {
+        instruction,
+        message: versioned,
+        wire_bytes,
+        loaded_addresses,
+        required_signers,
+        lock_census: census,
+    })
+}
+
 /// Build and compile one permissionless expiry cleanup transaction.
 pub fn build_dealer_scenario_checkpoint_cleanup_v1(
     trading_program: Pubkey,
@@ -1257,6 +1475,8 @@ pub struct DealerScenarioCheckpointJournalV1 {
     pub reservation_count: u8,
     /// Number of finalized reverse-order rollback ingestions.
     pub rollback_count: u8,
+    /// Custody batch activation receipt digest, zero before activation.
+    pub activation_receipt: [u8; 32],
     /// Whether finalized cleanup observed the checkpoint vacant.
     pub cleaned: bool,
 }
@@ -1281,6 +1501,7 @@ impl DealerScenarioCheckpointJournalV1 {
             reservation_receipts: [[0; 32]; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
             reservation_count: 0,
             rollback_count: 0,
+            activation_receipt: [0; 32],
             cleaned: false,
         })
     }
@@ -1341,6 +1562,7 @@ impl DealerScenarioCheckpointJournalV1 {
             || evaluation_receipt == [0; 32]
             || checkpoint_poststate_digest == [0; 32]
             || self.evaluation_receipt != [0; 32]
+            || custody_effect_count == 0
             || usize::from(custody_effect_count) > DEALER_SCENARIO_MAX_RESERVATIONS_V1
             || self.cleaned
         {
@@ -1365,6 +1587,7 @@ impl DealerScenarioCheckpointJournalV1 {
             || receipt_digest == [0; 32]
             || checkpoint_poststate_digest == [0; 32]
             || self.rollback_count != 0
+            || self.activation_receipt != [0; 32]
             || self.cleaned
         {
             return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
@@ -1402,6 +1625,7 @@ impl DealerScenarioCheckpointJournalV1 {
             || prior_receipt_digest == [0; 32]
             || rollback_receipt_digest == [0; 32]
             || checkpoint_poststate_digest == [0; 32]
+            || self.activation_receipt != [0; 32]
             || self.cleaned
         {
             return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
@@ -1422,10 +1646,29 @@ impl DealerScenarioCheckpointJournalV1 {
         Ok(())
     }
 
+    /// Record finalized Custody activation only after every reservation is live.
+    pub fn record_activated(
+        &mut self,
+        activation_receipt_digest: [u8; 32],
+    ) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
+        if self.custody_effect_count == 0
+            || self.reservation_count != self.custody_effect_count
+            || self.rollback_count != 0
+            || activation_receipt_digest == [0; 32]
+            || self.activation_receipt != [0; 32]
+            || self.cleaned
+        {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
+        }
+        self.activation_receipt = activation_receipt_digest;
+        Ok(())
+    }
+
     /// Record finalized expiry cleanup only after create occurred.
     pub fn record_cleaned(&mut self) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
         if self.checkpoint_digest == [0; 32]
             || self.reservation_count != self.rollback_count
+            || self.activation_receipt != [0; 32]
             || self.cleaned
         {
             return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
@@ -1629,6 +1872,82 @@ mod tests {
     }
 
     #[test]
+    fn four_effect_activation_uses_real_escrows_and_fits_with_alt() {
+        let effects = [
+            DealerScenarioActivationEffectAccountsV1 {
+                effect_body: key(60),
+                reservation_state: key(61),
+                escrow: key(62),
+                destination: key(63),
+            },
+            DealerScenarioActivationEffectAccountsV1 {
+                effect_body: key(64),
+                reservation_state: key(65),
+                escrow: key(66),
+                destination: key(67),
+            },
+            DealerScenarioActivationEffectAccountsV1 {
+                effect_body: key(68),
+                reservation_state: key(69),
+                escrow: key(70),
+                destination: key(71),
+            },
+            DealerScenarioActivationEffectAccountsV1 {
+                effect_body: key(72),
+                reservation_state: key(73),
+                escrow: key(74),
+                destination: key(75),
+            },
+        ];
+        let accounts = DealerScenarioActivationAccountsV1 {
+            custody_program: key(30),
+            market: key(31),
+            activation_cache: key(32),
+            registry_program: key(33),
+            trading_program: key(34),
+            trading_programdata: key(35),
+            realm: key(36),
+            realm_staging: key(37),
+            custody_replay: key(38),
+            checkpoint: key(39),
+            effect_producer: key(40),
+            effect_manifest: key(41),
+            batch: key(42),
+            activation_receipt: key(43),
+            mint: key(44),
+            custody_authority: key(45),
+            token_program: key(46),
+            payer: key(47),
+            refund_beneficiary: key(48),
+            clock: key(49),
+            rent: key(50),
+            system_program: key(51),
+            effects,
+            effect_count: 4,
+        };
+        assert_eq!(
+            build_dealer_scenario_activation_v1(accounts, blockhash(), &[]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Packet)
+        );
+        let table = AddressLookupTableAccount {
+            key: key(29),
+            addresses: (31_u8..=75).map(key).collect(),
+        };
+        let packet = build_dealer_scenario_activation_v1(
+            accounts,
+            blockhash(),
+            core::slice::from_ref(&table),
+        )
+        .expect("activation");
+        assert_eq!(packet.lock_census.unique_account_lock_count, 38);
+        assert_eq!(packet.wire_bytes, 287);
+        assert_eq!(packet.loaded_addresses, 36);
+        assert_eq!(packet.instruction.accounts.len(), 37);
+        assert_eq!(packet.instruction.accounts[23].pubkey, key(62));
+        assert!(packet.instruction.accounts[23].is_writable);
+    }
+
+    #[test]
     fn maximum_page_uses_a_table_and_stays_below_64_locks() {
         let observations = (20_u8..68).map(key).collect::<Vec<_>>();
         let table = AddressLookupTableAccount {
@@ -1731,6 +2050,16 @@ mod tests {
         journal
             .record_reservation(1, [62; 32], [63; 32])
             .expect("reservation one");
+        let mut activated = journal.clone();
+        activated.record_activated([64; 32]).expect("activation");
+        assert_eq!(
+            activated.record_rollback(1, [62; 32], [65; 32], [66; 32]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
+        );
+        assert_eq!(
+            activated.record_cleaned(),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
+        );
         assert_eq!(
             journal.record_cleaned(),
             Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
