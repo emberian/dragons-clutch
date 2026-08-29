@@ -20,7 +20,9 @@ for manifest in \
   programs/dclutch-dealer-accelerator-sbf/Cargo.toml \
   programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml \
   programs/dclutch-trading-sbf/Cargo.toml \
-  programs/dclutch-custody-sbf/Cargo.toml
+  programs/dclutch-custody-sbf/Cargo.toml \
+  programs/dclutch-claims-sbf/Cargo.toml \
+  programs/dclutch-core-sbf/Cargo.toml
 do
   cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$sbf_out"
 done

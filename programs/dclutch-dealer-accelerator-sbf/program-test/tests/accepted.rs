@@ -146,6 +146,12 @@ const EFFECTS: Pubkey = Pubkey::new_from_array([0xdb; 32]);
 const EFFECT_BODY: Pubkey = Pubkey::new_from_array([0xdc; 32]);
 /// A real executable program the activated release set never named as Custody.
 const UNACTIVATED_PRODUCER: Pubkey = Pubkey::new_from_array([0xdd; 32]);
+/// Release-selected Custody program.
+const CUSTODY_PROGRAM: Pubkey = Pubkey::new_from_array([0xe1; 32]);
+/// Release-selected Claims program.
+const CLAIMS_PROGRAM: Pubkey = Pubkey::new_from_array([0xe6; 32]);
+/// Release-selected Core program.
+const CORE_PROGRAM: Pubkey = Pubkey::new_from_array([0xe7; 32]);
 
 /// The refusal Trading raises when a route's account content is not canonical.
 const TRADING_CONTENT: u32 = 0x4003;
@@ -155,11 +161,17 @@ const TRADING_TRANSITION: u32 = 0x4004;
 const TRADING_COMMIT: u32 = 0x4005;
 /// The refusal Trading raises when the release waist does not authenticate.
 const TRADING_RELEASE: u32 = 0x4001;
+/// The Claims SignedDelta route's refusal when the aggregate state does not join.
+const CLAIMS_SIGNED_DELTA_STATE: u32 = 0x5204;
 
 /// Runtime Product outcome width this scenario transitions.
 const WIDTH: u32 = 3;
 /// Last slot at which this scenario's checkpoint may still be advanced.
-const SCENARIO_EXPIRES_AT: u64 = 25;
+///
+/// Commit admits only a live checkpoint, and building the address lookup table
+/// the commit needs costs several slots, so the preparation window has to
+/// outlast its own transport.
+const SCENARIO_EXPIRES_AT: u64 = 5_000;
 
 /// The five execution roles one activated release set binds.
 const ALL_ROLES: [ExecutionRoleV1; 5] = [
@@ -199,11 +211,14 @@ struct ReleaseWaist {
     release_set_id: [u8; 32],
     custody_program: Pubkey,
     custody_programdata: Pubkey,
+    claims_program: Pubkey,
+    claims_programdata: Pubkey,
+    core_program: Pubkey,
+    core_programdata: Pubkey,
+    trading_programdata: Pubkey,
     activation_cache: Pubkey,
     cache_body: Vec<u8>,
-    program_body: Vec<u8>,
-    programdata_body: Vec<u8>,
-    custody_elf: Vec<u8>,
+    deployments: Vec<(&'static str, Pubkey, Vec<u8>)>,
 }
 
 /// The exact 36-byte Loader V3 Program account body.
@@ -245,66 +260,100 @@ fn loader_programdata_body(slot: u64, authority: Option<[u8; 32]>, elf: &[u8]) -
     output
 }
 
-/// Build one whole activated release set, exactly as the Registry writes it.
-///
-/// The release set identity is derived, never chosen: it is the digest of the
-/// release set body, and the cache address is derived from that. A scenario
-/// therefore adopts its release set rather than naming one.
-fn release_waist() -> ReleaseWaist {
-    release_waist_for(0xe1)
+/// Loader V3 ProgramData address for one program.
+fn programdata_address(program: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
 }
 
-/// Build one activated release set over a chosen Custody program identity.
-fn release_waist_for(custody_seed: u8) -> ReleaseWaist {
-    let registry = Pubkey::new_from_array([0xe0; 32]);
-    let custody_program = Pubkey::new_from_array([custody_seed; 32]);
-    let custody_programdata =
-        Pubkey::find_program_address(&[custody_program.as_ref()], &bpf_loader_upgradeable::ID).0;
-    // The Custody role is pinned to a real deployed artifact, not a stand-in:
-    // the activation binds this exact ELF digest and slot.
-    let elf = elf("dclutch_custody_sbf");
-    let release = ArtifactReleaseV1::new(
-        ProgramIdentityV1::new(custody_program.to_bytes()).expect("program identity"),
+/// One slot-pinned immutable release over a real deployed artifact.
+fn artifact_release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleaseV1 {
+    ArtifactReleaseV1::new(
+        ProgramIdentityV1::new(program.to_bytes()).expect("program identity"),
         ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity"),
-        custody_programdata.to_bytes(),
-        ContentId::new([0xe3; 32]).expect("semantic release"),
-        hash(&elf).to_bytes(),
+        programdata_address(program).to_bytes(),
+        ContentId::new([semantic; 32]).expect("semantic release"),
+        hash(elf).to_bytes(),
         WAIST_SLOT,
         ArtifactUpgradePolicyV1::Immutable,
         None,
     )
-    .expect("artifact release");
-    let artifact_id =
-        ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact id");
-    let binding = ExecutionRoleBindingV1::new(release.program(), artifact_id);
-    let release_set = ExecutionReleaseSetV1::new(binding, binding, binding, binding, binding)
-        .expect("aliased release set");
-    let release_set_id =
-        ContentId::new(hash(&release_set.to_bytes()).to_bytes()).expect("release set id");
+    .expect("artifact release")
+}
+
+/// Activation input for one release, observed exactly as staged.
+fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+    let artifact = ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes())
+        .expect("artifact identity");
     let observation = DeploymentObservationV1::new(
-        custody_program.to_bytes(),
+        release.program().to_bytes(),
         bpf_loader_upgradeable::ID.to_bytes(),
         true,
-        custody_programdata.to_bytes(),
+        release.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         false,
-        custody_programdata.to_bytes(),
+        release.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
-        WAIST_SLOT,
-        hash(&elf).to_bytes(),
-        None,
+        release.deployment_slot(),
+        release.elf_digest(),
+        release.upgrade_authority(),
     )
     .expect("deployment observation");
-    let input = ArtifactActivationInputV1::new(artifact_id, release, observation);
+    ArtifactActivationInputV1::new(artifact, release, observation)
+}
+
+/// Build the multi-role activated release set this campaign executes under.
+///
+/// Every role is bound to a real deployed artifact at the slot its activation
+/// observed. Trading is bound to the Trading program because Trading is the
+/// caller inside the Claims frame; Custody to Custody because reservation
+/// authenticates that role; Claims and Core because the commit frame
+/// authenticates both.
+fn release_waist() -> ReleaseWaist {
+    release_waist_for(CUSTODY_PROGRAM)
+}
+
+/// Build one activated release set over a chosen Custody program identity.
+fn release_waist_for(custody_program: Pubkey) -> ReleaseWaist {
+    let registry = Pubkey::new_from_array([0xe0; 32]);
+    let custody_elf = elf("dclutch_custody_sbf");
+    let claims_elf = elf("dclutch_claims_sbf");
+    let core_elf = elf("dclutch_core_sbf");
+    let trading_elf = elf("dclutch_trading_sbf");
+    let custody = artifact_release(custody_program, 0xe3, &custody_elf);
+    let claims = artifact_release(CLAIMS_PROGRAM, 0xe4, &claims_elf);
+    let core = artifact_release(CORE_PROGRAM, 0xe5, &core_elf);
+    let trading = artifact_release(TRADING, 0xe6, &trading_elf);
+    let bind = |release: ArtifactReleaseV1| {
+        ExecutionRoleBindingV1::new(
+            release.program(),
+            ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact id"),
+        )
+    };
+    let release_set = ExecutionReleaseSetV1::new(
+        bind(core),
+        bind(claims),
+        bind(trading),
+        bind(claims),
+        bind(custody),
+    )
+    .expect("multi-role release set");
+    let release_set_id =
+        ContentId::new(hash(&release_set.to_bytes()).to_bytes()).expect("release set id");
     let mut cache_body = vec![0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
     initialize_activation_cache_v1(&mut cache_body, release_set_id).expect("initialize cache");
-    for role in ALL_ROLES {
+    for (role, release) in [
+        (ExecutionRoleV1::Core, core),
+        (ExecutionRoleV1::Claims, claims),
+        (ExecutionRoleV1::Trading, trading),
+        (ExecutionRoleV1::Resolution, claims),
+        (ExecutionRoleV1::Custody, custody),
+    ] {
         activate_execution_role_into_v1(
             &mut cache_body,
             release_set_id,
             &release_set,
             role,
-            &input,
+            &activation_input(release),
         )
         .expect("activate role");
     }
@@ -312,12 +361,20 @@ fn release_waist_for(custody_seed: u8) -> ReleaseWaist {
         registry,
         release_set_id: release_set_id.to_bytes(),
         custody_program,
-        custody_programdata,
+        custody_programdata: programdata_address(custody_program),
+        claims_program: CLAIMS_PROGRAM,
+        claims_programdata: programdata_address(CLAIMS_PROGRAM),
+        core_program: CORE_PROGRAM,
+        core_programdata: programdata_address(CORE_PROGRAM),
+        trading_programdata: programdata_address(TRADING),
         activation_cache: activation_cache_address_v1(&registry, &release_set_id.to_bytes()),
         cache_body,
-        program_body: loader_program_body(custody_programdata),
-        programdata_body: loader_programdata_body(WAIST_SLOT, None, &elf),
-        custody_elf: elf,
+        deployments: vec![
+            ("dclutch_custody_sbf", custody_program, custody_elf),
+            ("dclutch_claims_sbf", CLAIMS_PROGRAM, claims_elf),
+            ("dclutch_core_sbf", CORE_PROGRAM, core_elf),
+            ("dclutch_trading_sbf", TRADING, trading_elf),
+        ],
     }
 }
 
@@ -731,7 +788,6 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.set_compute_max_units(1_400_000);
-    test.add_program("dclutch_trading_sbf", TRADING, None);
     test.add_account(
         REQUEST,
         data_account(TRADING, scenario.request_bytes.clone()),
@@ -760,14 +816,16 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
     // role is installed as a real loadable deployment and its ProgramData is
     // then written to the exact slot and authority the activation pinned.
     add_executable(&mut test, scenario.waist.registry);
-    test.add_upgradeable_program_to_genesis(
-        "dclutch_custody_sbf",
-        &scenario.waist.custody_program,
-    );
-    test.add_account(
-        scenario.waist.custody_programdata,
-        data_account(bpf_loader_upgradeable::ID, scenario.waist.programdata_body.clone()),
-    );
+    for (name, program, artifact) in &scenario.waist.deployments {
+        test.add_upgradeable_program_to_genesis(name, program);
+        test.add_account(
+            programdata_address(*program),
+            data_account(
+                bpf_loader_upgradeable::ID,
+                loader_programdata_body(WAIST_SLOT, None, artifact),
+            ),
+        );
+    }
     test.add_account(
         scenario.waist.activation_cache,
         data_account(scenario.waist.registry, scenario.waist.cache_body.clone()),
@@ -785,6 +843,11 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         scenario.waist.custody_program,
         scenario.waist.custody_programdata,
         scenario.waist.activation_cache,
+        scenario.waist.claims_program,
+        scenario.waist.claims_programdata,
+        scenario.waist.core_program,
+        scenario.waist.core_programdata,
+        scenario.waist.trading_programdata,
         MANIFEST_PRODUCER,
         UNACTIVATED_PRODUCER,
         BENEFICIARY,
@@ -1202,7 +1265,13 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
     let effects_body = manifest.encode().expect("effect manifest encodes").to_vec();
     let candidate_bank = vec![0xc1; 64];
     let candidate_obligation = scenario.candidate_obligation_bytes.clone();
-    let claims_delta = vec![0xc3; 48];
+    // Commit requires this body to be byte-identical to the SignedDelta packet
+    // carried inside the request, so the evaluator cannot promise Claims one
+    // delta and publish another.
+    let claims_delta = DealerScenarioTradeRequestV3::decode(&scenario.request_bytes)
+        .expect("canonical request decodes")
+        .claims_packet()
+        .to_vec();
     let receipt = derive_dealer_scenario_evaluation_receipt_v1(
         TRADING,
         scenario.checkpoint,
@@ -2104,7 +2173,7 @@ async fn a_valid_activation_cache_for_another_release_set_refuses() {
     // every role activated -- belonging to a different release generation, and
     // written at this generation's address. The header is the thing that must
     // refuse it, not the shape.
-    let other = release_waist_for(0xf1);
+    let other = release_waist_for(Pubkey::new_from_array([0xf1; 32]));
     assert_ne!(
         other.release_set_id, scenario.waist.release_set_id,
         "the substituted cache must belong to another generation"
@@ -2250,12 +2319,44 @@ fn claims_caller_authority(scenario: &Scenario) -> Pubkey {
 }
 
 /// The exact Claims SignedDelta frame this scenario commits through.
+///
+/// Roles the campaign can already satisfy for real are bound to their real
+/// accounts: the request-scoped caller authority, the rent sysvar, and every
+/// release-waist coordinate. The Claims aggregate, the Core Market and the four
+/// finalized record pairs remain campaign identities until the Product graph is
+/// staged, which is the named next wall.
 fn commit_claims_frame(scenario: &Scenario) -> Vec<AccountMeta> {
-    let mut frame = claims_frame(TRADING);
+    let spec = SignedDeltaFrameSpecV3::new(2).expect("two-position Claims frame");
+    let count = spec.account_count().expect("frame width");
     let authority = claims_caller_authority(scenario);
-    *frame.first_mut().expect("caller authority coordinate") =
-        AccountMeta::new_readonly(authority, false);
-    frame
+    (0..count)
+        .map(|index| {
+            let account = spec.account(index).expect("frame account");
+            let key = match account.role() {
+                ClaimsFrameRoleV1::CallerAuthority => authority,
+                ClaimsFrameRoleV1::RentSysvar => sysvar::rent::ID,
+                ClaimsFrameRoleV1::ActivationCache => scenario.waist.activation_cache,
+                ClaimsFrameRoleV1::RegistryProgram => scenario.waist.registry,
+                ClaimsFrameRoleV1::CallerProgram => TRADING,
+                ClaimsFrameRoleV1::CallerProgramData => scenario.waist.trading_programdata,
+                ClaimsFrameRoleV1::ClaimsProgram => scenario.waist.claims_program,
+                ClaimsFrameRoleV1::ClaimsProgramData => scenario.waist.claims_programdata,
+                ClaimsFrameRoleV1::CoreProgram => scenario.waist.core_program,
+                ClaimsFrameRoleV1::CoreProgramData => scenario.waist.core_programdata,
+                _ => {
+                    let mut seed = [0_u8; 32];
+                    seed[0] = 0x5c;
+                    seed[1] = u8::try_from(index).expect("small frame index");
+                    Pubkey::new_from_array(seed)
+                }
+            };
+            if account.privileges().writable() {
+                AccountMeta::new(key, false)
+            } else {
+                AccountMeta::new_readonly(key, false)
+            }
+        })
+        .collect()
 }
 
 /// The complete commit bank for this scenario's locked value.
@@ -2297,7 +2398,7 @@ fn commit_bank(
 }
 
 #[tokio::test]
-async fn the_commit_clears_phase_geometry_and_privileges_and_stops_at_the_claims_waist() {
+async fn the_commit_authenticates_whole_and_reaches_the_real_claims_program() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
     let (reservation, after_evaluation) =
@@ -2370,31 +2471,30 @@ async fn the_commit_clears_phase_geometry_and_privileges_and_stops_at_the_claims
         .await
         .expect("ProgramTest processing");
 
-    // What this pins is depth, not success. Reaching a Release refusal means
-    // commit already accepted the checkpoint phase -- so the reservation really
-    // happened -- then the account count, the absence of duplicates, the fixed
-    // privileges, and every privilege the Claims frame specification requires.
-    // It stops in authenticate_commit_releases_v1 because the Claims frame's
-    // release accounts are still campaign identities: the activation cache,
-    // Registry, Claims and Core coordinates are not yet a real multi-role
-    // release set. That is the named next wall, and it is the same Product-graph
-    // waist tests/frontier.rs stops at.
+    // Everything Trading owns about this commit is satisfied, and the proof is
+    // that control leaves Trading at all: the checkpoint phase, the account
+    // count and privileges, the multi-role release waist, the evaluation
+    // artifacts, the re-derived candidate obligation, the locked Custody batch
+    // at the address Custody signs, both Custody bodies, and the request-scoped
+    // caller authority. Trading then CPIs the real Claims program at depth two.
+    //
+    // Claims refuses on its own aggregate state. That is the named next wall:
+    // the LBV2 Claims Market and its Position table are not staged here, and no
+    // Dealer fixture has ever built them. It is the same Product-graph waist
+    // tests/frontier.rs stops at, reached from the other side.
+    let logs = processed
+        .metadata
+        .as_ref()
+        .map(|value| value.log_messages.clone())
+        .unwrap_or_default();
+    assert!(
+        logs.iter().any(|line| line.contains("invoke [2]")),
+        "commit must reach the child Claims invocation; logs {logs:?}"
+    );
     assert_eq!(
         custom_code(&processed.result),
-        Some(TRADING_RELEASE),
-        "commit must reach the Claims frame release waist and stop there; observed {:?} logs {:?}",
-        processed.result,
-        processed.metadata.as_ref().map(|value| &value.log_messages)
-    );
-    assert_ne!(
-        custom_code(&processed.result),
-        Some(TRADING_TRANSITION),
-        "no Trading-owned transition check may refuse this commit"
-    );
-    assert_ne!(
-        custom_code(&processed.result),
-        Some(TRADING_CONTENT),
-        "the commit frame's shape and privileges must be accepted"
+        Some(CLAIMS_SIGNED_DELTA_STATE),
+        "the Claims aggregate state is the wall, not anything Trading owns; logs {logs:?}"
     );
     assert_eq!(
         checkpoint_body(&mut context, &scenario).await,
