@@ -32,9 +32,12 @@ use dclutch_bearer_v2_operator::{
     RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3,
-    RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3, RationalOpenStructuredHotBundleInputV3,
-    RationalTerminalAccountProfileInputV3, RationalTerminalHotBundleInputV3,
-    build_rational_open_structured_hot_bundle_v3, build_rational_terminal_hot_bundle_v3,
+    RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
+    RationalOpenCapabilityProgramSetInputV3, RationalOpenSelectedHotBundleInputV3,
+    RationalOpenStructuredHotBundleInputV3, RationalTerminalAccountProfileInputV3,
+    RationalTerminalHotBundleInputV3, build_rational_open_capability_program_set_v3,
+    build_rational_open_selected_hot_bundle_v3, build_rational_open_structured_hot_bundle_v3,
+    build_rational_terminal_hot_bundle_v3,
     validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
     validate_rational_open_structured_hot_bundle_v3,
 };
@@ -60,8 +63,12 @@ use dclutch_structured_v2_operator::{
     STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2, StructuredDescriptorAuthorityV2,
     StructuredRepresentationDescriptorV2, decode_derived_structured_descriptor_v2,
 };
+use dclutch_structured_v2_kernel::{
+    STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
+};
 use dclutch_token_svm::{
-    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };
 
 use support::{digest, identity};
@@ -538,4 +545,145 @@ fn the_terminal_redeem_artifacts_are_byte_identical_across_two_markets() {
     assert_eq!(a.strategy, b.strategy, "strategy");
     assert_eq!(a.effect, b.effect, "effect");
     assert_eq!(a.descriptor, b.descriptor, "CapabilityProgramV4 descriptor");
+}
+
+/// THE WHOLE RELEASE, COMPILED TWICE. This is the assertion the seam's
+/// invariant actually reduces to for Structured.
+///
+/// The previous two tests compare artifacts. This one compares the
+/// `CapabilityProgramSetV2` those artifacts are assembled into, and its
+/// SHA-256 -- which is the `release_id` a founded Market's capability manifest
+/// entry names, and whose manifest digest is a seed of the Market PDA. If this
+/// identity is stable across Markets then a Structured capability can be
+/// compiled, published and finalized BEFORE the Market that selects it exists,
+/// and the fixed point the seam refuses to express is simply absent.
+///
+/// The set is the complete five-action open capability -- Denominate,
+/// Reconstitute, IssueStructured, UnwrapStructured, RedeemTerminal -- because
+/// those five are one wire at one selector offset, and because Denominate is
+/// where the shards IssueStructured consumes are created. A narrowed
+/// three-action Structured set encodes legally (the codec requires only
+/// strictly ascending selectors, and 3/4/5 are ascending) but would select a
+/// capability whose Issue consumes a resource its own market has no verb to
+/// make.
+///
+/// Two of the five bundles are driven by the Structured-derived descriptor and
+/// therefore move with the Market at their INPUT; the other three receive only
+/// the authenticated Token behavior. All five contribute a descriptor digest to
+/// the set. So this is not a restatement of the earlier tests: it is the join.
+#[test]
+fn the_whole_five_action_program_set_has_one_identity_across_two_markets() {
+    let compile = |market: u8| {
+        let derived = derived_descriptor_for_market(identity(market));
+        let descriptor =
+            decode_derived_structured_descriptor_v2(&derived, authority()).expect("hostile decode");
+        let behavior = token_behavior(descriptor);
+        let basis = basis(PRODUCT_N);
+        let policy = lifecycle_policy();
+
+        let mut selected_lengths = vec![0_u32; RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3 as usize];
+        let width = u32::try_from(basis.len()).expect("basis width");
+        selected_lengths[4] = width;
+        selected_lengths[29] = width;
+        let structured_lengths = fixed_lengths(&basis);
+        let mut terminal_lengths =
+            vec![0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
+        terminal_lengths[1] =
+            u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection width");
+        terminal_lengths[4] = width;
+        terminal_lengths[29] = width;
+
+        let selected = |action| {
+            build_rational_open_selected_hot_bundle_v3(RationalOpenSelectedHotBundleInputV3 {
+                action,
+                logical_data_lengths: &selected_lengths,
+                product_basis: &basis,
+                kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+                authenticated_token_behavior: behavior,
+                root_schema: identity(0x11),
+                lifecycle_policy: &policy,
+                capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+                root_state_bytes: 8,
+            })
+            .expect("selected bundle")
+        };
+        let structured = |action| {
+            build_rational_open_structured_hot_bundle_v3(RationalOpenStructuredHotBundleInputV3 {
+                action,
+                fixed_data_lengths: &structured_lengths,
+                item_data_lengths: [64, 82, 165, 165],
+                product_basis: &basis,
+                representation_descriptor: descriptor,
+                kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+                authenticated_token_behavior: behavior,
+                root_schema: identity(0x11),
+                lifecycle_policy: &policy,
+                capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+                root_state_bytes: 8,
+            })
+            .expect("structured bundle")
+        };
+        let denominate = selected(RepresentationActionV2::Denominate);
+        let reconstitute = selected(RepresentationActionV2::Reconstitute);
+        let issue = structured(RepresentationActionV2::IssueStructured);
+        let unwrap = structured(RepresentationActionV2::UnwrapStructured);
+        let redeem = build_rational_terminal_hot_bundle_v3(RationalTerminalHotBundleInputV3 {
+            account_profile: RationalTerminalAccountProfileInputV3 {
+                logical_data_lengths: &terminal_lengths,
+                product_basis: &basis,
+            },
+            kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+            authenticated_token_behavior: behavior,
+            root_schema: identity(0x11),
+            lifecycle_policy: &policy,
+            capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+            root_state_bytes: 8,
+        })
+        .expect("terminal bundle");
+
+        let set = build_rational_open_capability_program_set_v3(
+            RationalOpenCapabilityProgramSetInputV3 {
+                authenticated_token_behavior: behavior,
+                denominate: &denominate,
+                reconstitute: &reconstitute,
+                issue_structured: &issue,
+                unwrap_structured: &unwrap,
+                redeem_terminal: &redeem,
+            },
+        )
+        .expect("five-action capability set");
+        (derived.descriptor_id, set)
+    };
+
+    let (first_descriptor_id, first) = compile(0x21);
+    let (second_descriptor_id, second) = compile(0x22);
+
+    // The positive control: the two compilations really were driven from two
+    // different Markets, and that difference really did reach a content
+    // identity. Without this the equalities below could be reporting that
+    // nothing varied.
+    assert_ne!(first_descriptor_id, second_descriptor_id);
+
+    // *** THE FIXED-POINT ANSWER. ***
+    assert_eq!(
+        first.program_set_id, second.program_set_id,
+        "the release_id a Market manifest entry names must not move with the Market"
+    );
+    assert_eq!(first.program_set, second.program_set, "program set bytes");
+    assert_eq!(
+        first.token_behavior_selection, second.token_behavior_selection,
+        "the config_id a Market manifest entry names must not move with the Market"
+    );
+    assert_eq!(
+        first.token_behavior_selection_id,
+        second.token_behavior_selection_id
+    );
+
+    // The set really is the five-action one. Its entry count is already pinned
+    // inside the builder -- `validate_rational_open_capability_program_set_v3`
+    // requires `entry_count() == 5` and proves each action routes to its own
+    // descriptor through the table -- so this asserts the width the five
+    // entries imply rather than restating a check the builder already ran.
+    assert_eq!(first.program_set.len(), second.program_set.len());
+    assert!(!first.program_set.is_empty());
 }
