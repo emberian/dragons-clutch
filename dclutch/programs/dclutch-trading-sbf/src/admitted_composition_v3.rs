@@ -13,7 +13,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 use dclutch_capability_program_contract::{
-    hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3, v3::SCHEMA_RELEASE_ID as CAPABILITY_SCHEMA_ID_V3,
+    hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3, v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
@@ -27,7 +27,7 @@ use dclutch_execution_strategy_contract::{
         classify_bank_transport_v2, register_bank_bytes_v2, resolve_execution_candidate_v2,
     },
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -512,65 +512,43 @@ fn validate_authenticated_frame(
     {
         return Err(TradingSbfError::Release.into());
     }
-    require_record_key(
+    // Each raw record and its staging cursor are ONE Registry identity under two
+    // domains, so they are checked as a pair and can no longer be given halves of
+    // it. See `require_record_pair`.
+    require_record_pair(
         frame.registry.key,
         frame.capability_raw.key,
-        RAW_RECORD_PDA_SEED_V1,
-        authenticated.capability_program_id().as_bytes(),
-    )?;
-    require_record_key(
-        frame.registry.key,
         frame.capability_staging.key,
-        STAGING_CURSOR_PDA_SEED_V1,
-        &CAPABILITY_SCHEMA_ID_V3,
+        CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        authenticated.capability_program_id().to_bytes(),
     )?;
-    require_record_key(
+    require_record_pair(
         frame.registry.key,
         frame.strategy_raw.key,
-        RAW_RECORD_PDA_SEED_V1,
-        authenticated.strategy_program_id().as_bytes(),
-    )?;
-    require_record_key(
-        frame.registry.key,
         frame.strategy_staging.key,
-        STAGING_CURSOR_PDA_SEED_V1,
-        &EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+        EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+        authenticated.strategy_program_id().to_bytes(),
     )?;
-    require_record_key(
+    require_record_pair(
         frame.registry.key,
         frame.certificate_raw.key,
-        RAW_RECORD_PDA_SEED_V1,
-        context.certificate.as_bytes(),
-    )?;
-    require_record_key(
-        frame.registry.key,
         frame.certificate_staging.key,
-        STAGING_CURSOR_PDA_SEED_V1,
-        &EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+        EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+        context.certificate.to_bytes(),
     )?;
-    require_record_key(
+    require_record_pair(
         frame.registry.key,
         frame.admission_raw.key,
-        RAW_RECORD_PDA_SEED_V1,
-        context.admission.as_bytes(),
-    )?;
-    require_record_key(
-        frame.registry.key,
         frame.admission_staging.key,
-        STAGING_CURSOR_PDA_SEED_V1,
-        &EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
+        EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
+        context.admission.to_bytes(),
     )?;
-    require_record_key(
+    require_record_pair(
         frame.registry.key,
         frame.artifact_raw.key,
-        RAW_RECORD_PDA_SEED_V1,
-        context.artifact_release.as_bytes(),
-    )?;
-    require_record_key(
-        frame.registry.key,
         frame.artifact_staging.key,
-        STAGING_CURSOR_PDA_SEED_V1,
-        &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        context.artifact_release.to_bytes(),
     )?;
     Ok(())
 }
@@ -584,18 +562,58 @@ fn exact_deployment_keys_v3(
     admitted_program == observed_program && admitted_programdata == observed_programdata
 }
 
-fn require_record_key(
+/// Address of one Registry record under the seed order the Registry itself uses.
+///
+/// The seeds are taken from [`RecordKeyV1`] rather than spelled here, because a
+/// Registry record address is the Registry's fact and this program is not a
+/// second author of it.
+fn record_address(registry: &Pubkey, seeds: RecordPdaSeedsV1) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            seeds.schema_release_id().as_bytes(),
+            seeds.expected_digest().as_bytes(),
+        ],
+        registry,
+    )
+    .0
+}
+
+/// Require one finalized raw record and its vacant staging cursor to sit at the
+/// two addresses the Registry derives for a single `(schema, digest)` identity.
+///
+/// **A record is keyed by schema/release AND digest, and both domains take the
+/// same pair.** This took a schema-less `identity` and a bare `domain` until
+/// 2026-08-29, deriving `[domain, identity]` where the Registry derives
+/// `[domain, schema, digest]` (`dclutch_record_contract::raw_record_pda_seeds`,
+/// `programs/dclutch-registry-sbf/src/record_v1.rs:537-551`). Because Solana
+/// concatenates seed segments, a two-seed address commits 32 bytes of identity
+/// material where the Registry commits 64, so no record the Registry can create
+/// was ever at the address this checked — while `execution_strategy_v2`'s
+/// `authenticate_finalized_record` and `hot_v3`'s `borrow_finalized_record_at`
+/// derived the same records correctly in the same invocation.
+///
+/// The ten calls were also splitting one identity in half: the raw call passed
+/// the digest and the staging call passed the schema, so neither had a whole
+/// one. Taking the pair in a single argument list is what makes that
+/// unexpressible rather than merely fixed.
+fn require_record_pair(
     registry: &Pubkey,
-    actual: &Pubkey,
-    domain: &[u8],
-    identity: &[u8; 32],
+    raw: &Pubkey,
+    staging: &Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
 ) -> Result<(), ProgramError> {
-    let (expected, _) = Pubkey::find_program_address(&[domain, identity], registry);
-    if actual == &expected {
-        Ok(())
-    } else {
-        Err(TradingSbfError::Content.into())
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(schema).map_err(|_| TradingSbfError::Content)?,
+        ContentDigest::new(digest).map_err(|_| TradingSbfError::Content)?,
+    );
+    if raw != &record_address(registry, key.raw_record_pda_seeds())
+        || staging != &record_address(registry, key.staging_cursor_pda_seeds())
+    {
+        return Err(TradingSbfError::Content.into());
     }
+    Ok(())
 }
 
 fn validate_input_scratch_pages(
@@ -719,6 +737,8 @@ fn content(bytes: &[u8]) -> Result<ContentId, ProgramError> {
 
 #[cfg(test)]
 mod tests {
+    use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
+
     use super::*;
 
     #[test]
@@ -782,22 +802,46 @@ mod tests {
             [1; 32], [2; 32], [1; 32], [3; 32]
         ));
 
+        // The addresses below come from `dclutch_record_contract`, not from
+        // seeds re-spelled here. The previous version of this test derived its
+        // own "canonical" address with the checker's own spelling and then
+        // asserted the checker accepted it -- a tautology that held for any
+        // spelling and was blind to the only thing that mattered, which is why
+        // a two-seed derivation sat here undetected.
         let registry = Pubkey::new_unique();
-        let identity = [9_u8; 32];
-        let (canonical, _) =
-            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &identity], &registry);
+        let schema = [7_u8; 32];
+        let digest = [9_u8; 32];
+        let key = RecordKeyV1::new(
+            SchemaReleaseId::new(schema).expect("nonzero schema"),
+            ContentDigest::new(digest).expect("nonzero digest"),
+        );
+        let raw = record_address(&registry, key.raw_record_pda_seeds());
+        let staging = record_address(&registry, key.staging_cursor_pda_seeds());
         assert_eq!(
-            require_record_key(&registry, &canonical, RAW_RECORD_PDA_SEED_V1, &identity,),
+            require_record_pair(&registry, &raw, &staging, schema, digest),
             Ok(())
         );
+
+        // The exact defect: a record at the Registry's three-seed address must
+        // NOT satisfy a two-seed check, and the two-seed address must not be
+        // mistaken for the record.
+        let two_seed =
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &digest], &registry).0;
+        assert_ne!(raw, two_seed);
+        assert!(require_record_pair(&registry, &two_seed, &staging, schema, digest).is_err());
+
+        // Swapping schema and digest names a different record.
+        assert!(require_record_pair(&registry, &raw, &staging, digest, schema).is_err());
+        // A raw record paired with another identity's staging cursor refuses.
         assert!(
-            require_record_key(
-                &registry,
-                &Pubkey::new_unique(),
-                RAW_RECORD_PDA_SEED_V1,
-                &identity,
-            )
-            .is_err()
+            require_record_pair(&registry, &raw, &Pubkey::new_unique(), schema, digest).is_err()
         );
+        assert!(
+            require_record_pair(&registry, &Pubkey::new_unique(), &staging, schema, digest)
+                .is_err()
+        );
+        // A zero schema or digest is not an identity at all.
+        assert!(require_record_pair(&registry, &raw, &staging, [0; 32], digest).is_err());
+        assert!(require_record_pair(&registry, &raw, &staging, schema, [0; 32]).is_err());
     }
 }

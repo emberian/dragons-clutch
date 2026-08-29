@@ -8623,9 +8623,13 @@ fn build_generic_market_founding_v3(
         .checked_add(coordinates.funding_ledgers.len())
         .ok_or_else(|| Error::new("founding frame width overflow"))?;
     if accounts.len() != expected {
-        return Err(Error::new(
-            "assembled founding frame did not match its exact width",
-        ));
+        return Err(Error::new(format!(
+            "assembled founding frame did not match its exact width: assembled {}, expected {} ({} fixed + {} funding ledgers)",
+            accounts.len(),
+            expected,
+            GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3,
+            coordinates.funding_ledgers.len(),
+        )));
     }
 
     // One key, one privilege: union writability so a key writable in any stage

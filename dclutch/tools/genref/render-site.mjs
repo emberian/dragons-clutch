@@ -650,6 +650,59 @@ for (const relative of currentDeploymentTruthPages) {
   }
 }
 
+// The guard above catches a claim that understates what is deployed. This one
+// catches the opposite, which is the failure that actually reached readers:
+// the site telling someone to run something that cannot work, or offering them
+// something that is not open.
+//
+// Both of these shipped. README and the reader guide published
+// `run.sh --mode full` as "boot a local validator, create and open a market
+// (about 13 minutes)" while that mode dies unconditionally at the retired
+// demo-market boundary -- so a reader built for minutes and got exit 1. Kept
+// narrow and literal on purpose: a guard that tried to judge whether prose
+// "promises too much" would either misfire or be ignored, but a guard that
+// refuses one exact dead command cannot do either.
+const deadInstructions = [
+  // If a mode or driver is un-parked, delete its row here in the same commit.
+  ["--mode full", "run.sh --mode full dies at the retired demo-market boundary"],
+];
+const instructionPages = [
+  `${DOCS}/readme.html`,
+  `${DOCS}/guides/reader.html`,
+  `${DOCS}/guides/trader.html`,
+  `${DOCS}/guides/client-developers.html`,
+];
+for (const relative of instructionPages) {
+  const rendered = fs.readFileSync(path.join(outDir, relative), "utf8");
+  for (const [needle, why] of deadInstructions) {
+    if (rendered.includes(needle)) {
+      console.error(
+        `render-site: ${relative} tells a reader to run ${JSON.stringify(needle)}, and ${why}; refusing the artifact.`,
+      );
+      process.exit(1);
+    }
+  }
+}
+
+// The posture the whole site is written to, pinned where a reader meets it
+// first. These are not style preferences -- each one replaced a live overclaim.
+const requiredPosture = [
+  [`${DOCS}/guides/README.html`, "There is no open market"],
+  [`${DOCS}/guides/trader.html`, "no devnet market is open for trading"],
+  // Joining is one third of the chain that works today, and for a long time no
+  // guide mentioned it at all.
+  [`${DOCS}/guides/trader.html`, "dclutch join"],
+];
+for (const [relative, needle] of requiredPosture) {
+  const rendered = fs.readFileSync(path.join(outDir, relative), "utf8");
+  if (!rendered.includes(needle)) {
+    console.error(
+      `render-site: ${relative} no longer says ${JSON.stringify(needle)}; refusing the artifact.`,
+    );
+    process.exit(1);
+  }
+}
+
 if (!appDir) {
   fs.writeFileSync(
     path.join(outDir, "index.html"),
