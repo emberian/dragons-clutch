@@ -8,8 +8,10 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     liability_basis_vector_width_v2,
 };
 use dclutch_market_retirement_v1_operator::{
-    MarketRetirementOperatorErrorV1, MarketRetirementSnapshotV1,
-    ResolutionRetirementReceiptFactsV3, build_market_retirement_v1,
+    CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
+    CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1, MarketRetirementOperatorErrorV1,
+    MarketRetirementSnapshotV1, ResolutionRetirementReceiptFactsV3,
+    build_checkpoint_market_retirement_v1, build_market_retirement_v1,
 };
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
@@ -21,12 +23,16 @@ use dclutch_rent_contract::RefundAuthority;
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
-use spl_token_interface::state::Account as SplAccount;
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
+use solana_sdk::hash::Hash;
+use spl_token_interface::state::{Account as SplAccount, AccountState};
+use std::str::FromStr;
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x76; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x77; 32]);
 const CLAIMS_REVISION: u64 = 11;
 const CUSTODY_REVISION: u64 = 2;
+const SOLANA_PACKET_BYTES: usize = 1_232;
 
 struct JoinedFixture {
     base: Fixture,
@@ -398,6 +404,102 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         },
         context,
     )
+}
+
+async fn seed_exact_retirement_prestate(context: &mut ProgramTestContext, fixture: &JoinedFixture) {
+    let market_account = observed(context, fixture.base.market)
+        .await
+        .expect("prebuilt Market");
+    let mut market = CoreState::decode(&market_account.data).expect("prebuilt Core Market");
+    market.phase = Phase::Retiring;
+    market.readiness = Readiness::Consumed;
+    market.outstanding_capabilities = 0;
+    market.terminal_winner = 0;
+    market.terminal_receipt =
+        Some(CoreIdentity::new(fixture.base.certificate.to_bytes()).expect("terminal certificate"));
+    set_account(
+        context,
+        fixture.base.market,
+        Account {
+            data: market.encode().expect("Retiring Core Market").to_vec(),
+            ..market_account
+        },
+    );
+
+    let source_refund_lamports = 1_u64;
+    let closure = SourceClosureReceiptV3 {
+        market: fixture.base.market.to_bytes(),
+        source_state: fixture.base.source.to_bytes(),
+        source_material: market.identity.resolution_policy.to_bytes(),
+        capability_manifest: market.identity.capability_manifest.to_bytes(),
+        terminal_certificate: fixture.base.certificate.to_bytes(),
+        receipt_account: fixture.base.closure.to_bytes(),
+        beneficiary: fixture.base.rent_credit.to_bytes(),
+        source_state_digest: [0xa1; 32],
+        terminal_certificate_digest: [0xa2; 32],
+        funding_set_digest: [0xa3; 32],
+        generation: market.identity.generation,
+        terminal_sequence: TERMINAL_SEQUENCE,
+        selector: market.terminal_winner,
+        source_refund_lamports,
+        ledger_remaining_native_principal: 0,
+        ledger_rent_lamports: 0,
+        ledger_lamport_surplus: 0,
+        refund_lamports: source_refund_lamports,
+        closed_at: u64::try_from(TERMINAL_TIME).expect("positive terminal time"),
+    };
+    set_account(
+        context,
+        fixture.base.closure,
+        protocol_account(
+            RESOLUTION_PROGRAM_ID,
+            closure.to_bytes().expect("Source closure receipt").to_vec(),
+        ),
+    );
+
+    let replay = CustodyReplayV1 {
+        caller_role: CallerRoleV1::Core,
+        release_set: fixture.base.release_set,
+        market: fixture.base.market.to_bytes(),
+        realm: market.identity.realm_id.to_bytes(),
+        context: fixture.base.market.to_bytes(),
+        caller_program: CORE_PROGRAM_ID.to_bytes(),
+        rent_refund: fixture.base.rent_credit.to_bytes(),
+        open_vault_count: 1,
+        next_revision: CUSTODY_REVISION,
+        generation: market.identity.generation,
+        last_request_digest: [0xb1; 32],
+        last_poststate_commitment: [0xb2; 32],
+    };
+    set_account(
+        context,
+        fixture.base.replay,
+        protocol_account(
+            CUSTODY_PROGRAM_ID,
+            replay.to_bytes().expect("Custody replay").to_vec(),
+        ),
+    );
+
+    let mut vault_data = vec![0_u8; SplAccount::LEN];
+    SplAccount::pack(
+        SplAccount {
+            mint: fixture.base.mint,
+            owner: fixture.base.custody_authority,
+            amount: 0,
+            delegate: COption::None,
+            state: AccountState::Initialized,
+            is_native: COption::None,
+            delegated_amount: 0,
+            close_authority: COption::None,
+        },
+        &mut vault_data,
+    )
+    .expect("empty Hoard vault");
+    set_account(
+        context,
+        fixture.base.vault,
+        protocol_account(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), vault_data),
+    );
 }
 
 struct RetirementPlan {
@@ -1073,4 +1175,306 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
         wallet_before + plan.expected_refund_delta,
         "the sole immutable wallet receives exact credit + Claims + Custody + Market lamports"
     );
+}
+
+fn packet_census(
+    instruction: &Instruction,
+    payer: Pubkey,
+    recent_blockhash: Hash,
+) -> (usize, usize) {
+    let compute_budget = Pubkey::from_str("ComputeBudget111111111111111111111111111111")
+        .expect("Compute Budget program");
+    let mut limit_data = Vec::from([2_u8]);
+    limit_data.extend_from_slice(&1_400_000_u32.to_le_bytes());
+    let mut price_data = Vec::from([3_u8]);
+    price_data.extend_from_slice(&1_u64.to_le_bytes());
+    let unique = std::iter::once(payer)
+        .chain(std::iter::once(instruction.program_id))
+        .chain(instruction.accounts.iter().map(|meta| meta.pubkey))
+        .collect::<std::collections::BTreeSet<_>>();
+    let addresses = instruction
+        .accounts
+        .iter()
+        .map(|meta| meta.pubkey)
+        .filter(|key| *key != payer && *key != instruction.program_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let lookup = AddressLookupTableAccount {
+        key: Pubkey::new_from_array([0xfc; 32]),
+        addresses,
+    };
+    let message = v0::Message::try_compile(
+        &payer,
+        &[
+            Instruction {
+                program_id: compute_budget,
+                accounts: Vec::new(),
+                data: limit_data,
+            },
+            Instruction {
+                program_id: compute_budget,
+                accounts: Vec::new(),
+                data: price_data,
+            },
+            instruction.clone(),
+        ],
+        &[lookup],
+        recent_blockhash,
+    )
+    .expect("retirement packet compiles through its dedicated ALT");
+    let signatures = usize::from(message.header.num_required_signatures);
+    let wire_bytes = 1 + signatures * 64 + VersionedMessage::V0(message).serialize().len();
+    (unique.len(), wire_bytes)
+}
+
+#[tokio::test]
+async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
+    let (fixture, mut context) = joined_fixture().await;
+    seed_exact_retirement_prestate(&mut context, &fixture).await;
+    let snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let plan = build_checkpoint_market_retirement_v1(&snapshot)
+        .expect("checkpointed aggregate-retirement plan");
+    assert_eq!(
+        plan.prepare.data.len(),
+        CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1
+    );
+    assert_eq!(
+        plan.close_vault.data.len(),
+        CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1
+    );
+    assert_eq!(
+        plan.close_replay.data.len(),
+        CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1
+    );
+    assert_eq!(
+        plan.finish.data.len(),
+        CHECKPOINT_RETIREMENT_FINISH_BYTES_V1
+    );
+    assert_eq!(plan.prepare.accounts.len(), 35);
+    assert_eq!(plan.close_vault.accounts.len(), 35);
+    assert_eq!(plan.close_replay.accounts.len(), 35);
+    assert_eq!(plan.finish.accounts.len(), 35);
+
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("packet census blockhash");
+    let census = [
+        ("prepare", &plan.prepare),
+        ("close-vault", &plan.close_vault),
+        ("close-replay", &plan.close_replay),
+        ("finish", &plan.finish),
+    ]
+    .map(|(name, instruction)| {
+        let (keys, bytes) = packet_census(instruction, context.payer.pubkey(), blockhash);
+        println!(
+            "checkpoint-retirement packet {name}: metas={} unique_keys={keys} data_bytes={} wire_bytes={bytes}",
+            instruction.accounts.len(),
+            instruction.data.len(),
+        );
+        assert!(
+            bytes <= SOLANA_PACKET_BYTES,
+            "{name} is {bytes} bytes, over the Solana packet ceiling"
+        );
+        (keys, bytes)
+    });
+    assert!(
+        2_280 > SOLANA_PACKET_BYTES,
+        "the legacy wrapped instruction data alone proves its wire cliff"
+    );
+
+    let before = joined_snapshot(&mut context, &fixture).await;
+    let claims_prestate = before
+        .claims_aggregate
+        .clone()
+        .expect("Claims aggregate prestate");
+    let mut substituted_claims_owner = claims_prestate.clone();
+    substituted_claims_owner.owner = system_program::ID;
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        substituted_claims_owner,
+    );
+    let substituted_owner_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.prepare))
+            .await
+            .is_err(),
+        "Claims handoff refuses a substituted aggregate owner"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        substituted_owner_snapshot,
+        "owner refusal cannot partially reassign or refund the aggregate"
+    );
+    set_account(&mut context, fixture.claims_aggregate, claims_prestate);
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_vault))
+            .await
+            .is_err(),
+        "a suffix cannot mint authority before Claims handoff"
+    );
+    assert_eq!(joined_snapshot(&mut context, &fixture).await, before);
+
+    submit(&mut context, std::slice::from_ref(&plan.prepare))
+        .await
+        .expect("Claims handoff and ClaimsClosed checkpoint");
+    let prepared = required_observed(&mut context, fixture.claims_aggregate).await;
+    let prepared_account = observed(&mut context, fixture.claims_aggregate)
+        .await
+        .expect("raw ClaimsClosed checkpoint");
+    assert_eq!(prepared.owner, CORE_PROGRAM_ID);
+    assert_eq!(prepared.data.len(), 256);
+    assert_eq!(
+        prepared.lamports,
+        before
+            .claims_aggregate
+            .as_ref()
+            .expect("Claims aggregate prestate")
+            .lamports,
+        "Claims refund stays in the exact handed-off account"
+    );
+    assert_eq!(
+        required_observed(&mut context, fixture.base.rent_credit)
+            .await
+            .lamports,
+        before
+            .rent_credit
+            .as_ref()
+            .expect("RentCredit prestate")
+            .lamports,
+        "Claims handoff never relabels its retained refund as RentCredit"
+    );
+    let prepared_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.prepare))
+            .await
+            .is_err(),
+        "ClaimsClosed cannot replay prepare"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        prepared_snapshot,
+        "prepare replay refusal is byte/lamport atomic"
+    );
+    let mut substituted_checkpoint_owner = prepared_account.clone();
+    substituted_checkpoint_owner.owner = CLAIMS_PROGRAM_ID;
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        substituted_checkpoint_owner,
+    );
+    let substituted_checkpoint_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_vault))
+            .await
+            .is_err(),
+        "a suffix refuses a checkpoint reassigned away from Core"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        substituted_checkpoint_snapshot,
+        "checkpoint-owner refusal cannot close or refund Custody state"
+    );
+    set_account(&mut context, fixture.claims_aggregate, prepared_account);
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_replay))
+            .await
+            .is_err(),
+        "Custody replay cannot close before the HoardPrincipal vault"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        prepared_snapshot,
+        "phase refusal is byte/lamport atomic"
+    );
+
+    submit(&mut context, std::slice::from_ref(&plan.close_vault))
+        .await
+        .expect("HoardPrincipal close and HoardVaultClosed checkpoint");
+    assert!(observed(&mut context, fixture.base.vault).await.is_none());
+    assert!(observed(&mut context, fixture.base.market).await.is_some());
+    assert!(
+        observed(&mut context, fixture.base.rent_credit)
+            .await
+            .is_some()
+    );
+    let vault_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_vault))
+            .await
+            .is_err(),
+        "HoardVaultClosed cannot replay close-vault"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        vault_closed_snapshot,
+        "close-vault replay refusal is byte/lamport atomic"
+    );
+    submit(&mut context, std::slice::from_ref(&plan.close_replay))
+        .await
+        .expect("Custody replay close and CustodyReplayClosed checkpoint");
+    assert!(observed(&mut context, fixture.base.replay).await.is_none());
+    assert!(observed(&mut context, fixture.base.market).await.is_some());
+    assert!(
+        observed(&mut context, fixture.base.rent_credit)
+            .await
+            .is_some()
+    );
+    let replay_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_replay))
+            .await
+            .is_err(),
+        "CustodyReplayClosed cannot replay close-replay"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        replay_closed_snapshot,
+        "close-replay replay refusal is byte/lamport atomic"
+    );
+
+    let mut substituted_refund = plan.finish.clone();
+    substituted_refund
+        .accounts
+        .iter_mut()
+        .find(|meta| meta.pubkey == fixture.refund_wallet)
+        .expect("finish refund-wallet meta")
+        .pubkey = context.payer.pubkey();
+    assert!(
+        submit(&mut context, &[substituted_refund]).await.is_err(),
+        "finish refuses substitution of the immutable refund wallet"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        replay_closed_snapshot,
+        "refund substitution cannot close checkpoint, Market, or RentCredit"
+    );
+
+    let wallet_before = before
+        .refund_wallet
+        .as_ref()
+        .expect("refund wallet prestate")
+        .lamports;
+    submit(&mut context, std::slice::from_ref(&plan.finish))
+        .await
+        .expect("checkpoint then Core then Rent close");
+    let after = joined_snapshot(&mut context, &fixture).await;
+    assert!(after.claims_aggregate.is_none());
+    assert!(after.market.is_none());
+    assert!(after.rent_credit.is_none());
+    assert!(after.custody_replay.is_none());
+    assert!(after.hoard_vault.is_none());
+    assert_eq!(after.source_receipt, before.source_receipt);
+    assert_eq!(
+        after
+            .refund_wallet
+            .expect("immutable refund wallet")
+            .lamports,
+        wallet_before + plan.expected_refund_delta,
+        "every classified rent lamport reaches the immutable refund wallet exactly once"
+    );
+    assert!(census.iter().all(|(keys, _)| *keys <= 64));
 }

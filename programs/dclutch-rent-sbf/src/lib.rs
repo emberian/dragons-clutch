@@ -436,12 +436,16 @@ struct CloseAccountsV2<'a, 'info> {
     core_caller: &'a AccountInfo<'info>,
     retired_market: &'a AccountInfo<'info>,
     registry_admission: Option<&'a AccountInfo<'info>>,
+    balance_witness: Option<&'a AccountInfo<'info>>,
 }
 
 impl<'a, 'info> CloseAccountsV2<'a, 'info> {
     fn parse(accounts: &'a [AccountInfo<'info>], continuation: bool) -> Result<Self, ProgramError> {
+        let direct_with_witness = !continuation && accounts.len() == CLOSE_ACCOUNT_COUNT_V2 + 1;
         let expected_count = if continuation {
             CLOSE_CONTINUATION_ACCOUNT_COUNT_V2
+        } else if direct_with_witness {
+            CLOSE_ACCOUNT_COUNT_V2 + 1
         } else {
             CLOSE_ACCOUNT_COUNT_V2
         };
@@ -458,6 +462,11 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
             core_caller: account(accounts, 6)?,
             retired_market: account(accounts, 7)?,
             registry_admission: if continuation {
+                Some(account(accounts, 8)?)
+            } else {
+                None
+            },
+            balance_witness: if direct_with_witness {
                 Some(account(accounts, 8)?)
             } else {
                 None
@@ -494,6 +503,14 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
                     || !admission.data_is_empty()
                     || admission.lamports() != 0
             })
+            || value.balance_witness.is_some_and(|witness| {
+                witness.is_signer
+                    || witness.is_writable
+                    || witness.executable
+                    || witness.owner != &system_program::ID
+                    || !witness.data_is_empty()
+                    || witness.lamports() != 0
+            })
         {
             return Err(RentSbfError::AccountFrame.into());
         }
@@ -515,6 +532,9 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
         if value
             .registry_admission
             .is_some_and(|admission| keys.contains(&admission.key))
+            || value
+                .balance_witness
+                .is_some_and(|witness| keys.contains(&witness.key))
         {
             return Err(RentSbfError::AccountFrame.into());
         }

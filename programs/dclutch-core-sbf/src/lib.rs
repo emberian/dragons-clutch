@@ -20,7 +20,9 @@ use dclutch_custody_contract::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
 };
 use dclutch_market_core_codec::{
-    Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1,
+    AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
+    AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action,
+    CAPABILITY_FUNDING_HEADER_BYTES_V2, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1,
     CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2, CoreEffectEnvelopeV1,
     GENERIC_FOUNDING_REQUEST_BYTES_V1, GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1,
     PROJECT_FOUND_REQUEST_BYTES_V2, PROJECT_FOUND_REQUEST_MAGIC_V2, ProjectFoundRequestV2,
@@ -173,6 +175,17 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len() >= AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1
+        && matches!(
+            instruction_data.get(..8),
+            Some(magic)
+                if magic == AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1
+                    || magic == AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1
+                    || magic == AGGREGATE_RETIREMENT_FINISH_MAGIC_V1
+        )
+    {
+        return retire_v1::process_checkpoint_suffix(program_id, accounts, instruction_data);
+    }
     if instruction_data.len()
         == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
         && instruction_data
@@ -350,6 +363,34 @@ pub fn process_instruction(
                 claims_request_bytes,
                 close_vault_request_bytes,
                 close_replay_request_bytes,
+            )
+        }
+        Action::Retire
+            if instruction_data.len()
+                == retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1 =>
+        {
+            let bundle_start = REQUEST_BYTES;
+            let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
+            let bundle_bytes = instruction_data
+                .get(bundle_start..claims_start)
+                .ok_or(CoreSbfError::Instruction)?;
+            let claims_request_bytes = instruction_data
+                .get(claims_start..)
+                .ok_or(CoreSbfError::Instruction)?;
+            if claims_request_bytes.get(
+                ..dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
+            ) != Some(
+                dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
+            ) {
+                return Err(CoreSbfError::Instruction.into());
+            }
+            retire_v1::process_checkpoint_prepare(
+                program_id,
+                accounts,
+                request,
+                request_bytes,
+                bundle_bytes,
+                claims_request_bytes,
             )
         }
         Action::ActivateCapability | Action::CloseCapability => {
