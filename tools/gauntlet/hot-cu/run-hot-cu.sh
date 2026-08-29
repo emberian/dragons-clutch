@@ -393,6 +393,26 @@ if [ "$GATE_MODE" = "true" ]; then
     git -C "$REPO" ls-tree -r --full-tree "$REVISION" > "$WORK/gate-source-tree.txt"
     [ "$(sha256 "$WORK/gate-source-tree.txt")" = "$GATE_SOURCE_TREE_SHA256" ] \
         || die "local source revision does not reproduce the checked gate source-tree digest"
+    # `waist::elves` consumes the explicit authenticated paths above, but
+    # ProgramTest's `add_upgradeable_program_to_genesis(name, ..)` separately
+    # resolves `name.so` below SBF_OUT_DIR before the fixture replaces the
+    # ProgramData bytes.  Stage byte-identical regular copies under those five
+    # canonical loader names; an empty selector directory makes every seed fail
+    # before Hot, while pointing SBF_OUT_DIR at a mixed gate is insufficient
+    # because its evidence filenames are role.so rather than package names.
+    stage_checked_elf() {
+        source=$1
+        name=$2
+        target="$ELF_DIR/$name"
+        cp "$source" "$target"
+        cmp -s "$source" "$target" \
+            || die "work-local checked ELF staging differs: $name"
+    }
+    stage_checked_elf "$REGISTRY_ELF_PATH" dclutch_registry_sbf.so
+    stage_checked_elf "$TRADING_ELF_PATH" dclutch_trading_sbf.so
+    stage_checked_elf "$CORE_ELF_PATH" dclutch_core_sbf.so
+    stage_checked_elf "$CLAIMS_ELF_PATH" dclutch_claims_sbf.so
+    stage_checked_elf "$CUSTODY_ELF_PATH" dclutch_custody_sbf.so
     if [ "$MIXED_GATE_MODE" = "true" ]; then
         # The mixed projection is the bounded bridge: the archived candidate
         # predates the v2 composer, so it cannot own this selector.  Require all
@@ -571,6 +591,18 @@ HARNESS_TARGET="$WORK/harness-target-${HARNESS_REVISION:0:12}"
 
 reauth_gate_roles() {
     [ "$GATE_MODE" = "true" ] || return 0
+    for row in \
+        "$REGISTRY_ELF_PATH:$ELF_DIR/dclutch_registry_sbf.so" \
+        "$TRADING_ELF_PATH:$ELF_DIR/dclutch_trading_sbf.so" \
+        "$CORE_ELF_PATH:$ELF_DIR/dclutch_core_sbf.so" \
+        "$CLAIMS_ELF_PATH:$ELF_DIR/dclutch_claims_sbf.so" \
+        "$CUSTODY_ELF_PATH:$ELF_DIR/dclutch_custody_sbf.so"
+    do
+        source=${row%%:*}
+        target=${row#*:}
+        cmp -s "$source" "$target" \
+            || die "work-local checked ELF staging changed before/during CU consumption: $(basename "$target")"
+    done
     if [ "$MIXED_GATE_MODE" = "true" ]; then
         check="$GATE_SELECTION_DIR/mixed.check.json"
         rm -f "$check"

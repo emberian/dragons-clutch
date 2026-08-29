@@ -65,6 +65,16 @@ else
     not_ok "Hot CU runner lost locked-offline admission"
 fi
 
+if grep -Fq 'stage_checked_elf "$REGISTRY_ELF_PATH" dclutch_registry_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$TRADING_ELF_PATH" dclutch_trading_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$CORE_ELF_PATH" dclutch_core_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$CLAIMS_ELF_PATH" dclutch_claims_sbf.so' "$RUNNER" \
+    && grep -Fq 'stage_checked_elf "$CUSTODY_ELF_PATH" dclutch_custody_sbf.so' "$RUNNER"; then
+    ok "checked ELFs are staged under ProgramTest loader names"
+else
+    not_ok "checked ELF ProgramTest loader-name staging is incomplete"
+fi
+
 mkdir -p "$SCRATCH/bin" "$SCRATCH/elf"
 cat > "$SCRATCH/bin/cargo" <<'SH'
 #!/usr/bin/env bash
