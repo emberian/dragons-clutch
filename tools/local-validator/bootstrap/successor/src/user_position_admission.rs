@@ -3216,9 +3216,12 @@ fn build_report(
         ));
     }
     let (recent_blockhash, last_valid_block_height) = latest_blockhash(rpc)?;
+    // The admission's Trading->Claims chain exceeds the 200k default budget;
+    // the same house ComputeBudget declarations every ladder message carries.
+    let bounded = crate::rpc::bounded_instructions(&unsigned.instructions, None)?;
     let compiled = compile_v0_message_with_optional_tables(
         arguments.fee_payer,
-        &unsigned.instructions,
+        &bounded,
         recent_blockhash,
         unsigned.observation,
         &snapshot.routing_tables,
@@ -3399,9 +3402,10 @@ fn authenticate_fresh_admission_plan_v1(
         .recent_blockhash
         .parse::<Hash>()
         .map_err(|error| Error::new(format!("durable admission blockhash: {error}")))?;
+    let bounded = crate::rpc::bounded_instructions(&unsigned.instructions, None)?;
     let compiled = compile_v0_message_with_optional_tables(
         arguments.fee_payer,
-        &unsigned.instructions,
+        &bounded,
         recent_blockhash,
         observation,
         &snapshot.routing_tables,
