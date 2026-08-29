@@ -9681,6 +9681,14 @@ fn execute_funding_readiness_suffix_v1(
                 DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1 - geometry.complete_keys,
             ));
         }
+        FundingReadinessPlanV1::ConsumedByFounding => {
+            completed.push(
+                "resolution funding readiness is terminal: the atomic founding consumed the \
+                 staged readiness and the Market is Open; nothing adjacent remains to drive"
+                    .into(),
+            );
+            return Ok(());
+        }
         FundingReadinessPlanV1::Activate(_)
         | FundingReadinessPlanV1::Accept(_)
         | FundingReadinessPlanV1::Complete(_) => {
@@ -9767,6 +9775,12 @@ fn execute_funding_readiness_suffix_v1(
         FundingReadinessPlanV1::Create(_) => {
             return Err(Error::new(
                 "CreateFund finalized without selecting the adjacent Activate route",
+            ));
+        }
+        FundingReadinessPlanV1::ConsumedByFounding => {
+            return Err(Error::new(
+                "CreateFund finalized into a terminal Consumed readiness; the suffix should \
+                 have returned before this stage",
             ));
         }
     }
@@ -9858,6 +9872,12 @@ fn execute_funding_readiness_suffix_v1(
         FundingReadinessPlanV1::Create(_) | FundingReadinessPlanV1::Activate(_) => {
             return Err(Error::new(
                 "ActivateFund finalized without selecting the adjacent Accept route",
+            ));
+        }
+        FundingReadinessPlanV1::ConsumedByFounding => {
+            return Err(Error::new(
+                "ActivateFund finalized into a terminal Consumed readiness; the suffix should \
+                 have returned before this stage",
             ));
         }
     }
