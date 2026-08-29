@@ -1522,10 +1522,38 @@ def semantic_owner_digest(document: dict[str, Any], field: str, label: str) -> s
     )
 
 
+def resolution_producer_identity_sha256(producer: dict[str, Any]) -> str:
+    """Reproduce flagship Resolution's canonical producer-identity tuple."""
+
+    tables = producer.get("tables")
+    if not isinstance(tables, dict) or set(tables) != {"submit", "execute", "reclaim"}:
+        raise Refusal("Resolution producer identity omitted its exact three table plans")
+    ordered_tables = {
+        stage: tables[stage] for stage in ("submit", "execute", "reclaim")
+    }
+    identity = [
+        producer.get("planSha256"),
+        producer.get("campaignEvidenceSha256"),
+        producer.get("pythFactsSha256"),
+        producer.get("market"),
+        producer.get("generation"),
+        producer.get("payer"),
+        producer.get("authority"),
+        ordered_tables,
+        producer.get("plannedInput"),
+    ]
+    return sha256_bytes(
+        json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode()
+    )
+
+
 def authenticate_resolution_producer(
     document: Any,
     *,
     require_complete: bool,
+    plan: Path,
+    campaign_evidence: Path,
+    pyth_facts: Path,
 ) -> dict[str, Any]:
     producer = exact_keys(
         document,
@@ -1547,8 +1575,14 @@ def authenticate_resolution_producer(
         },
         "Resolution producer checkpoint",
     )
-    for field in ("planSha256", "campaignEvidenceSha256", "pythFactsSha256"):
-        lowercase_sha256(producer.get(field), f"Resolution {field}")
+    expected_source_digests = {
+        "planSha256": sha256_file(plan),
+        "campaignEvidenceSha256": sha256_file(campaign_evidence),
+        "pythFactsSha256": sha256_file(pyth_facts),
+    }
+    for field, expected in expected_source_digests.items():
+        if lowercase_sha256(producer.get(field), f"Resolution {field}") != expected:
+            raise Refusal(f"Resolution {field} differs from its exact source file")
     if producer.get("format") != RESOLUTION_PRODUCER_SCHEMA:
         raise Refusal(
             "Resolution producer checkpoint used another owned-loopback schema"
@@ -1593,6 +1627,7 @@ def authenticate_resolution_table_journal(
     document: Any,
     *,
     require_complete: bool,
+    producer: dict[str, Any],
 ) -> list[dict[str, Any]]:
     journal = exact_keys(
         document,
@@ -1612,9 +1647,13 @@ def authenticate_resolution_table_journal(
     )
     if journal.get("format") != RESOLUTION_TABLE_SCHEMA:
         raise Refusal("Resolution table journal used another owned-loopback schema")
-    lowercase_sha256(
-        journal.get("producerIdentitySha256"), "Resolution producer identity"
-    )
+    if (
+        lowercase_sha256(
+            journal.get("producerIdentitySha256"), "Resolution producer identity"
+        )
+        != resolution_producer_identity_sha256(producer)
+    ):
+        raise Refusal("Resolution table journal names another producer identity")
     receipts = journal.get("receipts")
     if not isinstance(receipts, list):
         raise Refusal("Resolution table journal receipts are not one array")
@@ -1639,7 +1678,9 @@ def authenticate_resolution_table_journal(
     return facts
 
 
-def authenticate_resolution_checkpoint(document: Any) -> list[dict[str, Any]]:
+def authenticate_resolution_checkpoint(
+    document: Any, *, input_path: Path
+) -> list[dict[str, Any]]:
     checkpoint = exact_keys(
         document,
         {"format", "inputSha256", "stagePlan", "receipts", "verifiedTerminal"},
@@ -1651,7 +1692,11 @@ def authenticate_resolution_checkpoint(document: Any) -> list[dict[str, Any]]:
         or checkpoint.get("verifiedTerminal") is not True
     ):
         raise Refusal("Resolution checkpoint is not verified terminal")
-    lowercase_sha256(checkpoint.get("inputSha256"), "Resolution input digest")
+    if (
+        lowercase_sha256(checkpoint.get("inputSha256"), "Resolution input digest")
+        != sha256_file(input_path)
+    ):
+        raise Refusal("Resolution checkpoint names another exact input file")
     receipts = checkpoint.get("receipts")
     if not isinstance(receipts, list) or [row.get("stage") for row in receipts] != [
         "submit",
@@ -2473,10 +2518,20 @@ def run_flagship_resolution(
     producer = produce()
     for _attempt in range(MAX_RESOLUTION_TABLE_INVOCATIONS):
         authenticated = authenticate_resolution_producer(
-            producer, require_complete=False
+            producer,
+            require_complete=False,
+            plan=plan,
+            campaign_evidence=campaign_evidence,
+            pyth_facts=pyth_facts,
         )
         if authenticated.get("flagshipInput") is not None:
-            authenticate_resolution_producer(authenticated, require_complete=True)
+            authenticate_resolution_producer(
+                authenticated,
+                require_complete=True,
+                plan=plan,
+                campaign_evidence=campaign_evidence,
+                pyth_facts=pyth_facts,
+            )
             if (
                 read_unique_json(input_path, "Resolution input")
                 != authenticated["plannedInput"]
@@ -2511,7 +2566,9 @@ def run_flagship_resolution(
             != document
         ):
             raise Refusal("Resolution table stdout differs from its persisted journal")
-        authenticate_resolution_table_journal(document, require_complete=False)
+        authenticate_resolution_table_journal(
+            document, require_complete=False, producer=authenticated
+        )
         producer = produce()
     else:
         raise Refusal(
@@ -2519,7 +2576,9 @@ def run_flagship_resolution(
         )
 
     table = read_unique_json(table_path, "completed Resolution table journal")
-    table_facts = authenticate_resolution_table_journal(table, require_complete=True)
+    table_facts = authenticate_resolution_table_journal(
+        table, require_complete=True, producer=producer
+    )
     planned = producer["plannedInput"]
     submitter = canonical_pubkey(planned.get("submitter"), "Resolution submitter")
     resolver = canonical_pubkey(planned.get("resolver"), "Resolution resolver")
@@ -2562,7 +2621,9 @@ def run_flagship_resolution(
                 "Resolution executor stdout differs from its persisted checkpoint"
             )
         if checkpoint.get("verifiedTerminal") is True:
-            stage_facts = authenticate_resolution_checkpoint(checkpoint)
+            stage_facts = authenticate_resolution_checkpoint(
+                checkpoint, input_path=input_path
+            )
             return {
                 "schema": "dclutch-private-validator-resolution-controller-v1",
                 "status": "finalized",
