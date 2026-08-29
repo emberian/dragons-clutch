@@ -27,10 +27,11 @@ missing facts.
 
 The broader execution evidence is still local:
 
-- On a local test chain, a market is created, funded, opened, and resolved
-  on chain, after which it begins winding down. The recorded resolution
-  fixtures exercise the Pyth and Wormhole verification paths, but they are
-  not live devnet price publications.
+- On a local test chain, a market is created, funded, opened, and a
+  participant is admitted to it, on chain. Resolving that market and paying
+  it out are not part of the run that is accepted today. The recorded
+  resolution fixtures do exercise the Pyth and Wormhole verification paths,
+  but in a test harness, and they are not live devnet price publications.
 - Trading between two counterparties, moving claims between holders, and
   paying out a winning claim run in test harnesses at Solana's compute and
   memory limits. Those runs are software evidence, not devnet executions.
@@ -57,17 +58,20 @@ risk.
 ## See it run
 
 ```sh
-# build the programs, boot a local validator, create and open a market
-# (about 13 minutes):
-tools/gauntlet/run.sh --mode full
+# build the programs and enumerate every route they accept (no chain):
+tools/gauntlet/run.sh --mode census
+
+# found a market on a throwaway local validator and join it as a
+# participant:
+tools/release/private-validator-lifecycle/run.py --through participant
 
 # the web app's test suite:
 cd apps/dclutch-web && npm test
 ```
 
-The run shuts down its validator when it finishes. Resume the saved chain
-with `tools/gauntlet/frontend/resume-validator.sh` and point the web app
-at it to browse the market you just made.
+The lifecycle run builds its own local chain, founds one market, admits one
+participant, and tears the chain down when it finishes. Resolving that
+market and paying it out are not part of it yet.
 
 Every instruction, error code, and measured cost is in the
 [reference](../reference/README.md), generated from the code itself.

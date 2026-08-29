@@ -112,7 +112,49 @@ renderSet.set("tools/sbom/NOTICES.md", "notices.html");
       }
     }
   };
-  walk("docs/guides");
+  // The guides are published BY THE INDEX, not by walking the directory.
+  //
+  // Walking it published five operator runbooks nobody had listed and nobody
+  // meant to publish -- among them a 512-line Loader-v3 program-upgrade
+  // procedure describing the retained-authority workflow, live and crawlable
+  // at /docs/guides/devnet-permanent-id-upgrade.html with no link to it from
+  // anywhere on the site. Unlinked is not unpublished.
+  //
+  // Deriving the set from docs/guides/README.md keeps the property the walk
+  // had -- no hand-kept list here, add a guide and it ships -- while making
+  // the act of listing a guide for readers the same act as publishing it. A
+  // file that is not in the index is internal, which is what "not in the
+  // index" already meant to everyone reading it.
+  renderSet.set("docs/guides/README.md", "guides/README.html");
+  {
+    const index = fs.readFileSync(
+      path.join(REPO, "docs/guides/README.md"),
+      "utf8",
+    );
+    const listed = new Set();
+    for (const m of index.matchAll(/\]\(([A-Za-z0-9._-]+\.md)\)/g)) {
+      listed.add(m[1]);
+    }
+    if (listed.size === 0) {
+      console.error(
+        "render-site: docs/guides/README.md lists no guide; refusing the artifact.",
+      );
+      process.exit(1);
+    }
+    for (const name of [...listed].sort()) {
+      const rel = path.posix.join("docs/guides", name);
+      if (!fs.existsSync(path.join(REPO, rel))) {
+        console.error(
+          `render-site: the guides index lists ${name}, which does not exist; refusing the artifact.`,
+        );
+        process.exit(1);
+      }
+      renderSet.set(rel, `guides/${name.replace(/\.md$/, ".html")}`);
+    }
+    console.log(
+      `render-site: publishing ${listed.size} guides named by the index.`,
+    );
+  }
   // The run evidence renders too. A filed public comment cites the Evidence
   // page by URL, so these documents have to be readable on the site and not
   // only in the repository -- see the `/evidence` index below.

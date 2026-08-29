@@ -20,12 +20,14 @@ on a local test chain you can run yourself.
 
 ## What works today
 
-- On a local test validator, a market is created, funded, opened, and
-  resolved on chain, after which it begins winding down. Resolution runs
-  through the same Pyth and Wormhole programs that are deployed on
-  mainnet, and they really do check the signatures — but the price they
-  check is a recorded one signed by a test key, not a live Pyth
-  publication.
+- On a local test validator, a market is created, funded, opened, and a
+  participant is admitted to it, on chain. Resolving that market and paying
+  it out are not part of the run that is accepted today.
+- Resolution itself runs through the same Pyth and Wormhole programs that
+  are deployed on mainnet, and they really do check the signatures — but
+  the price they check is a recorded one signed by a test key, not a live
+  Pyth publication, and that check runs in a test harness rather than on a
+  chain.
 - Trading between two counterparties, moving claims between holders, and
   paying out a winning claim run against those same programs in a test
   harness, at the real compute and memory limits. None of the three has
@@ -53,6 +55,9 @@ active work.
 
 ## How a market works
 
+This is the design, end to end. Steps 1 and 2 run today; steps 3 and 4 are
+built and tested but not yet open to anyone.
+
 1. **Someone creates it.** The creator fixes everything up front: the
    collateral token, the question and its cells, the price source, the
    resolution time window, and a fallback outcome in case the source goes
@@ -68,8 +73,9 @@ active work.
    the collateral that was there the whole time.
 
 If the source never publishes inside the window, the market takes the
-fallback outcome the creator disclosed before it opened, and anyone can
-trigger that step for a pre-funded bounty.
+fallback outcome the creator disclosed before it opened. Once markets are
+open and that step can be submitted, anyone will be able to trigger it for
+a pre-funded bounty; today the command previews the transaction and stops.
 
 A transaction that doesn't check out exactly — wrong account, wrong
 authority, stale state, a window that isn't open — is **refused**: the
@@ -133,9 +139,12 @@ from, that's a bug in the console — this table is the answer key.
 ## Try it
 
 ```sh
-# build the programs, boot a local validator, create and open a market
-# (about 13 minutes):
-tools/gauntlet/run.sh --mode full
+# build the programs and enumerate every route they accept (no chain):
+tools/gauntlet/run.sh --mode census
+
+# found a market on a throwaway local validator and join it as a
+# participant. It builds its own chain and tears it down afterwards:
+tools/release/private-validator-lifecycle/run.py --through participant
 
 # the web app's test suite:
 cd apps/dclutch-web && npm test
