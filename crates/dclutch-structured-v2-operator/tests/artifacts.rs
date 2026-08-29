@@ -33,11 +33,15 @@ use dclutch_bearer_v2_operator::{
     RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3,
     RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
-    RationalOpenCapabilityProgramSetInputV3, RationalOpenSelectedHotBundleInputV3,
-    RationalOpenStructuredHotBundleInputV3, RationalTerminalAccountProfileInputV3,
-    RationalTerminalHotBundleInputV3, build_rational_open_capability_program_set_v3,
+    RationalOpenCapabilityProgramSetInputV3, RationalOpenCapabilityProgramSetInputV6,
+    RationalOpenSelectedBundleInputV6, RationalOpenSelectedHotBundleInputV3,
+    RationalOpenStructuredHotBundleInputV3, RationalOpenStructuredSelectedBundleInputV6,
+    RationalTerminalAccountProfileInputV3, RationalTerminalHotBundleInputV3,
+    RationalTerminalSelectedBundleInputV6, build_rational_open_capability_program_set_v3,
+    build_rational_open_capability_program_set_v6, build_rational_open_selected_bundle_v6,
     build_rational_open_selected_hot_bundle_v3, build_rational_open_structured_hot_bundle_v3,
-    build_rational_terminal_hot_bundle_v3,
+    build_rational_open_structured_selected_bundle_v6, build_rational_terminal_hot_bundle_v3,
+    build_rational_terminal_selected_bundle_v6,
     validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
     validate_rational_open_structured_hot_bundle_v3,
 };
@@ -686,4 +690,192 @@ fn the_whole_five_action_program_set_has_one_identity_across_two_markets() {
     // entries imply rather than restating a check the builder already ran.
     assert_eq!(first.program_set.len(), second.program_set.len());
     assert!(!first.program_set.is_empty());
+}
+
+/// THE POINT OF THE WHOLE EXERCISE: the release compiled with NO Market
+/// anywhere in scope is the same release, byte for byte.
+///
+/// The preceding tests establish that the emitted identity does not MOVE with
+/// the Market. That is necessary but not sufficient for founding, because the
+/// V3 builders still cannot RUN before a Market exists: they take a
+/// `RepresentationDescriptorV2` and an `AuthenticatedTokenBehaviorV2`, and both
+/// require a finalized descriptor whose identity is the SHA-256 of a preimage
+/// carrying the Core Market. That is a CONSTRUCTIBILITY wall, not a
+/// byte-dependence one, and it is the last thing between Structured and a
+/// selectable release.
+///
+/// The V6 builders remove it by taking the two things the V3 path actually
+/// consulted -- the representation width and the immutable
+/// `TokenBehaviorSelectionV2` -- and nothing else. This test is the acceptance
+/// criterion for that narrowing, and it is the strongest one available: the
+/// pre-founding path must reproduce the Market-bound path EXACTLY, including
+/// the `program_set_id` a capability manifest entry names as `release_id`.
+///
+/// If the narrowing had dropped or altered any input that reaches an artifact,
+/// this comparison is what would say so.
+#[test]
+fn the_market_free_path_compiles_the_identical_release() {
+    let basis = basis(PRODUCT_N);
+    let policy = lifecycle_policy();
+    let selection =
+        TokenBehaviorSelectionV2::new(identity(REALM), identity(RELEASE_SET)).expect("selection");
+
+    let mut selected_lengths = vec![0_u32; RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3 as usize];
+    let width = u32::try_from(basis.len()).expect("basis width");
+    selected_lengths[4] = width;
+    selected_lengths[29] = width;
+    let structured_lengths = fixed_lengths(&basis);
+    let mut terminal_lengths = vec![0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
+    terminal_lengths[1] = u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection width");
+    terminal_lengths[4] = width;
+    terminal_lengths[29] = width;
+
+    // Not one value below is, or contains, a Market. There is no descriptor to
+    // derive and no admission to authenticate, so there is nothing a Market
+    // could enter through.
+    let selected = |action| {
+        build_rational_open_selected_bundle_v6(RationalOpenSelectedBundleInputV6 {
+            action,
+            logical_data_lengths: &selected_lengths,
+            product_basis: &basis,
+            kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+            token_behavior_selection: selection,
+            root_schema: identity(0x11),
+            lifecycle_policy: &policy,
+            capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+            root_state_bytes: 8,
+        })
+        .expect("market-free selected bundle")
+    };
+    let structured = |action| {
+        build_rational_open_structured_selected_bundle_v6(
+            RationalOpenStructuredSelectedBundleInputV6 {
+                action,
+                fixed_data_lengths: &structured_lengths,
+                item_data_lengths: [64, 82, 165, 165],
+                product_basis: &basis,
+                representation_outcome_count: K,
+                token_behavior_selection: selection,
+                kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+                root_schema: identity(0x11),
+                lifecycle_policy: &policy,
+                capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+                root_state_bytes: 8,
+            },
+        )
+        .expect("market-free structured bundle")
+    };
+    let denominate = selected(RepresentationActionV2::Denominate);
+    let reconstitute = selected(RepresentationActionV2::Reconstitute);
+    let issue = structured(RepresentationActionV2::IssueStructured);
+    let unwrap = structured(RepresentationActionV2::UnwrapStructured);
+    let redeem = build_rational_terminal_selected_bundle_v6(RationalTerminalSelectedBundleInputV6 {
+        account_profile: RationalTerminalAccountProfileInputV3 {
+            logical_data_lengths: &terminal_lengths,
+            product_basis: &basis,
+        },
+        kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+        token_behavior_selection: selection,
+        root_schema: identity(0x11),
+        lifecycle_policy: &policy,
+        capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+        root_state_bytes: 8,
+    })
+    .expect("market-free terminal bundle");
+
+    let market_free = build_rational_open_capability_program_set_v6(
+        RationalOpenCapabilityProgramSetInputV6 {
+            token_behavior_selection: selection,
+            denominate: &denominate,
+            reconstitute: &reconstitute,
+            issue_structured: &issue,
+            unwrap_structured: &unwrap,
+            redeem_terminal: &redeem,
+        },
+    )
+    .expect("market-free five-action capability set");
+
+    // Now the Market-bound path, at an arbitrary Market, for comparison.
+    let derived = derived_descriptor_for_market(identity(0x21));
+    let descriptor =
+        decode_derived_structured_descriptor_v2(&derived, authority()).expect("hostile decode");
+    let behavior = token_behavior(descriptor);
+    let bound_selected = |action| {
+        build_rational_open_selected_hot_bundle_v3(RationalOpenSelectedHotBundleInputV3 {
+            action,
+            logical_data_lengths: &selected_lengths,
+            product_basis: &basis,
+            kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+            authenticated_token_behavior: behavior,
+            root_schema: identity(0x11),
+            lifecycle_policy: &policy,
+            capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+            root_state_bytes: 8,
+        })
+        .expect("descriptor-bound selected bundle")
+    };
+    let bound_structured = |action| {
+        build_rational_open_structured_hot_bundle_v3(RationalOpenStructuredHotBundleInputV3 {
+            action,
+            fixed_data_lengths: &structured_lengths,
+            item_data_lengths: [64, 82, 165, 165],
+            product_basis: &basis,
+            representation_descriptor: descriptor,
+            kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+            authenticated_token_behavior: behavior,
+            root_schema: identity(0x11),
+            lifecycle_policy: &policy,
+            capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+            root_state_bytes: 8,
+        })
+        .expect("descriptor-bound structured bundle")
+    };
+    let bound_redeem = build_rational_terminal_hot_bundle_v3(RationalTerminalHotBundleInputV3 {
+        account_profile: RationalTerminalAccountProfileInputV3 {
+            logical_data_lengths: &terminal_lengths,
+            product_basis: &basis,
+        },
+        kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+        authenticated_token_behavior: behavior,
+        root_schema: identity(0x11),
+        lifecycle_policy: &policy,
+        capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+        root_state_bytes: 8,
+    })
+    .expect("descriptor-bound terminal bundle");
+    let bound_denominate = bound_selected(RepresentationActionV2::Denominate);
+    let bound_reconstitute = bound_selected(RepresentationActionV2::Reconstitute);
+    let bound_issue = bound_structured(RepresentationActionV2::IssueStructured);
+    let bound_unwrap = bound_structured(RepresentationActionV2::UnwrapStructured);
+
+    let market_bound = build_rational_open_capability_program_set_v3(
+        RationalOpenCapabilityProgramSetInputV3 {
+            authenticated_token_behavior: behavior,
+            denominate: &bound_denominate,
+            reconstitute: &bound_reconstitute,
+            issue_structured: &bound_issue,
+            unwrap_structured: &bound_unwrap,
+            redeem_terminal: &bound_redeem,
+        },
+    )
+    .expect("descriptor-bound five-action capability set");
+
+    // Per-bundle, so a failure names the bundle rather than only the set.
+    assert_eq!(denominate, bound_denominate, "Denominate");
+    assert_eq!(reconstitute, bound_reconstitute, "Reconstitute");
+    assert_eq!(issue, bound_issue, "IssueStructured");
+    assert_eq!(unwrap, bound_unwrap, "UnwrapStructured");
+    assert_eq!(redeem, bound_redeem, "RedeemTerminal");
+
+    // *** A COMPLETE STRUCTURED CAPABILITY RELEASE, COMPILED BEFORE ITS
+    // MARKET, IS THE RELEASE THAT MARKET WOULD HAVE SELECTED. ***
+    assert_eq!(
+        market_free.program_set_id, market_bound.program_set_id,
+        "the pre-founding release_id must be the descriptor-bound one"
+    );
+    assert_eq!(market_free.program_set, market_bound.program_set);
+    assert_eq!(
+        market_free.token_behavior_selection_id,
+        market_bound.token_behavior_selection_id
+    );
 }

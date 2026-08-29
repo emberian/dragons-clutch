@@ -92,15 +92,92 @@ pub struct RationalTerminalHotBundleV3 {
     pub descriptor: [u8; RATIONAL_TERMINAL_DESCRIPTOR_BYTES_V3],
 }
 
-/// Emit one complete terminal Bearer Hot bundle from checked semantic inputs.
+/// Pre-founding-safe inputs for the terminal artifact bundle.
+///
+/// Identical in every field to [`RationalTerminalHotBundleInputV3`] except that
+/// it names the immutable `TokenBehaviorSelectionV2` directly instead of an
+/// `AuthenticatedTokenBehaviorV2`. That admission can only be built from a
+/// finalized `RepresentationDescriptorV2`, whose identity is the SHA-256 of a
+/// preimage carrying the Core Market -- so a release compiled before its Market
+/// exists cannot produce one, while needing nothing from it but the selection.
+///
+/// The builder never consulted the admission for anything else: it read
+/// `selection()` for the config bytes and checked `content_digest()` against
+/// the hash of those same bytes, which is a self-consistency check on a value
+/// this form does not carry. Measured, not assumed -- see
+/// `the_whole_five_action_program_set_has_one_identity_across_two_markets`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalTerminalSelectedBundleInputV6<'a> {
+    /// Exact logical account widths and authenticated Product basis body.
+    pub account_profile: RationalTerminalAccountProfileInputV3<'a>,
+    /// Manifest-selected Bearer capability kind.
+    pub kind: [u8; 32],
+    /// Immutable Realm/release selection, chosen before Market founding.
+    pub token_behavior_selection: TokenBehaviorSelectionV2,
+    /// Manifest-selected mutable root-tail schema.
+    pub root_schema: [u8; 32],
+    /// Exact finalized successor lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
+    /// Manifest-selected physical capacity profile.
+    pub capacity_profile: [u8; 32],
+    /// Exact mutable root-tail byte width.
+    pub root_state_bytes: u32,
+}
+
+/// Build the terminal artifact bundle with no Market in scope.
+pub fn build_rational_terminal_selected_bundle_v6(
+    input: RationalTerminalSelectedBundleInputV6<'_>,
+) -> Result<RationalTerminalHotBundleV3> {
+    build_terminal_bundle_inner(
+        input.account_profile,
+        input.kind,
+        input.token_behavior_selection,
+        input.root_schema,
+        input.lifecycle_policy,
+        input.capacity_profile,
+        input.root_state_bytes,
+    )
+}
+
+/// Build the terminal artifact bundle from a Token-behavior admission.
+///
+/// Identical output to [`build_rational_terminal_selected_bundle_v6`], which it
+/// delegates to after checking that the admission's content digest really is
+/// the digest of the selection it carries.
 pub fn build_rational_terminal_hot_bundle_v3(
     input: RationalTerminalHotBundleInputV3<'_>,
 ) -> Result<RationalTerminalHotBundleV3> {
-    let account_profile = encode_rational_terminal_account_profile_v3(input.account_profile)?;
+    let selection = input.authenticated_token_behavior.selection();
+    if hash(&selection.to_bytes()).to_bytes() != input.authenticated_token_behavior.content_digest()
+    {
+        return Err(Error::ContentIdentity);
+    }
+    build_terminal_bundle_inner(
+        input.account_profile,
+        input.kind,
+        selection,
+        input.root_schema,
+        input.lifecycle_policy,
+        input.capacity_profile,
+        input.root_state_bytes,
+    )
+}
+
+fn build_terminal_bundle_inner(
+    account_profile_input: RationalTerminalAccountProfileInputV3<'_>,
+    kind: [u8; 32],
+    token_behavior_selection: TokenBehaviorSelectionV2,
+    root_schema: [u8; 32],
+    lifecycle_policy_bytes: &[u8],
+    capacity_profile: [u8; 32],
+    root_state_bytes: u32,
+) -> Result<RationalTerminalHotBundleV3> {
+    let input_account_profile = account_profile_input;
+    let account_profile = encode_rational_terminal_account_profile_v3(input_account_profile)?;
     let request_profile = encode_rational_terminal_request_profile_v3()?;
     let transition = encode_rational_terminal_transition_v3()?;
     let effect = encode_rational_terminal_effect_v3()?;
-    let lifecycle_policy = Vec::from(input.lifecycle_policy);
+    let lifecycle_policy = Vec::from(lifecycle_policy_bytes);
     let lifecycle_id = digest(&lifecycle_policy)?;
     let transition_id = digest(&transition)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
@@ -116,19 +193,14 @@ pub fn build_rational_terminal_hot_bundle_v3(
     )
     .map_err(Error::ExecutionStrategy)?;
     let strategy = strategy_value.to_bytes();
-    let token_behavior_selection = input.authenticated_token_behavior.selection().to_bytes();
-    if hash(&token_behavior_selection).to_bytes()
-        != input.authenticated_token_behavior.content_digest()
-    {
-        return Err(Error::ContentIdentity);
-    }
+    let token_behavior_selection = token_behavior_selection.to_bytes();
     let descriptor_value = CapabilityProgramV4::new(
-        content(input.kind)?,
+        content(kind)?,
         content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
         content(RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_ID_V3)?,
-        content(input.root_schema)?,
+        content(root_schema)?,
         lifecycle_id,
-        content(input.capacity_profile)?,
+        content(capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
                 dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
@@ -149,7 +221,7 @@ pub fn build_rational_terminal_hot_bundle_v3(
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect)?.to_bytes())?,
         },
-        input.root_state_bytes,
+        root_state_bytes,
     )
     .map_err(Error::CapabilityDescriptor)?;
     let bundle = RationalTerminalHotBundleV3 {
@@ -162,10 +234,9 @@ pub fn build_rational_terminal_hot_bundle_v3(
         effect,
         descriptor: descriptor_value.encode(),
     };
-    validate_rational_terminal_hot_bundle_for_authenticated_selection_v3(
-        &bundle,
-        input.authenticated_token_behavior,
-    )?;
+    // The Realm/release join is true by construction here -- the bundle's config
+    // IS the selection it was built from -- so the geometry is what remains.
+    validate_rational_terminal_hot_bundle_v3(&bundle)?;
     Ok(bundle)
 }
 
