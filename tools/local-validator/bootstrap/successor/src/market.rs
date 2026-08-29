@@ -8282,13 +8282,13 @@ fn authenticate_core_state_encoding_v1(rpc: &mut Rpc, market: Pubkey) -> Result<
 
 /// Build the exact 125 + physical-funding-count account `DCLTGMF3` frame.
 ///
-/// Privileges are the outer's own assertion. Exactly eleven distinct keys are
+/// Privileges are the outer's own assertion. Exactly twelve distinct keys are
 /// writable — the projected replay, the rent credit, the Hoard vault, the
 /// source vault, the source replay, the Found caller PDA, the Market, the
-/// permit, and the three Claims accounts — and **no account in the frame is a
-/// transaction-level signer**: every stage's signer is a PDA the outer signs
-/// for under `invoke_signed`, so the fee payer must be a key that appears
-/// nowhere in this list.
+/// permit, the three Claims accounts, and the controller-funding checkpoint —
+/// and **no account in the frame is a transaction-level signer**: every stage's
+/// signer is a PDA the outer signs for under `invoke_signed`, so the fee payer
+/// must be a key that appears nowhere in this list.
 ///
 /// Writability is unioned per key at the end rather than per slot. Solana
 /// grants privileges per key, so an account that must be writable in one stage
