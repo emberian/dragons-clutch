@@ -256,19 +256,29 @@ export function httpFailureReasonV1(status: number): string {
 /**
  * How many heavy reads this origin may have in flight against one endpoint.
  *
- * Measured against api.devnet.solana.com on 2026-08-29, and the shape of the
- * limit is the surprise: it is CONCURRENCY, not volume. Twelve sequential
- * light reads all pass; six sequential getProgramAccounts scans all pass; six
- * of the same scans issued AT THE SAME TIME return two 429s. Our reading
- * surface fans its discovery join out in parallel across registry, claims and
- * custody per market, so it sat on the wrong side of that limit by
- * construction -- the cold-client journey could not finish a single page load
- * against the public endpoint, five attempts over twenty minutes.
+ * Measured against api.devnet.solana.com on 2026-08-29. The endpoint runs a
+ * rate budget with a burst allowance of roughly eight heavy reads: twelve
+ * sequential light reads pass, six sequential program scans pass, and twenty
+ * scans at concurrency two still return eleven 429s. Pacing reaches the same
+ * budget, only later.
+ *
+ * So be clear about what this bound is and is not for. It is NOT what makes
+ * the public site work: the market-discovery path is a plain sequential loop
+ * (marketDiscovery.ts, the `for (const address of addresses)` over markets),
+ * so it was never firing these in parallel and this gate does not speed it up
+ * or save it. What refuses that path is the NUMBER of round trips -- about
+ * four per market against ten markets -- and the fix for that is to hoist the
+ * per-market record reads out of the loop and read them in 32-address batches,
+ * not to throttle them.
+ *
+ * What this bound does is keep any OTHER caller from firing unbounded parallel
+ * reads at one endpoint and being refused by its own traffic, which is a thing
+ * that costs nothing to prevent and is invisible when it happens.
  *
  * Two, not one: sequential is demonstrably safe, so this keeps a little
- * parallelism and still leaves margin under the measured cliff. It bounds
- * in-flight requests, never total ones, so nothing is dropped or retried --
- * a read that would have raced now simply waits its turn.
+ * parallelism and still leaves margin. It bounds in-flight requests, never
+ * total ones, so nothing is dropped or retried -- a read that would have raced
+ * now simply waits its turn.
  */
 export const MAX_IN_FLIGHT_READS_PER_ENDPOINT_V1 = 2;
 
