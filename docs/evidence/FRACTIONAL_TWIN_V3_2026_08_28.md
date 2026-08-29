@@ -110,6 +110,35 @@ transactions, and one fixed Finish. Width changes transaction count, never a
 transaction frame. This is the architectural fix; the ALT is only packet
 compression.
 
+## Real SBF frame measurement
+
+The Claims link was freshly rebuilt from this worktree with the repository's
+measurement flags and then read with `tools/sbf-frame-sizes.py`:
+
+```text
+RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
+  CARGO_TARGET_DIR=<fresh> cargo build-sbf \
+  --manifest-path programs/dclutch-claims-sbf/Cargo.toml -- --locked
+```
+
+The build emitted zero SBF stack-overwrite diagnostics. The measurement object
+SHA-256 was
+`0172fc58454973ff637f9a91feb0f07ecfaba5af78e71cb42cab57aefeda0c85`.
+It contained 201 measured frames, none at or over 4,096 bytes. The relevant
+Fractional frames were:
+
+| Function | Static frame | Margin |
+|---|---:|---:|
+| open Claims + Token child | 3,904 | 192 |
+| boxed terminal Claims/Custody child | 3,200 | 896 |
+| terminal Fractional handler | 2,880 | 1,216 |
+| terminal receipt emission | 1,600 | 2,496 |
+
+The public Claims selector is split into bounded no-inline routing frames. The
+split changes neither instruction bytes nor family order; it prevents adding
+the Fractional family from causing the otherwise-green legacy selector to be
+recompiled as one 4,672-byte frame.
+
 ## What is implemented
 
 - exact physical action planning with denominator conservation;
@@ -148,9 +177,8 @@ exist. Integration still requires:
    PDA and its lifecycle rent;
 4. one-coordinate Claims Position close plus Token Mint close in the retirement
    step, and fixed final Core/Lifecycle-Rent closure;
-5. a real-ELF caller-backed late-Token-failure rollback campaign, frame
-   diagnostic, 20-seed CU mean, and
-   checked release bindings.
+5. a real-ELF caller-backed late-Token-failure rollback campaign, 20-seed CU
+   mean, and checked release bindings.
 
 Until those exist, the current 14-action release remains refused and this code
-must not be described as an executable or deployed Fractional market.
+must not be described as a complete executable or deployed Fractional market.

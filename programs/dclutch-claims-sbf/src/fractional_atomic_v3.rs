@@ -8,12 +8,12 @@
 
 extern crate alloc;
 
-use alloc::vec;
+use alloc::{boxed::Box, vec};
 
 use dclutch_claims_svm::{
     CallerRole,
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
-    signed_delta_v3::{PositionDeltaV3, SignedDeltaV3},
+    signed_delta_v3::{PositionDeltaV3, SignedDeltaReceiptV3, SignedDeltaV3},
 };
 use dclutch_custody_contract::CustodyReplayV1;
 use dclutch_fractional_claim_contract::{
@@ -36,8 +36,8 @@ use dclutch_fractional_claim_kernel::{
     FractionalExposureTermsV2,
 };
 use dclutch_fractional_claims_kernel::{
-    FractionalExposureSignedDeltaInputV2, fractional_exposure_signed_delta_shape_v2,
-    prepare_fractional_exposure_signed_delta_v2,
+    FractionalExposureSignedDeltaInputV2, PreparedFractionalExposureSignedDeltaV2,
+    fractional_exposure_signed_delta_shape_v2, prepare_fractional_exposure_signed_delta_v2,
     validate_fractional_exposure_signed_delta_postcondition_v2,
 };
 use dclutch_token_svm::{
@@ -84,18 +84,32 @@ pub(super) fn process(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    let request = FractionalExposureRequestV2::decode(instruction_data)
-        .map_err(|_| ClaimsSbfError::Instruction)?;
+    let request = Box::new(
+        FractionalExposureRequestV2::decode(instruction_data)
+            .map_err(|_| ClaimsSbfError::Instruction)?,
+    );
     match request.action() {
         FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap => {
-            process_open(program_id, accounts, instruction_data, request)
+            process_open(program_id, accounts, instruction_data, &request)
         }
         FractionalExposureActionV2::TerminalRedeem
         | FractionalExposureActionV2::TerminalZeroBurn => {
-            process_terminal(program_id, accounts, instruction_data, request)
+            process_terminal(program_id, accounts, instruction_data, &request)
         }
         _ => Err(ClaimsSbfError::Instruction.into()),
     }
+}
+
+#[inline(never)]
+fn execute_signed_delta_boxed(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    packet: &[u8],
+    parent: AuthenticatedSignedDeltaParentV3,
+) -> Result<Box<SignedDeltaReceiptV3>, ProgramError> {
+    Ok(Box::new(execute_parent_authenticated(
+        program_id, accounts, packet, parent,
+    )?))
 }
 
 #[inline(never)]
@@ -103,12 +117,12 @@ fn process_open(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
-    request: FractionalExposureRequestV2,
+    request: &FractionalExposureRequestV2,
 ) -> Result<(), ProgramError> {
     if accounts.len() != FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3 {
         return Err(ClaimsSbfError::Accounts.into());
     }
-    authenticate_tail_privileges(program_id, accounts, request)?;
+    authenticate_tail_privileges(program_id, accounts, *request)?;
     let rent =
         Rent::from_account_info(account(accounts, RENT)?).map_err(|_| ClaimsSbfError::Accounts)?;
     let registry = account(accounts, REGISTRY)?;
@@ -140,7 +154,7 @@ fn process_open(
         },
     )
     .map_err(|_| ClaimsSbfError::Representation)?;
-    request
+    (*request)
         .bind_terms(terms)
         .map_err(|_| ClaimsSbfError::Representation)?;
 
@@ -205,7 +219,7 @@ fn process_open(
     drop(root_data);
 
     let physical =
-        plan_fractional_physical_v3(terms, request).map_err(|_| ClaimsSbfError::Representation)?;
+        plan_fractional_physical_v3(terms, *request).map_err(|_| ClaimsSbfError::Representation)?;
     let mint_account = account(accounts, FRACTIONAL_ATOMIC_SHARD_MINT_V3)?;
     let holder_account = account(accounts, FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3)?;
     let token_program = account(accounts, FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3)?;
@@ -274,7 +288,7 @@ fn process_open(
         return Err(ClaimsSbfError::Identity.into());
     };
     let input = FractionalExposureSignedDeltaInputV2 {
-        request,
+        request: *request,
         terms,
         semantic_product_id: market.product_instance_id,
         market_account: account(accounts, MARKET)?.key.to_bytes(),
@@ -311,13 +325,15 @@ fn process_open(
     .map_err(|_| ClaimsSbfError::Economic)?;
     let mut row_scratch = [placeholder; 2];
     let mut packet = vec![0; shape.packet_bytes()];
-    let prepared = prepare_fractional_exposure_signed_delta_v2(
-        input,
-        &mut aggregate_scratch,
-        &mut row_scratch,
-        &mut packet,
-    )
-    .map_err(|_| ClaimsSbfError::Economic)?;
+    let prepared = Box::new(
+        prepare_fractional_exposure_signed_delta_v2(
+            input,
+            &mut aggregate_scratch,
+            &mut row_scratch,
+            &mut packet,
+        )
+        .map_err(|_| ClaimsSbfError::Economic)?,
+    );
     drop(position_0_data);
     drop(position_1_data);
     drop(market_data);
@@ -328,7 +344,7 @@ fn process_open(
         .ok_or(ClaimsSbfError::Accounts)?;
     authenticate_parent_releases(program_id, signed_accounts, &packet)?;
     let request_digest = hash(instruction_data).to_bytes();
-    let signed_receipt = execute_parent_authenticated(
+    let signed_receipt = execute_signed_delta_boxed(
         program_id,
         signed_accounts,
         &packet,
@@ -343,7 +359,7 @@ fn process_open(
     )?;
 
     execute_token(
-        request,
+        *request,
         physical.consumed_shards,
         decimals,
         root_account,
@@ -403,28 +419,64 @@ fn process_open(
     let post_position_1 = account(accounts, POSITION_1)?
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
+    validate_open_and_emit(
+        request,
+        request_digest,
+        &prepared,
+        &packet,
+        &signed_receipt,
+        token_post_digest,
+        root_account.key.to_bytes(),
+        expected_supply,
+        expected_holder,
+        physical.consumed_shards,
+        position_0.owner,
+        &post_market,
+        &post_position_0,
+        &post_position_1,
+    )
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn validate_open_and_emit(
+    request: &FractionalExposureRequestV2,
+    request_digest: [u8; 32],
+    prepared: &PreparedFractionalExposureSignedDeltaV2,
+    packet: &[u8],
+    signed_receipt: &SignedDeltaReceiptV3,
+    token_post_digest: [u8; 32],
+    root: [u8; 32],
+    expected_supply: u64,
+    expected_holder: u64,
+    consumed_shards: u64,
+    position_0_owner: [u8; 32],
+    post_market: &[u8],
+    post_position_0: &[u8],
+    post_position_1: &[u8],
+) -> Result<(), ProgramError> {
     let signed_receipt_bytes = signed_receipt.to_bytes();
     validate_fractional_exposure_signed_delta_postcondition_v2(
-        prepared,
-        &packet,
+        *prepared,
+        packet,
         signed_receipt.packet_digest(),
         signed_receipt.table_digest(),
         signed_receipt.post_resource_digest(),
         &signed_receipt_bytes,
-        &post_market,
-        &[&post_position_0, &post_position_1],
+        post_market,
+        &[post_position_0, post_position_1],
     )
     .map_err(|_| ClaimsSbfError::Receipt)?;
-    let actor_view = if position_0.owner == request.input().owner {
-        LiabilityBasisPositionViewV2::decode(&post_position_0)
+    let actor_view = if position_0_owner == request.input().owner {
+        LiabilityBasisPositionViewV2::decode(post_position_0)
     } else {
-        LiabilityBasisPositionViewV2::decode(&post_position_1)
+        LiabilityBasisPositionViewV2::decode(post_position_1)
     }
     .map_err(|_| ClaimsSbfError::Receipt)?;
-    let reserve_view = if position_0.owner == root_account.key.to_bytes() {
-        LiabilityBasisPositionViewV2::decode(&post_position_0)
+    let reserve_view = if position_0_owner == root {
+        LiabilityBasisPositionViewV2::decode(post_position_0)
     } else {
-        LiabilityBasisPositionViewV2::decode(&post_position_1)
+        LiabilityBasisPositionViewV2::decode(post_position_1)
     }
     .map_err(|_| ClaimsSbfError::Receipt)?;
     let receipt = FractionalAtomicReceiptV3::new(
@@ -434,13 +486,13 @@ fn process_open(
         hash(&signed_receipt_bytes).to_bytes(),
         token_post_digest,
         signed_receipt.post_resource_digest(),
-        root_account.key.to_bytes(),
+        root,
         signed_receipt.post_market_revision(),
         actor_view.revision,
         reserve_view.revision,
         expected_supply,
         expected_holder,
-        physical.consumed_shards,
+        consumed_shards,
     )
     .map_err(|_| ClaimsSbfError::Receipt)?;
     set_return_data(&receipt.to_bytes());
@@ -452,7 +504,7 @@ fn process_terminal(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
-    request: FractionalExposureRequestV2,
+    request: &FractionalExposureRequestV2,
 ) -> Result<(), ProgramError> {
     use dclutch_claims_svm::terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3 as COLLATERAL_MINT,
@@ -466,7 +518,7 @@ fn process_terminal(
     if accounts.len() != FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3 {
         return Err(ClaimsSbfError::Accounts.into());
     }
-    authenticate_terminal_tail_privileges(program_id, accounts, request)?;
+    authenticate_terminal_tail_privileges(program_id, accounts, *request)?;
     let rent =
         Rent::from_account_info(account(accounts, RENT)?).map_err(|_| ClaimsSbfError::Accounts)?;
     let registry = account(accounts, REGISTRY)?;
@@ -497,7 +549,7 @@ fn process_terminal(
         },
     )
     .map_err(|_| ClaimsSbfError::Representation)?;
-    request
+    (*request)
         .bind_terms(terms)
         .map_err(|_| ClaimsSbfError::Representation)?;
 
@@ -564,7 +616,7 @@ fn process_terminal(
     drop(root_data);
 
     let physical =
-        plan_fractional_physical_v3(terms, request).map_err(|_| ClaimsSbfError::Representation)?;
+        plan_fractional_physical_v3(terms, *request).map_err(|_| ClaimsSbfError::Representation)?;
     let mint = account(accounts, FRACTIONAL_TERMINAL_SHARD_MINT_V3)?;
     let source = account(accounts, FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3)?;
     let token_program = account(accounts, TOKEN_PROGRAM)?;
@@ -633,35 +685,37 @@ fn process_terminal(
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     let outer_digest = hash(instruction_data).to_bytes();
-    let terminal_request = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
-        caller_role: CallerRole::Trading,
-        release_set: request.input().release_set,
-        market: request.input().market,
-        realm: market.realm_id,
-        parent_context: outer_digest,
-        product_record_digest: request.input().product_record,
-        exposure_id: request.input().exposure,
-        exposure_digest: hash(&exposure_data).to_bytes(),
-        terminal_record_digest: request.input().terminal_digest,
-        owner: root_account.key.to_bytes(),
-        position: account(accounts, POSITION_0)?.key.to_bytes(),
-        recipient_owner: request.input().owner,
-        recipient_token_account: account(accounts, RECIPIENT)?.key.to_bytes(),
-        claims_program: program_id.to_bytes(),
-        custody_program: account(accounts, CUSTODY_PROGRAM)?.key.to_bytes(),
-        collateral_mint: account(accounts, COLLATERAL_MINT)?.key.to_bytes(),
-        token_program: token_program.key.to_bytes(),
-        semantic_basis_id: terms.representation_basis(),
-        linked_basis_record_digest: hash(&basis_data).to_bytes(),
-        generation: market.generation,
-        expected_market_revision: market.revision,
-        expected_position_revision: position.revision,
-        expected_custody_revision: replay.next_revision,
-        quantity: physical.whole_claims,
-        claim_index: request.input().representation_coordinate,
-        transfer_index: 0,
-    })
-    .map_err(|_| ClaimsSbfError::Instruction)?;
+    let terminal_request = Box::new(
+        TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
+            caller_role: CallerRole::Trading,
+            release_set: request.input().release_set,
+            market: request.input().market,
+            realm: market.realm_id,
+            parent_context: outer_digest,
+            product_record_digest: request.input().product_record,
+            exposure_id: request.input().exposure,
+            exposure_digest: hash(&exposure_data).to_bytes(),
+            terminal_record_digest: request.input().terminal_digest,
+            owner: root_account.key.to_bytes(),
+            position: account(accounts, POSITION_0)?.key.to_bytes(),
+            recipient_owner: request.input().owner,
+            recipient_token_account: account(accounts, RECIPIENT)?.key.to_bytes(),
+            claims_program: program_id.to_bytes(),
+            custody_program: account(accounts, CUSTODY_PROGRAM)?.key.to_bytes(),
+            collateral_mint: account(accounts, COLLATERAL_MINT)?.key.to_bytes(),
+            token_program: token_program.key.to_bytes(),
+            semantic_basis_id: terms.representation_basis(),
+            linked_basis_record_digest: hash(&basis_data).to_bytes(),
+            generation: market.generation,
+            expected_market_revision: market.revision,
+            expected_position_revision: position.revision,
+            expected_custody_revision: replay.next_revision,
+            quantity: physical.whole_claims,
+            claim_index: request.input().representation_coordinate,
+            transfer_index: 0,
+        })
+        .map_err(|_| ClaimsSbfError::Instruction)?,
+    );
     drop(basis_data);
     drop(exposure_data);
     drop(replay_data);
@@ -669,12 +723,13 @@ fn process_terminal(
     drop(behavior_data);
     drop(market_data);
 
-    let terminal_receipt = execute_terminal_enclosing(
+    let terminal_request_digest = terminal_request_digest(&terminal_request);
+    let terminal_receipt = execute_terminal_boxed(
         program_id,
         accounts
             .get(..FRACTIONAL_TERMINAL_BASE_ACCOUNT_COUNT_V3)
             .ok_or(ClaimsSbfError::Accounts)?,
-        terminal_request,
+        *terminal_request,
         request.input().terms,
         outer_digest,
     )?;
@@ -725,24 +780,73 @@ fn process_terminal(
         return Err(ClaimsSbfError::Token.into());
     }
     let token_post_digest = hashv(&[TOKEN_POST_DOMAIN, &post_mint, &post_source]).to_bytes();
-    let terminal_bytes = terminal_receipt.to_bytes();
-    if terminal_bytes.len()
-        != dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_RECEIPT_BYTES_V3
-    {
-        return Err(ClaimsSbfError::Receipt.into());
-    }
-    let receipt = FractionalTerminalAtomicReceiptV3::new(
+    emit_terminal_receipt(
         request.action(),
         outer_digest,
-        hash(&terminal_request.to_bytes()).to_bytes(),
-        hash(&terminal_bytes).to_bytes(),
-        terminal_evidence.post_resource_digest,
+        terminal_request_digest,
+        &terminal_receipt,
         token_post_digest,
         root_account.key.to_bytes(),
-        terminal_evidence.payout,
         expected_supply,
         expected_holder,
         physical.consumed_shards,
+    )
+}
+
+#[inline(never)]
+fn terminal_request_digest(
+    request: &dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestV3,
+) -> [u8; 32] {
+    hash(&request.to_bytes()).to_bytes()
+}
+
+#[inline(never)]
+fn execute_terminal_boxed(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestV3,
+    outer_context: [u8; 32],
+    outer_request_digest: [u8; 32],
+) -> Result<
+    Box<dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementReceiptV3>,
+    ProgramError,
+> {
+    Ok(Box::new(execute_terminal_enclosing(
+        program_id,
+        accounts,
+        request,
+        outer_context,
+        outer_request_digest,
+    )?))
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn emit_terminal_receipt(
+    action: FractionalExposureActionV2,
+    request_digest: [u8; 32],
+    terminal_request_digest: [u8; 32],
+    terminal_receipt: &dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementReceiptV3,
+    token_post_digest: [u8; 32],
+    root: [u8; 32],
+    post_mint_supply: u64,
+    post_holder_amount: u64,
+    consumed_shards: u64,
+) -> Result<(), ProgramError> {
+    let terminal_evidence = terminal_receipt.evidence();
+    let terminal_bytes = terminal_receipt.to_bytes();
+    let receipt = FractionalTerminalAtomicReceiptV3::new(
+        action,
+        request_digest,
+        terminal_request_digest,
+        hash(&terminal_bytes).to_bytes(),
+        terminal_evidence.post_resource_digest,
+        token_post_digest,
+        root,
+        terminal_evidence.payout,
+        post_mint_supply,
+        post_holder_amount,
+        consumed_shards,
     )
     .map_err(|_| ClaimsSbfError::Receipt)?;
     let receipt_bytes = receipt.to_bytes();
