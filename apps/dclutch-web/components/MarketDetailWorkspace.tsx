@@ -22,6 +22,7 @@ import {
 } from '@/lib/marketDiscovery';
 import CellStrip from '@/components/charts/CellStrip';
 import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
+import JoinPanel from '@/components/JoinPanel';
 import MarketTradePanel from '@/components/MarketTradePanel';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
@@ -350,6 +351,18 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         ? <p className="market-empty">No capability manifest identity exists to authenticate, because no Market root has been decoded.</p>
         : <Capabilities capabilities={decoded.capabilities} />}
     </section>
+
+    {decoded !== null && <JoinPanel
+      endpoint={deployment.endpoint}
+      marketAddress={address}
+      marketPhase={decoded.phase}
+      coreProgramId={deployment.programs.core}
+      registryProgramId={deployment.programs.registry}
+      claimsProgramId={deployment.programs.claims}
+      tradingProgramId={deployment.programs.trading}
+      custodyProgramId={deployment.programs.custody}
+      rentProgramId={deployment.programs.rent}
+    />}
 
     {decoded !== null && <MarketTradePanel
       endpoint={deployment.endpoint}

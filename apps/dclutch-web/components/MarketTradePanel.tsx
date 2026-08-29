@@ -492,7 +492,7 @@ export default function MarketTradePanel({
   const supplies = liability !== null && liability.status === 'bound' ? liability.supplyAtoms : null;
 
   return <section className="trade-v3-card">
-    <header><span>05</span><div><h2>Trade this Market</h2><p>Pick an outcome, size it, and cross one signed offer at the price its maker signed. Every number you see is read off the chain or computed by the exact code the chain runs. When something cannot happen yet, this panel tells you exactly why in one sentence — never a greyed-out button with no reason.</p></div></header>
+    <header><span>06</span><div><h2>Trade this Market</h2><p>Pick an outcome, size it, and cross one signed offer at the price its maker signed. Every number you see is read off the chain or computed by the exact code the chain runs. When something cannot happen yet, this panel tells you exactly why in one sentence — never a greyed-out button with no reason.</p></div></header>
 
     <div className="direct-actions">
       <button type="button" onClick={() => void inspect()}>Ask the chain about trading here</button>

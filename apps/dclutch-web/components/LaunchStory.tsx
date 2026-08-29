@@ -15,7 +15,7 @@ import {
 
 const LIFECYCLE = [
   ['01', 'Found', 'Lock collateral and publish the market.', 'found'],
-  ['02', 'Join', 'Choose an outcome and enter with a real Position.', null],
+  ['02', 'Join', 'Choose an outcome and enter with a real Position.', 'join'],
   ['03', 'Trade', 'Exchange claims through a signed Direct route.', 'trade'],
   ['04', 'Resolve', 'Read the named oracle path after the deadline.', 'resolve'],
   ['05', 'Redeem', 'Burn winning claims and release their collateral.', 'redeem'],
@@ -73,7 +73,9 @@ export default function LaunchStory() {
       <ol>
         {LIFECYCLE.map(([number, title, detail, step]) => <li key={title}>
           <span>{number}</span><strong>{title}</strong><p>{detail}</p>
-          {step === null || publicCutTransactionHrefV1(step as PublicCutActivityStepV1, cut) === null ? null : <Anchor href={publicCutTransactionHrefV1(step as PublicCutActivityStepV1, cut)!}>Open {title.toLowerCase()} transaction →</Anchor>}
+          {step === 'join'
+            ? <Anchor href={`${marketHref}#join`}>{opened ? 'Check your standing and join →' : 'See what joining creates →'}</Anchor>
+            : step === null || publicCutTransactionHrefV1(step as PublicCutActivityStepV1, cut) === null ? null : <Anchor href={publicCutTransactionHrefV1(step as PublicCutActivityStepV1, cut)!}>Open {title.toLowerCase()} transaction →</Anchor>}
         </li>)}
       </ol>
     </section>
