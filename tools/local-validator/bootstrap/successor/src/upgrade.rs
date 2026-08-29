@@ -8185,9 +8185,13 @@ fn validate_receipt_binding(
             }
         }
         ReceiptPhaseV1::Submitted => {
+            let signed_shape_invalid = if receipt.buffer_adopted {
+                !no_unsigned || !no_signed
+            } else {
+                !has_unsigned || !has_signed
+            };
             if !has_buffer_ready
-                || !has_unsigned
-                || !has_signed
+                || signed_shape_invalid
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_some()
                 || receipt.finalized_transaction_sha256.is_some()
@@ -8202,9 +8206,13 @@ fn validate_receipt_binding(
             validate_recorded_deploy_output(receipt)?;
         }
         ReceiptPhaseV1::Complete => {
+            let signed_shape_invalid = if receipt.buffer_adopted {
+                !no_unsigned || !no_signed
+            } else {
+                !has_unsigned || !has_signed
+            };
             if !has_buffer_ready
-                || !has_unsigned
-                || !has_signed
+                || signed_shape_invalid
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_none()
                 || receipt.finalized_transaction_sha256.is_none()
@@ -8338,13 +8346,21 @@ fn validate_recorded_deploy_output(receipt: &UpgradeReceiptV1) -> Result<()> {
         .as_ref()
         .and_then(Value::as_object)
         .ok_or_else(|| Error::new("Upgrade receipt omitted CLI JSON object"))?;
-    if output.len() != 5
-        || output.get("transport").and_then(Value::as_str) != Some("sendTransaction")
-        || output.get("maxRetries").and_then(Value::as_u64) != Some(0)
-        || output.get("signature").and_then(Value::as_str) != Some(signature)
-        || output.get("buffer").and_then(Value::as_str) != Some(receipt.buffer_pubkey.as_str())
-        || output.get("spill").and_then(Value::as_str) != Some(receipt.fee_payer.as_str())
-    {
+    let invalid = if receipt.buffer_adopted {
+        output.len() != 3
+            || output.get("transport").and_then(Value::as_str)
+                != Some("solana-cli-program-deploy-adopted-v1")
+            || output.get("maxSignAttempts").and_then(Value::as_u64) != Some(1)
+            || output.get("signature").and_then(Value::as_str) != Some(signature)
+    } else {
+        output.len() != 5
+            || output.get("transport").and_then(Value::as_str) != Some("sendTransaction")
+            || output.get("maxRetries").and_then(Value::as_u64) != Some(0)
+            || output.get("signature").and_then(Value::as_str) != Some(signature)
+            || output.get("buffer").and_then(Value::as_str) != Some(receipt.buffer_pubkey.as_str())
+            || output.get("spill").and_then(Value::as_str) != Some(receipt.fee_payer.as_str())
+    };
+    if invalid {
         return Err(Error::new(
             "Upgrade receipt send evidence does not bind its exact packet, Buffer, spill, and maxRetries=0",
         ));
