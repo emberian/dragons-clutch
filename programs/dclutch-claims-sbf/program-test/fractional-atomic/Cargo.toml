@@ -15,6 +15,7 @@ dclutch-claims-sbf = { path = "../..", features = ["no-entrypoint"] }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
+dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
 dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
 dclutch-fractional-atomic-test-caller-sbf = { path = "../../test-programs/fractional-atomic-caller", features = ["no-entrypoint"] }

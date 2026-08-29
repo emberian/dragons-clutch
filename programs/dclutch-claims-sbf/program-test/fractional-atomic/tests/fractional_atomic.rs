@@ -1529,7 +1529,7 @@ fn terminal_fixture(
 }
 
 /// The exact 44-account production terminal frame, in contract coordinate order.
-fn terminal_child_accounts(fixture: &TerminalFixture) -> Vec<AccountMeta> {
+fn terminal_child_accounts(fixture: &TerminalFixture, custody_caller: Pubkey) -> Vec<AccountMeta> {
     let shared = &fixture.shared;
     let accounts = vec![
         AccountMeta::new_readonly(fixture.caller_authority, false),
@@ -1557,9 +1557,9 @@ fn terminal_child_accounts(fixture: &TerminalFixture) -> Vec<AccountMeta> {
         AccountMeta::new(shared.reserve_position.account, false),
         AccountMeta::new_readonly(shared.exposure.raw, false),
         AccountMeta::new_readonly(shared.exposure.staging, false),
-        // On the zero-payout path this coordinate must literally be the Claims
-        // program; there is no Custody CPI to sign for.
-        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+        // On the zero-payout path this must literally be the Claims program;
+        // a paying redemption instead needs the derived caller authority.
+        AccountMeta::new_readonly(custody_caller, false),
         AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
         AccountMeta::new_readonly(CERTIFICATE_ACCOUNT, false),
         AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
@@ -1585,10 +1585,14 @@ fn terminal_child_accounts(fixture: &TerminalFixture) -> Vec<AccountMeta> {
     accounts
 }
 
-fn terminal_instruction(fixture: &TerminalFixture, fail_after: bool) -> Instruction {
+fn terminal_instruction(
+    fixture: &TerminalFixture,
+    custody_caller: Pubkey,
+    fail_after: bool,
+) -> Instruction {
     let mut accounts = Vec::with_capacity(45);
     accounts.push(AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false));
-    accounts.extend(terminal_child_accounts(fixture));
+    accounts.extend(terminal_child_accounts(fixture, custody_caller));
     let mut data = fixture.wrapper.clone();
     *data.first_mut().expect("control byte") = u8::from(fail_after);
     Instruction {
@@ -1713,7 +1717,7 @@ async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
     assert_eq!(balance(&before[2], OUTCOME as usize), WRAP_NATIVE_CLAIMS);
 
     let (accepted, logs, units, result) =
-        submit(&mut context, terminal_instruction(&fixture, false)).await;
+        submit(&mut context, terminal_instruction(&fixture, CLAIMS_PROGRAM_ID, false)).await;
     assert!(accepted, "the zero-payout terminal burn must commit: {result:?}");
     assert!(
         logs.iter()
@@ -1750,6 +1754,63 @@ async fn observe5(context: &mut ProgramTestContext, keys: [Pubkey; 5]) -> [Accou
     observed.try_into().expect("five observed accounts")
 }
 
+/// The winning coordinate redeems collateral out of the Market's Hoard.
+///
+/// This is the whole Fractional lifecycle's far end: shards issued against
+/// locked native Claims are burned at a resolved winning coordinate, and the
+/// Market's Custody Hoard pays the holder. Unlike the zero-payout burn this
+/// really does invoke Custody, which really does invoke Token-2022, so the
+/// campaign checks collateral conservation across the Hoard and the recipient
+/// and requires the Custody replay cursor to advance exactly once.
+#[tokio::test]
+async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
+    let (test, fixture) =
+        terminal_fixture(TERMINAL_WIDTH, OUTCOME, FractionalExposureActionV2::TerminalRedeem);
+    let mut context = test.start_with_context().await;
+    create_custody_replay(&mut context, &fixture).await;
+
+    let custody_caller = paying_custody_caller(&fixture, OUTCOME);
+    let keys = terminal_observe(&fixture);
+    let before = observe5(&mut context, keys).await;
+    assert_eq!(mint_supply(&before[0]), TERMINAL_SHARDS);
+    assert_eq!(token_amount(&before[3]), HOARD_ATOMS);
+    assert_eq!(token_amount(&before[4]), RECIPIENT_ATOMS);
+
+    let (accepted, logs, units, result) =
+        submit(&mut context, terminal_instruction(&fixture, custody_caller, false)).await;
+    assert!(accepted, "the terminal redemption must commit: {result:?}");
+    assert!(
+        logs.iter()
+            .any(|line| line.contains(&CUSTODY_PROGRAM_ID.to_string())),
+        "a paying redemption must actually enter the Custody program"
+    );
+    assert!(units > 30_000, "{units} compute units");
+
+    let after = observe5(&mut context, keys).await;
+    assert_eq!(mint_supply(&after[0]), 0, "every redeemed shard is burned");
+    assert_eq!(token_amount(&after[1]), 0);
+    assert_eq!(balance(&after[2], OUTCOME as usize), 0);
+
+    // Collateral is conserved: whatever left the Hoard arrived at the recipient.
+    let paid = token_amount(&after[4]) - token_amount(&before[4]);
+    assert!(paid > 0, "the winning coordinate must actually pay");
+    assert_eq!(
+        token_amount(&before[3]) - token_amount(&after[3]),
+        paid,
+        "every atom the recipient gained left the Hoard"
+    );
+    assert_eq!(token_amount(&after[3]) + token_amount(&after[4]), HOARD_ATOMS + RECIPIENT_ATOMS);
+
+    // A paying redemption advances the Custody cursor exactly once.
+    let replay_after = account(&mut context, fixture.custody_replay).await;
+    assert_eq!(
+        CustodyReplayV1::decode(&replay_after.data)
+            .expect("replay decodes")
+            .next_revision,
+        CUSTODY_EXPECTED_REVISION + 1,
+    );
+}
+
 /// A paying redemption needs the derived Custody caller, not the Claims program.
 ///
 /// On the zero-payout path coordinate 23 must literally BE the Claims program,
@@ -1774,7 +1835,7 @@ async fn a_paying_redemption_refuses_the_zero_payout_custody_caller() {
     let keys = terminal_observe(&fixture);
     let before = observe5(&mut context, keys).await;
     let (accepted, _logs, _units, result) =
-        submit(&mut context, terminal_instruction(&fixture, false)).await;
+        submit(&mut context, terminal_instruction(&fixture, CLAIMS_PROGRAM_ID, false)).await;
     assert!(!accepted);
     assert_eq!(
         custom_refusal(&result),
@@ -1785,4 +1846,188 @@ async fn a_paying_redemption_refuses_the_zero_payout_custody_caller() {
     // And nothing moved: a refused redemption pays nobody.
     let after = observe5(&mut context, keys).await;
     assert_eq!(before, after);
+}
+
+/// Reproduce the exact Custody caller-authority PDA a paying redemption needs.
+///
+/// Its seeds commit to the whole `CustodyRequestV1`, which commits to the
+/// candidate digest, which commits to the payout and the signed-delta packet.
+/// So the only way to name this account is to evaluate the terminal settlement
+/// host-side exactly as Claims will, against the same authenticated bytes.
+fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
+    use dclutch_claims_svm::{
+        CallerRole,
+        liability_basis_state_v2::LiabilityBasisMarketViewV2,
+        product_basis_terminal_v3::{
+            ProductClaimsTerminalAdmissionV3, ProductClaimsTerminalInputV3,
+            encode_product_claims_terminal_signed_delta_v3,
+        },
+        signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3},
+        terminal_settlement_v3::{
+            TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3, TerminalSettlementRequestInputV3,
+            TerminalSettlementRequestV3,
+        },
+    };
+    use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
+    use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
+    use dclutch_representation_composition_v3_kernel::RecordAdmissionV3;
+    use solana_program::hash::hashv;
+
+    let shared = &fixture.shared;
+    let market = LiabilityBasisMarketViewV2::decode(&shared.claims_market_bytes)
+        .expect("aggregate decode");
+    let position = &shared.reserve_position;
+    let terminal_request = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
+        caller_role: CallerRole::Trading,
+        release_set: fixture.release_set,
+        market: shared.core_market.to_bytes(),
+        realm: fixture.realm_record.digest,
+        parent_context: hash(&fixture.wrapper[1..]).to_bytes(),
+        product_record_digest: shared.product.digest,
+        exposure_id: EXPOSURE_ID,
+        exposure_digest: shared.exposure.digest,
+        terminal_record_digest: CERTIFICATE_ACCOUNT.to_bytes(),
+        owner: fixture.root.to_bytes(),
+        position: position.account.to_bytes(),
+        recipient_owner: fixture.actor.to_bytes(),
+        recipient_token_account: RECIPIENT_TOKEN.to_bytes(),
+        claims_program: CLAIMS_PROGRAM_ID.to_bytes(),
+        custody_program: CUSTODY_PROGRAM_ID.to_bytes(),
+        collateral_mint: COLLATERAL_MINT.to_bytes(),
+        token_program: TOKEN_2022_PROGRAM_ID,
+        semantic_basis_id: shared.semantic_basis_id,
+        linked_basis_record_digest: shared.linked_basis.digest,
+        generation: GENERATION,
+        expected_market_revision: market.revision,
+        expected_position_revision: 0,
+        expected_custody_revision: CUSTODY_EXPECTED_REVISION,
+        quantity: WRAP_NATIVE_CLAIMS,
+        claim_index: OUTCOME,
+        transfer_index: 0,
+    })
+    .expect("terminal settlement request");
+    let terminal_bytes = terminal_request.to_bytes();
+    let terminal_digest = hash(&terminal_bytes).to_bytes();
+
+    let admission = ProductClaimsTerminalAdmissionV3::new(
+        EXPOSURE_ID,
+        shared.exposure.digest,
+        shared.product_id,
+        shared.result_domain.digest,
+        dclutch_fractional_atomic_program_test::narrow_fixture::COORDINATE_DOMAIN_ID,
+        dclutch_fractional_atomic_program_test::narrow_fixture::RESULT_UNIT_ID,
+        shared.semantic_basis_id,
+        shared.linked_basis.digest,
+        shared.core_market.to_bytes(),
+        fixture.release_set,
+        dclutch_fractional_atomic_program_test::narrow_fixture::EVALUATOR_RELEASE_ID,
+        shared.outcome_count,
+        dclutch_fractional_atomic_program_test::narrow_fixture::PAYOUT_SCALE,
+    )
+    .expect("terminal admission");
+    let width = shared.outcome_count as usize;
+    let mut product_scratch = vec![0_u64; width];
+    let mut translation_scratch = vec![0_u64; width];
+    let mut claims_scratch = vec![0_u64; width];
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral");
+    let mut aggregate_scratch = vec![neutral; width];
+    let mut packet = vec![
+        0_u8;
+        dclutch_claims_svm::signed_delta_v3::plan_bytes(market.claim_count, 1, 1)
+            .expect("packet width")
+    ];
+    let payout = encode_product_claims_terminal_signed_delta_v3(
+        ProductClaimsTerminalInputV3 {
+            product_basis_bytes: &shared.linked_basis.bytes,
+            admission,
+            composition_exposure_bytes: &shared.exposure.bytes,
+            composition_exposure_admission: RecordAdmissionV3 {
+                selected_id: EXPOSURE_ID,
+                finalized_id: EXPOSURE_ID,
+                recomputed_digest: shared.exposure.digest,
+                finalized_digest: shared.exposure.digest,
+                record_authenticated: true,
+            },
+            product_record_digest: shared.product.digest,
+            market_account: shared.claims_market.to_bytes(),
+            market_bytes: &shared.claims_market_bytes,
+            position_bytes: &position.bytes,
+            owner: fixture.root.to_bytes(),
+            request_id: terminal_digest,
+            caller_role: CallerRole::Trading,
+            terminal: TerminalScenarioV3::Categorical(winner),
+            claim_index: OUTCOME,
+            quantity: WRAP_NATIVE_CLAIMS,
+            expected_generation: GENERATION,
+            expected_market_revision: market.revision,
+            expected_position_revision: 0,
+            hoard_before: HOARD_ATOMS,
+        },
+        &mut product_scratch,
+        &mut translation_scratch,
+        &mut claims_scratch,
+        &mut aggregate_scratch,
+        &mut packet,
+    )
+    .expect("host-side terminal evaluation must agree with the chain");
+    assert!(payout > 0, "the winning coordinate must pay");
+
+    let candidate_digest = hashv(&[
+        TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
+        &terminal_digest,
+        &hash(&packet).to_bytes(),
+        &payout.to_le_bytes(),
+        &shared.exposure.digest,
+        &CERTIFICATE_ACCOUNT.to_bytes(),
+    ])
+    .to_bytes();
+    let custody_request = CustodyRequestV1 {
+        operation: OperationV1::Transfer,
+        caller_role: CallerRoleV1::Claims,
+        source_compartment: CompartmentV1::HoardPrincipal,
+        destination_compartment: CompartmentV1::External,
+        release_set: fixture.release_set,
+        market: shared.core_market.to_bytes(),
+        realm: fixture.realm_record.digest,
+        context: CUSTODY_CONTEXT,
+        caller_program: CLAIMS_PROGRAM_ID.to_bytes(),
+        semantic: ContextV1 {
+            candidate: candidate_digest,
+            source_owner: [0; 32],
+            destination_owner: fixture.actor.to_bytes(),
+            order: [0; 32],
+            parent_request_digest: terminal_digest,
+            order_nonce: 0,
+            generation: GENERATION,
+            page_index: 0,
+            execution_index: 0,
+            transfer_index: 0,
+        },
+        source: fixture.hoard.to_bytes(),
+        destination: RECIPIENT_TOKEN.to_bytes(),
+        source_vault_context: CUSTODY_CONTEXT,
+        destination_vault_context: [0; 32],
+        mint: COLLATERAL_MINT.to_bytes(),
+        token_program: TOKEN_2022_PROGRAM_ID,
+        payer: [0; 32],
+        rent_refund: [0; 32],
+        expected_revision: CUSTODY_EXPECTED_REVISION,
+        resulting_revision: CUSTODY_EXPECTED_REVISION + 1,
+        amount: payout,
+        rent_lamports: 0,
+    };
+    let custody_bytes = custody_request.to_bytes().expect("custody request bytes");
+    Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::from_bytes(
+            fixture.release_set,
+            shared.core_market.to_bytes(),
+            ExecutionRoleV1::Claims,
+            CUSTODY_CONTEXT,
+            hash(&custody_bytes).to_bytes(),
+        )
+        .expect("claims custody caller seeds")
+        .as_slices(),
+        &CLAIMS_PROGRAM_ID,
+    )
+    .0
 }

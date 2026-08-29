@@ -55,9 +55,14 @@ const CLAIMS_ABI_VERSION_V2: u16 = 2;
 const CLAIMS_MARKET_HEADER_BYTES_V2: usize = 256;
 const CLAIMS_POSITION_HEADER_BYTES_V2: usize = 128;
 const CLAIMS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
-const COORDINATE_DOMAIN_ID: [u8; 32] = [0x43; 32];
-const RESULT_UNIT_ID: [u8; 32] = [0x44; 32];
-const EVALUATOR_RELEASE_ID: [u8; 32] = [0x48; 32];
+/// Product coordinate-domain identity this fixture compiles against.
+pub const COORDINATE_DOMAIN_ID: [u8; 32] = [0x43; 32];
+/// Product result-unit identity this fixture compiles against.
+pub const RESULT_UNIT_ID: [u8; 32] = [0x44; 32];
+/// Product evaluator release this fixture compiles against.
+pub const EVALUATOR_RELEASE_ID: [u8; 32] = [0x48; 32];
+/// Payout scale the categorical basis is compiled with.
+pub const PAYOUT_SCALE: u64 = 1;
 const PROVISIONAL_RESULT_DOMAIN_ID: [u8; 32] = [0x49; 32];
 
 /// Narrow-fixture compilation refusal.
