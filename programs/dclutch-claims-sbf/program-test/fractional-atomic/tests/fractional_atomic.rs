@@ -2031,3 +2031,49 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
     )
     .0
 }
+
+/// The terminal settlement stops fitting a transaction above width 98.
+///
+/// This is the sharpest edge in the family and it is not where anything else
+/// says it should be. Three separate layers admit a representation width of
+/// 256 -- the `U8` action selector's index space, the Fractional terms codec,
+/// and `MAX_COMPOSITION_REPRESENTATION_WIDTH_V3` -- but a terminal settlement
+/// translates every Product result coordinate onto every Claims representation
+/// root, and that work grows until it exhausts the transaction:
+///
+/// ```text
+///   width   8   16   32   48   64    96      98      99
+///   units 463k 519k 593k 731k 897k 1356k   1393k   exhausted
+/// ```
+///
+/// So a Fractional Market wider than 98 outcomes can be founded, and can be
+/// wrapped into, and can never be redeemed from. That is a trap rather than a
+/// limit, which is why it is pinned here rather than left as a note: the
+/// margin at 98 is under seven thousand units, so any compute regression in
+/// the terminal path lowers the real ceiling, and this test says so.
+#[tokio::test]
+async fn the_terminal_settlement_fits_to_width_98_and_no_further() {
+    async fn settles(width: usize) -> (bool, u64) {
+        let (test, fixture) = terminal_fixture(
+            width,
+            LOSING_COORDINATE,
+            FractionalExposureActionV2::TerminalZeroBurn,
+        );
+        let mut context = test.start_with_context().await;
+        create_custody_replay(&mut context, &fixture).await;
+        let (accepted, _logs, units, _result) = submit(
+            &mut context,
+            terminal_instruction(&fixture, CLAIMS_PROGRAM_ID, false),
+        )
+        .await;
+        (accepted, units)
+    }
+
+    let (last_fits, units) = settles(98).await;
+    assert!(last_fits, "width 98 is the widest terminal settlement that fits");
+    assert!(units < 1_400_000, "{units} units");
+
+    let (over, exhausted) = settles(99).await;
+    assert!(!over, "width 99 must not settle");
+    assert_eq!(exhausted, 1_400_000, "and it fails by exhausting the budget");
+}
