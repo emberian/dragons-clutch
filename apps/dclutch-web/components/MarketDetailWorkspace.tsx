@@ -204,7 +204,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow"><Anchor href="/markets">← all Markets</Anchor> · one Market, decoded field by field</p>
-        <h1>{shortAddressV1(address, 8)}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : 'unread') : decoded.phase}</em></h1>
+        <h1>{shortAddressV1(address, 8)}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : card !== null && card.status === 'refused' ? 'refused' : 'unread') : decoded.phase}</em></h1>
         <p>Every field below is decoded from a finalized account this browser read, or the section carries REFUSED and its exact reason. Nothing here is aggregated, estimated, or carried over from a previous observation, and no sub-state renders as empty-but-fine.</p>
       </div>
       <aside>
