@@ -28,6 +28,7 @@ use dclutch_dealer_codec::scenario_membership_manifest_v1::{
     DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1, DEALER_SCENARIO_MEMBERSHIP_PAGE_DOMAIN_V1,
     DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
 };
+use dclutch_dealer_codec::scenario_custody_reservation_v1::DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1;
 use dclutch_dealer_codec::scenario_reservation_receipt_v1::{
     DEALER_SCENARIO_MAX_RESERVATIONS_V1, DealerScenarioReservationActionV1,
 };
@@ -1875,6 +1876,29 @@ pub struct DealerScenarioEvaluationBodiesV1<'a> {
     pub effects: &'a [u8],
 }
 
+/// The one canonical Custody-owned reservation batch address for a checkpoint.
+///
+/// Custody signs this account into existence under exactly these seeds, and
+/// Trading authenticates it at exactly this address. Keeping the derivation in
+/// one supported place is the point: the two programs disagreed here once,
+/// Trading having named a third request-digest seed that Custody never signs,
+/// which made every real batch unauthenticatable at commit. The checkpoint is
+/// itself derived from the request digest, so the request is bound already.
+#[must_use]
+pub fn dealer_scenario_reservation_batch_address_v1(
+    custody_program: Pubkey,
+    checkpoint: Pubkey,
+) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1,
+            checkpoint.as_ref(),
+        ],
+        &custody_program,
+    )
+    .0
+}
+
 /// Producer-owned evaluation receipt PDA for one checkpoint and request.
 #[must_use]
 pub fn dealer_scenario_evaluation_receipt_address_v1(
@@ -2660,6 +2684,40 @@ mod tests {
         assert_eq!(
             require_dealer_scenario_devnet_lock_limit_v1(payer, core::slice::from_ref(&at_65)),
             Err(crate::dealer_scenario_hot_v4::DealerScenarioLockLimitErrorV1::LockLimit)
+        );
+    }
+
+    #[test]
+    fn the_reservation_batch_address_is_the_one_custody_signs() {
+        // Custody creates this account with invoke_signed over exactly two
+        // seeds. Trading once authenticated a three-seed address, so no batch
+        // Custody could actually create was ever authenticatable at commit.
+        // Pinning the seeds here is what stops the two drifting apart again.
+        let custody = key(11);
+        let checkpoint = key(12);
+        assert_eq!(
+            dealer_scenario_reservation_batch_address_v1(custody, checkpoint),
+            Pubkey::find_program_address(
+                &[
+                    DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1,
+                    checkpoint.as_ref(),
+                ],
+                &custody,
+            )
+            .0
+        );
+        assert_ne!(
+            dealer_scenario_reservation_batch_address_v1(custody, checkpoint),
+            Pubkey::find_program_address(
+                &[
+                    DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1,
+                    checkpoint.as_ref(),
+                    &[7_u8; 32],
+                ],
+                &custody,
+            )
+            .0,
+            "a request-digest seed names an address Custody never signs"
         );
     }
 
