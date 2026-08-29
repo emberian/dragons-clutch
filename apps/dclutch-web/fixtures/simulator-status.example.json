@@ -1,0 +1,38 @@
+{
+  "schema": "dclutch-load-simulator-status-v1",
+  "cluster": { "label": "local", "rpc_url": "http://127.0.0.1:21000/" },
+  "market": { "address": "GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA" },
+  "mode": "sustain",
+  "started_at": "2026-08-29T20:12:04+00:00",
+  "updated_at": "2026-08-29T21:40:11+00:00",
+  "cycles": { "run": 12, "target": null },
+  "trades": {
+    "landed": 24,
+    "signatures": [
+      "3K6ik9Ah7xzBtYgvm6ZuaNs7C3GCNnPiwP5XX1b9gDG1EyjbU9AEN7ei8kYk4umPt3dXCXqiFwLEecBjunFVKtwF",
+      "2Y1jfZtUq6UZLQZ4S8b1m6cVUnpyjcyRRUnCyVzXhXQ4v9wDdVbW3qJ7dq2s1uNjX1u3fCkTTpVJoRB614bqVvbn"
+    ]
+  },
+  "wallets": [
+    {
+      "address": "GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA",
+      "role": "participant",
+      "sol_lamports": 49442160,
+      "source": "staged"
+    },
+    {
+      "address": "7qpeoFRmMeyXnMic5kuoDoEsqxg1yesJ5R7BZJnyKycE",
+      "role": "participant",
+      "sol_lamports": null,
+      "source": "minted"
+    }
+  ],
+  "last_reconciliation": {
+    "ok": true,
+    "checked_at": "2026-08-29T21:40:09+00:00",
+    "output": "/work/census/cycle-000012.json"
+  },
+  "halted": false,
+  "halt_reason": null,
+  "stopping": false
+}
