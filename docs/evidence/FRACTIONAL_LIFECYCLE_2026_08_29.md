@@ -208,6 +208,14 @@ second exterior sequence rather than two more entries.
   requires evaluating the settlement host-side exactly as Claims will. That is
   the seam working as intended: a caller cannot invent an authority for a payout
   it did not compute.
+- **The Custody order nonce is the Position's replay revision.** Not an
+  independent counter. The campaign's Positions therefore open at a non-zero
+  revision on purpose: a fixture pinned at zero silently excuses anything
+  downstream that hardcodes zero, and that is exactly how the terminal
+  derivation carried a hardcoded nonce that was correct only by coincidence.
+  The narrow fixture takes the revision as an input, so a campaign needing
+  Positions with history does not have to work around it. The exterior keeps
+  zero, because a genesis Market on a fresh ledger genuinely is at zero.
 - **A round trip is not a no-op.** Every committed transaction advances the LBV2
   Position replay revision, which is what stops a wrap or unwrap being replayed.
   Asserting raw byte equality across a wrap and its unwrap would be asserting
