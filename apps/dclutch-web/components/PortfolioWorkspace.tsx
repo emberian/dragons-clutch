@@ -129,7 +129,7 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
   const [state, setState] = useState<State>({
     kind: 'idle',
     message: redemption
-      ? 'Connect your wallet. This page then reads its Positions across every current-compatible Market of the active deployment and shows a redemption control only for an exact winning balance.'
+      ? 'Connect your wallet. This page then finds the claims it holds in every market this build can read, and offers a payout only where the chain says you hold a winning claim.'
       : 'Connect a wallet — or paste any owner address — and this surface reads its Positions across every Market of the active deployment. Reading a derived address requires no authority at all.',
   });
   const portfolio = state.kind === 'ready' ? state.portfolio : null;
