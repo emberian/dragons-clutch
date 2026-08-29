@@ -1098,6 +1098,7 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
  "dclutch-series-v3-kernel",
+ "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",
  "dclutch-token-svm",
  "dclutch-transition-vm",
