@@ -58,19 +58,19 @@ export default function LandingPulse() {
   const deployment = useDeploymentV1();
   const [state, setState] = useState<PulseState>({
     stats: UNREAD,
-    provenance: 'Reading finalized state from the active deployment…',
+    provenance: 'Reading live from the chain…',
   });
 
   useEffect(() => {
     let cancelled = false;
     const settle = (next: PulseState) => { if (!cancelled) setState(next); };
     (async () => {
-      settle({ stats: UNREAD, provenance: `Reading finalized state from ${deployment.label}…` });
+      settle({ stats: UNREAD, provenance: `Reading live from ${deployment.label}…` });
       try {
         const client = new SolanaRpcClient(deployment.endpoint);
         const enumeration = await enumerateCoreMarketAddressesV1(client, deployment.programs.core);
         if (enumeration.mode === 'refused') {
-          settle({ stats: UNREAD, provenance: `The ${deployment.label} endpoint refused the bounded Market scan: ${enumeration.reason}` });
+          settle({ stats: UNREAD, provenance: `The ${deployment.label} endpoint would not answer the market scan: ${enumeration.reason}` });
           return;
         }
         if (enumeration.addresses.length === 0) {
