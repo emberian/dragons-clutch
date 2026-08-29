@@ -20,6 +20,7 @@ import base64
 import contextlib
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,10 @@ OFFLINE_PREFLIGHT_RELATIVE_PATH = Path(
 )
 RUNNER_RELATIVE_PATH = Path("tools/release/private-validator-lifecycle/run.py")
 OFFLINE_PREFLIGHT_RECEIPT = "OFFLINE_PREFLIGHT.json"
+MIXED_GATE_SCHEMA = "dclutch-checked-upgrade-gate-v2"
+MIXED_GATE_AUTHENTICATOR_RELATIVE_PATH = Path(
+    "tools/release/compose-mixed-gate.py"
+)
 SEED_DOMAIN = b"dclutch/private-validator-lifecycle/named-seed/v1\0"
 FOUNDING_PARTICIPANT_COMMANDS = (
     "local-mutable-prepare-v1",
@@ -208,6 +213,9 @@ class Refusal(RuntimeError):
 class Paths:
     repo: Path
     release_root: Path
+    expected_release_gate_sha256: str | None
+    expected_release_source_revision: str | None
+    expected_release_source_tree_sha256: str | None
     bootstrap: Path
     reuse_bootstrap_work: Path | None
     validator: Path
@@ -630,19 +638,107 @@ def canonical_resolution_link(gate: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def load_mixed_gate_authenticator(paths: Paths) -> Any:
+    module_path = canonical_file(
+        paths.repo / MIXED_GATE_AUTHENTICATOR_RELATIVE_PATH,
+        "mixed checked-gate authenticator",
+    )
+    spec = importlib.util.spec_from_file_location(
+        "dclutch_private_mixed_gate_authenticator", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise Refusal("mixed checked-gate authenticator could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    inserted = str(module_path.parent)
+    sys.path.insert(0, inserted)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if sys.path[0] == inserted:
+            sys.path.pop(0)
+        else:
+            sys.path.remove(inserted)
+    if not callable(getattr(module, "authenticate_existing_gate", None)):
+        raise Refusal("mixed checked-gate authenticator omitted its shared API")
+    return module
+
+
 def checked_gate(paths: Paths, commit: str) -> tuple[Path, dict[str, Any], str]:
     gate_path = canonical_file(
         paths.release_root / "CHECKED_UPGRADE_GATE.json", "checked release gate"
     )
     gate = read_unique_json(gate_path, "checked release gate")
-    if gate.get("schema") != "dclutch-checked-upgrade-gate-v1":
-        raise Refusal(
-            "checked release gate schema is not dclutch-checked-upgrade-gate-v1"
+    gate_digest = sha256_file(gate_path)
+    schema = gate.get("schema")
+    if schema == "dclutch-checked-upgrade-gate-v1":
+        if gate.get("source_revision") != commit:
+            raise Refusal(
+                f"checked release gate commit {gate.get('source_revision')} differs from clean source {commit}"
+            )
+        for actual, expected, label in (
+            (gate_digest, paths.expected_release_gate_sha256, "gate SHA-256"),
+            (
+                gate.get("source_revision"),
+                paths.expected_release_source_revision,
+                "source revision",
+            ),
+            (
+                gate.get("source_tree_sha256"),
+                paths.expected_release_source_tree_sha256,
+                "source tree SHA-256",
+            ),
+        ):
+            if expected is not None and actual != expected:
+                raise Refusal(f"checked release {label} differs from its explicit pin")
+    elif schema == MIXED_GATE_SCHEMA:
+        pins = (
+            paths.expected_release_gate_sha256,
+            paths.expected_release_source_revision,
+            paths.expected_release_source_tree_sha256,
         )
-    if gate.get("source_revision") != commit:
-        raise Refusal(
-            f"checked release gate commit {gate.get('source_revision')} differs from clean source {commit}"
-        )
+        if any(value is None for value in pins):
+            raise Refusal(
+                "mixed checked release requires explicit gate, source revision, and source-tree pins"
+            )
+        authenticator = load_mixed_gate_authenticator(paths)
+        try:
+            selection = authenticator.authenticate_existing_gate(
+                gate_path,
+                paths.expected_release_gate_sha256,
+                paths.expected_release_source_revision,
+                paths.expected_release_source_tree_sha256,
+                CANONICAL_RESOLUTION_GATE_LABEL,
+            )
+        except (
+            OSError,
+            KeyError,
+            TypeError,
+            ValueError,
+            authenticator.Refusal,
+        ) as error:
+            raise Refusal(f"mixed checked release refused: {error}") from error
+        resolution = canonical_resolution_link(gate)
+        if (
+            selection.get("schema")
+            != "dclutch-checked-mixed-gate-link-selection-v1"
+            or selection.get("gate_path") != str(gate_path)
+            or selection.get("gate_sha256") != gate_digest
+            or selection.get("source_revision") != gate.get("source_revision")
+            or selection.get("source_tree_sha256")
+            != gate.get("source_tree_sha256")
+            or selection.get("label") != resolution.get("label")
+            or selection.get("package") != resolution.get("package")
+            or selection.get("elf") != resolution.get("elf")
+            or selection.get("checked_manifest")
+            != resolution.get("checked_manifest")
+            or selection.get("artifact_provenance")
+            != resolution.get("artifact_provenance")
+        ):
+            raise Refusal(
+                "mixed checked release Resolution projection differs from its admitted gate row"
+            )
+    else:
+        raise Refusal("checked release gate schema is neither admitted v1 nor v2")
     if gate.get("link_count") != 13 or len(gate.get("links", [])) != 13:
         raise Refusal(
             "checked release gate does not carry the exact thirteen-link closure"
@@ -670,7 +766,7 @@ def checked_gate(paths: Paths, commit: str) -> tuple[Path, dict[str, Any], str]:
         tree_path
     ) != tree.get("sha256"):
         raise Refusal("checked release source-tree manifest digest changed")
-    return gate_path, gate, sha256_file(gate_path)
+    return gate_path, gate, gate_digest
 
 
 def command_surface(bootstrap: Path, through: str) -> str:
@@ -4311,6 +4407,9 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--release-root", required=True)
+    parser.add_argument("--expected-release-gate-sha256")
+    parser.add_argument("--expected-release-source-revision")
+    parser.add_argument("--expected-release-source-tree-sha256")
     parser.add_argument("--validator", required=True)
     parser.add_argument("--solana", required=True)
     parser.add_argument("--work", required=True)
@@ -4346,6 +4445,9 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
     paths = Paths(
         repo=canonical_directory(args.repo, "repository"),
         release_root=canonical_directory(args.release_root, "checked release root"),
+        expected_release_gate_sha256=args.expected_release_gate_sha256,
+        expected_release_source_revision=args.expected_release_source_revision,
+        expected_release_source_tree_sha256=args.expected_release_source_tree_sha256,
         bootstrap=work / "host-target/release/dclutch-local-successor-bootstrap",
         reuse_bootstrap_work=(
             None

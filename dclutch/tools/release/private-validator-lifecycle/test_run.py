@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import importlib.util
 from pathlib import Path
 import sys
@@ -83,11 +84,133 @@ def offline_preflight_fixture(
 
 
 class PrivateValidatorLifecycleTests(unittest.TestCase):
+    def test_mixed_gate_uses_shared_authenticator_and_explicit_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            tree = root / "source-tree.txt"
+            tree.write_bytes(b"candidate source tree\n")
+            tree_sha256 = MODULE.sha256_file(tree)
+            labels = [MODULE.CANONICAL_RESOLUTION_GATE_LABEL] + [
+                f"other-{index}" for index in range(12)
+            ]
+            links = []
+            for label in labels:
+                row: dict[str, object] = {
+                    "label": label,
+                    "sbf_diagnostics_count": 0,
+                    "frame_bound_bytes": 4096,
+                    "frames_at_or_over_bound": 0,
+                    "deepest_frame_bytes": 4032,
+                }
+                if label == MODULE.CANONICAL_RESOLUTION_GATE_LABEL:
+                    row.update(
+                        {
+                            "package": MODULE.CANONICAL_RESOLUTION_PACKAGE,
+                            "compile_marker": (
+                                "Compiling " + MODULE.CANONICAL_RESOLUTION_PACKAGE
+                            ),
+                            "checked_manifest": {
+                                "canonical_path": "evidence/resolution/checked.bin"
+                            },
+                            "artifact_provenance": {
+                                "canonical_path": "provenance/resolution.json"
+                            },
+                            "elf": {
+                                "canonical_path": MODULE.CANONICAL_RESOLUTION_ELF_PATH,
+                                "bytes": 1234,
+                            },
+                        }
+                    )
+                links.append(row)
+            source_revision = "11" * 20
+            gate = {
+                "schema": MODULE.MIXED_GATE_SCHEMA,
+                "source_revision": source_revision,
+                "source_tree_sha256": tree_sha256,
+                "source_tree_manifest": {
+                    "canonical_path": tree.name,
+                    "sha256": tree_sha256,
+                },
+                "link_count": 13,
+                "links": links,
+            }
+            gate_path = root / "CHECKED_UPGRADE_GATE.json"
+            gate_path.write_text(MODULE.json.dumps(gate))
+            gate_sha256 = MODULE.sha256_file(gate_path)
+            paths = MODULE.Paths(
+                repo=MODULE_PATH.parents[3],
+                release_root=root,
+                expected_release_gate_sha256=gate_sha256,
+                expected_release_source_revision=source_revision,
+                expected_release_source_tree_sha256=tree_sha256,
+                bootstrap=root / "bootstrap",
+                reuse_bootstrap_work=None,
+                validator=MODULE_PATH,
+                solana=MODULE_PATH,
+                work=root / "unused-work",
+            )
+            resolution = links[0]
+
+            class Authenticator:
+                Refusal = RuntimeError
+
+                @staticmethod
+                def authenticate_existing_gate(
+                    observed_gate: Path,
+                    observed_sha256: str,
+                    observed_revision: str,
+                    observed_tree: str,
+                    selected_link: str,
+                ) -> dict[str, object]:
+                    self.assertEqual(observed_gate, gate_path)
+                    self.assertEqual(observed_sha256, gate_sha256)
+                    self.assertEqual(observed_revision, source_revision)
+                    self.assertEqual(observed_tree, tree_sha256)
+                    self.assertEqual(
+                        selected_link, MODULE.CANONICAL_RESOLUTION_GATE_LABEL
+                    )
+                    return {
+                        "schema": "dclutch-checked-mixed-gate-link-selection-v1",
+                        "gate_path": str(gate_path),
+                        "gate_sha256": gate_sha256,
+                        "source_revision": source_revision,
+                        "source_tree_sha256": tree_sha256,
+                        "label": resolution["label"],
+                        "package": resolution["package"],
+                        "elf": resolution["elf"],
+                        "checked_manifest": resolution["checked_manifest"],
+                        "artifact_provenance": resolution["artifact_provenance"],
+                    }
+
+            with mock.patch.object(
+                MODULE,
+                "load_mixed_gate_authenticator",
+                return_value=Authenticator,
+            ):
+                observed_path, observed_gate, observed_sha256 = MODULE.checked_gate(
+                    paths, "22" * 20
+                )
+            self.assertEqual(
+                (observed_path, observed_gate, observed_sha256),
+                (gate_path, gate, gate_sha256),
+            )
+
+            without_pin = dataclasses.replace(
+                paths, expected_release_gate_sha256=None
+            )
+            with self.assertRaisesRegex(
+                MODULE.Refusal, "requires explicit gate"
+            ):
+                MODULE.checked_gate(without_pin, "22" * 20)
+
     def test_offline_preflight_authenticates_exact_source_set_and_model(self) -> None:
         repo = MODULE_PATH.parents[3]
         paths = MODULE.Paths(
             repo=repo,
             release_root=repo,
+            expected_release_gate_sha256=None,
+            expected_release_source_revision=None,
+            expected_release_source_tree_sha256=None,
             bootstrap=repo / "unused-bootstrap",
             reuse_bootstrap_work=None,
             validator=MODULE_PATH,
@@ -167,6 +290,9 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             paths = MODULE.Paths(
                 repo=MODULE_PATH.parents[3],
                 release_root=root,
+                expected_release_gate_sha256=None,
+                expected_release_source_revision=None,
+                expected_release_source_tree_sha256=None,
                 bootstrap=work / "bootstrap",
                 reuse_bootstrap_work=None,
                 validator=MODULE_PATH,
@@ -205,6 +331,9 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             paths = MODULE.Paths(
                 repo=MODULE_PATH.parents[3],
                 release_root=root,
+                expected_release_gate_sha256=None,
+                expected_release_source_revision=None,
+                expected_release_source_tree_sha256=None,
                 bootstrap=work / "bootstrap",
                 reuse_bootstrap_work=None,
                 validator=MODULE_PATH,
