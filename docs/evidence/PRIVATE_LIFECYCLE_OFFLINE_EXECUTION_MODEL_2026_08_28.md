@@ -147,4 +147,3 @@ schemas, zero or substitute fixture supply, add an airdrop role, raise founding
 above 64 keys, split the founding magic join, reorder private stages and Pyth
 actions, alter Direct geometry/vocabulary, remove zero-payout semantics, reorder
 Resolution receipts, move the retirement handoff, and try to clobber output.
-
