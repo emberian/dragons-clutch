@@ -39,6 +39,13 @@ export type AuthenticatedDirectMakerNonceV1 = Readonly<{
   [authenticatedDirectMakerNonceV1]: true;
 }>;
 
+export type DirectMakerNonceRequestV1 = Readonly<{
+  tradingProgram: string;
+  market: string;
+  generation: bigint;
+  maker: string;
+}>;
+
 function canonicalKey(value: string, field: string): PublicKey {
   const key = new PublicKey(value);
   if (key.toBase58() !== value) throw new Error(`${field} must be canonical base58 text`);
@@ -141,6 +148,49 @@ function decodeExistingMakerReplayV1(
   });
 }
 
+function projectMakerReplayObservationV1(
+  account: RpcAccount | null,
+  expected: Readonly<{
+    address: string;
+    bump: number;
+    tradingProgram: PublicKey;
+    market: PublicKey;
+    generation: bigint;
+    maker: PublicKey;
+    observedSlot: string;
+  }>,
+): AuthenticatedDirectMakerNonceV1 {
+  if (account === null) {
+    return authenticated({
+      address: expected.address,
+      tradingProgram: expected.tradingProgram.toBase58(),
+      market: expected.market.toBase58(),
+      generation: expected.generation,
+      maker: expected.maker.toBase58(),
+      observedSlot: expected.observedSlot,
+      nextNonce: 0n,
+      state: 'vacant',
+    });
+  }
+  if (account.owner === SYSTEM_PROGRAM_ID) {
+    u64Text(account.lamports, 'vacant maker replay lamports');
+    if (account.executable || account.space !== 0 || account.data.length !== 0) {
+      throw new Error('maker replay PDA is not an exact data-free System-owned vacant account');
+    }
+    return authenticated({
+      address: expected.address,
+      tradingProgram: expected.tradingProgram.toBase58(),
+      market: expected.market.toBase58(),
+      generation: expected.generation,
+      maker: expected.maker.toBase58(),
+      observedSlot: expected.observedSlot,
+      nextNonce: 0n,
+      state: 'vacant',
+    });
+  }
+  return decodeExistingMakerReplayV1(account, expected);
+}
+
 /**
  * Read the next taker nonce from the sole canonical replay PDA at one
  * finalized floor. An absent or exact data-free System-owned PDA is first use
@@ -148,12 +198,7 @@ function decodeExistingMakerReplayV1(
  */
 export async function inspectDirectMakerNonceV1(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'accountInfo'>,
-  request: Readonly<{
-    tradingProgram: string;
-    market: string;
-    generation: bigint;
-    maker: string;
-  }>,
+  request: DirectMakerNonceRequestV1,
 ): Promise<AuthenticatedDirectMakerNonceV1> {
   const tradingProgram = canonicalKey(request.tradingProgram, 'Trading program');
   const market = canonicalKey(request.market, 'Direct Market');
@@ -166,36 +211,7 @@ export async function inspectDirectMakerNonceV1(
   const observation = await client.accountInfo(derived.address, floor);
   const observedSlot = u64Text(observation.slot, 'maker replay observation slot');
   if (observedSlot < floorValue) throw new Error('maker replay observation regressed below its finalized floor');
-  const account = observation.account;
-  if (account === null) {
-    return authenticated({
-      address: derived.address,
-      tradingProgram: tradingProgram.toBase58(),
-      market: market.toBase58(),
-      generation: request.generation,
-      maker: maker.toBase58(),
-      observedSlot: observation.slot,
-      nextNonce: 0n,
-      state: 'vacant',
-    });
-  }
-  if (account.owner === SYSTEM_PROGRAM_ID) {
-    u64Text(account.lamports, 'vacant maker replay lamports');
-    if (account.executable || account.space !== 0 || account.data.length !== 0) {
-      throw new Error('maker replay PDA is not an exact data-free System-owned vacant account');
-    }
-    return authenticated({
-      address: derived.address,
-      tradingProgram: tradingProgram.toBase58(),
-      market: market.toBase58(),
-      generation: request.generation,
-      maker: maker.toBase58(),
-      observedSlot: observation.slot,
-      nextNonce: 0n,
-      state: 'vacant',
-    });
-  }
-  return decodeExistingMakerReplayV1(account, {
+  return projectMakerReplayObservationV1(observation.account, {
     address: derived.address,
     bump: derived.bump,
     tradingProgram,
@@ -204,6 +220,69 @@ export async function inspectDirectMakerNonceV1(
     maker,
     observedSlot: observation.slot,
   });
+}
+
+/**
+ * Reacquire both makers' replay roots in one finalized account snapshot.
+ *
+ * A Direct Hot request consumes seller and buyer nonces atomically. Reading
+ * them through two independent RPC observations would let a client assemble
+ * a packet from states that never coexisted, so the wallet caller uses this
+ * exact pair reader immediately before it asks for a transaction signature.
+ */
+export async function inspectDirectMakerNoncePairV1(
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  requests: readonly [DirectMakerNonceRequestV1, DirectMakerNonceRequestV1],
+): Promise<readonly [AuthenticatedDirectMakerNonceV1, AuthenticatedDirectMakerNonceV1]> {
+  const first = requests[0];
+  const second = requests[1];
+  if (first.tradingProgram !== second.tradingProgram
+      || first.market !== second.market
+      || first.generation !== second.generation) {
+    throw new Error('maker replay pair does not share one Trading program, Market, and generation');
+  }
+  if (first.maker === second.maker) throw new Error('maker replay pair must contain two distinct makers');
+  const tradingProgram = canonicalKey(first.tradingProgram, 'Trading program');
+  const market = canonicalKey(first.market, 'Direct Market');
+  const prepared = requests.map((request, index) => {
+    const maker = canonicalKey(request.maker, `Direct maker ${index}`);
+    const derived = deriveDirectMakerReplayAddressV1(
+      tradingProgram.toBase58(), market.toBase58(), request.generation, maker.toBase58(),
+    );
+    return Object.freeze({ request, maker, derived });
+  }) as unknown as readonly [
+    Readonly<{ request: DirectMakerNonceRequestV1; maker: PublicKey; derived: Readonly<{ address: string; bump: number }> }>,
+    Readonly<{ request: DirectMakerNonceRequestV1; maker: PublicKey; derived: Readonly<{ address: string; bump: number }> }>,
+  ];
+  if (prepared[0].derived.address === prepared[1].derived.address) {
+    throw new Error('maker replay pair aliases one derived replay address');
+  }
+  const floor = await client.finalizedSlot();
+  const floorValue = u64Text(floor, 'maker replay finalized floor');
+  const addresses = prepared.map((entry) => entry.derived.address);
+  const observation = await client.multipleAccounts(addresses, floor);
+  const observedSlot = u64Text(observation.slot, 'maker replay observation slot');
+  if (observedSlot < floorValue) throw new Error('maker replay observation regressed below its finalized floor');
+  if (observation.accounts.length !== 2
+      || observation.accounts.some((entry, index) => entry.address !== addresses[index])) {
+    throw new Error('maker replay RPC result substituted or reordered the requested pair');
+  }
+  const decoded = prepared.map((entry, index) => projectMakerReplayObservationV1(
+    observation.accounts[index]?.account ?? null,
+    {
+      address: entry.derived.address,
+      bump: entry.derived.bump,
+      tradingProgram,
+      market,
+      generation: entry.request.generation,
+      maker: entry.maker,
+      observedSlot: observation.slot,
+    },
+  ));
+  return Object.freeze(decoded) as unknown as readonly [
+    AuthenticatedDirectMakerNonceV1,
+    AuthenticatedDirectMakerNonceV1,
+  ];
 }
 
 /** Runtime-check an opaque chain observation and bind it to one crossing. */
