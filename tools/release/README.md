@@ -11,9 +11,11 @@ runner enumerates `programs/*/Cargo.toml`; that directory is the sole owner of
 the frame-gated link set. Ten current packages produce release artifacts and
 three are frame-gate-only, so the present summary reports thirteen links.
 
-Each per-link log is truncated and stamped with a new run identifier before
-`cargo build-sbf` starts. The run refuses unless every log has both that stamp
-and Cargo's top-package `Compiling <package>` line. This distinction is
+Each per-link log is truncated and stamped with a new run identifier and the
+exact build invocation before `cargo build-sbf` starts. The old deploy output
+for that artifact is removed first. The run refuses unless the invocation emits
+a new regular, non-symlink artifact and every log has both stamps and Cargo's
+top-package `Compiling <package>` line. This distinction is
 load-bearing: a warm target can make Cargo emit no compiler diagnostics because
 it invoked no compiler. Silence from that run is not a zero-diagnostic build.
 
@@ -36,6 +38,31 @@ fresh measurement build for each of the same thirteen links with
 `-Zemit-stack-sizes`. The measurement objects are never shipped. The runner
 refuses a missing top-package compile marker, an empty frame report, or any
 frame at or above the 4,096-byte SBPF v0 bound.
+
+The two builds are joined rather than confused. For every link the runner emits
+`provenance/<label>.json` with schema `dclutch-sbf-link-provenance-v1`. That
+descriptor binds the named role/package, source commit and source-tree digest,
+build run, exact plain invocation/log/compile marker, exact shipped ELF, exact
+frame invocation/log/object/report, and their hashes. A same-named output in an
+adjacent target directory, a digest-identical renamed copy, a symlink, or an old
+deploy output is not selectable through this descriptor.
+
+Before the source freeze, forecast the one batched hbox build instead of
+discovering changed links one rebuild at a time:
+
+```sh
+tools/release/plan-sbf-release-batch.py \
+  --base <last-accepted-source> \
+  --candidate <candidate-source> \
+  --output /private/tmp/dclutch-sbf-batch-plan.json
+```
+
+The static plan must enumerate exactly thirteen links. It computes each SBF
+package's local non-dev dependency-closure digest and names the changed inputs.
+It is scheduling evidence only: it predicts which content-addressed artifacts
+must be built once after the family freeze. The actual provenance descriptor is
+what frame diagnostics, import/symbol audit, caller proof, and CU consumers must
+select; none may rediscover or rebuild a nearby ELF.
 
 `--keep-elf` is retained only to give old invocations a precise refusal. Reused
 ELFs and prior logs cannot qualify a new checked-release candidate.
@@ -68,7 +95,8 @@ The admitted summary must say `sbf_build_freshness=passed`,
 `cargo_lock_immutability=passed`. Preserve `build-links.tsv`,
 `build-run.txt`, `source-tree.txt`, every `build-*.log`, every
 `frame-build-*.log`, the `frame/` reports, `build-diagnostics.txt`, and both
-Cargo lock manifests with the candidate evidence.
+Cargo lock manifests with the candidate evidence. Preserve every `provenance/`
+descriptor and its referenced frame object as well.
 
 ## Upgrade gate
 
@@ -76,7 +104,8 @@ A clean run also emits `CHECKED_UPGRADE_GATE.json` and prints its SHA-256. The
 gate is generated only after the fresh all-link build, static frame gate, and
 checked release manifests complete. It binds the source commit/tree, exact
 thirteen-link identities, run stamps and compile markers, build and frame logs,
-frame counts, every release ELF, and each checked manifest.
+frame counts, every release ELF, each per-link provenance descriptor, and each
+checked manifest.
 
 For this gate, run the runner from the exact source commit and let it build
 `dclutch-release-tool` from that archived source. An invocation whose runner or
@@ -91,6 +120,20 @@ symlink. `devnet-upgrade-v1` requires the separately recorded gate digest and
 source commit/tree, rehashes every referenced file, and requires `--elf` to be
 the selected permanent role's exact canonical gate file. A handwritten
 `checked_release_accepted: true` document has no authority.
+
+The bounded selector used by downstream consumers is:
+
+```sh
+tools/release/artifact_provenance.py select-gate-role \
+  --gate /absolute/candidate/CHECKED_UPGRADE_GATE.json \
+  --gate-sha256 <separately-recorded-gate-sha256> \
+  --role trading
+```
+
+It refuses a noncanonical gate path, anything other than the exact all-thirteen
+set, a wrong role/package map, a stale source/run/log/object/report/ELF, and an
+adjacent or renamed file. Its JSON result names the only ELF path that a
+consumer may open.
 
 ## All-workspace gate
 

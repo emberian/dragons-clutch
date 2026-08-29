@@ -66,8 +66,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRESHNESS_CHECKER="$SCRIPT_DIR/check_sbf_build_freshness.py"
+PROVENANCE_TOOL="$SCRIPT_DIR/artifact_provenance.py"
 [ -x "$FRESHNESS_CHECKER" ] \
     || { echo "build-freshness checker not executable: $FRESHNESS_CHECKER" >&2; exit 1; }
+[ -x "$PROVENANCE_TOOL" ] \
+    || { echo "artifact-provenance tool not executable: $PROVENANCE_TOOL" >&2; exit 1; }
 
 # role label : cargo package : built artifact stem
 ROLES="core:dclutch-core-sbf:dclutch_core_sbf
@@ -97,6 +100,7 @@ SOURCE_TREE="$WORK/source-tree.txt"
 LOCKS_BEFORE="$WORK/cargo-locks-before.tsv"
 LOCKS_AFTER="$WORK/cargo-locks-after.tsv"
 UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
+PROVENANCE_DIR="$WORK/provenance"
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
@@ -148,9 +152,10 @@ SOURCE_TREE="$WORK/source-tree.txt"
 LOCKS_BEFORE="$WORK/cargo-locks-before.tsv"
 LOCKS_AFTER="$WORK/cargo-locks-after.tsv"
 UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
+PROVENANCE_DIR="$WORK/provenance"
 rm -f "$UPGRADE_GATE" "$SUMMARY"
-rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR"
-mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR"
+rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR"
+mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR"
 
 # ---------------------------------------------------------------- source pin
 SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
@@ -185,7 +190,11 @@ cmp -s "$SCRIPT_DIR/checked-release-candidate.sh" \
 cmp -s "$SCRIPT_DIR/check_sbf_build_freshness.py" \
     "$SOURCE/tools/release/check_sbf_build_freshness.py" \
     || { echo "refusing: build-freshness checker differs from the exact --commit source revision" >&2; exit 1; }
+cmp -s "$SCRIPT_DIR/artifact_provenance.py" \
+    "$SOURCE/tools/release/artifact_provenance.py" \
+    || { echo "refusing: artifact-provenance tool differs from the exact --commit source revision" >&2; exit 1; }
 FRESHNESS_CHECKER="$SOURCE/tools/release/check_sbf_build_freshness.py"
+PROVENANCE_TOOL="$SOURCE/tools/release/artifact_provenance.py"
 
 ROOT_LOCK_DIGEST="$(sha256 "$SOURCE/Cargo.lock")"
 
@@ -290,7 +299,13 @@ while IFS=$'\t' read -r label package; do
     fi
     link_log="$WORK/build-$label.log"
     link_target="$(target_dir_for "$package")"
+    build_target_relative="${link_target#"$WORK"/}"
+    build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
     printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$link_log"
+    printf 'dclutch-sbf-build-invocation-v1=%s\n' "$build_invocation" >> "$link_log"
+    if [ -n "$stem" ]; then
+        rm -f "$link_target/deploy/$stem.so"
+    fi
     (
         cd "$SOURCE"
         CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
@@ -304,7 +319,11 @@ while IFS=$'\t' read -r label package; do
         grep "$DIAGNOSTIC_PATTERN" "$link_log" | sort -u >&2
     fi
     if [ -n "$stem" ]; then
+        [ -f "$link_target/deploy/$stem.so" ] && [ ! -L "$link_target/deploy/$stem.so" ] \
+            || { echo "refusing: fresh build did not emit one regular $stem.so for $label" >&2; exit 1; }
         cp "$link_target/deploy/$stem.so" "$ELF_DIR/$label.so"
+        [ -f "$ELF_DIR/$label.so" ] && [ ! -L "$ELF_DIR/$label.so" ] \
+            || { echo "refusing: staged named-role ELF is not regular for $label" >&2; exit 1; }
     fi
 done < "$BUILD_LINKS"
 
@@ -352,7 +371,9 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
         frame_raw="$FRAME_DIR/$label.raw.txt"
         frame_report="$FRAME_DIR/$label.txt"
         rm -rf "$frame_target"
+        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
         printf 'dclutch-sbf-frame-run-v1=%s\n' "$BUILD_RUN_ID" > "$frame_build_log"
+        printf 'dclutch-sbf-frame-invocation-v1=%s\n' "$frame_invocation" >> "$frame_build_log"
         (
             cd "$SOURCE"
             RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
@@ -384,6 +405,8 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
             printf 'dclutch-sbf-frame-report-v1\n'
             printf 'label=%s\n' "$label"
             printf 'package=%s\n' "$package"
+            printf 'source_tree_sha256=%s\n' "$SOURCE_DIGEST"
+            printf 'build_run_id=%s\n' "$BUILD_RUN_ID"
             printf 'frame_count=%s\n' "$frame_count"
             printf 'frame_bound_bytes=4096\n'
             printf 'frames_at_or_over_bound=0\n'
@@ -392,6 +415,47 @@ if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
             printf 'measurement_output:\n'
             cat "$frame_raw"
         } > "$frame_report"
+    done < "$BUILD_LINKS"
+
+    # One descriptor is the only supported join between the named link, the
+    # source/run, the fresh plain build, the shipped ELF, and the independent
+    # frame object/report. Downstream gates and CU selectors rehash it instead
+    # of rediscovering a same-looking file from an adjacent target directory.
+    while IFS=$'\t' read -r label package; do
+        stem=""
+        for entry in $ROLES; do
+            role="${entry%%:*}"; rest="${entry#*:}"
+            role_package="${rest%%:*}"; role_stem="${rest#*:}"
+            if [ "$package" = "$role_package" ]; then stem="$role_stem"; break; fi
+        done
+        link_target="$(target_dir_for "$package")"
+        build_target_relative="${link_target#"$WORK"/}"
+        build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
+        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
+        build_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/build-$label.log" | tail -n 1)"
+        frame_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/frame-build-$label.log" | tail -n 1)"
+        object_stem="$(printf '%s' "$package" | tr '-' '_')"
+        set -- emit \
+            --root "$WORK" \
+            --output "$PROVENANCE_DIR/$label.json" \
+            --label "$label" \
+            --package "$package" \
+            --source-revision "$SOURCE_REVISION" \
+            --source-tree-sha256 "$SOURCE_DIGEST" \
+            --build-run-id "$BUILD_RUN_ID" \
+            --build-invocation "$build_invocation" \
+            --build-log "build-$label.log" \
+            --build-compile-marker "$build_marker" \
+            --diagnostics-count 0 \
+            --frame-invocation "$frame_invocation" \
+            --frame-build-log "frame-build-$label.log" \
+            --frame-compile-marker "$frame_marker" \
+            --frame-object "frame-target-$label/$TARGET_TRIPLE/release/deps/$object_stem.o" \
+            --frame-report "frame/$label.txt"
+        if [ -n "$stem" ]; then
+            set -- "$@" --artifact-stem "$stem" --elf "elf/$label.so"
+        fi
+        python3 "$PROVENANCE_TOOL" "$@"
     done < "$BUILD_LINKS"
 else
     echo "checked Upgrade gate: not emitted because zero diagnostics in strict mode were not established" >&2
@@ -663,7 +727,7 @@ for row in (root / "build-links.tsv").read_text().splitlines():
     if not frame_compile_lines:
         raise SystemExit(f"missing canonical frame compile marker for {label}")
     frame_fields = {}
-    for line in (root / "frame" / f"{label}.txt").read_text().splitlines()[1:8]:
+    for line in (root / "frame" / f"{label}.txt").read_text().splitlines()[1:10]:
         key, value = line.split("=", 1)
         frame_fields[key] = value
     role = roles.get(package)
@@ -676,6 +740,7 @@ for row in (root / "build-links.tsv").read_text().splitlines():
         "frame_build_log": evidence(f"frame-build-{label}.log"),
         "frame_compile_marker": frame_compile_lines[-1],
         "frame_report": evidence(f"frame/{label}.txt"),
+        "artifact_provenance": evidence(f"provenance/{label}.json"),
         "frame_count": int(frame_fields["frame_count"]),
         "frame_bound_bytes": int(frame_fields["frame_bound_bytes"]),
         "frames_at_or_over_bound": int(frame_fields["frames_at_or_over_bound"]),

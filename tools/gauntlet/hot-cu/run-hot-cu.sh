@@ -94,6 +94,9 @@ TRADING_ELF_OVERRIDE=""
 COMMIT=""
 SEEDS=20
 SUBSTRATE="immutable"
+CHECKED_GATE=""
+CHECKED_GATE_SHA256=""
+PROBE="false"
 # The harness paths whose dirtiness the DIRTY flag cannot speak for: `--commit`
 # archives the BUILD, but the fixture derivation -- keys, substrate, staged
 # ProgramData -- is read out of --repo on every run, committed or not.
@@ -115,6 +118,15 @@ usage: tools/gauntlet/hot-cu/run-hot-cu.sh [options]
                    and not a symlink. Its digest is reported explicitly. This is
                    the bounded handoff for a final Direct ELF; all seven fixture
                    support ELFs remain byte-identical to the base set.
+  --checked-gate PATH
+                   release-grade selector: authenticate the exact canonical
+                   Registry/Trading/Core/Claims/Custody ELFs through this
+                   all-13 checked gate and each link's provenance descriptor.
+  --checked-gate-sha256 HEX64
+                   required out-of-band digest for --checked-gate.
+  --probe          explicitly allow working-tree, --elf-dir, --trading-elf, or
+                   a seed count other than 20. Probe output is never M-61 and
+                   its JSON mean_cu remains null.
   --commit REV     build the ELFs from a clean `git archive` of REV instead of
                    from the working tree. Use this whenever the number is going
                    to be quoted at a revision: this is a SHARED checkout and a
@@ -142,6 +154,9 @@ while [ "$#" -gt 0 ]; do
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --elf-dir) ELF_DIR="${2:?--elf-dir needs a value}"; shift 2 ;;
         --trading-elf) TRADING_ELF_OVERRIDE="${2:?--trading-elf needs a value}"; shift 2 ;;
+        --checked-gate) CHECKED_GATE="${2:?--checked-gate needs a value}"; shift 2 ;;
+        --checked-gate-sha256) CHECKED_GATE_SHA256="${2:?--checked-gate-sha256 needs a value}"; shift 2 ;;
+        --probe) PROBE="true"; shift ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --seeds) SEEDS="${2:?--seeds needs a value}"; shift 2 ;;
         --substrate) SUBSTRATE="${2:?--substrate needs a value}"; shift 2 ;;
@@ -153,6 +168,19 @@ done
 case "$WORK" in /*) ;; *) echo "hot-cu: --work must be absolute" >&2; exit 2 ;; esac
 case "$SEEDS" in ''|*[!0-9]*) echo "hot-cu: --seeds must be a decimal count" >&2; exit 2 ;; esac
 [ "$SEEDS" -gt 0 ] || { echo "hot-cu: --seeds must be positive" >&2; exit 2; }
+if [ -n "$CHECKED_GATE" ] || [ -n "$CHECKED_GATE_SHA256" ]; then
+    [ -n "$CHECKED_GATE" ] && [ -n "$CHECKED_GATE_SHA256" ] \
+        || { echo "hot-cu: --checked-gate and --checked-gate-sha256 are one required pair" >&2; exit 2; }
+    [ "$PROBE" = "false" ] \
+        || { echo "hot-cu: --probe and --checked-gate are mutually exclusive" >&2; exit 2; }
+    [ "$SEEDS" -eq 20 ] \
+        || { echo "hot-cu: release M-61 requires exactly 20 seeds; use --probe for any other count" >&2; exit 2; }
+    [ -z "$ELF_DIR" ] && [ -z "$TRADING_ELF_OVERRIDE" ] && [ -z "$COMMIT" ] \
+        || { echo "hot-cu: checked-gate selection refuses --elf-dir, --trading-elf, and --commit" >&2; exit 2; }
+elif [ "$PROBE" != "true" ]; then
+    echo "hot-cu: release M-61 requires --checked-gate + --checked-gate-sha256; pass --probe for non-release diagnostics" >&2
+    exit 2
+fi
 # Refused here as well as in the fixture. `FixtureSubstrateV1::from_env` panics
 # on an unknown name, so a typo would already fail -- but it would fail twenty
 # times, after a full ELF build, with the reason buried in a per-seed log.
@@ -164,10 +192,12 @@ esac
 die() { echo "hot-cu: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+PROVENANCE_TOOL="$REPO/tools/release/artifact_provenance.py"
 
 command -v cargo >/dev/null 2>&1 || die "cargo not found"
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
     || die "not a repository: $REPO"
+[ -x "$PROVENANCE_TOOL" ] || die "artifact provenance selector is not executable: $PROVENANCE_TOOL"
 if [ -n "$TRADING_ELF_OVERRIDE" ]; then
     case "$TRADING_ELF_OVERRIDE" in
         /*) ;;
@@ -191,7 +221,55 @@ mkdir -p "$WORK" "$LOGS" "$SWEEP"
 # A re-run must not blend its pass count with a previous shape's logs.
 rm -f "$SWEEP"/seed*.log
 
-REVISION="$(git -C "$REPO" rev-parse "${COMMIT:-HEAD}")"
+GATE_MODE="false"
+GATE_SELECTION_DIR="$WORK/gate-role-selections"
+GATE_SOURCE_TREE_SHA256=""
+CHECKED_GATE_SHA_JSON=null
+REGISTRY_ELF_PATH=""
+TRADING_ELF_PATH=""
+CORE_ELF_PATH=""
+CLAIMS_ELF_PATH=""
+CUSTODY_ELF_PATH=""
+json_field() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import pathlib
+import sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+field = value[sys.argv[2]]
+if not isinstance(field, str) or not field:
+    raise SystemExit(f"selection field {sys.argv[2]} is not nonempty text")
+print(field)
+PY
+}
+if [ -n "$CHECKED_GATE" ]; then
+    case "$CHECKED_GATE" in /*) ;; *) die "--checked-gate must be absolute" ;; esac
+    rm -rf "$GATE_SELECTION_DIR"
+    mkdir -p "$GATE_SELECTION_DIR"
+    for role in registry trading core claims custody; do
+        python3 "$PROVENANCE_TOOL" select-gate-role \
+            --gate "$CHECKED_GATE" \
+            --gate-sha256 "$CHECKED_GATE_SHA256" \
+            --role "$role" > "$GATE_SELECTION_DIR/$role.json" \
+            || die "checked gate did not authenticate the exact $role role"
+    done
+    REVISION="$(json_field "$GATE_SELECTION_DIR/trading.json" source_revision)"
+    GATE_SOURCE_TREE_SHA256="$(json_field "$GATE_SELECTION_DIR/trading.json" source_tree_sha256)"
+    for role in registry core claims custody; do
+        [ "$(json_field "$GATE_SELECTION_DIR/$role.json" source_revision)" = "$REVISION" ] \
+            && [ "$(json_field "$GATE_SELECTION_DIR/$role.json" source_tree_sha256)" = "$GATE_SOURCE_TREE_SHA256" ] \
+            || die "checked role selections do not share one source revision/tree"
+    done
+    REGISTRY_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/registry.json" elf_path)"
+    TRADING_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/trading.json" elf_path)"
+    CORE_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/core.json" elf_path)"
+    CLAIMS_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/claims.json" elf_path)"
+    CUSTODY_ELF_PATH="$(json_field "$GATE_SELECTION_DIR/custody.json" elf_path)"
+    GATE_MODE="true"
+    CHECKED_GATE_SHA_JSON="\"$CHECKED_GATE_SHA256\""
+else
+    REVISION="$(git -C "$REPO" rev-parse "${COMMIT:-HEAD}")"
+fi
 DIRTY="clean"
 git -C "$REPO" diff --quiet HEAD -- programs crates Cargo.toml Cargo.lock 2>/dev/null || DIRTY="DIRTY"
 # The HARNESS is a separate fact from the artifacts, and `--commit` does not
@@ -204,11 +282,16 @@ git -C "$REPO" diff --quiet HEAD -- programs crates Cargo.toml Cargo.lock 2>/dev
 # the harness is whatever is checked out here, and labelling it with the
 # revision the ELFs were archived from would be the same mispairing again, one
 # level down.
-HARNESS_REVISION="$(git -C "$REPO" rev-parse HEAD)"
-HARNESS_DIRTY="clean"
-git -C "$REPO" diff --quiet HEAD -- $HARNESS_PATHS 2>/dev/null || HARNESS_DIRTY="DIRTY"
-if [ -n "$(git -C "$REPO" ls-files --others --exclude-standard -- $HARNESS_PATHS 2>/dev/null)" ]; then
-    HARNESS_DIRTY="DIRTY"
+if [ "$GATE_MODE" = "true" ]; then
+    HARNESS_REVISION="$REVISION"
+    HARNESS_DIRTY="clean-gate-archive"
+else
+    HARNESS_REVISION="$(git -C "$REPO" rev-parse HEAD)"
+    HARNESS_DIRTY="clean"
+    git -C "$REPO" diff --quiet HEAD -- $HARNESS_PATHS 2>/dev/null || HARNESS_DIRTY="DIRTY"
+    if [ -n "$(git -C "$REPO" ls-files --others --exclude-standard -- $HARNESS_PATHS 2>/dev/null)" ]; then
+        HARNESS_DIRTY="DIRTY"
+    fi
 fi
 
 # ------------------------------------------------------------------ 1. the ELFs
@@ -234,11 +317,32 @@ fi
 # `program-test/direct-hot/src/waist.rs` -- so check that the harness paths are
 # clean when quoting, which the DIRTY flag lets a reader do.
 BUILD_ROOT="$REPO"
+SWEEP_ROOT="$REPO"
 SBF_TARGET_DIR=""
 PROVENANCE=""
 STAMP=""
 NEEDS_BUILD="yes"
-if [ -n "$ELF_DIR" ]; then
+if [ "$GATE_MODE" = "true" ]; then
+    BUILD_ROOT="$WORK/source-${REVISION:0:12}"
+    SWEEP_ROOT="$BUILD_ROOT"
+    ELF_DIR="$WORK/gate-role-elf-selector"
+    DIRTY="clean"
+    PROVENANCE="checked gate $CHECKED_GATE_SHA256 at $REVISION/$GATE_SOURCE_TREE_SHA256"
+    NEEDS_BUILD=""
+    say "stage checked gate: $REVISION"
+    rm -rf "$BUILD_ROOT" "$ELF_DIR"
+    mkdir -p "$BUILD_ROOT" "$ELF_DIR"
+    git -C "$REPO" archive "$REVISION" | tar -x -C "$BUILD_ROOT"
+    git -C "$REPO" ls-tree -r --full-tree "$REVISION" > "$WORK/gate-source-tree.txt"
+    [ "$(sha256 "$WORK/gate-source-tree.txt")" = "$GATE_SOURCE_TREE_SHA256" ] \
+        || die "local source revision does not reproduce the checked gate source-tree digest"
+    cmp -s "$REPO/tools/gauntlet/hot-cu/run-hot-cu.sh" \
+        "$BUILD_ROOT/tools/gauntlet/hot-cu/run-hot-cu.sh" \
+        || die "Hot CU selector differs from the checked gate source revision"
+    cmp -s "$PROVENANCE_TOOL" "$BUILD_ROOT/tools/release/artifact_provenance.py" \
+        || die "artifact provenance selector differs from the checked gate source revision"
+    PROVENANCE_TOOL="$BUILD_ROOT/tools/release/artifact_provenance.py"
+elif [ -n "$ELF_DIR" ]; then
     case "$ELF_DIR" in /*) ;; *) die "--elf-dir must be absolute" ;; esac
     [ -d "$ELF_DIR" ] || die "--elf-dir does not exist: $ELF_DIR"
     say "stage elf: using the artifacts already at $ELF_DIR"
@@ -377,9 +481,55 @@ if [ -n "$TRADING_ELF_OVERRIDE" ]; then
     PROVENANCE="$PROVENANCE; Trading ELF supplied via --trading-elf ($TRADING_ELF_OVERRIDE_SHA)"
 fi
 
-TRADING_ELF="$ELF_DIR/dclutch_trading_sbf.so"
+if [ "$GATE_MODE" = "true" ]; then
+    TRADING_ELF="$TRADING_ELF_PATH"
+else
+    TRADING_ELF="$ELF_DIR/dclutch_trading_sbf.so"
+fi
 [ -f "$TRADING_ELF" ] || die "no trading ELF at $TRADING_ELF"
 TRADING_SHA="$(sha256 "$TRADING_ELF")"
+HARNESS_TARGET="$WORK/harness-target-${HARNESS_REVISION:0:12}"
+
+reauth_gate_roles() {
+    [ "$GATE_MODE" = "true" ] || return 0
+    for role in registry trading core claims custody; do
+        check="$GATE_SELECTION_DIR/$role.check.json"
+        python3 "$PROVENANCE_TOOL" select-gate-role \
+            --gate "$CHECKED_GATE" \
+            --gate-sha256 "$CHECKED_GATE_SHA256" \
+            --role "$role" > "$check" \
+            || die "checked $role role provenance changed before/during CU consumption"
+        cmp -s "$GATE_SELECTION_DIR/$role.json" "$check" \
+            || die "checked $role selection changed before/during CU consumption"
+        rm -f "$check"
+    done
+}
+reauth_gate_roles
+
+SELECTION_MANIFEST="$WORK/cu-artifact-selection.json"
+SELECTION_MANIFEST_SHA_JSON=null
+if [ "$GATE_MODE" = "true" ]; then
+    SELECTION_ROOT="$GATE_SELECTION_DIR" SELECTION_GATE_SHA="$CHECKED_GATE_SHA256" \
+        SELECTION_OUTPUT="$SELECTION_MANIFEST" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["SELECTION_ROOT"])
+value = {
+    "schema": "dclutch-m61-artifact-selection-v1",
+    "checked_upgrade_gate_sha256": os.environ["SELECTION_GATE_SHA"],
+    "roles": [json.loads((root / f"{role}.json").read_text()) for role in (
+        "registry", "trading", "core", "claims", "custody"
+    )],
+}
+Path(os.environ["SELECTION_OUTPUT"]).write_text(
+    json.dumps(value, indent=2, sort_keys=True) + "\n"
+)
+PY
+    SELECTION_MANIFEST_SHA="$(sha256 "$SELECTION_MANIFEST")"
+    SELECTION_MANIFEST_SHA_JSON="\"$SELECTION_MANIFEST_SHA\""
+fi
 
 # --------------------------------------------------------------- 2. the sweep
 say "sweep: $SEEDS fixture seeds on the $SUBSTRATE substrate, trading ELF ${TRADING_SHA:0:16}..."
@@ -395,12 +545,30 @@ for s in $(seq 0 $((SEEDS - 1))); do
     # sweep exists to count, not an error that should abort the run. `|| status=`
     # keeps `set -e` from taking the failure.
     status=0
-    ( cd "$REPO" && DCLUTCH_FIXTURE_SEED="$s" SBF_OUT_DIR="$ELF_DIR" \
-        DCLUTCH_FIXTURE_SUBSTRATE="$SUBSTRATE" \
-        cargo test --locked --offline \
-            --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
-            --test hot_heap_frame_is_inert -- --nocapture ) \
-        > "$log" 2>&1 || status=$?
+    if [ "$GATE_MODE" = "true" ]; then
+        ( cd "$SWEEP_ROOT" && \
+            DCLUTCH_FIXTURE_SEED="$s" SBF_OUT_DIR="$ELF_DIR" \
+            DCLUTCH_FIXTURE_SUBSTRATE="$SUBSTRATE" \
+            DCLUTCH_REGISTRY_ELF_PATH="$REGISTRY_ELF_PATH" \
+            DCLUTCH_TRADING_ELF_PATH="$TRADING_ELF_PATH" \
+            DCLUTCH_CORE_ELF_PATH="$CORE_ELF_PATH" \
+            DCLUTCH_CLAIMS_ELF_PATH="$CLAIMS_ELF_PATH" \
+            DCLUTCH_CUSTODY_ELF_PATH="$CUSTODY_ELF_PATH" \
+            CARGO_TARGET_DIR="$HARNESS_TARGET" \
+            cargo test --locked --offline \
+                --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
+                --test hot_heap_frame_is_inert -- --nocapture ) \
+            > "$log" 2>&1 || status=$?
+    else
+        ( cd "$SWEEP_ROOT" && \
+            DCLUTCH_FIXTURE_SEED="$s" SBF_OUT_DIR="$ELF_DIR" \
+            DCLUTCH_FIXTURE_SUBSTRATE="$SUBSTRATE" \
+            CARGO_TARGET_DIR="$HARNESS_TARGET" \
+            cargo test --locked --offline \
+                --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
+                --test hot_heap_frame_is_inert -- --nocapture ) \
+            > "$log" 2>&1 || status=$?
+    fi
 
     # ONE capture group, not `grep -oE '[0-9]+'` over the matched line: the line
     # reads "... fixture seed 7: 1376260 CU ...", so a bare digit grep returns
@@ -417,6 +585,10 @@ for s in $(seq 0 $((SEEDS - 1))); do
     fi
     printf 'seed %2d  %4d  %-11s %s\n' "$s" "$status" "${cu:-FAIL}" "${res:-no test result line}"
 done
+reauth_gate_roles
+if [ "$GATE_MODE" = "true" ] && [ "$(sha256 "$SELECTION_MANIFEST")" != "$SELECTION_MANIFEST_SHA" ]; then
+    die "CU artifact selection manifest changed during the sweep"
+fi
 
 # ------------------------------------------------------------- 3. the statistic
 #
@@ -430,19 +602,26 @@ if [ "$pass" -eq "$SEEDS" ]; then
 $(awk '{ t += $1; if (n++ == 0 || $1 < lo) lo = $1; if ($1 > hi) hi = $1 }
        END { printf "%d %d %d\n", int(t / n + 0.5), lo, hi }' "$OBSERVED")
 EOF
-    MEAN_JSON="$MEAN"
+    PROBE_MEAN_JSON="$MEAN"
     MIN_JSON="$MIN"
     MAX_JSON="$MAX"
     ALL_SEEDS_COMPLETED=true
 else
-    MEAN_JSON=null
+    PROBE_MEAN_JSON=null
     MIN_JSON=null
     MAX_JSON=null
     ALL_SEEDS_COMPLETED=false
 fi
 
+M61_ELIGIBLE=false
+MEAN_JSON=null
+if [ "$GATE_MODE" = "true" ] && [ "$SEEDS" -eq 20 ] && [ "$pass" -eq 20 ]; then
+    M61_ELIGIBLE=true
+    MEAN_JSON="$MEAN"
+fi
+
 printf 'PASS %d/%d\n' "$pass" "$SEEDS"
-if [ "$pass" -eq "$SEEDS" ]; then
+if [ "$M61_ELIGIBLE" = "true" ]; then
     printf "MEAN %'d CU   (over all %d requested seeds, of 1,400,000)\n" "$MEAN" "$SEEDS"
     printf "MIN  %'d CU\n" "$MIN"
     printf "MAX  %'d CU\n" "$MAX"
@@ -451,6 +630,9 @@ if [ "$pass" -eq "$SEEDS" ]; then
     # and flooring would report 32 and invite someone to hunt the missing one.
     printf "SPREAD %'d CU  ~ %d bump-search iterations at 1,500 CU each\n" \
         "$((MAX - MIN))" "$(( (MAX - MIN + 750) / 1500 ))"
+elif [ "$pass" -eq "$SEEDS" ]; then
+    printf "PROBE MEAN %'d CU   (not M-61; no checked all-13 provenance)\n" "$MEAN"
+    printf 'M-61 REFUSED (requires checked-gate provenance and exactly 20 seeds)\n'
 else
     printf 'MEAN -   MIN -   MAX -   (requires PASS %d/%d; %d completed)\n' \
         "$SEEDS" "$SEEDS" "$pass"
@@ -483,8 +665,10 @@ fi
 
 cat > "$SUMMARY" <<EOF
 {
-  "schema": "dclutch-hot-cu-sweep-v2",
+  "schema": "dclutch-hot-cu-sweep-v3",
   "artifact_provenance": "$PROVENANCE",
+  "checked_upgrade_gate_sha256": $CHECKED_GATE_SHA_JSON,
+  "artifact_selection_sha256": $SELECTION_MANIFEST_SHA_JSON,
   "trading_elf_sha256": "$TRADING_SHA",
   "trading_elf_override_sha256": $TRADING_ELF_OVERRIDE_JSON,
   "elf_dir": "$ELF_DIR",
@@ -495,12 +679,14 @@ cat > "$SUMMARY" <<EOF
   "pass": $pass,
   "fail": $fail,
   "all_seeds_completed": $ALL_SEEDS_COMPLETED,
+  "m61_eligible": $M61_ELIGIBLE,
   "mean_cu": $MEAN_JSON,
+  "probe_mean_cu": $PROBE_MEAN_JSON,
   "min_cu": $MIN_JSON,
   "max_cu": $MAX_JSON,
   "ceiling_cu": 1400000,
   "observed_cu": [$(paste -sd, - < "$OBSERVED")],
-  "statistic": "PASS and an all-requested-seed MEAN. A partial run has null mean/min/max. Complete-run min/max are the observed spread of a bump-search lottery (M-61), not bounds; they are keyed to trading_elf_sha256 and a one-byte ELF change redraws every seed.",
+  "statistic": "M-61 mean_cu exists only for PASS 20/20 selected through one exact checked all-13 gate and its link provenance. Explicit probes write only probe_mean_cu. A partial run has null means. Complete-run min/max are observed bump-search spread, not bounds.",
   "cross_substrate": "A difference between two substrates' means is redraw PLUS effect: the substrate moves the release identity and so redraws every seed. Subtract the immutable-pinned arm, which is the same digest arm at a different identity, to separate them."
 }
 EOF

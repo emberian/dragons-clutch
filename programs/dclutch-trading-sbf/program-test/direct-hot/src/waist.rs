@@ -342,13 +342,34 @@ pub fn programdata(program: Pubkey) -> Pubkey {
 
 pub fn elves() -> Elves {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
-    let read = |name: &str| fs::read(directory.join(name)).expect("required real ELF");
+    let read = |role: &str, name: &str| {
+        let variable = format!("DCLUTCH_{}_ELF_PATH", role.to_ascii_uppercase());
+        let path = match env::var_os(&variable) {
+            Some(value) => {
+                let path = PathBuf::from(value);
+                assert!(path.is_absolute(), "{variable} must be absolute");
+                let metadata = fs::symlink_metadata(&path).expect("role ELF metadata");
+                assert!(
+                    metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+                    "{variable} must be one regular non-symlink file"
+                );
+                assert_eq!(
+                    fs::canonicalize(&path).expect("canonical role ELF"),
+                    path,
+                    "{variable} must be an exact canonical path"
+                );
+                path
+            }
+            None => directory.join(name),
+        };
+        fs::read(path).expect("required real ELF")
+    };
     Elves {
-        registry: read("dclutch_registry_sbf.so"),
-        trading: read("dclutch_trading_sbf.so"),
-        core: read("dclutch_core_sbf.so"),
-        claims: read("dclutch_claims_sbf.so"),
-        custody: read("dclutch_custody_sbf.so"),
+        registry: read("registry", "dclutch_registry_sbf.so"),
+        trading: read("trading", "dclutch_trading_sbf.so"),
+        core: read("core", "dclutch_core_sbf.so"),
+        claims: read("claims", "dclutch_claims_sbf.so"),
+        custody: read("custody", "dclutch_custody_sbf.so"),
     }
 }
 
