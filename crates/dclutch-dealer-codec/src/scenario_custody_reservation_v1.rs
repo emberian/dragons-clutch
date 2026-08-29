@@ -10,7 +10,56 @@
 //! owner of both compartments.
 
 use super::{Error, Result, array_at, byte_at, put, put_byte, put_u64, require_zero, u64_at};
-use crate::scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1;
+use crate::scenario_reservation_receipt_v1::{
+    DEALER_SCENARIO_MAX_RESERVATIONS_V1, DealerScenarioReservationActionV1,
+};
+
+/// Exact Reserve or Rollback selector plus one ordinal.
+pub const DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1: usize = 9;
+/// Reserve one ordered effect into Custody escrow.
+pub const DEALER_SCENARIO_RESERVE_MAGIC_V1: [u8; 8] = *b"DCLTCRS1";
+/// Roll one expired escrow back to its original source.
+pub const DEALER_SCENARIO_ROLLBACK_MAGIC_V1: [u8; 8] = *b"DCLTCRB1";
+
+/// Encode one exact reserve/rollback instruction.
+pub fn encode_dealer_scenario_reservation_instruction_v1(
+    action: DealerScenarioReservationActionV1,
+    ordinal: u8,
+) -> Result<[u8; DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1]> {
+    if usize::from(ordinal) >= DEALER_SCENARIO_MAX_RESERVATIONS_V1 {
+        return Err(Error::InvalidPhase);
+    }
+    let mut output = [0_u8; DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1];
+    output[..8].copy_from_slice(match action {
+        DealerScenarioReservationActionV1::Reserve => &DEALER_SCENARIO_RESERVE_MAGIC_V1,
+        DealerScenarioReservationActionV1::Rollback => &DEALER_SCENARIO_ROLLBACK_MAGIC_V1,
+    });
+    output[8] = ordinal;
+    Ok(output)
+}
+
+/// Hostile-decode one exact reserve/rollback instruction.
+pub fn decode_dealer_scenario_reservation_instruction_v1(
+    input: &[u8],
+) -> Result<(DealerScenarioReservationActionV1, u8)> {
+    if input.len() != DEALER_SCENARIO_RESERVATION_INSTRUCTION_BYTES_V1 {
+        return Err(Error::InvalidLength);
+    }
+    let action = match input.get(..8) {
+        Some(magic) if magic == DEALER_SCENARIO_RESERVE_MAGIC_V1 => {
+            DealerScenarioReservationActionV1::Reserve
+        }
+        Some(magic) if magic == DEALER_SCENARIO_ROLLBACK_MAGIC_V1 => {
+            DealerScenarioReservationActionV1::Rollback
+        }
+        _ => return Err(Error::InvalidMagic),
+    };
+    let ordinal = byte_at(input, 8)?;
+    if usize::from(ordinal) >= DEALER_SCENARIO_MAX_RESERVATIONS_V1 {
+        return Err(Error::InvalidPhase);
+    }
+    Ok((action, ordinal))
+}
 
 /// Canonical Custody V1 request width carried by an effect envelope.
 pub const DEALER_SCENARIO_CANONICAL_CUSTODY_REQUEST_BYTES_V1: usize = 672;
@@ -852,7 +901,11 @@ impl DealerScenarioReservationStateV1 {
             || usize::from(self.effect_count) > DEALER_SCENARIO_MAX_RESERVATIONS_V1
             || self.ordinal >= self.effect_count
             || self.amount == 0
-            || self.escrow_after != self.amount
+            || match self.status {
+                DealerScenarioReservationStateStatusV1::Active => self.escrow_after != self.amount,
+                DealerScenarioReservationStateStatusV1::RolledBack
+                | DealerScenarioReservationStateStatusV1::Activated => self.escrow_after != 0,
+            }
             || [
                 self.batch,
                 self.checkpoint,

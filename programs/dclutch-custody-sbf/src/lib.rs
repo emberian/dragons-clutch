@@ -20,6 +20,7 @@ use dclutch_custody_contract::{
 };
 
 mod delegated;
+mod dealer_reservation_v1;
 mod projected;
 mod retirement_replay_handoff_v1;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
@@ -174,6 +175,9 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if dealer_reservation_v1::is_instruction(instruction_data) {
+        return dealer_reservation_v1::process(program_id, accounts, instruction_data);
+    }
     if instruction_data.len()
         == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
         && instruction_data
