@@ -30,8 +30,8 @@ bash programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh
 
 Measured cold on 2026-08-29 from a deleted target directory: **3m05s wall, exit
 0, 26 tests across four targets**, 21 of them the accepted campaign. Re-measured
-warm on the same day with the delivery leg landed: **exit 0, 28 tests across the
-same four targets**, 23 of them the accepted campaign. The runner
+warm on the same day with the delivery leg and its hostiles landed: **exit 0, 30
+tests across the same four targets**, 25 of them the accepted campaign. The runner
 builds five real artifacts — the Dealer accelerator, its test caller, Trading,
 Custody, Claims and Core — and stages them as real loadable deployments.
 
@@ -235,12 +235,20 @@ producer; evaluate requires it to equal the evaluate-producer account; the body
 cannot change between them. An evaluator that is not Trading passes evaluate and
 reserve in isolation and can never commit.
 
-## The sixteen hostiles, by the check each reaches
+## The eighteen hostiles, by the check each reaches
 
 Every case asserts the exact refusal code and re-reads the checkpoint to prove
 no mutation survived. Where a case could have been answered by a shallower
 check, it is built to get past that check first — a hostile that stops early is
 not the hostile it claims to be.
+
+Inside delivery that means re-sealing: a case that edits a Custody-owned body and
+leaves the digests committing to it alone is answered by the digest, not by the
+gate it names. Each such case recomputes the batch's or the reservation's own
+pinned digests around its lie, through the supported codecs. The cursor case
+carries its own control — the same lie submitted *unsealed* first, shown being
+answered by the batch before any token program runs — so the seal is
+demonstrably load-bearing rather than decorative.
 
 | case | reaches |
 |---|---|
@@ -260,6 +268,8 @@ not the hostile it claims to be.
 | replayed commit (byte-identical, same live table) | checkpoint phase; Positions do not move twice |
 | committed checkpoint refuses cleanup | committed-versus-abandoned boundary; rent retained |
 | replayed delivery (byte-identical, same live table) | activation-receipt vacancy; collateral, cursor and batch do not move twice |
+| replay cursor one revision ahead (batch prestate digest re-sealed over the tampered cursor) | `CustodyReplayV1::advance` — *after* the transfer, proven by the token program in the transaction log |
+| substituted destination (a third token account, real, same Mint, same balance, different owner; reservation re-sealed to name it and commit to its prestate) | the external destination owner the request names (0x6006, past every 0x6005 reservation join) |
 
 ## Named debt
 
@@ -270,20 +280,6 @@ they would authenticate Custody's own output, and delivery refuses unless those
 digests are what the chain actually holds. But Custody's reserve route did not
 write them. That is the same evidence class the reserve leg already had, now
 carried one leg further.
-
-**The membership frame still names placeholder collateral coordinates.** The
-six-page unsplit topology census carries a synthetic mint and token program,
-while the executed delivery uses the real ones. No executed route joins the two —
-the unsplit form is unsubmittable, so nothing reads the census's collateral
-coordinates — but a scenario naming two mints is exactly the shape that hides a
-defect, and it should be collapsed onto the real Realm-selected pair.
-
-**The delivery leg carries one hostile, not a family.** The replayed delivery is
-sealed and reaches the gate it names. The refusals *inside* activation — a cursor
-at the wrong revision reaching `advance`, a substituted destination reaching the
-reservation join — each need the batch's own pinned digests restaged around the
-lie before the case is the case it claims, and that staging is not written. Named
-as owed, not as done.
 
 **One effect, one coordinate.** The delivery is a single-effect batch. The
 activation frame admits up to four, and the operator builder is exercised at four
@@ -296,12 +292,24 @@ carrying both is `InvalidIntent`). So the executed commit moves value one way at
 the funded coordinate. This is a narrowing of the campaign, not of Dealer:
 Dealer scenarios trade across coordinates in general.
 
+**The request's named destination is pinned only transitively.** At activation,
+the frame's destination account is compared to the *reservation's* destination,
+and the reservation is Custody-written, so in the live protocol the two agree.
+But `original.destination` is never compared to the frame account directly: the
+pin runs through the reservation rather than through the request. Nothing is
+exploitable — a reservation state is a Custody-owned PDA and cannot be forged —
+but it is one link longer than it needs to be, and the campaign's own staged
+reservation is what made it visible.
+
 **The membership frame's identities are derived but synthetic.** The six-page
 transcript is the real physical frame — the account profile fixes every
 coordinate, width and privilege, the semantic projection fixes the spans and the
 caller-authority count, and `project_dealer_scenario_unsplit_topology_v4` is run
 for real — but the frame is compiled from a fixture rather than observed from a
-founded Market.
+founded Market. Its collateral coordinates are no longer synthetic: the census
+names the same Mint, token program, replay namespace and trading-principal vault
+the executed delivery moves, and the principal balance it states is exactly the
+sum of what the reservation left behind and what the escrow held.
 
 **No devnet anything.** No selected Market, no live participant, no public
 caller. This is executed evidence, not a capability.
