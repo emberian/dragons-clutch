@@ -934,7 +934,7 @@ fn verify_close_receipt(
     Ok(ClaimsRouteReceiptV3::Close(receipt))
 }
 
-fn signed_delta_post_resource_digest(
+pub(crate) fn signed_delta_post_resource_digest(
     child_accounts: &[AccountInfo<'_>],
     position_count: u32,
 ) -> Result<[u8; 32], ProgramError> {

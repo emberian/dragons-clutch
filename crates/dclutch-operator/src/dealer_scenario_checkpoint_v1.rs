@@ -9,6 +9,7 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
     HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
 };
+use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_dealer_codec::scenario_checkpoint_v1::{
     DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
 };
@@ -32,9 +33,10 @@ use dclutch_trading_sbf::dealer::{
     v3_composer::ScenarioCustodyEffectV3, v3_multi_lp::MultiLpCustodyRequestV3,
 };
 use dclutch_trading_sbf::dealer_scenario_checkpoint_v1::{
-    DEALER_SCENARIO_CHECKPOINT_CLEANUP_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_CREATE_MAGIC_V1,
-    DEALER_SCENARIO_CHECKPOINT_EVALUATE_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_PAGE_MAGIC_V1,
-    DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1,
+    DEALER_SCENARIO_CHECKPOINT_CLEANUP_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_COMMIT_MAGIC_V1,
+    DEALER_SCENARIO_CHECKPOINT_CREATE_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_EVALUATE_MAGIC_V1,
+    DEALER_SCENARIO_CHECKPOINT_PAGE_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1,
+    DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1,
 };
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
@@ -67,6 +69,8 @@ pub enum DealerScenarioCheckpointRouteV1 {
     Reserve(u8),
     /// Ingest one reverse-order Custody rollback receipt.
     Rollback(u8),
+    /// Atomically commit Claims and the candidate obligation against locked value.
+    Commit,
 }
 
 /// Packet-safe unsigned route and its exact lock/signer geometry.
@@ -251,6 +255,57 @@ pub struct DealerScenarioActivationPacketV1 {
     pub lock_census: DealerScenarioTransactionLockCensusV1,
 }
 
+/// One ordered readonly Custody proof consumed by the final commit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DealerScenarioCommitEffectAccountsV1 {
+    /// Custody-owned typed Reserve receipt.
+    pub reservation_receipt: Pubkey,
+    /// Custody-owned active reservation state.
+    pub reservation_state: Pubkey,
+}
+
+/// Exact final Claims/obligation commit account bank.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerScenarioCommitAccountsV1 {
+    /// Current Trading program.
+    pub trading_program: Pubkey,
+    /// Transaction fee payer; no protocol authority is inferred from it.
+    pub payer: Pubkey,
+    /// Trading-owned checkpoint.
+    pub checkpoint: Pubkey,
+    /// Clock sysvar used only for pre-expiry commit admission.
+    pub clock: Pubkey,
+    /// Exact immutable Dealer request.
+    pub request: Pubkey,
+    /// Trading-owned persisted evaluation receipt.
+    pub evaluation_receipt: Pubkey,
+    /// Trading-owned exact candidate bank.
+    pub candidate_bank: Pubkey,
+    /// Trading-owned exact candidate obligation body.
+    pub candidate_obligation: Pubkey,
+    /// Trading-owned exact SignedDelta body.
+    pub claims_delta: Pubkey,
+    /// Trading-owned Custody-effect manifest.
+    pub effects: Pubkey,
+    /// Immutable Dealer child root.
+    pub root: Pubkey,
+    /// Writable canonical obligation.
+    pub obligation: Pubkey,
+    /// Current Custody program.
+    pub custody_program: Pubkey,
+    /// Current Custody ProgramData.
+    pub custody_programdata: Pubkey,
+    /// Custody-owned complete locked batch.
+    pub batch: Pubkey,
+    /// Exact Claims SignedDelta frame, excluding the Claims callee duplicate.
+    pub claims_accounts: Vec<AccountMeta>,
+    /// Active ordered proof prefix.
+    pub effect_accounts:
+        [DealerScenarioCommitEffectAccountsV1; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+    /// Exact active effect count.
+    pub effect_count: u8,
+}
+
 /// Stable builder or journal refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerScenarioCheckpointOperatorErrorV1 {
@@ -432,10 +487,9 @@ pub fn encode_dealer_scenario_custody_effect_artifacts_v1(
 
 /// Project the smallest one-transaction Claims/Custody effect topology.
 ///
-/// This is account topology only. It deliberately does not claim a final
-/// executor: the future handler must still reauthenticate the release-selected
-/// producer, immediate Claims/Custody receipts, candidate obligation bytes,
-/// and close the checkpoint atomically.
+/// This is legacy account-topology evidence for the original monolithic
+/// proposal. The executable split now locks value first, commits Claims plus
+/// the obligation atomically, and delivers Custody escrows afterward.
 pub fn project_dealer_scenario_final_commit_topology_v1(
     state: DealerScenarioHotMetaStateV4<'_>,
     tail_count: u32,
@@ -525,9 +579,10 @@ pub fn project_dealer_scenario_final_commit_topology_v1(
 
 /// Project the bounded final topology after every Custody effect is reserved.
 ///
-/// This remains topology evidence, not a final executor. The missing Custody
-/// batch route must activate the reservation states in the same rollback
-/// domain as Claims and the obligation write-last commit.
+/// This remains legacy topology evidence, not the executable final route. The
+/// real commit builder below authenticates the locked batch and moves the
+/// checkpoint to `Committed`; Custody delivery is then permissionless and
+/// resumable in a later transaction.
 pub fn project_dealer_scenario_reserved_final_topology_v1(
     state: DealerScenarioHotMetaStateV4<'_>,
     tail_count: u32,
@@ -1201,6 +1256,105 @@ pub fn build_dealer_scenario_reservation_bundle_v1(
     })
 }
 
+/// Build the bounded transaction which commits Claims and the obligation.
+///
+/// The embedded Claims caller authority is a Trading PDA and is therefore not
+/// a top-level signer. Trading signs only the child CPI after every locked
+/// Custody proof and candidate artifact has rejoined the checkpoint.
+pub fn build_dealer_scenario_commit_v1(
+    accounts: DealerScenarioCommitAccountsV1,
+    recent_blockhash: Hash,
+    lookup_tables: &[AddressLookupTableAccount],
+) -> Result<DealerScenarioCheckpointPacketV1, DealerScenarioCheckpointOperatorErrorV1> {
+    let active = usize::from(accounts.effect_count);
+    if active == 0 || active > DEALER_SCENARIO_MAX_RESERVATIONS_V1 {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let position_count = accounts
+        .claims_accounts
+        .len()
+        .checked_sub(20)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| matches!(value, 1 | 2))
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    let spec = SignedDeltaFrameSpecV3::new(position_count)
+        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    if usize::from(
+        spec.account_count()
+            .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?,
+    ) != accounts.claims_accounts.len()
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    for (index, meta) in accounts.claims_accounts.iter().enumerate() {
+        let expected = spec
+            .account(
+                u16::try_from(index)
+                    .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?,
+            )
+            .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+        let privileges = expected.privileges();
+        if meta.is_signer
+            || meta.is_writable != privileges.writable()
+            || (matches!(expected.role(), ClaimsFrameRoleV1::CallerProgram)
+                && meta.pubkey != accounts.trading_program)
+            || matches!(expected.role(), ClaimsFrameRoleV1::CallerAuthority)
+                && (meta.is_signer || meta.is_writable)
+        {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+        }
+    }
+    let default_effect = DealerScenarioCommitEffectAccountsV1::default();
+    if accounts.effect_accounts.iter().take(active).any(|proof| {
+        proof.reservation_receipt == Pubkey::default()
+            || proof.reservation_state == Pubkey::default()
+    }) || accounts
+        .effect_accounts
+        .iter()
+        .skip(active)
+        .any(|proof| *proof != default_effect)
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let mut metas = vec![
+        AccountMeta::new(accounts.checkpoint, false),
+        AccountMeta::new_readonly(accounts.clock, false),
+        AccountMeta::new_readonly(accounts.request, false),
+        AccountMeta::new_readonly(accounts.evaluation_receipt, false),
+        AccountMeta::new_readonly(accounts.candidate_bank, false),
+        AccountMeta::new_readonly(accounts.candidate_obligation, false),
+        AccountMeta::new_readonly(accounts.claims_delta, false),
+        AccountMeta::new_readonly(accounts.effects, false),
+        AccountMeta::new_readonly(accounts.root, false),
+        AccountMeta::new(accounts.obligation, false),
+        AccountMeta::new_readonly(accounts.custody_program, false),
+        AccountMeta::new_readonly(accounts.custody_programdata, false),
+        AccountMeta::new_readonly(accounts.batch, false),
+    ];
+    metas.extend(accounts.claims_accounts);
+    for proof in accounts.effect_accounts.iter().take(active) {
+        metas.extend([
+            AccountMeta::new_readonly(proof.reservation_receipt, false),
+            AccountMeta::new_readonly(proof.reservation_state, false),
+        ]);
+    }
+    let keys = metas.iter().map(|meta| meta.pubkey).collect::<Vec<_>>();
+    if keys.contains(&Pubkey::default()) || has_duplicate_keys(&keys) {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    compile_checkpoint_packet(
+        DealerScenarioCheckpointRouteV1::Commit,
+        accounts.payer,
+        Instruction {
+            program_id: accounts.trading_program,
+            accounts: metas,
+            data: DEALER_SCENARIO_CHECKPOINT_COMMIT_MAGIC_V1.to_vec(),
+        },
+        recent_blockhash,
+        lookup_tables,
+    )
+}
+
 /// Build the one bounded transaction that delivers every reserved escrow.
 ///
 /// The caller normally supplies an ALT because four effects resolve 38 locks
@@ -1472,6 +1626,8 @@ pub struct DealerScenarioCheckpointJournalV1 {
     pub reservation_count: u8,
     /// Number of finalized reverse-order rollback ingestions.
     pub rollback_count: u8,
+    /// Whether the atomic Claims/obligation transaction reached finalized `Committed`.
+    pub committed: bool,
     /// Custody batch activation receipt digest, zero before activation.
     pub activation_receipt: [u8; 32],
     /// Whether finalized cleanup observed the checkpoint vacant.
@@ -1498,6 +1654,7 @@ impl DealerScenarioCheckpointJournalV1 {
             reservation_receipts: [[0; 32]; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
             reservation_count: 0,
             rollback_count: 0,
+            committed: false,
             activation_receipt: [0; 32],
             cleaned: false,
         })
@@ -1584,6 +1741,7 @@ impl DealerScenarioCheckpointJournalV1 {
             || receipt_digest == [0; 32]
             || checkpoint_poststate_digest == [0; 32]
             || self.rollback_count != 0
+            || self.committed
             || self.activation_receipt != [0; 32]
             || self.cleaned
         {
@@ -1622,6 +1780,7 @@ impl DealerScenarioCheckpointJournalV1 {
             || prior_receipt_digest == [0; 32]
             || rollback_receipt_digest == [0; 32]
             || checkpoint_poststate_digest == [0; 32]
+            || self.committed
             || self.activation_receipt != [0; 32]
             || self.cleaned
         {
@@ -1643,7 +1802,27 @@ impl DealerScenarioCheckpointJournalV1 {
         Ok(())
     }
 
-    /// Record finalized Custody activation only after every reservation is live.
+    /// Record the finalized atomic Claims/obligation checkpoint transition.
+    pub fn record_committed(
+        &mut self,
+        checkpoint_poststate_digest: [u8; 32],
+    ) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
+        if self.custody_effect_count == 0
+            || self.reservation_count != self.custody_effect_count
+            || self.rollback_count != 0
+            || self.committed
+            || self.activation_receipt != [0; 32]
+            || checkpoint_poststate_digest == [0; 32]
+            || self.cleaned
+        {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
+        }
+        self.committed = true;
+        self.checkpoint_digest = checkpoint_poststate_digest;
+        Ok(())
+    }
+
+    /// Record finalized Custody activation only after liabilities committed.
     pub fn record_activated(
         &mut self,
         activation_receipt_digest: [u8; 32],
@@ -1651,6 +1830,7 @@ impl DealerScenarioCheckpointJournalV1 {
         if self.custody_effect_count == 0
             || self.reservation_count != self.custody_effect_count
             || self.rollback_count != 0
+            || !self.committed
             || activation_receipt_digest == [0; 32]
             || self.activation_receipt != [0; 32]
             || self.cleaned
@@ -1665,6 +1845,7 @@ impl DealerScenarioCheckpointJournalV1 {
     pub fn record_cleaned(&mut self) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
         if self.checkpoint_digest == [0; 32]
             || self.reservation_count != self.rollback_count
+            || self.committed
             || self.activation_receipt != [0; 32]
             || self.cleaned
         {
@@ -1986,6 +2167,99 @@ mod tests {
     }
 
     #[test]
+    fn committed_claims_and_obligation_fit_with_exact_custody_proofs() {
+        let spec = SignedDeltaFrameSpecV3::new(2).expect("spec");
+        let mut claims_accounts = Vec::new();
+        for index in 0..spec.account_count().expect("count") {
+            let account = spec.account(index).expect("account");
+            let role = account.role();
+            let pubkey = if role == ClaimsFrameRoleV1::CallerProgram {
+                key(3)
+            } else {
+                key(60_u8
+                    .checked_add(u8::try_from(index).expect("index"))
+                    .expect("key"))
+            };
+            claims_accounts.push(if account.privileges().writable() {
+                AccountMeta::new(pubkey, false)
+            } else {
+                AccountMeta::new_readonly(pubkey, false)
+            });
+        }
+        let proofs = [
+            DealerScenarioCommitEffectAccountsV1 {
+                reservation_receipt: key(90),
+                reservation_state: key(91),
+            },
+            DealerScenarioCommitEffectAccountsV1 {
+                reservation_receipt: key(92),
+                reservation_state: key(93),
+            },
+            DealerScenarioCommitEffectAccountsV1 {
+                reservation_receipt: key(94),
+                reservation_state: key(95),
+            },
+            DealerScenarioCommitEffectAccountsV1 {
+                reservation_receipt: key(96),
+                reservation_state: key(97),
+            },
+        ];
+        let commit = DealerScenarioCommitAccountsV1 {
+            trading_program: key(3),
+            payer: key(2),
+            checkpoint: key(4),
+            clock: key(5),
+            request: key(6),
+            evaluation_receipt: key(7),
+            candidate_bank: key(8),
+            candidate_obligation: key(9),
+            claims_delta: key(10),
+            effects: key(11),
+            root: key(12),
+            obligation: key(13),
+            custody_program: key(14),
+            custody_programdata: key(15),
+            batch: key(16),
+            claims_accounts,
+            effect_accounts: proofs,
+            effect_count: 4,
+        };
+        let mut signer_hostile = commit.clone();
+        signer_hostile.claims_accounts[0].is_signer = true;
+        assert_eq!(
+            build_dealer_scenario_commit_v1(signer_hostile, blockhash(), &[]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Geometry)
+        );
+        let caller_program_index = (0..spec.account_count().expect("count"))
+            .find(|index| {
+                spec.account(*index).expect("account").role() == ClaimsFrameRoleV1::CallerProgram
+            })
+            .expect("caller program index");
+        let mut caller_hostile = commit.clone();
+        caller_hostile.claims_accounts[usize::from(caller_program_index)].pubkey = key(250);
+        assert_eq!(
+            build_dealer_scenario_commit_v1(caller_hostile, blockhash(), &[]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Geometry)
+        );
+        assert_eq!(
+            build_dealer_scenario_commit_v1(commit.clone(), blockhash(), &[]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Packet)
+        );
+        let table = AddressLookupTableAccount {
+            key: key(1),
+            addresses: (4_u8..=97).map(key).collect(),
+        };
+        let packet =
+            build_dealer_scenario_commit_v1(commit, blockhash(), core::slice::from_ref(&table))
+                .expect("commit");
+        assert_eq!(packet.route, DealerScenarioCheckpointRouteV1::Commit);
+        assert_eq!(packet.instruction.accounts.len(), 43);
+        assert_eq!(packet.lock_census.unique_account_lock_count, 44);
+        assert!(packet.wire_bytes <= DEALER_SCENARIO_PACKET_BYTES_V1);
+        assert!(packet.loaded_addresses >= 40);
+    }
+
+    #[test]
     fn resolved_transaction_census_admits_64_and_refuses_65() {
         let payer = key(2);
         let program = key(1);
@@ -2046,8 +2320,23 @@ mod tests {
         journal
             .record_reservation(1, [62; 32], [63; 32])
             .expect("reservation one");
+        assert_eq!(
+            journal.record_activated([64; 32]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
+        );
+        let mut committed = journal.clone();
+        committed.record_committed([64; 32]).expect("commit");
+        assert_eq!(
+            committed.record_rollback(1, [62; 32], [65; 32], [66; 32]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
+        );
+        assert_eq!(
+            committed.record_cleaned(),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
+        );
         let mut activated = journal.clone();
-        activated.record_activated([64; 32]).expect("activation");
+        activated.record_committed([64; 32]).expect("commit");
+        activated.record_activated([65; 32]).expect("activation");
         assert_eq!(
             activated.record_rollback(1, [62; 32], [65; 32], [66; 32]),
             Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
