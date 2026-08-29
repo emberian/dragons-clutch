@@ -45,7 +45,10 @@ pub use artifacts::{
     FractionalFinalizedArtifactBundleV1, build_fractional_composed_artifact_bundle_v1,
     build_fractional_finalized_artifact_bundle_v1,
 };
-pub use atomic_v3::build_fractional_atomic_claims_instruction_v3;
+pub use atomic_v3::{
+    build_fractional_atomic_claims_instruction_v3,
+    build_fractional_terminal_atomic_claims_instruction_v3,
+};
 pub use claims::{
     FractionalClaimsPositionSnapshotV1, FractionalSignedDeltaChainObservationV1,
     FractionalSignedDeltaChainPlanV1, build_fractional_signed_delta_instruction_v1,

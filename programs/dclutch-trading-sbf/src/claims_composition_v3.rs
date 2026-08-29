@@ -200,6 +200,22 @@ pub fn execute_claims_route_v3<'info>(
         ReceiptKindV3::Founding => {
             PostResourceEvidenceV3::Founding(founding_post_resource_digests(&buffers.accounts)?)
         }
+        ReceiptKindV3::FractionalAtomic => PostResourceEvidenceV3::FractionalRoot(
+            buffers
+                .accounts
+                .get(FRACTIONAL_ATOMIC_ROOT_V3)
+                .ok_or(TradingSbfError::Content)?
+                .key
+                .to_bytes(),
+        ),
+        ReceiptKindV3::FractionalTerminalAtomic => PostResourceEvidenceV3::FractionalRoot(
+            buffers
+                .accounts
+                .get(FRACTIONAL_TERMINAL_ROOT_V3)
+                .ok_or(TradingSbfError::Content)?
+                .key
+                .to_bytes(),
+        ),
         _ => PostResourceEvidenceV3::None,
     };
     verify_route_receipt(
@@ -302,6 +318,7 @@ enum PostResourceEvidenceV3 {
     None,
     Single([u8; 32]),
     Founding(FoundingPostResourceDigestsV5),
+    FractionalRoot([u8; 32]),
 }
 
 fn composition_owns_route(composition: ClaimsCompositionV3<'_>, route: u16) -> bool {
@@ -598,12 +615,24 @@ fn verify_route_receipt(
         ReceiptKindV3::RationalRepresentation => {
             verify_rational_representation_receipt(request, receipt, request_digest, claims_program)
         }
-        ReceiptKindV3::FractionalAtomic => {
-            verify_fractional_atomic_receipt(request, receipt, request_digest)
-        }
-        ReceiptKindV3::FractionalTerminalAtomic => {
-            verify_fractional_terminal_atomic_receipt(request, receipt, request_digest)
-        }
+        ReceiptKindV3::FractionalAtomic => verify_fractional_atomic_receipt(
+            request,
+            receipt,
+            request_digest,
+            match expected_post_resources {
+                PostResourceEvidenceV3::FractionalRoot(value) => Some(value),
+                _ => None,
+            },
+        ),
+        ReceiptKindV3::FractionalTerminalAtomic => verify_fractional_terminal_atomic_receipt(
+            request,
+            receipt,
+            request_digest,
+            match expected_post_resources {
+                PostResourceEvidenceV3::FractionalRoot(value) => Some(value),
+                _ => None,
+            },
+        ),
         ReceiptKindV3::Close => {
             verify_close_receipt(request, receipt, request_digest, claims_program)
         }
@@ -615,6 +644,7 @@ fn verify_fractional_atomic_receipt(
     request: &[u8],
     receipt: &[u8],
     request_digest: [u8; 32],
+    expected_root: Option<[u8; 32]>,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if receipt.len() != FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3 {
         return Err(TradingSbfError::Transition.into());
@@ -626,6 +656,9 @@ fn verify_fractional_atomic_receipt(
     receipt
         .verify_for(request, request_digest)
         .map_err(|_| TradingSbfError::Transition)?;
+    if expected_root != Some(receipt.root()) {
+        return Err(TradingSbfError::Transition.into());
+    }
     Ok(ClaimsRouteReceiptV3::FractionalAtomic(receipt))
 }
 
@@ -634,6 +667,7 @@ fn verify_fractional_terminal_atomic_receipt(
     request: &[u8],
     receipt: &[u8],
     request_digest: [u8; 32],
+    expected_root: Option<[u8; 32]>,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if receipt.len() != FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3 {
         return Err(TradingSbfError::Transition.into());
@@ -645,6 +679,9 @@ fn verify_fractional_terminal_atomic_receipt(
     receipt
         .verify_for(request, request_digest)
         .map_err(|_| TradingSbfError::Transition)?;
+    if expected_root != Some(receipt.root()) {
+        return Err(TradingSbfError::Transition.into());
+    }
     Ok(ClaimsRouteReceiptV3::FractionalTerminalAtomic(receipt))
 }
 
@@ -1670,7 +1707,7 @@ mod tests {
                 &receipt.to_bytes(),
                 id(20),
                 id(21),
-                PostResourceEvidenceV3::None,
+                PostResourceEvidenceV3::FractionalRoot(id(44)),
             ),
             Ok(ClaimsRouteReceiptV3::FractionalAtomic(_))
         ));
@@ -1683,7 +1720,7 @@ mod tests {
                 &substituted,
                 id(20),
                 id(21),
-                PostResourceEvidenceV3::None,
+                PostResourceEvidenceV3::FractionalRoot(id(44)),
             )
             .is_err()
         );
@@ -1792,7 +1829,7 @@ mod tests {
                     &receipt.to_bytes(),
                     id(20),
                     id(21),
-                    PostResourceEvidenceV3::None,
+                    PostResourceEvidenceV3::FractionalRoot(id(44)),
                 ),
                 Ok(ClaimsRouteReceiptV3::FractionalTerminalAtomic(_))
             ));

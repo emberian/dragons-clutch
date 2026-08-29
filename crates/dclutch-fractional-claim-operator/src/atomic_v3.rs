@@ -9,13 +9,31 @@ use dclutch_claims_svm::{
     frame_spec_v1::SignedDeltaFrameSpecV3,
     liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2,
     protocol_position_v2::ProtocolPositionSeedsV2,
+    terminal_settlement_v3::{
+        TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3, TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3, TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
+    },
 };
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
     FRACTIONAL_ATOMIC_TERMS_RAW_V3, FRACTIONAL_ATOMIC_TERMS_STAGING_V3,
     FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_RAW_V3, FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_STAGING_V3,
-    FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3, FRACTIONAL_ROOT_PDA_SEED_V1, FractionalExposureActionV2,
+    FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3, FRACTIONAL_ROOT_PDA_SEED_V1,
+    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ACTOR_V3,
+    FRACTIONAL_TERMINAL_ROOT_V3, FRACTIONAL_TERMINAL_SHARD_MINT_V3,
+    FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, FRACTIONAL_TERMINAL_TERMS_RAW_V3,
+    FRACTIONAL_TERMINAL_TERMS_STAGING_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
+    FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalExposureActionV2,
     FractionalExposureRequestV2, FractionalRootV1,
 };
 use dclutch_fractional_claim_kernel::{
@@ -23,6 +41,10 @@ use dclutch_fractional_claim_kernel::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_representation_composition_v3_kernel::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3,
+    CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
+};
 use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2;
 use solana_program::{
     hash::hash,
@@ -189,6 +211,203 @@ pub fn build_fractional_atomic_claims_instruction_v3(
     })
 }
 
+/// Build one exact terminal Claims/Custody/Token CPI from authenticated exposure bytes.
+///
+/// This remains an inner Trading instruction: coordinate zero and the Fractional
+/// root are program signers, while the shard holder is the sole wallet signer.
+pub fn build_fractional_terminal_atomic_claims_instruction_v3(
+    request: FractionalExposureRequestV2,
+    terms: FractionalExposureTermsV2<'_>,
+    root: FractionalRootV1,
+    composition_exposure_bytes: &[u8],
+    accounts: &[AccountMeta],
+) -> Result<Instruction> {
+    request.bind_terms(terms).map_err(|_| Error::Claims)?;
+    if !matches!(
+        request.action(),
+        FractionalExposureActionV2::TerminalRedeem | FractionalExposureActionV2::TerminalZeroBurn
+    ) || accounts.len() != FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3
+    {
+        return Err(Error::Claims);
+    }
+    let bytes = request.to_bytes().map_err(|_| Error::Claims)?;
+    let request_digest = hash(&bytes).to_bytes();
+    let input = request.input();
+    let exposure_digest = hash(composition_exposure_bytes).to_bytes();
+    CompositionExposureBundleV3::decode(
+        composition_exposure_bytes,
+        RecordAdmissionV3 {
+            selected_id: input.exposure,
+            finalized_id: input.exposure,
+            recomputed_digest: exposure_digest,
+            finalized_digest: exposure_digest,
+            record_authenticated: true,
+        },
+    )
+    .and_then(|exposure| {
+        exposure.verify_execution_for(CompositionExposureExecutionExpectedV3 {
+            market: input.market,
+            result_domain: input.result_domain,
+            release_set: input.release_set,
+            product_basis: terms.product_basis(),
+            representation_basis: terms.representation_basis(),
+            product_width: terms.product_width(),
+            representation_width: terms.representation_width(),
+        })
+    })
+    .map_err(|_| Error::Claims)?;
+
+    let claims_program = meta(accounts, CLAIMS_PROGRAM)?.pubkey;
+    let trading_program = meta(accounts, TRADING_PROGRAM)?.pubkey;
+    let registry = meta(accounts, REGISTRY)?.pubkey;
+    let caller = CallerAuthoritySeedsV1::from_bytes(
+        input.release_set,
+        input.market,
+        ExecutionRoleV1::Trading,
+        input.terms,
+        request_digest,
+    )
+    .map_err(|_| Error::Claims)?;
+    let expected_authority = Pubkey::find_program_address(&caller.as_slices(), &trading_program).0;
+    let expected_market = Pubkey::find_program_address(
+        &[LIABILITY_BASIS_MARKET_SEED_V2, input.market.as_slice()],
+        &claims_program,
+    )
+    .0;
+    let root_input = root.input();
+    let expected_root = Pubkey::create_program_address(
+        &[
+            FRACTIONAL_ROOT_PDA_SEED_V1,
+            input.terms.as_slice(),
+            input.market.as_slice(),
+            &[root_input.bump],
+        ],
+        &trading_program,
+    )
+    .map_err(|_| Error::Claims)?;
+    let reserve_position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(expected_market.to_bytes(), expected_root.to_bytes())
+            .map_err(|_| Error::Claims)?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    if root_input.terms != input.terms
+        || root_input.market != input.market
+        || root_input.revision != input.expected_revision
+        || meta(accounts, 0)?.pubkey != expected_authority
+        || meta(accounts, MARKET)?.pubkey != expected_market
+        || meta(accounts, POSITION_0)?.pubkey != reserve_position
+        || meta(accounts, FRACTIONAL_TERMINAL_ROOT_V3)?.pubkey != expected_root
+        || meta(accounts, FRACTIONAL_TERMINAL_ACTOR_V3)?
+            .pubkey
+            .to_bytes()
+            != input.owner
+        || meta(accounts, FRACTIONAL_TERMINAL_SHARD_MINT_V3)?
+            .pubkey
+            .to_bytes()
+            != terms
+                .shard_mint(input.representation_coordinate)
+                .map_err(|_| Error::Claims)?
+        || meta(accounts, FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3)?
+            .pubkey
+            .to_bytes()
+            != input.source_token_account
+        || meta(accounts, TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3)?
+            .pubkey
+            .to_bytes()
+            != input.terminal_digest
+        || meta(accounts, TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3)?
+            .pubkey
+            .to_bytes()
+            != terms.token_program()
+    {
+        return Err(Error::Claims);
+    }
+
+    for (raw, staging, schema, digest) in [
+        (
+            FRACTIONAL_TERMINAL_TERMS_RAW_V3,
+            FRACTIONAL_TERMINAL_TERMS_STAGING_V3,
+            FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            input.terms,
+        ),
+        (
+            FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
+            FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3,
+            TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+            input.token_behavior,
+        ),
+        (
+            TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
+            TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3,
+            COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+            exposure_digest,
+        ),
+    ] {
+        require_record_pair(accounts, registry, raw, staging, schema, digest)?;
+    }
+
+    let spec = SignedDeltaFrameSpecV3::new(1).map_err(|_| Error::Claims)?;
+    for index in 0..spec.account_count().map_err(|_| Error::Claims)? {
+        let expected = spec.account(index).map_err(|_| Error::Claims)?.privileges();
+        require_privilege(
+            accounts,
+            usize::from(index),
+            expected.signer(),
+            expected.writable(),
+        )?;
+    }
+    for (index, signer, writable) in [
+        (TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3, false, false),
+        (
+            TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3,
+            false,
+            false,
+        ),
+        (TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3, false, false),
+        (TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3, false, false),
+        (TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3, false, false),
+        (
+            TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+            false,
+            false,
+        ),
+        (
+            TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
+            false,
+            false,
+        ),
+        (TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3, false, false),
+        (TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3, false, false),
+        (TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, false, true),
+        (TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3, false, false),
+        (TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3, false, true),
+        (TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3, false, true),
+        (
+            TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3,
+            false,
+            false,
+        ),
+        (TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3, false, false),
+        (FRACTIONAL_TERMINAL_TERMS_RAW_V3, false, false),
+        (FRACTIONAL_TERMINAL_TERMS_STAGING_V3, false, false),
+        (FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3, false, false),
+        (FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, false, false),
+        (FRACTIONAL_TERMINAL_ROOT_V3, true, false),
+        (FRACTIONAL_TERMINAL_ACTOR_V3, true, false),
+        (FRACTIONAL_TERMINAL_SHARD_MINT_V3, false, true),
+        (FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, false, true),
+    ] {
+        require_privilege(accounts, index, signer, writable)?;
+    }
+    Ok(Instruction {
+        program_id: claims_program,
+        accounts: accounts.to_vec(),
+        data: bytes.to_vec(),
+    })
+}
+
 fn require_record_pair(
     accounts: &[AccountMeta],
     registry: Pubkey,
@@ -213,6 +432,20 @@ fn meta(accounts: &[AccountMeta], index: usize) -> Result<&AccountMeta> {
     accounts.get(index).ok_or(Error::Claims)
 }
 
+fn require_privilege(
+    accounts: &[AccountMeta],
+    index: usize,
+    signer: bool,
+    writable: bool,
+) -> Result<()> {
+    let observed = meta(accounts, index)?;
+    if observed.is_signer != signer || observed.is_writable != writable {
+        Err(Error::Claims)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +455,10 @@ mod tests {
     use dclutch_fractional_claim_kernel::{
         FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2,
         encode_fractional_exposure_terms_v2, fractional_exposure_terms_bytes_v2,
+    };
+    use dclutch_representation_composition_v3_kernel::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -235,6 +472,11 @@ mod tests {
         terms_id: [u8; 32],
         root: FractionalRootV1,
         accounts: Vec<AccountMeta>,
+    }
+
+    struct TerminalFixture {
+        base: Fixture,
+        exposure_bytes: Vec<u8>,
     }
 
     impl Fixture {
@@ -424,6 +666,181 @@ mod tests {
         }
     }
 
+    fn terminal_fixture() -> TerminalFixture {
+        let mut base = fixture();
+        let first_terms = [CompositionExposureTermV3 {
+            product_coordinate: 0,
+            numerator: 1,
+        }];
+        let second_terms = [CompositionExposureTermV3 {
+            product_coordinate: 1,
+            numerator: 1,
+        }];
+        let rows = [
+            CompositionExposureRowInputV3 {
+                node_id: id(60),
+                denominator: 1,
+                terms: &first_terms,
+            },
+            CompositionExposureRowInputV3 {
+                node_id: id(61),
+                denominator: 1,
+                terms: &second_terms,
+            },
+        ];
+        let width = composition_exposure_bytes_v3(2, 2).expect("exposure width");
+        let mut scratch = vec![0; width];
+        let mut exposure_bytes = vec![0; width];
+        encode_composition_exposure_v3_atomic(
+            CompositionExposureInputV3 {
+                market: id(2),
+                result_domain: id(10),
+                release_set: id(3),
+                product_basis: id(12),
+                representation_basis: id(13),
+                graph_id: id(14),
+                product_width: 3,
+                rows: &rows,
+            },
+            &mut scratch,
+            &mut exposure_bytes,
+        )
+        .expect("exposure");
+        let input = base.request.input();
+        base.request = FractionalExposureRequestV2::new(
+            FractionalExposureActionV2::TerminalRedeem,
+            FractionalExposureRequestInputV2 {
+                source_token_account: id(6),
+                destination_token_account: [0; 32],
+                terminal_digest: id(90),
+                ..input
+            },
+        )
+        .expect("terminal request");
+
+        let claims = base.accounts[CLAIMS_PROGRAM].pubkey;
+        let trading = base.accounts[TRADING_PROGRAM].pubkey;
+        let registry = base.accounts[REGISTRY].pubkey;
+        let root_key = base.accounts[FRACTIONAL_ATOMIC_ROOT_V3].pubkey;
+        let mut accounts = Vec::new();
+        let spec = SignedDeltaFrameSpecV3::new(1).expect("spec");
+        for index in 0..spec.account_count().expect("count") {
+            let privileges = spec.account(index).expect("account").privileges();
+            let key = Pubkey::new_from_array(id(u8::try_from(index + 100).expect("id")));
+            accounts.push(if privileges.writable() {
+                AccountMeta::new(key, privileges.signer())
+            } else {
+                AccountMeta::new_readonly(key, privileges.signer())
+            });
+        }
+        for (signer, writable) in [
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, true),
+            (false, false),
+            (false, true),
+            (false, true),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (false, false),
+            (true, false),
+            (true, false),
+            (false, true),
+            (false, true),
+        ] {
+            let key = Pubkey::new_unique();
+            accounts.push(if writable {
+                AccountMeta::new(key, signer)
+            } else {
+                AccountMeta::new_readonly(key, signer)
+            });
+        }
+        assert_eq!(accounts.len(), FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3);
+        accounts[REGISTRY].pubkey = registry;
+        accounts[TRADING_PROGRAM].pubkey = trading;
+        accounts[CLAIMS_PROGRAM].pubkey = claims;
+        let terminal_input = base.request.input();
+        let request_digest = hash(&base.request.to_bytes().expect("bytes")).to_bytes();
+        let caller = CallerAuthoritySeedsV1::from_bytes(
+            terminal_input.release_set,
+            terminal_input.market,
+            ExecutionRoleV1::Trading,
+            terminal_input.terms,
+            request_digest,
+        )
+        .expect("caller");
+        accounts[0].pubkey = Pubkey::find_program_address(&caller.as_slices(), &trading).0;
+        let claims_market = Pubkey::find_program_address(
+            &[LIABILITY_BASIS_MARKET_SEED_V2, &terminal_input.market],
+            &claims,
+        )
+        .0;
+        accounts[MARKET].pubkey = claims_market;
+        accounts[POSITION_0].pubkey = Pubkey::find_program_address(
+            &ProtocolPositionSeedsV2::new(claims_market.to_bytes(), root_key.to_bytes())
+                .expect("reserve seeds")
+                .as_slices(),
+            &claims,
+        )
+        .0;
+        accounts[TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3].pubkey =
+            Pubkey::new_from_array(terminal_input.terminal_digest);
+        accounts[TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3].pubkey =
+            Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+        accounts[FRACTIONAL_TERMINAL_ROOT_V3].pubkey = root_key;
+        accounts[FRACTIONAL_TERMINAL_ACTOR_V3].pubkey =
+            Pubkey::new_from_array(terminal_input.owner);
+        accounts[FRACTIONAL_TERMINAL_SHARD_MINT_V3].pubkey = Pubkey::new_from_array(id(8));
+        accounts[FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3].pubkey =
+            Pubkey::new_from_array(terminal_input.source_token_account);
+        for (raw, staging, schema, digest) in [
+            (
+                FRACTIONAL_TERMINAL_TERMS_RAW_V3,
+                FRACTIONAL_TERMINAL_TERMS_STAGING_V3,
+                FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+                terminal_input.terms,
+            ),
+            (
+                FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
+                FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3,
+                TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                terminal_input.token_behavior,
+            ),
+            (
+                TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
+                TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3,
+                COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+                hash(&exposure_bytes).to_bytes(),
+            ),
+        ] {
+            accounts[raw].pubkey = Pubkey::find_program_address(
+                &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+                &registry,
+            )
+            .0;
+            accounts[staging].pubkey = Pubkey::find_program_address(
+                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+                &registry,
+            )
+            .0;
+        }
+        base.accounts = accounts;
+        TerminalFixture {
+            base,
+            exposure_bytes,
+        }
+    }
+
     #[test]
     fn exact_inner_caller_builds_and_binds_both_program_signers() {
         let fixture = fixture();
@@ -472,6 +889,76 @@ mod tests {
                 fixture.terms(),
                 fixture.root,
                 &fixture.accounts,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_builder_binds_chain_derived_exposure_and_distinct_44_frame() {
+        let fixture = terminal_fixture();
+        let instruction = build_fractional_terminal_atomic_claims_instruction_v3(
+            fixture.base.request,
+            fixture.base.terms(),
+            fixture.base.root,
+            &fixture.exposure_bytes,
+            &fixture.base.accounts,
+        )
+        .expect("terminal instruction");
+        assert_eq!(instruction.accounts.len(), 44);
+        assert!(instruction.accounts[0].is_signer);
+        assert!(instruction.accounts[FRACTIONAL_TERMINAL_ROOT_V3].is_signer);
+        assert!(instruction.accounts[FRACTIONAL_TERMINAL_ACTOR_V3].is_signer);
+        assert_eq!(instruction.data.len(), 416);
+    }
+
+    #[test]
+    fn terminal_exposure_root_token_and_privilege_substitution_refuse() {
+        for index in [
+            0,
+            POSITION_0,
+            TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3,
+            TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3,
+            FRACTIONAL_TERMINAL_ROOT_V3,
+            FRACTIONAL_TERMINAL_ACTOR_V3,
+            FRACTIONAL_TERMINAL_SHARD_MINT_V3,
+            FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3,
+        ] {
+            let mut fixture = terminal_fixture();
+            fixture.base.accounts[index].pubkey = Pubkey::new_unique();
+            assert!(
+                build_fractional_terminal_atomic_claims_instruction_v3(
+                    fixture.base.request,
+                    fixture.base.terms(),
+                    fixture.base.root,
+                    &fixture.exposure_bytes,
+                    &fixture.base.accounts,
+                )
+                .is_err(),
+                "index {index}"
+            );
+        }
+        let mut fixture = terminal_fixture();
+        fixture.exposure_bytes[16] ^= 1;
+        assert!(
+            build_fractional_terminal_atomic_claims_instruction_v3(
+                fixture.base.request,
+                fixture.base.terms(),
+                fixture.base.root,
+                &fixture.exposure_bytes,
+                &fixture.base.accounts,
+            )
+            .is_err()
+        );
+        let mut fixture = terminal_fixture();
+        fixture.base.accounts[TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3].is_writable = false;
+        assert!(
+            build_fractional_terminal_atomic_claims_instruction_v3(
+                fixture.base.request,
+                fixture.base.terms(),
+                fixture.base.root,
+                &fixture.exposure_bytes,
+                &fixture.base.accounts,
             )
             .is_err()
         );

@@ -124,9 +124,10 @@ compression.
 - Trading composition admission for all four executable actions, with distinct
   receipt kinds and two authenticated `invoke_signed` authorities: the exact
   request caller PDA and the terms/Market Fractional-root PDA;
-- a caller-side Claims instruction builder for the 31-account open frame that
-  rederives both PDAs, both record pairs, both ordered Claims Positions, the
-  selected Mint/Token account, and every privilege;
+- caller-side Claims instruction builders for the 31-account open and
+  44-account terminal frames that rederive both PDAs, selected record pairs,
+  canonical Claims Positions, selected Mint/Token accounts, terminal exposure
+  bytes, and every privilege;
 - explicit refusal of the old all-`K` retirement route;
 - exact hostile-decoded retirement request and cursor formats;
 - strict ordered cursor transitions and fixed-width finish evidence;
@@ -143,12 +144,11 @@ exist. Integration still requires:
    ExecutionStrategy artifacts whose exact expanded frame matches the census;
 2. the outer Trading transition that advances the sole Fractional-root
    revision only after the verified child receipt, plus its rollback campaign;
-3. a terminal-frame caller-side builder equivalent to the landed open builder;
-4. a migration or new producer-root version that authenticates the V3 cursor
+3. a migration or new producer-root version that authenticates the V3 cursor
    PDA and its lifecycle rent;
-5. one-coordinate Claims Position close plus Token Mint close in the retirement
+4. one-coordinate Claims Position close plus Token Mint close in the retirement
    step, and fixed final Core/Lifecycle-Rent closure;
-6. a real-ELF caller-backed late-Token-failure rollback campaign, frame
+5. a real-ELF caller-backed late-Token-failure rollback campaign, frame
    diagnostic, 20-seed CU mean, and
    checked release bindings.
 
