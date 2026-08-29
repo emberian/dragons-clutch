@@ -38,6 +38,7 @@ import {
   REPLAY_ACCOUNT_AGGREGATE_V1,
   REPLAY_ACCOUNT_CUSTODY_REPLAY_V1,
   REPLAY_ACCOUNT_PAYER_V1,
+  REPLAY_ACCOUNT_RENT_REFUND_V1,
 } from './generated/claimsCustodyReplayV1';
 import {
   LIABILITY_BASIS_MARKET_CLAIM_COUNT_OFFSET,
@@ -53,10 +54,17 @@ import {
   LIABILITY_BASIS_MARKET_REGISTRY_OFFSET,
   LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET,
   LIABILITY_BASIS_STATE_VERSION_V2,
+  CORE_STATE_GENERATION_OFFSET,
+  CORE_STATE_IDENTITY_REALM_OFFSET,
+  CORE_STATE_MARKET_ID_OFFSET,
+  CORE_STATE_REGISTRY_PROGRAM_OFFSET,
+  CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  CORE_STATE_SELECTED_RELEASE_SET_OFFSET,
 } from './generated/coreFound';
 import { deriveClaimsAggregateAddressV2 } from './marketCoreV2';
 import { SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount } from './rpc';
+import { currentCoreMarketV3 } from '../fixtures/liveOpenMarket';
 
 const CLAIMS = Keypair.fromSeed(new Uint8Array(32).fill(21)).publicKey.toBase58();
 const CUSTODY = Keypair.fromSeed(new Uint8Array(32).fill(22)).publicKey.toBase58();
@@ -68,6 +76,7 @@ const CONTEXT = new Uint8Array(32).fill(32);
 const REALM_ID = new Uint8Array(32).fill(33);
 const PRODUCT_ID = new Uint8Array(32).fill(34);
 const BASIS_ID = new Uint8Array(32).fill(35);
+const RENT_REFUND = Keypair.fromSeed(new Uint8Array(32).fill(36)).publicKey.toBase58();
 const BLOCKHASH = Keypair.fromSeed(new Uint8Array(32).fill(26)).publicKey.toBase58();
 const CUSTODY_REPLAY_LAST_REQUEST_DIGEST_OFFSET_V1 = CUSTODY_REPLAY_GENERATION_OFFSET_V1 + 8;
 const CUSTODY_REPLAY_LAST_POSTSTATE_COMMITMENT_OFFSET_V1 = CUSTODY_REPLAY_LAST_REQUEST_DIGEST_OFFSET_V1 + 32;
@@ -90,6 +99,17 @@ function aggregateBytes(overrides?: Partial<Readonly<{ logicalMarket: string }>>
   for (let index = 0; index < claimCount; index += 1) {
     new DataView(bytes.buffer).setBigUint64(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + index * 8, 500n, true);
   }
+  return bytes;
+}
+
+function coreMarketBytes(): Uint8Array {
+  const bytes = currentCoreMarketV3();
+  bytes.set(new PublicKey(MARKET).toBytes(), CORE_STATE_MARKET_ID_OFFSET);
+  bytes.set(RELEASE_SET, CORE_STATE_SELECTED_RELEASE_SET_OFFSET);
+  bytes.set(new PublicKey(REGISTRY).toBytes(), CORE_STATE_REGISTRY_PROGRAM_OFFSET);
+  bytes.set(REALM_ID, CORE_STATE_IDENTITY_REALM_OFFSET);
+  new DataView(bytes.buffer).setBigUint64(CORE_STATE_GENERATION_OFFSET, 2n, true);
+  bytes.set(new PublicKey(RENT_REFUND).toBytes(), CORE_STATE_RENT_BENEFICIARY_OFFSET);
   return bytes;
 }
 
@@ -138,7 +158,10 @@ function fakeClient(accounts: Record<string, RpcAccount>) {
     async multipleAccounts(addresses: ReadonlyArray<string>) {
       return Object.freeze({
         slot: '90',
-        accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account: accounts[address] ?? null }))),
+        accounts: Object.freeze(addresses.map((address) => Object.freeze({
+          address,
+          account: accounts[address] ?? (address === MARKET ? account(REGISTRY, coreMarketBytes()) : null),
+        }))),
       });
     },
     async minimumBalanceForRentExemption(dataLength: number) {
@@ -160,7 +183,7 @@ describe('Claims-role Custody replay creation (the wallet-side redemption precon
     expect(new PublicKey(bytes.slice(16, 48)).toBase58()).toBe(MARKET);
   });
 
-  it('mirrors expected_request_v1: InitializeReplay under the Claims role with payer as rent refund', async () => {
+  it('mirrors expected_request_v1: InitializeReplay under the Claims role with the immutable Core Market RentCredit as refund', async () => {
     const request = await encodeExpectedCustodyRequestV1({
       releaseSet: RELEASE_SET,
       market: new PublicKey(MARKET).toBytes(),
@@ -168,6 +191,7 @@ describe('Claims-role Custody replay creation (the wallet-side redemption precon
       context: CONTEXT,
       claimsProgram: new PublicKey(CLAIMS).toBytes(),
       payer: new PublicKey(PAYER).toBytes(),
+      rentRefund: new PublicKey(RENT_REFUND).toBytes(),
       generation: 2n,
       rentLamports: 2895840n,
     });
@@ -176,9 +200,8 @@ describe('Claims-role Custody replay creation (the wallet-side redemption precon
     expect(request[CUSTODY_REQUEST_OPERATION_OFFSET_V1]).toBe(0);
     expect(request[CUSTODY_REQUEST_CALLER_ROLE_OFFSET_V1]).toBe(EXECUTION_ROLE_CLAIMS_V1);
     expect(new PublicKey(request.slice(CUSTODY_REQUEST_MARKET_OFFSET_V1, CUSTODY_REQUEST_MARKET_OFFSET_V1 + 32)).toBase58()).toBe(MARKET);
-    // Whoever prepays owns the refund; the payer is written into both fields.
-    expect(request.slice(CUSTODY_REQUEST_PAYER_OFFSET_V1, CUSTODY_REQUEST_PAYER_OFFSET_V1 + 32))
-      .toEqual(request.slice(CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1, CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1 + 32));
+    expect(new PublicKey(request.slice(CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1, CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1 + 32)).toBase58())
+      .toBe(RENT_REFUND);
     expect(new DataView(request.buffer).getBigUint64(CUSTODY_REQUEST_RENT_LAMPORTS_OFFSET_V1, true)).toBe(2895840n);
     // The synthetic parent digest is nonzero: validate() requires it.
     expect(request.slice(CUSTODY_REQUEST_PARENT_REQUEST_DIGEST_OFFSET_V1, CUSTODY_REQUEST_PARENT_REQUEST_DIGEST_OFFSET_V1 + 32).some((byte) => byte !== 0)).toBe(true);
@@ -193,12 +216,13 @@ describe('Claims-role Custody replay creation (the wallet-side redemption precon
       context: CONTEXT,
       claimsProgram: new PublicKey(CLAIMS).toBytes(),
       payer: new PublicKey(PAYER).toBytes(),
+      rentRefund: new PublicKey(RENT_REFUND).toBytes(),
       generation: 2n,
       rentLamports: 0n,
     })).rejects.toThrow('rent');
   });
 
-  it('plans one legacy packet-bound transaction with the exact 14-account frame', async () => {
+  it('plans one legacy packet-bound transaction with the exact 15-account frame', async () => {
     const aggregateAddress = deriveClaimsAggregateAddressV2(CLAIMS, MARKET);
     const state = await inspectClaimsCustodyReplayV1(fakeClient({
       [aggregateAddress]: account(CLAIMS, aggregateBytes()),
@@ -220,6 +244,8 @@ describe('Claims-role Custody replay creation (the wallet-side redemption precon
     expect(frame[REPLAY_ACCOUNT_PAYER_V1]).toBe(PAYER);
     expect(frame[REPLAY_ACCOUNT_CUSTODY_REPLAY_V1]).toBe(plan.replayAddress);
     expect(frame[REPLAY_ACCOUNT_AGGREGATE_V1]).toBe(plan.aggregateAddress);
+    expect(frame[REPLAY_ACCOUNT_RENT_REFUND_V1]).toBe(RENT_REFUND);
+    expect(plan.rentRefundAddress).toBe(RENT_REFUND);
     expect(state.note).toContain('legacy transaction');
     expect(CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1).toBeGreaterThan(160_000);
   });

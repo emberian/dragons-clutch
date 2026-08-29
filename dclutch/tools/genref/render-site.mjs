@@ -654,37 +654,54 @@ function servedBy(abs) {
 }
 
 // The app export writes `route.html`; Pages serves its canonical public URL as
-// `/route`. Unlike that extensionless form, `/route/` is not an asset match,
-// so it needs an explicit redirect before a cold request reaches 404.html.
-// Check the assembled production artifact instead of trusting the source file:
-// the export's route set and its copied `_redirects` rules must stay together.
-function checkPagesTrailingSlashRoutes() {
-  const redirectsPath = path.join(outDir, "_redirects");
-  if (!isFile(redirectsPath)) {
-    console.error("render-site: missing Pages _redirects routing artifact");
-    return 1;
-  }
-  const redirects = new Set(
-    fs
-      .readFileSync(redirectsPath, "utf8")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line !== "" && !line.startsWith("#")),
-  );
+// `/route`. Unlike that extensionless form, `/route/` is not an asset match:
+// GitHub Pages looks up `route/index.html`, finds nothing, and serves 404.html.
+// (A `_redirects` file is a Netlify/Cloudflare convention; GitHub Pages
+// ignores it — shipping one was exactly how `/live/` 404'd on the live host
+// while a green check watched the wrong artifact.) The only routing a Pages
+// artifact really has is its file layout, so the fix IS layout: every
+// top-level `route.html` gets a `route/index.html` stub that sends the
+// browser to the canonical extensionless URL, keeping query and fragment.
+// Emitted here, from what actually rendered, so the app's routes and this
+// file's own evidence.html are covered by one rule and no hand-kept list.
+function emitTrailingSlashDirectoryIndexes() {
   let failures = 0;
+  let emitted = 0;
   for (const entry of fs.readdirSync(outDir).sort()) {
     if (!entry.endsWith(".html") || entry === "index.html" || entry === "404.html") {
       continue;
     }
-    const route = `/${entry.slice(0, -".html".length)}`;
-    const required = `${route}/ ${route} 308`;
-    if (!redirects.has(required)) {
+    const route = entry.slice(0, -".html".length);
+    const stubPath = path.join(outDir, route, "index.html");
+    if (fs.existsSync(stubPath)) {
+      // Two answers for one URL; decide which, rather than letting copy order.
       console.error(
-        `render-site: missing trailing-slash redirect ${JSON.stringify(required)}`,
+        `render-site: both ${entry} and ${route}/index.html exist; refusing the artifact.`,
       );
       failures++;
+      continue;
     }
+    fs.mkdirSync(path.join(outDir, route), { recursive: true });
+    fs.writeFileSync(
+      stubPath,
+      `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url=/${route}">
+<link rel="canonical" href="/${route}">
+<title>dClutch</title>
+<script>location.replace("/${route}" + location.search + location.hash);</script>
+</head>
+<body><p><a href="/${route}">Continue to /${route}</a></p></body>
+</html>
+`,
+    );
+    emitted++;
   }
+  console.log(
+    `render-site: emitted ${emitted} trailing-slash directory indexes.`,
+  );
   return failures;
 }
 
@@ -699,7 +716,7 @@ function checkPagesTrailingSlashRoutes() {
 const DYNAMIC_PREFIXES = ["/markets/"];
 
 let checkedPages = 0;
-broken += checkPagesTrailingSlashRoutes();
+broken += emitTrailingSlashDirectoryIndexes();
 for (const file of walkOut(outDir)) {
   if (!file.endsWith(".html")) continue;
   checkedPages++;

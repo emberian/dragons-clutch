@@ -10,6 +10,7 @@ import { parseArgs } from 'node:util';
 
 import { resolveContext } from './context';
 import { found } from './commands/found';
+import { join } from './commands/join';
 import { marketsLs, marketsShow } from './commands/markets';
 import { portfolio } from './commands/portfolio';
 import { redeem } from './commands/redeem';
@@ -33,6 +34,7 @@ commands:
   spine                            is this market Direct-tradable now, and which walls stand (--market)
   redeem                           resume or finalize one exact wallet payout
   found                            private-validator lifecycle (--spec), or durable permanent-devnet founding + participant admission
+  join                             admit one participant into a founded market (--plan, --campaign-evidence, --output; preflight unless --execute)
   walk                             preview the funded failure walk (--dry-run required; submission disabled)
   refusal <code...>                name any custom program error via the band registry
 
@@ -53,11 +55,25 @@ global flags:
                          crash-safe unsigned/submitted payout operation journal
   --discard-unsigned-payout
                          archive an unsigned payout journal without signing it
-  --i-mean-devnet <hash> name devnet by its full genesis hash for found, redeem, and walk
+  --i-mean-devnet <hash> name devnet by its full genesis hash for found, join, redeem, and walk
   --found-operation <json>
                          exact permanent-devnet market + participant operation
   --found-journal <json> durable outer journal for that operation
-  --execute              authorize the devnet founding operation after read-only preparation
+  --execute              authorize the founding or join operation after read-only preparation
+  --plan <json>          successor run plan naming the programs join admits against
+  --campaign-evidence <json>
+                         completed founding campaign evidence for join
+  --output <json>        durable admission report join reads, resumes, and reports
+  --fee-payer-keypair <path>
+                         join fee payer; defaults to the --keypair position owner
+  --minimum-finalized-slot <u64>
+                         state join's finalized floor instead of reading it from the endpoint
+  --collateral-source-owner-keypair <path>
+                         fund the admitted position after admission; requires the two flags below
+  --collateral-source-account <address>
+                         exact source token account for that funding
+  --collateral-quantity-atoms <u64>
+                         exact raw-atom quantity for that funding
 
 program ids come from --session or explicit --core-program/--claims-program/... flags.
 refusal codes: band = code >> 12; codes below 0x1000 are provably not dClutch's. See docs/guides/client-developers.md.`;
@@ -77,6 +93,14 @@ const FLAG_OPTIONS = {
   'found-operation': { type: 'string' },
   'found-journal': { type: 'string' },
   execute: { type: 'boolean' },
+  plan: { type: 'string' },
+  'campaign-evidence': { type: 'string' },
+  output: { type: 'string' },
+  'fee-payer-keypair': { type: 'string' },
+  'minimum-finalized-slot': { type: 'string' },
+  'collateral-source-owner-keypair': { type: 'string' },
+  'collateral-source-account': { type: 'string' },
+  'collateral-quantity-atoms': { type: 'string' },
   'payout-input': { type: 'string' },
   'payout-evidence': { type: 'string' },
   'payout-alt-plan': { type: 'string' },
@@ -154,6 +178,8 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
         return await redeem(context, io, env);
       case 'found':
         return await found(context, io, env);
+      case 'join':
+        return await join(context, io, env);
       case 'walk':
         return await walk(context, io, env);
       case 'refusal':

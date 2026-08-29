@@ -36,6 +36,8 @@ pub mod projected_custody_v3;
 /// Exact content/replay projector behind the canonical Trading hot outer.
 pub mod projector;
 /// Chain-derived Shadow-AOT release selection and generic request construction.
+/// Self-consistent Series Consume capability release assembly.
+pub mod release_v4;
 pub mod shadow_operator;
 /// Fixed-layout mutable replay state owned by the selected Trading program.
 pub mod state;

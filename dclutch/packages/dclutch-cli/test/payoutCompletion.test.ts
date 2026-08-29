@@ -50,6 +50,7 @@ import {
   REPLAY_ACCOUNT_REALM_STAGING_V1,
   REPLAY_ACCOUNT_REALM_V1,
   REPLAY_ACCOUNT_REGISTRY_PROGRAM_V1,
+  REPLAY_ACCOUNT_RENT_REFUND_V1,
   REPLAY_ACCOUNT_RENT_SYSVAR_V1,
   REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1,
 } from '@dclutch/sdk/generated/claimsCustodyReplayV1';
@@ -226,12 +227,14 @@ function littleU64(value: bigint): Uint8Array {
 async function replayFixture() {
   const signer = Keypair.fromSeed(new Uint8Array(32).fill(71));
   const market = key(61); const claims = key(62); const custody = key(63); const registry = key(64);
+  const rentRefundBeneficiary = key(65);
   const rent = 1_000n;
   const release = new Uint8Array(32).fill(6); const realm = new Uint8Array(32).fill(7);
   const context = new Uint8Array(32).fill(8);
   const custodyRequestBytes = await encodeExpectedCustodyRequestV1({
     releaseSet: release, market: new PublicKey(market).toBytes(), realm, context,
     claimsProgram: new PublicKey(claims).toBytes(), payer: signer.publicKey.toBytes(),
+    rentRefund: new PublicKey(rentRefundBeneficiary).toBytes(),
     generation: 9n, rentLamports: rent,
   });
   const instructionData = encodeClaimsCustodyReplayRequestV1(market);
@@ -269,6 +272,7 @@ async function replayFixture() {
   keys[REPLAY_ACCOUNT_PAYER_V1] = { pubkey: signer.publicKey, isSigner: true, isWritable: true };
   keys[REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1] = { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isSigner: false, isWritable: false };
   keys[REPLAY_ACCOUNT_RENT_SYSVAR_V1] = { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_RENT_REFUND_V1] = { pubkey: new PublicKey(rentRefundBeneficiary), isSigner: false, isWritable: true };
   keys[REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1] = { pubkey: custodyProgram, isSigner: false, isWritable: false };
   keys[REPLAY_ACCOUNT_AGGREGATE_V1] = { pubkey: new PublicKey(aggregate), isSigner: false, isWritable: false };
   const instruction = new TransactionInstruction({
@@ -288,6 +292,7 @@ async function replayFixture() {
     claimsProgramDataAddress: claimsProgramData.toBase58(),
     realmRecordAddress: realmRecord.record, realmStagingAddress: realmRecord.staging,
     payer: signer.publicKey.toBase58(),
+    rentRefundAddress: rentRefundBeneficiary,
     rentLamports: rent.toString(), custodyRequestBytes,
     custodyRequestDigestHex: Buffer.from(requestDigest).toString('hex'), instructionData,
     transaction, wireBytes: transaction.serialize(), requiredSigners: Object.freeze([signer.publicKey.toBase58()]),
@@ -305,7 +310,7 @@ async function replayFixture() {
   replayBytes.set(new PublicKey(market).toBytes(), CUSTODY_REPLAY_MARKET_OFFSET_V1);
   replayBytes.set(realm, CUSTODY_REPLAY_REALM_OFFSET_V1); replayBytes.set(context, CUSTODY_REPLAY_CONTEXT_OFFSET_V1);
   replayBytes.set(new PublicKey(claims).toBytes(), CUSTODY_REPLAY_CALLER_PROGRAM_OFFSET_V1);
-  replayBytes.set(signer.publicKey.toBytes(), CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1);
+  replayBytes.set(new PublicKey(rentRefundBeneficiary).toBytes(), CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1);
   putU64(replayBytes, CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1, 1n);
   putU64(replayBytes, CUSTODY_REPLAY_GENERATION_OFFSET_V1, 9n);
   replayBytes.set(requestDigest, 224); replayBytes.set(poststate, 256);

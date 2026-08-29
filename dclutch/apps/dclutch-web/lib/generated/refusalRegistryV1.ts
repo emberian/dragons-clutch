@@ -36,6 +36,7 @@ export const REFUSAL_BANDS_V1: ReadonlyArray<RefusalBandV1> = [
   { label: "test/dealer-accelerator-caller", package: "dclutch-dealer-accelerator-test-caller-sbf", base: 0x108000, tier: "test-caller" },
   { label: "test/general-accelerator-caller", package: "dclutch-general-accelerator-test-caller-sbf", base: 0x109000, tier: "test-caller" },
   { label: "test/resolution-receipt-caller", package: "dclutch-resolution-receipt-test-caller-sbf", base: 0x10A000, tier: "test-caller" },
+  { label: "test/claims-fractional-atomic-caller", package: "dclutch-fractional-atomic-test-caller-sbf", base: 0x10B000, tier: "test-caller" },
 ];
 
 export interface RefusalCodeV1 {

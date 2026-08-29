@@ -1497,11 +1497,14 @@ fn authenticate_locked_batch_header_v1(
         .map_err(|_| TradingSbfError::Content)?;
     let batch = DealerScenarioReservationBatchV1::decode(&batch_data)
         .map_err(|_| TradingSbfError::Content)?;
+    // Custody signs this account into existence under exactly two seeds, and
+    // the checkpoint is itself derived from the request digest, so a third
+    // request-digest seed here named an address Custody can never create. The
+    // request digest is still bound -- by the decoded body, immediately below.
     let expected_batch = Pubkey::find_program_address(
         &[
             DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1,
             checkpoint_account.key.as_ref(),
-            &context.request_digest,
         ],
         custody_program.key,
     )

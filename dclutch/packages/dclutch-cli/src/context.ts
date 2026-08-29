@@ -134,16 +134,28 @@ export function optionalProgramId(context: CliContext, role: ProgramRoleV1): str
 }
 
 /**
+ * The exact key file the caller named, without opening it.
+ *
+ * Separated from `loadKeypair` for the one case that needs the path and not
+ * the secret: a command that hands the file to a child process which is the
+ * thing that signs. The resolution rule is the same and lives only here.
+ */
+export function keypairPath(context: CliContext, env: NodeJS.ProcessEnv, flag = 'keypair'): string {
+  const path = (typeof context.flags[flag] === 'string' ? (context.flags[flag] as string) : undefined) ?? (flag === 'keypair' ? env.DCLUTCH_KEYPAIR : undefined);
+  if (path === undefined || path === '') {
+    throw new Error(`no signer: pass --${flag} <path to a Solana JSON keypair> ${flag === 'keypair' ? 'or set DCLUTCH_KEYPAIR ' : ''}(this tool never reads a default wallet path)`);
+  }
+  return path;
+}
+
+/**
  * Load the signing keypair from the exact file the caller named — the
  * standard Solana JSON array of 64 bytes — via `--keypair` or
  * `$DCLUTCH_KEYPAIR`. Refuses to guess: no `~/.config/solana/id.json`
  * fallback, deliberately.
  */
 export function loadKeypair(context: CliContext, env: NodeJS.ProcessEnv, flag = 'keypair'): Keypair {
-  const path = (typeof context.flags[flag] === 'string' ? (context.flags[flag] as string) : undefined) ?? (flag === 'keypair' ? env.DCLUTCH_KEYPAIR : undefined);
-  if (path === undefined || path === '') {
-    throw new Error(`no signer: pass --${flag} <path to a Solana JSON keypair> ${flag === 'keypair' ? 'or set DCLUTCH_KEYPAIR ' : ''}(this tool never reads a default wallet path)`);
-  }
+  const path = keypairPath(context, env, flag);
   const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (!Array.isArray(raw) || raw.length !== 64 || raw.some((value) => typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 255)) {
     throw new Error(`${path} is not a Solana JSON keypair (an array of exactly 64 bytes)`);

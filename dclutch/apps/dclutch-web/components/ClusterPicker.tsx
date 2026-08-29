@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import {
+  importDeploymentDocumentV1,
   LOCAL_DEPLOYMENT_V1,
   PROTOCOL_ROLES_V1,
   type ProtocolRoleV1,
@@ -29,8 +30,10 @@ export default function ClusterPicker() {
   const [draftEndpoint, setDraftEndpoint] = useState('');
   const [draftPrograms, setDraftPrograms] = useState<Record<ProtocolRoleV1, string>>({ ...LOCAL_DEPLOYMENT_V1.programs });
   const [problem, setProblem] = useState<string | null>(null);
+  const [importText, setImportText] = useState('');
+  const [importNote, setImportNote] = useState<string | null>(null);
   const dialogRef = useRef<HTMLFormElement>(null);
-  const firstFieldRef = useRef<HTMLInputElement>(null);
+  const firstFieldRef = useRef<HTMLTextAreaElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -66,6 +69,22 @@ export default function ClusterPicker() {
       setEditing(false);
     } catch (error) {
       setProblem(error instanceof Error ? error.message : 'the deployment did not validate');
+    }
+  }
+
+  function importDocument(text: string) {
+    setImportText(text);
+    if (text.trim() === '') { setImportNote(null); return; }
+    try {
+      const imported = importDeploymentDocumentV1(text);
+      setDraftPrograms({ ...imported.programs });
+      if (imported.endpoint !== null) setDraftEndpoint(imported.endpoint);
+      setProblem(null);
+      setImportNote(imported.endpoint !== null
+        ? 'Seven programs and the endpoint filled from your run spec. Review below, then use it.'
+        : 'Seven programs filled from your plan. It names no endpoint — set the RPC URL yourself.');
+    } catch (error) {
+      setImportNote(error instanceof Error ? error.message : 'the document did not import');
     }
   }
 
@@ -121,8 +140,19 @@ export default function ClusterPicker() {
             An endpoint and the seven role programs. Stored only in this browser; every surface
             reads them from here. The named clusters need none of this.
           </p>
+          <label><span>Running the local successor bootstrap? Paste its run spec or plan and the form fills itself</span>
+            <textarea
+              ref={firstFieldRef}
+              rows={3}
+              value={importText}
+              onChange={(event) => importDocument(event.target.value)}
+              spellCheck={false}
+              placeholder='{"schema": "dclutch-local-successor-run-spec-v2", …}'
+            />
+          </label>
+          {importNote === null ? null : <p className="cluster-modal-note" aria-live="polite">{importNote}</p>}
           <label><span>JSON-RPC endpoint</span>
-            <input ref={firstFieldRef} value={draftEndpoint} onChange={(event) => setDraftEndpoint(event.target.value.trim())} spellCheck={false} placeholder="http://127.0.0.1:8899" />
+            <input value={draftEndpoint} onChange={(event) => setDraftEndpoint(event.target.value.trim())} spellCheck={false} placeholder="http://127.0.0.1:20890" />
           </label>
           <div className="cluster-modal-grid">
             {PROTOCOL_ROLES_V1.map((role) => (

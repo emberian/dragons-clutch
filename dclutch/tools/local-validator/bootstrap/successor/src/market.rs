@@ -4354,11 +4354,11 @@ fn authenticate_cleanup_compiled_census_v1(
 ) -> Result<()> {
     let admitted = projected_bootstrap_compiled_geometry_v2(
         payer,
-        &append_distinct_census_accounts_v1(instruction, 45),
+        &append_distinct_census_accounts_v1(instruction, CONTROLLER_FUNDING_CLEANUP_CENSUS_PADDING_V1),
     )?;
     let refused = projected_bootstrap_compiled_geometry_v2(
         payer,
-        &append_distinct_census_accounts_v1(instruction, 46),
+        &append_distinct_census_accounts_v1(instruction, CONTROLLER_FUNDING_CLEANUP_CENSUS_PADDING_V1 + 1),
     )?;
     if base.complete_keys != CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1
         || admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
@@ -6336,7 +6336,12 @@ fn execute_projected_custody_bootstrap(
                         funding.address.to_string(),
                     );
                 }
-                recovery_accounts.insert("direct_capability_root".into(), root.to_string());
+                // The Direct capability root is a CHECKPOINT COORDINATE (the
+                // checkpoint field below carries it), not a DCLTPCB2 product:
+                // since f581af6b root/replay setup is permissionless
+                // first-use, so no account exists at this address until the
+                // Direct exterior first runs. Requiring it here (90b6bf7a)
+                // made every complete founding refuse its own poststate.
                 recovery_accounts.insert(
                     "direct_trading_funding_ledger".into(),
                     trading_ledger.address.to_string(),
@@ -6452,11 +6457,17 @@ fn execute_projected_custody_bootstrap(
     }
     if lane == PrestateLaneV1::Founding {
         let root = Pubkey::new_from_array(coordinates.found.capability_root().to_bytes());
-        let root_account = rpc.required_account(root, "direct_capability_root")?;
-        accounts.insert(
-            "direct_capability_root".into(),
-            account_evidence(root, &root_account),
-        );
+        // Under transaction publication the Direct capability root is created
+        // permissionlessly on FIRST USE by the Direct exterior, so at founding
+        // time its absence is the expected state, not missing evidence. The
+        // checkpoint carries the coordinate either way; the account row joins
+        // the evidence only where a genesis pre-created the root.
+        if let Some(root_account) = rpc.account(root)? {
+            accounts.insert(
+                "direct_capability_root".into(),
+                account_evidence(root, &root_account),
+            );
+        }
         let trading = pubkey(&plan.trading.program_id)?;
         let trading_ledger = coordinates
             .funding_ledgers
@@ -6569,7 +6580,14 @@ const CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1: usize = 17;
 const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize =
     PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1 + CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1;
 const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 33;
-const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 19;
+// 19 until 5ca145e8 de-aliased the DCLTCFQ1 funding source into the payer,
+// removing one distinct key from the cleanup frame.
+const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 18;
+/// Derived from the two pinned numbers so the exact lock-limit proof
+/// (base + padding == 64, one more refuses) cannot lag the frame the way a
+/// literal did when 5ca145e8 de-aliased the funding source.
+const CONTROLLER_FUNDING_CLEANUP_CENSUS_PADDING_V1: usize =
+    DEVNET_ACCOUNT_LOCK_LIMIT_V1 - CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1;
 const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
 const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
 
@@ -11167,6 +11185,14 @@ mod tests {
             })
             .collect::<Vec<_>>();
         accounts[1].pubkey = program_id;
+        // The funding source is the payer since 5ca145e8 de-aliased it: one
+        // coordinate references an already-counted key, so the frame carries
+        // 18 distinct complete keys, not 19. Any in-bounds slot other than
+        // the program alias at [1] models the same census; the guard keeps a
+        // frame-width change from silently pushing the alias out of range.
+        const PAYER_ALIAS_INDEX: usize = 11;
+        assert!(PAYER_ALIAS_INDEX < CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1 && PAYER_ALIAS_INDEX != 1);
+        accounts[PAYER_ALIAS_INDEX] = AccountMeta::new(payer, true);
         (
             payer,
             Instruction {
@@ -11542,7 +11568,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_cleanup_compiler_census_pins_both_19_64_65_walls() {
+    fn controller_cleanup_compiler_census_pins_both_18_64_65_walls() {
         for data in [
             CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
             CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
@@ -11552,13 +11578,13 @@ mod tests {
                 .expect("cleanup base census");
             authenticate_cleanup_compiled_census_v1(payer, &instruction, base)
                 .expect("cleanup boundary census");
-            assert_eq!(base.complete_keys, 19);
+            assert_eq!(base.complete_keys, CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1);
             assert_eq!(base.required_signatures, 1);
             assert_eq!(base.static_keys, 3);
             assert_eq!(base.loaded_writable, 5);
-            assert_eq!(base.loaded_readonly, 11);
-            assert_eq!(base.message_bytes, 241);
-            assert_eq!(base.packet_bytes, 306);
+            assert_eq!(base.loaded_readonly, 10);
+            assert_eq!(base.message_bytes, 240);
+            assert_eq!(base.packet_bytes, 305);
         }
     }
 

@@ -26,6 +26,7 @@ export const REPLAY_ACCOUNT_CUSTODY_REPLAY_V1 = 8 as const;
 export const REPLAY_ACCOUNT_PAYER_V1 = 9 as const;
 export const REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1 = 10 as const;
 export const REPLAY_ACCOUNT_RENT_SYSVAR_V1 = 11 as const;
+export const REPLAY_ACCOUNT_RENT_REFUND_V1 = 12 as const;
 export const REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1 = 13 as const;
 export const REPLAY_ACCOUNT_AGGREGATE_V1 = 14 as const;
 export const CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 = 13 as const;

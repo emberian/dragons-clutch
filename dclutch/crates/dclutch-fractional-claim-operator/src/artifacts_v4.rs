@@ -452,6 +452,24 @@ fn encode_account_profile(
                 },
                 prestate: AccountPrestateV2::AuthenticatedRouteAlias,
             });
+        } else if observed.opaque_data {
+            if observed.data_length != 0 {
+                return Err(FractionalSelectedArtifactErrorV4::InvalidInput);
+            }
+            rules.push(AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: AccountPrivilegesV2::new(
+                        observed.signer,
+                        observed.writable,
+                        observed.executable,
+                    ),
+                    effect_permissions: none,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 0,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+            });
         } else {
             rules.push(AccountRuleWithPrestateInputV2 {
                 rule: AccountRuleInputV2 {
@@ -964,6 +982,7 @@ mod tests {
                 writable: false,
                 executable: false,
                 data_length: 64,
+                opaque_data: false,
             };
             usize::from(count)
         ];

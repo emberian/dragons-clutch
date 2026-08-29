@@ -205,6 +205,54 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
 
 ## Queue (next linger points) — reconciled by GIT-SCAN 2026-08-27
 
+- **OPEN PROTOCOL DECISION — the published/selected capability release is ONE
+  gap, not two** (GEN-SER, 2026-08-29; accepted open, not ruled mid-wave).
+  Neither General nor Series reaches Trading's commit half, and the reason is
+  the same for both. **There is no missing Trading dispatch site**: `hot_v3`
+  is family-neutral, already dispatched at `trading-sbf/src/lib.rs:454`, and
+  walks whatever child routes the *selected* EffectProgram declares by
+  `FixedRole`. No family has an arm there and none needs one. The
+  ~20 `series-family` cfg blocks inside `hot_v3` are those family-neutral role
+  routes, gated so a `--features series-family` build still compiles the roles
+  a Series effect declares — they are not Series dispatch, and reading them as
+  such sends you to build the wrong thing.
+  `stage_series_consume_execution_v3` (`series/execute_v3.rs:211`) has zero
+  callers because it belongs to the superseded adapter design.
+  What is actually missing is a release **published and selected**: the
+  artifacts finalized as Registry records, named by a `CapabilityProgramSetV2`,
+  and chosen by a founded Market's capability manifest. Only Direct has that
+  pipeline (`successor/src/{market,direct_market}.rs`, a whole records
+  compiler); `plan_general_capability_activation_v3` has test callers only.
+  Sizing it as one shared piece of infrastructure rather than two family
+  efforts is the point of this entry — GEN-SER's round-2 General campaign runs
+  against the accelerator ELF for exactly this reason, and that is not a
+  General-specific debt.
+- **OPEN PROTOCOL DECISION — Series declares no `StateLifecyclePolicyV5`**
+  (GEN-SER, 2026-08-29; blocks every Series release). Every other family has
+  one (`encode_general_state_lifecycle_v5_atomic`; Direct has two).
+  `series/lifecycle.rs` is about FUNDING — `FundingStateV1`, top-ups, refunds
+  — not the lifecycle *artifact*. Until this exists there is no admissible
+  Series release at all, because
+  `authenticate_series_consume_artifacts_v4` decodes the policy, runs
+  `validate_account_profile` against the Series Consume Profile13, and
+  requires `action_plan_count(Consume)` to be **nonzero** — a policy covering
+  only Prepare or Expire decodes, validates, and is still refused. So it is
+  not a field that can be left empty and filled in later. Three things need
+  deciding, none of them a caller's call:
+  (a) **which created states it covers** — Series creates a root *and* a
+  Ticket, where General's precedent covers primary+terminal;
+  (b) **which rent-quote generation it pins**;
+  (c) **who receives the refund** — and note the hazard:
+  `series/lifecycle.rs:149 ticket_capability_refund` already suggests the
+  Ticket's capability rent is spoken for by the funding path, so a policy that
+  also claimed it would be a **second author for one lamport flow**, the exact
+  class of bug the escrow work keeps fixing.
+  Do not hand-write it against prose. The requirement is derived off the
+  verifier, in order, as `SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4` in
+  `trading-sbf/src/series/release_v4.rs` (8b37cc52) — check the answer against
+  that. The assembler in the same file (e4aa2bbd) takes `lifecycle` and
+  `strategy` as typed parameters rather than defaulting them, so the moment a
+  policy exists the bundle assembles and authenticates with no other change.
 - **LINGER₂ Sonnet batch — DONE.** Satellites folded (root `exclude` is now
   empty; nested program-test harness workspaces stay per 5c663da precedent);
   both skeleton dirs deleted; `dealer_chain` warnings cleared (21df8e5).
@@ -1005,3 +1053,18 @@ for commits/fmt; the frame-diagnostic SCRIPT over every shipped link;
 M-61 margin reporting (pass count + mean); parked-is-not-landed; the
 board (/private/tmp/dclutch-wave-board.md, archived copy in docs/) is
 append-only coordination, never authority; reader-voice on anything public.
+
+DOCTRINE, from the Dealer accepted-transition lane (2026-08-29): EVERY NEW PDA
+DOMAIN GETS A CONST LENGTH ASSERTION. Four Dealer domains shipped at 35-36 bytes
+against Solana's 32-byte maximum seed length, which does not make an address
+unusual — it makes it underivable, so the whole Custody reservation/escrow/
+activation family could never be created by Custody nor authenticated by
+Trading. Every component test passed; none of them derived the address. The
+guard is one line beside the constant — `const _: () = assert!(DOMAIN.len() <=
+32)` — and it turns the next over-long seed into a build failure instead of a
+family of addresses nobody can reach. dclutch-dealer-codec carries them now;
+there was no guard of this class anywhere in the tree before. The sibling
+lesson from the same lane: two programs agreeing on a PDA by coincidence is not
+agreement — Trading and Custody derived the reservation batch under different
+seed counts, so give a cross-program address ONE supported derivation and pin it
+from both sides.

@@ -26,18 +26,21 @@ fn claims_frame() -> [FractionalClaimsAccountRuleV1; 3] {
             writable: false,
             executable: true,
             data_length: 36,
+            opaque_data: false,
         },
         FractionalClaimsAccountRuleV1 {
             signer: false,
             writable: true,
             executable: false,
             data_length: 512,
+            opaque_data: false,
         },
         FractionalClaimsAccountRuleV1 {
             signer: false,
             writable: false,
             executable: false,
             data_length: 144,
+            opaque_data: false,
         },
     ]
 }

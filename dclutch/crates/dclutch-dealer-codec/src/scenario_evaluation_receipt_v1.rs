@@ -18,6 +18,12 @@ pub const DEALER_SCENARIO_EVALUATION_RECEIPT_BYTES_V1: usize = 336;
 /// Producer-owned PDA domain for one checkpoint-scoped receipt.
 pub const DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-eval:v1";
 
+const _: () = assert!(
+    DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1.len()
+        <= crate::scenario_custody_reservation_v1::MAX_PDA_SEED_BYTES_V1,
+    "the evaluation receipt domain must be a usable PDA seed"
+);
+
 const VERSION_OFFSET: usize = 8;
 const EFFECT_COUNT_OFFSET: usize = 10;
 const RESERVED_OFFSET: usize = 11;

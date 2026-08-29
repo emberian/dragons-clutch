@@ -86,6 +86,14 @@ const COMPUTE_UNIT_PRICE_MICROLAMPORTS: u64 = 50_000;
 /// a drop).
 const REBUILD_ON_DROP_ATTEMPTS: u32 = 5;
 
+/// How many times a durable legacy packet is polled for finalized history.
+///
+/// The blockhash's own last-valid height is the authority on whether the
+/// packet can still land, and it is checked every pass; this bound only stops
+/// an unresponsive endpoint from spinning forever. At 400ms a pass it is about
+/// two minutes, which is far past finality on a 16-tick loopback slot.
+const FINALIZED_POLL_ATTEMPTS: u32 = 300;
+
 /// One exact signed versioned packet persisted before its first submission.
 ///
 /// The last-valid height is liveness metadata returned beside the blockhash;
@@ -392,6 +400,24 @@ enum ConfirmOutcomeV1 {
 pub(crate) struct FinalizedSignedPacketV1 {
     pub(crate) evidence: TransactionEvidence,
     pub(crate) packet: Vec<u8>,
+    /// Exact top-level program return data when the finalized transaction
+    /// published it. Durable family callers authenticate this at the same
+    /// boundary as the signed packet rather than accepting a log projection.
+    ///
+    /// A log line is a projection the validator is free to truncate; the
+    /// `returnData` field is the datum the program actually set. A family ACK
+    /// is commit-last evidence, so reading it from anywhere but here would let
+    /// a truncated log silently weaken the strongest claim the caller makes.
+    pub(crate) return_data: Option<FinalizedReturnDataV1>,
+}
+
+/// Canonical finalized transaction return-data projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FinalizedReturnDataV1 {
+    /// Program that called `set_return_data` last.
+    pub(crate) program: Pubkey,
+    /// Canonically decoded base64 payload.
+    pub(crate) data: Vec<u8>,
 }
 
 impl Rpc {
@@ -615,6 +641,48 @@ impl Rpc {
                     .collect()
             })
             .unwrap_or_default();
+        // Absent and JSON null both mean the transaction published no return
+        // data. Anything present must be the canonical `[base64, "base64"]`
+        // pair; a noncanonical encoding is refused rather than coerced,
+        // because the bytes it decodes to are what a family ACK is checked
+        // against and a lenient decode would admit two spellings of one ACK.
+        let return_data = match meta.get("returnData") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let program = value
+                    .get("programId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::new(format!("{label} return data omitted programId")))?
+                    .parse::<Pubkey>()
+                    .map_err(|error| {
+                        Error::new(format!("{label} return data programId: {error}"))
+                    })?;
+                let pair = value
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| Error::new(format!("{label} return data omitted data pair")))?;
+                if pair.len() != 2 || pair.get(1).and_then(Value::as_str) != Some("base64") {
+                    return Err(Error::new(format!(
+                        "{label} return data encoding was not canonical base64"
+                    )));
+                }
+                let encoded = pair
+                    .first()
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        Error::new(format!("{label} return data payload was not a string"))
+                    })?;
+                let data = BASE64
+                    .decode(encoded)
+                    .map_err(|error| Error::new(format!("{label} return data base64: {error}")))?;
+                if BASE64.encode(&data) != encoded {
+                    return Err(Error::new(format!(
+                        "{label} return data was not canonical base64"
+                    )));
+                }
+                Some(FinalizedReturnDataV1 { program, data })
+            }
+        };
         self.read_floor = self.read_floor.max(slot);
         Ok(Some(FinalizedSignedPacketV1 {
             evidence: TransactionEvidence {
@@ -629,6 +697,7 @@ impl Rpc {
                 logs,
             },
             packet,
+            return_data,
         }))
     }
 
@@ -849,6 +918,129 @@ impl Rpc {
         self.send_inner(label, instructions, payer, false)
     }
 
+    /// Sign one exact legacy packet without submitting it.
+    ///
+    /// The v0 path above is the right one whenever a frame needs routing. A
+    /// family whose whole frame already fits the 1,232-byte ceiling does not,
+    /// and making it publish an address lookup table first would add an
+    /// activation round trip and a table the campaign then has to own. The
+    /// durability rule is identical and is the entire point of both: persist
+    /// these exact bytes, then only ever resend them.
+    pub(crate) fn prepare_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+    ) -> Result<SignedVersionedPacketV1> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, last_valid_block_height) = self.latest_blockhash_with_height()?;
+        let signers: Vec<&dyn Signer> = vec![payer];
+        let transaction = Transaction::new_signed_with_payer(
+            &bounded,
+            Some(&payer.pubkey()),
+            &signers,
+            blockhash,
+        );
+        let packet = bincode::serialize(&transaction)
+            .map_err(|error| Error::new(format!("{label}: serialize transaction: {error}")))?;
+        if packet.len() > 1_232 {
+            return Err(Error::new(format!(
+                "{label}: legacy transaction is {} bytes, above the 1,232-byte packet ceiling; \
+                 this frame needs v0 routing",
+                packet.len()
+            )));
+        }
+        let signature = transaction
+            .signatures
+            .first()
+            .ok_or_else(|| Error::new(format!("{label}: signed packet omitted signature")))?
+            .to_string();
+        Ok(SignedVersionedPacketV1 {
+            signature,
+            packet_base64: BASE64.encode(&packet),
+            packet_sha256: hex(&Sha256::digest(&packet)),
+            last_valid_block_height,
+        })
+    }
+
+    /// Submit the already-persisted legacy packet exactly once.
+    pub(crate) fn submit_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        let expected = Self::authenticate_signed_legacy_packet(label, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, false)?;
+        if observed != expected {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Poll one submitted, persisted legacy signature through finalized history.
+    ///
+    /// Poll-only by construction, exactly like the v0 sibling: a `Submitted`
+    /// journal can never fan out into a second transaction identity.
+    pub(crate) fn confirm_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<FinalizedSignedPacketV1> {
+        let signature = Self::authenticate_signed_legacy_packet(label, packet)?;
+        for _ in 0..FINALIZED_POLL_ATTEMPTS {
+            if let Some(finalized) = self.finalized_signed_packet(label, signature, false)? {
+                return Ok(finalized);
+            }
+            let height = self.block_height()?;
+            if height > packet.last_valid_block_height {
+                return Err(Error::new(format!(
+                    "{label}: persisted signature {signature} expired at block height {height} \
+                     without a finalized status; retain the journal as evidence and prepare a new \
+                     action under a new output path"
+                )));
+            }
+            thread::sleep(Duration::from_millis(400));
+        }
+        Err(Error::new(format!(
+            "{label}: persisted signature {signature} did not reach finalized history within \
+             {FINALIZED_POLL_ATTEMPTS} polls"
+        )))
+    }
+
+    /// Reauthenticate one persisted legacy packet against its own digest.
+    pub(crate) fn authenticate_signed_legacy_packet(
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<Signature> {
+        let bytes = BASE64
+            .decode(&packet.packet_base64)
+            .map_err(|error| Error::new(format!("{label}: persisted packet base64: {error}")))?;
+        if BASE64.encode(&bytes) != packet.packet_base64
+            || hex(&Sha256::digest(&bytes)) != packet.packet_sha256
+        {
+            return Err(Error::new(format!(
+                "{label}: persisted packet digest changed"
+            )));
+        }
+        let transaction: Transaction = bincode::deserialize(&bytes)
+            .map_err(|error| Error::new(format!("{label}: persisted transaction: {error}")))?;
+        transaction
+            .verify()
+            .map_err(|error| Error::new(format!("{label}: persisted signature: {error}")))?;
+        let signature = transaction
+            .signatures
+            .first()
+            .copied()
+            .ok_or_else(|| Error::new(format!("{label}: persisted transaction is unsigned")))?;
+        if signature.to_string() != packet.signature {
+            return Err(Error::new(format!("{label}: persisted signature changed")));
+        }
+        Ok(signature)
+    }
+
     /// Sign one exact routed v0 packet without submitting it.
     ///
     /// The caller must durably persist the returned value before invoking
@@ -933,6 +1125,64 @@ impl Rpc {
             )));
         }
         Ok(())
+    }
+
+    /// Submit one persisted v0 packet that is EXPECTED to fail on chain.
+    ///
+    /// A hostile is only evidence if it reaches consensus. With preflight on,
+    /// the RPC simulates the transaction and rejects it before it is ever a
+    /// block entry, which proves what a simulator thinks rather than what the
+    /// chain did. This skips preflight so the refusal is committed, paid for,
+    /// and readable in finalized history like any other outcome.
+    pub(crate) fn submit_signed_v0_packet_expecting_failure(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, true)?;
+        if observed.to_string() != packet.signature {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Poll one persisted v0 signature that is expected to have failed.
+    ///
+    /// Returns the finalized evidence with its error intact. A transaction
+    /// that SUCCEEDED here is itself a refusal: a hostile that landed is the
+    /// loudest possible failure of the property it was meant to defend.
+    pub(crate) fn confirm_signed_v0_packet_expecting_failure(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<TransactionEvidence> {
+        let signature =
+            Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        for _ in 0..FINALIZED_POLL_ATTEMPTS {
+            if let Some(finalized) = self.finalized_signed_packet(label, signature, true)? {
+                return Ok(finalized.evidence);
+            }
+            let height = self.block_height()?;
+            if height > packet.last_valid_block_height {
+                return Err(Error::new(format!(
+                    "{label}: hostile signature {signature} expired at block height {height} \
+                     without a finalized status"
+                )));
+            }
+            thread::sleep(Duration::from_millis(400));
+        }
+        Err(Error::new(format!(
+            "{label}: hostile signature {signature} did not reach finalized history"
+        )))
     }
 
     /// Poll one submitted, persisted signature through finalized history.

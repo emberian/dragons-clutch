@@ -21,6 +21,12 @@ pub const DEALER_SCENARIO_MEMBERSHIP_MANIFEST_MAGIC_V1: [u8; 8] = *b"DCLTDMM1";
 pub const DEALER_SCENARIO_MEMBERSHIP_MANIFEST_VERSION_V1: u16 = 1;
 /// Producer-owned PDA domain for one checkpoint-scoped manifest.
 pub const DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-members:v1";
+
+const _: () = assert!(
+    DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1.len()
+        <= crate::scenario_custody_reservation_v1::MAX_PDA_SEED_BYTES_V1,
+    "the membership manifest domain must be a usable PDA seed"
+);
 /// Domain for one exact ordered membership page.
 pub const DEALER_SCENARIO_MEMBERSHIP_PAGE_DOMAIN_V1: &[u8] = b"dclutch:dealer-members-page:v1";
 

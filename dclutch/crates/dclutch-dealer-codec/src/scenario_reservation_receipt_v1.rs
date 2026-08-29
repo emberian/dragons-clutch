@@ -19,6 +19,12 @@ pub const DEALER_SCENARIO_RESERVATION_RECEIPT_VERSION_V1: u16 = 1;
 /// Custody-owned PDA domain for one reservation receipt.
 pub const DEALER_SCENARIO_RESERVATION_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-reserve:v1";
 
+const _: () = assert!(
+    DEALER_SCENARIO_RESERVATION_RECEIPT_PDA_DOMAIN_V1.len()
+        <= crate::scenario_custody_reservation_v1::MAX_PDA_SEED_BYTES_V1,
+    "the reservation receipt domain must be a usable PDA seed"
+);
+
 const VERSION_OFFSET: usize = 8;
 const ACTION_OFFSET: usize = 10;
 const ORDINAL_OFFSET: usize = 11;

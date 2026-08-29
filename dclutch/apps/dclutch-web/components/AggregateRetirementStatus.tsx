@@ -74,7 +74,7 @@ export default function AggregateRetirementStatus({
 
   return <section className="trade-v3-card route-card">
     <header>
-      <span>05</span>
+      <span>07</span>
       <div>
         <h2>Retirement checkpoint</h2>
         <p>You can see whether this Market has reached the packet-bounded retirement waist and, if it has, which durable step comes next. The account is derived from this Market and decoded from the Rust-owned generated ABI. Browser storage is never treated as progress.</p>

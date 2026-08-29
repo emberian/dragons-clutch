@@ -142,6 +142,55 @@ function canonicalAddress(value: unknown, field: string): string {
 }
 
 /**
+ * Read an operator document into the Custom form: the successor bootstrap's
+ * run spec (`dclutch-local-successor-run-spec-v2`, which names its RPC URL)
+ * or its infrastructure plan (`dclutch-local-successor-infrastructure-plan-v2`,
+ * program identities only). This fills the draft; admission is still
+ * `parseCustomDeploymentV1`, so an imported document cannot smuggle anything
+ * the hand-typed form could not.
+ */
+export function importDeploymentDocumentV1(text: string): Readonly<{
+  endpoint: string | null;
+  programs: Readonly<Record<ProtocolRoleV1, string>>;
+}> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error('the pasted document is not JSON');
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('the pasted document is not one JSON object');
+  const record = raw as Record<string, unknown>;
+  const schema = record.schema;
+  if (schema !== 'dclutch-local-successor-run-spec-v2' && schema !== 'dclutch-local-successor-infrastructure-plan-v2') {
+    throw new Error('the pasted document is neither a successor run spec (dclutch-local-successor-run-spec-v2) nor an infrastructure plan (dclutch-local-successor-infrastructure-plan-v2)');
+  }
+  const roleKey: Readonly<Record<ProtocolRoleV1, string>> = Object.freeze({
+    registry: 'registry', core: 'core', claims: 'claims', trading: 'trading',
+    resolution: 'resolution', custody: 'custody', rent: 'rent_credit',
+  });
+  const programs = {} as Record<ProtocolRoleV1, string>;
+  const missing: string[] = [];
+  for (const role of PROTOCOL_ROLES_V1) {
+    const entry = record[roleKey[role]];
+    const id = entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+      ? (entry as Record<string, unknown>).program_id
+      : undefined;
+    if (typeof id !== 'string' || id === '') {
+      missing.push(roleKey[role]);
+      continue;
+    }
+    programs[role] = canonicalAddress(id, `${roleKey[role]} program`);
+  }
+  if (missing.length > 0) {
+    throw new Error(`the document names no program for: ${missing.join(', ')} — a browser deployment needs all seven roles`);
+  }
+  const rpc = record.rpc_url;
+  const endpoint = typeof rpc === 'string' && rpc.trim() !== '' ? rpc.trim() : null;
+  return Object.freeze({ endpoint, programs: Object.freeze(programs) });
+}
+
+/**
  * Validate one custom deployment (the picker's Custom form, or its stored
  * JSON). Every field is checked the way the RPC layer would check it, so a
  * stored deployment can never smuggle a malformed address into a derivation.
