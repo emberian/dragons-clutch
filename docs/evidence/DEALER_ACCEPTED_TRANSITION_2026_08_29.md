@@ -30,8 +30,8 @@ bash programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh
 
 Measured cold on 2026-08-29 from a deleted target directory: **3m05s wall, exit
 0, 26 tests across four targets**, 21 of them the accepted campaign. Re-measured
-warm on the same day with the delivery leg landed: **exit 0, 27 tests across the
-same four targets**, 22 of them the accepted campaign. The runner
+warm on the same day with the delivery leg landed: **exit 0, 28 tests across the
+same four targets**, 23 of them the accepted campaign. The runner
 builds five real artifacts — the Dealer accelerator, its test caller, Trading,
 Custody, Claims and Core — and stages them as real loadable deployments.
 
@@ -235,7 +235,7 @@ producer; evaluate requires it to equal the evaluate-producer account; the body
 cannot change between them. An evaluator that is not Trading passes evaluate and
 reserve in isolation and can never commit.
 
-## The fifteen hostiles, by the check each reaches
+## The sixteen hostiles, by the check each reaches
 
 Every case asserts the exact refusal code and re-reads the checkpoint to prove
 no mutation survived. Where a case could have been answered by a shallower
@@ -259,6 +259,7 @@ not the hostile it claims to be.
 | Claims Position table permuted (both real Positions, real bodies, real privileges) | Claims canonical owner ordering |
 | replayed commit (byte-identical, same live table) | checkpoint phase; Positions do not move twice |
 | committed checkpoint refuses cleanup | committed-versus-abandoned boundary; rent retained |
+| replayed delivery (byte-identical, same live table) | activation-receipt vacancy; collateral, cursor and batch do not move twice |
 
 ## Named debt
 
@@ -276,6 +277,13 @@ while the executed delivery uses the real ones. No executed route joins the two 
 the unsplit form is unsubmittable, so nothing reads the census's collateral
 coordinates — but a scenario naming two mints is exactly the shape that hides a
 defect, and it should be collapsed onto the real Realm-selected pair.
+
+**The delivery leg carries one hostile, not a family.** The replayed delivery is
+sealed and reaches the gate it names. The refusals *inside* activation — a cursor
+at the wrong revision reaching `advance`, a substituted destination reaching the
+reservation join — each need the batch's own pinned digests restaged around the
+lie before the case is the case it claims, and that staging is not written. Named
+as owed, not as done.
 
 **One effect, one coordinate.** The delivery is a single-effect batch. The
 activation frame admits up to four, and the operator builder is exercised at four

@@ -3662,3 +3662,58 @@ async fn the_delivery_moves_the_locked_collateral_and_closes_its_escrow() {
     assert_eq!(receipt.request_digest, scenario.request_digest);
     assert_eq!(receipt.batch, reservation.batch.to_bytes());
 }
+
+#[tokio::test]
+async fn a_replayed_delivery_refuses_and_the_collateral_does_not_move_twice() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let reservation = committed_with_delivery_inputs(&mut context, &scenario).await;
+    let delivery = &scenario.delivery;
+    let payer = context.payer.pubkey();
+
+    submit_activation(&mut context, activation_bank(&scenario, &reservation, payer))
+        .await
+        .result
+        .expect("the first delivery executes");
+    let destination_once = account_body(&mut context, delivery.destination)
+        .await
+        .expect("the destination survives the first delivery");
+    let replay_once = account_body(&mut context, delivery.replay)
+        .await
+        .expect("the cursor survives the first delivery");
+    let batch_once = account_body(&mut context, reservation.batch)
+        .await
+        .expect("the batch survives the first delivery");
+
+    // Byte-identical resubmission. The activation receipt is no longer vacant,
+    // which is the anti-replay gate for the whole route; behind it the batch is
+    // already Activated and the cursor has already advanced, so the case would
+    // refuse three times over. It reaches the first of them.
+    let processed =
+        submit_activation(&mut context, activation_bank(&scenario, &reservation, payer)).await;
+    assert!(
+        processed.result.is_err(),
+        "a replayed delivery must fail closed; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        account_body(&mut context, delivery.destination).await,
+        Some(destination_once),
+        "a refused delivery must not credit the destination a second time"
+    );
+    assert_eq!(
+        account_body(&mut context, delivery.replay).await,
+        Some(replay_once),
+        "a refused delivery must not advance the replay cursor"
+    );
+    assert_eq!(
+        account_body(&mut context, reservation.batch).await,
+        Some(batch_once),
+        "a refused delivery must not touch the batch it already delivered"
+    );
+    assert_eq!(
+        account_body(&mut context, delivery.escrow).await,
+        None,
+        "the escrow stays closed"
+    );
+}
