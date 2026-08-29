@@ -86,6 +86,7 @@ import {
   REPLAY_ACCOUNT_REALM_STAGING_V1,
   REPLAY_ACCOUNT_REALM_V1,
   REPLAY_ACCOUNT_REGISTRY_PROGRAM_V1,
+  REPLAY_ACCOUNT_RENT_REFUND_V1,
   REPLAY_ACCOUNT_RENT_SYSVAR_V1,
   REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1,
 } from '@dclutch/sdk/generated/claimsCustodyReplayV1';
@@ -704,6 +705,7 @@ function replayIntent(
     custodyProgram: programs.custody,
     registryProgram: programs.registry,
     rentLamports: plan.rentLamports,
+    rentRefund: plan.rentRefundAddress,
     custodyRequestDigest: plan.custodyRequestDigestHex,
   }));
 }
@@ -866,7 +868,7 @@ function parseReplayIntent(source: string) {
   const value = object(exactJson(source, 'Claims replay journal intent', MAX_JOURNAL_BYTES), 'Claims replay journal intent');
   exactKeys(value, [
     'format', 'market', 'owner', 'replay', 'aggregate', 'claimsProgram', 'custodyProgram',
-    'registryProgram', 'rentLamports', 'custodyRequestDigest',
+    'registryProgram', 'rentLamports', 'rentRefund', 'custodyRequestDigest',
   ], 'Claims replay journal intent');
   if (value.format !== REPLAY_JOURNAL_INTENT_FORMAT) throw new Error('Claims replay intent has another format');
   return Object.freeze({
@@ -878,6 +880,7 @@ function parseReplayIntent(source: string) {
     custodyProgram: address(value.custodyProgram, 'Claims replay intent Custody program'),
     registryProgram: address(value.registryProgram, 'Claims replay intent Registry program'),
     rentLamports: decimal(value.rentLamports, 'Claims replay intent rent'),
+    rentRefund: address(value.rentRefund, 'Claims replay intent rent-refund beneficiary'),
     custodyRequestDigest: identity(value.custodyRequestDigest, 'Claims replay intent request digest'),
   });
 }
@@ -897,6 +900,13 @@ function canonicalReplayTransactionV1(
   const market = custodyRequestBytes.slice(CUSTODY_REQUEST_MARKET_OFFSET_V1, CUSTODY_REQUEST_MARKET_OFFSET_V1 + 32);
   const realm = custodyRequestBytes.slice(CUSTODY_REQUEST_REALM_OFFSET_V1, CUSTODY_REQUEST_REALM_OFFSET_V1 + 32);
   const context = custodyRequestBytes.slice(CUSTODY_REQUEST_CONTEXT_OFFSET_V1, CUSTODY_REQUEST_CONTEXT_OFFSET_V1 + 32);
+  // The immutable rent-refund beneficiary rides inside the digest-bound
+  // request bytes (the SDK plan wrote the Core Market's RentCredit there),
+  // so the account list reads it back from the same bytes it authenticates.
+  const rentRefund = custodyRequestBytes.slice(
+    CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1,
+    CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1 + 32,
+  );
   const requestDigest = digestBytes(custodyRequestBytes);
   const claimsProgram = new PublicKey(intent.claimsProgram);
   const custodyProgram = new PublicKey(intent.custodyProgram);
@@ -953,6 +963,7 @@ function canonicalReplayTransactionV1(
   keys[REPLAY_ACCOUNT_PAYER_V1] = { pubkey: owner, isSigner: true, isWritable: true };
   keys[REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1] = { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isSigner: false, isWritable: false };
   keys[REPLAY_ACCOUNT_RENT_SYSVAR_V1] = { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false };
+  keys[REPLAY_ACCOUNT_RENT_REFUND_V1] = { pubkey: new PublicKey(rentRefund), isSigner: false, isWritable: true };
   keys[REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1] = { pubkey: custodyProgram, isSigner: false, isWritable: false };
   keys[REPLAY_ACCOUNT_AGGREGATE_V1] = { pubkey: new PublicKey(aggregateAddress), isSigner: false, isWritable: false };
 
@@ -1002,7 +1013,7 @@ export function restoreReplayOperationJournalV1(journal: ReplayOperationJournalV
       || keyFromBytes(custodyRequestBytes, CUSTODY_REQUEST_MARKET_OFFSET_V1, 'saved Claims replay request Market') !== intent.market
       || keyFromBytes(custodyRequestBytes, CUSTODY_REQUEST_CALLER_PROGRAM_OFFSET_V1, 'saved Claims replay caller program') !== intent.claimsProgram
       || keyFromBytes(custodyRequestBytes, CUSTODY_REQUEST_PAYER_OFFSET_V1, 'saved Claims replay payer') !== intent.owner
-      || keyFromBytes(custodyRequestBytes, CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1, 'saved Claims replay rent refund') !== intent.owner
+      || keyFromBytes(custodyRequestBytes, CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1, 'saved Claims replay rent refund') !== intent.rentRefund
       || !zero(custodyRequestBytes.slice(CUSTODY_REQUEST_CANDIDATE_OFFSET_V1, CUSTODY_REQUEST_PARENT_REQUEST_DIGEST_OFFSET_V1))
       || !zero(custodyRequestBytes.slice(CUSTODY_REQUEST_SOURCE_OFFSET_V1, CUSTODY_REQUEST_PAYER_OFFSET_V1))
       || u64(custodyRequestBytes, CUSTODY_REQUEST_EXPECTED_REVISION_OFFSET_V1) !== 0n
@@ -1023,6 +1034,7 @@ export function restoreReplayOperationJournalV1(journal: ReplayOperationJournalV
     custodyRequestBytes.slice(CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1, CUSTODY_REQUEST_RELEASE_SET_OFFSET_V1 + 32),
     custodyRequestBytes.slice(CUSTODY_REQUEST_CONTEXT_OFFSET_V1, CUSTODY_REQUEST_CONTEXT_OFFSET_V1 + 32),
     new PublicKey(intent.owner).toBytes(),
+    new PublicKey(intent.rentRefund).toBytes(),
     le64(BigInt(intent.rentLamports)),
   );
   if (!same(
