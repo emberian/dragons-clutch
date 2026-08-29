@@ -22,7 +22,7 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1026,7 +1026,7 @@ fn prepare_inner(
         trading_deployment.upgrade_authority,
     )?;
     let resolution_semantic = hex32(&args.resolution_semantic_release_id)?;
-    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V6 {
         return Err(Error::new(
             "Resolution semantic release ID does not match the selected executable contract",
         ));
@@ -1947,6 +1947,18 @@ mod tests {
         publication: RecordPublicationV1,
         deployments: RoleDeploymentsV1,
     ) -> (Result<SuccessorPlan>, PathBuf) {
+        prepared_plan_with_resolution_semantic(
+            publication,
+            deployments,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+        )
+    }
+
+    fn prepared_plan_with_resolution_semantic(
+        publication: RecordPublicationV1,
+        deployments: RoleDeploymentsV1,
+        resolution_semantic_release_id: [u8; 32],
+    ) -> (Result<SuccessorPlan>, PathBuf) {
         let root =
             std::env::temp_dir().join(format!("dclutch-successor-plan-{}", Pubkey::new_unique()));
         fs::create_dir(&root).expect("create test root");
@@ -1982,7 +1994,7 @@ mod tests {
             resolution_program: program(5),
             resolution_elf,
             resolution_sha256,
-            resolution_semantic_release_id: hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V5),
+            resolution_semantic_release_id: hex(&resolution_semantic_release_id),
             custody_program: program(6),
             custody_elf,
             custody_sha256,
@@ -1996,6 +2008,23 @@ mod tests {
             deployments,
         });
         (plan, root)
+    }
+
+    #[test]
+    fn resolution_v5_is_refused_after_the_v6_prepared_funding_migration() {
+        let (result, root) = prepared_plan_with_resolution_semantic(
+            RecordPublicationV1::Transaction,
+            RoleDeploymentsV1::default(),
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+        );
+        let error = result.expect_err("Resolution V5 must not author a V6 successor plan");
+        assert!(
+            error
+                .to_string()
+                .contains("Resolution semantic release ID does not match"),
+            "unexpected refusal: {error}"
+        );
+        fs::remove_dir_all(root).expect("remove scoped test root");
     }
 
     /// A ProgramData account body in the shape a real cluster leaves behind

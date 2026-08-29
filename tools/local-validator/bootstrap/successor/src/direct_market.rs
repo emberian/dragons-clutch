@@ -687,7 +687,7 @@ impl DirectMarketCompilerOwnedV1 {
             deployment,
             fee: DirectFeeSelectionV1::explicit(Some(0), Some(registry))
                 .expect("test Direct fee policy"),
-            resolution_release: dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            resolution_release: dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6,
             activation_deadline_slot: u64::MAX,
             root_rent_minimum_lamports: Rent::default()
                 .minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1),
@@ -1523,7 +1523,7 @@ mod tests {
             resolution_elf: resolution_role.elf,
             resolution_sha256: resolution_role.sha256,
             resolution_semantic_release_id: hex(
-                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6,
             ),
             custody_program: Pubkey::new_from_array([6; 32]),
             custody_elf: custody_role.elf,
@@ -1768,7 +1768,7 @@ mod tests {
         let compiler = loaded.compiler();
         assert_eq!(
             compiler.resolution_release,
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6
         );
         assert_eq!(
             compiler.activation_deadline_slot,
