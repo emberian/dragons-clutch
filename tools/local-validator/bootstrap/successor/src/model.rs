@@ -404,7 +404,7 @@ pub(crate) struct SuccessorPlan {
     pub(crate) genesis_accounts: BTreeMap<String, GenesisAccountPin>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct TransactionEvidence {
     pub(crate) label: String,
     pub(crate) signature: String,

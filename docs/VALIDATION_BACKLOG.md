@@ -74,6 +74,32 @@ The checkpoint must include:
    observation. Require one writer, no second signature/send, exact payload and
    slot advance, unchanged parked rent, and complete payer/fee arithmetic.
 
+## Sponsored Pyth push convergence
+
+- Exercise Capture, Settle, CommitFailure, CloseCandidate, and CloseHead through
+  the final compiled Resolution artifact. The Market fixture must come through
+  the V6 controller-funding split: Prepared checkpoint, CustodyStaged, Open
+  consumption and checkpoint closure, then the exact active Resolution
+  `FundingLedgerV2`. A caller-supplied checkpoint, a still-Pending ledger, or a
+  V5 controller binding must refuse.
+- Preserve the accepted hostile corpus and prove whole-transaction rollback.
+  Run the real-SBF compute campaign under M-61 and report pass count plus the
+  20-seed mean for every action. Re-run activation/headroom measurements for
+  the final Resolution ELF; an earlier sponsored artifact is development
+  evidence only.
+- Exercise two independent sponsors, monotone best-valid-submitted head
+  advancement, strict post-deadline settlement, both sponsor-beneficiary
+  closes, and the vacant-head funded failure path on owned loopback.
+- Freeze the final Resolution semantic release, account frames, caller input
+  schema, GENREF/SBOM/lock rows, and checked artifact together. Re-run the old
+  pull-profile rejection against the sponsored release and account body.
+- Before devnet execution, provision and freeze the exact routing table and
+  exercise the report's durable
+  `planned -> prepared -> submitted -> finalized` restart states. Recheck the
+  Receiver and push-oracle ProgramData slots, authorities, Config digest, and
+  price account. Preserve the exact v0 packet/signature, table body, rent, and
+  fee arithmetic separately from protocol principal.
+
 ## Provider genesis and closure
 
 - Generate Receiver and Router Program plus ProgramData JSON accounts into the

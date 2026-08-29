@@ -34,6 +34,7 @@ pub mod provider_v3;
 mod relay_transport_v1;
 /// Current-ABI sealed relayed-record evidence composition.
 pub mod relay_v1;
+mod sponsored_push_v1;
 
 /// Stable Resolution controller refusal.
 #[repr(u32)]
@@ -116,6 +117,8 @@ pub enum ResolutionError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x8014,
+    /// Sponsored-push candidate, head, release, or deadline authentication failed.
+    SponsoredPush = 0x8015,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -126,7 +129,7 @@ const _: () = assert!(
     "ResolutionError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (ResolutionError::ReleaseSuperseded as u32)
+    (ResolutionError::SponsoredPush as u32)
         < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "ResolutionError must not run past its registered refusal band"
 );
@@ -190,6 +193,13 @@ pub fn process_instruction(
     }
     if relay_transport_v1::is_relay_transport_v1(instruction_data) {
         return relay_transport_v1::process_relay_transport_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if sponsored_push_v1::is_sponsored_push_v1(instruction_data) {
+        return sponsored_push_v1::process_sponsored_push_v1(
             program_id,
             accounts,
             instruction_data,

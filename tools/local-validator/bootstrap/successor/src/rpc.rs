@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde::{
-    Deserialize,
+    Deserialize, Serialize,
     de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Value, json};
@@ -85,6 +85,21 @@ const COMPUTE_UNIT_PRICE_MICROLAMPORTS: u64 = 50_000;
 /// transaction that failed on its merits (a failure is a confirmed status, not
 /// a drop).
 const REBUILD_ON_DROP_ATTEMPTS: u32 = 5;
+
+/// One exact signed versioned packet persisted before its first submission.
+///
+/// The last-valid height is liveness metadata returned beside the blockhash;
+/// it never participates in protocol semantics.  The packet digest and
+/// signature let a restarting exterior reject a changed journal before it
+/// polls or submits anything.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SignedVersionedPacketV1 {
+    pub(crate) signature: String,
+    pub(crate) packet_base64: String,
+    pub(crate) packet_sha256: String,
+    pub(crate) last_valid_block_height: u64,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct RpcAccount {
@@ -834,6 +849,153 @@ impl Rpc {
         self.send_inner(label, instructions, payer, false)
     }
 
+    /// Sign one exact routed v0 packet without submitting it.
+    ///
+    /// The caller must durably persist the returned value before invoking
+    /// [`Self::submit_signed_v0_packet`]. Unlike [`Self::send`], this path
+    /// never rebuilds a different signature after the persistence boundary.
+    pub(crate) fn prepare_signed_v0_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        table: &ObservedAccount,
+    ) -> Result<SignedVersionedPacketV1> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, last_valid_block_height) = self.latest_blockhash_with_height()?;
+        let routed = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            table.observation,
+            std::slice::from_ref(table),
+        )
+        .map_err(|error| Error::new(format!("{label}: v0 message: {error:?}")))?;
+        if routed.wire_bytes > 1_232 {
+            return Err(Error::new(format!(
+                "{label}: routed transaction is {} bytes, above the 1,232-byte packet ceiling",
+                routed.wire_bytes
+            )));
+        }
+        let transaction = VersionedTransaction::try_new(routed.message, &[payer])
+            .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
+        let signature = transaction
+            .signatures
+            .first()
+            .ok_or_else(|| Error::new(format!("{label}: signed packet omitted signature")))?
+            .to_string();
+        let packet = bincode::serialize(&transaction)
+            .map_err(|error| Error::new(format!("{label}: serialize transaction: {error}")))?;
+        Ok(SignedVersionedPacketV1 {
+            signature,
+            packet_base64: BASE64.encode(&packet),
+            packet_sha256: hex(&Sha256::digest(&packet)),
+            last_valid_block_height,
+        })
+    }
+
+    /// Submit the already-persisted packet exactly once.
+    ///
+    /// A crash after this call but before the caller records `Submitted` is
+    /// recovered by submitting the same bytes again: Solana deduplicates the
+    /// identical signature. No fresh blockhash or signature is created here.
+    pub(crate) fn submit_signed_v0_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, false)?;
+        if observed.to_string() != packet.signature {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Poll one submitted, persisted signature through finalized history.
+    ///
+    /// This is deliberately poll-only. It neither sends the packet nor
+    /// rebuilds it after blockhash expiry, so a `Submitted` journal can never
+    /// fan out into a second transaction identity on restart.
+    pub(crate) fn confirm_signed_v0_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<TransactionEvidence> {
+        let signature =
+            Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        match self.confirm_inner(
+            label,
+            signature,
+            None,
+            false,
+            packet.last_valid_block_height,
+        )? {
+            ConfirmOutcomeV1::Confirmed(evidence) => Ok(evidence),
+            ConfirmOutcomeV1::Dropped => Err(Error::new(format!(
+                "{label}: persisted signature {} expired without a finalized status; retain the journal as evidence and prepare a new action under a new output path",
+                packet.signature
+            ))),
+        }
+    }
+
+    pub(crate) fn authenticate_signed_v0_packet(
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<Signature> {
+        let bytes = BASE64
+            .decode(&packet.packet_base64)
+            .map_err(|error| Error::new(format!("{label}: persisted packet base64: {error}")))?;
+        if BASE64.encode(&bytes) != packet.packet_base64
+            || hex(&Sha256::digest(&bytes)) != packet.packet_sha256
+        {
+            return Err(Error::new(format!(
+                "{label}: persisted packet digest changed"
+            )));
+        }
+        let transaction: VersionedTransaction = bincode::deserialize(&bytes)
+            .map_err(|error| Error::new(format!("{label}: persisted transaction: {error}")))?;
+        transaction
+            .verify_and_hash_message()
+            .map_err(|error| Error::new(format!("{label}: persisted signature: {error}")))?;
+        let signature = transaction
+            .signatures
+            .first()
+            .copied()
+            .ok_or_else(|| Error::new(format!("{label}: persisted transaction is unsigned")))?;
+        if signature.to_string() != packet.signature {
+            return Err(Error::new(format!("{label}: persisted signature changed")));
+        }
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let expected = dclutch_versioned_message_operator::compile_v0_message(
+            payer,
+            &bounded,
+            *transaction.message.recent_blockhash(),
+            table.observation,
+            std::slice::from_ref(table),
+        )
+        .map_err(|error| Error::new(format!("{label}: canonical v0 message: {error:?}")))?;
+        if transaction.message != expected.message {
+            return Err(Error::new(format!(
+                "{label}: persisted transaction no longer matches the authenticated instruction"
+            )));
+        }
+        Ok(signature)
+    }
+
     pub(crate) fn send_with_signers(
         &mut self,
         label: &str,
@@ -1213,6 +1375,23 @@ impl Rpc {
         expect_failure: bool,
         last_valid_block_height: u64,
     ) -> Result<ConfirmOutcomeV1> {
+        self.confirm_inner(
+            label,
+            signature,
+            Some(encoded),
+            expect_failure,
+            last_valid_block_height,
+        )
+    }
+
+    fn confirm_inner(
+        &mut self,
+        label: &str,
+        signature: Signature,
+        resubmit_packet: Option<&str>,
+        expect_failure: bool,
+        last_valid_block_height: u64,
+    ) -> Result<ConfirmOutcomeV1> {
         // A DEADLINE, not an iteration count. The count was equivalent while
         // every connection polled an unpaced loopback validator at 100 ms; on a
         // paced connection each iteration also waits out the call interval, so
@@ -1231,12 +1410,16 @@ impl Rpc {
         // long enough never to fire inside the 60 s local budget.
         let mut next_resubmit = Instant::now() + self.pacing.resubmit_interval;
         while Instant::now() < deadline {
-            if Instant::now() >= next_resubmit {
+            if Instant::now() >= next_resubmit && resubmit_packet.is_some() {
                 // Resubmit against a transient drop while the blockhash is
                 // still valid. A resubmit failure is not fatal: the status
                 // poll below is the authority on whether it landed, and the
                 // block-height check is the authority on whether it ever can.
-                let _ = self.submit_encoded(label, encoded, expect_failure);
+                let _ = self.submit_encoded(
+                    label,
+                    resubmit_packet.ok_or_else(|| Error::new("resubmit packet disappeared"))?,
+                    expect_failure,
+                );
                 next_resubmit = Instant::now() + self.pacing.resubmit_interval;
             }
             let result = self.call(
@@ -1634,6 +1817,137 @@ mod tests {
             "context": {"slot": 17_u64, "apiVersion": "2.2.7"},
             "value": account
         })
+    }
+
+    #[test]
+    fn persisted_v0_packet_binds_signature_bytes_payer_table_and_instruction() {
+        use std::borrow::Cow;
+
+        use solana_address_lookup_table_interface::{
+            program as lookup_table_program,
+            state::{AddressLookupTable, LookupTableMeta},
+        };
+
+        let payer = Keypair::new();
+        let destination = Pubkey::new_unique();
+        let instruction = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![solana_sdk::instruction::AccountMeta::new(
+                destination,
+                false,
+            )],
+            data: vec![1, 2, 3],
+        };
+        let observation = Observation {
+            slot: 20,
+            unix_timestamp: 30,
+            finality: Finality::Finalized,
+        };
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                authority: None,
+                deactivation_slot: u64::MAX,
+                last_extended_slot: 19,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(vec![destination]),
+        };
+        let table = ObservedAccount {
+            observation,
+            key: Pubkey::new_unique(),
+            owner: lookup_table_program::ID,
+            lamports: 1,
+            executable: false,
+            data: table.serialize_for_tests().expect("table bytes"),
+        };
+        let bounded = bounded_instructions(std::slice::from_ref(&instruction), None)
+            .expect("bounded instruction");
+        let routed = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            Hash::new_unique(),
+            observation,
+            std::slice::from_ref(&table),
+        )
+        .expect("v0 message");
+        let transaction = VersionedTransaction::try_new(routed.message, &[&payer])
+            .expect("signed v0 transaction");
+        let packet_bytes = bincode::serialize(&transaction).expect("packet bytes");
+        let packet = SignedVersionedPacketV1 {
+            signature: transaction.signatures[0].to_string(),
+            packet_base64: BASE64.encode(&packet_bytes),
+            packet_sha256: hex(&Sha256::digest(&packet_bytes)),
+            last_valid_block_height: 99,
+        };
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &packet,
+            )
+            .is_ok()
+        );
+
+        let mut changed_digest = packet.clone();
+        changed_digest.packet_sha256 = "00".repeat(32);
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &changed_digest,
+            )
+            .is_err()
+        );
+        let mut changed_signature = packet.clone();
+        changed_signature.signature = Signature::default().to_string();
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &changed_signature,
+            )
+            .is_err()
+        );
+        let mut changed_instruction = instruction.clone();
+        changed_instruction.data.push(4);
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&changed_instruction),
+                payer.pubkey(),
+                &table,
+                &packet,
+            )
+            .is_err()
+        );
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                Pubkey::new_unique(),
+                &table,
+                &packet,
+            )
+            .is_err()
+        );
+        let mut changed_table = table.clone();
+        changed_table.key = Pubkey::new_unique();
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &changed_table,
+                &packet,
+            )
+            .is_err()
+        );
     }
 
     #[test]

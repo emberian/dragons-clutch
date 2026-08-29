@@ -32,6 +32,7 @@ mod release_capture;
 mod rpc;
 mod runtime;
 mod seed;
+mod sponsored_push;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
 mod terminal_sequence;
@@ -143,6 +144,10 @@ fn run() -> Result<()> {
             direct_trade_producer::run_owned_loopback(arguments.collect())
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
+        Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
+        Some("local-private-validator-sponsored-push-v1") => {
+            sponsored_push::run_owned_loopback(arguments.collect())
+        }
         Some(command) if command == OWNED_LOOPBACK_TERMINAL_COMMANDS_V1[0] => {
             flagship_resolution::run_owned_loopback(arguments.collect())
         }
@@ -1509,6 +1514,8 @@ fn usage() {
     println!("{}", private_lifecycle::direct_payout_schedule_usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
+    println!("{}", sponsored_push::usage());
+    println!("{}", sponsored_push::owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
     println!("{}", wallet_terminal_payout_exterior::usage());
     println!("{}", direct_trade::usage());

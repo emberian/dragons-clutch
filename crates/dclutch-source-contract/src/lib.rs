@@ -281,6 +281,15 @@ pub const RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1: [u8; 32] = [
     0x4f, 0x3e, 0x60, 0xe3, 0x40, 0x89, 0x5c, 0x3e, 0xf0, 0x0c, 0x37, 0x1c, 0xeb, 0x3e, 0xf7, 0x98,
     0xdf, 0xa5, 0x80, 0x66, 0xb6, 0x17, 0xc6, 0xde, 0x0d, 0xea, 0x87, 0x50, 0x13, 0x4c, 0x99, 0x46,
 ];
+/// Closed sponsored-push extension: permissionless capture, canonical
+/// best-submitted head, and post-deadline consumption.
+pub const PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/source-pyth-sponsored-push-extension/v1";
+/// SHA-256 identity of [`PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1`].
+pub const PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_ID_V1: [u8; 32] = [
+    0xfc, 0x5d, 0xcd, 0x15, 0x3e, 0x4d, 0x95, 0xd3, 0x65, 0x31, 0x5f, 0x75, 0xad, 0xf6, 0x0e, 0x17,
+    0xac, 0x5a, 0xed, 0xe8, 0xfc, 0x57, 0xab, 0xd9, 0xb9, 0x0d, 0xde, 0x53, 0x88, 0xe9, 0x6c, 0xde,
+];
 /// Closed preimage release for the canonical shared-evidence-set digest.
 pub const SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/source-shared-evidence-set/v1";
 /// SHA-256 identity of [`SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1`].
@@ -810,6 +819,11 @@ pub enum SourceAccessProfile {
     /// owns is unchanged: binding that normalized evidence to the immutable
     /// material, the window, and the statistic.
     RelayedObservationRecord = 3,
+    /// A fixed sponsored Pyth push account captured before the primary
+    /// deadline into immutable Resolution-owned candidate records. A mutable
+    /// head selects the best valid submitted candidate; consumption occurs
+    /// only after candidate admission has closed.
+    PythSponsoredPushSnapshot = 4,
 }
 
 impl SourceAccessProfile {
@@ -818,6 +832,7 @@ impl SourceAccessProfile {
             1 => Ok(Self::PythTerminalOneTransaction),
             2 => Ok(Self::SharedObservationChild),
             3 => Ok(Self::RelayedObservationRecord),
+            4 => Ok(Self::PythSponsoredPushSnapshot),
             _ => Err(Error::UnknownSourceAccess),
         }
     }
@@ -850,6 +865,7 @@ impl SourceAccessProfile {
                 PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
             }
             Self::RelayedObservationRecord => RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1,
+            Self::PythSponsoredPushSnapshot => PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_ID_V1,
         }
     }
 }

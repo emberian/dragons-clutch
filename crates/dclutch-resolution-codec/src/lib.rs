@@ -18,6 +18,7 @@ mod pre_market_funding_v1;
 mod provider_transport_v3;
 mod provider_v3;
 mod source_closure_receipt_v3;
+mod sponsored_push_v1;
 mod v2;
 
 pub use generated_v2::{
@@ -48,6 +49,7 @@ pub use source_closure_receipt_v3::{
     SOURCE_CLOSURE_RECEIPT_MAGIC_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
     SOURCE_CLOSURE_RECEIPT_VERSION_V3, SourceClosureReceiptV3,
 };
+pub use sponsored_push_v1::*;
 pub use v2::{
     AcceptPythRequestV2, ResolutionCertificateKindV2, ResolutionCertificateV2,
     SourceClosureReceiptV2,
