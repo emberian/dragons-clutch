@@ -37,7 +37,9 @@ dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-op
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-rational-lifecycle-hot-v3 = { path = "../dclutch-rational-lifecycle-hot-v3" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
+dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }

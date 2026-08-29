@@ -62,6 +62,8 @@ pub mod provider_transport_v3 {
     pub use dclutch_provider_transport_v3_operator::*;
 }
 /// Packet-safe unsigned Rational terminal Bearer redemption construction.
+pub mod rational_selected_release_v1;
+
 pub mod rational_terminal_v3;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.
 pub mod registry;
