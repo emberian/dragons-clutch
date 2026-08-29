@@ -357,6 +357,8 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       registryProgramId={deployment.programs.registry}
       claimsProgramId={deployment.programs.claims}
       tradingProgramId={deployment.programs.trading}
+      custodyProgramId={deployment.programs.custody}
+      rentProgramId={deployment.programs.rent}
       liability={decoded.liability}
     />}
 

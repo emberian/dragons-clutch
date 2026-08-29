@@ -24,6 +24,7 @@ const TRADING = Keypair.fromSeed(new Uint8Array(32).fill(66)).publicKey.toBase58
 const RENT_OWNER = Keypair.fromSeed(new Uint8Array(32).fill(67)).publicKey.toBase58();
 
 const ROUTE = Object.freeze({
+  tradingProgram: TRADING,
   market: MARKET,
   generation: 2n,
   outcomeCount: 4,
