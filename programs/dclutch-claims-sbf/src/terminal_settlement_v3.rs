@@ -90,6 +90,7 @@ use dclutch_product_runtime_v2_svm_reader::{
 };
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, RecordAdmissionV3,
 };
@@ -132,7 +133,61 @@ pub(super) fn process(
         .map_err(|_| ClaimsSbfError::Instruction)?;
     let request_digest = hash(instruction_data).to_bytes();
     let prepared = authenticate_and_prepare(program_id, accounts, &request, request_digest)?;
-    execute(program_id, accounts, &request, request_digest, prepared)
+    let receipt = execute(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        prepared,
+        parent_authority(request.input()),
+    )?;
+    set_return_data(&receipt.to_bytes());
+    Ok(())
+}
+
+/// Execute a chain-derived terminal request from an enclosing Claims family route.
+///
+/// The outer route authenticates its own exact family-request PDA here; the
+/// derived terminal request remains separately hashed and evidenced in the
+/// returned terminal receipt. No public terminal submission can select this
+/// mode.
+pub(crate) fn execute_enclosing_authenticated(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: TerminalSettlementRequestV3,
+    outer_context: [u8; 32],
+    outer_request_digest: [u8; 32],
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
+    if accounts.len() != ACCOUNT_COUNT || request.input().caller_role != CallerRole::Trading {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let input = request.input();
+    let seeds = CallerAuthoritySeedsV1::new(
+        dclutch_core_contract::ContentId::new(input.release_set)
+            .map_err(|_| ClaimsSbfError::Authority)?,
+        input.market,
+        ExecutionRoleV1::Trading,
+        outer_context,
+        outer_request_digest,
+    )
+    .map_err(|_| ClaimsSbfError::Authority)?;
+    if !accounts[0].is_signer
+        || accounts[0].key != &Pubkey::find_program_address(&seeds.as_slices(), accounts[14].key).0
+        || input.parent_context != outer_request_digest
+    {
+        return Err(ClaimsSbfError::Authority.into());
+    }
+    let request_bytes = request.to_bytes();
+    let request_digest = hash(&request_bytes).to_bytes();
+    let prepared = authenticate_and_prepare(program_id, accounts, &request, request_digest)?;
+    execute(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        prepared,
+        ParentAuthorityV3::EnclosingClaimsRoute,
+    )
 }
 
 struct PreparedTerminalSettlementV3 {
@@ -331,7 +386,8 @@ fn execute(
     request: &TerminalSettlementRequestV3,
     request_digest: [u8; 32],
     prepared: Box<PreparedTerminalSettlementV3>,
-) -> Result<(), ProgramError> {
+    authority: ParentAuthorityV3,
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
     let input = (*request).input();
     let signed_accounts = Vec::from(&accounts[..SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + 1]);
     authenticate_parent_releases(program_id, &signed_accounts, &prepared.packet)?;
@@ -341,7 +397,7 @@ fn execute(
         &prepared.packet,
         AuthenticatedSignedDeltaParentV3 {
             caller_role: input.caller_role,
-            authority: parent_authority(input),
+            authority,
             release_set: input.release_set,
             market: input.market,
             parent_context: input.parent_context,
@@ -446,11 +502,10 @@ fn execute(
 fn emit_receipt(
     request: TerminalSettlementRequestV3,
     evidence: Box<TerminalSettlementReceiptInputV3>,
-) -> Result<(), ProgramError> {
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
     let receipt = TerminalSettlementReceiptV3::new(request, *evidence)
         .map_err(|_| ClaimsSbfError::Receipt)?;
-    set_return_data(&receipt.to_bytes());
-    Ok(())
+    Ok(receipt)
 }
 
 fn authenticate_extra_privileges(

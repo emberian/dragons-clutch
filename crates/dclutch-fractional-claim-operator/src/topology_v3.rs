@@ -5,20 +5,18 @@
 //! understate Solana's account-lock ceiling. Address lookup tables reduce wire
 //! bytes only; these counts remain the lock admission fact.
 
-use dclutch_claims_svm::{
-    frame_spec_v1::{
-        PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
-    },
-    terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3,
-};
+use dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1;
 use dclutch_fractional_claim_contract::{
-    FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2, FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3,
+    FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2,
+    FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
 };
 
 /// One-byte Trading family envelope before the exact child request.
 pub const FRACTIONAL_CHILD_ENVELOPE_BYTES_V3: usize = 1;
 /// Token-2022 `TransferChecked` data width.
 pub const TOKEN_2022_TRANSFER_CHECKED_BYTES: usize = 10;
+/// Current devnet transaction account-lock ceiling.
+pub const FRACTIONAL_DEVNET_MAX_ACCOUNT_LOCKS_V3: usize = 64;
 
 /// Exact bounded outer frame kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,10 +53,11 @@ pub const fn fractional_frame_census_v3(kind: FractionalFrameKindV3) -> Fraction
     let request = FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2 + FRACTIONAL_CHILD_ENVELOPE_BYTES_V3;
     let retirement = FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3 + FRACTIONAL_CHILD_ENVELOPE_BYTES_V3;
     match kind {
-        // SignedDelta frame: fixed 20 + two Positions; selected Token route adds
-        // Token program, Mint, holder account, and root controller.
+        // Exact production Claims child: SignedDelta fixed 20 + two Positions,
+        // terms raw/staging, TokenBehavior raw/staging, root, holder signer,
+        // selected Mint, holder Token account, and Token-2022 program.
         FractionalFrameKindV3::WrapOrWholeUnwrap => FractionalFrameCensusV3 {
-            unique_account_locks: SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 as usize + 2 + 4,
+            unique_account_locks: FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3,
             instruction_data_bytes: request,
             required_signatures: 1,
         },
@@ -67,10 +66,11 @@ pub const fn fractional_frame_census_v3(kind: FractionalFrameKindV3) -> Fraction
             instruction_data_bytes: TOKEN_2022_TRANSFER_CHECKED_BYTES,
             required_signatures: 1,
         },
-        // Claims TerminalSettlement owns its exact 36-account frame, including
-        // Custody. Token program, Mint, source, and root are additional.
+        // Exact production terminal child: Claims/Custody fixed 36 plus
+        // terms raw/staging, TokenBehavior raw/staging, root, holder signer,
+        // selected Mint, and source Token account.
         FractionalFrameKindV3::TerminalRedeemOrZeroBurn => FractionalFrameCensusV3 {
-            unique_account_locks: TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 + 4,
+            unique_account_locks: FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
             instruction_data_bytes: request,
             required_signatures: 1,
         },
@@ -96,5 +96,32 @@ pub const fn fractional_frame_census_v3(kind: FractionalFrameKindV3) -> Fraction
             instruction_data_bytes: retirement,
             required_signatures: 1,
         },
+    }
+}
+
+/// Refuse a frame that crosses the current devnet 64-lock admission wall.
+pub const fn admit_fractional_devnet_locks_v3(unique_account_locks: usize) -> bool {
+    unique_account_locks != 0 && unique_account_locks <= FRACTIONAL_DEVNET_MAX_ACCOUNT_LOCKS_V3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrected_atomic_frame_and_runtime_boundary_are_exact() {
+        let atomic = fractional_frame_census_v3(FractionalFrameKindV3::WrapOrWholeUnwrap);
+        assert_eq!(atomic.unique_account_locks, 31);
+        assert!(admit_fractional_devnet_locks_v3(
+            atomic.unique_account_locks
+        ));
+        let terminal = fractional_frame_census_v3(FractionalFrameKindV3::TerminalRedeemOrZeroBurn);
+        assert_eq!(terminal.unique_account_locks, 44);
+        assert!(admit_fractional_devnet_locks_v3(
+            terminal.unique_account_locks
+        ));
+        assert!(admit_fractional_devnet_locks_v3(64));
+        assert!(!admit_fractional_devnet_locks_v3(65));
+        assert!(!admit_fractional_devnet_locks_v3(0));
     }
 }

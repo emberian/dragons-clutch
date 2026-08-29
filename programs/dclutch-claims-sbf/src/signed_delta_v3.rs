@@ -72,6 +72,13 @@ pub(crate) enum ParentAuthorityV3 {
     /// [`CallerRole::Claims`], where there is no caller program to derive a PDA
     /// under in the first place.
     PositionOwner([u8; 32]),
+    /// An enclosing Claims route already authenticated the exact external
+    /// caller PDA against its own family request before deriving this child.
+    ///
+    /// This is not a public submission mode: the enum and execution entry are
+    /// crate-private, and current-release authentication still runs before the
+    /// derived SignedDelta commits.
+    EnclosingClaimsRoute,
 }
 
 /// Exact already-authenticated parent request joined to one generated
@@ -504,9 +511,11 @@ fn authenticate_parent_authority(
         // Role `Claims` has no caller program, and no other role may substitute
         // an owner signature for its program's authority. Both crossings refuse.
         (CallerRole::Claims, ParentAuthorityV3::CallerProgramPda)
+        | (CallerRole::Claims, ParentAuthorityV3::EnclosingClaimsRoute)
         | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::PositionOwner(_)) => {
             return Err(SignedDeltaSbfErrorV3::Release.into());
         }
+        (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::EnclosingClaimsRoute) => {}
         (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::CallerProgramPda) => {
             let seeds = CallerAuthoritySeedsV1::new(
                 ContentId::new(parent.release_set).map_err(|_| SignedDeltaSbfErrorV3::Release)?,

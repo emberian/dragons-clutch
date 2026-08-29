@@ -296,7 +296,9 @@ use crate::{
     feature = "series-family",
     feature = "dealer-family"
 ))]
-use dclutch_claims_svm::composition_v3::{ClaimsCompositionParentV3, ClaimsCompositionV3};
+use dclutch_claims_svm::composition_v3::{
+    ClaimsCompositionParentV3, ClaimsCompositionV3, ClaimsExternalOnceV3,
+};
 // These are SBF-heap profile bounds, not semantic/product limits. The lifting
 // path is scratch-page transport under authenticated ExecutionStrategy V2.
 const MAX_HOT_RUNTIME_ACCOUNTS_V3: usize = 256;
@@ -7210,8 +7212,41 @@ fn decode_claims_composition_boxed_v3<'request>(
     family_request: &'request [u8],
     parent: ClaimsCompositionParentV3,
 ) -> Result<HeapBoxV3<ClaimsCompositionV3<'request>>, ProgramError> {
+    let external = if family_request.get(..8)
+        == Some(dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
+    {
+        let request =
+            dclutch_fractional_claim_contract::FractionalExposureRequestV2::decode(family_request)
+                .map_err(|_| TradingSbfError::Content)?;
+        let fixed_account_count = match request.action() {
+            dclutch_fractional_claim_contract::FractionalExposureActionV2::Wrap
+            | dclutch_fractional_claim_contract::FractionalExposureActionV2::WholeUnwrap => {
+                dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3
+            }
+            dclutch_fractional_claim_contract::FractionalExposureActionV2::TerminalRedeem
+            | dclutch_fractional_claim_contract::FractionalExposureActionV2::TerminalZeroBurn => {
+                dclutch_fractional_claim_contract::FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3
+            }
+            _ => return Err(TradingSbfError::Content.into()),
+        };
+        if request.input().release_set != parent.release_set
+            || request.input().market != parent.market
+            || hash(family_request).to_bytes() != parent.parent_request_digest
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        Some(
+            ClaimsExternalOnceV3::new(
+                family_request,
+                u16::try_from(fixed_account_count).map_err(|_| TradingSbfError::Content)?,
+            )
+            .map_err(|_| TradingSbfError::Content)?,
+        )
+    } else {
+        None
+    };
     HeapBoxV3::new(
-        ClaimsCompositionV3::decode_selected_with_witness(
+        ClaimsCompositionV3::decode_selected_with_external(
             effect.base(),
             tail_count,
             scalars,
@@ -7219,6 +7254,7 @@ fn decode_claims_composition_boxed_v3<'request>(
             request_bank,
             family_request,
             parent,
+            external,
         )
         .map_err(|_| TradingSbfError::Content)?,
     )
@@ -8743,6 +8779,8 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
             .to_bytes()
             .map(Vec::from)
             .map_err(|_| TradingSbfError::Transition)?,
+        ClaimsRouteReceiptV3::FractionalAtomic(value) => Vec::from(value.to_bytes()),
+        ClaimsRouteReceiptV3::FractionalTerminalAtomic(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)

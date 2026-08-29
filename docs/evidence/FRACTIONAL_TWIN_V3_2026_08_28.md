@@ -1,7 +1,7 @@
 # Fractional twin V3: selected-coordinate physics and bounded retirement
 
 Date: 2026-08-28
-Status: contract/operator rung; **not a live capability**
+Status: executable Claims/Trading child rung; **not a live capability**
 
 ## Decision
 
@@ -96,9 +96,9 @@ contract numbers, not real-ELF execution evidence:
 
 | Transaction | Unique locks | Instruction data | Fully signed v0 bytes | Packet margin |
 |---|---:|---:|---:|---:|
-| Wrap / WholeUnwrap | 26 | 417 | 672 | 560 |
+| Wrap / WholeUnwrap | 31 | 417 | 682 | 550 |
 | Direct TransferChecked | 5 | 10 | 222 | 1,010 |
-| TerminalRedeem / TerminalZeroBurn | 40 | 417 | 700 | 532 |
+| TerminalRedeem / TerminalZeroBurn | 44 | 417 | 708 | 524 |
 | Terminalize | 18 | 417 | 656 | 576 |
 | Retirement Begin | 8 | 289 | 508 | 724 |
 | Retirement Coordinate | 21 | 289 | 534 | 698 |
@@ -113,6 +113,20 @@ compression.
 ## What is implemented
 
 - exact physical action planning with denominator conservation;
+- a production Claims handler for the exact 31-account Wrap/WholeUnwrap frame;
+- a distinct production Claims handler for the exact 44-account terminal
+  frame, deriving its terminal Claims request from authenticated chain state;
+- native Claims mutation followed by Token-2022 mint/burn, and terminal
+  Claims/Custody settlement followed by Token-2022 burn, so a late child or
+  postcondition refusal aborts the enclosing SVM instruction;
+- exact 256-byte open and terminal receipts with family-request, Claims,
+  Custody, Token poststate, root, quantity, and payout bindings;
+- Trading composition admission for all four executable actions, with distinct
+  receipt kinds and two authenticated `invoke_signed` authorities: the exact
+  request caller PDA and the terms/Market Fractional-root PDA;
+- a caller-side Claims instruction builder for the 31-account open frame that
+  rederives both PDAs, both record pairs, both ordered Claims Positions, the
+  selected Mint/Token account, and every privilege;
 - explicit refusal of the old all-`K` retirement route;
 - exact hostile-decoded retirement request and cursor formats;
 - strict ordered cursor transitions and fixed-width finish evidence;
@@ -122,20 +136,20 @@ compression.
 
 ## What still blocks a live Fractional capability
 
-This rung intentionally stops before pretending a caller exists. Integration
-still requires:
+The native Claims/Token/Custody child and its Trading composition arm now
+exist. Integration still requires:
 
-1. a Claims child request/handler that atomically owns the native Claims plus
-   Token-2022/Custody mutations above, without importing Rational receipt
-   semantics;
-2. the matching Trading composition dispatch arm;
-3. generated EffectProgram, AccountProfile, RequestProfile, and
+1. generated EffectProgram, AccountProfile, RequestProfile, and
    ExecutionStrategy artifacts whose exact expanded frame matches the census;
+2. the outer Trading transition that advances the sole Fractional-root
+   revision only after the verified child receipt, plus its rollback campaign;
+3. a terminal-frame caller-side builder equivalent to the landed open builder;
 4. a migration or new producer-root version that authenticates the V3 cursor
    PDA and its lifecycle rent;
 5. one-coordinate Claims Position close plus Token Mint close in the retirement
    step, and fixed final Core/Lifecycle-Rent closure;
-6. a real-ELF caller-backed campaign, frame diagnostic, 20-seed CU mean, and
+6. a real-ELF caller-backed late-Token-failure rollback campaign, frame
+   diagnostic, 20-seed CU mean, and
    checked release bindings.
 
 Until those exist, the current 14-action release remains refused and this code

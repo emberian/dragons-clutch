@@ -67,6 +67,7 @@ dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel", optional = true }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract", features = ["alloc"] }
+dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
