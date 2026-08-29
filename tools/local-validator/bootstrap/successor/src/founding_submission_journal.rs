@@ -222,6 +222,44 @@ pub(crate) struct FoundingFinalizationV1 {
     pub(crate) poststates: Vec<AccountEvidence>,
 }
 
+/// The chain's answer, at sealing time, about a durable packet the campaign
+/// never observed finalize.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum UnresolvedFeeResolutionV1 {
+    /// `getSignatureStatuses` served a finalized status but the transaction
+    /// metadata is no longer served: the send LANDED, so the deterministic
+    /// `exactFeeLamports` IS its fee.
+    ChainStatusOnly,
+    /// The chain neither confirms nor denies: history purged, or a send that
+    /// truly never landed. The fee stays two-point {0, exactFeeLamports}.
+    ChainUnserved,
+    /// The endpoint could not answer when the campaign sealed.
+    RpcRefused,
+}
+
+/// An explicit accounting marker for a submission the run never saw finalize.
+///
+/// A submitted-and-unobserved transaction is charged by the chain all the same
+/// if it landed, and its fee is TWO-POINT: zero, or exactly the journal's own
+/// `exactFeeLamports` (the fee is computed at message-build time and
+/// `finalize_founding_submission_v1` refuses any finalized row that disagrees).
+/// The sealing pass either resolves the ambiguity against the chain or writes
+/// this marker, so the fee record accounts every send TOTALLY -- a ledger
+/// reads the bound as a named unknown instead of a silent absence.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct UnresolvedFeeMarkerV1 {
+    pub(crate) resolution: UnresolvedFeeResolutionV1,
+    /// The slot the served status named, for `chain-status-only` only.
+    pub(crate) status_slot: Option<u64>,
+    /// The bound the marker stands for; must restate `exactFeeLamports` so a
+    /// reader holding only the marker holds the bound.
+    pub(crate) unresolved_fee_bound_lamports: u64,
+    /// The finalized slot at which the chain was asked.
+    pub(crate) checked_at_slot: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct FoundingSubmissionJournalV1 {
@@ -261,6 +299,12 @@ pub(crate) struct FoundingSubmissionJournalV1 {
     pub(crate) compute_units_consumed: Option<u64>,
     pub(crate) finalized_poststates: Vec<AccountEvidence>,
     pub(crate) finalized_poststates_sha256: Option<String>,
+    /// Present only on an ambiguous durable tail (Dispatching or Submitted)
+    /// that the sealing pass tried and could not resolve. Serialized only when
+    /// present, so every row written before this field existed keeps its
+    /// byte-identical serialization and therefore its digests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) unresolved_fee: Option<UnresolvedFeeMarkerV1>,
     pub(crate) state_sha256: String,
 }
 
@@ -358,6 +402,7 @@ pub(crate) fn plan_founding_submission_v1(
         compute_units_consumed: None,
         finalized_poststates: Vec::new(),
         finalized_poststates_sha256: None,
+        unresolved_fee: None,
         state_sha256: String::new(),
     };
     journal.intent_sha256 = intent_digest_v1(&journal)?;
@@ -450,6 +495,8 @@ pub(crate) fn finalize_founding_submission_v1(
     authenticate_finalized_poststates_v1(current, &finalization.poststates)?;
     let mut next = current.clone();
     next.phase = FoundingSubmissionPhaseV1::Finalized;
+    // A resolved row carries no unknown: late resolution supersedes the marker.
+    next.unresolved_fee = None;
     next.finalized_slot = Some(finalization.finalized_slot);
     next.transaction_sha256 = Some(finalization.transaction_sha256);
     next.fee_lamports = Some(finalization.fee_lamports);
@@ -458,6 +505,47 @@ pub(crate) fn finalize_founding_submission_v1(
     next.finalized_poststates = finalization.poststates;
     refresh_state_digest_v1(&mut next)?;
     authenticate_transition_v1(binding, current, &next)?;
+    Ok(next)
+}
+
+/// Annotate an ambiguous durable packet with the chain's sealing-time answer.
+///
+/// This is NOT a phase transition -- the packet stays exactly as ambiguous as
+/// it was, and every recovery verdict is unchanged -- so it deliberately does
+/// not run `authenticate_transition_v1` (whose grammar rightly refuses a
+/// same-phase edge). The only fields that move are the marker and the state
+/// digest; the intent digest blanks the marker, so `same_intent_v1` still
+/// holds across any later legal transition of the same row.
+pub(crate) fn mark_unresolved_founding_submission_v1(
+    binding: &FoundingSubmissionBindingV1,
+    current: &FoundingSubmissionJournalV1,
+    marker: UnresolvedFeeMarkerV1,
+) -> Result<FoundingSubmissionJournalV1> {
+    authenticate_founding_submission_v1(binding, current)?;
+    if !matches!(
+        current.phase,
+        FoundingSubmissionPhaseV1::Dispatching | FoundingSubmissionPhaseV1::Submitted
+    ) {
+        return Err(refusal(
+            "an unresolved-fee marker belongs only on an ambiguous durable packet",
+        ));
+    }
+    if marker.unresolved_fee_bound_lamports != current.exact_fee_lamports {
+        return Err(refusal(
+            "an unresolved-fee marker must restate the exact deterministic fee bound",
+        ));
+    }
+    let mut next = current.clone();
+    next.unresolved_fee = Some(marker);
+    refresh_state_digest_v1(&mut next)?;
+    // Full per-row authentication enforces the marker grammar (phase, bound,
+    // slot shape) and proves the annotated row is loadable evidence.
+    authenticate_founding_submission_v1(binding, &next)?;
+    if !same_intent_v1(current, &next) {
+        return Err(refusal(
+            "an unresolved-fee marker may not move the durable intent",
+        ));
+    }
     Ok(next)
 }
 
@@ -678,6 +766,32 @@ pub(crate) fn authenticate_founding_submission_v1(
         || expected_wire > 1_232
     {
         return Err(refusal("founding message geometry changed"));
+    }
+    if let Some(marker) = &journal.unresolved_fee {
+        if !matches!(
+            journal.phase,
+            FoundingSubmissionPhaseV1::Dispatching | FoundingSubmissionPhaseV1::Submitted
+        ) {
+            return Err(refusal(
+                "an unresolved-fee marker belongs only on an ambiguous durable packet",
+            ));
+        }
+        if marker.unresolved_fee_bound_lamports != journal.exact_fee_lamports
+            || match marker.resolution {
+                UnresolvedFeeResolutionV1::ChainStatusOnly => {
+                    marker.checked_at_slot == 0
+                        || marker.status_slot.is_none_or(|slot| slot == 0)
+                }
+                UnresolvedFeeResolutionV1::ChainUnserved => {
+                    marker.checked_at_slot == 0 || marker.status_slot.is_some()
+                }
+                // A refused endpoint may not even know the slot it was asked
+                // at; it must still never claim a status slot.
+                UnresolvedFeeResolutionV1::RpcRefused => marker.status_slot.is_some(),
+            }
+        {
+            return Err(refusal("unresolved-fee marker contradicts its journal"));
+        }
     }
     match journal.phase {
         FoundingSubmissionPhaseV1::Planned => {
@@ -1042,6 +1156,9 @@ fn intent_digest_v1(journal: &FoundingSubmissionJournalV1) -> Result<String> {
     copy.compute_units_consumed = None;
     copy.finalized_poststates.clear();
     copy.finalized_poststates_sha256 = None;
+    // The marker is a post-Planned annotation: blanked here so marking an
+    // ambiguous row never moves its intent digest.
+    copy.unresolved_fee = None;
     copy.state_sha256.clear();
     serde_json::to_vec(&copy)
         .map(|bytes| sha256_hex(&bytes))
@@ -1498,5 +1615,174 @@ mod tests {
         );
         assert!(authenticate_founding_submission_prefix_v1(std::slice::from_ref(&second)).is_err());
         assert!(authenticate_founding_submission_prefix_v1(&[second, first]).is_err());
+    }
+
+    fn submitted(
+        signers: &[&Keypair],
+        operation: FoundingSubmissionOperationV1,
+    ) -> (FoundingSubmissionBindingV1, FoundingSubmissionJournalV1) {
+        let (binding, prepared) = prepared(signers, operation);
+        let dispatching =
+            dispatch_founding_submission_v1(&binding, &prepared).expect("dispatching");
+        let signature = dispatching.expected_signature.clone().expect("signature");
+        let submitted = submit_founding_submission_v1(&binding, &dispatching, &signature)
+            .expect("submitted");
+        (binding, submitted)
+    }
+
+    fn unserved_marker(bound: u64) -> UnresolvedFeeMarkerV1 {
+        UnresolvedFeeMarkerV1 {
+            resolution: UnresolvedFeeResolutionV1::ChainUnserved,
+            status_slot: None,
+            unresolved_fee_bound_lamports: bound,
+            checked_at_slot: 4_242,
+        }
+    }
+
+    #[test]
+    fn an_unresolved_fee_marker_annotates_without_moving_phase_or_intent() {
+        let payer = Keypair::new();
+        let (binding, row) = submitted(
+            &[&payer],
+            FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+        );
+        let marked = mark_unresolved_founding_submission_v1(
+            &binding,
+            &row,
+            unserved_marker(row.exact_fee_lamports),
+        )
+        .expect("marked");
+        assert_eq!(marked.phase, FoundingSubmissionPhaseV1::Submitted);
+        assert_eq!(marked.intent_sha256, row.intent_sha256);
+        assert_ne!(marked.state_sha256, row.state_sha256);
+        // The marked row is loadable evidence and its recovery verdict is the
+        // same poll-only ambiguity it always was.
+        authenticate_founding_submission_v1(&binding, &marked).expect("loadable");
+        assert_eq!(
+            founding_submission_recovery_v1(&binding, &marked).expect("recovery"),
+            FoundingSubmissionRecoveryV1::PollOnly
+        );
+    }
+
+    #[test]
+    fn a_marker_must_restate_the_exact_deterministic_fee() {
+        let payer = Keypair::new();
+        let (binding, row) = submitted(
+            &[&payer],
+            FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+        );
+        assert!(
+            mark_unresolved_founding_submission_v1(
+                &binding,
+                &row,
+                unserved_marker(row.exact_fee_lamports + 1),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_marker_belongs_only_on_an_ambiguous_durable_packet() {
+        let payer = Keypair::new();
+        let (binding, planned_row) = planned(
+            &[&payer],
+            FoundingSubmissionOperationV1::CoreFundingCreateV1,
+        );
+        assert!(
+            mark_unresolved_founding_submission_v1(
+                &binding,
+                &planned_row,
+                unserved_marker(planned_row.exact_fee_lamports),
+            )
+            .is_err()
+        );
+        // And the grammar itself refuses a marker smuggled onto a Planned row
+        // without the constructor.
+        let mut smuggled = planned_row.clone();
+        smuggled.unresolved_fee = Some(unserved_marker(smuggled.exact_fee_lamports));
+        refresh_state_digest_v1(&mut smuggled).expect("digest");
+        assert!(authenticate_founding_submission_v1(&binding, &smuggled).is_err());
+    }
+
+    #[test]
+    fn a_status_only_marker_requires_its_slot_and_unserved_forbids_one() {
+        let payer = Keypair::new();
+        let (binding, row) = submitted(
+            &[&payer],
+            FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+        );
+        let mut status_only = unserved_marker(row.exact_fee_lamports);
+        status_only.resolution = UnresolvedFeeResolutionV1::ChainStatusOnly;
+        assert!(
+            mark_unresolved_founding_submission_v1(&binding, &row, status_only.clone()).is_err(),
+            "a landed claim without the slot that landed it is not evidence"
+        );
+        status_only.status_slot = Some(900);
+        mark_unresolved_founding_submission_v1(&binding, &row, status_only).expect("status-only");
+
+        let mut unserved_with_slot = unserved_marker(row.exact_fee_lamports);
+        unserved_with_slot.status_slot = Some(900);
+        assert!(
+            mark_unresolved_founding_submission_v1(&binding, &row, unserved_with_slot).is_err(),
+            "an unserved verdict may not claim a slot it never saw"
+        );
+    }
+
+    #[test]
+    fn late_resolution_supersedes_the_marker() {
+        let payer = Keypair::new();
+        let (binding, row) = submitted(
+            &[&payer],
+            FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+        );
+        let marked = mark_unresolved_founding_submission_v1(
+            &binding,
+            &row,
+            unserved_marker(row.exact_fee_lamports),
+        )
+        .expect("marked");
+        let finalized = finalize_founding_submission_v1(
+            &binding,
+            &marked,
+            FoundingFinalizationV1 {
+                signature: marked.expected_signature.clone().expect("signature"),
+                finalized_slot: 1_000,
+                transaction_sha256: marked.signed_packet_sha256.clone().expect("packet"),
+                fee_lamports: marked.exact_fee_lamports,
+                compute_units_consumed: 1,
+                completion_contract_sha256: marked.completion_contract_sha256.clone(),
+                poststates: poststates(&marked),
+            },
+        )
+        .expect("finalized");
+        assert_eq!(finalized.unresolved_fee, None, "a resolved row carries no unknown");
+        authenticate_founding_submission_v1(&binding, &finalized).expect("loadable");
+    }
+
+    #[test]
+    fn rows_written_before_the_marker_existed_keep_their_serialization() {
+        let payer = Keypair::new();
+        let (binding, row) = submitted(
+            &[&payer],
+            FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
+        );
+        let serialized = serde_json::to_value(&row).expect("serialize");
+        assert!(
+            serialized.get("unresolvedFee").is_none(),
+            "an absent marker must not appear in the serialization, or every \
+             pre-marker row's state digest would move"
+        );
+        // And a marked row survives its own round trip as loadable evidence.
+        let marked = mark_unresolved_founding_submission_v1(
+            &binding,
+            &row,
+            unserved_marker(row.exact_fee_lamports),
+        )
+        .expect("marked");
+        let round_tripped: FoundingSubmissionJournalV1 =
+            serde_json::from_value(serde_json::to_value(&marked).expect("serialize"))
+                .expect("deserialize");
+        authenticate_founding_submission_v1(&binding, &round_tripped).expect("loadable");
+        assert_eq!(round_tripped, marked);
     }
 }

@@ -150,6 +150,7 @@ use founding_submission_journal::{
     finalize_founding_submission_v1, founding_submission_finalized_poststates_v1,
     founding_submission_message_v1, founding_submission_packet_v1,
     founding_submission_recovery_payload_v1, founding_submission_recovery_v1,
+    UnresolvedFeeMarkerV1, UnresolvedFeeResolutionV1, mark_unresolved_founding_submission_v1,
     plan_founding_submission_v1, prepare_founding_submission_v1, submit_founding_submission_v1,
     visit_founding_pre_send_boundary_v1,
 };
@@ -856,6 +857,125 @@ pub(crate) fn finalize_observed_founding_submission_v1(
             poststates,
         },
     )
+}
+
+/// Sealing-time totality pass over the durable submission journals.
+///
+/// Every journal the campaign never observed finalize either RESOLVES against
+/// the chain (a late confirmation through the same verified reader the
+/// recovery path trusts) or gains an explicit unresolved-fee marker, so the
+/// campaign's fee record accounts EVERY send and a ledger reads a named
+/// two-point bound instead of a silent absence. The selseam-hold-01 founding
+/// is the motivating evidence: resolution-funding-activate-v1 sat in phase
+/// `submitted` with a null fee while the chain had charged its deterministic
+/// 75,000 lamports, and nothing in the report said so.
+///
+/// Nothing here may abort a seal: every refusal degrades to the marker, and a
+/// marker refusal leaves the journal exactly as it was. Only rows whose packet
+/// may have reached the chain participate (Dispatching and Submitted --
+/// Planned and Prepared rows were never sent and owe no fee). Returns whether
+/// any row changed.
+pub(crate) fn resolve_stranded_founding_submissions_v1(
+    rpc: &mut Rpc,
+    binding: &FoundingSubmissionBindingV1,
+    journals: &mut BTreeMap<FoundingSubmissionOperationV1, FoundingSubmissionJournalV1>,
+) -> bool {
+    let stranded: Vec<FoundingSubmissionOperationV1> = journals
+        .iter()
+        .filter(|(_, journal)| {
+            matches!(
+                journal.phase,
+                FoundingSubmissionPhaseV1::Dispatching | FoundingSubmissionPhaseV1::Submitted
+            )
+        })
+        .map(|(operation, _)| *operation)
+        .collect();
+    let mut changed = false;
+    for operation in stranded {
+        let Some(journal) = journals.get(&operation).cloned() else {
+            continue;
+        };
+        let label = operation.label();
+        let resolved: Result<FoundingSubmissionJournalV1> = (|| {
+            let signature = journal
+                .expected_signature
+                .as_deref()
+                .ok_or_else(|| Error::new("stranded durable journal omitted its signature"))?
+                .parse::<Signature>()
+                .map_err(|error| Error::new(format!("stranded durable signature: {error}")))?;
+            let finalized = rpc
+                .finalized_signed_packet(label, signature, false)?
+                .ok_or_else(|| {
+                    Error::new("the chain does not serve the transaction at sealing")
+                })?;
+            // `finalize_observed_…` requires Submitted exactly; a stranded
+            // Dispatching row whose packet nevertheless finalized advances
+            // through Submitted locally first -- the same one-adjacent-phase
+            // grammar `finish_durable_founding_v1` uses.
+            let submitted = if journal.phase == FoundingSubmissionPhaseV1::Dispatching {
+                submit_founding_submission_v1(binding, &journal, &signature.to_string())?
+            } else {
+                journal.clone()
+            };
+            finalize_observed_founding_submission_v1(rpc, binding, &submitted, &finalized)
+        })();
+        match resolved {
+            Ok(next) => {
+                eprintln!(
+                    "campaign: {label} resolved at sealing; fee read from the chain's own transaction record"
+                );
+                journals.insert(operation, next);
+                changed = true;
+            }
+            Err(error) => {
+                let (verdict, checked_at_slot) = match journal
+                    .expected_signature
+                    .as_deref()
+                    .unwrap_or_default()
+                    .parse::<Signature>()
+                {
+                    Ok(signature) => rpc.late_signature_probe_v1(signature),
+                    Err(_) => (crate::rpc::LateSignatureProbeV1::Refused, 0),
+                };
+                let marker = match verdict {
+                    crate::rpc::LateSignatureProbeV1::StatusWithoutMetadata { slot } => {
+                        UnresolvedFeeMarkerV1 {
+                            resolution: UnresolvedFeeResolutionV1::ChainStatusOnly,
+                            status_slot: Some(slot),
+                            unresolved_fee_bound_lamports: journal.exact_fee_lamports,
+                            checked_at_slot,
+                        }
+                    }
+                    crate::rpc::LateSignatureProbeV1::Unserved => UnresolvedFeeMarkerV1 {
+                        resolution: UnresolvedFeeResolutionV1::ChainUnserved,
+                        status_slot: None,
+                        unresolved_fee_bound_lamports: journal.exact_fee_lamports,
+                        checked_at_slot,
+                    },
+                    crate::rpc::LateSignatureProbeV1::Refused => UnresolvedFeeMarkerV1 {
+                        resolution: UnresolvedFeeResolutionV1::RpcRefused,
+                        status_slot: None,
+                        unresolved_fee_bound_lamports: journal.exact_fee_lamports,
+                        checked_at_slot,
+                    },
+                };
+                eprintln!(
+                    "campaign: {label} could not resolve at sealing ({error}); writing the explicit unresolved-fee marker ({:?})",
+                    marker.resolution
+                );
+                match mark_unresolved_founding_submission_v1(binding, &journal, marker) {
+                    Ok(next) => {
+                        journals.insert(operation, next);
+                        changed = true;
+                    }
+                    Err(error) => eprintln!(
+                        "campaign: {label} unresolved-fee marker refused ({error}); journal retained unchanged"
+                    ),
+                }
+            }
+        }
+    }
+    changed
 }
 
 fn finalize_existing_founding_submission_v1(
