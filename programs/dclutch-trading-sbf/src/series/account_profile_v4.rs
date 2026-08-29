@@ -15,9 +15,18 @@ use dclutch_account_profile_contract::v2::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
-        RegisterGeometryV2,
+        RegisterGeometryV2, ScalarCoordinateV2,
         encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic,
     },
+};
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_MARKET_OFFSET,
+    CAPABILITY_ROOT_SELECTION_OFFSET,
+};
+use dclutch_release_set_contract::{
+    CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET, CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET, CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
 };
 
 use super::{
@@ -33,12 +42,38 @@ pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4: usize =
     SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize;
 const FIXED_RULE_COUNT: usize = SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4;
 const SPAN_RULE_COUNT: usize = 1;
-const OPERATION_COUNT: usize = 2;
+const OPERATION_COUNT: usize = 9;
 const CURRENT_TRADING_IDENTITY: u16 = 0;
-const COMMON_SCALAR_COUNT: u16 = 5;
-const COMMON_IDENTITY_COUNT: u16 = 1;
+const COMMON_SCALAR_COUNT: u16 = 7;
+const COMMON_IDENTITY_COUNT: u16 = 6;
 const ROOT: usize = 0;
 const TICKET_REPLAY: usize = 59;
+
+/// Sole Series root coordinate in the global Consume logical frame.
+pub const SERIES_CONSUME_ROOT_COORDINATE_V4: u16 = 0;
+/// Sole Ticket replay coordinate in the global Consume logical frame.
+///
+/// The Ticket appears in the Consume frame as a referenced coordinate only:
+/// its lamport flow is authored by the funding path
+/// ([`super::commit_plans::PendingFundingPlanV3::ticket_capability_refund`]),
+/// so a lifecycle plan naming this coordinate — directly or through a route
+/// alias — would be a second author for one lamport flow.
+pub const SERIES_CONSUME_TICKET_REPLAY_COORDINATE_V4: u16 = 59;
+
+/// Common identity register carrying the root header's Market identity.
+pub const SERIES_CONSUME_ROOT_MARKET_IDENTITY_V4: u16 = 1;
+/// Common identity register carrying the root header's manifest identity.
+pub const SERIES_CONSUME_ROOT_MANIFEST_IDENTITY_V4: u16 = 2;
+/// Common identity register carrying the root header's capability kind.
+pub const SERIES_CONSUME_ROOT_KIND_IDENTITY_V4: u16 = 3;
+/// Common identity register carrying the root header's capability release.
+pub const SERIES_CONSUME_ROOT_CAPABILITY_RELEASE_IDENTITY_V4: u16 = 4;
+/// Common identity register carrying the root header's config identity.
+pub const SERIES_CONSUME_ROOT_CONFIG_IDENTITY_V4: u16 = 5;
+/// Common scalar register carrying the root header's Market generation.
+pub const SERIES_CONSUME_ROOT_GENERATION_SCALAR_V4: u16 = 5;
+/// Common scalar register carrying the root header's manifest entry index.
+pub const SERIES_CONSUME_ROOT_ENTRY_INDEX_SCALAR_V4: u16 = 6;
 
 /// Exact Profile13 artifact width for the global Consume account vector.
 pub const SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
@@ -90,9 +125,47 @@ pub fn encode_series_consume_account_profile_v4_atomic(
         },
         prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
     }];
+    // The root's own immutable header is the sole author of the root PDA
+    // derivation (`CapabilityRootSeedsV1`). Projecting its seven seed fields
+    // into common registers lets the lifecycle policy's seed table reference
+    // the header's values instead of re-authoring them — a recipe built from
+    // any other source would be a second author for the derivation.
     let operations = [
         require_current_owner(ROOT)?,
         require_current_owner(TICKET_REPLAY)?,
+        project_root_identity(
+            SERIES_CONSUME_ROOT_MARKET_IDENTITY_V4,
+            CAPABILITY_ROOT_MARKET_OFFSET,
+        )?,
+        AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(SERIES_CONSUME_ROOT_COORDINATE_V4),
+            destination: ScalarCoordinateV2::common(SERIES_CONSUME_ROOT_GENERATION_SCALAR_V4),
+            data_offset: root_offset(CAPABILITY_ROOT_GENERATION_OFFSET, 0)?,
+        },
+        project_root_identity(
+            SERIES_CONSUME_ROOT_MANIFEST_IDENTITY_V4,
+            CAPABILITY_ROOT_SELECTION_OFFSET + CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET,
+        )?,
+        AccountOperationInputV2::ProjectDataU16 {
+            account: AccountCoordinateV2::fixed(SERIES_CONSUME_ROOT_COORDINATE_V4),
+            destination: ScalarCoordinateV2::common(SERIES_CONSUME_ROOT_ENTRY_INDEX_SCALAR_V4),
+            data_offset: root_offset(
+                CAPABILITY_ROOT_SELECTION_OFFSET,
+                CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET,
+            )?,
+        },
+        project_root_identity(
+            SERIES_CONSUME_ROOT_KIND_IDENTITY_V4,
+            CAPABILITY_ROOT_SELECTION_OFFSET + CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
+        )?,
+        project_root_identity(
+            SERIES_CONSUME_ROOT_CAPABILITY_RELEASE_IDENTITY_V4,
+            CAPABILITY_ROOT_SELECTION_OFFSET + CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
+        )?,
+        project_root_identity(
+            SERIES_CONSUME_ROOT_CONFIG_IDENTITY_V4,
+            CAPABILITY_ROOT_SELECTION_OFFSET + CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
+        )?,
     ];
     let mut project_fixed_rule = |coordinate| {
         fixed_rule(input.fixed_data_lengths, usize::from(coordinate))
@@ -197,6 +270,23 @@ fn require_current_owner(
         ),
         expected: IdentityCoordinateV2::common(CURRENT_TRADING_IDENTITY),
     })
+}
+
+fn project_root_identity(
+    destination: u16,
+    data_offset: usize,
+) -> Result<AccountOperationInputV2, SeriesConsumeAccountProfileErrorV4> {
+    Ok(AccountOperationInputV2::ProjectDataIdentity {
+        account: AccountCoordinateV2::fixed(SERIES_CONSUME_ROOT_COORDINATE_V4),
+        destination: IdentityCoordinateV2::common(destination),
+        data_offset: root_offset(data_offset, 0)?,
+    })
+}
+
+fn root_offset(base: usize, field: usize) -> Result<u32, SeriesConsumeAccountProfileErrorV4> {
+    base.checked_add(field)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(SeriesConsumeAccountProfileErrorV4::Geometry)
 }
 
 const fn exact(

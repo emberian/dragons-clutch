@@ -627,11 +627,11 @@ mod tests {
         )
         .expect("Series Profile13");
         let exact = AccountProfileV2::decode(&bytes).expect("decode Profile13");
-        let scalars = [128, 64, 2, 32, 7];
+        let scalars = [128, 64, 2, 32, 7, 9, 4];
         let registers = SeriesConsumeArtifactRegistersV4 {
             tail_count: 258,
             scalars: &scalars,
-            identities: &[[9_u8; 32]],
+            identities: &[[9_u8; 32]; 6],
             funding_count_hint: 7,
         };
         let effect_program = crate::series::effect_v4::tests::successor();

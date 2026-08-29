@@ -46,9 +46,16 @@ use super::{
 };
 
 /// Exact common scalar bank shared by RequestProfile, Transition, and Effect.
-pub const SERIES_CONSUME_COMMON_SCALAR_COUNT_V4: u16 = 5;
-/// Exact common identity bank containing the authenticated Trading program.
-pub const SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4: u16 = 1;
+///
+/// Scalars 0..5 carry request geometry (header bytes, proof bytes, proof
+/// count, witness item bytes, funding count). Scalars 5..7 and identities
+/// 1..6 are written only by the AccountProfile's root-header projections so
+/// the lifecycle policy's seed table can reference the root's own derivation
+/// fields; see [`super::account_profile_v4`].
+pub const SERIES_CONSUME_COMMON_SCALAR_COUNT_V4: u16 = 7;
+/// Exact common identity bank: the authenticated Trading program plus the
+/// five root-header identities the AccountProfile projects.
+pub const SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4: u16 = 6;
 /// Exact fixed RequestProfile operation count.
 pub const SERIES_CONSUME_REQUEST_PROFILE_OPERATION_COUNT_V4: usize = 2;
 /// Exact Series Consume RequestProfile width.
@@ -363,16 +370,28 @@ mod tests {
             .expect("request profile");
         let decoded = RequestProfileV1::decode(&request).expect("hostile decode request profile");
         assert_eq!(decoded.fixed_request_bytes(), 128);
-        assert_eq!(decoded.common_scalar_count(), 5);
-        assert_eq!(decoded.common_identity_count(), 1);
+        assert_eq!(
+            decoded.common_scalar_count(),
+            SERIES_CONSUME_COMMON_SCALAR_COUNT_V4
+        );
+        assert_eq!(
+            decoded.common_identity_count(),
+            SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4
+        );
 
         let mut transition_scratch = [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4];
         let mut transition = [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4];
         encode_series_consume_transition_v4_atomic(&mut transition_scratch, &mut transition)
             .expect("transition");
         let decoded = TransitionProgramV3::decode(&transition).expect("hostile decode transition");
-        assert_eq!(decoded.common_scalar_count(), 5);
-        assert_eq!(decoded.common_identity_count(), 1);
+        assert_eq!(
+            decoded.common_scalar_count(),
+            SERIES_CONSUME_COMMON_SCALAR_COUNT_V4
+        );
+        assert_eq!(
+            decoded.common_identity_count(),
+            SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4
+        );
     }
 
     #[test]
