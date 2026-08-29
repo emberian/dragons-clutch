@@ -87,7 +87,7 @@ def command_name(argv: list[str]) -> str:
 
 
 def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    expected = {"schema", "target", "commands"}
+    expected = {"schema", "target", "bufferStrategy", "commands"}
     unknown = set(flight) - expected
     if unknown or set(flight) != expected:
         raise FlightError("flight has exactly schema, target, and commands")
@@ -96,6 +96,9 @@ def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     target = flight["target"]
     if target != {"cluster": "devnet", "genesis": DEVNET_GENESIS}:
         raise FlightError("flight target must be the exact acknowledged devnet genesis")
+    buffer_strategy = flight["bufferStrategy"]
+    if buffer_strategy not in {"batched", "interleaved"}:
+        raise FlightError("bufferStrategy must be batched or interleaved")
     commands = flight["commands"]
     if not isinstance(commands, list):
         raise FlightError("commands must be an array")
@@ -120,13 +123,18 @@ def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
         raise FlightError("unknown command ids: " + ", ".join(sorted(extra)))
     order = [item["id"] for item in parsed]
     expected_order = ["candidate"]
-    for role in ROLES:
-        if f"extend:{role}" in seen:
-            expected_order.append(f"extend:{role}")
-        expected_order.extend((f"buffer:{role}", f"upgrade:{role}"))
+    if buffer_strategy == "batched":
+        expected_order.extend(f"extend:{role}" for role in ROLES if f"extend:{role}" in seen)
+        expected_order.extend(f"buffer:{role}" for role in ROLES)
+        expected_order.extend(f"upgrade:{role}" for role in ROLES)
+    else:
+        for role in ROLES:
+            if f"extend:{role}" in seen:
+                expected_order.append(f"extend:{role}")
+            expected_order.extend((f"buffer:{role}", f"upgrade:{role}"))
     expected_order.extend(REQUIRED[11:])
     if order != expected_order:
-        raise FlightError("commands must use candidate then per-role optional extend, buffer, Upgrade order")
+        raise FlightError(f"commands do not match declared {buffer_strategy} bufferStrategy order")
     for item in parsed:
         ident, argv = item["id"], item["argv"]
         if ident.startswith("buffer:") and "--stop-after-buffer-ready" not in argv:
