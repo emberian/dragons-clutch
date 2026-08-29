@@ -9471,6 +9471,14 @@ fn authenticate_funding_readiness_route_v1(
     expected: &str,
 ) -> Result<()> {
     let observed = plan_funding_readiness_from_rpc_v1(rpc, plan, coordinates, minimum_slot)?;
+    // The terminal poststate satisfies every earlier completion contract: once
+    // the atomic founding consumed the staged readiness into an Open Market,
+    // each stage's goal state has been strictly surpassed, and a lazily
+    // finalized earlier journal re-running its completion must not refuse the
+    // success it was part of producing.
+    if matches!(observed, FundingReadinessPlanV1::ConsumedByFounding) {
+        return Ok(());
+    }
     if observed.route_name() != expected {
         return Err(Error::new(format!(
             "funding-readiness completion selected {} instead of {expected}",
