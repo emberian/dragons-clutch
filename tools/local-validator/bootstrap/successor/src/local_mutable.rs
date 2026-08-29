@@ -906,6 +906,12 @@ pub(crate) struct LocalMutablePrepareReportV1 {
     /// Exact campaign flag surface, projected from the campaign role owner.
     /// The lifecycle supervisor must not grow its own stale copy of this list.
     pub(crate) campaign_keypairs: BTreeMap<String, String>,
+    /// Administration-only keypair flags. The local supervisor consumes this
+    /// exact projection rather than filtering the union above itself.
+    pub(crate) campaign_administration_keypairs: BTreeMap<String, String>,
+    /// Founding-only local-lifecycle keypair flags, including the exact two
+    /// authenticated participant-fixture roles used by the private run.
+    pub(crate) campaign_founding_keypairs: BTreeMap<String, String>,
     /// Public-only founding identities. Their secret material is never exposed
     /// through the campaign keypair surface.
     pub(crate) campaign_public_identities: BTreeMap<String, String>,
@@ -963,6 +969,23 @@ fn local_campaign_public_identities_v1(seed: [u8; 32]) -> Result<BTreeMap<String
             substituted_founder.to_string(),
         ),
     ]))
+}
+
+fn project_keypair_roles_v1(
+    keypairs: &BTreeMap<String, String>,
+    roles: &[&str],
+    label: &str,
+) -> Result<BTreeMap<String, String>> {
+    roles
+        .iter()
+        .map(|role| {
+            keypairs
+                .get(*role)
+                .cloned()
+                .map(|path| ((*role).into(), path))
+                .ok_or_else(|| Error::new(format!("local derivation omitted {label} role {role}")))
+        })
+        .collect()
 }
 
 /// Prepare one exact checked mutable plan and its disposable role key files.
@@ -1220,18 +1243,28 @@ pub(crate) fn prepare_local_mutable_v1(
         checked_local_mutable_set_sha256: pin.set_sha256.clone(),
         retained_upgrade_authority: authority.to_string(),
         programs,
-        campaign_keypairs: crate::campaign::KEYPAIR_ROLES
-            .iter()
-            .map(|role| {
-                keypairs
-                    .get(*role)
-                    .cloned()
-                    .map(|path| ((*role).into(), path))
-                    .ok_or_else(|| {
-                        Error::new(format!("local derivation omitted campaign role {role}"))
-                    })
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?,
+        campaign_keypairs: project_keypair_roles_v1(
+            &keypairs,
+            crate::campaign::KEYPAIR_ROLES,
+            "campaign",
+        )?,
+        campaign_administration_keypairs: project_keypair_roles_v1(
+            &keypairs,
+            crate::campaign::ADMIN_REQUIRED_ROLES,
+            "administration campaign",
+        )?,
+        campaign_founding_keypairs: project_keypair_roles_v1(
+            &keypairs,
+            &crate::campaign::FOUNDING_REQUIRED_ROLES
+                .iter()
+                .copied()
+                .chain([
+                    crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+                    crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+                ])
+                .collect::<Vec<_>>(),
+            "founding campaign",
+        )?,
         campaign_public_identities,
         keypairs,
     };
@@ -1564,6 +1597,46 @@ mod tests {
             .parse::<Pubkey>()
             .expect("substituted-founder public key");
         assert_ne!(founder, substituted);
+    }
+
+    #[test]
+    fn local_report_projects_disjoint_mode_specific_campaign_keypairs() {
+        let keypairs = local_key_roles_v1()
+            .into_iter()
+            .map(|role| (role.to_owned(), format!("/tmp/{role}.json")))
+            .collect::<BTreeMap<_, _>>();
+        let administration = project_keypair_roles_v1(
+            &keypairs,
+            crate::campaign::ADMIN_REQUIRED_ROLES,
+            "administration",
+        )
+        .expect("administration projection");
+        assert_eq!(
+            administration
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![crate::seed::role::CORE_UPGRADE_AUTHORITY]
+        );
+        let founding_roles = crate::campaign::FOUNDING_REQUIRED_ROLES
+            .iter()
+            .copied()
+            .chain([
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+            ])
+            .collect::<Vec<_>>();
+        let founding = project_keypair_roles_v1(&keypairs, &founding_roles, "founding")
+            .expect("founding projection");
+        assert_eq!(founding.len(), 8);
+        assert!(
+            administration
+                .keys()
+                .all(|role| !founding.contains_key(role)),
+            "administration and founding campaign signer sets must be disjoint"
+        );
+        assert!(!founding.contains_key(crate::seed::role::FOUNDING_FOUNDER));
+        assert!(!founding.contains_key(crate::seed::role::SUBSTITUTED_FOUNDER));
     }
 
     #[test]
