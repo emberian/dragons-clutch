@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 
 import { sha256 } from './bytes';
 import {
+  DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3,
+  DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3,
+  DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3,
+} from './directInlineV3';
+import {
   DIRECT_HOT_FIXED_ROLE_LABELS_V3,
   DIRECT_HOT_ROUTE_MANIFEST_FORMAT_V3,
   DIRECT_HOT_ROUTE_MANIFEST_MAX_BYTES_V3,
@@ -33,6 +38,7 @@ type ManifestValue = {
   strategyAccounts: Array<{ address: string; isSigner: boolean; isWritable: boolean }>;
   runtimeAccounts: Array<{ address: string; isSigner: boolean; isWritable: boolean }>;
   lookupTables: string[];
+  lookupTableCreationSlot: string;
   checkedInfrastructure: string | null;
   checkedInfrastructureSha256?: string;
   [field: string]: unknown;
@@ -40,18 +46,25 @@ type ManifestValue = {
 
 async function manifestValue(): Promise<ManifestValue> {
   const infrastructure = new Uint8Array(CHECKED_INFRASTRUCTURE_BYTES_V1).fill(0x5a);
+  const fixedAccounts = DIRECT_HOT_FIXED_ROLE_LABELS_V3.map((role, index) => ({
+    role,
+    address: key(index + 2),
+    isSigner: false,
+    isWritable: index === 1,
+  }));
+  const joins = new Map<number, number>(DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3);
   return {
     format: DIRECT_HOT_ROUTE_MANIFEST_FORMAT_V3,
     payer: key(1),
-    fixedAccounts: DIRECT_HOT_FIXED_ROLE_LABELS_V3.map((role, index) => ({
-      role,
-      address: key(index + 2),
-      isSigner: false,
-      isWritable: index === 1,
-    })),
+    fixedAccounts,
     strategyAccounts: [],
-    runtimeAccounts: [{ address: key(50), isSigner: false, isWritable: true }],
-    lookupTables: [key(51)],
+    runtimeAccounts: Array.from({ length: DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3 }, (_, index) => ({
+      address: index === 1 ? key(1) : joins.has(index) ? fixedAccounts[joins.get(index)!]!.address : key(100 + index),
+      isSigner: index === 1,
+      isWritable: DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3.includes(index as never),
+    })),
+    lookupTables: [key(200)],
+    lookupTableCreationSlot: '800',
     checkedInfrastructure: base64(infrastructure),
     checkedInfrastructureSha256: hex(await sha256(infrastructure)),
   };
@@ -147,20 +160,21 @@ describe('strict Direct Hot route manifest admission', () => {
     delete (missing.runtimeAccounts[0] as Partial<{ isSigner: boolean }>).isSigner;
     await refuseBeforeRpc(JSON.stringify(missing), /missing or unknown fields/);
     await refuseBeforeRpc(JSON.stringify({ ...value, strategyAccounts: [{ address: key(60), isSigner: false, isWritable: false }] }), /strategyAccounts must contain exactly 0 entries/);
-    await refuseBeforeRpc(JSON.stringify({ ...value, lookupTables: [key(51), key(52)] }), /lookupTables must contain exactly 1 entries/);
+    await refuseBeforeRpc(JSON.stringify({ ...value, lookupTables: [key(201), key(202)] }), /lookupTables must contain exactly 1 entries/);
+    await refuseBeforeRpc(JSON.stringify({ ...value, lookupTableCreationSlot: '0800' }), /canonical decimal u64/);
   });
 
   it('refuses noncanonical base58 and every account alias class', async () => {
     const value = await manifestValue();
     await refuseBeforeRpc(JSON.stringify({ ...value, payer: `${value.payer} ` }), /canonical Solana address/);
-    await refuseBeforeRpc(JSON.stringify({ ...value, payer: value.fixedAccounts[0]!.address }), /fixed account 0 aliases payer/);
+    await refuseBeforeRpc(JSON.stringify({ ...value, payer: value.fixedAccounts[0]!.address }), /route payer must be runtimeAccounts\[1\]/);
     const fixedAlias = structuredClone(value);
     fixedAlias.fixedAccounts[1]!.address = fixedAlias.fixedAccounts[0]!.address;
-    await refuseBeforeRpc(JSON.stringify(fixedAlias), /fixed account 1 aliases fixed account 0/);
-    await refuseBeforeRpc(JSON.stringify({ ...value, runtimeAccounts: [{
-      address: value.fixedAccounts[0]!.address, isSigner: false, isWritable: false,
-    }] }), /runtime account 0 aliases fixed account 0/);
-    await refuseBeforeRpc(JSON.stringify({ ...value, lookupTables: [value.fixedAccounts[0]!.address] }), /lookup table 0 aliases fixed account 0/);
+    await refuseBeforeRpc(JSON.stringify(fixedAlias), /39 distinct named pre-seal roles/);
+    const runtimeAlias = structuredClone(value);
+    runtimeAlias.runtimeAccounts[0]!.address = value.fixedAccounts[0]!.address;
+    await refuseBeforeRpc(JSON.stringify(runtimeAlias), /duplicate-free current 39-account physical tail/);
+    await refuseBeforeRpc(JSON.stringify({ ...value, lookupTables: [value.fixedAccounts[0]!.address] }), /lookup table 0 aliases the payer or one Hot instruction account/);
   });
 
   it('refuses malformed checked evidence encodings, hex identities, and substitutions', async () => {

@@ -16,9 +16,13 @@ import {
   type SignedDirectIntentV3,
   canonicalDirectInlineLookupAddressesV3,
   compileDirectInlineTransactionV3,
+  DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3,
+  DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3,
+  DIRECT_INLINE_CURRENT_WIRE_BYTES_V3,
   encodeCompactIntentSigningMessageV2,
   encodeDirectInlineOrdinaryRequestV3,
   previewDirectInlineV3,
+  projectDirectInlineSealedExecutionRouteV3,
   validateDirectInlineInstructionSequenceV3,
   validateDirectNativeEvidenceInstructionV3,
   validateRuntimeAccountProfileV2,
@@ -76,30 +80,34 @@ function participants(market: string, outcome = 70_000): Readonly<{ seller: Sign
   });
 }
 
-function runtimeProfile(stride = 0): Uint8Array {
-  const fixedAccounts = 5;
+function runtimeProfile(): Uint8Array {
+  const fixedAccounts = 5 + DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3;
   const predicateBytes = 16;
   const profileHeader = 48 + predicateBytes;
-  const output = new Uint8Array(profileHeader + (fixedAccounts + stride) * 16);
+  const output = new Uint8Array(profileHeader + fixedAccounts * 16);
   output.set(new TextEncoder().encode('DCLTAP02'), 0);
   const view = new DataView(output.buffer);
   view.setUint16(8, 2, true);
   view.setUint16(10, 14, true);
   view.setUint16(12, fixedAccounts, true);
-  view.setUint16(14, stride, true);
+  view.setUint16(14, 0, true);
   view.setUint16(20, 1, true);
   view.setUint16(42, 1, true);
   output[48] = 1;
   output[56] = 0x41;
-  output[profileHeader] = 2;
+  const writableRules = new Set([0, 5, 6, 7, 8, 12, 28, 29, 33, 35, 36, 41]);
+  const executableRules = new Set([9, 10, 21, 22, 24, 26, 38, 43]);
   for (let accountIndex = 0; accountIndex < fixedAccounts; accountIndex += 1) {
+    output[profileHeader + accountIndex * 16] = (accountIndex === 6 ? 1 : 0)
+      | (writableRules.has(accountIndex) ? 2 : 0)
+      | (executableRules.has(accountIndex) ? 4 : 0);
     view.setUint32(profileHeader + accountIndex * 16 + 8, 1, true);
   }
   return output;
 }
 
-function account(address: string, isWritable = false, executable = false): DirectHotAccountMetaV3 {
-  return Object.freeze({ address, isSigner: false, isWritable, executable });
+function account(address: string, isWritable = false, executable = false, isSigner = false): DirectHotAccountMetaV3 {
+  return Object.freeze({ address, isSigner, isWritable, executable });
 }
 
 function containsSlice(bytes: Uint8Array, needle: Uint8Array): boolean {
@@ -117,29 +125,24 @@ function route(checked = true, productionGeometry = false): DirectInlineHotRoute
   fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3] = account(key(12), false, true);
   fixed[HOT_RENT_SYSVAR_ACCOUNT_V3] = account(SYSVAR_RENT_PUBKEY.toBase58());
   fixed[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = account(SYSVAR_INSTRUCTIONS_PUBKEY.toBase58());
-  const runtimeAccounts = productionGeometry
-    ? Object.freeze(Array.from({ length: 51 }, (_, index) => account(key(100 + index))))
-    : Object.freeze([]);
+  const runtimeFixed = new Map([
+    [8, 37], [9, 31], [10, 32], [11, 33], [12, 35], [13, 28], [14, 0],
+    [15, 22], [16, 27], [17, 25], [18, 26], [21, 23], [22, 24],
+  ]);
+  const writable = new Set([0, 1, 2, 3, 7, 23, 24, 28, 30, 31, 36]);
+  const executable = new Set([4, 5, 16, 17, 19, 21, 33, 38]);
+  const runtimeAccounts = Object.freeze(Array.from({ length: DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3 }, (_, index) => {
+    const address = index === 1 ? key(91) : runtimeFixed.has(index) ? fixed[runtimeFixed.get(index)!]!.address : key(100 + index);
+    return account(address, writable.has(index), executable.has(index), index === 1);
+  }));
   const routeAccounts = Object.freeze({
     payer: key(91),
     tradingProgram: key(12),
     fixedAccounts: Object.freeze(fixed),
-    // The live 91-meta Hot geometry includes the invoked Trading identity as
-    // one non-loaded meta in addition to 89 ALT-routed keys.
-    strategyAccounts: productionGeometry ? Object.freeze([account(key(12), false, true)]) : Object.freeze([]),
+    strategyAccounts: Object.freeze([]),
     runtimeAccounts,
   });
-  const lookupTable = new AddressLookupTableAccount({
-    key: new PublicKey(key(90)),
-    state: {
-      deactivationSlot: MAX_U64,
-      lastExtendedSlot: 800,
-      lastExtendedSlotStartIndex: 0,
-      authority: undefined,
-      addresses: [...canonicalDirectInlineLookupAddressesV3(routeAccounts)],
-    },
-  });
-  return Object.freeze({
+  const projected = projectDirectInlineSealedExecutionRouteV3(Object.freeze({
     ...routeAccounts,
     market,
     releaseSet: new Uint8Array(32).fill(31),
@@ -148,15 +151,30 @@ function route(checked = true, productionGeometry = false): DirectInlineHotRoute
     outcomeCount: productionGeometry ? 51 : 70_001,
     priceScale: 1_000_000n,
     feeBasisPoints: 25,
-    accountProfile: runtimeProfile(productionGeometry ? 1 : 0),
+    accountProfile: runtimeProfile(),
     selectedProgramSchema: CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
     selectedProgram: new Uint8Array(32).fill(33),
+    observedSlot: 1_000n,
     recentBlockhash: key(92),
-    lookupTables: Object.freeze([lookupTable]),
+    blockhashObservedSlot: 1_001n,
+    lastValidBlockHeight: 2_000n,
+    lookupTableCreationSlot: 700n,
+    lookupTables: Object.freeze([]),
     outerEvidence: checked
       ? Object.freeze({ status: 'checked' as const, tradingArtifactRelease: '11'.repeat(32), checkedManifestDigest: '12'.repeat(32) })
       : Object.freeze({ status: 'unavailable' as const, reason: 'common hot outer has no accepted checked release' }),
+  }));
+  const lookupTable = new AddressLookupTableAccount({
+    key: new PublicKey(key(90)),
+    state: {
+      deactivationSlot: MAX_U64,
+      lastExtendedSlot: 800,
+      lastExtendedSlotStartIndex: 0,
+      authority: undefined,
+      addresses: [...canonicalDirectInlineLookupAddressesV3(projected)],
+    },
   });
+  return Object.freeze({ ...projected, lookupTables: Object.freeze([lookupTable]) });
 }
 
 describe('Direct V3 inline transaction construction', () => {
@@ -204,9 +222,9 @@ describe('Direct V3 inline transaction construction', () => {
     ]);
     expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(seller.intent))).toBe(false);
     expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(buyer.intent))).toBe(false);
-    expect(plan.wireBytes).toHaveLength(1_204);
-    expect(1_232 - plan.wireBytes.length).toBe(28);
-    expect(plan.loadedAddresses).toBe(89);
+    expect(plan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
+    expect(1_232 - plan.wireBytes.length).toBe(73);
+    expect(plan.loadedAddresses).toBe(DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3);
     expect(() => compileDirectInlineTransactionV3({ route: route(false), seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n })).toThrow(/unavailable/);
   });
 
@@ -362,12 +380,15 @@ describe('Direct V3 inline transaction construction', () => {
 
   it('refuses AccountProfile privilege substitution and intent over-width coordinates', () => {
     const candidate = route();
+    const logical = [
+      candidate.fixedAccounts[HOT_ROOT_ACCOUNT_V3]!, candidate.fixedAccounts[8]!, candidate.fixedAccounts[30]!, candidate.fixedAccounts[34]!, candidate.fixedAccounts[36]!,
+      ...candidate.runtimeAccounts,
+    ];
     expect(() => validateRuntimeAccountProfileV2(candidate.accountProfile, candidate.outcomeCount, [
-      account(key(11), false), account(key(12)), account(key(13)), account(key(14)), account(key(15)),
+      account(logical[0]!.address, false), ...logical.slice(1),
     ])).toThrow(/privilege/);
-    expect(() => validateRuntimeAccountProfileV2(candidate.accountProfile, candidate.outcomeCount, [
-      account(key(11), true), account(key(12)), account(key(13)), account(key(14)), account(key(15)),
-    ], [new Uint8Array([0x42]), new Uint8Array(1), new Uint8Array(1), new Uint8Array(1), new Uint8Array(1)])).toThrow(/data prestate/);
+    expect(() => validateRuntimeAccountProfileV2(candidate.accountProfile, candidate.outcomeCount, logical,
+      logical.map((_, index) => new Uint8Array([index === 0 ? 0x42 : 0])))).toThrow(/data prestate/);
     const { seller, buyer } = participants(candidate.market);
     expect(() => previewDirectInlineV3({ ...candidate, outcomeCount: 70_000 }, seller, buyer, 2_000n, 500_000n, 1_000n)).toThrow(/seller intent/);
   });
