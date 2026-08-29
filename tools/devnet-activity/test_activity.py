@@ -38,6 +38,7 @@ WALLET = "2" * 32
 SIGNATURE = "3" * 64
 ACTIVITY_SIGNATURE = "4" * 64
 SUBSTITUTED_SIGNATURE = "5" * 64
+FAILED_ACTIVITY_SIGNATURE = "6" * 64
 SECRET_MARKER = "THIS_IS_TEST_SECRET_KEY_MATERIAL"
 
 
@@ -177,6 +178,8 @@ def manifest_value(scenario: Path, target: str = "owned-loopback", rpc_url: str 
                     "path": "{{work}}/receipts/private-lifecycle.json",
                     "schema": "dclutch-local-private-validator-lifecycle-v1",
                     "signaturePointers": ["/signature"],
+                    "transactionListPointer": None,
+                    "requiredTransactionLabels": [],
                     "requiredValues": {"/completed": True},
                 },
             }
@@ -295,6 +298,7 @@ class RpcState:
         self.genesis = "loopback-test-genesis"
         self.transactions: dict[str, dict[str, object]] = {}
         self.signatures: list[str] = []
+        self.signature_errors: dict[str, object] = {}
         self.balances: dict[str, int] = {}
 
 
@@ -315,7 +319,14 @@ def rpc_server(state: RpcState):
             elif method == "getTransaction":
                 result = state.transactions.get(body["params"][0])
             elif method == "getSignaturesForAddress":
-                result = [{"signature": signature, "err": None, "slot": 99} for signature in state.signatures]
+                result = [
+                    {
+                        "signature": signature,
+                        "err": state.signature_errors.get(signature),
+                        "slot": 99,
+                    }
+                    for signature in state.signatures
+                ]
             else:
                 result = None
             encoded = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode()
@@ -834,6 +845,152 @@ class ActivityTests(unittest.TestCase):
             state.transactions[ACTIVITY_SIGNATURE] = activity_transaction(embedded_signature=SUBSTITUTED_SIGNATURE)
             with self.assertRaisesRegex(activity.Refusal, "substitutes activity signature"):
                 activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+
+    def test_campaign_completion_binds_full_transaction_list_and_failed_fees(self) -> None:
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {"checked": True})
+        write_json(market, {"market": "bound"})
+        manifest = self.parsed()
+        completion = activity.CompletionSpec(
+            path="{{work}}/receipts/campaign.json",
+            schema=activity.CAMPAIGN_REPORT_SCHEMA,
+            signature_pointers=(),
+            transaction_list_pointer="/execution/transactions",
+            required_transaction_labels=("found the market",),
+            required_values={},
+        )
+        adapter = dataclasses.replace(
+            manifest.adapters[0],
+            argv=(
+                "campaign",
+                "--rpc-url",
+                "{{rpc}}",
+                "--plan",
+                "{{input.checked-release}}",
+                "--market",
+                "{{input.market}}",
+                "--evidence",
+                "{{work}}/receipts/campaign.json",
+                "--execute",
+            ),
+            completion=completion,
+        )
+        manifest = dataclasses.replace(
+            manifest,
+            inputs={"checked-release": checked_release, "market": market},
+            adapters=(adapter,),
+        )
+        argv, completion_path = activity.expanded_adapter(
+            adapter,
+            manifest,
+            self.work,
+            {"alice": {"keypair": str(self.work / "private/wallets/alice.json")}},
+            {"alice": {"address": WALLET}},
+        )
+        self.assertEqual(argv[argv.index("--market") + 1], str(market))
+        completion_path.parent.mkdir(parents=True)
+        write_json(
+            completion_path,
+            {
+                "schema": activity.CAMPAIGN_REPORT_SCHEMA,
+                "cluster": "loopback",
+                "mode": "execute",
+                "plan_sha256": digest(checked_release),
+                "market_sha256": digest(market),
+                "execution": {
+                    "completed": True,
+                    "transactions": [
+                        {"label": "hostile refusal", "signature": FAILED_ACTIVITY_SIGNATURE},
+                        {"label": "found the market", "signature": ACTIVITY_SIGNATURE},
+                    ],
+                },
+            },
+        )
+        failed = activity_transaction(FAILED_ACTIVITY_SIGNATURE)
+        failed["meta"]["err"] = {"InstructionError": [0, "Custom"]}  # type: ignore[index]
+        state = RpcState()
+        state.transactions[FAILED_ACTIVITY_SIGNATURE] = failed
+        state.transactions[ACTIVITY_SIGNATURE] = activity_transaction()
+        with rpc_server(state) as rpc_url:
+            observed = activity.inspect_completion(
+                dataclasses.replace(manifest, rpc_url=rpc_url),
+                adapter,
+                completion_path,
+                activity.Rpc(rpc_url),
+                {"alice": WALLET},
+            )
+        assert observed is not None
+        _, signatures, transactions = observed
+        self.assertEqual(signatures, [FAILED_ACTIVITY_SIGNATURE, ACTIVITY_SIGNATURE])
+        self.assertEqual([row["succeeded"] for row in transactions], [False, True])
+        self.assertEqual(sum(int(row["feeLamports"]) for row in transactions), 2_000)
+
+        substituted = json.loads(completion_path.read_text())
+        substituted["market_sha256"] = "7" * 64
+        write_json(completion_path, substituted)
+        with rpc_server(state) as rpc_url:
+            with self.assertRaisesRegex(activity.Refusal, "release/Market"):
+                activity.inspect_completion(
+                    dataclasses.replace(manifest, rpc_url=rpc_url),
+                    adapter,
+                    completion_path,
+                    activity.Rpc(rpc_url),
+                    {"alice": WALLET},
+                )
+
+    def test_campaign_completion_refuses_omitted_required_stage_and_substituted_input(self) -> None:
+        parsed = self.parsed()
+        with self.assertRaisesRegex(activity.Refusal, "exact shape"):
+            activity.parse_completion(
+                {
+                    "path": "/tmp/report.json",
+                    "schema": activity.CAMPAIGN_REPORT_SCHEMA,
+                    "signaturePointers": [],
+                    "transactionListPointer": "/transactions",
+                    "requiredTransactionLabels": ["DCLTCFQ1"],
+                    "requiredValues": {},
+                },
+                "founding",
+            )
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {})
+        write_json(market, {})
+        adapter = dataclasses.replace(
+            parsed.adapters[0],
+            argv=(
+                "campaign",
+                "--plan",
+                "{{input.checked-release}}",
+                "--market",
+                "{{input.checked-release}}",
+                "--evidence",
+                "{{work}}/campaign.json",
+                "--execute",
+            ),
+            completion=activity.CompletionSpec(
+                path="{{work}}/campaign.json",
+                schema=activity.CAMPAIGN_REPORT_SCHEMA,
+                signature_pointers=(),
+                transaction_list_pointer="/execution/transactions",
+                required_transaction_labels=("DCLTCFQ1", "DCLTPCB2", "DCLTGMF2"),
+                required_values={},
+            ),
+        )
+        manifest = dataclasses.replace(
+            parsed,
+            inputs={"checked-release": checked_release, "market": market},
+            adapters=(adapter,),
+        )
+        with self.assertRaisesRegex(activity.Refusal, "substitutes --market"):
+            activity.expanded_adapter(
+                adapter,
+                manifest,
+                self.work,
+                {"alice": {"keypair": str(self.work / "private/wallets/alice.json")}},
+                {"alice": {"address": WALLET}},
+            )
 
     def test_expired_capability_allows_only_original_journal_recovery(self) -> None:
         manifest = self.parsed()

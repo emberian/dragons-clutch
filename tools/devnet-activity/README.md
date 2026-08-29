@@ -29,9 +29,11 @@ rewrite a devnet fixture to create one.
   must prove the exact System transfer, wallet credit, funder debit, and fee.
 - Caller arguments are arrays, never shell strings. Public journals contain
   only argument/path digests; caller output goes to mode-`0600` private logs.
-- A mutating adapter must name at least one exact completion JSON pointer to a
-  finalized signature. The transaction must contain that same signature and a
-  successful finalized result.
+- A simple mutating adapter must name at least one exact completion JSON
+  pointer to a successful finalized signature. A successor campaign instead
+  binds its full ordered `execution.transactions` list and names the labels
+  that must have succeeded. Every listed signature, including a fee-paying
+  failed hostile probe, is reconciled and included in both spend caps.
 - The scheduler preserves the scenario dependency graph, enforces the exact
   involved wallet set, never runs two adapters sharing a wallet concurrently,
   honors `maxConcurrency`, and spaces dispatches by
@@ -57,7 +59,7 @@ The activity manifest consumes the exact envelope
 digest. The authoritative generator and field contract are in
 `tools/devnet-scenarios/README.md`.
 
-The activity manifest schema is `dclutch-devnet-activity-manifest-v1` with
+The activity manifest schema is `dclutch-devnet-activity-manifest-v2` with
 exact top-level fields:
 
 ```text
@@ -77,7 +79,14 @@ schema, scenario, target, inputs, addressBindings, adapters
 - `adapters[]` is
   `{id, covers, caller, argv, dependsOn, wallets, mutation, completion}`.
   `caller` is `dclutch-cli` or `successor`; `argv` omits the executable.
-  Completion is `{path, schema, signaturePointers, requiredValues}`.
+  Completion is `{path, schema, signaturePointers, transactionListPointer,
+  requiredTransactionLabels, requiredValues}`. Simple receipts set the two
+  transaction-list fields to `null` and `[]`. A successor campaign sets
+  `signaturePointers: []`, `transactionListPointer:
+  /execution/transactions`, and lists every stage whose finalized transaction
+  is required for semantic completion. Its exact `checked-release` and
+  `market` manifest inputs must also be the campaign's `--plan` and `--market`,
+  and its completion path must be the campaign's `--evidence` path.
 
 Templates are limited to `{{rpc}}`, `{{devnetGenesis}}`, `{{work}}`,
 `{{input.ID}}`, `{{wallet.ID.address}}`, and `{{wallet.ID.keypair}}`.

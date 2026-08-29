@@ -34,7 +34,7 @@ from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 
-MANIFEST_SCHEMA = "dclutch-devnet-activity-manifest-v1"
+MANIFEST_SCHEMA = "dclutch-devnet-activity-manifest-v2"
 WALLET_LEDGER_SCHEMA = "dclutch-devnet-activity-wallet-ledger-v1"
 PRIVATE_INDEX_SCHEMA = "dclutch-devnet-activity-private-wallet-index-v1"
 FUNDING_JOURNAL_SCHEMA = "dclutch-devnet-activity-funding-journal-v1"
@@ -46,6 +46,7 @@ ADAPTER_JOURNAL_SCHEMA = "dclutch-devnet-activity-adapter-journal-v1"
 RECONCILIATION_SCHEMA = "dclutch-devnet-activity-reconciliation-v1"
 SUPERVISOR_REQUEST_SCHEMA = "dclutch-devnet-activity-supervisor-request-v2"
 SUPERVISOR_STATUS_SCHEMA = "dclutch-devnet-activity-supervisor-status-v2"
+CAMPAIGN_REPORT_SCHEMA = "dclutch-successor-campaign-report-v1"
 DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 DEVNET_MANIFEST_RPC_URL = "https://api.devnet.solana.com:443/"
 DEVNET_SUPERVISOR_RPC_URL = "https://api.devnet.solana.com/"
@@ -366,6 +367,8 @@ class CompletionSpec:
     path: str
     schema: str | None
     signature_pointers: tuple[str, ...]
+    transaction_list_pointer: str | None
+    required_transaction_labels: tuple[str, ...]
     required_values: Mapping[str, Any]
 
 
@@ -684,18 +687,69 @@ def validate_rpc_url(value: Any, target: str) -> str:
 
 def parse_completion(value: Any, adapter_id: str) -> CompletionSpec:
     source = exact_object(value, f"adapter {adapter_id} completion")
-    exact_keys(source, {"path", "schema", "signaturePointers", "requiredValues"}, f"adapter {adapter_id} completion")
+    exact_keys(
+        source,
+        {
+            "path",
+            "schema",
+            "signaturePointers",
+            "transactionListPointer",
+            "requiredTransactionLabels",
+            "requiredValues",
+        },
+        f"adapter {adapter_id} completion",
+    )
     path = text(source["path"], f"adapter {adapter_id} completion path")
     schema_value = source["schema"]
     schema = None if schema_value is None else text(schema_value, f"adapter {adapter_id} completion schema", 128)
     pointers = tuple(text(item, f"adapter {adapter_id} signature pointer", 256) for item in exact_list(source["signaturePointers"], f"adapter {adapter_id} signature pointers"))
     if len(set(pointers)) != len(pointers):
         raise Refusal(f"adapter {adapter_id} repeats a signature pointer")
+    transaction_list_value = source["transactionListPointer"]
+    transaction_list_pointer = (
+        None
+        if transaction_list_value is None
+        else text(
+            transaction_list_value,
+            f"adapter {adapter_id} transaction-list pointer",
+            256,
+        )
+    )
+    required_transaction_labels = tuple(
+        text(item, f"adapter {adapter_id} required transaction label", 512)
+        for item in exact_list(
+            source["requiredTransactionLabels"],
+            f"adapter {adapter_id} required transaction labels",
+        )
+    )
+    if len(set(required_transaction_labels)) != len(required_transaction_labels):
+        raise Refusal(f"adapter {adapter_id} repeats a required transaction label")
+    if transaction_list_pointer is None:
+        if required_transaction_labels:
+            raise Refusal(
+                f"adapter {adapter_id} has required transaction labels without a transaction list"
+            )
+    elif (
+        schema != CAMPAIGN_REPORT_SCHEMA
+        or transaction_list_pointer != "/execution/transactions"
+        or pointers
+        or not required_transaction_labels
+    ):
+        raise Refusal(
+            f"adapter {adapter_id} campaign transaction-list completion has another exact shape"
+        )
     required_values = exact_object(source["requiredValues"], f"adapter {adapter_id} required values")
     for pointer in required_values:
         if not pointer.startswith("/"):
             raise Refusal(f"adapter {adapter_id} required-value key is not a JSON pointer")
-    return CompletionSpec(path, schema, pointers, required_values)
+    return CompletionSpec(
+        path,
+        schema,
+        pointers,
+        transaction_list_pointer,
+        required_transaction_labels,
+        required_values,
+    )
 
 
 def parse_address_binding(value: Any, index: int, inputs: Mapping[str, Path], wallet_ids: set[str]) -> AddressBinding:
@@ -813,8 +867,16 @@ def parse_manifest(path: Path) -> Manifest:
         if any(operation_by_id[item].mutation_expected for item in covers) and not mutation:
             raise Refusal(f"adapter {adapter_id} disables a scenario operation with a committed mutating caller")
         completion = parse_completion(source["completion"], adapter_id)
-        if mutation and not completion.signature_pointers:
+        if mutation and not (
+            completion.signature_pointers or completion.required_transaction_labels
+        ):
             raise Refusal(f"mutating adapter {adapter_id} has no finalized-signature evidence pointer")
+        if completion.schema == CAMPAIGN_REPORT_SCHEMA and (
+            "checked-release" not in inputs or "market" not in inputs
+        ):
+            raise Refusal(
+                f"campaign adapter {adapter_id} requires checked-release and market inputs"
+            )
         adapters.append(AdapterSpec(adapter_id, covers, caller, argv, dependencies, tuple(sorted(adapter_wallets)), mutation, completion))
     if covered != set(operation_by_id):
         raise Refusal(f"activity adapters do not cover exactly the scenario operations: missing {sorted(set(operation_by_id) - covered)}")
@@ -1796,6 +1858,26 @@ def expanded_adapter(
     completion_path = Path(completion_text)
     if not completion_path.is_absolute() or completion_path.is_symlink():
         raise Refusal(f"adapter {adapter.adapter_id} completion must be an absolute non-symlink path")
+    if adapter.completion.schema == CAMPAIGN_REPORT_SCHEMA:
+        expected_pairs = {
+            "--plan": str(manifest.inputs["checked-release"]),
+            "--market": str(manifest.inputs["market"]),
+            "--evidence": str(completion_path),
+        }
+        for flag, expected in expected_pairs.items():
+            if argv.count(flag) != 1:
+                raise Refusal(
+                    f"campaign adapter {adapter.adapter_id} must name {flag} exactly once"
+                )
+            index = argv.index(flag)
+            if index + 1 >= len(argv) or argv[index + 1] != expected:
+                raise Refusal(
+                    f"campaign adapter {adapter.adapter_id} substitutes {flag}"
+                )
+        if argv.count("--execute") != 1:
+            raise Refusal(
+                f"campaign adapter {adapter.adapter_id} is not one exact executed campaign"
+            )
     return argv, completion_path
 
 
@@ -1893,11 +1975,20 @@ def token_amount_rows(transaction: Mapping[str, Any], field: str, keys: Sequence
     return output
 
 
-def transaction_evidence(transaction: Mapping[str, Any], signature: str, wallet_addresses: Mapping[str, str]) -> dict[str, Any]:
+def transaction_evidence(
+    transaction: Mapping[str, Any],
+    signature: str,
+    wallet_addresses: Mapping[str, str],
+    *,
+    require_success: bool = True,
+) -> dict[str, Any]:
     slot = transaction.get("slot")
     meta = exact_object(transaction.get("meta"), "transaction meta")
-    if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0 or meta.get("err") is not None:
-        raise Refusal(f"activity signature {signature} is failed or has another finalized slot")
+    error = meta.get("err")
+    if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0:
+        raise Refusal(f"activity signature {signature} has another finalized slot")
+    if require_success and error is not None:
+        raise Refusal(f"required activity signature {signature} failed")
     if signature not in transaction_signatures(transaction):
         raise Refusal(f"RPC transaction substitutes activity signature {signature}")
     fee = meta.get("fee")
@@ -1934,6 +2025,8 @@ def transaction_evidence(transaction: Mapping[str, Any], signature: str, wallet_
     return {
         "signature": signature,
         "slot": str(slot),
+        "succeeded": error is None,
+        "errorSha256": None if error is None else sha256_bytes(canonical_json(error)),
         "feeLamports": str(fee),
         "transactionSha256": sha256_bytes(canonical_json(transaction)),
         "walletLamportDeltas": wallet_deltas,
@@ -1959,15 +2052,88 @@ def inspect_completion(
     for required_pointer, expected in adapter.completion.required_values.items():
         if pointer(value, required_pointer, f"adapter {adapter.adapter_id} required value") != expected:
             raise Refusal(f"adapter {adapter.adapter_id} completion changed {required_pointer}")
-    signatures = [signature_text(pointer(value, item, f"adapter {adapter.adapter_id} signature"), f"adapter {adapter.adapter_id} signature") for item in adapter.completion.signature_pointers]
+    required_success_signatures = [
+        signature_text(
+            pointer(value, item, f"adapter {adapter.adapter_id} signature"),
+            f"adapter {adapter.adapter_id} signature",
+        )
+        for item in adapter.completion.signature_pointers
+    ]
+    signatures = list(required_success_signatures)
+    if adapter.completion.transaction_list_pointer is not None:
+        source = exact_object(value, f"adapter {adapter.adapter_id} campaign completion")
+        expected_cluster = (
+            "devnet"
+            if manifest.scenario.cluster_target == "devnet"
+            else "loopback"
+        )
+        if (
+            source.get("cluster") != expected_cluster
+            or source.get("mode") != "execute"
+            or pointer(
+                source,
+                "/execution/completed",
+                f"adapter {adapter.adapter_id} campaign completion",
+            )
+            is not True
+            or source.get("plan_sha256")
+            != sha256_file(manifest.inputs["checked-release"])
+            or source.get("market_sha256") != sha256_file(manifest.inputs["market"])
+        ):
+            raise Refusal(
+                f"adapter {adapter.adapter_id} campaign report changed cluster/mode/release/Market completion"
+            )
+        transaction_rows = exact_list(
+            pointer(
+                source,
+                adapter.completion.transaction_list_pointer,
+                f"adapter {adapter.adapter_id} transaction list",
+            ),
+            f"adapter {adapter.adapter_id} transaction list",
+        )
+        if not transaction_rows or len(transaction_rows) > manifest.scenario.limits.max_transactions:
+            raise Refusal(
+                f"adapter {adapter.adapter_id} transaction list is outside its scenario bound"
+            )
+        by_label: dict[str, str] = {}
+        signatures = []
+        for index, raw_row in enumerate(transaction_rows):
+            row = exact_object(raw_row, f"adapter {adapter.adapter_id} transaction row {index}")
+            label = text(
+                row.get("label"),
+                f"adapter {adapter.adapter_id} transaction label {index}",
+                512,
+            )
+            if label in by_label:
+                raise Refusal(f"adapter {adapter.adapter_id} repeats transaction label {label}")
+            signature = signature_text(
+                row.get("signature"),
+                f"adapter {adapter.adapter_id} transaction signature {index}",
+            )
+            by_label[label] = signature
+            signatures.append(signature)
+        for label in adapter.completion.required_transaction_labels:
+            if label not in by_label:
+                raise Refusal(
+                    f"adapter {adapter.adapter_id} omitted required transaction {label}"
+                )
+            required_success_signatures.append(by_label[label])
     if len(set(signatures)) != len(signatures):
         raise Refusal(f"adapter {adapter.adapter_id} completion repeats a signature")
+    required_success_set = set(required_success_signatures)
     transactions: list[dict[str, Any]] = []
     for signature in signatures:
         transaction = rpc.transaction(signature)
         if transaction is None:
             return None
-        transactions.append(transaction_evidence(transaction, signature, wallet_addresses))
+        transactions.append(
+            transaction_evidence(
+                transaction,
+                signature,
+                wallet_addresses,
+                require_success=signature in required_success_set,
+            )
+        )
     return sha256_file(completion_path), signatures, transactions
 
 
@@ -2382,7 +2548,12 @@ def reconcile_activity(
             transaction = rpc.transaction(signature)
             if transaction is None:
                 raise Refusal(f"activity signature {signature} disappeared during reconciliation")
-            evidence = transaction_evidence(transaction, signature, wallet_addresses)
+            evidence = transaction_evidence(
+                transaction,
+                signature,
+                wallet_addresses,
+                require_success=False,
+            )
             if exact_object(captured_raw, f"adapter {adapter_id} captured transaction") != evidence:
                 raise Refusal(f"adapter {adapter_id} captured transaction changed on finalized RPC")
             seen_signatures.add(signature)
@@ -2444,7 +2615,6 @@ def reconcile_activity(
         history = {
             signature_text(row.get("signature"), f"wallet {wallet.wallet_id} history signature")
             for row in history_rows
-            if row.get("err") is None
         }
         if history != wallet_signature_sets[wallet.wallet_id]:
             raise Refusal(f"wallet {wallet.wallet_id} finalized history has missing or foreign signatures")
@@ -2637,6 +2807,13 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
     market_sha256 = digest_text(arguments.market_sha256, "supervisor Market digest")
     if sha256_file(market) != market_sha256:
         raise Refusal("supervisor Market artifact digest changed")
+    if (
+        manifest.inputs.get("checked-release") != checked_release
+        or manifest.inputs.get("market") != market
+    ):
+        raise Refusal(
+            "supervisor checked release/Market are not the exact manifest campaign inputs"
+        )
     dclutch_bin = canonical_existing_file(arguments.dclutch_bin, "supervisor dclutch CLI", executable=True)
     successor_bin = canonical_existing_file(arguments.successor_bin, "supervisor successor CLI", executable=True)
     keygen_bin = canonical_existing_file(
