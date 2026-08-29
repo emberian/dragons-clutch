@@ -25,7 +25,7 @@ Sources, in the order the wire is assembled:
 
 | name | value |
 | --- | --- |
-| `GENERIC_MARKET_FOUNDING_MAGIC_V2` | `DCLTGMF2` |
+| `GENERIC_MARKET_FOUNDING_MAGIC_V3` | `DCLTGMF3` |
 | `GENERIC_FOUNDING_REQUEST_MAGIC_V1` | `DCLTGFQ1` |
 | `GENERIC_FOUNDING_ACK_MAGIC_V1` | `DCLTGFA1` |
 | `GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1` | `dclutch/generic-founding-funding-list/v1` |
@@ -34,18 +34,19 @@ Sources, in the order the wire is assembled:
 
 | name | value |
 | --- | ---: |
-| `GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2` | 8 |
-| `GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2` | 4 |
-| `GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2` | 4 |
+| `GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3` | 5 |
+| `GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3` | 13 |
+| `GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3` | 4 |
+| `GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3` | 4 |
 | `GENERIC_FOUNDING_FOUND_RAW_INDEX_V1` | 0 |
 | `GENERIC_FOUNDING_LOCK_RAW_INDEX_V1` | 1 |
 | `GENERIC_FOUNDING_REALIZE_RAW_INDEX_V1` | 2 |
 | `PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1` | 14 |
 | `PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1` | 12 |
-| `GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1` | 28 |
+| `GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1` | 26 |
 | `GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1` | 15 |
-| `CLAIMS_FOUNDING_ACCOUNT_COUNT_V5` | 32 |
-| `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2` | 129 |
+| `CLAIMS_FOUNDING_ACCOUNT_COUNT_V5` | 31 |
+| `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3` | 125 |
 | `CORE_FOUND_MARKET_INDEX_V1` | 1 |
 | `CORE_FOUND_CORE_PROGRAM_INDEX_V1` | 13 |
 | `CORE_FOUND_TRADING_PROGRAM_INDEX_V1` | 25 |
@@ -79,7 +80,7 @@ The renderer did not recognize these statement shapes, so they are
 shown verbatim rather than dropped.
 
 ```ts
-export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2 = 5 as const;
+export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3 = 5 as const;
 
 /** Index of each readonly request account inside the frame prefix. */
 ```
@@ -89,7 +90,7 @@ export const GENERIC_FOUNDING_CLAIMS_RAW_INDEX_V1 = 3 as const;
 /** Stage account widths. The frame is exactly the concatenation of these. */
 ```
 ```ts
-export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
+export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 21 as const;
 
 /**
  * Frame width at `funding_count = 0`, restated by the reference client.
@@ -100,12 +101,12 @@ export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
  */
 ```
 ```ts
-export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 25 as const;
+export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 24 as const;
 
 /** Exact distinct writable keys the outer requires, asserted by the client. */
 ```
 ```ts
-export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V2 = 11 as const;
+export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 12 as const;
 
 /** Devnet transaction account-lock limit without the raise feature. */
 ```

@@ -81,6 +81,9 @@ export const BONDING_CURVE_FLOOR_DERIVATION_ID_V1 = '0c2e4a32ad014352ec6ff0e72d6
 ```
 ```ts
 export const BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1 = 'dclutch/source-manipulation-floor-derivation/bonding-curve-buyout-exit/v1';
+```
+```ts
+export const MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1 = 18446744073709551615n as const;
 
 /** `ManipulationFloorV1` layout, for a decoder that reads a real floor record. */
 ```
@@ -114,5 +117,22 @@ export const PRINCIPAL_ADMISSION_CASES_V1 = Object.freeze([
   Object.freeze({ numerator: 4294967295, denominator: 1, floorAtoms: 18446744073709551615n, principalAtoms: 18446744073709551615n, admitted: true }),
   Object.freeze({ numerator: 4294967295, denominator: 1, floorAtoms: 18446744073709551615n, principalAtoms: 340282366920938463463374607431768211455n, admitted: false }),
   Object.freeze({ numerator: 1, denominator: 4294967295, floorAtoms: 18446744073709551615n, principalAtoms: 340282366920938463463374607431768211455n, admitted: false }),
+] as const);
+
+/** The Lean-emitted collateral-atom cap to complete-set projection corpus. */
+```
+```ts
+export const PRINCIPAL_CAP_PROJECTION_CASES_V1 = Object.freeze([
+  Object.freeze({ capAtoms: 0n, basisScale: 1n, projectedSets: 0n }),
+  Object.freeze({ capAtoms: 1n, basisScale: 1n, projectedSets: 1n }),
+  Object.freeze({ capAtoms: 4654518500n, basisScale: 1n, projectedSets: 4654518500n }),
+  Object.freeze({ capAtoms: 4654518500n, basisScale: 1000000000n, projectedSets: 4n }),
+  Object.freeze({ capAtoms: 4654518500n, basisScale: 10000000000n, projectedSets: 0n }),
+  Object.freeze({ capAtoms: 18446744073709551614n, basisScale: 1n, projectedSets: 18446744073709551614n }),
+  Object.freeze({ capAtoms: 18446744073709551615n, basisScale: 1n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 18446744073709551616n, basisScale: 1n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 340282366920938463463374607431768211455n, basisScale: 1n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 340282366920938463463374607431768211455n, basisScale: 18446744073709551615n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 1n, basisScale: 0n, projectedSets: null }),
 ] as const);
 ```
