@@ -315,8 +315,10 @@ impl KeyForge {
                  not exist until it is drawn"
             ))),
             KeyOriginV1::Seeded(seed) => {
-                Ok(Keypair::new_from_array(derive(KEYPAIR_SEED_DOMAIN_V1, seed, role, index))
-                    .pubkey())
+                Ok(
+                    Keypair::new_from_array(derive(KEYPAIR_SEED_DOMAIN_V1, seed, role, index))
+                        .pubkey(),
+                )
             }
             KeyOriginV1::Persisted(secrets) => match secrets.get(role) {
                 None => Err(Error::new(format!(
@@ -448,7 +450,9 @@ mod tests {
         let second_peek = forge.peek_pubkey("collateral-mint").expect("peek again");
         assert_eq!(first_peek, second_peek, "a peek must not issue");
         assert_eq!(forge.keypair("collateral-mint").pubkey(), first_peek);
-        let after_draw = forge.peek_pubkey("collateral-mint").expect("peek after draw");
+        let after_draw = forge
+            .peek_pubkey("collateral-mint")
+            .expect("peek after draw");
         assert_ne!(after_draw, first_peek);
         assert_eq!(forge.keypair("collateral-mint").pubkey(), after_draw);
         // Random: refused, because the future key does not exist.
