@@ -6341,7 +6341,12 @@ fn execute_projected_custody_bootstrap(
                         funding.address.to_string(),
                     );
                 }
-                recovery_accounts.insert("direct_capability_root".into(), root.to_string());
+                // The Direct capability root is a CHECKPOINT COORDINATE (the
+                // checkpoint field below carries it), not a DCLTPCB2 product:
+                // since f581af6b root/replay setup is permissionless
+                // first-use, so no account exists at this address until the
+                // Direct exterior first runs. Requiring it here (90b6bf7a)
+                // made every complete founding refuse its own poststate.
                 recovery_accounts.insert(
                     "direct_trading_funding_ledger".into(),
                     trading_ledger.address.to_string(),
