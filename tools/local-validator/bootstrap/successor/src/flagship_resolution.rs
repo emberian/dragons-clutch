@@ -12,6 +12,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_claims_svm::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
     liability_basis_state_v2::{LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2},
@@ -30,12 +31,20 @@ use dclutch_operator::{
         build_provider_reclaim_v3, build_provider_submit_v3, compile_provider_execute_v0,
         compile_provider_reclaim_v0, compile_provider_submit_v0,
     },
+    resolution_core_v3::{
+        ResolutionAdmitTerminalReportV3, ResolutionAdmitTerminalSnapshotV3,
+        build_resolution_admit_terminal_v3,
+    },
+};
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, GuardianSetV1, PostUpdateParamsView, ProgramDataV3View, ProgramV3View,
     PythReleaseV1, ReceiverConfigV2View, VerifiedEncodedVaaV1, devnet_release_v1,
     local_validator_release_v1,
 };
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
@@ -50,8 +59,9 @@ use dclutch_resolution_core_v3_operator::provider_finalized_projection_v3::{
     project_finalized_provider_submit_v3,
 };
 use dclutch_source_contract::{
-    PythAdapterConfigV1, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1,
-    SourceResolutionRouteV1, SourceResolutionStateV2, WindowSpecV1,
+    PythAdapterConfigV1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionRouteV1,
+    SourceResolutionStateV2, WindowSpecV1,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -94,8 +104,8 @@ use crate::{
 
 const INPUT_FORMAT: &str = "dclutch-flagship-resolution-input-v1";
 const LOCAL_INPUT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-input-v1";
-const CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-checkpoint-v2";
-const LOCAL_CHECKPOINT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-checkpoint-v2";
+const CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-checkpoint-v3";
+const LOCAL_CHECKPOINT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-checkpoint-v3";
 const PRODUCER_FACTS_FORMAT: &str = "dclutch-flagship-pyth-update-facts-v1";
 const PRODUCER_CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-producer-v1";
 const LOCAL_PRODUCER_CHECKPOINT_FORMAT: &str =
@@ -179,6 +189,7 @@ struct AccountSelectorsV1 {
     market: String,
     source_state: String,
     source_material: String,
+    source_material_staging: String,
     source_spec: String,
     source_provider_release: String,
     adapter_config: String,
@@ -186,8 +197,14 @@ struct AccountSelectorsV1 {
     statistic: String,
     pyth_release: String,
     product: String,
+    product_staging: String,
     result_domain: String,
+    result_domain_staging: String,
     portfolio: String,
+    portfolio_staging: String,
+    capability_manifest: String,
+    capability_manifest_staging: String,
+    funding_ledger: String,
     certificate: String,
     activation_cache: String,
     infrastructure: String,
@@ -288,6 +305,7 @@ enum StableAddressClassV1 {
     Beneficiary,
     MarketState,
     SourceState,
+    FundingLedger,
     ActivationCache,
     Infrastructure,
     Program,
@@ -457,6 +475,7 @@ struct PriceFeedMessageV1 {
 enum StageV1 {
     Submit,
     Execute,
+    Accept,
     Reclaim,
     Complete,
 }
@@ -466,10 +485,11 @@ impl StageV1 {
         match value {
             "submit" => Ok(Self::Submit),
             "execute" => Ok(Self::Execute),
+            "accept" => Ok(Self::Accept),
             "reclaim" => Ok(Self::Reclaim),
             "complete" => Ok(Self::Complete),
             _ => Err(Error::new(
-                "--through must be submit, execute, reclaim, or complete",
+                "--through must be submit, execute, accept, reclaim, or complete",
             )),
         }
     }
@@ -478,8 +498,16 @@ impl StageV1 {
         match self {
             Self::Submit => "submit",
             Self::Execute => "execute",
+            Self::Accept => "accept",
             Self::Reclaim => "reclaim",
             Self::Complete => "complete",
+        }
+    }
+
+    const fn routing_stage(self) -> Self {
+        match self {
+            Self::Accept => Self::Execute,
+            other => other,
         }
     }
 }
@@ -538,6 +566,7 @@ impl SelectedInputV1 {
         account!("market", market);
         account!("source_state", source_state);
         account!("source_material", source_material);
+        account!("source_material_staging", source_material_staging);
         account!("source_spec", source_spec);
         account!("source_provider_release", source_provider_release);
         account!("adapter_config", adapter_config);
@@ -545,8 +574,14 @@ impl SelectedInputV1 {
         account!("statistic", statistic);
         account!("pyth_release", pyth_release);
         account!("product", product);
+        account!("product_staging", product_staging);
         account!("result_domain", result_domain);
+        account!("result_domain_staging", result_domain_staging);
         account!("portfolio", portfolio);
+        account!("portfolio_staging", portfolio_staging);
+        account!("capability_manifest", capability_manifest);
+        account!("capability_manifest_staging", capability_manifest_staging);
+        account!("funding_ledger", funding_ledger);
         account!("certificate", certificate);
         account!("activation_cache", activation_cache);
         account!("infrastructure", infrastructure);
@@ -618,7 +653,7 @@ impl SelectedInputV1 {
 
     fn table(&self, stage: StageV1) -> Result<Pubkey> {
         self.lookup_tables
-            .get(&stage)
+            .get(&stage.routing_stage())
             .copied()
             .ok_or_else(|| Error::new(format!("internal missing {} lookup table", stage.label())))
     }
@@ -776,6 +811,14 @@ fn classify(facts: ChainFactsV1) -> Result<StageV1> {
             Submitted,
             Vacant,
         ) => Ok(StageV1::Execute),
+        (
+            CorePhase::Open,
+            Readiness::Consumed,
+            SourceResolutionPhaseV1::Resolved | SourceResolutionPhaseV1::FailureCommitted,
+            Consumed,
+            Submitted,
+            Submitted,
+        ) => Ok(StageV1::Accept),
         (
             CorePhase::Terminal,
             Readiness::Consumed,
@@ -1108,6 +1151,7 @@ fn lifecycle_address(selected: &SelectedInputV1) -> Result<Pubkey> {
 }
 
 fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec<StableAddressV1>> {
+    let routed_stage = stage.routing_stage();
     let mut rows = Vec::new();
     let mut seen = BTreeSet::new();
     let mut push =
@@ -1157,7 +1201,7 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             selected!("router_programdata", ProgramData);
         };
     }
-    match stage {
+    match routed_stage {
         StageV1::Submit => {
             push(
                 "refund_recipient",
@@ -1177,10 +1221,16 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             selected!("guardian_set", ProviderObservation);
         }
         StageV1::Execute => {
+            selected!("market", MarketState);
             common_release!();
             selected!("trading_program", Program);
             selected!("trading_programdata", ProgramData);
+            selected!("source_state", SourceState);
             selected!("source_material", FinalizedRecord);
+            selected!("source_material_staging", FinalizedRecordStaging);
+            selected!("capability_manifest", FinalizedRecord);
+            selected!("capability_manifest_staging", FinalizedRecordStaging);
+            selected!("funding_ledger", FundingLedger);
             selected!("source_spec", FinalizedRecord);
             selected!("source_provider_release", FinalizedRecord);
             selected!("adapter_config", FinalizedRecord);
@@ -1188,8 +1238,11 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             selected!("statistic", FinalizedRecord);
             selected!("pyth_release", FinalizedRecord);
             selected!("product", FinalizedRecord);
+            selected!("product_staging", FinalizedRecordStaging);
             selected!("result_domain", FinalizedRecord);
+            selected!("result_domain_staging", FinalizedRecordStaging);
             selected!("portfolio", FinalizedRecord);
+            selected!("portfolio_staging", FinalizedRecordStaging);
             selected!("update_account", ProviderObservation);
             provider_programs!();
         }
@@ -1209,6 +1262,7 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             selected!("receiver_program", Program);
             selected!("receiver_programdata", ProgramData);
         }
+        StageV1::Accept => unreachable!("accept routes through execute"),
         StageV1::Complete => {
             return Err(Error::new("complete has no lookup-table union"));
         }
@@ -2106,10 +2160,34 @@ struct StagePlanV1 {
     finalized: Option<StageReceiptV1>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+enum ReceiptStageV1 {
+    #[serde(rename = "submit")]
+    Submit,
+    #[serde(rename = "resolution-provider-execute-v1")]
+    ProviderExecute,
+    #[serde(rename = "core-terminal-accept-v1")]
+    CoreAccept,
+    #[serde(rename = "reclaim")]
+    Reclaim,
+}
+
+impl ReceiptStageV1 {
+    fn from_stage(stage: StageV1) -> Result<Self> {
+        match stage {
+            StageV1::Submit => Ok(Self::Submit),
+            StageV1::Execute => Ok(Self::ProviderExecute),
+            StageV1::Accept => Ok(Self::CoreAccept),
+            StageV1::Reclaim => Ok(Self::Reclaim),
+            StageV1::Complete => Err(Error::new("complete has no mutation receipt")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StageReceiptV1 {
-    stage: StageV1,
+    stage: ReceiptStageV1,
     signature: String,
     slot: u64,
     fee_lamports: u64,
@@ -2911,6 +2989,36 @@ fn authenticate_checked_plan(
     }
 }
 
+fn campaign_record_staging(
+    campaign: &CampaignMarketEvidenceV1,
+    label: &str,
+    schema: [u8; 32],
+    registry_program: Pubkey,
+) -> Result<Pubkey> {
+    let row = campaign
+        .accounts
+        .get(label)
+        .ok_or_else(|| Error::new(format!("completed campaign omitted {label}")))?;
+    let raw = nonzero_pubkey(&row.address, label)?;
+    let digest = hex32(&row.data_sha256)?;
+    let expected_raw = Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+        &registry_program,
+    )
+    .0;
+    let staging = Pubkey::find_program_address(
+        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+        &registry_program,
+    )
+    .0;
+    if raw != expected_raw || staging == Pubkey::default() {
+        return Err(Error::new(format!(
+            "completed campaign {label} is not the canonical raw record coordinate"
+        )));
+    }
+    Ok(staging)
+}
+
 fn producer_selected_input(
     plan: &SuccessorPlan,
     campaign: &CampaignMarketEvidenceV1,
@@ -3034,6 +3142,38 @@ fn producer_selected_input(
     let (registry_artifact, registry_artifact_staging) =
         plan_record(plan, "registry_artifact_release")?;
     let (pyth_release, _) = plan_record(plan, "pyth_release")?;
+    let source_material_staging = campaign_record_staging(
+        campaign,
+        "source_material_record",
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        registry_program,
+    )?;
+    let capability_manifest = campaign_account(campaign, "capability_manifest_record")?;
+    let capability_manifest_staging = campaign_record_staging(
+        campaign,
+        "capability_manifest_record",
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        registry_program,
+    )?;
+    let product_staging = campaign_record_staging(
+        campaign,
+        "product_record",
+        PRODUCT_RECORD_SCHEMA_ID_V2,
+        registry_program,
+    )?;
+    let result_domain_staging = campaign_record_staging(
+        campaign,
+        "result_domain_record",
+        RESULT_DOMAIN_SCHEMA_ID_V2,
+        registry_program,
+    )?;
+    let portfolio_staging = campaign_record_staging(
+        campaign,
+        "portfolio_record",
+        PORTFOLIO_SCHEMA_ID_V2,
+        registry_program,
+    )?;
+    let funding_ledger = campaign_account(campaign, "resolution_funding_ledger")?;
     Ok(PlanInputV1 {
         format: input_format(expected_cluster).to_owned(),
         generation,
@@ -3048,6 +3188,7 @@ fn producer_selected_input(
             market: market.to_string(),
             source_state: source_state.to_string(),
             source_material: campaign_account(campaign, "source_material_record")?.to_string(),
+            source_material_staging: source_material_staging.to_string(),
             source_spec: campaign_account(campaign, "source_spec_record")?.to_string(),
             source_provider_release: campaign_account(campaign, "provider_release_record")?
                 .to_string(),
@@ -3056,8 +3197,14 @@ fn producer_selected_input(
             statistic: campaign_account(campaign, "statistic_spec_record")?.to_string(),
             pyth_release: pyth_release.to_owned(),
             product: campaign_account(campaign, "product_record")?.to_string(),
+            product_staging: product_staging.to_string(),
             result_domain: campaign_account(campaign, "result_domain_record")?.to_string(),
+            result_domain_staging: result_domain_staging.to_string(),
             portfolio: campaign_account(campaign, "portfolio_record")?.to_string(),
+            portfolio_staging: portfolio_staging.to_string(),
+            capability_manifest: capability_manifest.to_string(),
+            capability_manifest_staging: capability_manifest_staging.to_string(),
+            funding_ledger: funding_ledger.to_string(),
             certificate: certificate.to_string(),
             activation_cache: plan.activation.clone(),
             infrastructure: plan.infrastructure_profile.address.clone(),
@@ -3215,6 +3362,8 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
     for (label, selector) in [
         ("founding_market", "market"),
         ("source_material_record", "source_material"),
+        ("capability_manifest_record", "capability_manifest"),
+        ("resolution_funding_ledger", "funding_ledger"),
         ("source_spec_record", "source_spec"),
         ("provider_release_record", "source_provider_release"),
         ("pyth_adapter_config_record", "adapter_config"),
@@ -4309,6 +4458,79 @@ fn provider_execute_report(
     Ok(report)
 }
 
+fn core_terminal_accept_report(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+) -> Result<ResolutionAdmitTerminalReportV3> {
+    let market = selected.account("market")?;
+    let report = build_resolution_admit_terminal_v3(&ResolutionAdmitTerminalSnapshotV3 {
+        market: snapshot.observed(market, "Market")?,
+        activation_cache: snapshot
+            .observed(selected.account("activation_cache")?, "activation cache")?,
+        registry_program: snapshot
+            .observed(selected.account("registry_program")?, "Registry program")?,
+        core_program: snapshot.observed(selected.account("core_program")?, "Core program")?,
+        core_programdata: snapshot
+            .observed(selected.account("core_programdata")?, "Core ProgramData")?,
+        resolution_program: snapshot.observed(
+            selected.account("resolution_program")?,
+            "Resolution program",
+        )?,
+        resolution_programdata: snapshot.observed(
+            selected.account("resolution_programdata")?,
+            "Resolution ProgramData",
+        )?,
+        source_material: snapshot
+            .observed(selected.account("source_material")?, "SourceMaterial")?,
+        source_material_staging: snapshot
+            .observed_or_vacant(selected.account("source_material_staging")?),
+        capability_manifest: snapshot.observed(
+            selected.account("capability_manifest")?,
+            "CapabilityManifest",
+        )?,
+        capability_manifest_staging: snapshot
+            .observed_or_vacant(selected.account("capability_manifest_staging")?),
+        source_state: snapshot.observed(selected.account("source_state")?, "Source state")?,
+        funding_ledger: snapshot.observed(
+            selected.account("funding_ledger")?,
+            "Resolution funding ledger",
+        )?,
+        certificate: snapshot.observed(selected.account("certificate")?, "terminal certificate")?,
+        rent_sysvar: snapshot.observed(sysvar::rent::ID, "Rent sysvar")?,
+        product_raw: snapshot.observed(selected.account("product")?, "Product")?,
+        product_staging: snapshot.observed_or_vacant(selected.account("product_staging")?),
+        result_domain_raw: snapshot.observed(selected.account("result_domain")?, "ResultDomain")?,
+        result_domain_staging: snapshot
+            .observed_or_vacant(selected.account("result_domain_staging")?),
+        portfolio_raw: snapshot.observed(selected.account("portfolio")?, "Portfolio")?,
+        portfolio_staging: snapshot.observed_or_vacant(selected.account("portfolio_staging")?),
+    })
+    .map_err(|error| Error::new(format!("Core terminal accept builder: {error:?}")))?;
+    if report.instruction.program_id != selected.account("core_program")?
+        || report
+            .instruction
+            .accounts
+            .first()
+            .is_none_or(|meta| meta.pubkey != report.caller_authority || meta.is_signer)
+        || report
+            .instruction
+            .accounts
+            .get(1)
+            .is_none_or(|meta| meta.pubkey != market)
+        || report
+            .instruction
+            .accounts
+            .iter()
+            .any(|meta| meta.is_signer)
+        || report.terminal_sequence != selected.terminal_sequence
+    {
+        return Err(Error::new(
+            "Core terminal accept report changed its producer, caller, Market, signer, or sequence boundary",
+        ));
+    }
+    Ok(report)
+}
+
 fn provider_reclaim_report(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
@@ -4527,6 +4749,14 @@ fn canonical_stage_semantics(
                 selected.account("source_state")?,
             )
         }
+        StageV1::Accept => {
+            let report = core_terminal_accept_report(selected, snapshot)?;
+            (
+                report.instruction,
+                vec![selected.resolver],
+                selected.account("market")?,
+            )
+        }
         StageV1::Reclaim => {
             let report = provider_reclaim_report(selected, snapshot)?;
             let lifecycle_account =
@@ -4561,7 +4791,7 @@ fn canonical_stage_semantics(
     };
     let expected_signers = match stage {
         StageV1::Submit => vec![selected.submitter, selected.account("update_account")?],
-        StageV1::Execute | StageV1::Reclaim => vec![selected.resolver],
+        StageV1::Execute | StageV1::Accept | StageV1::Reclaim => vec![selected.resolver],
         StageV1::Complete => Vec::new(),
     };
     if required_signers != expected_signers {
@@ -4613,7 +4843,7 @@ fn prepare_stage(
         StageV1::Submit | StageV1::Execute => {
             authenticate_selected_pyth_release(selected, snapshot, true, expected_cluster)?;
         }
-        StageV1::Reclaim => {
+        StageV1::Accept | StageV1::Reclaim => {
             authenticate_selected_pyth_release(selected, snapshot, false, expected_cluster)?;
         }
         StageV1::Complete => {}
@@ -4949,35 +5179,50 @@ fn provider_transaction_status(
             })
             .collect()
     };
-    let return_data = meta
-        .get("returnData")
-        .and_then(Value::as_object)
-        .ok_or_else(|| Error::new("provider transaction omitted returnData"))?;
-    let tuple = return_data
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error::new("provider returnData omitted base64 tuple"))?;
-    let return_data_base64 = tuple
-        .first()
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("provider returnData omitted bytes"))?
-        .to_owned();
-    let return_bytes = BASE64
-        .decode(&return_data_base64)
-        .map_err(|error| Error::new(format!("provider returnData base64: {error}")))?;
-    if tuple.len() != 2
-        || tuple.get(1).and_then(Value::as_str) != Some("base64")
-        || return_data.get("programId").and_then(Value::as_str)
-            != Some(selected.account("resolution_program")?.to_string().as_str())
-        || BASE64.encode(return_bytes) != return_data_base64
-        || fee_lamports != plan.exact_fee_lamports
+    let return_data_base64 = if plan.stage == StageV1::Accept {
+        if meta.get("returnData").is_some_and(|value| !value.is_null()) {
+            return Err(Error::new(
+                "Core terminal accept unexpectedly emitted returnData",
+            ));
+        }
+        String::new()
+    } else {
+        let return_data = meta
+            .get("returnData")
+            .and_then(Value::as_object)
+            .ok_or_else(|| Error::new("provider transaction omitted returnData"))?;
+        let tuple = return_data
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new("provider returnData omitted base64 tuple"))?;
+        let return_data_base64 = tuple
+            .first()
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new("provider returnData omitted bytes"))?
+            .to_owned();
+        let return_bytes = BASE64
+            .decode(&return_data_base64)
+            .map_err(|error| Error::new(format!("provider returnData base64: {error}")))?;
+        if tuple.len() != 2
+            || tuple.get(1).and_then(Value::as_str) != Some("base64")
+            || return_data.get("programId").and_then(Value::as_str)
+                != Some(selected.account("resolution_program")?.to_string().as_str())
+            || BASE64.encode(return_bytes) != return_data_base64
+        {
+            return Err(Error::new(
+                "provider finalized returnData changed producer, encoding, or bytes",
+            ));
+        }
+        return_data_base64
+    };
+    if fee_lamports != plan.exact_fee_lamports
         || pre_balances != plan.pre_balances
         || post_balances.len() != plan.resolved_account_keys.len()
         || parse_addresses("writable")? != plan.loaded_writable
         || parse_addresses("readonly")? != plan.loaded_readonly
     {
         return Err(Error::new(
-            "provider finalized fee, balances, loaded addresses, or returnData changed",
+            "provider finalized fee, balances, or loaded addresses changed",
         ));
     }
     Ok(Some(ProviderFinalizedTransactionV1 {
@@ -5008,7 +5253,7 @@ fn authenticate_provider_prestate(
     authenticate_selected_pyth_release(
         selected,
         &snapshot,
-        plan.stage != StageV1::Reclaim,
+        matches!(plan.stage, StageV1::Submit | StageV1::Execute),
         expected_cluster,
     )?;
     let table = snapshot.observed(selected.table(plan.stage)?, "provider lookup table")?;
@@ -5085,6 +5330,24 @@ fn durable_pre_account(plan: &StagePlanV1, key: Pubkey) -> Result<ObservedAccoun
         executable: state.executable,
         data,
     })
+}
+
+fn require_same_account_state(
+    before: &ObservedAccount,
+    after: &ObservedAccount,
+    purpose: &str,
+) -> Result<()> {
+    if before.key != after.key
+        || before.owner != after.owner
+        || before.lamports != after.lamports
+        || before.executable != after.executable
+        || before.data != after.data
+    {
+        return Err(Error::new(format!(
+            "Core terminal accept changed immutable {purpose} state"
+        )));
+    }
+    Ok(())
 }
 
 fn authenticate_provider_finalized_projection(
@@ -5198,6 +5461,45 @@ fn authenticate_provider_finalized_projection(
                 Error::new(format!("finalized provider execute projection: {error:?}"))
             })?;
         }
+        StageV1::Accept => {
+            if !return_data.is_empty() {
+                return Err(Error::new(
+                    "Core terminal accept carried prohibited return data",
+                ));
+            }
+            let before_market = durable_pre_account(plan, key(1)?)?;
+            let after_market = post.observed_or_vacant(key(1)?);
+            if before_market.owner != after_market.owner
+                || before_market.executable != after_market.executable
+                || before_market.data == after_market.data
+            {
+                return Err(Error::new(
+                    "Core terminal accept did not exclusively advance its Market state",
+                ));
+            }
+            for (index, purpose) in [
+                (12, "Source"),
+                (13, "Resolution funding ledger"),
+                (14, "Resolution certificate"),
+            ] {
+                require_same_account_state(
+                    &durable_pre_account(plan, key(index)?)?,
+                    &post.observed_or_vacant(key(index)?),
+                    purpose,
+                )?;
+            }
+            let replay = core_terminal_accept_report(selected, post)?;
+            if replay.instruction.program_id != instruction.program_id
+                || replay.instruction.accounts != instruction.accounts
+                || replay.terminal_sequence != selected.terminal_sequence
+                || replay.role_request_digest == [0; 32]
+                || replay.outcome_count == 0
+            {
+                return Err(Error::new(
+                    "Core terminal accept replay changed its account frame or semantic receipt",
+                ));
+            }
+        }
         StageV1::Reclaim => {
             let before1 = durable_pre_account(plan, key(1)?)?;
             let before2 = durable_pre_account(plan, key(2)?)?;
@@ -5258,7 +5560,8 @@ fn finish_provider_stage(
     )?;
     let expected = match plan.stage {
         StageV1::Submit => StageV1::Execute,
-        StageV1::Execute => StageV1::Reclaim,
+        StageV1::Execute => StageV1::Accept,
+        StageV1::Accept => StageV1::Reclaim,
         StageV1::Reclaim => StageV1::Complete,
         StageV1::Complete => return Err(Error::new("complete has no provider finalization")),
     };
@@ -5267,7 +5570,10 @@ fn finish_provider_stage(
             "provider packet did not produce its exact next stage",
         ));
     }
-    if matches!(plan.stage, StageV1::Execute | StageV1::Reclaim) {
+    if matches!(
+        plan.stage,
+        StageV1::Execute | StageV1::Accept | StageV1::Reclaim
+    ) {
         authenticate_current_deployments(selected, &post)?;
         authenticate_selected_pyth_release(
             selected,
@@ -5275,6 +5581,8 @@ fn finish_provider_stage(
             plan.stage == StageV1::Execute,
             expected_cluster,
         )?;
+    }
+    if matches!(plan.stage, StageV1::Accept | StageV1::Reclaim) {
         verify_terminal(selected, &post)?;
     }
     let payer_pre = plan.pre_balances[0];
@@ -5304,6 +5612,7 @@ fn finish_provider_stage(
                 .and_then(|value| value.checked_add(plan.arithmetic.provider_fee_lamports))
                 .ok_or_else(|| Error::new("submit balance arithmetic overflow"))?,
             StageV1::Execute => top_ups,
+            StageV1::Accept => 0,
             _ => 0,
         };
         if payer_post
@@ -5317,7 +5626,7 @@ fn finish_provider_stage(
         }
     }
     Ok(StageReceiptV1 {
-        stage: plan.stage,
+        stage: ReceiptStageV1::from_stage(plan.stage)?,
         signature: plan.expected_signature.clone().unwrap_or_default(),
         slot: finalized.slot,
         fee_lamports: finalized.fee_lamports,
@@ -5537,6 +5846,7 @@ fn run_with_expected_cluster(
             authenticate_current_deployments(&selected, &snapshot)?;
             authenticate_selected_pyth_release(&selected, &snapshot, false, expected_cluster)?;
             verify_terminal(&selected, &snapshot)?;
+            require_terminal_receipts(&checkpoint)?;
             checkpoint.verified_terminal = true;
             write_checkpoint(&checkpoint_path, &checkpoint)?;
             println!("{}", serde_json::to_string_pretty(&checkpoint)?);
@@ -5585,16 +5895,62 @@ fn load_checkpoint(
     if let Some(plan) = &checkpoint.stage_plan {
         plan.validate()?;
     }
-    if checkpoint
+    authenticate_receipt_prefix(&checkpoint)?;
+    Ok(checkpoint)
+}
+
+fn authenticate_receipt_prefix(checkpoint: &CheckpointV1) -> Result<()> {
+    let expected = [
+        ReceiptStageV1::Submit,
+        ReceiptStageV1::ProviderExecute,
+        ReceiptStageV1::CoreAccept,
+        ReceiptStageV1::Reclaim,
+    ];
+    let signatures = checkpoint
         .receipts
-        .windows(2)
-        .any(|pair| pair[0].stage >= pair[1].stage || pair[0].slot > pair[1].slot)
+        .iter()
+        .map(|receipt| receipt.signature.as_str())
+        .collect::<BTreeSet<_>>();
+    if checkpoint.receipts.len() > expected.len()
+        || checkpoint
+            .receipts
+            .iter()
+            .zip(expected)
+            .any(|(receipt, expected_stage)| {
+                receipt.stage != expected_stage
+                    || receipt.signature.is_empty()
+                    || receipt.slot == 0
+                    || receipt.fee_lamports == 0
+                    || receipt.compute_units_consumed == 0
+                    || hex32(&receipt.signed_transaction_sha256).is_err()
+                    || hex32(&receipt.return_data_sha256).is_err()
+                    || (receipt.stage == ReceiptStageV1::CoreAccept
+                        && (!receipt.return_data_base64.is_empty()
+                            || receipt.return_data_sha256 != hex(&Sha256::digest([]))))
+            })
+        || checkpoint
+            .receipts
+            .windows(2)
+            .any(|pair| pair[0].slot >= pair[1].slot)
+        || signatures.len() != checkpoint.receipts.len()
+        || (checkpoint.verified_terminal
+            && (checkpoint.receipts.len() != expected.len() || checkpoint.stage_plan.is_some()))
     {
         return Err(Error::new(
-            "checkpoint receipts are duplicated, out of order, or cross-run substituted",
+            "checkpoint receipts are missing, substituted, out of order, or disagree with terminal completion",
         ));
     }
-    Ok(checkpoint)
+    Ok(())
+}
+
+fn require_terminal_receipts(checkpoint: &CheckpointV1) -> Result<()> {
+    authenticate_receipt_prefix(checkpoint)?;
+    if checkpoint.receipts.len() != 4 || checkpoint.stage_plan.is_some() {
+        return Err(Error::new(
+            "Core terminal state cannot finalize an incomplete four-mutation checkpoint",
+        ));
+    }
+    Ok(())
 }
 
 fn authenticate_checkpoint_identity(
@@ -5690,7 +6046,7 @@ fn load_stage_signers(
                 selected.account("update_account")?,
             )?),
         )),
-        StageV1::Execute | StageV1::Reclaim => Ok((
+        StageV1::Execute | StageV1::Accept | StageV1::Reclaim => Ok((
             load_keypair(
                 arguments.resolver_keypair.as_ref(),
                 "resolver",
@@ -5887,8 +6243,8 @@ mod tests {
                 Submitted,
                 Submitted,
             ))
-            .is_err(),
-            "provider execution has no finalized pre-admission intermediate"
+            .is_ok_and(|stage| stage == StageV1::Accept),
+            "provider execution must stop at the durable Core-accept boundary"
         );
         assert_eq!(
             classify(facts(
@@ -6028,6 +6384,7 @@ mod tests {
             market: key(),
             source_state: key(),
             source_material: key(),
+            source_material_staging: key(),
             source_spec: key(),
             source_provider_release: key(),
             adapter_config: key(),
@@ -6035,8 +6392,14 @@ mod tests {
             statistic: key(),
             pyth_release: key(),
             product: key(),
+            product_staging: key(),
             result_domain: key(),
+            result_domain_staging: key(),
             portfolio: key(),
+            portfolio_staging: key(),
+            capability_manifest: key(),
+            capability_manifest_staging: key(),
+            funding_ledger: key(),
             certificate: key(),
             activation_cache: key(),
             infrastructure: key(),
@@ -6494,10 +6857,16 @@ mod tests {
         let selected = sample_selected();
         let submit = stable_lookup_union(&selected, StageV1::Submit).expect("submit union");
         let execute = stable_lookup_union(&selected, StageV1::Execute).expect("execute union");
+        let accept = stable_lookup_union(&selected, StageV1::Accept).expect("accept union");
         let reclaim = stable_lookup_union(&selected, StageV1::Reclaim).expect("reclaim union");
         assert_ne!(submit, execute);
         assert_ne!(submit, reclaim);
         assert_ne!(execute, reclaim);
+        assert_eq!(accept, execute);
+        assert_eq!(
+            selected.table(StageV1::Accept).expect("accept table"),
+            selected.table(StageV1::Execute).expect("execute table")
+        );
         assert_eq!(submit[0].label, "refund_recipient");
         assert_eq!(submit[0].class, StableAddressClassV1::Beneficiary);
         assert!(execute.iter().any(|row| {
@@ -6554,7 +6923,7 @@ mod tests {
     }
 
     #[test]
-    fn resolution_v2_receipts_require_exact_finalized_compute_units() {
+    fn resolution_v3_receipts_require_exact_finalized_compute_units() {
         assert_eq!(
             finalized_compute_units(&json!({"computeUnitsConsumed": 123}), "fixture")
                 .expect("finalized CU"),
@@ -6570,7 +6939,7 @@ mod tests {
         }
 
         let stage_receipt = StageReceiptV1 {
-            stage: StageV1::Submit,
+            stage: ReceiptStageV1::Submit,
             signature: Pubkey::new_from_array([1; 32]).to_string(),
             slot: 7,
             fee_lamports: 5_000,
@@ -6654,7 +7023,80 @@ mod tests {
     }
 
     #[test]
-    fn resolution_v2_headers_refuse_every_old_v1_checkpoint_and_alt_journal() {
+    fn resolution_v3_checkpoint_requires_exact_four_mutation_completion() {
+        let receipt = |stage: ReceiptStageV1, byte: u8, slot: u64| StageReceiptV1 {
+            stage,
+            signature: Pubkey::new_from_array([byte; 32]).to_string(),
+            slot,
+            fee_lamports: 5_000,
+            compute_units_consumed: 100_000 + u64::from(byte),
+            transfer_fee_lamports: 0,
+            arithmetic: ArithmeticPlanV1::default(),
+            signed_transaction_sha256: hex(&[byte; 32]),
+            resolved_account_keys: vec![Pubkey::new_from_array([byte + 10; 32]).to_string()],
+            pre_balances: vec![10_000],
+            post_balances: vec![5_000],
+            return_data_base64: if stage == ReceiptStageV1::CoreAccept {
+                String::new()
+            } else {
+                BASE64.encode([byte])
+            },
+            return_data_sha256: if stage == ReceiptStageV1::CoreAccept {
+                hex(&Sha256::digest([]))
+            } else {
+                hex(&Sha256::digest([byte]))
+            },
+        };
+        let receipts = vec![
+            receipt(ReceiptStageV1::Submit, 1, 10),
+            receipt(ReceiptStageV1::ProviderExecute, 2, 11),
+            receipt(ReceiptStageV1::CoreAccept, 3, 12),
+            receipt(ReceiptStageV1::Reclaim, 4, 13),
+        ];
+        assert_eq!(
+            receipts
+                .iter()
+                .map(|row| serde_json::to_value(row).expect("receipt")["stage"]
+                    .as_str()
+                    .expect("stage")
+                    .to_owned())
+                .collect::<Vec<_>>(),
+            [
+                "submit",
+                "resolution-provider-execute-v1",
+                "core-terminal-accept-v1",
+                "reclaim",
+            ]
+        );
+        let complete = CheckpointV1 {
+            format: CHECKPOINT_FORMAT.into(),
+            input_sha256: "22".repeat(32),
+            stage_plan: None,
+            receipts: receipts.clone(),
+            verified_terminal: true,
+        };
+        assert!(authenticate_receipt_prefix(&complete).is_ok());
+        assert!(require_terminal_receipts(&complete).is_ok());
+
+        let mut duplicate_signature = complete.clone();
+        duplicate_signature.receipts[2].signature =
+            duplicate_signature.receipts[1].signature.clone();
+        assert!(authenticate_receipt_prefix(&duplicate_signature).is_err());
+        let mut same_slot = complete.clone();
+        same_slot.receipts[2].slot = same_slot.receipts[1].slot;
+        assert!(authenticate_receipt_prefix(&same_slot).is_err());
+        let mut reordered = complete.clone();
+        reordered.receipts.swap(1, 2);
+        assert!(authenticate_receipt_prefix(&reordered).is_err());
+        let mut missing_accept = complete.clone();
+        missing_accept.receipts.remove(2);
+        missing_accept.verified_terminal = false;
+        assert!(authenticate_receipt_prefix(&missing_accept).is_err());
+        assert!(require_terminal_receipts(&missing_accept).is_err());
+    }
+
+    #[test]
+    fn resolution_v3_headers_refuse_old_checkpoints_and_v1_alt_journal() {
         for (expected_cluster, old_checkpoint, old_journal) in [
             (
                 ExpectedClusterV1::Devnet,
@@ -6695,6 +7137,21 @@ mod tests {
                     .is_err()
             );
         }
+        let old_v2 = CheckpointV1 {
+            format: "dclutch-owned-loopback-flagship-resolution-checkpoint-v2".into(),
+            input_sha256: "99".repeat(32),
+            stage_plan: None,
+            receipts: Vec::new(),
+            verified_terminal: false,
+        };
+        assert!(
+            authenticate_checkpoint_identity(
+                &old_v2,
+                &"99".repeat(32),
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_err()
+        );
     }
 
     #[test]
