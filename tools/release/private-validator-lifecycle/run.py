@@ -1267,6 +1267,7 @@ def local_bankroll_transfer_argv(
     url: str,
     source_keypair: Path,
     payer_address: str,
+    amount_sol: str = "100",
 ) -> list[str]:
     return [
         str(solana),
@@ -1276,7 +1277,7 @@ def local_bankroll_transfer_argv(
         url,
         "transfer",
         payer_address,
-        "100",
+        amount_sol,
         "--from",
         str(source_keypair),
         "--fee-payer",
@@ -4177,9 +4178,28 @@ def run_one(
             raise Refusal(
                 "localhost finalized slot after founding was not a positive integer"
             )
+        # The admission snapshot requires the position owner to exist as a
+        # funded System wallet (devnet campaigns fund participants 0.02 SOL
+        # for the same reason). The founding fixture mints the participant's
+        # collateral ATOMS and never lamports, so the pipeline funds the
+        # wallet here, after founding, from the same genesis source the
+        # local test-bankroll uses. No probe had ever reached this stage
+        # before 2026-08-29, which is how the gap stayed invisible.
         run_stage(
             run,
             7,
+            "participant-bankroll",
+            local_bankroll_transfer_argv(
+                paths.solana,
+                url,
+                payer_key,
+                participant_address,
+                "0.02",
+            ),
+        )
+        run_stage(
+            run,
+            8,
             "participant",
             [
                 str(paths.bootstrap),
@@ -4313,7 +4333,7 @@ def run_one(
             evidence,
             participant,
             prepare_work / "keys",
-            8,
+            9,
         )
         post_direct, _next_ordinal = run_post_direct_lifecycle(
             run,
