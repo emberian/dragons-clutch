@@ -11,17 +11,22 @@
 //!
 //! INVARIANT (the fixed point this seam refuses to express): the capability
 //! manifest digest is a Market-PDA seed (`MarketIdentity::capability_manifest`,
-//! see `derive_founding_targets_inner`), so every fact in the manifest — the
-//! config identity included — must be derivable BEFORE the Market address
-//! exists. A capability whose config record binds the Market PDA is
-//! unsatisfiable-by-construction: manifest ⊃ entry.config_id = SHA-256(config)
-//! ⊃ config.market = PDA(seeds ⊇ SHA-256(manifest)) is a SHA-256 fixed point
-//! no author can construct. Fractional's shipped contract has exactly this
-//! shape (its config schema IS the exposure terms, and the terms bind the
-//! Core Market: `fractional_atomic_v3.rs:224`, `request_v2.rs::bind_terms`),
-//! which is why no Fractional capability can be selected by a founded Market
-//! until its config is split into a market-free record. The executable pin of
-//! that circle lives in this module's tests.
+//! see `derive_founding_targets_inner`), so EVERY entry-authored identity —
+//! config, release/program-set (and therefore every descriptor and artifact
+//! the set names), capacity, kind — must be derivable BEFORE the Market
+//! address exists. An identity that consumes the Market PDA is
+//! unsatisfiable-by-construction: manifest ⊃ entry identity =
+//! SHA-256(bytes(Market PDA)) with Market PDA = f(SHA-256(manifest)) is a
+//! SHA-256 fixed point no author can construct. Two shipped families carry
+//! the trap through two different identities: Fractional through its CONFIG
+//! (the config schema IS the exposure terms, and the terms bind the Core
+//! Market — `fractional_atomic_v3.rs:224`, `request_v2.rs::bind_terms`;
+//! pinned in `fractional_market.rs`), and Rational through its RELEASE_ID
+//! (the compact effect's child template bakes per-Market custody-owner PDAs
+//! into the descriptor bytes — pinned at c09cd7eb with a pre-registered
+//! success criterion). General and Direct are acyclic in every entry
+//! identity, which is what makes them foundable. A family compiler entering
+//! this seam owes exactly that property, in every identity the entry names.
 
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
