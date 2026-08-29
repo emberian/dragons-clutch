@@ -19,11 +19,29 @@ import {
   inspectDirectTradeSpineV1,
   type DirectTradeSpineV1,
 } from '@/lib/directTradeSpine';
-import { transactionSignatureV1 } from '@/lib/clientOperationJournal';
+import {
+  clearFinalizedClientOperationJournalV1,
+  discardUnsignedClientOperationJournalV1,
+  findClientOperationJournalV1,
+  markClientOperationSubmittedV1,
+  requireSubmittedSignatureMatchV1,
+  submittedClientOperationWireV1,
+  transactionSignatureV1,
+  writeUnsignedClientOperationJournalV1,
+  type ClientOperationJournalV1,
+} from '@/lib/clientOperationJournal';
+import {
+  describeClaimChangeV1,
+  directInlineJournalInputV1,
+  directTradeBalanceChangesV1,
+  directTradeFinalizedCompletionV1,
+  type DirectTradeBalanceSnapshotV1,
+} from '@/lib/directTradeJournal';
 import { type MarketLiabilityV1 } from '@/lib/marketDiscovery';
 import {
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
+  submitSignedTransactionV1,
 } from '@/lib/walletHandoff';
 import { inspectDirectHotRouteManifestJsonV3 } from '@dclutch/sdk/directHotRouteManifest';
 import {
@@ -50,8 +68,12 @@ import {
  * derived by the same builders the byte-level tests pin. Preview arithmetic
  * needs no route; EXECUTION needs the operator-published route manifest and
  * lookup table, which the advanced drawer accepts in exactly the /trade
- * workspace's format. This panel may prepare and wallet-sign exact bytes, but
- * deliberately stops before any submission or execution claim.
+ * workspace's format. This panel prepares, journals, wallet-signs, and — on a
+ * cluster where mutation is admitted — submits the exact saved packet once,
+ * then claims execution only from a finalized read-back of the connected
+ * wallet's own Position. The journal discipline is redemption's, shared:
+ * durable intent before key access, signature match on resume, never a
+ * second send.
  */
 
 type TicketState =
@@ -78,6 +100,7 @@ type WalletPreparationState =
     kind: 'wallet-preparable';
     preparation: Extract<DirectWalletPreparationV1, { status: 'wallet-preparable' }>;
     takerTicket: string;
+    takerBefore: DirectTradeBalanceSnapshotV1;
   }>
   | Readonly<{
     kind: 'operator-required';
@@ -97,6 +120,22 @@ type WalletPreparationState =
     blockhashObservedSlot: string;
     lastValidBlockHeight: string;
     lookupTable: string;
+    journal: ClientOperationJournalV1;
+    takerBefore: DirectTradeBalanceSnapshotV1;
+  }>
+  | Readonly<{
+    kind: 'submitted';
+    journal: ClientOperationJournalV1;
+    signature: string;
+    confirmation: string;
+    takerBefore: DirectTradeBalanceSnapshotV1 | null;
+  }>
+  | Readonly<{
+    kind: 'executed';
+    signature: string;
+    observedSlot: string;
+    after: DirectTradeBalanceSnapshotV1;
+    changes: ReturnType<typeof directTradeBalanceChangesV1> | null;
   }>;
 
 function positiveU64(text: string, fallback: bigint): bigint {
@@ -117,6 +156,11 @@ function base64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 8_192));
   }
   return btoa(binary);
+}
+
+function browserStorage(): Storage {
+  if (typeof window === 'undefined' || window.localStorage === undefined) throw new Error('this browser does not expose local recovery storage, so no wallet signature was requested');
+  return window.localStorage;
 }
 
 function chainContext(
@@ -232,6 +276,20 @@ export default function MarketTradePanel({
     });
     setParticipant(nextParticipant);
     setParticipantStatus(nextParticipant.status === 'refused' ? `Refused: ${nextParticipant.reason}` : nextParticipant.reason);
+    try {
+      const admission = await rpc.assertMutationCluster();
+      const saved = await findClientOperationJournalV1(
+        browserStorage(),
+        Object.freeze({ clusterGenesis: admission.genesisHash, market: marketAddress, owner: wallets.address }),
+        'direct-inline-v3',
+      );
+      if (saved !== null && saved.phase === 'submitted') {
+        setWalletPreparation({ kind: 'submitted', journal: saved, signature: saved.signature!, takerBefore: null, confirmation: 'A submitted Direct packet is saved for this exact chain, Market, and wallet. Resuming its signature; it is never sent twice.' });
+        void pollDirectJournal(saved, null);
+      }
+    } catch {
+      // Read-only cluster or no local storage: nothing could have been submitted from here.
+    }
   }
 
   async function previewIntent() {
@@ -435,7 +493,12 @@ export default function MarketTradePanel({
         });
         return;
       }
-      setWalletPreparation({ kind: 'wallet-preparable', preparation: prepared, takerTicket });
+      if (takerParticipant.status !== 'ready') throw new Error('your participant accounts are not ready to trade, so a packet will not be prepared');
+      const takerBefore = Object.freeze({
+        positionBalances: takerParticipant.positionBalances,
+        spendableCollateralAtoms: takerParticipant.spendableCollateralAtoms,
+      });
+      setWalletPreparation({ kind: 'wallet-preparable', preparation: prepared, takerTicket, takerBefore });
     } catch (error) {
       setWalletPreparation({ kind: 'refused', reason: errorMessage(error) });
     }
@@ -444,6 +507,7 @@ export default function MarketTradePanel({
   async function signPreparedTransaction() {
     if (walletPreparation.kind !== 'wallet-preparable') return;
     const prepared = walletPreparation.preparation;
+    const { takerTicket, takerBefore } = walletPreparation;
     try {
       if (wallets.address !== prepared.binding.connectedWallet) throw new Error('connected wallet changed after Direct preparation');
       const client = new SolanaRpcClient(endpoint);
@@ -455,7 +519,32 @@ export default function MarketTradePanel({
       if (blockHeight > prepared.binding.lastValidBlockHeight) {
         throw new Error(`prepared Direct blockhash expired at block height ${prepared.binding.lastValidBlockHeight}`);
       }
-      setWalletPreparation({ kind: 'working', message: 'Asking your wallet to sign the exact 1,159-byte v0 packet. The page will not submit it.' });
+      const lookupTable = prepared.transactionPlan.transaction.message.addressTableLookups[0]?.accountKey.toBase58();
+      if (lookupTable === undefined) throw new Error('prepared Direct packet omitted its authenticated lookup table');
+      // Durable intent before key access: the exact packet is journaled in this
+      // browser before the wallet is asked for a signature. A stale UNSIGNED
+      // plan (no signature exists, nothing is ambiguous) is discarded; a
+      // submitted-but-unresolved one refuses replacement inside the writer.
+      const messageBytes = prepared.transactionPlan.transaction.message.serialize();
+      const scope = Object.freeze({
+        clusterGenesis: prepared.binding.genesisHash,
+        market: marketAddress,
+        owner: prepared.binding.connectedWallet,
+      });
+      const journalInput = await directInlineJournalInputV1(scope, takerTicket, {
+        payer: prepared.payer,
+        lookupTable,
+        routeObservedSlot: prepared.binding.routeObservedSlot,
+        blockhashObservedSlot: prepared.binding.blockhashObservedSlot.toString(),
+        lastValidBlockHeight: prepared.binding.lastValidBlockHeight.toString(),
+        messageBase64: base64(messageBytes),
+      }, messageBytes);
+      const existing = await findClientOperationJournalV1(browserStorage(), scope, 'direct-inline-v3');
+      if (existing !== null && existing.phase === 'unsigned' && existing.operationDigest !== journalInput.operationDigest) {
+        await discardUnsignedClientOperationJournalV1(browserStorage(), existing);
+      }
+      const journal = await writeUnsignedClientOperationJournalV1(browserStorage(), journalInput);
+      setWalletPreparation({ kind: 'working', message: 'Saved the exact packet locally. Asking your wallet to sign it; nothing is submitted by signing.' });
       const signed = await requestWalletTransactionSignatureV1(
         client,
         wallets.handoff(endpoint),
@@ -471,21 +560,105 @@ export default function MarketTradePanel({
       if (afterHeight > prepared.binding.lastValidBlockHeight) {
         throw new Error(`signed Direct packet expired at block height ${prepared.binding.lastValidBlockHeight}; it must not be submitted`);
       }
-      const lookupTable = prepared.transactionPlan.transaction.message.addressTableLookups[0]?.accountKey.toBase58();
-      if (lookupTable === undefined) throw new Error('prepared Direct packet omitted its authenticated lookup table');
       setWalletPreparation({
         kind: 'wallet-signed',
         signature: transactionSignatureV1(signed.transaction.signatures[0]!),
         signedWireBase64: base64(signed.wireBytes),
-        messageBase64: base64(signed.transaction.message.serialize()),
+        messageBase64: base64(messageBytes),
         wireBytes: signed.wireBytes.length,
         routeObservedSlot: prepared.binding.routeObservedSlot,
         blockhashObservedSlot: prepared.binding.blockhashObservedSlot.toString(),
         lastValidBlockHeight: prepared.binding.lastValidBlockHeight.toString(),
         lookupTable,
+        journal,
+        takerBefore,
       });
     } catch (error) {
       setWalletPreparation({ kind: 'refused', reason: errorMessage(error) });
+    }
+  }
+
+  /** The participant read request, for reads that outlive one preparation closure. */
+  function participantReadRequest(owner: string) {
+    if (registryProgramId === null || claimsProgramId === null || tradingProgramId === null
+        || custodyProgramId === null || rentProgramId === null) {
+      throw new Error('this deployment does not name every program needed to authenticate participant accounts');
+    }
+    return Object.freeze({
+      market: marketAddress,
+      owner,
+      coreProgram: coreProgramId,
+      registryProgram: registryProgramId,
+      claimsProgram: claimsProgramId,
+      tradingProgram: tradingProgramId,
+      custodyProgram: custodyProgramId,
+      rentProgram: rentProgramId,
+    });
+  }
+
+  /** Poll one submitted Direct signature to finalized truth, then show the Position change. */
+  async function pollDirectJournal(
+    journal: ClientOperationJournalV1,
+    takerBefore: DirectTradeBalanceSnapshotV1 | null,
+  ): Promise<void> {
+    const signature = journal.signature;
+    if (journal.phase !== 'submitted' || signature === null) throw new Error('Direct recovery requires one submitted signature');
+    const client = new SolanaRpcClient(endpoint);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      try {
+        const status = (await client.signatureStatuses([signature]))[0];
+        if (status?.known && status.succeeded === false) {
+          setWalletPreparation({ kind: 'submitted', journal, signature, takerBefore, confirmation: `The chain reports an error (${status.errorText ?? 'unnamed chain error'}). The submitted record stays saved because it cannot be safely replayed or discarded.` });
+          return;
+        }
+        if (directTradeFinalizedCompletionV1(status)) {
+          const readiness = await inspectDirectParticipantReadinessV1(client, participantReadRequest(journal.owner));
+          if (readiness.status !== 'ready') throw new Error(`the crossing finalized but your participant accounts read back ${readiness.status}: ${readiness.reason}`);
+          const afterSnapshot = Object.freeze({
+            positionBalances: readiness.positionBalances,
+            spendableCollateralAtoms: readiness.spendableCollateralAtoms,
+          });
+          await clearFinalizedClientOperationJournalV1(browserStorage(), journal);
+          setWalletPreparation({
+            kind: 'executed',
+            signature,
+            observedSlot: readiness.observedSlot,
+            after: afterSnapshot,
+            changes: takerBefore === null ? null : directTradeBalanceChangesV1(takerBefore, afterSnapshot),
+          });
+          return;
+        }
+        setWalletPreparation({ kind: 'submitted', journal, signature, takerBefore, confirmation: 'The exact signature is not finalized yet. You can close this page; reloading resumes this signature and never submits it again.' });
+      } catch (error) {
+        setWalletPreparation({ kind: 'submitted', journal, signature, takerBefore, confirmation: `${errorMessage(error)} The submitted record stays saved; reloading only resumes its exact signature.` });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    setWalletPreparation({ kind: 'submitted', journal, signature, takerBefore, confirmation: 'Finalized completion is still unresolved. You can reload later; this exact signature stays saved and is never replayed.' });
+  }
+
+  async function submitDirectPacket() {
+    if (walletPreparation.kind !== 'wallet-signed') return;
+    const { journal, signature, signedWireBase64, takerBefore, lastValidBlockHeight } = walletPreparation;
+    let submitted: ClientOperationJournalV1 | null = null;
+    try {
+      const client = new SolanaRpcClient(endpoint);
+      const admission = await client.assertMutationCluster();
+      if (admission.genesisHash !== journal.clusterGenesis) throw new Error('RPC genesis changed after the packet was signed; it must not be submitted here');
+      const currentHeight = BigInt(await client.blockHeight());
+      if (currentHeight > BigInt(lastValidBlockHeight)) {
+        throw new Error(`the signed packet expired at block height ${lastValidBlockHeight}; the chain can no longer include it`);
+      }
+      const wireBytes = Uint8Array.from(atob(signedWireBase64), (character) => character.charCodeAt(0));
+      submitted = await markClientOperationSubmittedV1(browserStorage(), journal, signature, wireBytes);
+      setWalletPreparation({ kind: 'submitted', journal: submitted, signature, takerBefore, confirmation: 'Saved before submission; sending the exact signed packet…' });
+      const returned = await submitSignedTransactionV1(client, submittedClientOperationWireV1(submitted));
+      requireSubmittedSignatureMatchV1(signature, returned);
+      await pollDirectJournal(submitted, takerBefore);
+    } catch (error) {
+      if (submitted !== null) setWalletPreparation({ kind: 'submitted', journal: submitted, signature, takerBefore, confirmation: `${errorMessage(error)} The submitted record stays saved; reloading never resubmits it.` });
+      else setWalletPreparation({ kind: 'refused', reason: errorMessage(error) });
     }
   }
 
@@ -589,13 +762,31 @@ export default function MarketTradePanel({
           <p>This request still does not submit. Your wallet must preserve the exact message bytes; any rewrite is refused.</p>
         </div>}
         {walletPreparation.kind === 'wallet-signed' && <div className="portfolio-claim">
-          <span>Wallet signed · prepared, not submitted</span>
+          <span>Wallet signed · saved locally, not yet submitted</span>
           <strong>{walletPreparation.signature}</strong>
-          <p>{walletPreparation.wireBytes} bytes. Route slot {walletPreparation.routeObservedSlot}; blockhash slot {walletPreparation.blockhashObservedSlot}; expires at block height {walletPreparation.lastValidBlockHeight}. Frozen table {walletPreparation.lookupTable}. Nothing has been sent to RPC.</p>
+          <p>{walletPreparation.wireBytes} bytes. Route slot {walletPreparation.routeObservedSlot}; blockhash slot {walletPreparation.blockhashObservedSlot}; expires at block height {walletPreparation.lastValidBlockHeight}. Frozen table {walletPreparation.lookupTable}. The exact packet is saved in this browser; nothing has been sent to RPC.</p>
           <label><span>Exact signed packet · base64</span><textarea readOnly rows={6} value={walletPreparation.signedWireBase64} /></label>
           <label><span>Exact v0 message · base64</span><textarea readOnly rows={5} value={walletPreparation.messageBase64} /></label>
+          <div className="direct-actions"><button type="button" onClick={() => void submitDirectPacket()}>Submit this exact packet and watch it finalize</button></div>
+          <p>Submitting sends this one saved packet once, then reads your Position back at finalized commitment. If this page closes mid-flight, reloading resumes the saved signature and never sends a second packet.</p>
         </div>}
-        <p className="direct-status">The next protocol step after a prepared packet is an explicitly authorized durable submit/finalization caller. This page does not pretend that boundary has occurred.</p>
+        {walletPreparation.kind === 'submitted' && <div className="portfolio-claim">
+          <span>Submitted · awaiting finalized truth</span>
+          <strong>{walletPreparation.signature}</strong>
+          <p aria-live="polite">{walletPreparation.confirmation}</p>
+        </div>}
+        {walletPreparation.kind === 'executed' && <div className="portfolio-claim">
+          <span>Executed · finalized</span>
+          <strong>{walletPreparation.signature}</strong>
+          <p>Finalized, read back at slot {walletPreparation.observedSlot}. Your Position now holds:</p>
+          <ul className="market-bindings">
+            {walletPreparation.changes === null
+              ? walletPreparation.after.positionBalances.map((balance, index) => <li key={index}>claim {index}: {balance.toString()} atoms</li>)
+              : walletPreparation.changes.claims.map((change) => <li key={change.claimIndex}>{describeClaimChangeV1(change)}</li>)}
+          </ul>
+          {walletPreparation.changes !== null && <p>Spendable collateral: {walletPreparation.changes.spendableBefore.toString()} → {walletPreparation.changes.spendableAfter.toString()} atoms.{walletPreparation.changes.moved ? '' : ' Nothing moved — the finalized crossing changed no balance, and that is reported as exactly that.'}</p>}
+        </div>}
+        <p className="direct-status">Submission here is journaled: the exact signed packet is saved in this browser before its one send, the returned signature must match the saved one, and completion is only ever claimed from a finalized read-back of your own Position.</p>
       </details>
     </>}
   </section>;
