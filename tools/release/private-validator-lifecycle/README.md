@@ -5,15 +5,24 @@ model:
 
 ```sh
 python3 tools/release/private-validator-lifecycle/preflight.py \
-  --repo /absolute/clean/dclutch --through full-probe
+  --repo /absolute/clean/dclutch --through full-probe \
+  --output /absolute/path/outside/dclutch/PREFLIGHT.json
 ```
 
 It joins the runner to every required Rust dispatch and accepted help function,
 schema handoff, signer-role projection, fixture/supply invariant, current
 generic-founding lock census, Direct message geometry, Pyth/Resolution order,
-zero-payout burn, and terminal handoff. It performs no build, RPC, key read, or
-validator action. The detailed derivation is in
+zero-payout burn, and terminal handoff. It executes the tracked exact-integer
+economic semantic owner against both canonical fixtures and admits SourceAbort
+only as a separate three-mutation recovery surface, never as a happy-path
+stage. It performs no build, RPC, key read, or validator action. The detailed derivation is in
 `docs/evidence/PRIVATE_LIFECYCLE_OFFLINE_EXECUTION_MODEL_2026_08_28.md`.
+
+Acceptance requires a clean committed Git root. The gate binds full HEAD and
+tree object IDs plus every modeled source digest before work, rechecks source
+bytes and Git identity after work, and rechecks them again before writing a
+create-new report outside the repository. Dirty, untracked, uncommitted,
+mid-run, and output-induced source substitutions refuse.
 
 `run.py` is the release-level localhost supervisor for one exact checked
 dClutch source commit. It is not devnet evidence and it never accepts a
