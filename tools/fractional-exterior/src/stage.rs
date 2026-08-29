@@ -547,6 +547,7 @@ fn compile(release_set: [u8; 32], actor: Pubkey, reserve: Pubkey) -> NarrowFixtu
         funded_coordinate: OUTCOME as usize,
         funded_balance: ACTOR_FUNDED_BALANCE,
         reserve_balance: 0,
+        position_revision: 0,
         terminal: None,
         rent_beneficiary: RENT_CREDIT,
         graph_id: GRAPH_ID,

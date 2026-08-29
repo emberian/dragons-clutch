@@ -16,11 +16,11 @@
 use std::{env, fs, path::PathBuf};
 
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+use dclutch_core_contract::ContentId;
 use dclutch_fractional_atomic_program_test::narrow_fixture::{
     FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2, NarrowFixtureError, NarrowFixtureInputV2,
     NarrowFixtureV2, NarrowRecordV2, NarrowTerminalInputV2, compile_narrow_fixture_v2,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_fractional_atomic_test_caller_sbf::FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES;
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
@@ -70,6 +70,15 @@ const DENOMINATOR: u64 = 10;
 const WRAP_NATIVE_CLAIMS: u64 = 7;
 /// Native Claims the actor holds at the selected coordinate before any wrap.
 const ACTOR_FUNDED_BALANCE: u64 = 1_000;
+/// Replay revision the fixture's Positions open at.
+///
+/// Deliberately not zero. A Position with history is the normal case for any
+/// Market that has been traded, and a fixture pinned at zero silently excuses
+/// anything that hardcodes zero downstream -- which is exactly what happened
+/// here: the Custody order nonce IS the Position revision, and the terminal
+/// derivation had it hardcoded, correct only by coincidence. Keeping this
+/// non-zero keeps that coupling honest.
+const POSITION_REVISION: u64 = 3;
 const OUTCOME: u32 = 0;
 const MINT_DECIMALS: u8 = 0;
 const GRAPH_ID: [u8; 32] = [0x7c; 32];
@@ -289,6 +298,7 @@ fn compile_shared(
         funded_coordinate: OUTCOME as usize,
         funded_balance: ACTOR_FUNDED_BALANCE,
         reserve_balance: 0,
+        position_revision: POSITION_REVISION,
         terminal: None,
         rent_beneficiary: RENT_CREDIT,
         graph_id: GRAPH_ID,
@@ -793,16 +803,23 @@ async fn the_production_fractional_wrap_locks_native_claims_and_mints_the_denomi
     let reserve_before = account(&mut context, reserve_account).await;
     assert_eq!(mint_supply(&mint_before), 0);
     assert_eq!(token_amount(&holder_before), 0);
-    assert_eq!(balance(&actor_before, OUTCOME as usize), ACTOR_FUNDED_BALANCE);
+    assert_eq!(
+        balance(&actor_before, OUTCOME as usize),
+        ACTOR_FUNDED_BALANCE
+    );
     assert_eq!(balance(&reserve_before, OUTCOME as usize), 0);
     assert_eq!(root_revision(&root_before), ROOT_REVISION);
 
-    let (accepted, logs, units, result) = submit(&mut context, instruction(&fixture, &fixture.wrap, false)).await;
-    assert!(accepted, "the production Fractional wrap must commit: {result:?}");
+    let (accepted, logs, units, result) =
+        submit(&mut context, instruction(&fixture, &fixture.wrap, false)).await;
     assert!(
-        logs.iter()
-            .any(|line| line.contains(&CLAIMS_PROGRAM_ID.to_string())
-                && line.contains("invoke [2]")),
+        accepted,
+        "the production Fractional wrap must commit: {result:?}"
+    );
+    assert!(
+        logs.iter().any(
+            |line| line.contains(&CLAIMS_PROGRAM_ID.to_string()) && line.contains("invoke [2]")
+        ),
         "the real Claims ELF must be entered as a child of the test caller"
     );
     assert!(
@@ -810,7 +827,10 @@ async fn the_production_fractional_wrap_locks_native_claims_and_mints_the_denomi
             .any(|line| line.contains(&token_program_id().to_string())),
         "Token-2022 must be entered for the mint effect"
     );
-    assert!(units > 30_000 && units <= 1_400_000, "{units} compute units");
+    assert!(
+        units > 30_000 && units <= 1_400_000,
+        "{units} compute units"
+    );
 
     let mint_after = account(&mut context, fixture.shard_mint).await;
     let holder_after = account(&mut context, fixture.holder_token).await;
@@ -830,7 +850,10 @@ async fn the_production_fractional_wrap_locks_native_claims_and_mints_the_denomi
         balance(&actor_after, OUTCOME as usize),
         ACTOR_FUNDED_BALANCE - WRAP_NATIVE_CLAIMS
     );
-    assert_eq!(balance(&reserve_after, OUTCOME as usize), WRAP_NATIVE_CLAIMS);
+    assert_eq!(
+        balance(&reserve_after, OUTCOME as usize),
+        WRAP_NATIVE_CLAIMS
+    );
     assert_eq!(
         balance(&actor_after, OUTCOME as usize) + balance(&reserve_after, OUTCOME as usize),
         ACTOR_FUNDED_BALANCE,
@@ -871,7 +894,8 @@ async fn a_late_caller_refusal_after_the_real_claims_commit_rolls_everything_bac
         account(&mut context, reserve_account).await,
     ];
 
-    let (accepted, _logs, _units, result) = submit(&mut context, instruction(&fixture, &fixture.wrap, true)).await;
+    let (accepted, _logs, _units, result) =
+        submit(&mut context, instruction(&fixture, &fixture.wrap, true)).await;
     assert!(!accepted, "the deliberate late refusal must abort");
     assert_eq!(
         custom_refusal(&result),
@@ -925,9 +949,9 @@ async fn wrap_then_whole_unwrap_restores_the_exact_opening_state() {
         submit(&mut context, instruction(&fixture, &fixture.unwrap, false)).await;
     assert!(unwrapped, "whole unwrap must commit: {result:?}");
     assert!(
-        logs.iter()
-            .any(|line| line.contains(&CLAIMS_PROGRAM_ID.to_string())
-                && line.contains("invoke [2]")),
+        logs.iter().any(
+            |line| line.contains(&CLAIMS_PROGRAM_ID.to_string()) && line.contains("invoke [2]")
+        ),
         "the real Claims ELF must run the unwrap too"
     );
     assert!(units > 30_000, "{units} compute units");
@@ -976,9 +1000,7 @@ async fn wrap_then_whole_unwrap_restores_the_exact_opening_state() {
 /// quietly forwarded into Claims.
 #[tokio::test]
 async fn a_transfer_is_refused_by_the_family_caller_and_routed_direct_to_token_2022() {
-    use dclutch_fractional_claim_contract::{
-        FractionalChildRouteV3, plan_fractional_physical_v3,
-    };
+    use dclutch_fractional_claim_contract::{FractionalChildRouteV3, plan_fractional_physical_v3};
     use dclutch_fractional_claim_kernel::{
         FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
         FractionalExposureTermsV2,
@@ -1054,7 +1076,9 @@ async fn a_transfer_is_refused_by_the_family_caller_and_routed_direct_to_token_2
 fn the_fractional_representation_width_bound_is_exactly_256() {
     assert_eq!(FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2, 256);
     assert!(fractional_exposure_terms_bytes_v2(FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2).is_ok());
-    assert!(fractional_exposure_terms_bytes_v2(FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2 + 1).is_err());
+    assert!(
+        fractional_exposure_terms_bytes_v2(FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2 + 1).is_err()
+    );
 
     let admissible = compile_narrow_fixture_v2(NarrowFixtureInputV2 {
         outcome_count: FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2,
@@ -1070,13 +1094,16 @@ fn the_fractional_representation_width_bound_is_exactly_256() {
         funded_coordinate: 0,
         funded_balance: 1,
         reserve_balance: 0,
+        position_revision: POSITION_REVISION,
         terminal: None,
         rent_beneficiary: RENT_CREDIT,
         graph_id: GRAPH_ID,
         exposure_id: EXPOSURE_ID,
     });
     assert_eq!(
-        admissible.expect("the bound itself must compile").outcome_count,
+        admissible
+            .expect("the bound itself must compile")
+            .outcome_count,
         256
     );
     let refused = compile_narrow_fixture_v2(NarrowFixtureInputV2 {
@@ -1093,6 +1120,7 @@ fn the_fractional_representation_width_bound_is_exactly_256() {
         funded_coordinate: 0,
         funded_balance: 1,
         reserve_balance: 0,
+        position_revision: POSITION_REVISION,
         terminal: None,
         rent_beneficiary: RENT_CREDIT,
         graph_id: GRAPH_ID,
@@ -1193,16 +1221,36 @@ fn terminal_fixture(
     test.prefer_bpf(true);
     test.set_compute_max_units(1_400_000);
     for (name, program, elf) in [
-        ("dclutch_claims_sbf", CLAIMS_PROGRAM_ID, artifacts.claims.as_slice()),
-        ("dclutch_registry_sbf", REGISTRY_PROGRAM_ID, artifacts.registry.as_slice()),
-        ("dclutch_core_sbf", CORE_PROGRAM_ID, artifacts.core.as_slice()),
-        ("dclutch_custody_sbf", CUSTODY_PROGRAM_ID, artifacts.custody.as_slice()),
+        (
+            "dclutch_claims_sbf",
+            CLAIMS_PROGRAM_ID,
+            artifacts.claims.as_slice(),
+        ),
+        (
+            "dclutch_registry_sbf",
+            REGISTRY_PROGRAM_ID,
+            artifacts.registry.as_slice(),
+        ),
+        (
+            "dclutch_core_sbf",
+            CORE_PROGRAM_ID,
+            artifacts.core.as_slice(),
+        ),
+        (
+            "dclutch_custody_sbf",
+            CUSTODY_PROGRAM_ID,
+            artifacts.custody.as_slice(),
+        ),
         (
             "dclutch_fractional_atomic_test_caller_sbf",
             TEST_CALLER_PROGRAM_ID,
             artifacts.caller.as_slice(),
         ),
-        ("spl_token_2022", token_program_id(), artifacts.token.as_slice()),
+        (
+            "spl_token_2022",
+            token_program_id(),
+            artifacts.token.as_slice(),
+        ),
     ] {
         add_upgradeable_program(&mut test, name, program, elf);
     }
@@ -1212,7 +1260,12 @@ fn terminal_fixture(
         &REGISTRY_PROGRAM_ID,
     )
     .0;
-    add_account(&mut test, activation_cache_key, REGISTRY_PROGRAM_ID, cache_bytes);
+    add_account(
+        &mut test,
+        activation_cache_key,
+        REGISTRY_PROGRAM_ID,
+        cache_bytes,
+    );
 
     // The Realm commits to the collateral Mint, and its own content digest is
     // the Realm identity the Market and every Custody coordinate are keyed by.
@@ -1253,6 +1306,7 @@ fn terminal_fixture(
             funded_coordinate: OUTCOME as usize,
             funded_balance: ACTOR_FUNDED_BALANCE - WRAP_NATIVE_CLAIMS,
             reserve_balance: WRAP_NATIVE_CLAIMS,
+            position_revision: POSITION_REVISION,
             terminal: Some(terminal),
             rent_beneficiary: RENT_CREDIT,
             graph_id: GRAPH_ID,
@@ -1360,7 +1414,12 @@ fn terminal_fixture(
     ] {
         add_finalized(&mut test, record);
     }
-    add_account(&mut test, shared.core_market, CORE_PROGRAM_ID, shared.core_state.clone());
+    add_account(
+        &mut test,
+        shared.core_market,
+        CORE_PROGRAM_ID,
+        shared.core_state.clone(),
+    );
     add_account(
         &mut test,
         shared.claims_market,
@@ -1368,10 +1427,20 @@ fn terminal_fixture(
         shared.claims_market_bytes.clone(),
     );
     for position in shared.ordered_positions() {
-        add_account(&mut test, position.account, CLAIMS_PROGRAM_ID, position.bytes.clone());
+        add_account(
+            &mut test,
+            position.account,
+            CLAIMS_PROGRAM_ID,
+            position.bytes.clone(),
+        );
     }
     add_account(&mut test, root, TEST_CALLER_PROGRAM_ID, root_bytes);
-    add_account(&mut test, shard_mint, token_program_id(), mint_bytes(root, TERMINAL_SHARDS));
+    add_account(
+        &mut test,
+        shard_mint,
+        token_program_id(),
+        mint_bytes(root, TERMINAL_SHARDS),
+    );
     add_account(
         &mut test,
         holder_token,
@@ -1402,7 +1471,12 @@ fn terminal_fixture(
     }
     .to_bytes()
     .expect("canonical Resolution certificate");
-    add_account(&mut test, CERTIFICATE_ACCOUNT, CLAIMS_PROGRAM_ID, certificate_bytes.to_vec());
+    add_account(
+        &mut test,
+        CERTIFICATE_ACCOUNT,
+        CLAIMS_PROGRAM_ID,
+        certificate_bytes.to_vec(),
+    );
 
     let custody_authority = Pubkey::find_program_address(
         &[
@@ -1670,7 +1744,10 @@ async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &Termi
             .to_vec(),
     };
     let (accepted, _logs, _units, result) = submit(context, instruction).await;
-    assert!(accepted, "the Claims-role Custody replay must be creatable: {result:?}");
+    assert!(
+        accepted,
+        "the Claims-role Custody replay must be creatable: {result:?}"
+    );
 
     let created = account(context, fixture.custody_replay).await;
     assert_eq!(created.owner, CUSTODY_PROGRAM_ID);
@@ -1683,8 +1760,11 @@ async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &Termi
 
 #[tokio::test]
 async fn the_claims_role_custody_replay_is_created_by_the_real_route() {
-    let (test, fixture) =
-        terminal_fixture(TERMINAL_WIDTH, OUTCOME, FractionalExposureActionV2::TerminalRedeem);
+    let (test, fixture) = terminal_fixture(
+        TERMINAL_WIDTH,
+        OUTCOME,
+        FractionalExposureActionV2::TerminalRedeem,
+    );
     let mut context = test.start_with_context().await;
     create_custody_replay(&mut context, &fixture).await;
 }
@@ -1724,13 +1804,19 @@ async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
     assert_eq!(token_amount(&before[1]), TERMINAL_SHARDS);
     assert_eq!(balance(&before[2], OUTCOME as usize), WRAP_NATIVE_CLAIMS);
 
-    let (accepted, logs, units, result) =
-        submit(&mut context, terminal_instruction(&fixture, CLAIMS_PROGRAM_ID, false)).await;
-    assert!(accepted, "the zero-payout terminal burn must commit: {result:?}");
+    let (accepted, logs, units, result) = submit(
+        &mut context,
+        terminal_instruction(&fixture, CLAIMS_PROGRAM_ID, false),
+    )
+    .await;
     assert!(
-        logs.iter()
-            .any(|line| line.contains(&CLAIMS_PROGRAM_ID.to_string())
-                && line.contains("invoke [2]"))
+        accepted,
+        "the zero-payout terminal burn must commit: {result:?}"
+    );
+    assert!(
+        logs.iter().any(
+            |line| line.contains(&CLAIMS_PROGRAM_ID.to_string()) && line.contains("invoke [2]")
+        )
     );
     assert!(units > 30_000, "{units} compute units");
 
@@ -1740,7 +1826,11 @@ async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
     assert_eq!(token_amount(&after[1]), 0);
     assert_eq!(balance(&after[2], OUTCOME as usize), 0);
     // Not one collateral atom moved, in either direction.
-    assert_eq!(token_amount(&after[3]), HOARD_ATOMS, "the Hoard is untouched");
+    assert_eq!(
+        token_amount(&after[3]),
+        HOARD_ATOMS,
+        "the Hoard is untouched"
+    );
     assert_eq!(token_amount(&after[4]), RECIPIENT_ATOMS);
     // And the Custody replay did not advance, because Custody never ran.
     let replay_after = account(&mut context, fixture.custody_replay).await;
@@ -1772,8 +1862,11 @@ async fn observe5(context: &mut ProgramTestContext, keys: [Pubkey; 5]) -> [Accou
 /// and requires the Custody replay cursor to advance exactly once.
 #[tokio::test]
 async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
-    let (test, fixture) =
-        terminal_fixture(TERMINAL_WIDTH, OUTCOME, FractionalExposureActionV2::TerminalRedeem);
+    let (test, fixture) = terminal_fixture(
+        TERMINAL_WIDTH,
+        OUTCOME,
+        FractionalExposureActionV2::TerminalRedeem,
+    );
     let mut context = test.start_with_context().await;
     create_custody_replay(&mut context, &fixture).await;
 
@@ -1784,8 +1877,11 @@ async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
     assert_eq!(token_amount(&before[3]), HOARD_ATOMS);
     assert_eq!(token_amount(&before[4]), RECIPIENT_ATOMS);
 
-    let (accepted, logs, units, result) =
-        submit(&mut context, terminal_instruction(&fixture, custody_caller, false)).await;
+    let (accepted, logs, units, result) = submit(
+        &mut context,
+        terminal_instruction(&fixture, custody_caller, false),
+    )
+    .await;
     assert!(accepted, "the terminal redemption must commit: {result:?}");
     assert!(
         logs.iter()
@@ -1807,7 +1903,10 @@ async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
         paid,
         "every atom the recipient gained left the Hoard"
     );
-    assert_eq!(token_amount(&after[3]) + token_amount(&after[4]), HOARD_ATOMS + RECIPIENT_ATOMS);
+    assert_eq!(
+        token_amount(&after[3]) + token_amount(&after[4]),
+        HOARD_ATOMS + RECIPIENT_ATOMS
+    );
 
     // A paying redemption advances the Custody cursor exactly once.
     let replay_after = account(&mut context, fixture.custody_replay).await;
@@ -1835,15 +1934,21 @@ async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
 /// campaign above, which authenticates the identical 44-account frame.
 #[tokio::test]
 async fn a_paying_redemption_refuses_the_zero_payout_custody_caller() {
-    let (test, fixture) =
-        terminal_fixture(TERMINAL_WIDTH, OUTCOME, FractionalExposureActionV2::TerminalRedeem);
+    let (test, fixture) = terminal_fixture(
+        TERMINAL_WIDTH,
+        OUTCOME,
+        FractionalExposureActionV2::TerminalRedeem,
+    );
     let mut context = test.start_with_context().await;
     create_custody_replay(&mut context, &fixture).await;
 
     let keys = terminal_observe(&fixture);
     let before = observe5(&mut context, keys).await;
-    let (accepted, _logs, _units, result) =
-        submit(&mut context, terminal_instruction(&fixture, CLAIMS_PROGRAM_ID, false)).await;
+    let (accepted, _logs, _units, result) = submit(
+        &mut context,
+        terminal_instruction(&fixture, CLAIMS_PROGRAM_ID, false),
+    )
+    .await;
     assert!(!accepted);
     assert_eq!(
         custom_refusal(&result),
@@ -1882,8 +1987,8 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
     use solana_program::hash::hashv;
 
     let shared = &fixture.shared;
-    let market = LiabilityBasisMarketViewV2::decode(&shared.claims_market_bytes)
-        .expect("aggregate decode");
+    let market =
+        LiabilityBasisMarketViewV2::decode(&shared.claims_market_bytes).expect("aggregate decode");
     let position = &shared.reserve_position;
     let terminal_request = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
         caller_role: CallerRole::Trading,
@@ -1907,7 +2012,7 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
         linked_basis_record_digest: shared.linked_basis.digest,
         generation: GENERATION,
         expected_market_revision: market.revision,
-        expected_position_revision: 0,
+        expected_position_revision: POSITION_REVISION,
         expected_custody_revision: CUSTODY_EXPECTED_REVISION,
         quantity: WRAP_NATIVE_CLAIMS,
         claim_index: OUTCOME,
@@ -1968,7 +2073,7 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
             quantity: WRAP_NATIVE_CLAIMS,
             expected_generation: GENERATION,
             expected_market_revision: market.revision,
-            expected_position_revision: 0,
+            expected_position_revision: POSITION_REVISION,
             hoard_before: HOARD_ATOMS,
         },
         &mut product_scratch,
@@ -2005,7 +2110,8 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
             destination_owner: fixture.actor.to_bytes(),
             order: [0; 32],
             parent_request_digest: terminal_digest,
-            order_nonce: 0,
+            // Claims sets the Custody order nonce to the Position's revision.
+            order_nonce: POSITION_REVISION,
             generation: GENERATION,
             page_index: 0,
             execution_index: 0,
@@ -2093,5 +2199,8 @@ async fn the_terminal_settlement_has_headroom_at_the_supported_width_and_none_fa
 
     let (over, exhausted) = settles(128).await;
     assert!(!over, "width 128 must not settle");
-    assert_eq!(exhausted, 1_400_000, "and it fails by exhausting the budget");
+    assert_eq!(
+        exhausted, 1_400_000,
+        "and it fails by exhausting the budget"
+    );
 }

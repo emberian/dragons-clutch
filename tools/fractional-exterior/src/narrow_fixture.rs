@@ -160,6 +160,13 @@ pub struct NarrowFixtureInputV2 {
     pub funded_coordinate: usize,
     /// Native Claims units the actor holds at that coordinate.
     pub funded_balance: u64,
+    /// Replay revision both Positions open at.
+    ///
+    /// Claims compares a Position's revision for exact equality against the
+    /// packet's expectation, so a campaign that needs Positions with history --
+    /// anything already traded against -- cannot use a fixture pinned at zero.
+    /// Suggested by the Dealer lane, which hit exactly that.
+    pub position_revision: u64,
     /// Native Claims already locked in the reserve Position at that coordinate.
     ///
     /// A terminal campaign opens after a wrap has happened, so the reserve is
@@ -390,6 +397,7 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         input.actor_owner,
         semantic_basis_id,
         &actor_balances,
+        input.position_revision,
     )?;
     let mut reserve_balances = vec![0_u64; input.outcome_count];
     *reserve_balances
@@ -401,6 +409,7 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         input.reserve_owner,
         semantic_basis_id,
         &reserve_balances,
+        input.position_revision,
     )?;
 
     // One Claims representation root per Product result coordinate, weight 1.
@@ -581,6 +590,7 @@ fn position(
     owner: Pubkey,
     semantic_basis_id: [u8; 32],
     balances: &[u64],
+    revision: u64,
 ) -> Result<NarrowPositionV2> {
     let position_seeds = ProtocolPositionSeedsV2::new(claims_market.to_bytes(), owner.to_bytes())
         .map_err(|_| NarrowFixtureError::Identity)?;
@@ -598,7 +608,7 @@ fn position(
     put(&mut bytes, 0, &CLAIMS_POSITION_MAGIC_V2)?;
     put(&mut bytes, 8, &CLAIMS_ABI_VERSION_V2.to_le_bytes())?;
     put(&mut bytes, 12, &count.to_le_bytes())?;
-    put(&mut bytes, 16, &0_u64.to_le_bytes())?;
+    put(&mut bytes, 16, &revision.to_le_bytes())?;
     put(&mut bytes, 24, &claims_market.to_bytes())?;
     put(&mut bytes, 56, &owner.to_bytes())?;
     put(&mut bytes, 88, &semantic_basis_id)?;
