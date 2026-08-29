@@ -322,6 +322,24 @@ pub fn build_series_shadow_source_v1(
     })
 }
 
+/// Emit the Rust include payload for one already-compiled source manifest.
+///
+/// This is the include emitter alone. It hostile-decodes `manifest_bytes` and
+/// writes exactly the constants `build.rs` selects. It authenticates NOTHING
+/// about where that manifest came from: no finalized record, no shared
+/// observation identity, no descriptor join, no replay coordinate.
+/// [`build_series_shadow_source_v1`] is the operator path that establishes
+/// those facts and calls this emitter only at its end.
+///
+/// Callers that reach this directly are producing a build that is **not
+/// release evidence** — a measurement, a frame probe, or a lab candidate. A
+/// selected release must come through the operator path.
+pub fn emit_series_shadow_generated_include_v1(
+    manifest_bytes: &[u8],
+) -> SourceOperatorResult<Vec<u8>> {
+    emit_generated_include(SeriesShadowSourceManifestV1::decode(manifest_bytes)?)
+}
+
 fn require_observation(input: &SeriesShadowObservedSourceV1<'_>) -> SourceOperatorResult<()> {
     let expected = input.checked_release.observation;
     if input.replay.observation != expected
