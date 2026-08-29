@@ -4,14 +4,26 @@
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
 use dclutch_capability_program_contract::set_v2::{CapabilityProgramSetV2, SelectorWidthV2};
-use dclutch_claims_svm::frame_spec_v1::SignedDeltaFrameSpecV3;
+use dclutch_claims_svm::{
+    frame_spec_v1::SignedDeltaFrameSpecV3,
+    terminal_settlement_v3::{
+        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
+    },
+};
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ACTOR_V3,
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
     FRACTIONAL_ATOMIC_TERMS_STAGING_V3, FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3,
     FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_EXPOSURE_REQUEST_ACTION_OFFSET_V2,
     FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
-    FRACTIONAL_TERMINAL_ACTOR_V3, FRACTIONAL_TERMINAL_ROOT_V3, FractionalExposureActionV2,
+    FRACTIONAL_TERMINAL_ACTOR_V3, FRACTIONAL_TERMINAL_ROOT_V3, FRACTIONAL_TERMINAL_SHARD_MINT_V3,
+    FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, FRACTIONAL_TERMINAL_TERMS_RAW_V3,
+    FRACTIONAL_TERMINAL_TERMS_STAGING_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
+    FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalExposureActionV2,
 };
 use dclutch_fractional_claim_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
@@ -247,9 +259,47 @@ fn the_derived_frames_are_the_frames_the_claims_child_actually_demands() {
         .unwrap(),
         terminal
     );
+    // The full Fractional terminal tail, matched against exactly what
+    // authenticate_terminal_tail_privileges in the Claims handler demands.
+    for coordinate in [
+        FRACTIONAL_TERMINAL_TERMS_RAW_V3,
+        FRACTIONAL_TERMINAL_TERMS_STAGING_V3,
+        FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
+        FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3,
+    ] {
+        assert!(!terminal[coordinate].writable);
+        assert!(!terminal[coordinate].signer);
+        assert!(!terminal[coordinate].executable);
+    }
     assert!(terminal[FRACTIONAL_TERMINAL_ROOT_V3].signer);
     assert!(terminal[FRACTIONAL_TERMINAL_ROOT_V3].writable);
+    assert!(!terminal[FRACTIONAL_TERMINAL_ROOT_V3].executable);
+    assert_eq!(
+        terminal[FRACTIONAL_TERMINAL_ROOT_V3].data_length,
+        u32::try_from(FRACTIONAL_CAPABILITY_ROOT_BYTES_V4).unwrap()
+    );
     assert!(terminal[FRACTIONAL_TERMINAL_ACTOR_V3].signer);
+    assert!(!terminal[FRACTIONAL_TERMINAL_ACTOR_V3].writable);
+    assert!(!terminal[FRACTIONAL_TERMINAL_ACTOR_V3].executable);
+    assert!(terminal[FRACTIONAL_TERMINAL_SHARD_MINT_V3].writable);
+    assert!(!terminal[FRACTIONAL_TERMINAL_SHARD_MINT_V3].signer);
+    assert!(terminal[FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3].writable);
+    assert!(!terminal[FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3].signer);
+
+    // The terminal settlement span carries the Custody composition, so its
+    // three program coordinates must be executable and nothing else may be.
+    for coordinate in [
+        TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+        TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3,
+    ] {
+        assert!(terminal[coordinate].executable);
+        assert!(!terminal[coordinate].writable);
+        assert!(!terminal[coordinate].signer);
+    }
+    assert!(terminal[TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3].writable);
+    assert!(terminal[TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3].writable);
+    assert!(terminal[TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3].writable);
 
     // The Product-width tail is resolved from the authenticated terms, so a
     // 258-outcome Market produces a wider Position rule than a 2-outcome one.
