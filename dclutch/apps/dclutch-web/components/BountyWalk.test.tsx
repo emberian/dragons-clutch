@@ -42,10 +42,20 @@ describe('the smoke story and bounty pages speak to the reader', () => {
     expect(bounty).not.toContain('Transition (12)');
   });
 
-  it('labels measured numbers as measurements of the rehearsal, never as constants', () => {
+  it('labels measured numbers as measurements, and says what they were measured against', () => {
     expect(bounty).toContain('each market posts its own number before opening');
     expect(bounty).toContain('895 bytes measured');
-    expect(bounty).toContain('local test network');
+    // The page used to rest its numbers on one past end-to-end run on a local
+    // network. That run is real but its campaign is parked, so a reader cannot
+    // reproduce it — while the stronger claim went unsaid. The walk executes
+    // against the real compiled Resolution and Core programs on every test run
+    // (crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs,
+    // a_silent_relayer_cannot_make_the_market_unresolvable), and 895 is still
+    // the measured single-signer extent at HEAD: the harness measures 991 for
+    // its two-signature form, less one signature (64) and one account key (32).
+    expect(bounty).toContain('it runs against the real programs');
+    expect(bounty).toContain('The numbers below are measured from those runs');
+    expect(bounty).not.toContain('local test network');
   });
 
   it('keeps handwritten instruction bytes off the reader page', () => {

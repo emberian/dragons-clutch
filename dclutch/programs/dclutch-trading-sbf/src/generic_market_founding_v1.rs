@@ -92,7 +92,19 @@ const REALIZE_RAW: usize = 2;
 const CLAIMS_RAW: usize = 3;
 
 const CORE_FOUND_CORE_PROGRAM: usize = 13;
-const CORE_FOUND_TRADING_PROGRAM: usize = 25;
+/// Trading-program index inside the Found window.
+///
+/// Core parses the Found window as its compact 24-account ProjectedFound V2
+/// prefix followed by the Trading program and then its ProgramData
+/// (`core-sbf/generic_founding_v1.rs`, `GenericFoundAccounts::parse`), so the
+/// Trading program is the second-to-last account of the shared fixed span.
+/// Derived from the shared codec count rather than spelled, because a spelled
+/// `25` — the ProgramData slot — refused every composed founding with
+/// `TradingSbfError::Release` before its first CPI: ProgramData is not
+/// executable and its key is not this program's id. The two windows must
+/// disagree nowhere, and the only authority on the fixed span's width both
+/// sides read is `GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1`.
+const CORE_FOUND_TRADING_PROGRAM: usize = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 - 2;
 const CORE_FOUND_MARKET: usize = 1;
 
 const CORE_FOUND_PERMIT_SUFFIX: usize = 0;
