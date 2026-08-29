@@ -321,6 +321,7 @@ struct ActionArm {
 
 struct Fixture {
     shared: NarrowFixtureV2,
+    release_set: [u8; 32],
     activation_cache: Pubkey,
     wrap: ActionArm,
     unwrap: ActionArm,
@@ -591,6 +592,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         test,
         Fixture {
             shared,
+            release_set,
             activation_cache: activation_cache_key,
             wrap,
             unwrap,
@@ -942,6 +944,82 @@ async fn wrap_then_whole_unwrap_restores_the_exact_opening_state() {
         opening[0].data[36..44],
         closing[0].data[36..44],
         "the Mint supply returns to its opening value"
+    );
+}
+
+/// Transfer is a Token-2022 movement and never enters the Claims family route.
+///
+/// A shard transfer moves an already-issued representation between holders. It
+/// creates and destroys no native Claims, so there is nothing for Claims to
+/// authorise and no Claims handler exists for it -- `fractional_atomic_v3`
+/// dispatches only the two open-market actions and the two terminal ones. This
+/// pins that from both directions: the contract routes Transfer to Token-2022
+/// directly, and a Transfer pushed at the family caller is refused rather than
+/// quietly forwarded into Claims.
+#[tokio::test]
+async fn a_transfer_is_refused_by_the_family_caller_and_routed_direct_to_token_2022() {
+    use dclutch_fractional_claim_contract::{
+        FractionalChildRouteV3, plan_fractional_physical_v3,
+    };
+    use dclutch_fractional_claim_kernel::{
+        FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
+        FractionalExposureTermsV2,
+    };
+
+    let (test, fixture) = fixture();
+
+    let transfer = FractionalExposureRequestV2::new(
+        FractionalExposureActionV2::Transfer,
+        FractionalExposureRequestInputV2 {
+            release_set: fixture.release_set,
+            market: fixture.shared.core_market.to_bytes(),
+            product_record: fixture.shared.product.digest,
+            result_domain: fixture.shared.result_domain.digest,
+            terms: fixture.terms_record.digest,
+            token_behavior: fixture.behavior_record.digest,
+            exposure: [0x7a; 32],
+            owner: fixture.actor.to_bytes(),
+            source_token_account: fixture.holder_token.to_bytes(),
+            destination_token_account: [0x79; 32],
+            terminal_digest: [0; 32],
+            expected_revision: ROOT_REVISION,
+            quantity: DENOMINATOR,
+            representation_coordinate: OUTCOME,
+        },
+    )
+    .expect("canonical Fractional transfer request");
+
+    // The contract routes it away from Claims entirely.
+    let terms = FractionalExposureTermsV2::decode(
+        &fixture.terms_record.bytes,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: fixture.terms_record.digest,
+            finalized_terms_id: fixture.terms_record.digest,
+            recomputed_terms_digest: fixture.terms_record.digest,
+            finalized_terms_digest: fixture.terms_record.digest,
+            record_authenticated: true,
+        },
+    )
+    .expect("terms decode");
+    let plan = plan_fractional_physical_v3(terms, transfer).expect("physical transfer plan");
+    assert_eq!(plan.route, FractionalChildRouteV3::Token2022DirectTransfer);
+    assert_eq!(plan.whole_claims, 0, "a transfer moves no native Claims");
+
+    // And the family caller refuses to carry it into Claims.
+    let mut context = test.start_with_context().await;
+    let mut wrapper = Vec::with_capacity(FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES);
+    wrapper.push(0);
+    wrapper.extend_from_slice(&transfer.to_bytes().expect("transfer bytes"));
+    let mut hostile = instruction(&fixture, &fixture.wrap, false);
+    hostile.data = wrapper;
+    let (accepted, _logs, _units, result) = submit(&mut context, hostile).await;
+    assert!(!accepted);
+    assert_eq!(
+        custom_refusal(&result),
+        Some(0x10_B000),
+        "the caller must refuse a Transfer as an unsupported instruction"
     );
 }
 
