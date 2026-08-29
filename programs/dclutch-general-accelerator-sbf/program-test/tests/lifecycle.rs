@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, vec, vec::Vec};
 
 use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
+use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
     AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
@@ -607,7 +608,11 @@ fn real_sbf_fixture(
     let fixed_count = usize::from(
         general_account_profile_fixed_count_v3(controller.action).expect("account geometry"),
     );
-    let mut frame = vec![DUMMY; 18 + fixed_count];
+    // The runtime coordinates start where the contract says they start. This
+    // read `18` until 2026-08-29, which is the same defect class as the frame
+    // count asserted in `assert_execution_evidence`: a restated constant is one
+    // the code can stop agreeing with silently.
+    let mut frame = vec![DUMMY; ADMITTED_RUNTIME_ACCOUNTS_START_V3 + fixed_count];
     *frame.first_mut().expect("authority frame") = authority;
     *frame.get_mut(4).expect("instructions frame") = sysvar::instructions::ID;
     *frame.get_mut(5).expect("Trading frame") = CALLER;
@@ -616,7 +621,7 @@ fn real_sbf_fixture(
         let key = runtime_key(controller.action, coordinate);
         add_account(&mut test, key, CALLER, data.clone());
         *frame
-            .get_mut(18 + usize::from(coordinate))
+            .get_mut(ADMITTED_RUNTIME_ACCOUNTS_START_V3 + usize::from(coordinate))
             .expect("runtime coordinate") = key;
         observed_accounts.push((key, data));
     }
@@ -1521,28 +1526,40 @@ fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcom
     assert_eq!(evidence.outcome_count, outcome_count);
     assert!(evidence.compute_units > 0);
     assert!(evidence.compute_units <= 1_400_000);
-    // NAMED DEBT, and the 2026-08-29 addendum to
-    // `docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md` is the reason
-    // it is worth naming. `instruction_accounts` is the number that document
-    // records per action, and this is the only assertion standing behind it:
-    // `> 20` admits every wrong answer above twenty. The counts reach the
-    // document through the `eprintln!` below, by hand, so when `f581af6b`
-    // widened Custody `InitializeReplay` this harness stayed green while the
-    // document stopped describing the code. What caught it was a control in
-    // another crate that had no business being the first line of defence.
+    // The frame width is DERIVED here, not restated, and the 2026-08-29
+    // addendum to `docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md`
+    // is why that matters. `instruction_accounts` is the number that document
+    // records per action, and the only assertion that used to stand behind it
+    // was `> 20`, which admits every wrong answer above twenty. The counts
+    // reach the document through the `eprintln!` below, by hand. So when
+    // `f581af6b` widened Custody `InitializeReplay` from 12 to 13 accounts,
+    // this harness stayed green while the document stopped describing the
+    // code, for a day; what caught it was a control in another crate that had
+    // no business being the first line of defence.
     //
-    // The fix is an exact assertion that DERIVES rather than restates:
-    //   2 + ADMITTED_RUNTIME_ACCOUNTS_START_V3
-    //     + general_account_profile_fixed_count_v3(action)
-    //     + evidence.scratch_pages
-    // every term already available here -- `dclutch-execution-strategy-contract`
-    // is a dependency, the count is imported above, and the page span is
-    // measured in `evidence` itself. It was left undone deliberately rather
-    // than overlooked: it changes a shared General harness, and the same pass
-    // should replace the restated `18` in `build_fixture`'s
-    // `vec![DUMMY; 18 + fixed_count]` with that constant, which is the same
-    // defect class this whole addendum is about.
-    assert!(evidence.instruction_accounts > 20);
+    // Every term below is already a fact this test holds, so nothing is
+    // asserted twice from two places: two leading accounts, the fixed runtime
+    // start owned by `dclutch-execution-strategy-contract`, the per-action
+    // profile width owned by `dclutch-general-adapter-contract`, and the page
+    // span the run actually measured. A frame that drifts by one now fails
+    // here, at the ELF, naming both numbers -- which is the only place that can
+    // notice before the evidence document goes stale again.
+    let expected_accounts = 2_usize
+        .saturating_add(ADMITTED_RUNTIME_ACCOUNTS_START_V3)
+        .saturating_add(usize::from(
+            general_account_profile_fixed_count_v3(action).expect("account geometry"),
+        ))
+        .saturating_add(usize::try_from(evidence.scratch_pages).expect("scratch page span"));
+    assert_eq!(
+        evidence.instruction_accounts, expected_accounts,
+        "{action:?} at N={outcome_count} built a {}-account frame; the profile derives {expected_accounts} \
+         (2 + start {ADMITTED_RUNTIME_ACCOUNTS_START_V3} + fixed {} + scratch pages {}). \
+         If the frame legitimately moved, re-run the campaign and move the evidence document with it -- \
+         do NOT edit this number to make the harness green.",
+        evidence.instruction_accounts,
+        general_account_profile_fixed_count_v3(action).expect("account geometry"),
+        evidence.scratch_pages,
+    );
     // This readonly CPI harness deliberately submits a legacy message so the
     // accelerator can see every scratch page directly. Some N=258 actions
     // exceed the network packet ceiling in this diagnostic transport; the
