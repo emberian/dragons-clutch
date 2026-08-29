@@ -27,9 +27,8 @@ use dclutch_capability_program_contract::hot_v3::{
 };
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_claims_svm::liability_basis_state_v2::{
-    LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionInputV2,
-    LiabilityBasisPositionViewV2, encode_liability_basis_market_into_v2,
-    encode_liability_basis_position_into_v2,
+    LiabilityBasisMarketInputV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    encode_liability_basis_market_into_v2,
 };
 use dclutch_fractional_atomic_program_test::narrow_fixture::{
     NarrowFixtureInputV2, NarrowFixtureV2, NarrowPositionV2, compile_narrow_fixture_v2,
@@ -606,6 +605,10 @@ fn scenario() -> Scenario {
         reserve_owner: COUNTERPARTY,
         funded_coordinate: FUNDED_COORDINATE,
         funded_balance: 100,
+        // A Dealer trade is against Positions that have already been transacted,
+        // and the projection refuses revision zero outright. The fixture plants
+        // the live revision itself, so no Dealer file re-encodes a Position.
+        position_revision: LIVE_POSITION_REVISION,
         reserve_balance: 100,
         terminal: None,
         rent_beneficiary: BENEFICIARY,
@@ -887,27 +890,21 @@ fn live_claims_graph(fixture: &NarrowFixtureV2) -> LiveClaimsGraph {
         &mut market,
     )
     .expect("live aggregate encodes");
-    let relive = |position: &NarrowPositionV2| {
+    // The Positions are taken as the fixture planted them: it opens both at
+    // `position_revision`, so the campaign only has to read their coordinates.
+    let observe = |position: &NarrowPositionV2| {
         let view = LiabilityBasisPositionViewV2::decode(&position.bytes).expect("position decodes");
+        assert_eq!(
+            view.revision, LIVE_POSITION_REVISION,
+            "fixture Positions open at the revision the campaign trades against"
+        );
         let balances = (0..fixture.outcome_count)
             .map(|claim| view.balance(&position.bytes, claim).expect("balance"))
             .collect::<Vec<_>>();
-        let mut bytes = vec![0_u8; position.bytes.len()];
-        encode_liability_basis_position_into_v2(
-            LiabilityBasisPositionInputV2 {
-                revision: LIVE_POSITION_REVISION,
-                market_account: view.market_account,
-                owner: view.owner,
-                basis_id: view.basis_id,
-            },
-            &balances,
-            &mut bytes,
-        )
-        .expect("live position encodes");
-        (bytes, balances)
+        (position.bytes.clone(), balances)
     };
-    let (dealer_position, dealer_balances) = relive(&fixture.actor_position);
-    let (counterparty_position, counterparty_balances) = relive(&fixture.reserve_position);
+    let (dealer_position, dealer_balances) = observe(&fixture.actor_position);
+    let (counterparty_position, counterparty_balances) = observe(&fixture.reserve_position);
     LiveClaimsGraph {
         market,
         dealer_position,
