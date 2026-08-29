@@ -197,7 +197,7 @@ pub fn build_general_invocation_v1(
 
 fn artifact_graph_digest_v1(artifacts: GeneralHotArtifactDigestsV3) -> [u8; 32] {
     let mut bytes = [0_u8; 11 * 32];
-    for (index, identity) in [
+    for (chunk, identity) in bytes.chunks_exact_mut(32).zip([
         artifacts.program_set,
         artifacts.descriptor,
         artifacts.config,
@@ -209,12 +209,8 @@ fn artifact_graph_digest_v1(artifacts: GeneralHotArtifactDigestsV3) -> [u8; 32] 
         artifacts.admission,
         artifacts.transition,
         artifacts.effect,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let start = index * 32;
-        bytes[start..start + 32].copy_from_slice(&identity);
+    ]) {
+        chunk.copy_from_slice(&identity);
     }
     hashv(&[GENERAL_INVOCATION_ARTIFACT_GRAPH_DOMAIN_V1, &bytes]).to_bytes()
 }
