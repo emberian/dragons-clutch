@@ -2632,6 +2632,12 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         WritePolicyV1::ReadsOnly
     };
     let mut rpc = Rpc::connect_cluster(&args.origin, policy)?;
+    let observed_genesis_hash = rpc
+        .call("getGenesisHash", &json!([]))?
+        .as_str()
+        .ok_or_else(|| Error::new("getGenesisHash result was not a string"))?
+        .to_owned();
+    args.origin.authenticate_genesis(&observed_genesis_hash)?;
     authenticate_checked_live_substrate(&mut rpc, &plan)?;
 
     // Key-free detectors first. Their authenticated result is fsynced before
@@ -2671,6 +2677,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let mut report = json!({
         "schema": "dclutch-successor-campaign-report-v1",
         "cluster": args.origin.label(),
+        "genesis_hash": observed_genesis_hash,
         "rpc_url": args.origin.redacted_url(),
         "mode": if args.execute { "execute" } else { "preflight (reads only, enforced)" },
         "plan": args.plan_path.display().to_string(),
@@ -2885,6 +2892,8 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             .as_deref()
             .ok_or_else(|| Error::new("founding journal recovery omitted Market digest"))?;
         let binding = crate::market::founding_submission_journal::FoundingSubmissionBindingV1::new(
+            args.origin.label(),
+            &observed_genesis_hash,
             evidence_path,
             args.origin.redacted_url(),
             plan_sha256.clone(),
@@ -3206,31 +3215,27 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             }
             Ok(())
         };
-        let mut recorder = match &args.origin {
-            ClusterOriginV1::AcknowledgedDevnet { .. } => {
-                let evidence_path = args
-                    .evidence_path
-                    .as_deref()
-                    .ok_or_else(|| Error::new("devnet founding execution omitted evidence path"))?;
-                let market_sha256 = market_sha256
-                    .as_deref()
-                    .ok_or_else(|| Error::new("devnet founding execution omitted Market digest"))?;
-                let binding =
-                    crate::market::founding_submission_journal::FoundingSubmissionBindingV1::new(
-                        evidence_path,
-                        args.origin.redacted_url(),
-                        plan_sha256.clone(),
-                        market_sha256,
-                        payer.pubkey(),
-                    )?;
-                Some(crate::market::FoundingSubmissionRecorderV1::new(
-                    binding,
-                    &mut founding_submission_journals,
-                    &mut persist_journals,
-                )?)
-            }
-            ClusterOriginV1::Loopback { .. } => None,
-        };
+        let evidence_path = args
+            .evidence_path
+            .as_deref()
+            .ok_or_else(|| Error::new("founding execution omitted evidence path"))?;
+        let market_sha256 = market_sha256
+            .as_deref()
+            .ok_or_else(|| Error::new("founding execution omitted Market digest"))?;
+        let binding = crate::market::founding_submission_journal::FoundingSubmissionBindingV1::new(
+            args.origin.label(),
+            &observed_genesis_hash,
+            evidence_path,
+            args.origin.redacted_url(),
+            plan_sha256.clone(),
+            market_sha256,
+            payer.pubkey(),
+        )?;
+        let mut recorder = Some(crate::market::FoundingSubmissionRecorderV1::new(
+            binding,
+            &mut founding_submission_journals,
+            &mut persist_journals,
+        )?);
         execute_stages(
             &mut rpc,
             &plan,
