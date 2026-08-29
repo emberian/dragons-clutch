@@ -183,6 +183,19 @@ exist. Integration still requires:
 Until those exist, the current 14-action release remains refused and this code
 must not be described as a complete executable or deployed Fractional market.
 
+## Superseded 2026-08-29 by `FRACTIONAL_LIFECYCLE_2026_08_29.md`
+
+The section below records the first execution and the width wall as they stood
+mid-morning. Both have moved since, so read the lifecycle doc instead:
+
+* the 256/258 wall was ruled deliberate and closed — the campaign compiles its
+  own geometry rather than widening the terms or the shared fixture;
+* all four published actions, including both terminal ones, now execute and
+  commit;
+* the refusal blamed on width below turned out to be a shipped defect that made
+  terminal settlement dead for every representation, fixed in `4953bada`;
+* the operative width bound is 64, not 256 and not the arithmetic maximum 98.
+
 ## Update 2026-08-29: first execution, and the width wall it found
 
 `programs/dclutch-claims-sbf/program-test/fractional-atomic/` now executes the
