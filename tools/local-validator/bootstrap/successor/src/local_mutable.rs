@@ -1339,14 +1339,34 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     let recipient_secret =
         crate::campaign::read_keypair_file(&recipient_path, "retirement-beneficiary")?;
     let recipient = Keypair::new_from_array(recipient_secret).pubkey();
-    let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
-        &plan_path,
-        &required(rpc_url, "--rpc-url")?,
-        registry,
-        Some(fee_basis_points),
-        Some(recipient),
-    )?;
-    let market = crate::market::demo_market_input(registry, direct.compiler())?;
+    let rpc_url = required(rpc_url, "--rpc-url")?;
+    // Capability selection follows the split-founding precedent: an
+    // environment toggle rather than a new required flag, so every existing
+    // caller keeps compiling the Direct-selected demo market unchanged.
+    let market = match std::env::var("DCLUTCH_MARKET_CAPABILITY") {
+        Ok(family) if family == "general" => crate::general_market::demo_general_market_input(
+            &plan_path,
+            &rpc_url,
+            registry,
+            recipient,
+        )?,
+        Ok(family) if family != "direct" => {
+            return Err(Error::new(format!(
+                "DCLUTCH_MARKET_CAPABILITY={family} names no selectable capability compiler; \
+                 this command compiles direct (default) or general"
+            )));
+        }
+        _ => {
+            let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
+                &plan_path,
+                &rpc_url,
+                registry,
+                Some(fee_basis_points),
+                Some(recipient),
+            )?;
+            crate::market::demo_market_input(registry, direct.compiler())?
+        }
+    };
     let mut stdout = std::io::stdout();
     serde_json::to_writer_pretty(&mut stdout, &market)?;
     stdout.write_all(b"\n")?;

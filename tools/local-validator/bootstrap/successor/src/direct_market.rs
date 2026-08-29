@@ -143,10 +143,13 @@ impl DirectDeploymentWidthsV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectDevnetPolicyObservationV1 {
-    finalized_slot: u64,
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DirectDevnetPolicyObservationV1 {
+    pub(crate) finalized_slot: u64,
     root_rent_minimum_lamports: u64,
+    /// The canonical finalized Rent, so a family compiler can quote its own
+    /// root width from the same snapshot Direct quoted 256 bytes from.
+    pub(crate) rent: Rent,
     deployment: DirectDeploymentWidthsV1,
 }
 
@@ -335,7 +338,7 @@ fn authenticate_local_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result<
         .ok_or_else(|| Error::new("checked local mutable set omitted every deployment slot"))
 }
 
-fn authenticated_resolution_release_v1(plan: &SuccessorPlan) -> Result<[u8; 32]> {
+pub(crate) fn authenticated_resolution_release_v1(plan: &SuccessorPlan) -> Result<[u8; 32]> {
     decode_hex(&plan.resolution.semantic_release_id)?
         .try_into()
         .map_err(|_| Error::new("Resolution semantic release ID was not exactly 32 bytes"))
@@ -444,6 +447,7 @@ fn observe_policy_v1<R: DirectFinalizedSnapshotV1>(
             "finalized Rent account did not have canonical sysvar ownership",
         ));
     }
+    let rent = canonical_rent_v1(&rent_account.data)?;
     let root_rent_minimum_lamports = direct_root_rent_minimum_v1(&rent_account.data)?;
     let mut trading_programdata_bytes = None;
     let mut claims_programdata_bytes = None;
@@ -468,6 +472,7 @@ fn observe_policy_v1<R: DirectFinalizedSnapshotV1>(
     Ok(DirectDevnetPolicyObservationV1 {
         finalized_slot,
         root_rent_minimum_lamports,
+        rent,
         deployment: DirectDeploymentWidthsV1 {
             trading_programdata_bytes: trading_programdata_bytes
                 .ok_or_else(|| Error::new("live deployment snapshot omitted Trading width"))?,
@@ -479,7 +484,7 @@ fn observe_policy_v1<R: DirectFinalizedSnapshotV1>(
     })
 }
 
-fn direct_root_rent_minimum_v1(rent_sysvar: &[u8]) -> Result<u64> {
+fn canonical_rent_v1(rent_sysvar: &[u8]) -> Result<Rent> {
     let rent: Rent = bincode::deserialize(rent_sysvar)
         .map_err(|error| Error::new(format!("finalized Rent sysvar: {error}")))?;
     if bincode::serialize(&rent)
@@ -490,11 +495,55 @@ fn direct_root_rent_minimum_v1(rent_sysvar: &[u8]) -> Result<u64> {
             "finalized Rent sysvar was not its exact canonical body",
         ));
     }
-    let minimum = rent.minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1);
+    Ok(rent)
+}
+
+fn direct_root_rent_minimum_v1(rent_sysvar: &[u8]) -> Result<u64> {
+    let minimum = canonical_rent_v1(rent_sysvar)?.minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1);
     if minimum == 0 {
         return Err(Error::new("finalized 256-byte Direct root Rent was zero"));
     }
     Ok(minimum)
+}
+
+impl DirectDevnetPolicyObservationV1 {
+    /// Exact Rent quote for one capability-root width from this snapshot.
+    pub(crate) fn root_rent_minimum_for_width_v1(&self, root_bytes: usize) -> Result<u64> {
+        let minimum = self.rent.minimum_balance(root_bytes);
+        if minimum == 0 {
+            return Err(Error::new(format!(
+                "finalized {root_bytes}-byte capability-root Rent was zero"
+            )));
+        }
+        Ok(minimum)
+    }
+
+    /// The finite prepaid-lazy activation deadline this snapshot anchors.
+    pub(crate) fn activation_deadline_slot_v1(&self) -> Result<u64> {
+        activation_deadline_v1(self.finalized_slot)
+    }
+}
+
+/// Read-only loopback observation for ANY capability compiler: the
+/// authenticated local plan plus one finalized policy snapshot. Direct's
+/// `load_local` and every family-neutral market compiler share this single
+/// author for the plan/floor/snapshot discipline.
+pub(crate) fn observe_local_market_policy_v1(
+    plan_path: &Path,
+    rpc_url: &str,
+    registry: Pubkey,
+) -> Result<(SuccessorPlan, DirectDevnetPolicyObservationV1)> {
+    let origin = ClusterOriginV1::parse(rpc_url, None)?;
+    if !matches!(origin, ClusterOriginV1::Loopback { .. }) {
+        return Err(Error::new(
+            "the checked-mutable market planner is localhost-only",
+        ));
+    }
+    let plan = read_exact_json_v1::<SuccessorPlan>(plan_path, "successor plan")?;
+    let floor = authenticate_local_plan_v1(&plan, registry)?;
+    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let observation = observe_policy_v1(&mut rpc, &plan, floor)?;
+    Ok((plan, observation))
 }
 
 fn authenticate_live_role_v1(
@@ -610,17 +659,8 @@ impl DirectMarketCompilerOwnedV1 {
         fee_basis_points: Option<u16>,
         fee_recipient: Option<Pubkey>,
     ) -> Result<Self> {
-        let origin = ClusterOriginV1::parse(rpc_url, None)?;
-        if !matches!(origin, ClusterOriginV1::Loopback { .. }) {
-            return Err(Error::new(
-                "the checked-mutable Direct planner is localhost-only",
-            ));
-        }
-        let plan = read_exact_json_v1::<SuccessorPlan>(plan_path, "successor plan")?;
-        let floor = authenticate_local_plan_v1(&plan, registry)?;
         let fee = DirectFeeSelectionV1::explicit(fee_basis_points, fee_recipient)?;
-        let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
-        let observation = observe_policy_v1(&mut rpc, &plan, floor)?;
+        let (plan, observation) = observe_local_market_policy_v1(plan_path, rpc_url, registry)?;
         Ok(Self {
             deployment: observation.deployment,
             fee,

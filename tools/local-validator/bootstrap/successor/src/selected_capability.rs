@@ -216,6 +216,132 @@ fn capability_content(value: [u8; 32]) -> Result<CapabilityContentId> {
         .map_err(|error| Error::new(format!("capability content: {error:?}")))
 }
 
+/// Derive the manifest entry one serialized closure payload determines.
+pub(crate) fn payload_manifest_entry_v1(
+    payload: &crate::model::SelectedCapabilityV1,
+) -> Result<CapabilityEntryV1> {
+    let program_set = crate::runtime::decode_hex(&payload.program_set_hex)?;
+    let selected_descriptor = crate::runtime::decode_hex(&payload.selected_descriptor_hex)?;
+    let config = crate::runtime::decode_hex(&payload.config_hex)?;
+    selected_manifest_entry_v1(SelectedCapabilityClosureV1 {
+        program_set: &program_set,
+        selected_descriptor: &selected_descriptor,
+        config: &config,
+        activation_deadline_slot: payload.activation_deadline_slot,
+        root_rent_minimum_lamports: payload.root_rent_minimum_lamports,
+    })
+}
+
+/// Attach one compiled family closure to a market input.
+///
+/// Merges the entry the payload's own bytes derive into the input's canonical
+/// three-entry Resolution base, records the selected index, and stores the
+/// payload. The input must not already carry a capability closure of either
+/// shape — one selected trade capability per Market.
+pub(crate) fn attach_selected_capability_v1(
+    input: &mut crate::model::MarketRunInput,
+    payload: crate::model::SelectedCapabilityV1,
+) -> Result<()> {
+    if input.direct_capability.is_some() || input.selected_capability.is_some() {
+        return Err(Error::new(
+            "a market input carries exactly one selected-capability closure, and this one \
+             already has one",
+        ));
+    }
+    let entry = payload_manifest_entry_v1(&payload)?;
+    let base = crate::runtime::decode_hex(&input.capability_manifest_hex)?;
+    let (manifest, selected_manifest_entry_index) = merge_selected_manifest_v1(&base, entry)?;
+    let mut payload = payload;
+    payload.selected_manifest_entry_index = selected_manifest_entry_index;
+    input.capability_manifest_hex = crate::plan::hex(&manifest);
+    input.selected_capability = Some(payload);
+    validate_selected_capability_input_v1(input)
+}
+
+/// Validate one market input carrying a family-neutral selected closure.
+///
+/// The entry is re-derived from the payload's own bytes and the manifest must
+/// carry exactly it at the recorded index; the publication must be nonempty;
+/// every record label must be unique and end in `_record` so the founding
+/// checkpoint's record-graph census re-authenticates the whole closure.
+pub(crate) fn validate_selected_capability_input_v1(
+    input: &crate::model::MarketRunInput,
+) -> Result<()> {
+    let payload = input
+        .selected_capability
+        .as_ref()
+        .ok_or_else(|| Error::new("market input omitted its selected-capability closure"))?;
+    if input.direct_capability.is_some() {
+        return Err(Error::new(
+            "a market input carries exactly one selected-capability closure; this one carries \
+             both the Direct closure and a family-neutral closure",
+        ));
+    }
+    if payload.family.is_empty() {
+        return Err(Error::new("selected capability must name its family"));
+    }
+    if crate::runtime::decode_hex(&payload.publication_hex)?.is_empty() {
+        return Err(Error::new(
+            "selected capability omitted its canonical publication bytes",
+        ));
+    }
+    let mut labels = std::collections::BTreeSet::new();
+    for record in &payload.records {
+        if !record.label.ends_with("_record") {
+            return Err(Error::new(format!(
+                "selected-capability record label {} must end in _record so the founding \
+                 checkpoint's record-graph census covers it",
+                record.label
+            )));
+        }
+        if !labels.insert(record.label.as_str()) {
+            return Err(Error::new(format!(
+                "selected-capability record label {} repeats",
+                record.label
+            )));
+        }
+        let _ = crate::runtime::decode_hex(&record.schema_hex)?;
+        if crate::runtime::decode_hex(&record.body_hex)?.is_empty() {
+            return Err(Error::new(format!(
+                "selected-capability record {} carried no body",
+                record.label
+            )));
+        }
+    }
+    let entry = payload_manifest_entry_v1(payload)?;
+    let manifest = crate::runtime::decode_hex(&input.capability_manifest_hex)?;
+    validate_selected_manifest_v1(&manifest, entry, payload.selected_manifest_entry_index)
+}
+
+/// The selected entry's index for either closure shape.
+pub(crate) fn selected_manifest_entry_index_v1(
+    input: &crate::model::MarketRunInput,
+) -> Result<u16> {
+    match (&input.direct_capability, &input.selected_capability) {
+        (Some(direct), None) => Ok(direct.selected_manifest_entry_index),
+        (None, Some(selected)) => Ok(selected.selected_manifest_entry_index),
+        _ => Err(Error::new(
+            "market input must carry exactly one selected-capability closure",
+        )),
+    }
+}
+
+/// The selected entry's kind for either closure shape, read from the
+/// validated manifest at the recorded index.
+pub(crate) fn selected_capability_kind_v1(
+    input: &crate::model::MarketRunInput,
+) -> Result<[u8; 32]> {
+    let index = selected_manifest_entry_index_v1(input)?;
+    let manifest_bytes = crate::runtime::decode_hex(&input.capability_manifest_hex)?;
+    let manifest = CapabilityManifestV1::decode(&manifest_bytes)
+        .map_err(|error| Error::new(format!("selected-capable manifest: {error:?}")))?;
+    Ok(manifest
+        .entry(index)
+        .map_err(|error| Error::new(format!("selected manifest entry: {error:?}")))?
+        .kind_id()
+        .to_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

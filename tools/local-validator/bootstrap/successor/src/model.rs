@@ -119,7 +119,55 @@ pub(crate) struct MarketRunInput {
     /// while an in-process producer is assembling the Resolution base and is
     /// refused by `validate_market_input`.
     pub(crate) direct_capability: Option<DirectMarketCapabilityV1>,
+    /// Family-neutral selected-capability closure for the one non-Resolution
+    /// manifest entry, in the byte shape the selection seam consumes. Exactly
+    /// one of this and `direct_capability` must be present:
+    /// `validate_market_input` refuses zero closures and refuses two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_capability: Option<SelectedCapabilityV1>,
     pub(crate) linked_basis_hex: String,
+}
+
+/// One Registry record a selected capability's publication chain finalizes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectedCapabilityRecordV1 {
+    /// Operator-facing name; also the founding-evidence label, so it must be
+    /// unique within one closure.
+    pub(crate) label: String,
+    /// Schema/release identity the record finalizes under, read off the
+    /// release's own artifacts by the family compiler.
+    pub(crate) schema_hex: String,
+    /// Exact semantic bytes.
+    pub(crate) body_hex: String,
+}
+
+/// One family-neutral selected-capability closure, serialized.
+///
+/// Every byte field is the family release compiler's own output; the driver
+/// derives the manifest entry from these through the selection seam
+/// (`selected_capability.rs`) and restates nothing. An additional family is
+/// this payload plus its publication — not new driver code.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectedCapabilityV1 {
+    /// Operator-facing family label (for example "general").
+    pub(crate) family: String,
+    /// Exact `CapabilityProgramSetV2` bytes.
+    pub(crate) program_set_hex: String,
+    /// The selected V4 descriptor authoring the entry's kind, capacity
+    /// profile, root schema, and derivation policy.
+    pub(crate) selected_descriptor_hex: String,
+    /// Exact config record body; must be derivable before the Market exists
+    /// (the seam's fixed-point invariant).
+    pub(crate) config_hex: String,
+    /// The family's canonical Market-bindable publication bytes.
+    pub(crate) publication_hex: String,
+    /// Every record the Registry must finalize for this release.
+    pub(crate) records: Vec<SelectedCapabilityRecordV1>,
+    pub(crate) activation_deadline_slot: u64,
+    pub(crate) root_rent_minimum_lamports: u64,
+    pub(crate) selected_manifest_entry_index: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

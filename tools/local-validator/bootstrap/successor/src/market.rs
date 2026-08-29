@@ -42,9 +42,9 @@ use dclutch_custody_contract::{
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
-use dclutch_direct_codec::{
-    COMPILED_DIRECT_RELEASE_ID_V1, execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
-};
+use dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1;
+#[cfg(test)]
+use dclutch_direct_codec::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3;
 use dclutch_market_core_codec::{
     Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
@@ -1498,10 +1498,22 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
         .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
     if manifest.entry_count() != 4 {
         return Err(Error::new(
-            "capability manifest must contain one Direct entry and three Resolution companions",
+            "capability manifest must contain one selected trade entry and three Resolution \
+             companions",
         ));
     }
-    validate_direct_market_capability_v1(input)?;
+    match (&input.direct_capability, &input.selected_capability) {
+        (Some(_), None) => validate_direct_market_capability_v1(input)?,
+        (None, Some(_)) => {
+            crate::selected_capability::validate_selected_capability_input_v1(input)?;
+        }
+        _ => {
+            return Err(Error::new(
+                "market input must carry exactly one selected-capability closure: the Direct \
+                 closure or a family-neutral closure",
+            ));
+        }
+    }
     // The Product's `liability_basis_id` is the semantic identity of a real
     // published `ProductBasisV3`. Founding reads that record and refuses any
     // Product whose declared liability basis is not the one it links, so the
@@ -1595,8 +1607,9 @@ struct MarketRecords {
     provider_release: PublishedRecord,
     adapter_config: PublishedRecord,
     sponsored_push_release: Option<PublishedRecord>,
-    /// Exact Registry closure selected by the manifest's Direct entry.
-    direct: BTreeMap<&'static str, PublishedRecord>,
+    /// Exact Registry closure selected by the manifest's one trade entry —
+    /// Direct's typed record set, or a family-neutral closure's record list.
+    direct: BTreeMap<String, PublishedRecord>,
     principal_cap_sets: u64,
 }
 
@@ -1982,9 +1995,9 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
             account_evidence(recovery.raw, &account),
         );
     }
-    for (&label, record) in &records.direct {
+    for (label, record) in &records.direct {
         let account = rpc.required_account(record.raw, label)?;
-        accounts.insert(label.into(), account_evidence(record.raw, &account));
+        accounts.insert(label.clone(), account_evidence(record.raw, &account));
     }
     let mut completed = vec![
             "created an exact Token-2022 collateral Mint and funded raw-atom wallet with ephemeral local keys".into(),
@@ -2036,11 +2049,8 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
         accounts,
         founding_custody_context: hex(&founding_custody_context
             .ok_or_else(|| Error::new("founding lane omitted its custody context"))?),
-        direct_selected_manifest_entry_index: input
-            .direct_capability
-            .as_ref()
-            .ok_or_else(|| Error::new("founding evidence omitted its Direct payload"))?
-            .selected_manifest_entry_index,
+        direct_selected_manifest_entry_index:
+            crate::selected_capability::selected_manifest_entry_index_v1(input)?,
         local_participant_fixture_liquidity,
     })
 }
@@ -3153,30 +3163,76 @@ fn publish_market_records(
             transactions,
         )?)
     };
-    let mut direct = BTreeMap::new();
+    let mut direct: BTreeMap<String, PublishedRecord> = BTreeMap::new();
     let linked_basis_bytes = decode_hex(&input.linked_basis_hex)?;
-    for record in crate::direct_market::direct_publication_records_v1(
-        input,
-        dclutch_representation_composition_v3_operator::native_categorical_v1::NativeCategoricalCompositionInputV1 {
-            market: terminal_market.to_bytes(),
-            release_set,
-            product_record_bytes: &product_body,
-            result_domain_bytes: &domain_body,
-            portfolio_bytes: &portfolio_body,
-            product_basis_bytes: &linked_basis_bytes,
-        },
-    )? {
-        let published = publish_record(
-            rpc,
-            registry,
-            payer,
-            record.schema,
-            &record.body,
-            None,
-            transactions,
-        )?;
-        if direct.insert(record.label, published).is_some() {
-            return Err(Error::new("Direct publication repeated an evidence label"));
+    let native_composition = dclutch_representation_composition_v3_operator::native_categorical_v1::NativeCategoricalCompositionInputV1 {
+        market: terminal_market.to_bytes(),
+        release_set,
+        product_record_bytes: &product_body,
+        result_domain_bytes: &domain_body,
+        portfolio_bytes: &portfolio_body,
+        product_basis_bytes: &linked_basis_bytes,
+    };
+    if let Some(selected) = &input.selected_capability {
+        // The family-neutral closure: its own record list, labels already
+        // validated unique and `_record`-suffixed, plus the four terminal
+        // composition records every market's terminal path requires.
+        for record in &selected.records {
+            let published = publish_record(
+                rpc,
+                registry,
+                payer,
+                hex32(&record.schema_hex)?,
+                &decode_hex(&record.body_hex)?,
+                None,
+                transactions,
+            )?;
+            if direct.insert(record.label.clone(), published).is_some() {
+                return Err(Error::new(
+                    "selected-capability publication repeated an evidence label",
+                ));
+            }
+        }
+        let native = dclutch_representation_composition_v3_operator::native_categorical_v1::compile_native_categorical_composition_v1(native_composition)
+            .map_err(|error| Error::new(format!("native categorical composition: {error:?}")))?;
+        for (label, target) in [
+            "terminal_composition_descriptor_record",
+            "terminal_composition_graph_record",
+            "terminal_composition_translation_record",
+            "terminal_composition_exposure_record",
+        ]
+        .into_iter()
+        .zip(native.publication_targets())
+        {
+            let published = publish_record(
+                rpc,
+                registry,
+                payer,
+                target.schema_id,
+                target.bytes,
+                None,
+                transactions,
+            )?;
+            if direct.insert(label.to_string(), published).is_some() {
+                return Err(Error::new(
+                    "selected-capability publication repeated an evidence label",
+                ));
+            }
+        }
+    } else {
+        for record in crate::direct_market::direct_publication_records_v1(input, native_composition)? {
+            let published = publish_record(
+                rpc,
+                registry,
+                payer,
+                record.schema,
+                &record.body,
+                None,
+                transactions,
+            )?;
+            if direct.insert(record.label.to_string(), published).is_some() {
+                return Err(Error::new("Direct publication repeated an evidence label"));
+            }
         }
     }
     let manifest = publish_record(
@@ -4422,11 +4478,19 @@ fn manifest_required_union_v1(entry_count: u16) -> Result<u16> {
     }
 }
 
-fn direct_founding_controller_masks_v1(
+/// Split the founding manifest into its Resolution-companion mask and the one
+/// selected trade entry the Trading controller funds.
+///
+/// The selected kind is the one the input's own capability closure derived —
+/// Direct's, or a family-neutral closure's — so this census is
+/// capability-neutral: exactly one entry of the selected kind whose release is
+/// not the Resolution release, and three exact Resolution companions.
+fn selected_founding_controller_masks_v1(
     manifest: CapabilityManifestV1<'_>,
     resolution_release: [u8; 32],
+    selected_kind: [u8; 32],
 ) -> Result<(u16, [u16; 2])> {
-    let mut direct_index = None;
+    let mut selected_index = None;
     let mut resolution_mask = 0_u16;
     for entry_index in 0..manifest.entry_count() {
         let entry = manifest
@@ -4435,12 +4499,13 @@ fn direct_founding_controller_masks_v1(
         let bit = 1_u16
             .checked_shl(u32::from(entry_index))
             .ok_or_else(|| Error::new("capability entry mask overflow"))?;
-        if entry.kind_id().to_bytes() == DIRECT_SUCCESSOR_KIND_ID_V3 {
-            if direct_index.replace(entry_index).is_some()
+        if entry.kind_id().to_bytes() == selected_kind {
+            if selected_index.replace(entry_index).is_some()
                 || entry.release_id().to_bytes() == resolution_release
             {
                 return Err(Error::new(
-                    "the founding manifest must contain exactly one non-Resolution Direct entry",
+                    "the founding manifest must contain exactly one non-Resolution selected \
+                     trade entry",
                 ));
             }
         } else if entry.release_id().to_bytes() == resolution_release {
@@ -4451,11 +4516,12 @@ fn direct_founding_controller_masks_v1(
             )));
         }
     }
-    let direct_index = direct_index
-        .ok_or_else(|| Error::new("the founding manifest omitted its Direct capability entry"))?;
+    let selected_index = selected_index.ok_or_else(|| {
+        Error::new("the founding manifest omitted its selected capability entry")
+    })?;
     let trading_mask = 1_u16
-        .checked_shl(u32::from(direct_index))
-        .ok_or_else(|| Error::new("Direct capability entry mask overflow"))?;
+        .checked_shl(u32::from(selected_index))
+        .ok_or_else(|| Error::new("selected capability entry mask overflow"))?;
     let required_union = manifest_required_union_v1(manifest.entry_count())?;
     if manifest.entry_count() != 4
         || resolution_mask.count_ones() != 3
@@ -4463,10 +4529,10 @@ fn direct_founding_controller_masks_v1(
         || resolution_mask | trading_mask != required_union
     {
         return Err(Error::new(
-            "Direct founding requires one Direct entry and three exact Resolution companions",
+            "founding requires one selected trade entry and three exact Resolution companions",
         ));
     }
-    Ok((direct_index, [resolution_mask, trading_mask]))
+    Ok((selected_index, [resolution_mask, trading_mask]))
 }
 
 /// Derive one founding's complete coordinate set from the finalized graph.
@@ -4617,7 +4683,11 @@ fn derive_founding_coordinates(
     let resolution = pubkey(&plan.resolution.program_id)?;
     let resolution_release = hex32(&plan.resolution.semantic_release_id)?;
     let (capability_entry_index, [resolution_mask, trading_mask]) =
-        direct_founding_controller_masks_v1(manifest, resolution_release)?;
+        selected_founding_controller_masks_v1(
+            manifest,
+            resolution_release,
+            crate::selected_capability::selected_capability_kind_v1(input)?,
+        )?;
     let mut subsets = vec![(resolution_mask, resolution), (trading_mask, trading)];
     subsets.sort_by_key(|(mask, _)| mask.trailing_zeros());
     let mut funding_ledgers = Vec::with_capacity(subsets.len());
@@ -11208,6 +11278,19 @@ pub(crate) fn demo_market_input(
     registry: Pubkey,
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<MarketRunInput> {
+    let mut input = demo_market_input_base(registry, direct.resolution_release)?;
+    attach_direct_market_capability_v1(&mut input, direct)?;
+    validate_market_input(&input)?;
+    Ok(input)
+}
+
+/// The demo market's capability-free graph. See `demo_market_input` for the
+/// market itself; a family-neutral caller attaches its own selected closure
+/// to this base through the selection seam.
+pub(crate) fn demo_market_input_base(
+    registry: Pubkey,
+    resolution_release: [u8; 32],
+) -> Result<MarketRunInput> {
     use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
 
     // The release this Market resolves against is the LOCAL-VALIDATOR
@@ -11226,7 +11309,7 @@ pub(crate) fn demo_market_input(
     // publication (TWIN's finding: a window forced to one instant is a market
     // nobody can resolve), and `max_age_seconds` is the fixture's declared
     // shelf life, not a market parameter — see the shared core for both.
-    pyth_market_input(
+    pyth_market_input_base(
         PythMarketParamsV1 {
             registry,
             release: PythMarketProviderV1::Pull(fixture.release()),
@@ -11253,7 +11336,7 @@ pub(crate) fn demo_market_input(
             generation: 1,
             local_participant_fixture_liquidity_atoms: LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1,
         },
-        direct,
+        resolution_release,
     )
 }
 
@@ -11375,6 +11458,20 @@ fn devnet_window_end_v1(spec: &DevnetPythMarketSpecV1<'_>) -> Result<i64> {
 fn pyth_market_input(
     params: PythMarketParamsV1<'_>,
     direct: DirectMarketCompilerInputV1<'_>,
+) -> Result<MarketRunInput> {
+    let mut input = pyth_market_input_base(params, direct.resolution_release)?;
+    attach_direct_market_capability_v1(&mut input, direct)?;
+    validate_market_input(&input)?;
+    Ok(input)
+}
+
+/// The capability-free Pyth market graph: everything a market is, up to and
+/// including its three-entry Resolution manifest base, with no trade
+/// capability attached. `pyth_market_input` attaches Direct; a family-neutral
+/// caller attaches its own closure through the selection seam instead.
+fn pyth_market_input_base(
+    params: PythMarketParamsV1<'_>,
+    resolution_release: [u8; 32],
 ) -> Result<MarketRunInput> {
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
@@ -11676,7 +11773,7 @@ fn pyth_market_input(
     // that produced the Direct compiler. A stale hard-coded V4 here once let
     // the read-only market compiler succeed and then made real founding refuse
     // only after collateral, records, RentCredit, ALT, and Found37 existed.
-    let release = CapabilityContentId::new(direct.resolution_release)
+    let release = CapabilityContentId::new(resolution_release)
         .map_err(|error| Error::new(format!("demo Resolution release: {error:?}")))?;
     let mut entries_input: Vec<([u8; 32], [u8; 32])> = vec![
         (
@@ -11726,7 +11823,7 @@ fn pyth_market_input(
     CapabilityManifestV1::encode_into(&entries, &mut manifest)
         .map_err(|error| Error::new(format!("demo capability manifest: {error:?}")))?;
 
-    let mut input = MarketRunInput {
+    let input = MarketRunInput {
         generation: params.generation,
         collateral_display_decimals: 6,
         local_participant_fixture_liquidity_atoms: params.local_participant_fixture_liquidity_atoms,
@@ -11757,10 +11854,9 @@ fn pyth_market_input(
         recovery_policy_hex: hex(&recovery_bytes),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
+        selected_capability: None,
         linked_basis_hex: hex(&linked_basis),
     };
-    attach_direct_market_capability_v1(&mut input, direct)?;
-    validate_market_input(&input)?;
     Ok(input)
 }
 
@@ -12108,9 +12204,10 @@ mod tests {
             let bytes = direct_controller_manifest(Some(direct_index), None);
             let direct_mask = 1_u16 << direct_index;
             assert_eq!(
-                direct_founding_controller_masks_v1(
+                selected_founding_controller_masks_v1(
                     CapabilityManifestV1::decode(&bytes).expect("manifest"),
                     [0x30; 32],
+                    DIRECT_SUCCESSOR_KIND_ID_V3,
                 )
                 .expect("partition"),
                 (
@@ -12128,9 +12225,10 @@ mod tests {
             direct_controller_manifest(Some(3), Some(1)),
         ] {
             assert!(
-                direct_founding_controller_masks_v1(
+                selected_founding_controller_masks_v1(
                     CapabilityManifestV1::decode(&bytes).expect("manifest"),
                     [0x30; 32],
+                    DIRECT_SUCCESSOR_KIND_ID_V3,
                 )
                 .is_err()
             );
@@ -12149,15 +12247,26 @@ mod tests {
         let bytes = decode_hex(&input.capability_manifest_hex).expect("manifest bytes");
         let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
         let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
-        assert!(direct_founding_controller_masks_v1(manifest, expected).is_ok());
         assert!(
-            direct_founding_controller_masks_v1(
+            selected_founding_controller_masks_v1(
+                manifest,
+                expected,
+                DIRECT_SUCCESSOR_KIND_ID_V3
+            )
+            .is_ok()
+        );
+        assert!(
+            selected_founding_controller_masks_v1(
                 manifest,
                 dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+                DIRECT_SUCCESSOR_KIND_ID_V3,
             )
             .is_err()
         );
-        assert!(direct_founding_controller_masks_v1(manifest, [0x5a; 32]).is_err());
+        assert!(
+            selected_founding_controller_masks_v1(manifest, [0x5a; 32], DIRECT_SUCCESSOR_KIND_ID_V3)
+                .is_err()
+        );
     }
 
     fn projected_bootstrap_census_fixture_v2() -> (Pubkey, Instruction) {

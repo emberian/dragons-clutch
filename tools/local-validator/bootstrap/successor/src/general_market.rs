@@ -94,6 +94,170 @@ pub(crate) fn general_selected_closure_v1(
     })
 }
 
+/// The demo General-selected market: the same lab market graph as
+/// `demo_market_input`, with the General capability selected instead of
+/// Direct through the neutral seam.
+///
+/// Derived facts come from the base graph itself — capacity profile from the
+/// carried source-capacity body, claim basis from the carried linked-basis
+/// record, outcome width from the cuts, price scale from the collateral
+/// decimals, generation from the founding lane — and the deadline and root
+/// Rent quote from the same finalized loopback snapshot Direct quotes.
+/// LAB FACTS, labeled as lab facts exactly like the demo market's synthetic
+/// Pyth release: the policy windows are the executed accelerator campaign's,
+/// the external widths are the ones that campaign really ran against, and the
+/// four deployment identities (accelerator artifact release, compiler,
+/// toolchain, translation validation) are domain-separated projections of the
+/// plan's own release-set identity, because no local accelerator deployment
+/// exists to observe. A devnet General market replaces exactly those inputs;
+/// nothing else here is a free parameter.
+pub(crate) fn demo_general_market_input(
+    plan_path: &std::path::Path,
+    rpc_url: &str,
+    registry: solana_sdk::pubkey::Pubkey,
+    quote_surplus_beneficiary: solana_sdk::pubkey::Pubkey,
+) -> Result<crate::model::MarketRunInput> {
+    use dclutch_operator::general_selected_release_v1::{
+        GeneralConfigWindowsV1, GeneralDeploymentFactsV1,
+    };
+
+    let (plan, observation) =
+        crate::direct_market::observe_local_market_policy_v1(plan_path, rpc_url, registry)?;
+    let resolution_release = crate::direct_market::authenticated_resolution_release_v1(&plan)?;
+    let mut input = crate::market::demo_market_input_base(registry, resolution_release)?;
+
+    let capacity_profile: [u8; 32] =
+        Sha256::digest(crate::runtime::decode_hex(&input.source_capacity_profile_hex)?).into();
+    let claim_basis = crate::market::semantic_basis_identity_v3(&crate::runtime::decode_hex(
+        &input.linked_basis_hex,
+    )?)?;
+    let outcome_count = input
+        .cuts
+        .len()
+        .checked_add(2)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| Error::new("General market outcome width overflow"))?;
+    let price_scale = 10_u64
+        .checked_pow(u32::from(input.collateral_display_decimals))
+        .ok_or_else(|| Error::new("Market collateral decimals overflow General price scale"))?;
+    // The generic founding commits the Open Market at generation + 1, and the
+    // config binds the Market it is selected by, so the selection names the
+    // Open Market's generation, not the Found37 staging generation.
+    let generation = input
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| Error::new("General market generation overflow"))?;
+    let lab = |label: &str| -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"dclutch:lab:general-selection:v1");
+        hasher.update([0]);
+        hasher.update(plan.release_set_id.as_bytes());
+        hasher.update([0]);
+        hasher.update(label.as_bytes());
+        hasher.finalize().into()
+    };
+    let release_input = dclutch_operator::general_selected_release_v1::GeneralSelectedReleaseInputV1 {
+        capacity_profile,
+        claim_basis,
+        selection_policy: lab("selection-policy"),
+        quote_surplus_beneficiary: quote_surplus_beneficiary.to_bytes(),
+        generation,
+        price_scale,
+        // The executed accelerator campaign's policy windows.
+        windows: GeneralConfigWindowsV1 {
+            collection_slots: 16,
+            selection_slots: 16,
+            settlement_slots: 64,
+            max_orders_per_candidate: 32,
+            max_pages_per_candidate: 32,
+            continuation_reward_lamports: 1,
+        },
+        outcome_count,
+        // The widths the accelerator campaign really executed against at this
+        // exact outcome width. Reconciling them against the live local
+        // deployment is the General-hot follow-up; founding does not read them.
+        external_widths: dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 256,
+            result_domain: 192,
+            rent_sysvar: 17,
+            core_market: 320,
+            activation_cache: 160,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 112,
+            rent_credit: 48,
+        },
+        token_account_bytes: 165,
+        deployment: GeneralDeploymentFactsV1 {
+            accelerator_artifact_release: lab("accelerator-artifact-release"),
+            compiler_release: lab("compiler-release"),
+            toolchain: lab("toolchain"),
+            translation_validation: lab("translation-validation"),
+        },
+    };
+    let closure = general_selected_closure_v1(release_input)?;
+    let root_bytes = general_root_bytes_v1(&closure)?;
+    let payload = general_selected_payload_v1(
+        &closure,
+        observation.activation_deadline_slot_v1()?,
+        observation.root_rent_minimum_for_width_v1(root_bytes)?,
+    );
+    crate::selected_capability::attach_selected_capability_v1(&mut input, payload)?;
+    crate::market::validate_market_input(&input)?;
+    Ok(input)
+}
+
+/// The complete capability-root width the closure's own descriptor names.
+fn general_root_bytes_v1(closure: &GeneralSelectedClosureBytesV1) -> Result<usize> {
+    let descriptor = dclutch_capability_program_contract::v4::CapabilityProgramV4::decode(
+        &closure.selected_descriptor,
+    )
+    .map_err(|error| Error::new(format!("General selected descriptor: {error:?}")))?;
+    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+        .checked_add(
+            usize::try_from(descriptor.root_state_bytes())
+                .map_err(|_| Error::new("General root state width overflow"))?,
+        )
+        .ok_or_else(|| Error::new("General root width overflow"))
+}
+
+/// Serialize one General closure into the family-neutral payload the driver
+/// consumes — the single author for the label scheme and byte fields, shared
+/// by the compiler and its tests.
+fn general_selected_payload_v1(
+    closure: &GeneralSelectedClosureBytesV1,
+    activation_deadline_slot: u64,
+    root_rent_minimum_lamports: u64,
+) -> crate::model::SelectedCapabilityV1 {
+    crate::model::SelectedCapabilityV1 {
+        family: "general".into(),
+        program_set_hex: crate::plan::hex(&closure.program_set),
+        selected_descriptor_hex: crate::plan::hex(&closure.selected_descriptor),
+        config_hex: crate::plan::hex(&closure.config),
+        publication_hex: crate::plan::hex(&closure.publication),
+        records: closure
+            .records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| crate::model::SelectedCapabilityRecordV1 {
+                // Positional prefix + `_record` suffix: unique, deterministic,
+                // and covered by the founding checkpoint's record-graph census.
+                label: format!(
+                    "general_{index:02}_{}_record",
+                    record.label.replace('-', "_")
+                ),
+                schema_hex: crate::plan::hex(&record.schema),
+                body_hex: crate::plan::hex(&record.body),
+            })
+            .collect(),
+        activation_deadline_slot,
+        root_rent_minimum_lamports,
+        selected_manifest_entry_index: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use dclutch_market_core_codec::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
@@ -258,6 +422,51 @@ mod tests {
         // Every record the Registry must hold is enumerated with its schema
         // read off the release's own artifacts: 2 shared + 9 per action x 7.
         assert_eq!(closure.records.len(), 2 + 9 * 7);
+    }
+
+    /// The founding driver's own static gate accepts a General-selected
+    /// market input end to end: the demo market graph with the General
+    /// closure attached through the seam passes `validate_market_input` — the
+    /// same validation every founding campaign runs before it signs anything.
+    /// Direct appears nowhere in the input.
+    #[test]
+    fn the_founding_validator_accepts_a_general_selected_market_input() {
+        let registry = Pubkey::new_from_array([0x77; 32]);
+        let mut input = crate::market::demo_market_input_base(
+            registry,
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+        )
+        .expect("demo market base");
+
+        // The same derivations the compiler makes from the base graph.
+        let capacity_profile: [u8; 32] = Sha256::digest(
+            crate::runtime::decode_hex(&input.source_capacity_profile_hex).expect("capacity"),
+        )
+        .into();
+        let claim_basis = crate::market::semantic_basis_identity_v3(
+            &crate::runtime::decode_hex(&input.linked_basis_hex).expect("basis"),
+        )
+        .expect("semantic basis identity");
+        let outcome_count = u32::try_from(input.cuts.len() + 2).expect("width");
+        let generation = input.generation + 1;
+        let release_input = GeneralSelectedReleaseInputV1 {
+            capacity_profile,
+            claim_basis,
+            generation,
+            outcome_count,
+            price_scale: 1_000_000,
+            ..release_input()
+        };
+        let closure = general_selected_closure_v1(release_input).expect("General closure");
+        let root_bytes = general_root_bytes_v1(&closure).expect("root width");
+        assert!(root_bytes > dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1);
+        let payload = general_selected_payload_v1(&closure, u64::MAX, 1_000_000);
+
+        crate::selected_capability::attach_selected_capability_v1(&mut input, payload)
+            .expect("attach through the neutral seam");
+        assert!(input.direct_capability.is_none());
+        crate::market::validate_market_input(&input)
+            .expect("the founding validator accepts the General-selected market input");
     }
 
     /// The counterpart of the Fractional fixed-point pin: General's config is
