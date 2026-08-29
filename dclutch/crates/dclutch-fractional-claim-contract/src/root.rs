@@ -2,8 +2,17 @@
 
 use core::convert::TryInto;
 
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+};
+
 /// Exact mutable root width.
 pub const FRACTIONAL_ROOT_BYTES_V1: usize = 128;
+/// Byte offset of the Fractional state inside one activated Trading root.
+pub const FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4: usize = CAPABILITY_ROOT_HEADER_BYTES_V1;
+/// Exact activated Trading root width for the Fractional family.
+pub const FRACTIONAL_CAPABILITY_ROOT_BYTES_V4: usize =
+    FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4 + FRACTIONAL_ROOT_BYTES_V1;
 /// Root-state magic.
 pub const FRACTIONAL_ROOT_MAGIC_V1: [u8; 8] = *b"DCLTFR01";
 /// Finalized root schema label.
@@ -106,6 +115,40 @@ impl FractionalRootV1 {
     pub const fn input(self) -> FractionalRootInputV1 {
         self.0
     }
+}
+
+/// Hostile-decoded activated Trading root and its sole Fractional state tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalCapabilityRootV4 {
+    header: CapabilityRootHeaderV1,
+    state: FractionalRootV1,
+}
+
+impl FractionalCapabilityRootV4 {
+    /// Immutable generic activation header.
+    pub const fn header(self) -> CapabilityRootHeaderV1 {
+        self.header
+    }
+
+    /// Sole Fractional mutable state owner.
+    pub const fn state(self) -> FractionalRootV1 {
+        self.state
+    }
+}
+
+/// Decode one exact activated Trading root and its Fractional state tail.
+///
+/// A bare 128-byte family state is not an onchain root account. Both the
+/// immutable generic activation header and the family tail must be canonical.
+pub fn decode_fractional_capability_root_v4(bytes: &[u8]) -> Option<FractionalCapabilityRootV4> {
+    if bytes.len() != FRACTIONAL_CAPABILITY_ROOT_BYTES_V4 {
+        return None;
+    }
+    let (header, state) = bytes.split_at(FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4);
+    Some(FractionalCapabilityRootV4 {
+        header: CapabilityRootHeaderV1::decode(header).ok()?,
+        state: FractionalRootV1::decode(state)?,
+    })
 }
 
 fn array<const N: usize>(input: &[u8], offset: usize) -> Option<[u8; N]> {

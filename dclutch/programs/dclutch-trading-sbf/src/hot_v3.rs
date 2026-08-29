@@ -2970,6 +2970,7 @@ fn commit_prepared_hot_result_v3(
     hot_heap_mark!("lifecycle-creates");
     let child_execution_digest = execute_prepared_child_routes_v3(caller_bumps, prepared)?;
     hot_heap_mark!("children-executed");
+    verify_fractional_root_unchanged_after_children_v3(prepared)?;
     verify_direct_inline_post_children_v3(prepared)?;
     commit_prepared_post_children_v3(prepared)?;
     hot_heap_mark!("post-children");
@@ -7610,7 +7611,18 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             hot_cu_checkpoint!("pf-invocation-resolved");
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
-            require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
+            let allowed_local_representative = fractional_local_root_overlap_v3(
+                invocation,
+                request_bank,
+                family_request,
+                aliases,
+            )?;
+            require_child_disjoint_from_local(
+                invocation,
+                aliases,
+                locally_mutated,
+                allowed_local_representative,
+            )?;
             match invocation.role {
                 FixedRole::Core => {
                     caller_bumps.record(preflight_core_route_v3(
@@ -8356,6 +8368,7 @@ fn require_child_disjoint_from_local(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     aliases: &[usize],
     locally_mutated: &[bool],
+    allowed_local_representative: Option<usize>,
 ) -> Result<(), ProgramError> {
     let refuse_window = |start: usize, end: usize| -> Result<(), ProgramError> {
         let mut coordinate = start;
@@ -8365,6 +8378,7 @@ fn require_child_disjoint_from_local(
                 .get(representative)
                 .copied()
                 .ok_or(TradingSbfError::Content)?
+                && allowed_local_representative != Some(representative)
             {
                 return Err(TradingSbfError::Content.into());
             }
@@ -8395,6 +8409,97 @@ fn require_child_disjoint_from_local(
             .ok_or(TradingSbfError::Content)?;
         refuse_window(start, end)?;
         item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(())
+}
+
+/// Select the one local/child overlap Fractional requires.
+///
+/// Claims authenticates and signs with the Trading-owned root, but only
+/// Trading may revise that root. The exact Fractional external-Once route may
+/// therefore alias its action-selected child-root coordinate to logical root
+/// zero while the local Effect writes root state. No other child coordinate,
+/// route kind, request, or representative receives this exception. The root
+/// bytes are re-authenticated unchanged after the verified child receipt and
+/// before the commit-last pass.
+fn fractional_local_root_overlap_v3(
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    request_bank: &[u8],
+    family_request: &[u8],
+    aliases: &[usize],
+) -> Result<Option<usize>, ProgramError> {
+    use dclutch_fractional_claim_contract::{
+        FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ROOT_V3,
+        FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
+        FRACTIONAL_TERMINAL_ROOT_V3, FractionalExposureActionV2, FractionalExposureRequestV2,
+    };
+
+    if invocation.role != FixedRole::Claims
+        || invocation.kind != dclutch_effect_kernel::v3::RouteKindV3::Once
+        || invocation.borrowed_witness.is_some()
+        || family_request.get(..8) != Some(FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
+    {
+        return Ok(None);
+    }
+    let request = FractionalExposureRequestV2::decode(family_request)
+        .map_err(|_| TradingSbfError::Content)?;
+    let (account_count, root_coordinate) = match request.action() {
+        FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap => (
+            FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3,
+            FRACTIONAL_ATOMIC_ROOT_V3,
+        ),
+        FractionalExposureActionV2::TerminalRedeem
+        | FractionalExposureActionV2::TerminalZeroBurn => (
+            FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
+            FRACTIONAL_TERMINAL_ROOT_V3,
+        ),
+        _ => return Ok(None),
+    };
+    if usize::from(invocation.fixed_account_count) != account_count
+        || invocation.item_account_count != 0
+        || invocation.repeated_item_count != 0
+    {
+        return Ok(None);
+    }
+    let request_end = invocation
+        .request_offset
+        .checked_add(invocation.request_len)
+        .ok_or(TradingSbfError::Content)?;
+    if request_bank.get(invocation.request_offset..request_end) != Some(family_request) {
+        return Ok(None);
+    }
+    let logical_root = usize::from(invocation.fixed_account_start)
+        .checked_add(root_coordinate)
+        .ok_or(TradingSbfError::Content)?;
+    if aliases.get(logical_root).copied() != Some(0) {
+        return Ok(None);
+    }
+    Ok(Some(0))
+}
+
+/// Refuse a Fractional child that changed Trading's sole mutable root before
+/// the receipt-gated local commit.
+fn verify_fractional_root_unchanged_after_children_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    let root = prepared
+        .frame
+        .root
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Commit)?;
+    require_fractional_root_prestate_v3(prepared.family_request, &root, prepared.root_prestate)
+}
+
+fn require_fractional_root_prestate_v3(
+    family_request: &[u8],
+    root: &[u8],
+    expected_prestate: [u8; 32],
+) -> Result<(), ProgramError> {
+    if family_request.get(..8)
+        == Some(dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
+        && dclutch_sha256_adapter::digest(root) != expected_prestate
+    {
+        return Err(TradingSbfError::Commit.into());
     }
     Ok(())
 }
@@ -10632,6 +10737,117 @@ mod tests {
     fn alias_fixed_slot(accounts: &mut [AccountInfo<'static>], raw: usize, staging: usize) {
         let raw = accounts.get(raw).expect("raw fixed slot").clone();
         *accounts.get_mut(staging).expect("staging fixed slot") = raw;
+    }
+
+    fn fractional_wrap_request() -> Vec<u8> {
+        use dclutch_fractional_claim_contract::{
+            FractionalExposureActionV2, FractionalExposureRequestInputV2,
+            FractionalExposureRequestV2,
+        };
+
+        FractionalExposureRequestV2::new(
+            FractionalExposureActionV2::Wrap,
+            FractionalExposureRequestInputV2 {
+                release_set: [1; 32],
+                market: [2; 32],
+                product_record: [3; 32],
+                result_domain: [4; 32],
+                terms: [5; 32],
+                token_behavior: [6; 32],
+                exposure: [7; 32],
+                owner: [8; 32],
+                source_token_account: [0; 32],
+                destination_token_account: [9; 32],
+                terminal_digest: [0; 32],
+                expected_revision: 11,
+                quantity: 13,
+                representation_coordinate: 0,
+            },
+        )
+        .expect("canonical Fractional Wrap")
+        .to_bytes()
+        .expect("Fractional bytes")
+        .to_vec()
+    }
+
+    fn fractional_wrap_invocation(
+        request_len: usize,
+    ) -> dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+        dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+            role: FixedRole::Claims,
+            kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+            item: None,
+            fixed_account_start: 5,
+            fixed_account_count: u16::try_from(
+                dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3,
+            )
+            .expect("Fractional account count"),
+            item_account_start: 0,
+            item_account_count: 0,
+            item_account_stride: 0,
+            repeated_item_count: 0,
+            request_offset: 0,
+            request_len,
+            borrowed_witness: None,
+            receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
+            receipt_dependency: None,
+        }
+    }
+
+    #[test]
+    fn only_exact_fractional_root_alias_may_cross_local_child_boundary() {
+        let request = fractional_wrap_request();
+        let invocation = fractional_wrap_invocation(request.len());
+        let logical_count = usize::from(invocation.fixed_account_start)
+            + usize::from(invocation.fixed_account_count);
+        let mut aliases = (0..logical_count).collect::<Vec<_>>();
+        let root = usize::from(invocation.fixed_account_start)
+            + dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ROOT_V3;
+        aliases[root] = 0;
+        let mut locally_mutated = vec![false; logical_count];
+        locally_mutated[0] = true;
+
+        assert_eq!(
+            fractional_local_root_overlap_v3(invocation, &request, &request, &aliases)
+                .expect("exact overlap"),
+            Some(0)
+        );
+        require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, Some(0))
+            .expect("sole root overlap");
+
+        let mut foreign = request.clone();
+        foreign[0] ^= 1;
+        assert_eq!(
+            fractional_local_root_overlap_v3(invocation, &foreign, &request, &aliases)
+                .expect("foreign bank"),
+            None
+        );
+        assert!(
+            require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, None)
+                .is_err()
+        );
+
+        locally_mutated[6] = true;
+        assert!(
+            require_child_disjoint_from_local(invocation, &aliases, &locally_mutated, Some(0))
+                .is_err(),
+            "a second local/child overlap must not ride the root exception"
+        );
+    }
+
+    #[test]
+    fn fractional_child_must_leave_sole_root_prestate_unchanged() {
+        let request = fractional_wrap_request();
+        let before = [17_u8; 128];
+        let digest = dclutch_sha256_adapter::digest(&before);
+        require_fractional_root_prestate_v3(&request, &before, digest)
+            .expect("unchanged Fractional root");
+
+        let mut after = before;
+        after[112] ^= 1;
+        assert!(require_fractional_root_prestate_v3(&request, &after, digest).is_err());
+        require_fractional_root_prestate_v3(b"another-family", &after, digest)
+            .expect("unrelated family is not widened");
     }
 
     #[test]

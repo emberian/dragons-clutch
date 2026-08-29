@@ -68,7 +68,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
-    ResolutionError, authenticate_clock, authenticate_rent, deployment_observation,
+    ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
     provider_v3::{
         AuthenticatedProviderObservationV3, AuthenticatedSourceRecordsV3, ProviderJoinErrorV3,
@@ -565,11 +565,8 @@ fn authenticate_market_and_infrastructure(
         return Err(ResolutionError::ResolutionRelease.into());
     }
     require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::ResolutionRelease)?;
-    let observation = deployment_observation(
-        frame.registry_program(),
-        frame.account(8),
-        artifact.programdata(),
-    )?;
+    let observation =
+        cached_deployment_observation(frame.registry_program(), frame.account(8), artifact)?;
     artifact
         .authenticate_deployment(observation)
         .map_err(pinned_deployment_refusal)?;
@@ -638,7 +635,7 @@ fn authenticate_activation_and_caller(
         }
         if caller_executes_role(request.caller, role) {
             let observation =
-                deployment_observation(program, programdata, activated.release().programdata())?;
+                cached_deployment_observation(program, programdata, activated.release())?;
             activated
                 .authenticate_current_deployment(observation)
                 .map_err(|_| ResolutionError::ResolutionDeployment)?;
@@ -1108,6 +1105,8 @@ fn initialize_certificate<'info>(
 
 #[cfg(test)]
 mod tests {
+    use std::{boxed::Box, vec::Vec};
+
     use dclutch_resolution_codec::PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3;
     use dclutch_source_contract::{
         PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
@@ -1121,6 +1120,77 @@ mod tests {
     const CAPTURED_POST_UPDATE: &[u8] = include_bytes!(
         "../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-post-update.data"
     );
+
+    fn test_account(
+        key: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+        owner: Pubkey,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            false,
+            false,
+            Box::leak(Box::new(lamports)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(owner)),
+            false,
+        )
+    }
+
+    #[test]
+    fn finalized_profile_release_identity_refuses_before_cached_deployment_auth() {
+        let registry = Pubkey::new_from_array([0xd1; 32]);
+        let schema = ARTIFACT_RELEASE_SCHEMA_ID_V1;
+        let artifact_bytes = std::vec![0x44; ARTIFACT_RELEASE_BYTES_V1];
+        let digest = hash(&artifact_bytes).to_bytes();
+        let raw_key =
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
+        let staging_key = Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+            &registry,
+        )
+        .0;
+        let rent = Rent::default();
+        let raw = test_account(
+            raw_key,
+            rent.minimum_balance(artifact_bytes.len()),
+            artifact_bytes.clone(),
+            registry,
+        );
+        let staging = test_account(staging_key, 0, Vec::new(), system_program::ID);
+        assert_eq!(
+            authenticate_record(
+                &registry,
+                &raw,
+                &staging,
+                &rent,
+                schema,
+                digest,
+                &artifact_bytes,
+                ARTIFACT_RELEASE_BYTES_V1,
+            ),
+            Ok(()),
+        );
+
+        let substituted_profile_release = [0xd2; 32];
+        assert_eq!(
+            authenticate_record(
+                &registry,
+                &raw,
+                &staging,
+                &rent,
+                schema,
+                substituted_profile_release,
+                &artifact_bytes,
+                ARTIFACT_RELEASE_BYTES_V1,
+            ),
+            Err(ProgramError::Custom(
+                ResolutionError::FinalizedRecord as u32
+            )),
+            "the infrastructure profile's finalized ArtifactRelease identity remains authoritative",
+        );
+    }
 
     #[test]
     fn discriminator_requires_a_distinct_exact_post_body_suffix() {

@@ -392,6 +392,13 @@ export class SolanaRpcClient {
     return String(exactUnsigned(await this.#request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
   }
 
+  /** Read the finalized block height used by recent-blockhash expiry. */
+  async blockHeight(minimumContextSlot?: string): Promise<string> {
+    const configuration: Record<string, unknown> = { commitment: 'finalized' };
+    if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
+    return String(exactUnsigned(await this.#request('getBlockHeight', [configuration]), 'finalized block height'));
+  }
+
   async latestBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
     const configuration: Record<string, unknown> = { commitment: 'finalized' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');

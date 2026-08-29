@@ -29,7 +29,9 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
-use crate::{RecordKind, ResolutionError, authenticate_finalized_record, deployment_observation};
+use crate::{
+    RecordKind, ResolutionError, authenticate_finalized_record, cached_deployment_observation,
+};
 
 /// Fixed deployment-authenticated accounts before Core's ProjectFound frame.
 pub const PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1: usize = 7;
@@ -439,23 +441,23 @@ fn authenticate_release_and_caller(
         return Err(ResolutionError::ResolutionRelease.into());
     }
     trading
-        .authenticate_current_deployment(deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             caller_program,
             accounts
                 .get(CALLER_PROGRAMDATA)
                 .ok_or(ResolutionError::AccountFrame)?,
-            trading.release().programdata(),
+            trading.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
     resolution
-        .authenticate_current_deployment(deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             accounts
                 .get(RESOLUTION_PROGRAM)
                 .ok_or(ResolutionError::AccountFrame)?,
             accounts
                 .get(RESOLUTION_PROGRAMDATA)
                 .ok_or(ResolutionError::AccountFrame)?,
-            resolution.release().programdata(),
+            resolution.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
     // `decode` above accepts only the exact-width, canonical request encoding.

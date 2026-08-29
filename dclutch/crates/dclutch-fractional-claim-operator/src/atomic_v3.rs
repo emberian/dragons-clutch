@@ -28,13 +28,12 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, FRACTIONAL_ATOMIC_ROOT_V3, FRACTIONAL_ATOMIC_SHARD_MINT_V3,
     FRACTIONAL_ATOMIC_TERMS_RAW_V3, FRACTIONAL_ATOMIC_TERMS_STAGING_V3,
     FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_RAW_V3, FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_STAGING_V3,
-    FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3, FRACTIONAL_ROOT_PDA_SEED_V1,
-    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ACTOR_V3,
-    FRACTIONAL_TERMINAL_ROOT_V3, FRACTIONAL_TERMINAL_SHARD_MINT_V3,
+    FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
+    FRACTIONAL_TERMINAL_ACTOR_V3, FRACTIONAL_TERMINAL_ROOT_V3, FRACTIONAL_TERMINAL_SHARD_MINT_V3,
     FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, FRACTIONAL_TERMINAL_TERMS_RAW_V3,
     FRACTIONAL_TERMINAL_TERMS_STAGING_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
-    FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalExposureActionV2,
-    FractionalExposureRequestV2, FractionalRootV1,
+    FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalCapabilityRootV4,
+    FractionalExposureActionV2, FractionalExposureRequestV2,
 };
 use dclutch_fractional_claim_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsV2,
@@ -65,7 +64,7 @@ const POSITION_1: usize = 21;
 pub fn build_fractional_atomic_claims_instruction_v3(
     request: FractionalExposureRequestV2,
     terms: FractionalExposureTermsV2<'_>,
-    root: FractionalRootV1,
+    root: FractionalCapabilityRootV4,
     accounts: &[AccountMeta],
 ) -> Result<Instruction> {
     request.bind_terms(terms).map_err(|_| Error::Claims)?;
@@ -96,20 +95,17 @@ pub fn build_fractional_atomic_claims_instruction_v3(
         &claims_program,
     )
     .0;
-    let root_input = root.input();
-    let expected_root = Pubkey::create_program_address(
-        &[
-            FRACTIONAL_ROOT_PDA_SEED_V1,
-            input.terms.as_slice(),
-            input.market.as_slice(),
-            &[root_input.bump],
-        ],
-        &trading_program,
-    )
-    .map_err(|_| Error::Claims)?;
+    let header = root.header();
+    let root_input = root.state().input();
+    let (expected_root, expected_bump) =
+        Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program);
     if root_input.terms != input.terms
         || root_input.market != input.market
         || root_input.revision != input.expected_revision
+        || root_input.bump != expected_bump
+        || header.release_set().to_bytes() != input.release_set
+        || header.market() != input.market
+        || header.selection().config().to_bytes() != input.terms
         || meta(accounts, 0)?.pubkey != expected_authority
         || meta(accounts, MARKET)?.pubkey != expected_market
         || meta(accounts, FRACTIONAL_ATOMIC_ROOT_V3)?.pubkey != expected_root
@@ -193,7 +189,7 @@ pub fn build_fractional_atomic_claims_instruction_v3(
         (FRACTIONAL_ATOMIC_TERMS_STAGING_V3, false, false),
         (FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_RAW_V3, false, false),
         (FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_STAGING_V3, false, false),
-        (FRACTIONAL_ATOMIC_ROOT_V3, true, false),
+        (FRACTIONAL_ATOMIC_ROOT_V3, true, true),
         (FRACTIONAL_ATOMIC_ACTOR_V3, true, false),
         (FRACTIONAL_ATOMIC_SHARD_MINT_V3, false, true),
         (FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, false, true),
@@ -218,7 +214,7 @@ pub fn build_fractional_atomic_claims_instruction_v3(
 pub fn build_fractional_terminal_atomic_claims_instruction_v3(
     request: FractionalExposureRequestV2,
     terms: FractionalExposureTermsV2<'_>,
-    root: FractionalRootV1,
+    root: FractionalCapabilityRootV4,
     composition_exposure_bytes: &[u8],
     accounts: &[AccountMeta],
 ) -> Result<Instruction> {
@@ -274,17 +270,10 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
         &claims_program,
     )
     .0;
-    let root_input = root.input();
-    let expected_root = Pubkey::create_program_address(
-        &[
-            FRACTIONAL_ROOT_PDA_SEED_V1,
-            input.terms.as_slice(),
-            input.market.as_slice(),
-            &[root_input.bump],
-        ],
-        &trading_program,
-    )
-    .map_err(|_| Error::Claims)?;
+    let header = root.header();
+    let root_input = root.state().input();
+    let (expected_root, expected_bump) =
+        Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program);
     let reserve_position = Pubkey::find_program_address(
         &ProtocolPositionSeedsV2::new(expected_market.to_bytes(), expected_root.to_bytes())
             .map_err(|_| Error::Claims)?
@@ -295,6 +284,10 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
     if root_input.terms != input.terms
         || root_input.market != input.market
         || root_input.revision != input.expected_revision
+        || root_input.bump != expected_bump
+        || header.release_set().to_bytes() != input.release_set
+        || header.market() != input.market
+        || header.selection().config().to_bytes() != input.terms
         || meta(accounts, 0)?.pubkey != expected_authority
         || meta(accounts, MARKET)?.pubkey != expected_market
         || meta(accounts, POSITION_0)?.pubkey != reserve_position
@@ -394,7 +387,7 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
         (FRACTIONAL_TERMINAL_TERMS_STAGING_V3, false, false),
         (FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3, false, false),
         (FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, false, false),
-        (FRACTIONAL_TERMINAL_ROOT_V3, true, false),
+        (FRACTIONAL_TERMINAL_ROOT_V3, true, true),
         (FRACTIONAL_TERMINAL_ACTOR_V3, true, false),
         (FRACTIONAL_TERMINAL_SHARD_MINT_V3, false, true),
         (FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, false, true),
@@ -449,13 +442,18 @@ fn require_privilege(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+    use dclutch_core_contract::ContentId;
     use dclutch_fractional_claim_contract::{
-        FractionalExposureRequestInputV2, FractionalRootInputV1,
+        FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
+        FractionalExposureRequestInputV2, FractionalRootInputV1, FractionalRootV1,
+        decode_fractional_capability_root_v4,
     };
     use dclutch_fractional_claim_kernel::{
         FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2,
         encode_fractional_exposure_terms_v2, fractional_exposure_terms_bytes_v2,
     };
+    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
     use dclutch_representation_composition_v3_kernel::{
         CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
         composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
@@ -470,7 +468,7 @@ mod tests {
         request: FractionalExposureRequestV2,
         terms_bytes: Vec<u8>,
         terms_id: [u8; 32],
-        root: FractionalRootV1,
+        root: FractionalCapabilityRootV4,
         accounts: Vec<AccountMeta>,
     }
 
@@ -551,11 +549,24 @@ mod tests {
         let claims = Pubkey::new_from_array(id(20));
         let trading = Pubkey::new_from_array(id(21));
         let registry = Pubkey::new_from_array(id(22));
-        let (root_key, bump) = Pubkey::find_program_address(
-            &[FRACTIONAL_ROOT_PDA_SEED_V1, &terms_id, &market],
-            &trading,
-        );
-        let root = FractionalRootV1::new(FractionalRootInputV1 {
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            ContentId::new(id(24)).expect("manifest"),
+            ContentId::new(id(25)).expect("kind"),
+            ContentId::new(id(26)).expect("release"),
+            ContentId::new(terms_id).expect("terms config"),
+        )
+        .expect("selection");
+        let header = CapabilityRootHeaderV1::new(
+            ContentId::new(release).expect("release set"),
+            market,
+            1,
+            selection,
+            SelectedRecordBumpsV1::default(),
+        )
+        .expect("header");
+        let (root_key, bump) = Pubkey::find_program_address(&header.seeds().as_slices(), &trading);
+        let root_state = FractionalRootV1::new(FractionalRootInputV1 {
             bump,
             terms: terms_id,
             market,
@@ -564,6 +575,19 @@ mod tests {
             historical_rent_principal: 1,
         })
         .expect("root");
+        let mut root_bytes = [0_u8; FRACTIONAL_CAPABILITY_ROOT_BYTES_V4];
+        root_bytes[..FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4]
+            .copy_from_slice(&header.to_bytes());
+        root_bytes[FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4..]
+            .copy_from_slice(&root_state.to_bytes());
+        assert!(decode_fractional_capability_root_v4(&root_state.to_bytes()).is_none());
+        let mut substituted_header = root_bytes;
+        substituted_header[0] ^= 1;
+        assert!(decode_fractional_capability_root_v4(&substituted_header).is_none());
+        let mut substituted_state = root_bytes;
+        substituted_state[FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4 + 11] = 1;
+        assert!(decode_fractional_capability_root_v4(&substituted_state).is_none());
+        let root = decode_fractional_capability_root_v4(&root_bytes).expect("composite root");
         let mut accounts = Vec::new();
         let spec = SignedDeltaFrameSpecV3::new(2).expect("spec");
         for index in 0..spec.account_count().expect("count") {
@@ -595,6 +619,7 @@ mod tests {
             Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
             false,
         ));
+        accounts[FRACTIONAL_ATOMIC_ROOT_V3].is_writable = true;
         accounts[REGISTRY].pubkey = registry;
         accounts[TRADING_PROGRAM].pubkey = trading;
         accounts[CLAIMS_PROGRAM].pubkey = claims;
@@ -798,6 +823,7 @@ mod tests {
         accounts[TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3].pubkey =
             Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
         accounts[FRACTIONAL_TERMINAL_ROOT_V3].pubkey = root_key;
+        accounts[FRACTIONAL_TERMINAL_ROOT_V3].is_writable = true;
         accounts[FRACTIONAL_TERMINAL_ACTOR_V3].pubkey =
             Pubkey::new_from_array(terminal_input.owner);
         accounts[FRACTIONAL_TERMINAL_SHARD_MINT_V3].pubkey = Pubkey::new_from_array(id(8));
@@ -854,6 +880,7 @@ mod tests {
         assert_eq!(instruction.accounts.len(), 31);
         assert!(instruction.accounts[0].is_signer);
         assert!(instruction.accounts[FRACTIONAL_ATOMIC_ROOT_V3].is_signer);
+        assert!(instruction.accounts[FRACTIONAL_ATOMIC_ROOT_V3].is_writable);
         assert!(instruction.accounts[FRACTIONAL_ATOMIC_ACTOR_V3].is_signer);
         assert_eq!(instruction.data.len(), 416);
     }
@@ -908,6 +935,7 @@ mod tests {
         assert_eq!(instruction.accounts.len(), 44);
         assert!(instruction.accounts[0].is_signer);
         assert!(instruction.accounts[FRACTIONAL_TERMINAL_ROOT_V3].is_signer);
+        assert!(instruction.accounts[FRACTIONAL_TERMINAL_ROOT_V3].is_writable);
         assert!(instruction.accounts[FRACTIONAL_TERMINAL_ACTOR_V3].is_signer);
         assert_eq!(instruction.data.len(), 416);
     }

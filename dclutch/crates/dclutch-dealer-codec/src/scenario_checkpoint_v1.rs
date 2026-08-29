@@ -6,7 +6,8 @@
 //! transactions append authenticated page receipts in canonical order, one
 //! selected accelerator evaluation seals the best valid submitted candidate,
 //! and a final transaction reauthenticates every mutable prestate before it
-//! performs Claims/Custody effects and closes the checkpoint atomically.
+//! performs Claims and obligation effects atomically, persists `Committed`,
+//! then lets permissionless Custody delivery finish from already locked value.
 //!
 //! This crate owns only hostile fixed-layout decoding and the total phase
 //! machine. A Solana adapter must derive the PDA, compute every domain-separated
@@ -84,6 +85,8 @@ pub enum DealerScenarioCheckpointPhaseV1 {
     Reserved = 3,
     /// Expired reservations are being released in reverse order.
     RollingBack = 4,
+    /// Claims and obligation liabilities committed against locked Custody value.
+    Committed = 5,
 }
 
 impl DealerScenarioCheckpointPhaseV1 {
@@ -93,6 +96,7 @@ impl DealerScenarioCheckpointPhaseV1 {
             2 => Ok(Self::Evaluated),
             3 => Ok(Self::Reserved),
             4 => Ok(Self::RollingBack),
+            5 => Ok(Self::Committed),
             _ => Err(DealerScenarioCheckpointErrorV1::Phase),
         }
     }
@@ -633,6 +637,33 @@ impl DealerScenarioCheckpointV1 {
         Ok(())
     }
 
+    /// Persist the atomic Claims/obligation commit against locked value.
+    ///
+    /// The adapter must execute and authenticate Claims first, write the exact
+    /// obligation second, then write this checkpoint transition last in the
+    /// same Solana transaction. Custody delivery is a later permissionless,
+    /// resumable effect and may complete after the preparation expiry.
+    pub fn commit(
+        self,
+        current_slot: u64,
+        checkpoint_prestate_digest: [u8; 32],
+        evidence: DealerScenarioCommitEvidenceV1,
+    ) -> CheckpointResultV1<Self> {
+        self.admit_commit(current_slot, evidence)?;
+        if checkpoint_prestate_digest == [0; 32] {
+            return Err(DealerScenarioCheckpointErrorV1::Coordinate);
+        }
+        let mut next = self;
+        next.phase = DealerScenarioCheckpointPhaseV1::Committed;
+        next.last_checkpoint_prestate_digest = checkpoint_prestate_digest;
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or(DealerScenarioCheckpointErrorV1::Arithmetic)?;
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Admit permissionless cleanup only after the checkpoint expires.
     ///
     /// The returned beneficiary is immutable; a cleanup caller cannot redirect
@@ -641,7 +672,9 @@ impl DealerScenarioCheckpointV1 {
         if current_slot <= self.input.expires_at {
             return Err(DealerScenarioCheckpointErrorV1::Expiry);
         }
-        if self.reservation_count != self.rollback_count {
+        if self.phase == DealerScenarioCheckpointPhaseV1::Committed
+            || self.reservation_count != self.rollback_count
+        {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
         }
         Ok(self.input.refund_beneficiary)
@@ -805,6 +838,23 @@ impl DealerScenarioCheckpointV1 {
                     || self.input.custody_prestate_digest == [0; 32]
                     || !evaluation_is_complete(self.evaluation)
                     || self.rollback_count == 0
+                {
+                    return Err(DealerScenarioCheckpointErrorV1::Phase);
+                }
+            }
+            DealerScenarioCheckpointPhaseV1::Committed => {
+                if usize::from(self.next_page) != DEALER_SCENARIO_PREPARATION_PAGES_V1
+                    || self.revision
+                        != u64::try_from(DEALER_SCENARIO_PREPARATION_PAGES_V1)
+                            .map_err(|_| DealerScenarioCheckpointErrorV1::Arithmetic)?
+                            + 2
+                            + u64::from(self.reservation_count)
+                    || self.last_checkpoint_prestate_digest == [0; 32]
+                    || self.input.claims_prestate_digest == [0; 32]
+                    || self.input.custody_prestate_digest == [0; 32]
+                    || !evaluation_is_complete(self.evaluation)
+                    || self.reservation_count != self.evaluation.custody_effect_count
+                    || self.rollback_count != 0
                 {
                     return Err(DealerScenarioCheckpointErrorV1::Phase);
                 }
@@ -976,8 +1026,16 @@ mod tests {
         assert_eq!(checkpoint.revision(), 10);
         assert_eq!(checkpoint.next_page(), 6);
         assert_eq!(checkpoint.admit_commit(40, evidence()), Ok(()));
-        let bytes = checkpoint.to_bytes().expect("bytes");
-        assert_eq!(DealerScenarioCheckpointV1::decode(&bytes), Ok(checkpoint));
+        let committed = checkpoint
+            .commit(40, id(90), evidence())
+            .expect("persistent commit");
+        assert_eq!(
+            committed.phase(),
+            DealerScenarioCheckpointPhaseV1::Committed
+        );
+        assert_eq!(committed.revision(), 11);
+        let bytes = committed.to_bytes().expect("bytes");
+        assert_eq!(DealerScenarioCheckpointV1::decode(&bytes), Ok(committed));
     }
 
     #[test]
@@ -1063,6 +1121,17 @@ mod tests {
         assert_eq!(
             reserved.admit_commit(41, evidence()),
             Err(DealerScenarioCheckpointErrorV1::Expiry)
+        );
+        let committed = reserved
+            .commit(40, id(90), evidence())
+            .expect("commit before expiry");
+        assert_eq!(
+            committed.cleanup_beneficiary(41),
+            Err(DealerScenarioCheckpointErrorV1::Phase)
+        );
+        assert_eq!(
+            committed.append_rollback(41, 2, id(91), id(82), id(92)),
+            Err(DealerScenarioCheckpointErrorV1::Phase)
         );
         let evaluated = evaluated();
         assert_eq!(evaluated.cleanup_beneficiary(41), Ok(id(5)));

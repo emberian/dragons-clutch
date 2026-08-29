@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 from pathlib import Path
 import sys
@@ -35,7 +36,214 @@ PUBKEY_C = base58(bytes([3]) * 32)
 SIGNATURES = [base58(bytes([index]) * 64) for index in range(1, 20)]
 
 
+def offline_preflight_fixture(
+    paths: MODULE.Paths, commit: str, tree: str, through: str
+) -> dict[str, object]:
+    source_sha256 = {
+        str(MODULE.RUNNER_RELATIVE_PATH): MODULE.sha256_file(
+            paths.repo / MODULE.RUNNER_RELATIVE_PATH
+        ),
+        str(MODULE.OFFLINE_PREFLIGHT_RELATIVE_PATH): MODULE.sha256_file(
+            paths.repo / MODULE.OFFLINE_PREFLIGHT_RELATIVE_PATH
+        ),
+    }
+    report: dict[str, object] = {
+        "schema": MODULE.OFFLINE_PREFLIGHT_SCHEMA,
+        "status": "accepted",
+        "evidence_level": MODULE.OFFLINE_PREFLIGHT_EVIDENCE_LEVEL,
+        "through": through,
+        "validator_started": False,
+        "rpc_used": False,
+        "keys_read": False,
+        "build_run": False,
+        "repository": {
+            "head": commit,
+            "tree": tree,
+            "source_set_sha256": MODULE.sha256_bytes(
+                MODULE.json.dumps(
+                    source_sha256, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ),
+        },
+        "command_exposures": [],
+        "recovery_exposure": {},
+        "schema_handoffs": [],
+        "stage_vocabulary": [],
+        "constants": {},
+        "economic_owner": {},
+        "founding_geometry": {},
+        "transaction_geometry": {},
+        "expected_execution": [],
+        "source_sha256": source_sha256,
+    }
+    report["model_sha256"] = MODULE.sha256_bytes(
+        MODULE.json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+    )
+    return report
+
+
 class PrivateValidatorLifecycleTests(unittest.TestCase):
+    def test_offline_preflight_authenticates_exact_source_set_and_model(self) -> None:
+        repo = MODULE_PATH.parents[3]
+        paths = MODULE.Paths(
+            repo=repo,
+            release_root=repo,
+            bootstrap=repo / "unused-bootstrap",
+            reuse_bootstrap_work=None,
+            validator=MODULE_PATH,
+            solana=MODULE_PATH,
+            work=repo / "unused-preflight-work",
+        )
+        commit = "11" * 20
+        tree = "22" * 20
+        report = offline_preflight_fixture(paths, commit, tree, "full-probe")
+        self.assertEqual(
+            MODULE.authenticate_offline_preflight(
+                report,
+                paths=paths,
+                commit=commit,
+                tree=tree,
+                through="full-probe",
+            ),
+            report,
+        )
+        hostiles: list[tuple[str, dict[str, object], str]] = []
+        changed_source = copy.deepcopy(report)
+        changed_source["source_sha256"][str(MODULE.RUNNER_RELATIVE_PATH)] = "33" * 32
+        changed_source["repository"]["source_set_sha256"] = MODULE.sha256_bytes(
+            MODULE.json.dumps(
+                changed_source["source_sha256"],
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+        changed_source["model_sha256"] = MODULE.sha256_bytes(
+            MODULE.json.dumps(
+                {key: value for key, value in changed_source.items() if key != "model_sha256"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+        hostiles.append(("source", changed_source, "did not bind exact"))
+        changed_mode = copy.deepcopy(report)
+        changed_mode["through"] = "participant"
+        changed_mode["model_sha256"] = MODULE.sha256_bytes(
+            MODULE.json.dumps(
+                {key: value for key, value in changed_mode.items() if key != "model_sha256"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+        hostiles.append(("mode", changed_mode, "did not accept"))
+        changed_runtime = copy.deepcopy(report)
+        changed_runtime["validator_started"] = True
+        changed_runtime["model_sha256"] = MODULE.sha256_bytes(
+            MODULE.json.dumps(
+                {key: value for key, value in changed_runtime.items() if key != "model_sha256"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+        hostiles.append(("runtime", changed_runtime, "did not accept"))
+        changed_model = copy.deepcopy(report)
+        changed_model["model_sha256"] = "44" * 32
+        hostiles.append(("model", changed_model, "model digest changed"))
+        for label, hostile, refusal in hostiles:
+            with self.subTest(label=label), self.assertRaisesRegex(
+                MODULE.Refusal, refusal
+            ):
+                MODULE.authenticate_offline_preflight(
+                    hostile,
+                    paths=paths,
+                    commit=commit,
+                    tree=tree,
+                    through="full-probe",
+                )
+
+    def test_main_runs_preflight_before_gate_and_work_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            work = root / "work"
+            paths = MODULE.Paths(
+                repo=MODULE_PATH.parents[3],
+                release_root=root,
+                bootstrap=work / "bootstrap",
+                reuse_bootstrap_work=None,
+                validator=MODULE_PATH,
+                solana=MODULE_PATH,
+                work=work,
+            )
+
+            def preflight(*_args: object) -> tuple[bytes, dict[str, object]]:
+                self.assertFalse(work.exists())
+                return b'{"accepted":true}\n', {
+                    "model_sha256": "11" * 32,
+                    "repository": {"source_set_sha256": "22" * 32},
+                }
+
+            def gate(*_args: object) -> object:
+                self.assertFalse(work.exists())
+                raise MODULE.Refusal("stop before work")
+
+            with (
+                mock.patch.object(
+                    MODULE, "parse", return_value=(paths, 1, "full-probe", False)
+                ),
+                mock.patch.object(MODULE, "clean_commit", return_value="33" * 20),
+                mock.patch.object(MODULE, "clean_tree", return_value="44" * 20),
+                mock.patch.object(MODULE, "run_offline_preflight", side_effect=preflight),
+                mock.patch.object(MODULE, "checked_gate", side_effect=gate),
+                self.assertRaisesRegex(MODULE.Refusal, "stop before work"),
+            ):
+                MODULE.main([])
+            self.assertFalse(work.exists())
+
+    def test_main_persists_exact_preflight_stdout_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            work = root / "work"
+            paths = MODULE.Paths(
+                repo=MODULE_PATH.parents[3],
+                release_root=root,
+                bootstrap=work / "bootstrap",
+                reuse_bootstrap_work=None,
+                validator=MODULE_PATH,
+                solana=MODULE_PATH,
+                work=work,
+            )
+            captured = b'{"schema":"preflight-test"}\n'
+            report = {
+                "model_sha256": "11" * 32,
+                "repository": {"source_set_sha256": "22" * 32},
+            }
+
+            def build(observed: MODULE.Paths, *_args: object) -> MODULE.Paths:
+                self.assertEqual(
+                    (work / MODULE.OFFLINE_PREFLIGHT_RECEIPT).read_bytes(), captured
+                )
+                self.assertTrue((work / "runs").is_dir())
+                self.assertFalse((work / "SUMMARY.json").exists())
+                raise MODULE.Refusal("stop after receipt")
+
+            with (
+                mock.patch.object(
+                    MODULE, "parse", return_value=(paths, 1, "full-probe", False)
+                ),
+                mock.patch.object(MODULE, "clean_commit", return_value="33" * 20),
+                mock.patch.object(MODULE, "clean_tree", return_value="44" * 20),
+                mock.patch.object(
+                    MODULE, "run_offline_preflight", return_value=(captured, report)
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "checked_gate",
+                    return_value=(root / "gate.json", {}, "55" * 32),
+                ),
+                mock.patch.object(MODULE, "build_bootstrap", side_effect=build),
+                self.assertRaisesRegex(MODULE.Refusal, "stop after receipt"),
+            ):
+                MODULE.main([])
+
     def test_full_help_requires_every_dispatched_final_evidence_command(self) -> None:
         probe_required = (
             *MODULE.FOUNDING_PARTICIPANT_COMMANDS,

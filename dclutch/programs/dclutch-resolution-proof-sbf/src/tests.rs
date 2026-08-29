@@ -24,13 +24,14 @@ use dclutch_pyth_svm::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
-    ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
-    activate_execution_release_set_v1,
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
 };
 use dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES;
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ProgramIdentityV1,
 };
 use dclutch_resolution_codec::{
     ACCEPT_PYTH_REQUEST_BYTES, AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES,
@@ -57,7 +58,10 @@ use solana_program::{
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
-use super::{RecordKind, ResolutionError, authenticate_finalized_record, process_instruction};
+use super::{
+    RecordKind, ResolutionError, authenticate_finalized_record, cached_deployment_observation,
+    process_instruction,
+};
 
 const GENERATION: u64 = 1;
 const NOW: i64 = 100;
@@ -143,6 +147,16 @@ fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
         .get_mut(LOADER_V3_PROGRAMDATA_METADATA_BYTES..)
         .expect("ELF")
         .copy_from_slice(elf);
+    bytes
+}
+
+fn exact_authority_programdata_bytes(slot: u64, authority: [u8; 32], elf: &[u8]) -> Vec<u8> {
+    let mut bytes = immutable_programdata_bytes(slot, elf);
+    *bytes.get_mut(12).expect("authority option tag") = 1;
+    bytes
+        .get_mut(13..45)
+        .expect("upgrade authority")
+        .copy_from_slice(&authority);
     bytes
 }
 
@@ -262,6 +276,27 @@ fn artifact(
     .expect("valid immutable artifact")
 }
 
+fn exact_authority_artifact(
+    program: Pubkey,
+    programdata: Pubkey,
+    semantic_release_id: [u8; 32],
+    elf: &[u8],
+    slot: u64,
+    authority: [u8; 32],
+) -> ArtifactReleaseV1 {
+    ArtifactReleaseV1::new(
+        program_identity(program),
+        program_identity(bpf_loader_upgradeable::ID),
+        programdata.to_bytes(),
+        core_id(semantic_release_id),
+        hash(elf).to_bytes(),
+        slot,
+        ArtifactUpgradePolicyV1::ExactAuthority,
+        Some(authority),
+    )
+    .expect("valid exact-authority artifact")
+}
+
 fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
 }
@@ -286,6 +321,265 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
 
 fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(release.program(), artifact_id(release))
+}
+
+#[test]
+fn cached_observation_accepts_the_exact_release_projected_by_the_activation_cache() {
+    let program = key(0xc1);
+    let programdata =
+        Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let elf = b"cached-resolution-elf";
+    let release = artifact(program, programdata, [0xc2; 32], elf, 91);
+    let release_set = ExecutionReleaseSetV1::new(
+        binding(release),
+        binding(release),
+        binding(release),
+        binding(release),
+        binding(release),
+    )
+    .expect("aliased release-set projection");
+    let release_set_id = core_id(hash(&release_set.to_bytes()).to_bytes());
+    let input = activation_input(release);
+    let inputs = ExecutionReleaseActivationInputsV1::new(input, input, input, input, input);
+    let cache = activate_execution_release_set_v1(release_set_id, &release_set, &inputs)
+        .expect("activated release set")
+        .to_bytes();
+    let cached_release = ActivatedExecutionReleaseSetViewV1::decode(&cache)
+        .expect("canonical Registry cache")
+        .role(ExecutionRoleV1::Resolution)
+        .expect("Resolution role")
+        .release();
+    assert_eq!(cached_release, release);
+
+    let program_account = account(
+        program,
+        false,
+        1,
+        loader_program_bytes(programdata),
+        bpf_loader_upgradeable::ID,
+        true,
+    );
+    let programdata_account = account(
+        programdata,
+        false,
+        1,
+        immutable_programdata_bytes(91, elf),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    let observation =
+        cached_deployment_observation(&program_account, &programdata_account, cached_release)
+            .expect("activation-pinned deployment");
+    let expected = DeploymentObservationV1::new(
+        program.to_bytes(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        true,
+        programdata.to_bytes(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        false,
+        programdata.to_bytes(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        91,
+        release.elf_digest(),
+        None,
+    )
+    .expect("expected observation");
+    assert_eq!(observation, expected);
+
+    let mut hostile_cache = cache;
+    let digest_offset = hostile_cache
+        .windows(release.elf_digest().len())
+        .position(|window| window == release.elf_digest())
+        .expect("embedded release digest");
+    hostile_cache[digest_offset] ^= 1;
+    assert!(
+        ActivatedExecutionReleaseSetViewV1::decode(&hostile_cache).is_err(),
+        "a mutated cached release refuses before its admitted digest can be reused",
+    );
+}
+
+#[test]
+fn cached_observation_refuses_programdata_and_release_substitution() {
+    let program = key(0xc3);
+    let programdata =
+        Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let elf = b"pinned-elf";
+    let release = artifact(program, programdata, [0xc4; 32], elf, 92);
+    let program_account = account(
+        program,
+        false,
+        1,
+        loader_program_bytes(programdata),
+        bpf_loader_upgradeable::ID,
+        true,
+    );
+    let substituted_programdata = account(
+        key(0xc5),
+        false,
+        1,
+        immutable_programdata_bytes(92, elf),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        cached_deployment_observation(&program_account, &substituted_programdata, release),
+        Err(ProgramError::Custom(
+            ResolutionError::ResolutionDeployment as u32
+        )),
+    );
+
+    let programdata_account = account(
+        programdata,
+        false,
+        1,
+        immutable_programdata_bytes(92, elf),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    let substituted_release = artifact(program, key(0xc6), [0xc4; 32], elf, 92);
+    assert_eq!(
+        cached_deployment_observation(&program_account, &programdata_account, substituted_release,),
+        Err(ProgramError::Custom(
+            ResolutionError::ResolutionDeployment as u32
+        )),
+    );
+
+    let substituted_link = account(
+        program,
+        false,
+        1,
+        loader_program_bytes(key(0xc7)),
+        bpf_loader_upgradeable::ID,
+        true,
+    );
+    assert_eq!(
+        cached_deployment_observation(&substituted_link, &programdata_account, release),
+        Err(ProgramError::Custom(
+            ResolutionError::ResolutionDeployment as u32
+        )),
+        "the Loader-owned link, release, and supplied ProgramData must all agree",
+    );
+}
+
+#[test]
+fn cached_observation_names_only_a_forward_exact_authority_slot_move_as_superseded() {
+    let program = key(0xc8);
+    let programdata =
+        Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let authority = [0xc9; 32];
+    let elf = b"mutable-pinned-elf";
+    let release = exact_authority_artifact(program, programdata, [0xca; 32], elf, 93, authority);
+    let program_account = account(
+        program,
+        false,
+        1,
+        loader_program_bytes(programdata),
+        bpf_loader_upgradeable::ID,
+        true,
+    );
+    let upgraded_programdata = account(
+        programdata,
+        false,
+        1,
+        exact_authority_programdata_bytes(94, authority, b"replacement-elf"),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        cached_deployment_observation(&program_account, &upgraded_programdata, release),
+        Err(ProgramError::Custom(
+            ResolutionError::ReleaseSuperseded as u32
+        )),
+    );
+
+    let substituted_authority = account(
+        programdata,
+        false,
+        1,
+        exact_authority_programdata_bytes(93, [0xcb; 32], elf),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        cached_deployment_observation(&program_account, &substituted_authority, release),
+        Err(ProgramError::Custom(
+            ResolutionError::ResolutionDeployment as u32
+        )),
+        "authority substitution is not mislabeled as an upgrade",
+    );
+}
+
+#[test]
+fn recurring_resolution_deployment_auth_caller_census_is_exact() {
+    let core_effect = include_str!("core_effect.rs");
+    let pre_market = include_str!("pre_market_funding_v1.rs");
+    let pre_market_abort = include_str!("pre_market_funding_abort_v1.rs");
+    let provider_transport = include_str!("provider_transport_v3.rs");
+    let provider_instruction = include_str!("provider_instruction_v3.rs");
+    assert_eq!(
+        core_effect
+            .matches("cached_deployment_observation(")
+            .count(),
+        6,
+        "three Core-effect authenticators each bind Core and Resolution",
+    );
+    assert_eq!(
+        pre_market.matches("cached_deployment_observation(").count(),
+        2,
+        "pre-Market funding binds Trading and Resolution",
+    );
+    assert_eq!(
+        pre_market_abort
+            .matches("slot_pinned_deployment_observation(")
+            .count(),
+        2,
+        "funding retirement binds Trading and Resolution through the shared cached path",
+    );
+    for (name, source, expected) in [
+        ("core_effect", core_effect, 6),
+        ("pre_market_funding", pre_market, 2),
+        ("pre_market_funding_abort", pre_market_abort, 2),
+    ] {
+        assert_eq!(
+            source.matches("deployment_observation(").count(),
+            expected,
+            "{name} must not regain a full-ELF deployment observation",
+        );
+    }
+
+    assert_eq!(
+        provider_transport
+            .matches("cached_deployment_observation(")
+            .count(),
+        3,
+        "provider submission binds Registry, Core, and Resolution; reclaim binds Resolution",
+    );
+    assert_eq!(
+        provider_instruction
+            .matches("cached_deployment_observation(")
+            .count(),
+        2,
+        "provider execution binds Registry plus Resolution and the active caller",
+    );
+    assert_eq!(
+        provider_transport
+            .matches("deployment_observation(")
+            .count(),
+        3,
+        "provider transport must not regain a full-ELF deployment observation",
+    );
+    assert_eq!(
+        provider_instruction
+            .matches("deployment_observation(")
+            .count(),
+        2,
+        "provider execution must not regain a full-ELF deployment observation",
+    );
+    assert_eq!(
+        [6, 2, 2, 3, 2].into_iter().sum::<usize>(),
+        15,
+        "all recurring Resolution release/profile observations are enumerated",
+    );
 }
 
 fn fixture() -> Fixture {

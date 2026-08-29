@@ -23,6 +23,10 @@ use dclutch_dealer_codec::{
         DEALER_SCENARIO_PAGE_RECEIPT_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
         DealerScenarioCheckpointInputV1, DealerScenarioCheckpointV1, DealerScenarioEvaluationV1,
     },
+    scenario_custody_reservation_v1::{
+        DEALER_SCENARIO_CUSTODY_EFFECT_BYTES_V1, DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1,
+        DealerScenarioCustodyEffectManifestV1, DealerScenarioCustodyEffectV1,
+    },
     scenario_evaluation_receipt_v1::{
         DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1, DealerScenarioEvaluationReceiptV1,
     },
@@ -35,6 +39,8 @@ use dclutch_dealer_codec::{
         DealerScenarioReservationReceiptV1,
     },
 };
+use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -85,8 +91,8 @@ pub const DEALER_SCENARIO_CHECKPOINT_PAGE_MAX_OBSERVATIONS_V1: usize = 48;
 pub const DEALER_SCENARIO_CHECKPOINT_EVALUATE_ACCOUNT_COUNT_V1: usize = 8;
 /// Exact permissionless-cleanup account count.
 pub const DEALER_SCENARIO_CHECKPOINT_CLEANUP_ACCOUNT_COUNT_V1: usize = 3;
-/// Exact reservation or rollback receipt-ingest account count.
-pub const DEALER_SCENARIO_CHECKPOINT_RESERVATION_ACCOUNT_COUNT_V1: usize = 5;
+/// Exact release-authenticated reservation or rollback receipt-ingest count.
+pub const DEALER_SCENARIO_CHECKPOINT_RESERVATION_ACCOUNT_COUNT_V1: usize = 11;
 
 const CREATE_PAYER: usize = 0;
 const CREATE_DEALER_AUTHORITY: usize = 1;
@@ -121,8 +127,14 @@ const CLEANUP_CLOCK: usize = 2;
 const RESERVATION_CHECKPOINT: usize = 0;
 const RESERVATION_CLOCK: usize = 1;
 const RESERVATION_PRODUCER: usize = 2;
-const RESERVATION_RECEIPT: usize = 3;
-const RESERVATION_STATE: usize = 4;
+const RESERVATION_PRODUCER_PROGRAMDATA: usize = 3;
+const RESERVATION_ACTIVATION_CACHE: usize = 4;
+const RESERVATION_REGISTRY: usize = 5;
+const RESERVATION_RECEIPT: usize = 6;
+const RESERVATION_STATE: usize = 7;
+const RESERVATION_EFFECT_PRODUCER: usize = 8;
+const RESERVATION_EFFECT_MANIFEST: usize = 9;
+const RESERVATION_EFFECT_BODY: usize = 10;
 
 struct AuthenticatedDealerScenarioEvaluationV1 {
     claims_prestate_digest: [u8; 32],
@@ -590,6 +602,15 @@ fn authenticate_dealer_scenario_evaluation_v1(
     let candidate_obligation_digest = account_data_digest(candidate_obligation)?;
     let claims_delta_digest = account_data_digest(claims_delta)?;
     let effects_digest = account_data_digest(effects)?;
+    if effects.data_len() != DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let effects_data = effects
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let effects_manifest = DealerScenarioCustodyEffectManifestV1::decode(&effects_data)
+        .map_err(|_| TradingSbfError::Content)?;
+    drop(effects_data);
     if receipt.producer_program != producer.key.to_bytes()
         || receipt.checkpoint != checkpoint_account.key.to_bytes()
         || receipt.checkpoint_prestate_digest != prestate_digest
@@ -600,6 +621,10 @@ fn authenticate_dealer_scenario_evaluation_v1(
         || receipt.candidate_obligation_digest != candidate_obligation_digest
         || receipt.claims_delta_digest != claims_delta_digest
         || receipt.effects_digest != effects_digest
+        || effects_manifest.producer_program != producer.key.to_bytes()
+        || effects_manifest.checkpoint != checkpoint_account.key.to_bytes()
+        || effects_manifest.request_digest != input.request_digest
+        || effects_manifest.effect_count != receipt.custody_effect_count
     {
         return Err(TradingSbfError::Transition.into());
     }
@@ -672,11 +697,26 @@ fn process_dealer_scenario_checkpoint_reservation_receipt_v1(
     let checkpoint_account = account(accounts, RESERVATION_CHECKPOINT)?;
     let clock_account = account(accounts, RESERVATION_CLOCK)?;
     let producer = account(accounts, RESERVATION_PRODUCER)?;
+    let producer_programdata = account(accounts, RESERVATION_PRODUCER_PROGRAMDATA)?;
+    let activation_cache = account(accounts, RESERVATION_ACTIVATION_CACHE)?;
+    let registry = account(accounts, RESERVATION_REGISTRY)?;
     let receipt_account = account(accounts, RESERVATION_RECEIPT)?;
     let reservation_state = account(accounts, RESERVATION_STATE)?;
+    let effect_producer = account(accounts, RESERVATION_EFFECT_PRODUCER)?;
+    let effect_manifest = account(accounts, RESERVATION_EFFECT_MANIFEST)?;
+    let effect_body = account(accounts, RESERVATION_EFFECT_BODY)?;
     if !producer.executable
         || producer.is_signer
         || producer.is_writable
+        || producer_programdata.is_signer
+        || producer_programdata.is_writable
+        || producer_programdata.executable
+        || activation_cache.is_signer
+        || activation_cache.is_writable
+        || activation_cache.executable
+        || registry.is_signer
+        || registry.is_writable
+        || !registry.executable
         || receipt_account.is_signer
         || receipt_account.is_writable
         || receipt_account.executable
@@ -685,12 +725,38 @@ fn process_dealer_scenario_checkpoint_reservation_receipt_v1(
         || reservation_state.is_writable
         || reservation_state.executable
         || reservation_state.owner != producer.key
+        || !effect_producer.executable
+        || effect_producer.is_signer
+        || effect_producer.is_writable
+        || effect_manifest.is_signer
+        || effect_manifest.is_writable
+        || effect_manifest.executable
+        || effect_manifest.owner != effect_producer.key
+        || effect_manifest.data_len() != DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_BYTES_V1
+        || effect_body.is_signer
+        || effect_body.is_writable
+        || effect_body.executable
+        || effect_body.owner != effect_producer.key
+        || effect_body.data_len() != DEALER_SCENARIO_CUSTODY_EFFECT_BYTES_V1
         || has_duplicate_keys(accounts)
     {
         return Err(TradingSbfError::Content.into());
     }
     let (checkpoint, checkpoint_prestate_digest) = read_checkpoint(program_id, checkpoint_account)?;
     require_checkpoint_pda(program_id, checkpoint_account, checkpoint)?;
+    let input = checkpoint.input();
+    let release_receipt = authenticate_activated_role_v1(
+        registry,
+        activation_cache,
+        &input.release_set,
+        ExecutionRoleV1::Custody,
+        producer,
+        producer_programdata,
+    )
+    .map_err(|_| TradingSbfError::Release)?;
+    if release_receipt.program().as_bytes() != producer.key.as_ref() {
+        return Err(TradingSbfError::Release.into());
+    }
     let receipt_data = receipt_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
@@ -698,7 +764,6 @@ fn process_dealer_scenario_checkpoint_reservation_receipt_v1(
         .map_err(|_| TradingSbfError::Content)?;
     let action_seed = [expected_action as u8];
     let ordinal_seed = [receipt.effect_ordinal];
-    let input = checkpoint.input();
     let expected_receipt = Pubkey::find_program_address(
         &[
             DEALER_SCENARIO_RESERVATION_RECEIPT_PDA_DOMAIN_V1,
@@ -710,6 +775,14 @@ fn process_dealer_scenario_checkpoint_reservation_receipt_v1(
         producer.key,
     )
     .0;
+    authenticate_reservation_effect_bank_v1(
+        effect_producer,
+        effect_manifest,
+        effect_body,
+        checkpoint_account,
+        &checkpoint,
+        &receipt,
+    )?;
     if receipt.action != expected_action
         || receipt_account.key != &expected_receipt
         || receipt.producer_program != producer.key.to_bytes()
@@ -744,6 +817,48 @@ fn process_dealer_scenario_checkpoint_reservation_receipt_v1(
     .map_err(|_| TradingSbfError::Transition)?;
     write_checkpoint_last(program_id, checkpoint_account, checkpoint, next)?;
     set_return_data(&receipt_digest);
+    Ok(())
+}
+
+#[inline(never)]
+fn authenticate_reservation_effect_bank_v1(
+    producer: &AccountInfo<'_>,
+    manifest_account: &AccountInfo<'_>,
+    body_account: &AccountInfo<'_>,
+    checkpoint_account: &AccountInfo<'_>,
+    checkpoint: &DealerScenarioCheckpointV1,
+    receipt: &DealerScenarioReservationReceiptV1,
+) -> Result<(), ProgramError> {
+    let input = checkpoint.input();
+    let manifest_data = manifest_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let manifest_digest = hash(&manifest_data).to_bytes();
+    let manifest = DealerScenarioCustodyEffectManifestV1::decode(&manifest_data)
+        .map_err(|_| TradingSbfError::Content)?;
+    drop(manifest_data);
+    let body_data = body_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let body_digest = hash(&body_data).to_bytes();
+    let body =
+        DealerScenarioCustodyEffectV1::decode(&body_data).map_err(|_| TradingSbfError::Content)?;
+    let effect_index = usize::from(receipt.effect_ordinal);
+    if manifest_digest != checkpoint.evaluation().effects_digest
+        || manifest.producer_program != producer.key.to_bytes()
+        || manifest.checkpoint != checkpoint_account.key.to_bytes()
+        || manifest.request_digest != input.request_digest
+        || manifest.effect_count != receipt.effect_count
+        || manifest.effect_accounts.get(effect_index).copied() != Some(body_account.key.to_bytes())
+        || manifest.effect_digests.get(effect_index).copied() != Some(body_digest)
+        || body.producer_program != producer.key.to_bytes()
+        || body.checkpoint != checkpoint_account.key.to_bytes()
+        || body.request_digest != input.request_digest
+        || body.ordinal != receipt.effect_ordinal
+        || body.effect_count != receipt.effect_count
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
     Ok(())
 }
 

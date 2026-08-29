@@ -40,6 +40,15 @@ RUN_SCHEMA = "dclutch-private-validator-lifecycle-run-v1"
 PARTICIPANT_PROBE_RUN_SCHEMA = "dclutch-private-validator-participant-probe-run-v1"
 FULL_PROBE_RUN_SCHEMA = "dclutch-private-validator-full-lifecycle-probe-run-v1"
 PARTICIPANT_HANDOFF_SCHEMA = "dclutch-private-validator-participant-handoff-v1"
+OFFLINE_PREFLIGHT_SCHEMA = "dclutch-private-lifecycle-offline-preflight-v1"
+OFFLINE_PREFLIGHT_EVIDENCE_LEVEL = (
+    "offline-clean-committed-source-contract-only"
+)
+OFFLINE_PREFLIGHT_RELATIVE_PATH = Path(
+    "tools/release/private-validator-lifecycle/preflight.py"
+)
+RUNNER_RELATIVE_PATH = Path("tools/release/private-validator-lifecycle/run.py")
+OFFLINE_PREFLIGHT_RECEIPT = "OFFLINE_PREFLIGHT.json"
 SEED_DOMAIN = b"dclutch/private-validator-lifecycle/named-seed/v1\0"
 FOUNDING_PARTICIPANT_COMMANDS = (
     "local-mutable-prepare-v1",
@@ -421,6 +430,167 @@ def clean_commit(repo: Path) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()
+
+
+def clean_tree(repo: Path) -> str:
+    try:
+        tree = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD^{tree}"],
+            cwd=repo,
+            text=True,
+            stderr=subprocess.PIPE,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise Refusal(f"cannot bind the private lifecycle source tree: {error}") from error
+    if len(tree) != 40 or any(character not in "0123456789abcdef" for character in tree):
+        raise Refusal("private lifecycle source tree is not one lowercase Git object id")
+    return tree
+
+
+def authenticate_offline_preflight(
+    document: Any,
+    *,
+    paths: Paths,
+    commit: str,
+    tree: str,
+    through: str,
+) -> dict[str, Any]:
+    expected_fields = {
+        "schema",
+        "status",
+        "evidence_level",
+        "through",
+        "validator_started",
+        "rpc_used",
+        "keys_read",
+        "build_run",
+        "repository",
+        "command_exposures",
+        "recovery_exposure",
+        "schema_handoffs",
+        "stage_vocabulary",
+        "constants",
+        "economic_owner",
+        "founding_geometry",
+        "transaction_geometry",
+        "expected_execution",
+        "source_sha256",
+        "model_sha256",
+    }
+    report = exact_keys(document, expected_fields, "private lifecycle offline preflight")
+    repository = exact_keys(
+        report.get("repository"),
+        {"head", "tree", "source_set_sha256"},
+        "private lifecycle offline preflight repository",
+    )
+    if (
+        report.get("schema") != OFFLINE_PREFLIGHT_SCHEMA
+        or report.get("status") != "accepted"
+        or report.get("evidence_level") != OFFLINE_PREFLIGHT_EVIDENCE_LEVEL
+        or report.get("through") != through
+        or any(
+            report.get(field) is not False
+            for field in ("validator_started", "rpc_used", "keys_read", "build_run")
+        )
+        or repository.get("head") != commit
+        or repository.get("tree") != tree
+    ):
+        raise Refusal(
+            "private lifecycle offline preflight did not accept this exact clean source mode"
+        )
+    source_sha256 = report.get("source_sha256")
+    if not isinstance(source_sha256, dict) or not source_sha256:
+        raise Refusal("private lifecycle offline preflight omitted its source digest set")
+    for relative, digest in source_sha256.items():
+        if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+            raise Refusal("private lifecycle offline preflight named a non-relative source")
+        lowercase_sha256(digest, f"private lifecycle preflight source {relative}")
+    source_set_sha256 = sha256_bytes(
+        json.dumps(source_sha256, sort_keys=True, separators=(",", ":")).encode()
+    )
+    if source_set_sha256 != lowercase_sha256(
+        repository.get("source_set_sha256"),
+        "private lifecycle preflight source-set digest",
+    ):
+        raise Refusal("private lifecycle offline preflight source-set digest changed")
+    runner_path = canonical_file(
+        paths.repo / RUNNER_RELATIVE_PATH,
+        "private-validator lifecycle runner in target source",
+    )
+    executing_runner = canonical_file(
+        Path(__file__), "executing private-validator lifecycle runner"
+    )
+    preflight_path = canonical_file(
+        paths.repo / OFFLINE_PREFLIGHT_RELATIVE_PATH,
+        "private lifecycle offline preflight",
+    )
+    if executing_runner != runner_path:
+        raise Refusal("executing lifecycle runner is outside the clean target source")
+    expected_source_files = {
+        str(RUNNER_RELATIVE_PATH): sha256_file(runner_path),
+        str(OFFLINE_PREFLIGHT_RELATIVE_PATH): sha256_file(preflight_path),
+    }
+    for relative, digest in expected_source_files.items():
+        if source_sha256.get(relative) != digest:
+            raise Refusal(
+                f"private lifecycle offline preflight did not bind exact {relative} bytes"
+            )
+    claimed_model = lowercase_sha256(
+        report.get("model_sha256"), "private lifecycle offline preflight model"
+    )
+    model_material = dict(report)
+    del model_material["model_sha256"]
+    expected_model = sha256_bytes(
+        json.dumps(model_material, sort_keys=True, separators=(",", ":")).encode()
+    )
+    if claimed_model != expected_model:
+        raise Refusal("private lifecycle offline preflight model digest changed")
+    return report
+
+
+def run_offline_preflight(
+    paths: Paths, commit: str, tree: str, through: str
+) -> tuple[bytes, dict[str, Any]]:
+    preflight_path = canonical_file(
+        paths.repo / OFFLINE_PREFLIGHT_RELATIVE_PATH,
+        "private lifecycle offline preflight",
+    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(preflight_path),
+                "--repo",
+                str(paths.repo),
+                "--through",
+                through,
+            ],
+            cwd=paths.repo,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Refusal(f"private lifecycle offline preflight did not complete: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace")[-4000:]
+        raise Refusal(f"private lifecycle offline preflight refused:\n{detail}")
+    if result.stderr:
+        raise Refusal("accepted private lifecycle offline preflight wrote stderr")
+    try:
+        text = result.stdout.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise Refusal("private lifecycle offline preflight stdout was not UTF-8") from error
+    report = authenticate_offline_preflight(
+        decode_unique_json(text, "private lifecycle offline preflight stdout"),
+        paths=paths,
+        commit=commit,
+        tree=tree,
+        through=through,
+    )
+    return result.stdout, report
 
 
 def canonical_resolution_link(gate: dict[str, Any]) -> dict[str, Any]:
@@ -4192,8 +4362,20 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
 def main(argv: Sequence[str]) -> int:
     paths, seeds, through, hold_participant = parse(argv)
     commit = clean_commit(paths.repo)
+    tree = clean_tree(paths.repo)
+    preflight_bytes, preflight = run_offline_preflight(paths, commit, tree, through)
+    if clean_commit(paths.repo) != commit or clean_tree(paths.repo) != tree:
+        raise Refusal(
+            "private lifecycle source changed after its accepted offline preflight"
+        )
     gate_path, gate, gate_digest = checked_gate(paths, commit)
+    if clean_commit(paths.repo) != commit or clean_tree(paths.repo) != tree:
+        raise Refusal(
+            "private lifecycle source changed between preflight and work creation"
+        )
     paths.work.mkdir(mode=0o700)
+    preflight_receipt = paths.work / OFFLINE_PREFLIGHT_RECEIPT
+    write_bytes_new(preflight_receipt, preflight_bytes)
     (paths.work / "runs").mkdir()
     paths = build_bootstrap(paths, commit, gate_digest)
     help_sha256 = command_surface(paths.bootstrap, through)
@@ -4240,6 +4422,13 @@ def main(argv: Sequence[str]) -> int:
             )
         ),
         "source_revision": commit,
+        "source_tree": tree,
+        "offline_preflight": {
+            "path": str(preflight_receipt),
+            "sha256": sha256_file(preflight_receipt),
+            "model_sha256": preflight["model_sha256"],
+            "source_set_sha256": preflight["repository"]["source_set_sha256"],
+        },
         "checked_release_gate": str(gate_path),
         "checked_release_gate_sha256": gate_digest,
         "bootstrap_sha256": sha256_file(paths.bootstrap),

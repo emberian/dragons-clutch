@@ -10,6 +10,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
 
+use dclutch_capability_program_contract::CapabilityRootSeedsV1;
 use dclutch_claims_svm::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2, AffineBatchReceiptV2},
     composition_v3::ClaimsCompositionV3,
@@ -35,10 +36,10 @@ use dclutch_effect_kernel::{
 };
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_ATOMIC_ROOT_V3,
-    FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_ROOT_PDA_SEED_V1,
-    FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_TERMINAL_ROOT_V3,
-    FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
-    FractionalRootV1, FractionalTerminalAtomicReceiptV3,
+    FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3,
+    FRACTIONAL_TERMINAL_ROOT_V3, FractionalAtomicReceiptV3, FractionalExposureActionV2,
+    FractionalExposureRequestV2, FractionalTerminalAtomicReceiptV3,
+    decode_fractional_capability_root_v4,
 };
 use dclutch_rational_representation_v2_contract::{
     CallerRoleV2, RECEIPT_BYTES_V2 as REPRESENTATION_RECEIPT_BYTES_V2,
@@ -167,10 +168,25 @@ pub fn execute_claims_route_v3<'info>(
     let caller_signer = [domain, release, market, role, context, digest, &bump_seed];
     if let Some(root) = fractional_root {
         let root_bump = [root.bump];
+        let [
+            root_domain,
+            root_market,
+            root_generation,
+            root_manifest,
+            root_entry,
+            root_kind,
+            root_release,
+            root_config,
+        ] = root.seeds.as_slices();
         let root_signer = [
-            FRACTIONAL_ROOT_PDA_SEED_V1,
-            root.terms.as_slice(),
-            root.market.as_slice(),
+            root_domain,
+            root_market,
+            root_generation,
+            root_manifest,
+            root_entry,
+            root_kind,
+            root_release,
+            root_config,
             root_bump.as_slice(),
         ];
         buffers
@@ -687,9 +703,8 @@ fn verify_fractional_terminal_atomic_receipt(
 
 #[derive(Clone, Copy)]
 struct FractionalRootSignerV3 {
+    seeds: CapabilityRootSeedsV1,
     bump: u8,
-    terms: [u8; 32],
-    market: [u8; 32],
 }
 
 fn fractional_root_signer(
@@ -716,23 +731,21 @@ fn fractional_root_signer(
     let root_data = root_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    let root = FractionalRootV1::decode(&root_data).ok_or(TradingSbfError::Content)?;
-    let input = root.input();
-    let expected = Pubkey::create_program_address(
-        &[
-            FRACTIONAL_ROOT_PDA_SEED_V1,
-            input.terms.as_slice(),
-            input.market.as_slice(),
-            &[input.bump],
-        ],
-        program_id,
-    )
-    .map_err(|_| TradingSbfError::Content)?;
+    let composite =
+        decode_fractional_capability_root_v4(&root_data).ok_or(TradingSbfError::Content)?;
+    let header = composite.header();
+    let input = composite.state().input();
+    let seeds = header.seeds();
+    let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
     if root_account.key != &expected
         || root_account.owner != program_id
         || root_account.is_signer
-        || root_account.is_writable
+        || !root_account.is_writable
         || root_account.executable
+        || header.release_set().to_bytes() != request.input().release_set
+        || header.market() != request.input().market
+        || header.selection().config().to_bytes() != request.input().terms
+        || input.bump != bump
         || input.terms != request.input().terms
         || input.market != request.input().market
         || input.revision != request.input().expected_revision
@@ -740,15 +753,11 @@ fn fractional_root_signer(
         return Err(TradingSbfError::Content.into());
     }
     let meta = metas.get_mut(root_index).ok_or(TradingSbfError::Content)?;
-    if meta.pubkey != expected || meta.is_writable {
+    if meta.pubkey != expected || !meta.is_writable {
         return Err(TradingSbfError::Content.into());
     }
     meta.is_signer = true;
-    Ok(Some(FractionalRootSignerV3 {
-        bump: input.bump,
-        terms: input.terms,
-        market: input.market,
-    }))
+    Ok(Some(FractionalRootSignerV3 { seeds, bump }))
 }
 
 #[inline(never)]
@@ -1104,6 +1113,65 @@ mod tests {
         let lamports = Box::leak(Box::new(0_u64));
         let data = Box::leak(Vec::<u8>::new().into_boxed_slice());
         AccountInfo::new(key, signer, writable, lamports, data, owner, false)
+    }
+
+    fn fractional_root_info(
+        request: FractionalExposureRequestV2,
+        trading: Pubkey,
+    ) -> (AccountInfo<'static>, u8) {
+        use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
+        use dclutch_fractional_claim_contract::{
+            FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
+            FractionalRootInputV1, FractionalRootV1,
+        };
+        use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+
+        let input = request.input();
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            ContentId::new(id(51)).expect("manifest"),
+            ContentId::new(id(52)).expect("kind"),
+            ContentId::new(id(53)).expect("capability release"),
+            ContentId::new(input.terms).expect("terms config"),
+        )
+        .expect("selection");
+        let header = CapabilityRootHeaderV1::new(
+            ContentId::new(input.release_set).expect("release set"),
+            input.market,
+            1,
+            selection,
+            SelectedRecordBumpsV1::default(),
+        )
+        .expect("header");
+        let (root_key, bump) = Pubkey::find_program_address(&header.seeds().as_slices(), &trading);
+        let state = FractionalRootV1::new(FractionalRootInputV1 {
+            bump,
+            terms: input.terms,
+            market: input.market,
+            rent_beneficiary: id(50),
+            revision: input.expected_revision,
+            historical_rent_principal: 1,
+        })
+        .expect("root state");
+        let mut bytes = alloc::vec![0_u8; FRACTIONAL_CAPABILITY_ROOT_BYTES_V4];
+        bytes[..FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4].copy_from_slice(&header.to_bytes());
+        bytes[FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4..].copy_from_slice(&state.to_bytes());
+        let root_key = Box::leak(Box::new(root_key));
+        let root_owner = Box::leak(Box::new(trading));
+        let root_lamports = Box::leak(Box::new(1_u64));
+        let root_data = Box::leak(bytes.into_boxed_slice());
+        (
+            AccountInfo::new(
+                root_key,
+                false,
+                true,
+                root_lamports,
+                root_data,
+                root_owner,
+                false,
+            ),
+            bump,
+        )
     }
 
     /// The privilege rule now lives once, in the walk's shared buffer set, and
@@ -1726,38 +1794,7 @@ mod tests {
         );
 
         let trading = Pubkey::new_from_array(id(21));
-        let (root_key, bump) = Pubkey::find_program_address(
-            &[
-                FRACTIONAL_ROOT_PDA_SEED_V1,
-                decoded.input().terms.as_slice(),
-                decoded.input().market.as_slice(),
-            ],
-            &trading,
-        );
-        let root = dclutch_fractional_claim_contract::FractionalRootV1::new(
-            dclutch_fractional_claim_contract::FractionalRootInputV1 {
-                bump,
-                terms: decoded.input().terms,
-                market: decoded.input().market,
-                rent_beneficiary: id(50),
-                revision: decoded.input().expected_revision,
-                historical_rent_principal: 1,
-            },
-        )
-        .expect("root");
-        let root_key = Box::leak(Box::new(root_key));
-        let root_owner = Box::leak(Box::new(trading));
-        let root_lamports = Box::leak(Box::new(1_u64));
-        let root_data = Box::leak(Box::new(root.to_bytes()));
-        let root_info = AccountInfo::new(
-            root_key,
-            false,
-            false,
-            root_lamports,
-            root_data,
-            root_owner,
-            false,
-        );
+        let (root_info, bump) = fractional_root_info(decoded, trading);
         let mut accounts: Vec<_> = (0
             ..dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3)
             .map(|_| account_info(false, false))
@@ -1766,7 +1803,11 @@ mod tests {
         let mut metas: Vec<_> = accounts
             .iter()
             .map(|account| {
-                solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+                if account.is_writable {
+                    solana_program::instruction::AccountMeta::new(*account.key, false)
+                } else {
+                    solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+                }
             })
             .collect();
         let signer = fractional_root_signer(
@@ -1835,38 +1876,7 @@ mod tests {
             ));
 
             let trading = Pubkey::new_from_array(id(21));
-            let (root_key, bump) = Pubkey::find_program_address(
-                &[
-                    FRACTIONAL_ROOT_PDA_SEED_V1,
-                    decoded.input().terms.as_slice(),
-                    decoded.input().market.as_slice(),
-                ],
-                &trading,
-            );
-            let root = dclutch_fractional_claim_contract::FractionalRootV1::new(
-                dclutch_fractional_claim_contract::FractionalRootInputV1 {
-                    bump,
-                    terms: decoded.input().terms,
-                    market: decoded.input().market,
-                    rent_beneficiary: id(50),
-                    revision: decoded.input().expected_revision,
-                    historical_rent_principal: 1,
-                },
-            )
-            .expect("root");
-            let root_key = Box::leak(Box::new(root_key));
-            let root_owner = Box::leak(Box::new(trading));
-            let root_lamports = Box::leak(Box::new(1_u64));
-            let root_data = Box::leak(Box::new(root.to_bytes()));
-            let root_info = AccountInfo::new(
-                root_key,
-                false,
-                false,
-                root_lamports,
-                root_data,
-                root_owner,
-                false,
-            );
+            let (root_info, _bump) = fractional_root_info(decoded, trading);
             let mut accounts: Vec<_> = (0
                 ..dclutch_fractional_claim_contract::FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3)
                 .map(|_| account_info(false, false))
@@ -1875,7 +1885,11 @@ mod tests {
             let mut metas: Vec<_> = accounts
                 .iter()
                 .map(|account| {
-                    solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+                    if account.is_writable {
+                        solana_program::instruction::AccountMeta::new(*account.key, false)
+                    } else {
+                        solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+                    }
                 })
                 .collect();
             assert!(

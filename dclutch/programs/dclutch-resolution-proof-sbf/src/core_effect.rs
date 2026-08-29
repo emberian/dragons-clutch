@@ -57,7 +57,7 @@ use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
-    authenticate_rent, deployment_observation,
+    authenticate_rent, cached_deployment_observation,
 };
 
 /// Exact fixed instruction width for one canonical Core envelope and Resolution request.
@@ -146,6 +146,12 @@ struct DirectCloseAccounts<'a, 'info> {
     clock: &'a AccountInfo<'info>,
     rent: &'a AccountInfo<'info>,
     system: &'a AccountInfo<'info>,
+}
+
+#[derive(Clone, Copy)]
+struct DirectCloseMarketFacts {
+    terminal_winner: u32,
+    product_record: [u8; 32],
 }
 
 /// Return whether bytes select the one canonical Core effect route.
@@ -388,7 +394,7 @@ pub(crate) fn process_direct_funding_close_v1(
     if clock.unix_timestamp <= 0 {
         return Err(ResolutionError::Sysvar.into());
     }
-    let state = authenticate_direct_close_market(direct, request.as_ref())?;
+    let market = authenticate_direct_close_market(direct, request.as_ref())?;
     authenticate_direct_close_release(program_id, direct, request.as_ref())?;
     authenticate_direct_close_records(direct, request.as_ref(), &rent)?;
     let material_data = direct
@@ -418,7 +424,7 @@ pub(crate) fn process_direct_funding_close_v1(
         program_id,
         direct,
         request.as_ref(),
-        state,
+        market,
         manifest_id,
         manifest,
         clock.unix_timestamp,
@@ -432,7 +438,7 @@ fn commit_direct_close(
     program_id: &Pubkey,
     direct: DirectCloseAccounts<'_, '_>,
     request: &DirectFundingCloseRequestV1,
-    state: CoreState,
+    market: DirectCloseMarketFacts,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
     close_time: i64,
@@ -461,7 +467,7 @@ fn commit_direct_close(
     let terminal = source
         .terminal_projection()
         .map_err(|_| ResolutionError::Transition)?;
-    if terminal.selector() != state.terminal_winner
+    if terminal.selector() != market.terminal_winner
         || terminal
             .terminal_sequence()
             .checked_add(1)
@@ -471,7 +477,7 @@ fn commit_direct_close(
         return Err(ResolutionError::Transition.into());
     }
     source
-        .retire(state.identity.generation, close_time, 1, 1)
+        .retire(request.generation, close_time, 1, 1)
         .map_err(|_| ResolutionError::Transition)?;
 
     let mut closed_ledger = Box::new(copy_ledger_bytes(direct.funding_ledger)?);
@@ -487,7 +493,7 @@ fn commit_direct_close(
     authenticate_direct_close_ledger(
         program_id,
         direct,
-        state.identity.generation,
+        request.generation,
         manifest_id,
         manifest,
         request.role,
@@ -563,7 +569,7 @@ fn commit_direct_close(
         terminal.terminal_sequence(),
         request.role.source_material,
         request.market,
-        state.identity.product_record.to_bytes(),
+        market.product_record,
         request.generation,
         terminal.selector(),
         &certificate_data,
@@ -845,7 +851,7 @@ fn parse_direct_close_accounts<'a, 'info>(
 fn authenticate_direct_close_market(
     direct: DirectCloseAccounts<'_, '_>,
     request: &DirectFundingCloseRequestV1,
-) -> Result<CoreState, ProgramError> {
+) -> Result<DirectCloseMarketFacts, ProgramError> {
     if direct.market.owner != direct.core_program.key {
         return Err(ResolutionError::MarketAuthority.into());
     }
@@ -874,7 +880,10 @@ fn authenticate_direct_close_market(
     {
         return Err(ResolutionError::MarketAuthority.into());
     }
-    Ok(state)
+    Ok(DirectCloseMarketFacts {
+        terminal_winner: state.terminal_winner,
+        product_record: state.identity.product_record.to_bytes(),
+    })
 }
 
 fn authenticate_direct_close_release(
@@ -916,17 +925,17 @@ fn authenticate_direct_close_release(
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    core.authenticate_current_deployment(deployment_observation(
+    core.authenticate_current_deployment(cached_deployment_observation(
         direct.core_program,
         direct.core_programdata,
-        core.release().programdata(),
+        core.release(),
     )?)
     .map_err(|_| ResolutionError::ResolutionDeployment)?;
     resolution
-        .authenticate_current_deployment(deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             direct.resolution_program,
             direct.resolution_programdata,
-            resolution.release().programdata(),
+            resolution.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
@@ -1107,17 +1116,17 @@ fn authenticate_direct_activation(
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    core.authenticate_current_deployment(deployment_observation(
+    core.authenticate_current_deployment(cached_deployment_observation(
         direct.core_program,
         direct.core_programdata,
-        core.release().programdata(),
+        core.release(),
     )?)
     .map_err(|_| ResolutionError::ResolutionDeployment)?;
     resolution
-        .authenticate_current_deployment(deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             direct.resolution_program,
             direct.resolution_programdata,
-            resolution.release().programdata(),
+            resolution.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
@@ -1804,17 +1813,17 @@ fn authenticate_activation(
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    let core_observation = deployment_observation(
+    let core_observation = cached_deployment_observation(
         common.core_program,
         common.core_programdata,
-        core.release().programdata(),
+        core.release(),
     )?;
     core.authenticate_current_deployment(core_observation)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let resolution_observation = deployment_observation(
+    let resolution_observation = cached_deployment_observation(
         common.resolution_program,
         common.resolution_programdata,
-        resolution.release().programdata(),
+        resolution.release(),
     )?;
     resolution
         .authenticate_current_deployment(resolution_observation)

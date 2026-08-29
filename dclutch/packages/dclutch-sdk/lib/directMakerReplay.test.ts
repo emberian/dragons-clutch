@@ -6,13 +6,16 @@ import { type RpcAccount } from './rpc';
 import {
   DIRECT_MAKER_REPLAY_BYTES_V1,
   deriveDirectMakerReplayAddressV1,
+  inspectDirectMakerNoncePairV1,
   inspectDirectMakerNonceV1,
+  requireAuthenticatedDirectMakerNoncePairV1,
   requireAuthenticatedDirectMakerNonceV1,
 } from './directMakerReplay';
 
 const TRADING = Keypair.fromSeed(new Uint8Array(32).fill(71)).publicKey.toBase58();
 const MARKET = Keypair.fromSeed(new Uint8Array(32).fill(72)).publicKey.toBase58();
 const MAKER = Keypair.fromSeed(new Uint8Array(32).fill(73)).publicKey.toBase58();
+const MAKER_TWO = Keypair.fromSeed(new Uint8Array(32).fill(76)).publicKey.toBase58();
 const FOREIGN = Keypair.fromSeed(new Uint8Array(32).fill(74)).publicKey.toBase58();
 const RENT_OWNER = Keypair.fromSeed(new Uint8Array(32).fill(75)).publicKey.toBase58();
 const GENERATION = 4n;
@@ -27,20 +30,22 @@ function putU64(bytes: Uint8Array, offset: number, value: bigint): void {
 }
 
 function replayAccount(overrides?: Readonly<{
+  maker?: string;
   owner?: string;
   executable?: boolean;
   space?: number;
   lamports?: string;
   bytes?: (bytes: Uint8Array) => void;
 }>): RpcAccount {
-  const { bump } = deriveDirectMakerReplayAddressV1(TRADING, MARKET, GENERATION, MAKER);
+  const maker = overrides?.maker ?? MAKER;
+  const { bump } = deriveDirectMakerReplayAddressV1(TRADING, MARKET, GENERATION, maker);
   const data = new Uint8Array(DIRECT_MAKER_REPLAY_BYTES_V1);
   data.set(new TextEncoder().encode('DCLTDMR1'), 0);
   putU16(data, 8, 1);
   data[10] = bump;
   data.set(new PublicKey(MARKET).toBytes(), 16);
   putU64(data, 48, GENERATION);
-  data.set(new PublicKey(MAKER).toBytes(), 56);
+  data.set(new PublicKey(maker).toBytes(), 56);
   putU64(data, 88, 9n);
   putU64(data, 96, 2n);
   putU64(data, 104, 5n);
@@ -54,6 +59,21 @@ function replayAccount(overrides?: Readonly<{
     owner: overrides?.owner ?? TRADING,
     space: overrides?.space ?? data.length,
   });
+}
+
+function pairClient(accounts: readonly [RpcAccount | null, RpcAccount | null], observedSlot = '501') {
+  const first = deriveDirectMakerReplayAddressV1(TRADING, MARKET, GENERATION, MAKER).address;
+  const second = deriveDirectMakerReplayAddressV1(TRADING, MARKET, GENERATION, MAKER_TWO).address;
+  return {
+    finalizedSlot: vi.fn(async () => '500'),
+    multipleAccounts: vi.fn(async (addresses: ReadonlyArray<string>) => Object.freeze({
+      slot: observedSlot,
+      accounts: Object.freeze(addresses.map((address, index) => Object.freeze({
+        address,
+        account: address === first ? accounts[0] : address === second ? accounts[1] : index === 0 ? accounts[0] : accounts[1],
+      }))),
+    })),
+  };
 }
 
 function client(account: RpcAccount | null, observedSlot = '501') {
@@ -93,6 +113,45 @@ describe('the Direct maker replay nonce reader', () => {
       tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER,
     });
     expect(observed).toMatchObject({ state: 'existing', nextNonce: 9n, market: MARKET, generation: GENERATION, maker: MAKER });
+  });
+
+  it('reads seller and buyer replay roots from one exact finalized snapshot', async () => {
+    const rpc = pairClient([replayAccount(), replayAccount({ maker: MAKER_TWO })]);
+    const observed = await inspectDirectMakerNoncePairV1(rpc, [
+      { tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER },
+      { tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER_TWO },
+    ]);
+    const addresses = [
+      deriveDirectMakerReplayAddressV1(TRADING, MARKET, GENERATION, MAKER).address,
+      deriveDirectMakerReplayAddressV1(TRADING, MARKET, GENERATION, MAKER_TWO).address,
+    ];
+    expect(rpc.finalizedSlot).toHaveBeenCalledOnce();
+    expect(rpc.multipleAccounts).toHaveBeenCalledWith(addresses, '500');
+    expect(observed.map((entry) => [entry.maker, entry.nextNonce, entry.observedSlot])).toEqual([
+      [MAKER, 9n, '501'], [MAKER_TWO, 9n, '501'],
+    ]);
+    expect(requireAuthenticatedDirectMakerNoncePairV1(observed)).toBe(observed);
+    expect(() => requireAuthenticatedDirectMakerNoncePairV1([...observed] as unknown as typeof observed))
+      .toThrow('not acquired from the authenticated pair reader');
+  });
+
+  it('refuses a mixed route, same-maker replay, reordered RPC result, and slot regression', async () => {
+    const requests = [
+      { tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER },
+      { tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER_TWO },
+    ] as const;
+    await expect(inspectDirectMakerNoncePairV1(pairClient([null, null]), [
+      requests[0], { ...requests[1], market: FOREIGN },
+    ])).rejects.toThrow('does not share');
+    await expect(inspectDirectMakerNoncePairV1(pairClient([null, null]), [requests[0], { ...requests[1], maker: MAKER }]))
+      .rejects.toThrow('two distinct makers');
+    const reordered = pairClient([null, null]);
+    reordered.multipleAccounts.mockImplementationOnce(async (addresses: ReadonlyArray<string>) => Object.freeze({
+      slot: '501',
+      accounts: Object.freeze([...addresses].reverse().map((address) => Object.freeze({ address, account: null }))),
+    }));
+    await expect(inspectDirectMakerNoncePairV1(reordered, requests)).rejects.toThrow('substituted or reordered');
+    await expect(inspectDirectMakerNoncePairV1(pairClient([null, null], '499'), requests)).rejects.toThrow('regressed below');
   });
 
   it('refuses saturation and a finalized context regression', async () => {
