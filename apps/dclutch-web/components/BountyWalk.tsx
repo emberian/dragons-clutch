@@ -60,7 +60,7 @@ export default function BountyWalk() {
         <strong>{live ? 'Live on Solana devnet' : 'Not live yet'}</strong>
         {live
           ? <p>The abandoned market is live at <Anchor href={marketDetailHrefV1(abandoned.address)}><code>{abandoned.address}</code></Anchor>{abandoned.liveNote === null ? '' : ` — ${abandoned.liveNote}`}. The walk arms only after the market&apos;s deadline passes and its escrow is funded; until then this page is the practice run.</p>
-          : <p>No such market is live on any public network today. We have run this exact walk end-to-end on a local test network — the numbers below come from that run, and each one says so.</p>}
+          : <p>No such market is live on any public network today. The walk itself is not a sketch: it runs against the real programs — the same compiled code deployed on devnet — every time we test, and the market really does move to its fallback outcome with the bounty landing in a wallet that started with nothing. The numbers below are measured from those runs. What is missing is not the machinery; it is a market on a public network for you to point it at.</p>}
       </aside>
     </section>
 
