@@ -17,7 +17,7 @@ describe('Market detail route', () => {
     // The read starts on its own: the address is in the URL and the programs
     // come from the baked deployment, so nothing is asked for first.
     expect(html).toContain('>Reading…</button>');
-    expect(html).toContain('come from the active Devnet deployment');
+    expect(html).toContain('from the active Devnet deployment');
     expect(html).not.toContain('Finalized RPC endpoint');
     expect(html).not.toContain('Registry program · optional');
     expect(html).not.toContain('<input');

@@ -738,7 +738,7 @@ export default function MarketTradePanel({
 
       <details className="trade-v3-bytes">
         <summary>Prepare the exact wallet handoff</summary>
-        <p className="direct-status">Paste the operator-published <code>dclutch-direct-hot-route-manifest-v3</code>. The reader hostile-decodes the bounded JSON, reacquires the 39 named accounts plus the frozen lookup table, authenticates its checked release and capability seal, and then rechecks both participants and both nonces after your detached intent signature.</p>
+        <p className="direct-status">Paste the route file the operator published for this market (a <code>dclutch-direct-hot-route-manifest-v3</code>). Nothing in it is taken on trust: this page reads every account it names back off the chain, checks the programs it points at are the ones this deployment runs, and re-checks both traders and both replay counters after you sign your intent.</p>
         {publishedRoute !== null && routeText === publishedRoute && <p className="direct-status">This build already carries the operator&apos;s published route for this market, so the field below is pre-filled. You can replace it with your own; either way the route is re-authenticated before anything is signed.</p>}
         <label><span>Checked Direct Hot route manifest · JSON</span><textarea rows={7} spellCheck={false} value={routeText} onChange={(event) => { setRouteText(event.target.value); setWalletPreparation({ kind: 'idle' }); }} /></label>
         <div className="direct-actions">
