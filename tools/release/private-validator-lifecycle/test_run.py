@@ -209,7 +209,8 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         market_path = Path("/market.json")
         admin = {
             "schema": "dclutch-successor-campaign-report-v1",
-            "cluster": "owned-loopback",
+            "cluster": "loopback",
+            "genesis_hash": PUBKEY_A,
             "mode": "execute",
             "execution_intent": {
                 "authorized_mutation": True,

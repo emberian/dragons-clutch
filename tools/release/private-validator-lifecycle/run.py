@@ -2805,7 +2805,7 @@ def authenticate_campaign_completion(
     execution = document.get("execution")
     if (
         document.get("schema") != "dclutch-successor-campaign-report-v1"
-        or document.get("cluster") != "owned-loopback"
+        or document.get("cluster") != "loopback"
         or document.get("mode") != "execute"
         or not isinstance(intent, dict)
         or intent.get("campaign_mode") != expected_mode
@@ -2817,6 +2817,9 @@ def authenticate_campaign_completion(
         or execution.get("completed") is not True
     ):
         raise Refusal("campaign completion changed its exact mode, inputs, or status")
+    campaign_genesis = canonical_pubkey(
+        document.get("genesis_hash"), "campaign observed genesis"
+    )
     if expected_mode == "administration":
         if (
             intent.get("through_stage") != "activation"
@@ -2867,14 +2870,11 @@ def authenticate_campaign_completion(
         != list(FOUNDING_JOURNAL_OPERATIONS)
     ):
         raise Refusal("founding campaign omitted its exact six durable journal owners")
-    journal_genesis: str | None = None
     for index, (journal, label) in enumerate(
         zip(journals, FOUNDING_SUCCESS_MUTATIONS, strict=True)
     ):
         row = rows[label]
         genesis = canonical_pubkey(journal.get("genesisHash"), "founding journal genesis")
-        if journal_genesis is None:
-            journal_genesis = genesis
         if (
             journal.get("schema") != FOUNDING_JOURNAL_SCHEMA
             or journal.get("cluster") != "loopback"
@@ -2884,7 +2884,7 @@ def authenticate_campaign_completion(
             or journal.get("planSha256") != document.get("plan_sha256")
             or journal.get("marketSha256") != document.get("market_sha256")
             or journal.get("payer") != document.get("payer")
-            or genesis != journal_genesis
+            or genesis != campaign_genesis
             or journal.get("expectedSignature") != row.get("signature")
             or journal.get("finalizedSlot") != row.get("slot")
             or journal.get("feeLamports") != row.get("fee_lamports")
@@ -3168,6 +3168,8 @@ def run_one(
             plan,
             market,
         )
+        if campaign_report.get("genesis_hash") != funding_poststate.get("genesisHash"):
+            raise Refusal("founding campaign changed the local test-bankroll genesis")
         market_report = read_unique_json(market, "market input")
         fixture_liquidity = authenticate_participant_fixture_liquidity(
             campaign_report,
