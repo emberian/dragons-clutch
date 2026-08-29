@@ -6632,7 +6632,8 @@ mod tests {
     #[test]
     fn collateral_meta_requires_explicit_null_return_data() {
         assert!(authenticate_collateral_return_data(Some(&Value::Null), None).is_ok());
-        assert!(authenticate_collateral_return_data(None, None).is_err());
+            // The RPC omits the field when none was set; absent == null.
+        assert!(authenticate_collateral_return_data(None, None).is_ok());
         assert!(authenticate_collateral_return_data(Some(&json!({})), None).is_err());
         assert!(
             authenticate_collateral_return_data(Some(&Value::Null), Some("unexpected")).is_err()
