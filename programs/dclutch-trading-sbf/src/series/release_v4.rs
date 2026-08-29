@@ -59,6 +59,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::{vec, vec::Vec};
 
 use dclutch_account_profile_contract::{
@@ -425,7 +426,11 @@ impl SeriesConsumeSelectedPublicationV4 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SeriesConsumeSelectedReleaseV4 {
     /// The three fully determined artifacts, with their digests.
-    pub emitted: SeriesConsumeEmittedArtifactsV4,
+    ///
+    /// Boxed: the three inline artifact arrays are frame-scale, and holding
+    /// them by value put the compiler's 4 KiB SBF frame diagnostics on every
+    /// call this builder makes (the checked release refuses any diagnostic).
+    pub emitted: Box<SeriesConsumeEmittedArtifactsV4>,
     /// Exact canonical root-only `StateLifecyclePolicyV5` bytes.
     pub lifecycle: Vec<u8>,
     /// Exact occurrence-specific DCE5 Effect bytes.
@@ -470,6 +475,75 @@ pub fn encode_series_consume_strategy_v4(
     .to_bytes())
 }
 
+/// Emit the three determined artifacts inside their own SBF frame.
+///
+/// The emitted struct is frame-scale (three inline artifact arrays); calling
+/// the emitter from the release builder's frame put the builder over the
+/// 4 KiB SBF bound. The emit call's return slot lives here, alone, and the
+/// caller receives only a heap pointer.
+#[inline(never)]
+fn emit_series_consume_artifacts_boxed_v4(
+    lengths: &[u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+) -> SelectedResult<Box<SeriesConsumeEmittedArtifactsV4>> {
+    // One zero-initialized heap allocation, filled in place by the same
+    // per-artifact framed emitters `emit_series_consume_artifacts_v4` uses.
+    // Calling that function here instead would stack its return slot AND the
+    // box argument copy in this frame - measured at 6,016 bytes against the
+    // 4,096-byte SBF bound.
+    let mut artifacts = Box::new(SeriesConsumeEmittedArtifactsV4 {
+        account_profile: [0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4],
+        request_profile: [0_u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4],
+        transition: [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4],
+    });
+    let profile = SeriesConsumeAccountProfileInputV4 {
+        fixed_data_lengths: lengths,
+    };
+    emit_series_consume_account_profile_part_v4(profile, &mut artifacts.account_profile)
+        .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?;
+    emit_series_consume_request_profile_part_v4(&mut artifacts.request_profile)
+        .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?;
+    emit_series_consume_transition_part_v4(&mut artifacts.transition)
+        .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?;
+    Ok(artifacts)
+}
+
+/// Assemble and encode the descriptor inside its own SBF frame.
+///
+/// `CapabilityProgramV4` is a frame-scale temporary before `.encode()`
+/// reduces it to its 600 canonical bytes; holding it in the release
+/// builder's frame was the other half of the 4 KiB overflow.
+#[inline(never)]
+fn encode_series_consume_descriptor_framed_v4(
+    emitted: &SeriesConsumeEmittedArtifactsV4,
+    effect: &[u8],
+    lifecycle: &[u8],
+    strategy: &[u8; EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
+    template: ContentId,
+) -> SelectedResult<[u8; CAPABILITY_PROGRAM_V4_BYTES]> {
+    Ok(assemble_series_consume_descriptor_v4(
+        emitted,
+        SeriesConsumeSuppliedArtifactsV4 {
+            effect,
+            lifecycle,
+            strategy,
+            effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+            strategy_schema: EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+            lifecycle_schema: CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
+            request_profile_schema: dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+            transition_schema: dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+            account_profile_schema: ACCOUNT_PROFILE_SCHEMA_ID_V2,
+        },
+        hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes(),
+        hash(SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3).to_bytes(),
+        hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes(),
+        hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes(),
+        template.to_bytes(),
+        u32::try_from(SERIES_STATE_BYTES_V3).map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?,
+    )
+    .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?
+    .encode())
+}
+
 /// Compile the one canonical selected Series Consume release.
 ///
 /// This is the completion the WAVE queue names: the artifacts assembled into
@@ -490,10 +564,7 @@ pub fn series_consume_selected_release_v4(
         u32::try_from(SERIES_TICKET_STATE_BYTES_V3)
             .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?,
     );
-    let emitted = emit_series_consume_artifacts_v4(SeriesConsumeAccountProfileInputV4 {
-        fixed_data_lengths: &lengths,
-    })
-    .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?;
+    let emitted = emit_series_consume_artifacts_boxed_v4(&lengths)?;
 
     let mut lifecycle_scratch = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
     let mut lifecycle = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
@@ -519,28 +590,9 @@ pub fn series_consume_selected_release_v4(
             .map_err(|_| SeriesSelectedReleaseErrorV4::Strategy)?,
     )?;
 
-    let descriptor = assemble_series_consume_descriptor_v4(
-        &emitted,
-        SeriesConsumeSuppliedArtifactsV4 {
-            effect: &effect,
-            lifecycle: &lifecycle,
-            strategy: &strategy,
-            effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
-            strategy_schema: EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-            lifecycle_schema: CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
-            request_profile_schema: dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
-            transition_schema: dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
-            account_profile_schema: ACCOUNT_PROFILE_SCHEMA_ID_V2,
-        },
-        hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes(),
-        hash(SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3).to_bytes(),
-        hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes(),
-        hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes(),
-        input.template.to_bytes(),
-        u32::try_from(SERIES_STATE_BYTES_V3).map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?,
-    )
-    .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?
-    .encode();
+    let descriptor = encode_series_consume_descriptor_framed_v4(
+        &emitted, &effect, &lifecycle, &strategy, input.template,
+    )?;
 
     let descriptor_id = hash(&descriptor).to_bytes();
     let entries = [CapabilityProgramSetEntryV2::new(
