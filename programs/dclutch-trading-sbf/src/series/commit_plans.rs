@@ -1,9 +1,20 @@
-//! Total commit-last plans for the executable recurring-Series lifecycle.
+//! Total commit-last occurrence, funding, and terminal plans for Series V3.
 //!
 //! Plans never mutate account bytes. The SBF adapter stages physical transfers
 //! and Core CPI first, validates the immediate Core acknowledgement, then
 //! persists the candidate replay bytes. Any CPI refusal therefore leaves the
 //! same Series and Ticket revisions retryable under Solana transaction rollback.
+//!
+//! # This module is not the lifecycle artifact
+//!
+//! The protocol-wide term "lifecycle" means the `StateLifecyclePolicyV5`
+//! artifact a capability release binds and
+//! [`super::artifacts_v4::authenticate_series_consume_artifacts_v4`] verifies.
+//! This module owns the FUNDING side instead: `FundingStateV1` top-ups, the
+//! Ticket's capability refund ([`PendingFundingPlanV3::ticket_capability_refund`]
+//! is the SOLE author of that lamport flow), occurrence commits, retirement,
+//! and closure. A lifecycle policy that also claimed the Ticket's refund would
+//! be a second author for one lamport flow.
 
 use dclutch_capability_contract::{
     CapabilityManifestV1, FundingCustodyObservationV1, FundingStateV1, FundingStatus,

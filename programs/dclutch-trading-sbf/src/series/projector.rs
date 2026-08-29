@@ -15,7 +15,7 @@ use super::{
     SeriesConsumeCompositionV3, SeriesV3Error, TemplateV3, TerminalSeriesEscrowPlanV3,
     compose_series_consume_v3, consume_series_escrow_v3, expire_series_escrow_v3,
     instruction::{SeriesActionRequestV3, SeriesActionV3, SeriesInstructionErrorV3},
-    lifecycle::{
+    commit_plans::{
         ClosePlanV3, LifecycleErrorV3, OccurrenceCommitPlanV3, PendingFundingPlanV3, RetirePlanV3,
         plan_close, plan_consume, plan_expire, plan_prepare, plan_retire,
     },
@@ -203,7 +203,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         series: SeriesStateV3,
         ticket_state: TicketStateV3,
         now_slot: u64,
-        rent_sink: super::lifecycle::SeriesLifecycleRentSinkV3,
+        rent_sink: super::commit_plans::SeriesLifecycleRentSinkV3,
     ) -> Result<OccurrenceCommitPlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Expire {
             return Err(SeriesProjectorErrorV3::Frame);
@@ -246,7 +246,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         ticket_state: TicketStateV3,
         observed_ticket_lamports: u64,
         exact_ticket_rent: u64,
-        rent_sink: super::lifecycle::SeriesLifecycleRentSinkV3,
+        rent_sink: super::commit_plans::SeriesLifecycleRentSinkV3,
     ) -> Result<RetirePlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Retire {
             return Err(SeriesProjectorErrorV3::Frame);
@@ -270,7 +270,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         series: SeriesStateV3,
         observed_root_lamports: u64,
         exact_root_rent: u64,
-        rent_sink: super::lifecycle::SeriesLifecycleRentSinkV3,
+        rent_sink: super::commit_plans::SeriesLifecycleRentSinkV3,
     ) -> Result<ClosePlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Close {
             return Err(SeriesProjectorErrorV3::Frame);

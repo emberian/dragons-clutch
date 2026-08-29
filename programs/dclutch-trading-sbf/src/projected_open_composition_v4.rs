@@ -47,7 +47,7 @@ use crate::{
             SERIES_CONSUME_CLAIMS_ROUTE_V4, SERIES_CONSUME_OPEN_ROUTE_V4,
             series_consume_route_account_start_v4,
         },
-        lifecycle::OccurrenceCommitPlanV3,
+        commit_plans::OccurrenceCommitPlanV3,
         state::SERIES_TICKET_STATE_BYTES_V3,
     },
 };
