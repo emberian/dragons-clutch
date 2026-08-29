@@ -124,6 +124,43 @@ evidence, and participant evidence. The command independently requires the
 full Solana devnet genesis hash. Neither this CLI entry nor either Rust child
 admits mainnet.
 
+## Join a founded market
+
+`join` is the public participant-admission verb. It authors nothing: the Rust
+successor's User Position admission remains the sole author of the admission
+message, its rent and fee arithmetic, its signatures, and its durable report.
+This command names that child's exact inputs and hands them over.
+
+```sh
+# Preflight: finalized read-only planning. No --execute is passed to the child.
+dclutch --rpc https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --bootstrap-bin /work/dclutch-local-successor-bootstrap \
+  join --plan /work/plan.json --campaign-evidence /work/campaign.json \
+  --keypair /keys/participant.json --output /work/admission.json
+```
+
+Review `/work/admission.json`, then rerun the exact same command with
+`--execute` to perform the admission. The child resumes that same report.
+
+- The origin picks the child: an exact `http://127.0.0.1:PORT/` loopback origin
+  runs the owned-loopback admission, which takes no cluster acknowledgment and
+  refuses one; every other origin runs the devnet admission and requires
+  `--i-mean-devnet` with the full genesis hash. A loopback *host* in any other
+  shape (`localhost`, `https://`, no port) is refused as a spelling to fix, not
+  offered an acknowledgment.
+- `--position-owner` and `--fee-payer` are derived from key files, never typed.
+  The CLI reads each named keypair for its PUBLIC key alone and passes the file
+  path to the child, which is the process that signs. `--fee-payer-keypair` is
+  optional and defaults to the `--keypair` position owner.
+- `--minimum-finalized-slot` is read from the endpoint inside a fresh cluster
+  admission, so the floor provably comes from the chain the invocation named.
+  Pass the flag to state it yourself and the command performs no RPC at all.
+- To fund the admitted position after admission, pass all three of
+  `--collateral-source-owner-keypair`, `--collateral-source-account`, and
+  `--collateral-quantity-atoms`, or none. The source owner's address is derived
+  from its keypair. A partial tuple is refused before the child starts.
+
 ## Honesty notes
 
 - Refusals render by NAME (band registry, decision 0007) on every error
@@ -166,7 +203,7 @@ admits mainnet.
   receipt and account changes pass.
 - The keypair is always an explicit `--keypair <path>` or `$DCLUTCH_KEYPAIR`;
   there is no default-wallet fallback, deliberately.
-- Every enabled public-chain mutation (`redeem`) requires
+- Every enabled public-chain mutation (`redeem`, `join --execute`) requires
   `--i-mean-devnet` with Solana devnet's full genesis hash. The endpoint proves
   that exact identity again before every transaction signature and submission;
   an RPC hostname and an earlier observation grant no authority.
