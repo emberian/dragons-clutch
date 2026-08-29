@@ -422,6 +422,22 @@ fn candidate_context(context: DirectInlinePhysicalContextV2) -> DirectInlineCand
     }
 }
 
+/// Reproduce both maker replay PDAs at the bumps the settlement carries.
+///
+/// This is the [`hot_v3`](crate::hot_v3) `borrow_finalized_record_at` argument
+/// again: the outer preplan is the walk that SEARCHES (its `plan_lifecycle`
+/// derives each maker replay canonically after AccountProfile projection), and
+/// `validate_lifecycle` has already required each settlement bump to equal
+/// that plan's authenticated bump before this runs. So the two
+/// `find_program_address` searches this function used to repeat are replaced
+/// by the two `create_program_address` calls they would have ended on. Nothing
+/// in the conjunction weakens: the derivation from the exact authenticated
+/// seeds plus the carried bump must still reproduce the exact context account,
+/// and a wrong, noncanonical, or substituted-coordinate bump reproduces a
+/// different address (or none at all) and refuses — the derivation IS the
+/// check, and the carried bump is a memo of the preplan's own search, never an
+/// authority. Only who pays for the search changed: per-maker searches were a
+/// per-draw CU variance on the 1.4M ceiling.
 fn validate_maker_roots(
     direct: InlineOrdinaryInputV2,
     context: DirectInlinePhysicalContextV2,
@@ -432,6 +448,7 @@ fn validate_maker_roots(
         context.core_market.generation(),
     )
     .map_err(|_| DirectPhysicalError::State)?;
+    let trading_program = Pubkey::new_from_array(context.trading_program);
     for (maker, key, state) in [
         (
             direct.seller.authenticated.maker(),
@@ -446,8 +463,14 @@ fn validate_maker_roots(
     ] {
         let seeds =
             MakerReplaySeedsV1::new(coordinates, maker).map_err(|_| DirectPhysicalError::State)?;
-        let (expected, bump) = derive(context.trading_program, &seeds.as_slices());
-        if key != expected || state.bump() != bump {
+        let [domain, market, generation, maker_seed] = seeds.as_slices();
+        let bump_seed = [state.bump()];
+        let reproduced = Pubkey::create_program_address(
+            &[domain, market, generation, maker_seed, &bump_seed],
+            &trading_program,
+        )
+        .map_err(|_| DirectPhysicalError::Binding)?;
+        if key != reproduced.to_bytes() {
             return Err(DirectPhysicalError::Binding);
         }
     }
