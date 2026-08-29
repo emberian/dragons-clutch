@@ -364,10 +364,17 @@ impl AggregateRetirementCheckpointV1 {
             self.custody_revision,
             self.phase_revision,
         ];
+        // Six little-endian u64s tile 48 bytes exactly, so `chunks_exact_mut`
+        // yields exactly six slots and the zip is total — same bytes as the
+        // computed-index write it replaces, with no index to get wrong. The
+        // assert is what stops the tiling from going quiet: zip truncates, so
+        // adding a scalar without widening the buffer would silently drop it
+        // out of the digest rather than panic. It is compiled out of the SBF
+        // release build, so this costs the ELF nothing.
         let mut scalar_bytes = [0_u8; 48];
-        for (index, value) in scalars.iter().enumerate() {
-            let start = index.saturating_mul(8);
-            scalar_bytes[start..start + 8].copy_from_slice(&value.to_le_bytes());
+        debug_assert!(scalar_bytes.len() == scalars.len().saturating_mul(8));
+        for (slot, value) in scalar_bytes.chunks_exact_mut(8).zip(scalars.iter()) {
+            slot.copy_from_slice(&value.to_le_bytes());
         }
         digestv(&[
             AGGREGATE_RETIREMENT_HISTORY_DIGEST_DOMAIN_V1,
@@ -579,14 +586,35 @@ fn require_zero(
     Ok(())
 }
 
+/// Write one fixed-width field into the encoder's own exactly-sized buffer.
+///
+/// The slicing panic here is deliberate and is kept as a panic.
+///
+/// These three take no caller data. `output` is the buffer this module just
+/// allocated at the checkpoint's exact encoded width, and `offset` is one of
+/// this file's own layout constants. An out-of-range write is therefore not a
+/// malformed input to refuse — it is this encoder disagreeing with its own
+/// layout, which would mean every digest it produced was already wrong.
+///
+/// So there is no refusal to convert to. The two alternatives are both worse
+/// than the lint: `get_mut(..)` with the write skipped emits a short, partly
+/// zero record that hashes to a plausible-looking identity, and a fabricated
+/// `Err` variant would add a refusal path no caller can trigger and no test can
+/// reach. Panicking stops the transaction, which is the correct response to an
+/// encoder that cannot encode.
+#[allow(clippy::indexing_slicing)]
 fn put<const N: usize>(output: &mut [u8], offset: usize, value: &[u8; N]) {
     output[offset..offset + N].copy_from_slice(value);
 }
 
+/// See [`put`]: same buffer, same layout constants, same deliberate panic.
+#[allow(clippy::indexing_slicing)]
 fn put_u16(output: &mut [u8], offset: usize, value: u16) {
     output[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
+/// See [`put`]: same buffer, same layout constants, same deliberate panic.
+#[allow(clippy::indexing_slicing)]
 fn put_u64(output: &mut [u8], offset: usize, value: u64) {
     output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }

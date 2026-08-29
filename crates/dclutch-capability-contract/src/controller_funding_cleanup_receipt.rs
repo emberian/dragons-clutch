@@ -380,6 +380,22 @@ fn require_zero(bytes: &[u8], offset: usize, width: usize) -> Result<(), Error> 
     Ok(())
 }
 
+/// Write one fixed-width field into the encoder's own exactly-sized buffer.
+///
+/// The slicing panic here is deliberate and is kept as a panic.
+///
+/// This takes no caller data. `output` is the buffer this module just allocated
+/// at the record's exact encoded width, and `offset` is one of this file's own
+/// layout constants. An out-of-range write is therefore not a malformed input to
+/// refuse — it is this encoder disagreeing with its own layout, which would mean
+/// every record it produced was already wrong.
+///
+/// So there is no refusal to convert to. `get_mut(..)` with the write skipped
+/// would emit a short, partly zero record that still hashes to a plausible
+/// identity, and a fabricated `Err` variant would add a refusal path no caller
+/// can trigger. Panicking stops the transaction, which is the correct response
+/// to an encoder that cannot encode.
+#[allow(clippy::indexing_slicing)]
 fn put_array<const N: usize>(output: &mut [u8], offset: usize, value: [u8; N]) {
     output[offset..offset + N].copy_from_slice(&value);
 }
