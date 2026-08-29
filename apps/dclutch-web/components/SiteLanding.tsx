@@ -5,6 +5,7 @@ import LandingPulse from '@/components/charts/LandingPulse';
 
 import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
+import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@/lib/publicCutStaging';
 
 /**
  * The front door.
@@ -35,13 +36,19 @@ export default function SiteLanding() {
         before the claim exists, so there is no leverage, no liquidation, and no
         way to lose more than you paid.</p>
       </div>
+      {/* This aside is the one thing on the page that dates, so it reads the
+          same public cut the launch page does rather than hard-coding a
+          moment. Opening a market is a fixture edit; the front door should not
+          need a second one to stop saying markets are still being set up. */}
       <aside>
         <span>Where this stands</span>
         <strong>On devnet — nothing for sale</strong>
         <p>dClutch runs on Solana&apos;s devnet, a public test network whose
-        tokens are worthless by construction. The programs are deployed and
-        the first markets are being set up. There is no token, nothing to buy,
-        and no value at risk anywhere.</p>
+        tokens are worthless by construction. The programs are deployed{' '}
+        {PUBLIC_DEVNET_CUT_V1.market === null
+          ? <>and the first markets are being set up.</>
+          : <>and the first market is <Anchor href={publicCutMarketHrefV1(PUBLIC_DEVNET_CUT_V1)}>open</Anchor>.</>} There
+        is no token, nothing to buy, and no value at risk anywhere.</p>
       </aside>
     </section>
 
