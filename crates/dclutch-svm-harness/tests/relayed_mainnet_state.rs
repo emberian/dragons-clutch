@@ -1869,6 +1869,18 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
         "a refused retirement must leave the evidence exactly where it was"
     );
 
+    // One slot forward, so the retirement below is a distinct transaction and
+    // not a replay of the refused one. Nothing about the refusal depends on the
+    // slot; this is bank bookkeeping, not part of the property.
+    let clock: Clock = context
+        .banks_client
+        .get_sysvar()
+        .await
+        .expect("Clock sysvar");
+    context
+        .warp_to_slot(clock.slot.checked_add(1).expect("bounded fixture slot"))
+        .expect("advance one slot past the refused retirement");
+
     // Now terminalize the Market the way its own routes do — the funded failure
     // walk needs no identified party to get here, so this state is reachable
     // permissionlessly and the deferral is bounded. The SAME instruction from
