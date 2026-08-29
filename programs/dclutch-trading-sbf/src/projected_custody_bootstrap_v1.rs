@@ -1259,7 +1259,7 @@ pub fn process_projected_custody_abort_v1(
         STAGED_ABORT_FUNDING_START,
         CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1,
     )?;
-    let checkpoint = authenticate_expired_checkpoint_v1(
+    let _ = authenticate_expired_checkpoint_v1(
         program_id,
         funding,
         ControllerFundingCheckpointAbortKindV1::CustodyStagedExpired,
@@ -1298,7 +1298,44 @@ pub fn process_projected_custody_abort_v1(
         &ABORT_WRITABLE,
         &ABORT_SIGNERS,
     )?;
-    let raw_digest = hash(raw.as_slice()).to_bytes();
+    persist_projected_custody_abort_prefix_v1(program_id, accounts)
+}
+
+/// Re-authenticate and persist the post-CPI prefix in a fresh SBF frame.
+///
+/// The Custody request itself is 768 bytes and the durable checkpoint is now
+/// 768 bytes. Keeping both of them, the encoded child request, and the child
+/// receipt live in the CPI frame crosses the SBF 4 KiB frame ceiling. The CPI
+/// boundary is already authenticated and rollback-safe, so this suffix reads
+/// those same account facts back rather than carrying caller memory across it.
+#[inline(never)]
+fn persist_projected_custody_abort_prefix_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let funding = subslice(
+        accounts,
+        STAGED_ABORT_FUNDING_START,
+        CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1,
+    )?;
+    let checkpoint = authenticate_expired_checkpoint_v1(
+        program_id,
+        funding,
+        ControllerFundingCheckpointAbortKindV1::CustodyStagedExpired,
+    )?;
+    let raw_account = account(accounts, ABORT_LOCK_RAW)?;
+    let lock_data = raw_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let raw_digest = hash(&lock_data).to_bytes();
+    let abort = decode_projected_request(&lock_data)?.founding_source_abort_v1();
+    drop(lock_data);
+    let custody_program = account(accounts, ABORT_CUSTODY_PROGRAM)?;
+    let sub_frame = subslice(
+        accounts,
+        ABORT_SUB_FRAME_START,
+        PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
+    )?;
     let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
     if producer != *custody_program.key || receipt_bytes.len() != PROJECTED_CUSTODY_RECEIPT_BYTES_V1
     {

@@ -15,7 +15,7 @@ use dclutch_resolution_codec::{
 };
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
-    pubkey::Pubkey,
+    program_error::ProgramError, pubkey::Pubkey,
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -52,6 +52,7 @@ pub fn is_pre_market_funding_abort_v1(instruction_data: &[u8]) -> bool {
 }
 
 /// Authenticate one expired checkpoint and close its exact Pending Resolution ledger.
+#[inline(never)]
 pub fn process_pre_market_funding_abort_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -62,34 +63,9 @@ pub fn process_pre_market_funding_abort_v1(
     authenticate_frame(program_id, accounts, request)?;
     let rent = authenticate_rent(account(accounts, RENT)?)?;
     let clock = authenticate_clock(account(accounts, CLOCK)?)?;
-    let checkpoint_account = account(accounts, CHECKPOINT)?;
-    let checkpoint_data = checkpoint_account
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::Funding)?;
-    if hash(&checkpoint_data).to_bytes() != request.checkpoint_digest {
-        return Err(ResolutionError::Funding.into());
-    }
-    let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_data)
-        .map_err(|_| ResolutionError::Funding)?;
+    let expected_resolution_ledger_digest =
+        authenticate_live_cleanup_checkpoint(program_id, accounts, request, clock.slot)?;
     let ledger = account(accounts, LEDGER)?;
-    let ledger_data = ledger
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::Funding)?;
-    let controller_ledger_account_digest = controller_funding_ledger_account_digest_v1(
-        ledger.key.to_bytes(),
-        ledger.owner.to_bytes(),
-        ledger.lamports(),
-        &ledger_data,
-    );
-    drop(ledger_data);
-    authenticate_checkpoint(
-        checkpoint,
-        checkpoint_account,
-        account(accounts, CALLER_PROGRAM)?,
-        request,
-        clock.slot,
-        controller_ledger_account_digest,
-    )?;
 
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let manifest_raw = account(accounts, MANIFEST_RAW)?;
@@ -115,7 +91,7 @@ pub fn process_pre_market_funding_abort_v1(
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
     if ledger.owner != program_id
-        || hash(&ledger_data).to_bytes() != checkpoint.input().resolution_ledger_digest
+        || hash(&ledger_data).to_bytes() != expected_resolution_ledger_digest
         || pre_market_funding_ledger_account_digest_v1(
             ledger.key.to_bytes(),
             ledger.owner.to_bytes(),
@@ -206,6 +182,56 @@ pub fn process_pre_market_funding_abort_v1(
     };
     set_return_data(&receipt.encode().map_err(|_| ResolutionError::Instruction)?);
     Ok(())
+}
+
+/// Decode the enlarged durable checkpoint in an isolated SBF frame.
+///
+/// Keeping this 768-byte value alive alongside the manifest, authenticated
+/// ledger, and 488-byte terminal child receipt exceeds the SBF 4 KiB frame.
+/// Only the immutable Resolution-ledger data digest is needed after this
+/// authentication boundary, so return that scalar fact and drop the typed
+/// checkpoint before the economic close begins.
+#[inline(never)]
+fn authenticate_live_cleanup_checkpoint(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: PreMarketFundingAbortRequestV1,
+    current_slot: u64,
+) -> Result<[u8; 32], ProgramError> {
+    let checkpoint_account = account(accounts, CHECKPOINT)?;
+    let checkpoint_data = checkpoint_account
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    if hash(&checkpoint_data).to_bytes() != request.checkpoint_digest {
+        return Err(ResolutionError::Funding.into());
+    }
+    let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_data)
+        .map_err(|_| ResolutionError::Funding)?;
+    drop(checkpoint_data);
+    let ledger = account(accounts, LEDGER)?;
+    let ledger_data = ledger
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    let controller_ledger_account_digest = controller_funding_ledger_account_digest_v1(
+        ledger.key.to_bytes(),
+        ledger.owner.to_bytes(),
+        ledger.lamports(),
+        &ledger_data,
+    );
+    drop(ledger_data);
+    authenticate_checkpoint(
+        checkpoint,
+        checkpoint_account,
+        account(accounts, CALLER_PROGRAM)?,
+        request,
+        current_slot,
+        controller_ledger_account_digest,
+    )?;
+    let expected = checkpoint.input().resolution_ledger_digest;
+    if ledger.owner != program_id {
+        return Err(ResolutionError::Funding.into());
+    }
+    Ok(expected)
 }
 
 fn authenticate_checkpoint(
