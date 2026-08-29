@@ -10,7 +10,7 @@ describe('the public market design wizard', () => {
     expect(html).toContain('Inspect the chain');
     expect(html).toContain('Read-only opening preview');
     expect(html).toContain('without signing or spending');
-    expect(html).not.toContain('DCLTGMF2');
+    expect(html).not.toContain('DCLTGMF3');
     expect(html).not.toContain('κ');
     expect(html).not.toContain('ManipulationFloorV1');
     expect(html).not.toContain('Sign &amp; submit');

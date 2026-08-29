@@ -27,14 +27,14 @@ The checkpoint must include:
    separate frame-diagnostic build for every shipped link. Record the gate
    digest, exact source commit, all ELF digests, zero build diagnostics, deepest
    frame per link, and immutable Cargo-lock closure. Reconfirm the compiled
-   DCLTGMF2 59-key and DCLTPCB2 62-key censuses, including the admitted
+   DCLTGMF3 58-key and DCLTPCB2 62-key censuses, including the admitted
    64-key/refused 65-key boundary.
 2. One fresh owned-loopback run through Founding and collateralized participant
    admission before Direct starts. Require the explicit partition of
    1,000,000,000 founding atoms plus 100,000,000 participant atoms, removed mint
    authority, the `direct-buyer` source account owned by `participant`, and both
    participant transactions finalized. Require admission to join the exact
-   `founding_lifecycle_rent_credit` owned by the DCLTGMF2/Open-market generation;
+   `founding_lifecycle_rent_credit` owned by the DCLTGMF3/Open-market generation;
    the earlier Found37 `lifecycle_rent_credit`, an aliased coordinate, or a
    missing founding label must refuse before any signer access. For the
    owned-loopback SourceAbort lane, record the actual slot deltas across its
@@ -103,11 +103,11 @@ The checkpoint must include:
 ## Resolution V7 split lifecycle convergence
 
 - Exercise the atomic-founding recovery order from one finalized successor
-  campaign: `DCLTCFQ1`, `DCLTPCB2`, `DCLTGMF2`, `core-funding-create-v1`,
+  campaign: `DCLTCFQ1`, `DCLTPCB2`, `DCLTGMF3`, `core-funding-create-v1`,
   `resolution-funding-activate-v1`, `core-funding-accept-v1`, then participant
   admission and Direct. Create, activation, and Accept are three distinct
   payer-only transactions. A projected Found37 Market is not a live Core
-  account, and DCLTGMF2 does not create `SourceResolutionStateV2`; neither may
+  account, and DCLTGMF3 does not create `SourceResolutionStateV2`; neither may
   be used to skip CreateFund. Crash after Create must resume activation from
   the live Primary Source and Pending ledger. Crash after activation must
   resume the Accept suffix from the immutable `DCLRFAR1` receipt and the live

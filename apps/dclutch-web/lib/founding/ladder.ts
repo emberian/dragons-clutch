@@ -4,7 +4,7 @@
  * Founding is not one transaction. Between "an operator has chosen a Product"
  * and "a Market is Open" there are five kinds of work — a collateral Mint, a
  * dozen finalized Registry records, a lifecycle RentCredit, a projected-Custody
- * prestate, and finally the atomic DCLTGMF2 outer — and they are not equally
+ * prestate, and finally the atomic DCLTGMF3 outer — and they are not equally
  * reachable from a browser. Some have a browser builder today. Some are
  * derivations that only exist inside Rust kernels, and porting them by hand
  * would be re-deriving an authority rather than reading one.
@@ -120,7 +120,7 @@ export const FOUNDING_LADDER_V1: ReadonlyArray<FoundingRungV1> = Object.freeze([
   }),
   Object.freeze({
     id: 'routing-table',
-    title: 'The DCLTGMF2 routing table',
+    title: 'The DCLTGMF3 routing table',
     effect: 'An address lookup table holding every non-signer key in the founding frame, extended over several transactions and usable only strictly after the slot that last extended it.',
     transactions: '1 create + 1 per twenty addresses',
     status: 'browser-builder',
@@ -129,13 +129,13 @@ export const FOUNDING_LADDER_V1: ReadonlyArray<FoundingRungV1> = Object.freeze([
     lookupTable: false,
   }),
   Object.freeze({
-    id: 'dcltgmf1',
-    title: 'DCLTGMF2 — Lock, Found, Realize, Claims, Open',
+    id: 'dcltgmf3',
+    title: 'DCLTGMF3 — Lock, Found, Realize, Claims, Open',
     effect: 'One rollback domain. The Market is created by the Found stage and Opened by the last, so this single transaction is the whole distance from the projected-Custody prestate to a live Market with a Claims aggregate, a founder Position, and a Hoard holding the collateral.',
-    transactions: '1 (v0 on a 256 KiB heap frame, 129 + one or two funding-ledger account references; 59 distinct locks for the Direct profile)',
+    transactions: '1 (v0 on a 256 KiB heap frame, 125 + one or two funding-ledger account references; 58 distinct locks for the Direct profile)',
     status: 'browser-frame-borrowed-coordinates',
     builder: 'lib/founding/genericMarketFounding.ts',
-    reason: 'The outer instruction is assembled in the browser: eight bytes of data and the full stage-ordered frame, with the writability union and both invariants the reference client asserts on itself. What it cannot do alone is supply the coordinates — the four request records and the Custody PDAs come from the rungs above. The frame is the browser’s; the prestate is not.',
+    reason: 'The outer instruction is assembled in the browser: eight discriminator bytes, five invocation-evidence caller bumps, and the full stage-ordered frame, including the durable funding checkpoint. Rent and Clock come from runtime sysvar access instead of repeated child metas. What it cannot do alone is supply the coordinates — the four request records and the Custody PDAs come from the rungs above. The frame is the browser’s; the prestate is not.',
     lookupTable: true,
   }),
 ] as const);

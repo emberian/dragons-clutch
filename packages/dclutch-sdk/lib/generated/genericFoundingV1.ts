@@ -8,12 +8,13 @@
 //   crates/dclutch-claims-svm/src/founding_v5.rs                    (Claims)
 //   tools/local-validator/bootstrap/successor/src/market.rs         (the frame width)
 
-/** Sole top-level DCLTGMF2 discriminator. The outer carries no other bytes. */
-export const GENERIC_MARKET_FOUNDING_MAGIC_V2 = 'DCLTGMF2' as const;
-export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2 = 8 as const;
-export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 = 4 as const;
-export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2 = 4 as const;
-export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2 = 5 as const;
+/** Sole top-level DCLTGMF3 discriminator followed by five invocation-evidence bumps. */
+export const GENERIC_MARKET_FOUNDING_MAGIC_V3 = 'DCLTGMF3' as const;
+export const GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3 = 5 as const;
+export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3 = 13 as const;
+export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 = 4 as const;
+export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3 = 4 as const;
+export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3 = 5 as const;
 
 /** Index of each readonly request account inside the frame prefix. */
 export const GENERIC_FOUNDING_FOUND_RAW_INDEX_V1 = 0 as const;
@@ -24,10 +25,10 @@ export const GENERIC_FOUNDING_CLAIMS_RAW_INDEX_V1 = 3 as const;
 /** Stage account widths. The frame is exactly the concatenation of these. */
 export const PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1 = 14 as const;
 export const PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1 = 12 as const;
-export const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 = 28 as const;
+export const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 = 26 as const;
 export const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 = 15 as const;
-export const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5 = 32 as const;
-export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
+export const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5 = 31 as const;
+export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 21 as const;
 
 /**
  * Frame width at `funding_count = 0`, restated by the reference client.
@@ -36,11 +37,11 @@ export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
  * disagreement rather than as a silently wider frame; the assertion that the
  * six widths above sum to it lives in `genericMarketFounding.test.ts`.
  */
-export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2 = 129 as const;
-export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 25 as const;
+export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 = 125 as const;
+export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 24 as const;
 
 /** Exact distinct writable keys the outer requires, asserted by the client. */
-export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V2 = 11 as const;
+export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 12 as const;
 
 /** Devnet transaction account-lock limit without the raise feature. */
 export const MAX_TX_ACCOUNT_LOCKS_V2 = 64 as const;

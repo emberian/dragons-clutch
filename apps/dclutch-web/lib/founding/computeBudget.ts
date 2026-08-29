@@ -2,7 +2,7 @@
  * The ComputeBudget declarations a founding transaction cannot go without.
  *
  * Solana's default is 200,000 compute units per transaction. Found37 and the
- * DCLTGMF2 outer reauthenticate release and record state under an explicitly
+ * DCLTGMF3 outer reauthenticate release and record state under an explicitly
  * configured limit. A current performance claim for either route requires its
  * pass count and 20-seed mean; this module only reproduces the configured
  * declaration. Omitting it produces a transaction the runtime kills with
@@ -56,7 +56,7 @@ export function setComputeUnitLimitV1(units: number = LOCAL_PROTOCOL_COMPUTE_UNI
 /**
  * `RequestHeapFrame(bytes)`.
  *
- * Only the two routes on `declares_extended_heap_profile_v1` — DCLTGMF2 and
+ * Only the two routes on `declares_extended_heap_profile_v1` — DCLTGMF3 and
  * DCLTPCB2 — should carry this, and both present the instructions sysvar so
  * Trading's adapter can re-derive the grant from what the runtime serialized
  * rather than from a caller's claim. On any other route it costs compute and

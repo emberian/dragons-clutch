@@ -1,5 +1,5 @@
 /**
- * `GenericFoundingRequestV1` — the 400-byte body DCLTGMF2's account 0 holds.
+ * `GenericFoundingRequestV1` — the 400-byte body DCLTGMF3's account 0 holds.
  *
  * The outer instruction data is eight ASCII bytes and nothing else, so every
  * economic coordinate of an atomic founding travels in this record. Core
