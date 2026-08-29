@@ -1125,6 +1125,23 @@ Extrapolate the protocol's own principles to completion. Spawned immediately:
 2. MULTI-CAPABILITY RULING (folded into SEL-SEAM): the manifest encoder
    forbids two entries of one kind; does it PERMIT one entry each of several?
    Read it off the codec, prove or weld shut deliberately.
+   RESOLVED (SEL-SEAM, 2026-08-29): both, deliberately. The CODEC permits
+   one entry each of several distinct kinds (a five-entry manifest with two
+   trade kinds encodes canonically; up to 16 entries fit
+   CAPABILITY_MANIFEST_MAX_BYTES_V1) — coexisting capabilities are not a
+   wire impossibility, and per-entry roots and funding quotes already exist
+   on chain. Founding is WELDED to one selected trade capability at two
+   independent seams: the selection seam pins the four-entry shape and only
+   grows the three-entry Resolution base by one
+   (several_distinct_kinds_encode_but_the_selection_seam_welds_to_one,
+   selected_capability.rs), and the funding census requires every entry
+   funded by exactly one of the two controllers with Trading funding exactly
+   the selected entry — refusing symmetrically whichever of two coexisting
+   kinds is selected
+   (founding_masks_weld_the_manifest_to_one_selected_capability, market.rs).
+   Widening to several selected capabilities per Market is therefore a
+   deliberate future decision (driver + census change, no wire change), not
+   an accident any lane can back into.
 3. PERMISSIONLESS COMPLETION UNIVERSALIZED (LIVENESS): census every
    "someone must act" point in every lifecycle; each gets a funded,
    anyone-can-act path or a precisely named gap. The protocol's one-sentence

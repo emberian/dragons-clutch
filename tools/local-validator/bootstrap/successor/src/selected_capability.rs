@@ -451,6 +451,44 @@ mod tests {
             .expect_err("an index naming a companion refuses");
     }
 
+    /// The cycle-3 multi-capability ruling, read off the codec and welded
+    /// deliberately: the manifest CODEC permits one entry each of several
+    /// distinct kinds (a five-entry manifest with two trade kinds encodes
+    /// canonically — coexisting capabilities are not a wire impossibility),
+    /// and the selection SEAM welds founding to exactly one selected trade
+    /// capability: validation pins the four-entry shape, and the merge only
+    /// ever grows the canonical three-entry Resolution base by one. The
+    /// founding funding census welds the same fact independently
+    /// (`founding_masks_weld_the_manifest_to_one_selected_capability`,
+    /// `market.rs`): every entry must be funded by exactly one of the two
+    /// controllers, and the Trading controller funds exactly the one
+    /// selected entry. Widening to several selected capabilities is a
+    /// deliberate future decision — per-entry roots and funding already
+    /// exist on chain — not an accident this seam can back into.
+    #[test]
+    fn several_distinct_kinds_encode_but_the_selection_seam_welds_to_one() {
+        let second_trade_kind = [0x61; 32];
+        let five = encode(&[
+            entry([0x11; 32], COMPANION_RELEASE, [0x21; 32]),
+            entry([0x12; 32], COMPANION_RELEASE, [0x22; 32]),
+            entry([0x13; 32], COMPANION_RELEASE, [0x23; 32]),
+            entry(SELECTED_KIND, [0x91; 32], [0x62; 32]),
+            entry(second_trade_kind, [0x92; 32], [0x63; 32]),
+        ]);
+        // (a) the codec ADMITS the shape: five distinct kinds encode.
+        CapabilityManifestV1::decode(&five).expect("distinct kinds coexist at the codec");
+
+        // (b) the seam refuses it as a founding manifest…
+        let selected = entry(SELECTED_KIND, [0x91; 32], [0x62; 32]);
+        validate_selected_manifest_v1(&five, selected, 3)
+            .expect_err("founding validation welds the manifest to four entries");
+        // …and as a merge base, so a second trade capability cannot enter
+        // through either door.
+        let another = entry([0x71; 32], [0x93; 32], [0x64; 32]);
+        merge_selected_manifest_v1(&five, another)
+            .expect_err("the merge only grows the three-entry Resolution base");
+    }
+
     #[test]
     fn the_manifest_codec_itself_refuses_two_entries_of_one_kind() {
         // The day's one-selected-capability-per-Market answer, read off the

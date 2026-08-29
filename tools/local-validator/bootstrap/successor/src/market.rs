@@ -12250,6 +12250,59 @@ mod tests {
         }
     }
 
+    /// The founding census's half of the cycle-3 multi-capability ruling:
+    /// even where the codec admits two coexisting trade kinds, the funding
+    /// arithmetic welds founding to one — every entry must be funded by
+    /// exactly one of the two controllers, the Trading controller funds
+    /// exactly the selected entry, and a second non-Resolution entry of
+    /// another kind is refused symmetrically whichever kind is selected.
+    #[test]
+    fn founding_masks_weld_the_manifest_to_one_selected_capability() {
+        use dclutch_capability_contract::{
+            ActivationPolicy, CAPABILITY_ENTRY_BYTES, CompartmentFundingV1, FundingAmountsV1,
+            FundingQuoteV1, MANIFEST_HEADER_BYTES,
+        };
+        let none = CompartmentFundingV1::not_applicable();
+        let quote = FundingQuoteV1::new(
+            FundingAmountsV1::new(none, none, none, none, none, none, none).expect("amounts"),
+            None,
+        )
+        .expect("quote");
+        let entry = |kind: [u8; 32], release: [u8; 32], salt: u8| {
+            CapabilityEntryV1::new(
+                CapabilityContentId::new(kind).expect("kind"),
+                CapabilityContentId::new(release).expect("release"),
+                CapabilityContentId::new([0x40 + salt; 32]).expect("config"),
+                CapabilityContentId::new([0x50 + salt; 32]).expect("capacity"),
+                CapabilityContentId::new([0x60; 32]).expect("schema"),
+                CapabilityContentId::new([0x70; 32]).expect("derivation"),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quote,
+            )
+            .expect("entry")
+        };
+        let resolution = [0x30; 32];
+        let first_kind = [0x81; 32];
+        let second_kind = [0x82; 32];
+        let entries = [
+            entry([0x11; 32], resolution, 0),
+            entry([0x12; 32], resolution, 1),
+            entry([0x13; 32], resolution, 2),
+            entry(first_kind, [0x31; 32], 3),
+            entry(second_kind, [0x32; 32], 4),
+        ];
+        let mut bytes = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("five distinct kinds encode");
+        let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
+        for selected in [first_kind, second_kind] {
+            selected_founding_controller_masks_v1(manifest, resolution, selected)
+                .expect_err("a second trade capability cannot ride any founding");
+        }
+    }
+
     #[test]
     fn successor_controller_masks_refuse_missing_or_ambiguous_direct_ownership() {
         for bytes in [
