@@ -1,0 +1,45 @@
+[package]
+name = "dclutch-fractional-atomic-program-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.89"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
+dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-fractional-atomic-test-caller-sbf = { path = "../../test-programs/fractional-atomic-caller", features = ["no-entrypoint"] }
+dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
+dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
+dclutch-fractional-claims-kernel = { path = "../../../../crates/dclutch-fractional-claims-kernel" }
+dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
+solana-program = { version = "=3.0.0" }
+solana-sdk-ids = "=3.1.0"
+
+[dev-dependencies]
+solana-account = "=4.3.2"
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-transaction = "=4.1.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"

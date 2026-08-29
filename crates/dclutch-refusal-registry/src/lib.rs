@@ -199,6 +199,8 @@ pub const TEST_DEALER_ACCELERATOR_CALLER_BASE: u32 = 0x0010_8000;
 pub const TEST_GENERAL_ACCELERATOR_CALLER_BASE: u32 = 0x0010_9000;
 /// Band 0x10A — `dclutch-svm-harness` test caller `resolution-receipt-caller`.
 pub const TEST_RESOLUTION_RECEIPT_CALLER_BASE: u32 = 0x0010_A000;
+/// Band 0x10B — `dclutch-claims-sbf` test caller `fractional-atomic-caller`.
+pub const TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE: u32 = 0x0010_B000;
 
 // --------------------------------------------------------------- band table
 
@@ -373,6 +375,13 @@ pub const BANDS: &[RefusalBand] = &[
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
+    RefusalBand {
+        label: "test/claims-fractional-atomic-caller",
+        package: "dclutch-fractional-atomic-test-caller-sbf",
+        base: TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE,
+        span: BAND_SPAN,
+        tier: BandTier::TestCaller,
+    },
 ];
 
 // -------------------------------------------------------------- deliberate aliases
@@ -532,13 +541,14 @@ mod tests {
             TEST_DEALER_ACCELERATOR_CALLER_BASE,
             TEST_GENERAL_ACCELERATOR_CALLER_BASE,
             TEST_RESOLUTION_RECEIPT_CALLER_BASE,
+            TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE,
         ] {
             assert!(
                 BANDS.iter().any(|band| band.base == base),
                 "named base {base:#x} is not in BANDS"
             );
         }
-        assert_eq!(BANDS.len(), 24, "BANDS gained or lost an entry");
+        assert_eq!(BANDS.len(), 25, "BANDS gained or lost an entry");
     }
 
     #[test]
