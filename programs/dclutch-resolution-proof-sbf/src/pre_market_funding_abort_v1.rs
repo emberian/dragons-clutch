@@ -3,7 +3,8 @@
 use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     ControllerFundingCheckpointAbortKindV1, ControllerFundingCheckpointDerivationV1,
-    ControllerFundingCheckpointV1, FundingLedgerStatusV2, FundingLedgerV2,
+    ControllerFundingCheckpointV1, ControllerFundingControllerV1, FundingLedgerStatusV2,
+    FundingLedgerV2, controller_funding_ledger_account_digest_v1,
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -70,12 +71,24 @@ pub fn process_pre_market_funding_abort_v1(
     }
     let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_data)
         .map_err(|_| ResolutionError::Funding)?;
+    let ledger = account(accounts, LEDGER)?;
+    let ledger_data = ledger
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    let controller_ledger_account_digest = controller_funding_ledger_account_digest_v1(
+        ledger.key.to_bytes(),
+        ledger.owner.to_bytes(),
+        ledger.lamports(),
+        &ledger_data,
+    );
+    drop(ledger_data);
     authenticate_checkpoint(
         checkpoint,
         checkpoint_account,
         account(accounts, CALLER_PROGRAM)?,
         request,
         clock.slot,
+        controller_ledger_account_digest,
     )?;
 
     let registry = account(accounts, REGISTRY_PROGRAM)?;
@@ -98,7 +111,6 @@ pub fn process_pre_market_funding_abort_v1(
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
     let manifest_id =
         CapabilityContentId::new(request.manifest).map_err(|_| ResolutionError::Funding)?;
-    let ledger = account(accounts, LEDGER)?;
     let ledger_data = ledger
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
@@ -202,20 +214,10 @@ fn authenticate_checkpoint(
     caller_program: &AccountInfo<'_>,
     request: PreMarketFundingAbortRequestV1,
     current_slot: u64,
+    controller_ledger_account_digest: [u8; 32],
 ) -> ProgramResult {
     let input = checkpoint.input();
-    let expected_kind = match request.checkpoint_phase {
-        1 => ControllerFundingCheckpointAbortKindV1::PreparedExpired,
-        2 => ControllerFundingCheckpointAbortKindV1::CustodyStagedExpired,
-        _ => return Err(ResolutionError::Instruction.into()),
-    };
     if checkpoint_account.owner != caller_program.key
-        || checkpoint.phase() as u8 != request.checkpoint_phase
-        || checkpoint.revision() != request.checkpoint_revision
-        || checkpoint
-            .authenticate_expiry_abort(current_slot)
-            .map_err(|_| ResolutionError::Funding)?
-            != expected_kind
         || input.release_set != request.release_set
         || input.market != request.market
         || input.generation != request.generation
@@ -229,6 +231,14 @@ fn authenticate_checkpoint(
     {
         return Err(ResolutionError::Funding.into());
     }
+    authenticate_resolution_cleanup_position(
+        checkpoint,
+        request.checkpoint_phase,
+        request.checkpoint_revision,
+        request.selected_mask,
+        current_slot,
+        controller_ledger_account_digest,
+    )?;
     let derivation = ControllerFundingCheckpointDerivationV1::new(
         input.release_set,
         input.market,
@@ -241,6 +251,52 @@ fn authenticate_checkpoint(
         != *checkpoint_account.key
     {
         return Err(ResolutionError::Funding.into());
+    }
+    Ok(())
+}
+
+/// Bind Resolution's close to its exact position in the durable cleanup prefix.
+///
+/// Prepared and CustodyAborted are first-close phases. Once a first close has
+/// persisted, Resolution may only consume the checkpoint when it is the
+/// canonical remaining controller and the live account state is the exact
+/// prestate committed by that prefix. CustodyStaged is deliberately absent:
+/// Custody rollback must become durable before either controller ledger moves.
+fn authenticate_resolution_cleanup_position(
+    checkpoint: ControllerFundingCheckpointV1,
+    checkpoint_phase: u8,
+    checkpoint_revision: u64,
+    selected_mask: u16,
+    current_slot: u64,
+    controller_ledger_account_digest: [u8; 32],
+) -> ProgramResult {
+    if checkpoint.phase() as u8 != checkpoint_phase
+        || checkpoint.revision() != checkpoint_revision
+        || checkpoint.controller_mask(ControllerFundingControllerV1::Resolution) != selected_mask
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    let kind = checkpoint
+        .authenticate_expiry_abort(current_slot)
+        .map_err(|_| ResolutionError::Funding)?;
+    match (checkpoint_phase, kind) {
+        (1, ControllerFundingCheckpointAbortKindV1::PreparedExpired)
+        | (3, ControllerFundingCheckpointAbortKindV1::CustodyAborted) => {
+            if checkpoint.canonical_first_controller() != ControllerFundingControllerV1::Resolution
+            {
+                return Err(ResolutionError::Funding.into());
+            }
+        }
+        (4 | 5, ControllerFundingCheckpointAbortKindV1::FirstLedgerClosed) => {
+            let cleanup = checkpoint.cleanup().ok_or(ResolutionError::Funding)?;
+            if checkpoint.canonical_remaining_controller()
+                != ControllerFundingControllerV1::Resolution
+                || cleanup.remaining_ledger_prestate_digest() != controller_ledger_account_digest
+            {
+                return Err(ResolutionError::Funding.into());
+            }
+        }
+        _ => return Err(ResolutionError::Funding.into()),
     }
     Ok(())
 }
@@ -410,6 +466,42 @@ fn account<'a, 'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_capability_contract::ControllerFundingCheckpointInputV1;
+
+    const EXPIRY_SLOT: u64 = 90;
+
+    fn checkpoint_input(resolution_first: bool) -> ControllerFundingCheckpointInputV1 {
+        let (resolution_mask, trading_mask) = if resolution_first {
+            (0b0111, 0b1000)
+        } else {
+            (0b1110, 0b0001)
+        };
+        ControllerFundingCheckpointInputV1 {
+            release_set: [1; 32],
+            market: [2; 32],
+            generation: 3,
+            manifest: [4; 32],
+            funding_list: [5; 32],
+            found_request_digest: [6; 32],
+            project_found_receipt_digest: [7; 32],
+            resolution_ledger: [8; 32],
+            resolution_ledger_digest: [9; 32],
+            trading_ledger: [10; 32],
+            trading_ledger_digest: [11; 32],
+            funding_source: [12; 32],
+            rent_credit: [13; 32],
+            lock_request_digest: [14; 32],
+            expiry_slot: EXPIRY_SLOT,
+            prepared_slot: 40,
+            resolution_mask,
+            trading_mask,
+        }
+    }
+
+    fn prepared(resolution_first: bool) -> ControllerFundingCheckpointV1 {
+        ControllerFundingCheckpointV1::prepared(checkpoint_input(resolution_first))
+            .expect("prepared checkpoint")
+    }
 
     #[test]
     fn detector_and_phase_wires_are_exact() {
@@ -439,5 +531,182 @@ mod tests {
         let mut legacy = request;
         legacy[..8].copy_from_slice(b"DCLRPFQ1");
         assert!(!is_pre_market_funding_abort_v1(&legacy));
+    }
+
+    #[test]
+    fn first_close_accepts_resolution_only_in_canonical_position() {
+        let exact = prepared(true);
+        assert!(
+            authenticate_resolution_cleanup_position(
+                exact,
+                1,
+                1,
+                exact.input().resolution_mask,
+                EXPIRY_SLOT + 1,
+                [21; 32],
+            )
+            .is_ok()
+        );
+        for hostile in [
+            authenticate_resolution_cleanup_position(
+                prepared(false),
+                1,
+                1,
+                prepared(false).input().resolution_mask,
+                EXPIRY_SLOT + 1,
+                [21; 32],
+            ),
+            authenticate_resolution_cleanup_position(
+                exact,
+                2,
+                2,
+                exact.input().resolution_mask,
+                EXPIRY_SLOT + 1,
+                [21; 32],
+            ),
+            authenticate_resolution_cleanup_position(
+                exact,
+                1,
+                1,
+                exact.input().trading_mask,
+                EXPIRY_SLOT + 1,
+                [21; 32],
+            ),
+        ] {
+            assert!(hostile.is_err());
+        }
+
+        let custody_aborted = prepared(true)
+            .stage_custody(50, [15; 32])
+            .expect("staged")
+            .abort_custody(EXPIRY_SLOT + 1, [16; 32], [17; 32], [18; 32])
+            .expect("custody aborted");
+        assert!(
+            authenticate_resolution_cleanup_position(
+                custody_aborted,
+                3,
+                3,
+                custody_aborted.input().resolution_mask,
+                EXPIRY_SLOT + 2,
+                [21; 32],
+            )
+            .is_ok()
+        );
+        let wrong_first = prepared(false)
+            .stage_custody(50, [15; 32])
+            .expect("staged")
+            .abort_custody(EXPIRY_SLOT + 1, [16; 32], [17; 32], [18; 32])
+            .expect("custody aborted");
+        assert!(
+            authenticate_resolution_cleanup_position(
+                wrong_first,
+                3,
+                3,
+                wrong_first.input().resolution_mask,
+                EXPIRY_SLOT + 2,
+                [21; 32],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn remaining_close_requires_resolution_and_exact_persisted_live_digest() {
+        let remaining_digest = [31; 32];
+        let trading_first = prepared(false);
+        let prepared_prefix = trading_first
+            .close_first_ledger(
+                EXPIRY_SLOT + 1,
+                [20; 32],
+                ControllerFundingControllerV1::Trading,
+                trading_first.input().trading_mask,
+                [21; 32],
+                [22; 32],
+                [23; 32],
+                remaining_digest,
+                24,
+                25,
+            )
+            .expect("prepared cleanup prefix");
+        assert!(
+            authenticate_resolution_cleanup_position(
+                prepared_prefix,
+                4,
+                4,
+                prepared_prefix.input().resolution_mask,
+                EXPIRY_SLOT + 2,
+                remaining_digest,
+            )
+            .is_ok()
+        );
+        assert!(
+            authenticate_resolution_cleanup_position(
+                prepared_prefix,
+                4,
+                4,
+                prepared_prefix.input().resolution_mask,
+                EXPIRY_SLOT + 2,
+                [32; 32],
+            )
+            .is_err()
+        );
+
+        let staged = prepared(false)
+            .stage_custody(50, [15; 32])
+            .expect("staged")
+            .abort_custody(EXPIRY_SLOT + 1, [16; 32], [17; 32], [18; 32])
+            .expect("custody aborted");
+        let custody_prefix = staged
+            .close_first_ledger(
+                EXPIRY_SLOT + 2,
+                [26; 32],
+                ControllerFundingControllerV1::Trading,
+                staged.input().trading_mask,
+                [21; 32],
+                [22; 32],
+                [23; 32],
+                remaining_digest,
+                24,
+                25,
+            )
+            .expect("custody cleanup prefix");
+        assert!(
+            authenticate_resolution_cleanup_position(
+                custody_prefix,
+                5,
+                5,
+                custody_prefix.input().resolution_mask,
+                EXPIRY_SLOT + 3,
+                remaining_digest,
+            )
+            .is_ok()
+        );
+
+        let resolution_first = prepared(true);
+        let resolution_already_closed = resolution_first
+            .close_first_ledger(
+                EXPIRY_SLOT + 1,
+                [20; 32],
+                ControllerFundingControllerV1::Resolution,
+                resolution_first.input().resolution_mask,
+                [21; 32],
+                [22; 32],
+                [23; 32],
+                remaining_digest,
+                24,
+                25,
+            )
+            .expect("resolution-first prefix");
+        assert!(
+            authenticate_resolution_cleanup_position(
+                resolution_already_closed,
+                4,
+                4,
+                resolution_already_closed.input().resolution_mask,
+                EXPIRY_SLOT + 2,
+                remaining_digest,
+            )
+            .is_err()
+        );
     }
 }

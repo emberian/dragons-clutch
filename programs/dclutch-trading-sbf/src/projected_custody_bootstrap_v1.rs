@@ -39,16 +39,19 @@ use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId,
     ControllerFundingCheckpointAbortKindV1, ControllerFundingCheckpointDerivationV1,
     ControllerFundingCheckpointInputV1, ControllerFundingCheckpointPhaseV1,
-    ControllerFundingCheckpointV1, FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
-    validate_funding_ledger_masks_v2,
+    ControllerFundingCheckpointV1, ControllerFundingCleanupTerminalReceiptInputV1,
+    ControllerFundingCleanupTerminalReceiptV1, ControllerFundingControllerV1,
+    FundingLedgerStatusV2, FundingLedgerV2, controller_funding_ledger_account_digest_v1,
+    funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
 };
 use dclutch_custody_contract::{
     FoundingPrestateStageV1, INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
-    PROJECTED_CUSTODY_STATE_BYTES_V2, ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
+    PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
+    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
+    ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
+    ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3, GENERIC_FOUNDING_REQUEST_BYTES_V1,
@@ -65,7 +68,7 @@ use dclutch_resolution_codec::{
 };
 use solana_program::{
     account_info::AccountInfo,
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
@@ -203,10 +206,12 @@ const ABORT_SUB_FRAME_START: usize = 2;
 pub const PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1: usize =
     ABORT_SUB_FRAME_START + PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1;
 
-/// Controller-ledger expiry close without a Custody prestate.
-pub const CONTROLLER_FUNDING_PREPARED_ABORT_MAGIC_V1: [u8; 8] = *b"DCLTCFA1";
-/// Exact Prepared-expiry close instruction width.
-pub const CONTROLLER_FUNDING_PREPARED_ABORT_INSTRUCTION_BYTES_V1: usize = 8;
+/// Persist the canonical first controller-ledger close.
+pub const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
+/// Close the remaining controller ledger and checkpoint.
+pub const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
+/// Exact cleanup instruction width; all authority lives in the checkpoint.
+pub const CONTROLLER_FUNDING_CLEANUP_INSTRUCTION_BYTES_V1: usize = 8;
 /// Resolution's exact 16-account abort frame followed by the Trading ledger.
 pub const CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1: usize = 17;
 
@@ -229,7 +234,8 @@ const FUNDING_ABORT_SYSTEM: usize = 15;
 const FUNDING_ABORT_TRADING_LEDGER: usize = 16;
 
 const STAGED_ABORT_FUNDING_START: usize = PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1;
-/// Exact staged Custody abort followed by canonical controller-ledger cleanup.
+/// Exact staged Custody abort frame followed by the read/write checkpoint frame.
+/// Controller ledgers are authenticated here but deliberately left untouched.
 pub const PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2: usize =
     STAGED_ABORT_FUNDING_START + CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1;
 
@@ -397,23 +403,42 @@ pub fn process_controller_funding_prepare_v1(
     Ok(())
 }
 
-/// Return whether bytes select Prepared-expiry controller cleanup.
+/// Return whether bytes select the first durable controller-cleanup suffix.
 #[must_use]
-pub fn is_controller_funding_prepared_abort_v1(instruction_data: &[u8]) -> bool {
-    instruction_data == CONTROLLER_FUNDING_PREPARED_ABORT_MAGIC_V1
+pub fn is_controller_funding_cleanup_step1_v1(instruction_data: &[u8]) -> bool {
+    instruction_data == CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1
 }
 
-/// Close an expired Prepared checkpoint and both exact Pending ledgers.
-///
-/// This fixed frame has no Custody accounts. A caller cannot smuggle an
-/// optional Custody mutation into the pre-staging cleanup path.
+/// Close the canonical first Pending ledger and persist the exact prefix last.
 #[inline(never)]
-pub fn process_controller_funding_prepared_abort_v1(
+pub fn process_controller_funding_cleanup_step1_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    if !is_controller_funding_prepared_abort_v1(instruction_data)
+    if !is_controller_funding_cleanup_step1_v1(instruction_data)
+        || accounts.len() != CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let checkpoint = authenticate_cleanup_step1_checkpoint_v1(program_id, accounts)?;
+    persist_first_controller_close_v1(program_id, accounts, checkpoint)
+}
+
+/// Return whether bytes select the terminal controller-cleanup suffix.
+#[must_use]
+pub fn is_controller_funding_cleanup_step2_v1(instruction_data: &[u8]) -> bool {
+    instruction_data == CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1
+}
+
+/// Close only the authenticated remaining ledger, then the checkpoint last.
+#[inline(never)]
+pub fn process_controller_funding_cleanup_step2_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    if !is_controller_funding_cleanup_step2_v1(instruction_data)
         || accounts.len() != CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1
     {
         return Err(TradingSbfError::UnsupportedContent.into());
@@ -421,9 +446,64 @@ pub fn process_controller_funding_prepared_abort_v1(
     let checkpoint = authenticate_expired_checkpoint_v1(
         program_id,
         accounts,
-        ControllerFundingCheckpointAbortKindV1::PreparedExpired,
+        ControllerFundingCheckpointAbortKindV1::FirstLedgerClosed,
     )?;
-    close_controller_funding_v1(program_id, accounts, checkpoint)
+    let checkpoint_account = account(accounts, FUNDING_ABORT_CHECKPOINT)?;
+    let data = checkpoint_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let checkpoint_digest = hash(&data).to_bytes();
+    drop(data);
+    let remaining = close_remaining_controller_v1(program_id, accounts, checkpoint)?;
+    let cleanup = checkpoint.cleanup().ok_or(TradingSbfError::Transition)?;
+    let input = checkpoint.input();
+    let total_principal_refund_lamports = cleanup
+        .principal_refund_lamports()
+        .checked_add(remaining.principal_refund_lamports)
+        .ok_or(TradingSbfError::Transition)?;
+    let total_rent_refund_lamports = cleanup
+        .rent_refund_lamports()
+        .checked_add(remaining.rent_refund_lamports)
+        .ok_or(TradingSbfError::Transition)?;
+    let clock = Clock::from_account_info(account(accounts, FUNDING_ABORT_CLOCK)?)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let first = checkpoint.canonical_first_controller();
+    let remaining_controller = checkpoint.canonical_remaining_controller();
+    let receipt = ControllerFundingCleanupTerminalReceiptV1::new(
+        ControllerFundingCleanupTerminalReceiptInputV1 {
+            origin: cleanup.origin(),
+            first_controller: first,
+            remaining_controller,
+            checkpoint_phase: checkpoint.phase(),
+            producer: program_id.to_bytes(),
+            checkpoint_key: checkpoint_account.key.to_bytes(),
+            checkpoint_digest,
+            prior_checkpoint_digest: cleanup.prior_checkpoint_digest(),
+            first_prestate_digest: cleanup.first_ledger_prestate_digest(),
+            first_closed_digest: cleanup.first_ledger_closed_digest(),
+            first_child_receipt_digest: cleanup.first_close_receipt_digest(),
+            remaining_prestate_digest: cleanup.remaining_ledger_prestate_digest(),
+            remaining_closed_digest: remaining.closed_digest,
+            remaining_child_receipt_digest: remaining.receipt_digest,
+            funding_source: input.funding_source,
+            rent_credit: input.rent_credit,
+            first_principal_refund_lamports: cleanup.principal_refund_lamports(),
+            first_rent_refund_lamports: cleanup.rent_refund_lamports(),
+            remaining_principal_refund_lamports: remaining.principal_refund_lamports,
+            remaining_rent_refund_lamports: remaining.rent_refund_lamports,
+            total_principal_refund_lamports,
+            total_rent_refund_lamports,
+            first_transition_slot: cleanup.transition_slot(),
+            finalized_slot: clock.slot,
+            checkpoint_revision: checkpoint.revision(),
+            first_mask: checkpoint.controller_mask(first),
+            remaining_mask: checkpoint.controller_mask(remaining_controller),
+        },
+    )
+    .map_err(|_| TradingSbfError::Transition)?;
+    close_expired_checkpoint_v1(program_id, accounts, checkpoint)?;
+    set_return_data(&receipt.encode());
+    Ok(())
 }
 
 fn readonly_raw_bytes(account: &AccountInfo<'_>, width: usize) -> Result<Vec<u8>, ProgramError> {
@@ -544,9 +624,6 @@ fn authenticate_expired_checkpoint_v1(
     if caller.key != program_id
         || checkpoint_account.owner != program_id
         || checkpoint_account.data_len() != CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1
-        || account(accounts, FUNDING_ABORT_RESOLUTION_LEDGER)?.owner
-            != account(accounts, FUNDING_ABORT_RESOLUTION_PROGRAM)?.key
-        || account(accounts, FUNDING_ABORT_TRADING_LEDGER)?.owner != program_id
         || account(accounts, FUNDING_ABORT_SYSTEM)?.key != &system_program::ID
     {
         return Err(TradingSbfError::Content.into());
@@ -562,6 +639,21 @@ fn authenticate_expired_checkpoint_v1(
         .authenticate_expiry_abort(clock.slot)
         .map_err(|_| TradingSbfError::Content)?
         != expected_kind
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let resolution_ledger = account(accounts, FUNDING_ABORT_RESOLUTION_LEDGER)?;
+    let trading_ledger = account(accounts, FUNDING_ABORT_TRADING_LEDGER)?;
+    let first_closed = expected_kind == ControllerFundingCheckpointAbortKindV1::FirstLedgerClosed;
+    let resolution_should_be_closed = first_closed
+        && checkpoint.canonical_first_controller() == ControllerFundingControllerV1::Resolution;
+    let trading_should_be_closed = first_closed
+        && checkpoint.canonical_first_controller() == ControllerFundingControllerV1::Trading;
+    if !ledger_owner_matches_v1(
+        resolution_ledger,
+        account(accounts, FUNDING_ABORT_RESOLUTION_PROGRAM)?.key,
+        resolution_should_be_closed,
+    ) || !ledger_owner_matches_v1(trading_ledger, program_id, trading_should_be_closed)
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -597,28 +689,123 @@ fn authenticate_expired_checkpoint_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
+    authenticate_resolution_abort_authority_v1(program_id, accounts, checkpoint)?;
     Ok(checkpoint)
 }
 
-#[inline(never)]
-fn close_controller_funding_v1(
+/// Authenticate the single canonical account-zero PDA even when this suffix
+/// closes Trading directly and therefore performs no Resolution CPI.
+///
+/// If Resolution already closed, its exact current state is the System-owned,
+/// zero-lamport, zero-data account. Hashing that state produces the same
+/// deterministic request/authority rule for both controller orders; callers
+/// never substitute a sentinel or special-case Direct index zero.
+fn authenticate_resolution_abort_authority_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     checkpoint: ControllerFundingCheckpointV1,
 ) -> Result<(), ProgramError> {
-    let input = checkpoint.input_ref();
-    if input.trading_mask.trailing_zeros() < input.resolution_mask.trailing_zeros() {
-        close_trading_pending_ledger_v1(program_id, accounts, checkpoint)?;
-        invoke_resolution_funding_abort_v1(program_id, accounts, checkpoint)?;
-    } else {
-        invoke_resolution_funding_abort_v1(program_id, accounts, checkpoint)?;
-        close_trading_pending_ledger_v1(program_id, accounts, checkpoint)?;
+    let checkpoint_account = account(accounts, FUNDING_ABORT_CHECKPOINT)?;
+    let checkpoint_data = checkpoint_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let checkpoint_digest = hash(&checkpoint_data).to_bytes();
+    drop(checkpoint_data);
+    let ledger = account(accounts, FUNDING_ABORT_RESOLUTION_LEDGER)?;
+    let ledger_data = ledger
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let ledger_account_digest = pre_market_funding_ledger_account_digest_v1(
+        ledger.key.to_bytes(),
+        ledger.owner.to_bytes(),
+        ledger.lamports(),
+        &ledger_data,
+    );
+    drop(ledger_data);
+    let input = checkpoint.input();
+    let request = PreMarketFundingAbortRequestV1 {
+        checkpoint_phase: checkpoint.phase() as u8,
+        checkpoint_revision: checkpoint.revision(),
+        release_set: input.release_set,
+        checkpoint: checkpoint_account.key.to_bytes(),
+        checkpoint_digest,
+        market: input.market,
+        generation: input.generation,
+        manifest: input.manifest,
+        funding_list: input.funding_list,
+        selected_mask: input.resolution_mask,
+        ledger: ledger.key.to_bytes(),
+        ledger_account_digest,
+        funding_source: input.funding_source,
+        rent_credit: input.rent_credit,
+        expiry_slot: input.expiry_slot,
+    };
+    let request_bytes = request.encode().map_err(|_| TradingSbfError::Content)?;
+    let seeds = CallerAuthoritySeedsV1::from_bytes(
+        input.release_set,
+        input.market,
+        ExecutionRoleV1::Trading,
+        input.manifest,
+        hash(&request_bytes).to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::Release)?;
+    if Pubkey::find_program_address(&seeds.as_slices(), program_id).0
+        != *account(accounts, FUNDING_ABORT_CALLER_AUTHORITY)?.key
+    {
+        return Err(TradingSbfError::Release.into());
     }
-    close_expired_checkpoint_v1(program_id, accounts, checkpoint)
+    Ok(())
+}
+
+fn ledger_owner_matches_v1(
+    ledger: &AccountInfo<'_>,
+    live_owner: &Pubkey,
+    should_be_closed: bool,
+) -> bool {
+    if should_be_closed {
+        ledger.owner == &system_program::ID && ledger.lamports() == 0 && ledger.data_len() == 0
+    } else {
+        ledger.owner == live_owner && ledger.lamports() > 0 && ledger.data_len() > 0
+    }
+}
+
+fn authenticate_cleanup_step1_checkpoint_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+) -> Result<ControllerFundingCheckpointV1, ProgramError> {
+    let checkpoint_account = account(accounts, FUNDING_ABORT_CHECKPOINT)?;
+    let data = checkpoint_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let checkpoint =
+        ControllerFundingCheckpointV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    drop(data);
+    let clock = Clock::from_account_info(account(accounts, FUNDING_ABORT_CLOCK)?)
+        .map_err(|_| TradingSbfError::Content)?;
+    let kind = checkpoint
+        .authenticate_expiry_abort(clock.slot)
+        .map_err(|_| TradingSbfError::Content)?;
+    if !matches!(
+        kind,
+        ControllerFundingCheckpointAbortKindV1::PreparedExpired
+            | ControllerFundingCheckpointAbortKindV1::CustodyAborted
+    ) {
+        return Err(TradingSbfError::Content.into());
+    }
+    authenticate_expired_checkpoint_v1(program_id, accounts, kind)
+}
+
+#[derive(Clone, Copy)]
+struct ControllerLedgerCloseEvidenceV1 {
+    prestate_digest: [u8; 32],
+    closed_digest: [u8; 32],
+    receipt_digest: [u8; 32],
+    principal_refund_lamports: u64,
+    rent_refund_lamports: u64,
 }
 
 #[inline(never)]
-fn invoke_resolution_funding_abort_v1(
+fn persist_first_controller_close_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     checkpoint: ControllerFundingCheckpointV1,
@@ -627,9 +814,108 @@ fn invoke_resolution_funding_abort_v1(
     let checkpoint_data = checkpoint_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
+    let prior_checkpoint_digest = hash(&checkpoint_data).to_bytes();
+    drop(checkpoint_data);
+    let first = checkpoint.canonical_first_controller();
+    let remaining = checkpoint.canonical_remaining_controller();
+    let remaining_digest = controller_ledger_account_digest_v1(accounts, remaining)?;
+    let evidence = match first {
+        ControllerFundingControllerV1::Resolution => {
+            invoke_resolution_funding_abort_v1(program_id, accounts, checkpoint)?
+        }
+        ControllerFundingControllerV1::Trading => {
+            close_trading_pending_ledger_v1(program_id, accounts, checkpoint)?
+        }
+    };
+    let clock = Clock::from_account_info(account(accounts, FUNDING_ABORT_CLOCK)?)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let next = checkpoint
+        .close_first_ledger(
+            clock.slot,
+            prior_checkpoint_digest,
+            first,
+            checkpoint.controller_mask(first),
+            evidence.prestate_digest,
+            evidence.closed_digest,
+            evidence.receipt_digest,
+            remaining_digest,
+            evidence.principal_refund_lamports,
+            evidence.rent_refund_lamports,
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+    write_checkpoint_last_v1(program_id, checkpoint_account, checkpoint, next)?;
+    set_return_data(&next.encode());
+    Ok(())
+}
+
+#[inline(never)]
+fn close_remaining_controller_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    checkpoint: ControllerFundingCheckpointV1,
+) -> Result<ControllerLedgerCloseEvidenceV1, ProgramError> {
+    let cleanup = checkpoint.cleanup().ok_or(TradingSbfError::Content)?;
+    let first = checkpoint.canonical_first_controller();
+    let first_digest = controller_ledger_account_digest_v1(accounts, first)?;
+    let remaining = checkpoint.canonical_remaining_controller();
+    let remaining_digest = controller_ledger_account_digest_v1(accounts, remaining)?;
+    if cleanup.first_controller() != Some(first)
+        || cleanup.first_ledger_closed_digest() != first_digest
+        || cleanup.remaining_ledger_prestate_digest() != remaining_digest
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let evidence = match remaining {
+        ControllerFundingControllerV1::Resolution => {
+            invoke_resolution_funding_abort_v1(program_id, accounts, checkpoint)?
+        }
+        ControllerFundingControllerV1::Trading => {
+            close_trading_pending_ledger_v1(program_id, accounts, checkpoint)?
+        }
+    };
+    if evidence.prestate_digest != cleanup.remaining_ledger_prestate_digest() {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(evidence)
+}
+
+fn controller_ledger_account_digest_v1(
+    accounts: &[AccountInfo<'_>],
+    controller: ControllerFundingControllerV1,
+) -> Result<[u8; 32], ProgramError> {
+    let ledger = account(
+        accounts,
+        match controller {
+            ControllerFundingControllerV1::Resolution => FUNDING_ABORT_RESOLUTION_LEDGER,
+            ControllerFundingControllerV1::Trading => FUNDING_ABORT_TRADING_LEDGER,
+        },
+    )?;
+    let data = ledger
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(controller_funding_ledger_account_digest_v1(
+        ledger.key.to_bytes(),
+        ledger.owner.to_bytes(),
+        ledger.lamports(),
+        &data,
+    ))
+}
+
+#[inline(never)]
+fn invoke_resolution_funding_abort_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    checkpoint: ControllerFundingCheckpointV1,
+) -> Result<ControllerLedgerCloseEvidenceV1, ProgramError> {
+    let checkpoint_account = account(accounts, FUNDING_ABORT_CHECKPOINT)?;
+    let checkpoint_data = checkpoint_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
     let checkpoint_digest = hash(&checkpoint_data).to_bytes();
     drop(checkpoint_data);
     let ledger = account(accounts, FUNDING_ABORT_RESOLUTION_LEDGER)?;
+    let generic_prestate_digest =
+        controller_ledger_account_digest_v1(accounts, ControllerFundingControllerV1::Resolution)?;
     let ledger_data = ledger
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
@@ -727,7 +1013,15 @@ fn invoke_resolution_funding_abort_v1(
     {
         return Err(TradingSbfError::Transition.into());
     }
-    Ok(())
+    let closed_digest =
+        controller_ledger_account_digest_v1(accounts, ControllerFundingControllerV1::Resolution)?;
+    Ok(ControllerLedgerCloseEvidenceV1 {
+        prestate_digest: generic_prestate_digest,
+        closed_digest,
+        receipt_digest: hash(&receipt_bytes).to_bytes(),
+        principal_refund_lamports: receipt.native_principal_refund_lamports,
+        rent_refund_lamports: receipt.rent_refund_lamports,
+    })
 }
 
 #[inline(never)]
@@ -735,9 +1029,11 @@ fn close_trading_pending_ledger_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     checkpoint: ControllerFundingCheckpointV1,
-) -> Result<(), ProgramError> {
+) -> Result<ControllerLedgerCloseEvidenceV1, ProgramError> {
     let input = checkpoint.input();
     let ledger = account(accounts, FUNDING_ABORT_TRADING_LEDGER)?;
+    let prestate_digest =
+        controller_ledger_account_digest_v1(accounts, ControllerFundingControllerV1::Trading)?;
     let manifest_account = account(accounts, FUNDING_ABORT_MANIFEST_RAW)?;
     let manifest_data = manifest_account
         .try_borrow_data()
@@ -801,7 +1097,26 @@ fn close_trading_pending_ledger_v1(
         account(accounts, FUNDING_ABORT_RENT_CREDIT)?,
         principal,
         exact_rent,
-    )
+    )?;
+    let closed_digest =
+        controller_ledger_account_digest_v1(accounts, ControllerFundingControllerV1::Trading)?;
+    let principal_bytes = principal.to_le_bytes();
+    let rent_bytes = exact_rent.to_le_bytes();
+    let receipt_digest = hashv(&[
+        b"dclutch/controller-funding/trading-close-receipt/v1",
+        &prestate_digest,
+        &closed_digest,
+        &principal_bytes,
+        &rent_bytes,
+    ])
+    .to_bytes();
+    Ok(ControllerLedgerCloseEvidenceV1 {
+        prestate_digest,
+        closed_digest,
+        receipt_digest,
+        principal_refund_lamports: principal,
+        rent_refund_lamports: exact_rent,
+    })
 }
 
 fn close_one_pending_ledger_v1(
@@ -872,6 +1187,26 @@ fn close_expired_checkpoint_v1(
         .map_err(|_| TradingSbfError::Commit)? = 0;
     target.resize(0).map_err(|_| TradingSbfError::Commit)?;
     target.assign(&system_program::ID);
+    Ok(())
+}
+
+fn write_checkpoint_last_v1(
+    program_id: &Pubkey,
+    target: &AccountInfo<'_>,
+    expected: ControllerFundingCheckpointV1,
+    next: ControllerFundingCheckpointV1,
+) -> Result<(), ProgramError> {
+    let mut data = target
+        .try_borrow_mut_data()
+        .map_err(|_| TradingSbfError::Commit)?;
+    if target.owner != program_id
+        || data.len() != CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1
+        || ControllerFundingCheckpointV1::decode(&data).map_err(|_| TradingSbfError::Commit)?
+            != expected
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
+    data.copy_from_slice(&next.encode());
     Ok(())
 }
 
@@ -963,7 +1298,86 @@ pub fn process_projected_custody_abort_v1(
         &ABORT_WRITABLE,
         &ABORT_SIGNERS,
     )?;
-    close_controller_funding_v1(program_id, funding, checkpoint)
+    let raw_digest = hash(raw.as_slice()).to_bytes();
+    let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
+    if producer != *custody_program.key || receipt_bytes.len() != PROJECTED_CUSTODY_RECEIPT_BYTES_V1
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let receipt = ProjectedCustodyReceiptV1::decode(&receipt_bytes)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let expected_receipt = ProjectedCustodyReceiptV1 {
+        realized: false,
+        aborted_open: false,
+        market: abort.market,
+        release_set: abort.release_set,
+        parent_capability_root: abort.parent_capability_root,
+        context_digest: abort.context_digest,
+        hoard_vault: abort.hoard_vault,
+        amount: abort.amount,
+        request_digest: raw_digest,
+        market_state_digest: [0; 32],
+        rent_credit: abort.rent_credit,
+        resulting_revision: abort.resulting_revision,
+    };
+    if receipt != expected_receipt {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let checkpoint_account = account(funding, FUNDING_ABORT_CHECKPOINT)?;
+    let checkpoint_data = checkpoint_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let prior_checkpoint_digest = hash(&checkpoint_data).to_bytes();
+    drop(checkpoint_data);
+    let custody_poststate_digest = projected_abort_poststate_digest_v1(sub_frame)?;
+    let clock = Clock::from_account_info(account(funding, FUNDING_ABORT_CLOCK)?)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let next = checkpoint
+        .abort_custody(
+            clock.slot,
+            prior_checkpoint_digest,
+            hash(&receipt_bytes).to_bytes(),
+            custody_poststate_digest,
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+    write_checkpoint_last_v1(program_id, checkpoint_account, checkpoint, next)?;
+    set_return_data(&next.encode());
+    Ok(())
+}
+
+fn projected_abort_poststate_digest_v1(
+    sub_frame: &[AccountInfo<'_>],
+) -> Result<[u8; 32], ProgramError> {
+    let mut snapshots = [[0_u8; 32]; 6];
+    for (output, index) in snapshots.iter_mut().zip([
+        COMMON_STATE,
+        COMMON_RENT_CREDIT,
+        ABORT_SOURCE_VAULT,
+        ABORT_SOURCE_REPLAY,
+        ABORT_SOURCE_HOARD,
+        ABORT_SOURCE_DESTINATION,
+    ]) {
+        let value = account(sub_frame, index)?;
+        let data = value
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Transition)?;
+        *output = controller_funding_ledger_account_digest_v1(
+            value.key.to_bytes(),
+            value.owner.to_bytes(),
+            value.lamports(),
+            &data,
+        );
+    }
+    Ok(hashv(&[
+        b"dclutch/controller-funding/custody-abort-poststate/v1",
+        &snapshots[0],
+        &snapshots[1],
+        &snapshots[2],
+        &snapshots[3],
+        &snapshots[4],
+        &snapshots[5],
+    ])
+    .to_bytes())
 }
 
 /// Authenticate every Program identity the abort route hands a signature to.
@@ -3142,13 +3556,20 @@ mod tests {
         assert_eq!(PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2, 35);
         assert_eq!(STAGED_ABORT_FUNDING_START, 18);
         assert_eq!(CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1, 17);
-        assert!(is_controller_funding_prepared_abort_v1(
-            &CONTROLLER_FUNDING_PREPARED_ABORT_MAGIC_V1
+        assert!(is_controller_funding_cleanup_step1_v1(
+            &CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1
         ));
-        assert!(!is_controller_funding_prepared_abort_v1(
+        assert!(!is_controller_funding_cleanup_step1_v1(
             &PROJECTED_CUSTODY_ABORT_MAGIC_V1
         ));
-        assert_eq!(CONTROLLER_FUNDING_PREPARED_ABORT_INSTRUCTION_BYTES_V1, 8);
+        assert!(is_controller_funding_cleanup_step2_v1(
+            &CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1
+        ));
+        assert_ne!(
+            CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
+            CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1
+        );
+        assert_eq!(CONTROLLER_FUNDING_CLEANUP_INSTRUCTION_BYTES_V1, 8);
     }
 
     #[test]

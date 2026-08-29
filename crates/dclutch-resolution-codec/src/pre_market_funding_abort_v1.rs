@@ -19,7 +19,8 @@ const LEDGER_ACCOUNT_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/resolution-ledger-accou
 /// Exact expiry rollback request for one Resolution-owned Pending ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreMarketFundingAbortRequestV1 {
-    /// Durable checkpoint phase: `1` Prepared or `2` CustodyStaged.
+    /// Durable checkpoint phase: `1` Prepared, `3` CustodyAborted, or `4`/`5`
+    /// after the canonical first controller ledger closed.
     pub checkpoint_phase: u8,
     /// Exact checkpoint revision, equal to its phase in V1.
     pub checkpoint_revision: u64,
@@ -27,7 +28,7 @@ pub struct PreMarketFundingAbortRequestV1 {
     pub release_set: [u8; 32],
     /// Trading-owned controller-funding checkpoint PDA.
     pub checkpoint: [u8; 32],
-    /// SHA-256 of the exact 512-byte checkpoint prestate.
+    /// SHA-256 of the exact checkpoint prestate.
     pub checkpoint_digest: [u8; 32],
     /// Future Core Market.
     pub market: [u8; 32],
@@ -326,7 +327,7 @@ fn receipt_ids(value: PreMarketFundingAbortReceiptV1) -> [[u8; 32]; 13] {
 }
 
 fn valid_phase_revision(phase: u8, revision: u64) -> bool {
-    matches!((phase, revision), (1, 1) | (2, 2))
+    matches!((phase, revision), (1, 1) | (3, 3) | (4, 4) | (5, 5))
 }
 
 fn is_zero(value: &[u8; 32]) -> bool {
@@ -418,7 +419,29 @@ mod tests {
         let exact = request();
         let bytes = exact.encode().expect("request");
         assert_eq!(PreMarketFundingAbortRequestV1::decode(&bytes), Ok(exact));
-        for (phase, revision) in [(1, 2), (2, 1), (0, 0), (3, 3)] {
+        for (phase, revision) in [(1, 1), (3, 3), (4, 4), (5, 5)] {
+            let candidate = PreMarketFundingAbortRequestV1 {
+                checkpoint_phase: phase,
+                checkpoint_revision: revision,
+                ..exact
+            };
+            assert_eq!(
+                PreMarketFundingAbortRequestV1::decode(
+                    &candidate.encode().expect("accepted cleanup phase")
+                ),
+                Ok(candidate)
+            );
+        }
+        for (phase, revision) in [
+            (1, 2),
+            (2, 2),
+            (2, 1),
+            (3, 4),
+            (4, 5),
+            (5, 4),
+            (0, 0),
+            (6, 6),
+        ] {
             assert!(
                 PreMarketFundingAbortRequestV1 {
                     checkpoint_phase: phase,
@@ -434,8 +457,8 @@ mod tests {
     #[test]
     fn receipt_refuses_substitution_and_refund_mismatch() {
         let exact = PreMarketFundingAbortReceiptV1 {
-            checkpoint_phase: 2,
-            checkpoint_revision: 2,
+            checkpoint_phase: 3,
+            checkpoint_revision: 3,
             request_digest: [1; 32],
             release_set: [2; 32],
             checkpoint: [3; 32],

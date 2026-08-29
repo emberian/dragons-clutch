@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 
 [lints]
 workspace = true
