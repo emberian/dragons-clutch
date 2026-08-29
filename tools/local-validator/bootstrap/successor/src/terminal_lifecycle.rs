@@ -840,6 +840,7 @@ mod tests {
         let exact = serde_json::to_vec(&serde_json::json!({
             "schema": "dclutch-successor-campaign-report-v1",
             "cluster": "devnet",
+            "genesis_hash": crate::cluster::DEVNET_GENESIS_HASH,
             "rpc_url": "https://api.devnet.solana.com/",
             "mode": "execute",
             "plan_sha256": hex(&[1; 32]),
