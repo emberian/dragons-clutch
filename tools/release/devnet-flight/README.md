@@ -12,20 +12,23 @@ The required IDs, in order, are:
 
 ```text
 candidate
-buffer:custody buffer:resolution buffer:claims buffer:trading buffer:core
-upgrade:custody upgrade:resolution upgrade:claims upgrade:trading upgrade:core
+[extend:custody] buffer:custody upgrade:custody
+[extend:resolution] buffer:resolution upgrade:resolution
+[extend:claims] buffer:claims upgrade:claims
+[extend:trading] buffer:trading upgrade:trading
+[extend:core] buffer:core upgrade:core
 sponsored-market-open participant-lifecycle direct-lifecycle terminal-lifecycle
 finite-activity reconcile site-refresh wrapper-pages-checkpoint
 ```
 
 Optional `extend:custody`, `extend:resolution`, `extend:claims`,
-`extend:trading`, or `extend:core` entries belong after `candidate` and before
-the buffer stage. Include one only when the existing checked baseline and
-candidate command determine the ProgramData needs `devnet-upgrade-extend-v1`.
-The driver neither repeats that arithmetic nor decides whether an extension is
-needed. Each buffer argv must use the existing
+`extend:trading`, or `extend:core` immediately precedes that role's Buffer
+stage. Include one only when the existing checked baseline and candidate command
+determine the ProgramData needs `devnet-upgrade-extend-v1`. The driver neither
+repeats that arithmetic nor decides whether an extension is needed. Each buffer argv must use the existing
 `--stop-after-buffer-ready` boundary; its paired Upgrade argv resumes without
-that flag. The five Upgrade entries are canonical Custody-to-Core order.
+that flag. The five role trios are canonical Custody-to-Core order, so an
+Upgrade refunds and clears its Buffer before the next role starts.
 
 Plan mode is entirely local and key-free; it parses the flight and prints only
 argv SHA-256 values:

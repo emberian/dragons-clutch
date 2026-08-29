@@ -71,6 +71,16 @@ class FlightTests(unittest.TestCase):
         with self.assertRaisesRegex(flight.FlightError, "buffer:custody"):
             flight.validate_flight(document)
 
+    def test_extension_is_immediately_before_its_role_buffer(self):
+        document = fixture()
+        extension = command("extend:resolution", True)
+        document["commands"].insert(3, extension)
+        flight.validate_flight(document)
+        document["commands"].pop(3)
+        document["commands"].insert(1, extension)
+        with self.assertRaisesRegex(flight.FlightError, "per-role"):
+            flight.validate_flight(document)
+
 
 if __name__ == "__main__":
     unittest.main()
