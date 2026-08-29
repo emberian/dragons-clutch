@@ -1,0 +1,40 @@
+[package]
+name = "dclutch-fractional-exterior"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+publish = false
+
+# Localhost-only host utility. Resolves independently of the protocol workspace,
+# like every other tool under tools/local-validator/.
+[workspace]
+
+[dependencies]
+dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
+dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
+dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }
+dclutch-fractional-claim-kernel = { path = "../../crates/dclutch-fractional-claim-kernel" }
+dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
+dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product-runtime-v2-operator = { path = "../../crates/dclutch-product-runtime-v2-operator" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-representation-composition-v3-kernel" }
+dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
+dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
+base64 = "0.22"
+bincode = "1"
+serde_json = "1"
+solana-program = "=3.0.0"
+solana-client = "=2.1.0"
+solana-sdk = "=2.1.0"
+
+[lints.rust]
+unsafe_code = "forbid"
