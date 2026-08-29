@@ -21,13 +21,15 @@ rewrite a devnet fixture to create one.
 
 The committed public Direct and terminal-sequence callers are progressive:
 each invocation advances exactly one durable action and a later invocation
-reauthenticates the child journal before continuing. The harness adapter ABI is
-currently one-shot: after one child invocation it only polls terminal
-completion. Offline `validate` and the pre-wallet caller probe therefore refuse
-`devnet-direct-trade-v1` and `devnet-terminal-sequence-v1` as activity adapters.
-They remain valid standalone callers; admitting them here requires a distinct
-progressive-adapter journal and recovery contract, not a manifest spelling
-change.
+reauthenticates the child journal before continuing. An adapter using either
+caller must carry an exact `progressive` contract. The harness writes one
+fsynced journal before every child invocation, polls the terminal completion,
+and invokes the same authenticated child again when an earlier invocation
+exited or its RPC answer was lost. Every step binds the accepted manifest,
+scenario, Market, caller-source, private-session, binary, argv, and completion
+spec SHA-256. `maxSteps` is a hard bound in `1..256`; exhaustion refuses instead
+of turning an unfinished lifecycle into success. `resume` remains poll-only and
+never invokes a child.
 
 ## Safety properties
 
@@ -44,6 +46,11 @@ change.
   binds its full ordered `execution.transactions` list and names the labels
   that must have succeeded. Every listed signature, including a fee-paying
   failed hostile probe, is reconciled and included in both spend caps.
+- Direct and terminal completions can expose their whole child-owned mutation
+  journal as a transaction list. The completion spec names relative label and
+  signature pointers and must set `requireAllTransactionsSuccessful: true`;
+  reconciliation then captures every listed signature rather than only the
+  final Hot or aggregate-retirement transaction.
 - The scheduler preserves the scenario dependency graph, enforces the exact
   involved wallet set, never runs two adapters sharing a wallet concurrently,
   honors `maxConcurrency`, and spaces dispatches by
@@ -92,7 +99,8 @@ funding. A prefunded campaign-created role is unsupported and refused.
   `{kind: input-json, inputId, pointer}`. These bindings join logical token
   accounts/Mints to physical addresses for reconciliation.
 - `adapters[]` is
-  `{id, covers, caller, argv, dependsOn, wallets, mutation, completion}`.
+  `{id, covers, caller, argv, dependsOn, wallets, mutation, completion}` or that
+  exact object plus `progressive` for the two stepwise successor callers.
   `caller` is `dclutch-cli` or `successor`; `argv` omits the executable.
   Completion is `{path, schema, signaturePointers, transactionListPointer,
   requiredTransactionLabels, requiredValues}`. Simple receipts set the two
@@ -102,9 +110,48 @@ funding. A prefunded campaign-created role is unsupported and refused.
   is required for semantic completion. Its exact `checked-release` and
   `market` manifest inputs must also be the campaign's `--plan` and `--market`,
   and its completion path must be the campaign's `--evidence` path.
+- `progressive` is exactly `{maxSteps, sourceInput, sessionInput, marketInput}`.
+  All three ids name immutable manifest inputs. Direct completion must join its
+  public-manifest and private-session SHA-256; terminal completion must join its
+  session SHA-256 and exact plan/session/Market-input paths.
+- A non-campaign transaction-list completion additionally names
+  `transactionLabelPointer`, `transactionSignaturePointer`, and
+  `requireAllTransactionsSuccessful`. Direct uses `/mutations` with `/kind`
+  and `/signature`; terminal uses `/journals` with `/mutation/kind` and
+  `/signature`.
 
 Templates are limited to `{{rpc}}`, `{{devnetGenesis}}`, `{{work}}`,
 `{{input.ID}}`, `{{wallet.ID.address}}`, and `{{wallet.ID.keypair}}`.
+
+### Canonical Activity-v3 producer
+
+`produce_v3.py` is the only scenario/manifest producer in this directory. It
+requires accepted SHA-256 values for both
+`tools/economic-lifecycle-ledger/fixtures/activity-v3-canonical.json` and the
+flagship economic operation ensemble. It derives, rather than accepts through
+bindings, the ten-wallet partition, the exact `360000000` payer bankroll, four
+post-init transfers of `50000000`, and all 25 truthful mutating expectations.
+It authenticates the result with the economic ledger before publishing.
+
+The bindings document has schema
+`dclutch-devnet-activity-v3-producer-bindings-v1` and exact fields
+`schema,target,inputs,addressBindings,adapters,campaignIdentities,permanentAuthorityRef,foundingAdapter`.
+It supplies checked deployment/caller/session artifacts and no monetary field.
+The producer refuses existing output paths and validates the emitted manifest
+with this harness. Production still requires real, externally produced Direct
+private sessions; this producer never synthesizes operator authority or reads a
+key.
+
+```sh
+python3 tools/devnet-activity/produce_v3.py \
+  --economic-fixture /absolute/activity-v3-canonical.json \
+  --economic-fixture-sha256 HEX64 \
+  --base-scenario /absolute/flagship.json \
+  --base-scenario-sha256 HEX64 \
+  --bindings /absolute/activity-v3-bindings.json \
+  --scenario-out /absolute/activity-v3-scenario.json \
+  --manifest-out /absolute/activity-v3-manifest.json
+```
 
 ## Lifecycle commands
 

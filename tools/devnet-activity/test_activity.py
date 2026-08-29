@@ -425,18 +425,60 @@ def v3_devnet_manifest_value(
                 "id": adapter_id,
                 "covers": [operation_id],
                 "caller": "successor",
-                "argv": [command, "--execute"],
+                "argv": (
+                    [command, "--session", "{{input.market}}", "--execute"]
+                    if command in activity.PROGRESSIVE_SUCCESSOR_COMMANDS
+                    else [command, "--execute"]
+                ),
                 "dependsOn": [prior],
                 "wallets": ["alice"],
                 "mutation": True,
-                "completion": {
-                    "path": f"{{{{work}}}}/receipts/{operation_id}.json",
-                    "schema": f"dclutch-devnet-{kind}-completion-v1",
-                    "signaturePointers": ["/signature"],
-                    "transactionListPointer": None,
-                    "requiredTransactionLabels": [],
-                    "requiredValues": {"/completed": True},
-                },
+                "completion": (
+                    {
+                        "path": f"{{{{work}}}}/receipts/{operation_id}.json",
+                        "schema": (
+                            "dclutch-devnet-direct-trade-finalized-v1"
+                            if command == "devnet-direct-trade-v1"
+                            else "dclutch-devnet-terminal-sequence-completion-v1"
+                        ),
+                        "signaturePointers": [],
+                        "transactionListPointer": (
+                            "/mutations"
+                            if command == "devnet-direct-trade-v1"
+                            else "/journals"
+                        ),
+                        "requiredTransactionLabels": [],
+                        "requiredValues": {"/status": "finalized"},
+                        "transactionLabelPointer": (
+                            "/kind"
+                            if command == "devnet-direct-trade-v1"
+                            else "/mutation/kind"
+                        ),
+                        "transactionSignaturePointer": "/signature",
+                        "requireAllTransactionsSuccessful": True,
+                    }
+                    if command in activity.PROGRESSIVE_SUCCESSOR_COMMANDS
+                    else {
+                        "path": f"{{{{work}}}}/receipts/{operation_id}.json",
+                        "schema": f"dclutch-devnet-{kind}-completion-v1",
+                        "signaturePointers": ["/signature"],
+                        "transactionListPointer": None,
+                        "requiredTransactionLabels": [],
+                        "requiredValues": {"/completed": True},
+                    }
+                ),
+                **(
+                    {
+                        "progressive": {
+                            "maxSteps": 8,
+                            "sourceInput": "checked-release",
+                            "sessionInput": "market",
+                            "marketInput": "market",
+                        }
+                    }
+                    if command in activity.PROGRESSIVE_SUCCESSOR_COMMANDS
+                    else {}
+                ),
             }
         )
         prior = adapter_id
@@ -874,6 +916,29 @@ class ActivityTests(unittest.TestCase):
             [row.wallet_ref for row in manifest.campaign.post_init_funding],
             ["alice"],
         )
+
+    def test_v3_founding_adapter_uses_semantic_kind_not_literal_operation_id(self) -> None:
+        scenario = v3_scenario_value()
+        operations = scenario["body"]["operations"]
+        operations[0]["id"] = "flagship-four-outcome-found"
+        operations[1]["predecessorId"] = "flagship-four-outcome-found"
+        operations[1]["dependencyIds"] = ["flagship-four-outcome-found"]
+        scenario["bodySha256"] = hashlib.sha256(
+            json.dumps(
+                scenario["body"], separators=(",", ":"), ensure_ascii=False
+            ).encode()
+        ).hexdigest()
+        write_json(self.scenario, scenario)
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {"fixture": "checked-release"})
+        write_json(market, {"fixture": "market"})
+        value = v3_manifest_value(self.scenario, checked_release, market)
+        value["adapters"][0]["covers"] = ["flagship-four-outcome-found"]
+        write_json(self.manifest, value)
+        manifest = self.parsed()
+        assert manifest.campaign is not None
+        self.assertEqual(manifest.campaign.founding_adapter_id, "founding")
 
     def test_v3_refuses_prefunded_fresh_roles_aliases_and_missing_post_init(self) -> None:
         value = self.write_v3()
@@ -1824,7 +1889,7 @@ class ActivityTests(unittest.TestCase):
                 activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
             self.assertFalse((self.work / "private" / "caller-count").exists())
 
-    def test_progressive_devnet_callers_refuse_one_shot_adapter_contract(self) -> None:
+    def test_progressive_devnet_callers_write_ahead_recover_and_bind_exact_inputs(self) -> None:
         write_json(self.scenario, v3_devnet_scenario_value())
         checked_release = self.root / "checked-release.json"
         market = self.root / "market.json"
@@ -1835,24 +1900,132 @@ class ActivityTests(unittest.TestCase):
             v3_devnet_manifest_value(self.scenario, checked_release, market),
         )
         manifest = self.parsed()
-
-        with self.assertRaisesRegex(
-            activity.Refusal,
-            "progressive caller devnet-direct-trade-v1 under a one-shot dispatch contract",
-        ):
-            activity.validate_only(manifest)
-
-        invoked = self.root / "caller-invoked"
-        caller = executable(
-            self.root / "progressive-successor",
-            f"#!/bin/sh\ntouch '{invoked}'\nexit 0\n",
+        activity.validate_only(manifest)
+        direct = next(row for row in manifest.adapters if row.adapter_id == "live-direct")
+        argv = direct.argv
+        completion = self.work / "receipts" / "direct.json"
+        binary = executable(self.root / "progressive-successor", "#!/bin/sh\nexit 0\n")
+        constrained = dataclasses.replace(
+            manifest,
+            scenario=dataclasses.replace(
+                manifest.scenario,
+                limits=dataclasses.replace(manifest.scenario.limits, max_polls=1),
+            ),
         )
-        with self.assertRaisesRegex(activity.Refusal, "progressive caller"):
-            activity.probe_callers(
-                manifest,
-                {"dclutch-cli": caller, "successor": caller},
+        with (
+            mock.patch.object(
+                activity,
+                "inspect_completion",
+                side_effect=[None, None, ("b" * 64, [], [])],
+            ),
+            mock.patch.object(
+                activity,
+                "run_checked",
+                side_effect=[
+                    activity.subprocess.CompletedProcess([], 1),
+                    activity.subprocess.CompletedProcess([], 0),
+                ],
+            ) as invoked,
+        ):
+            result = activity.dispatch_progressive_adapter(
+                constrained,
+                direct,
+                binary,
+                digest(binary),
+                argv,
+                completion,
+                self.work,
+                mock.Mock(),
+                {"alice": WALLET},
+                "a" * 64,
+                mock.Mock(),
             )
-        self.assertFalse(invoked.exists())
+        self.assertEqual(result["phase"], "finalized")
+        self.assertEqual(invoked.call_count, 2)
+        steps = activity.authenticated_progressive_steps(
+            constrained, direct, digest(binary), argv, self.work
+        )
+        self.assertEqual([row["phase"] for row in steps], ["exited", "exited"])
+        self.assertEqual(steps[1]["recoveryOf"], 1)
+        self.assertEqual(steps[0]["binarySha256"], digest(binary))
+        self.assertEqual(steps[0]["sourceSha256"], digest(checked_release))
+        self.assertEqual(steps[0]["sessionSha256"], digest(market))
+        self.assertEqual(steps[0]["marketSha256"], digest(market))
+        self.assertEqual(steps[0]["scenarioSha256"], digest(self.scenario))
+
+        completion.parent.mkdir(parents=True, exist_ok=True)
+        exact_completion = {
+            "schema": direct.completion.schema,
+            "status": "finalized",
+            "mutations": [
+                {"kind": "hot", "signature": ACTIVITY_SIGNATURE},
+            ],
+            "publicManifestSha256": digest(checked_release),
+            "privateSessionSha256": digest(market),
+        }
+        write_json(completion, exact_completion)
+        rpc = mock.Mock()
+        rpc.transaction.return_value = activity_transaction()
+        self.assertIsNotNone(
+            activity.inspect_completion(
+                constrained, direct, completion, rpc, {"alice": WALLET}
+            )
+        )
+        exact_completion["privateSessionSha256"] = "0" * 64
+        write_json(completion, exact_completion)
+        with self.assertRaisesRegex(activity.Refusal, "source/session hashes"):
+            activity.inspect_completion(
+                constrained, direct, completion, rpc, {"alice": WALLET}
+            )
+
+        changed = v3_devnet_manifest_value(self.scenario, checked_release, market)
+        del changed["adapters"][2]["progressive"]
+        write_json(self.manifest, changed)
+        with self.assertRaisesRegex(activity.Refusal, "pair progressive caller and contract"):
+            self.parsed()
+
+    def test_progressive_adapter_refuses_beyond_exact_max_steps(self) -> None:
+        write_json(self.scenario, v3_devnet_scenario_value())
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {"fixture": "checked-release"})
+        write_json(market, {"fixture": "market"})
+        value = v3_devnet_manifest_value(self.scenario, checked_release, market)
+        value["adapters"][2]["progressive"]["maxSteps"] = 1
+        write_json(self.manifest, value)
+        manifest = self.parsed()
+        direct = next(row for row in manifest.adapters if row.adapter_id == "live-direct")
+        constrained = dataclasses.replace(
+            manifest,
+            scenario=dataclasses.replace(
+                manifest.scenario,
+                limits=dataclasses.replace(manifest.scenario.limits, max_polls=1),
+            ),
+        )
+        binary = executable(self.root / "bounded-successor", "#!/bin/sh\nexit 0\n")
+        with (
+            mock.patch.object(activity, "inspect_completion", return_value=None),
+            mock.patch.object(
+                activity,
+                "run_checked",
+                return_value=activity.subprocess.CompletedProcess([], 0),
+            ) as invoked,
+        ):
+            with self.assertRaisesRegex(activity.Refusal, "exhausted maxSteps=1"):
+                activity.dispatch_progressive_adapter(
+                    constrained,
+                    direct,
+                    binary,
+                    digest(binary),
+                    direct.argv,
+                    self.work / "receipts/direct.json",
+                    self.work,
+                    mock.Mock(),
+                    {"alice": WALLET},
+                    "a" * 64,
+                    mock.Mock(),
+                )
+        self.assertEqual(invoked.call_count, 1)
 
     def test_poll_only_fresh_and_partial_states_never_dispatch(self) -> None:
         manifest = self.parsed()
