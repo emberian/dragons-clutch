@@ -612,3 +612,102 @@ journal is polled rather than resubmitted. Rerunning a completed campaign
 produces byte-identical signatures and slots and submits nothing. A journal
 whose action, width, caller or family-request digest differs from the run in
 hand is refused rather than resumed.
+
+## Series: the first executed Found
+
+`local-private-validator-series-consume-v1` submits one `series_consume`
+transaction — the only Series route this tree dispatches — to a live local
+validator. It is a **write path**: the transaction *is* the Core Found.
+
+The campaign is **not** authored here. Its fixture is roughly 1,250 lines in
+`programs/dclutch-core-sbf/tests/found_program_test.rs`, and porting it would
+give one campaign two authors who could silently disagree. Instead that file
+gained one `#[ignore]`-gated emitter which builds the campaign exactly as every
+other Series test does, starts the genesis it would have run against, and reads
+every account the instruction names back out of the banks client.
+
+### Emit the bundle
+
+```sh
+SBF_OUT_DIR=/abs/sbf DCLUTCH_SERIES_CAMPAIGN_DIR=/abs/campaign \
+  cargo test --manifest-path programs/dclutch-core-sbf/Cargo.toml \
+  --test found_program_test -- --ignored emit_series_consume_validator_campaign
+```
+
+Build the four ELFs it reads first (`dclutch-core-sbf`, `dclutch-registry-sbf`,
+`dclutch-rent-sbf`, and `test-programs/series-consume-caller`) with
+`cargo build-sbf --sbf-out-dir`. Output: 61 genesis account files under
+`accounts/`, and `campaign.json`.
+
+### Start the validator and submit
+
+```sh
+solana-test-validator --ledger /abs/new/ledger --reset \
+  --rpc-port 21600 --faucet-port 21602 --gossip-port 21603 \
+  --dynamic-port-range 21610-21641 \
+  --account-dir /abs/campaign/accounts
+```
+
+**No `--bpf-program` flag.** The six loader-v3 Program *and* ProgramData
+accounts are in the bundle with their real bytes and executable bits, because
+their deployment slot flows into the release-set digest and therefore into the
+Market PDA — deploy-then-derive is circular with genesis here.
+
+**Use the default tick rate.** The occurrence's retry window is 10,000 slots
+measured from slot zero. At the stock 64 ticks per slot that is about 66
+minutes; at 16 it is about 16, and you will be debugging against a timer.
+
+```sh
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -- \
+  local-private-validator-series-consume-v1 \
+  --campaign /abs/campaign/campaign.json --rpc-url http://127.0.0.1:21600 \
+  --payer-keypair /abs/payer.json --journal /abs/campaign/journal.json --execute
+```
+
+Without `--execute` it preflights: it proves the lookup table is populated, the
+invoked program is executable, and the Market is still vacant — each of which
+would otherwise surface as an opaque `Custom(...)` deep inside Core.
+
+### Measured
+
+| | |
+|---|---:|
+| outcomes | 258 |
+| account metas | 62 (61 unique) |
+| instruction data | 656 bytes |
+| routed wire | 1,037 bytes (v0 + ALT) |
+| compute units | 624,620 |
+
+Legacy routing is not tight here, it is impossible: 61 keys is 1,952 bytes of
+addresses against a 1,232-byte packet. The compute budget comes from
+`bounded_instructions`, which already asks for 1,400,000 — a real validator's
+200,000 default would refuse.
+
+**A write path's acknowledgment is the state it committed**, not a returned
+buffer, so the consumer authenticates the Market being Core-owned and written
+and the founding permit holding its exact expected balance. Rerunning a
+finished campaign is a no-op; that check necessarily precedes the vacant-Market
+preflight, because a succeeded Found is exactly what makes the Market
+non-vacant.
+
+### Hostiles
+
+`--expect-refusal CODE` skips the vacant-Market precondition and requires the
+transaction to fail with exactly that code. It **skips preflight on purpose**:
+a hostile rejected by simulation proves what a simulator thinks, not what the
+chain did. The double-consume runs as:
+
+```sh
+  ... --journal /abs/campaign/hostile.json --expect-refusal 12293 --execute
+```
+
+and commits in its own slot carrying `{"Custom":12293}` — `CoreSbfError::Market`
+— leaving the Found it tried to overwrite byte-unchanged. A hostile that
+*succeeds* is reported as the loudest possible failure.
+
+### Debt
+
+The proper port into this tool alongside the General arm is deliberately
+deferred. The emitter/consumer split keeps the campaign authored once but
+living in two places; a future lane wanting Series in the same shape as General
+should close that.
