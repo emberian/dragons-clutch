@@ -22,14 +22,14 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_SIGNED_DELTA_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_TERMS_RAW_V3,
     FRACTIONAL_ATOMIC_TERMS_STAGING_V3, FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_RAW_V3,
     FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_STAGING_V3, FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3,
-    FRACTIONAL_ROOT_PDA_SEED_V1, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
-    FRACTIONAL_TERMINAL_ACTOR_V3, FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3,
-    FRACTIONAL_TERMINAL_BASE_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3,
-    FRACTIONAL_TERMINAL_SHARD_MINT_V3, FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3,
-    FRACTIONAL_TERMINAL_TERMS_RAW_V3, FRACTIONAL_TERMINAL_TERMS_STAGING_V3,
-    FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3,
-    FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
-    FractionalRootV1, FractionalTerminalAtomicReceiptV3, plan_fractional_physical_v3,
+    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ACTOR_V3,
+    FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_TERMINAL_BASE_ACCOUNT_COUNT_V3,
+    FRACTIONAL_TERMINAL_ROOT_V3, FRACTIONAL_TERMINAL_SHARD_MINT_V3,
+    FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, FRACTIONAL_TERMINAL_TERMS_RAW_V3,
+    FRACTIONAL_TERMINAL_TERMS_STAGING_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
+    FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalAtomicReceiptV3,
+    FractionalExposureActionV2, FractionalExposureRequestV2, FractionalTerminalAtomicReceiptV3,
+    decode_fractional_capability_root_v4, plan_fractional_physical_v3,
 };
 use dclutch_fractional_claim_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
@@ -195,21 +195,20 @@ fn process_open(
     let root_data = root_account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    let root = FractionalRootV1::decode(&root_data).ok_or(ClaimsSbfError::Representation)?;
+    let composite_root =
+        decode_fractional_capability_root_v4(&root_data).ok_or(ClaimsSbfError::Representation)?;
+    let root = composite_root.state();
     let root_input = root.input();
     let trading_program = account(accounts, TRADING_PROGRAM)?;
-    let expected_root = Pubkey::create_program_address(
-        &[
-            FRACTIONAL_ROOT_PDA_SEED_V1,
-            request.input().terms.as_slice(),
-            request.input().market.as_slice(),
-            &[root_input.bump],
-        ],
-        trading_program.key,
-    )
-    .map_err(|_| ClaimsSbfError::Representation)?;
+    let header = composite_root.header();
+    let (expected_root, expected_bump) =
+        Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key);
     if root_account.key != &expected_root
         || root_account.owner != trading_program.key
+        || header.release_set().to_bytes() != request.input().release_set
+        || header.market() != request.input().market
+        || header.selection().config().to_bytes() != request.input().terms
+        || root_input.bump != expected_bump
         || root_input.terms != request.input().terms
         || root_input.market != request.input().market
         || root_input.revision != request.input().expected_revision
@@ -592,21 +591,20 @@ fn process_terminal(
     let root_data = root_account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    let root = FractionalRootV1::decode(&root_data).ok_or(ClaimsSbfError::Representation)?;
+    let composite_root =
+        decode_fractional_capability_root_v4(&root_data).ok_or(ClaimsSbfError::Representation)?;
+    let root = composite_root.state();
     let root_input = root.input();
     let trading_program = account(accounts, TRADING_PROGRAM)?;
-    let expected_root = Pubkey::create_program_address(
-        &[
-            FRACTIONAL_ROOT_PDA_SEED_V1,
-            request.input().terms.as_slice(),
-            request.input().market.as_slice(),
-            &[root_input.bump],
-        ],
-        trading_program.key,
-    )
-    .map_err(|_| ClaimsSbfError::Representation)?;
+    let header = composite_root.header();
+    let (expected_root, expected_bump) =
+        Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key);
     if root_account.key != &expected_root
         || root_account.owner != trading_program.key
+        || header.release_set().to_bytes() != request.input().release_set
+        || header.market() != request.input().market
+        || header.selection().config().to_bytes() != request.input().terms
+        || root_input.bump != expected_bump
         || root_input.terms != request.input().terms
         || root_input.market != request.input().market
         || root_input.revision != request.input().expected_revision
