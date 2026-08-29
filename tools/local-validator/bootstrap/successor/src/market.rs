@@ -12,7 +12,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingLedgerV2, MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+    FundingLedgerV2, MAX_DEPENDENCIES_PER_CAPABILITY,
+    controller_funding_checkpoint::{
+        CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
+        ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointPhaseV1,
+        ControllerFundingCheckpointV1, ControllerFundingControllerV1,
+    },
+    funding_ledger_bytes_v2,
 };
 use dclutch_claims_svm::{
     founding_v5::{
@@ -78,7 +84,10 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
-use dclutch_resolution_codec::{PreMarketFundingRequestV1, pre_market_funding_prestate_digest_v1};
+use dclutch_resolution_codec::{
+    PreMarketFundingAbortRequestV1, PreMarketFundingRequestV2,
+    pre_market_funding_ledger_account_digest_v1, pre_market_funding_prestate_digest_v1,
+};
 use dclutch_source_contract::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -159,7 +168,7 @@ const TERMINAL_WINDOW_WIDTH_SECONDS: i64 = 300;
 /// refreshed. A Market resolving against a live feed states seconds here.
 const FIXTURE_SHELF_LIFE_SECONDS: u32 = 31_536_000;
 
-pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complete authenticated Product and Source graph, creates the lifecycle credit, projects the future Market through Core Found37, stages projected custody and the two controller-owned FundingLedgerV2 accounts through DCLTPCB2, and then opens the Market atomically through DCLTGMF2. The opening transaction locks the Hoard, creates Core and Claims state, realizes custody, consumes the one-shot permit, and commits Open last. Compute evidence must be remeasured for these V2 routes; the runner does not reuse pre-V2 founding measurements.";
+pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complete authenticated Product and Source graph, creates the lifecycle credit, projects the future Market through Core Found37, prepares the two controller-owned FundingLedgerV2 accounts and their checkpoint through DCLTCFQ1, stages projected custody through DCLTPCB2, and then opens the Market atomically through DCLTGMF2. The opening transaction locks the Hoard, creates Core and Claims state, realizes custody, consumes the one-shot permit, and commits Open last. Compute evidence must be remeasured for these split routes; the runner does not reuse pre-split founding measurements.";
 
 /// The one local-only participant allocation. It is test liquidity, not
 /// founding principal, and therefore never enters a Hoard or a principal cap.
@@ -228,7 +237,7 @@ struct Dcltpcb2RecoveryPayloadV1 {
 }
 
 /// The campaign report owns the filesystem and its exclusive lease; this
-/// adapter lets the two founding sends advance their embedded journal without
+/// adapter lets each split founding send advance its embedded journal without
 /// giving `market.rs` a second file format or lock implementation.
 pub(crate) struct FoundingSubmissionRecorderV1<'a> {
     binding: FoundingSubmissionBindingV1,
@@ -1793,7 +1802,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
         };
         if let Some(evidence) = finalize_existing_founding_submission_v1(
             rpc,
-            "create projected custody and controller funding (DCLTPCB2)",
+            "stage projected custody against prepared controller funding (DCLTPCB2)",
             FoundingSubmissionOperationV1::Dcltpcb2,
             recorder,
             &mut completion,
@@ -3285,7 +3294,7 @@ fn canonical_i128(value: &str) -> Result<i128> {
 }
 
 // ---------------------------------------------------------------------------
-// DCLTPCB2 - projected Custody plus canonical controller-ledger bootstrap.
+// DCLTPCB2 - projected Custody staging against prepared controller ledgers.
 //
 // Four Custody transitions in one rollback domain: Initialize, OpenHoard,
 // OpenSourceCompartment, and the FundingState staging Trading performs itself.
@@ -3314,14 +3323,16 @@ const PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2: [u8; 8] = *b"DCLTPCB2";
 /// account list to find it, so a frame without it keeps the compile-time
 /// 32 KiB ceiling this route was measured exhausting at stage three.
 const PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNTS_V2: usize = 85;
-const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_PROGRAM_V2: usize = 85;
-const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_PROGRAMDATA_V2: usize = 86;
-const PROJECTED_CUSTODY_BOOTSTRAP_CALLER_AUTHORITY_V2: usize = 87;
-const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_LEDGER_V2: usize = 88;
-const PROJECTED_CUSTODY_BOOTSTRAP_TRADING_LEDGER_V2: usize = 89;
-const PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNTS_V2: usize = 90;
-const PROJECTED_CUSTODY_BOOTSTRAP_COMPLETE_KEYS_V2: usize = 62;
+const PROJECTED_CUSTODY_BOOTSTRAP_CHECKPOINT_V2: usize = 85;
+const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_LEDGER_V2: usize = 86;
+const PROJECTED_CUSTODY_BOOTSTRAP_TRADING_LEDGER_V2: usize = 87;
+const PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNTS_V2: usize = 88;
+const PROJECTED_CUSTODY_BOOTSTRAP_COMPLETE_KEYS_V2: usize = 60;
 const DEVNET_ACCOUNT_LOCK_LIMIT_V1: usize = 64;
+
+const CONTROLLER_FUNDING_PREPARE_MAGIC_V1: [u8; 8] = *b"DCLTCFQ1";
+const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 49;
+const CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1: usize = 51;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompiledMessageGeometryV1 {
@@ -3336,12 +3347,12 @@ struct CompiledMessageGeometryV1 {
 
 fn dcltpcb2_completion_lines_v1(geometry: CompiledMessageGeometryV1) -> Vec<String> {
     vec![
-        "derived one generic founding's complete coordinate set - Market, credit, action context, Custody compartments, capability root, and prepaid FundingState list - from the finalized record graph alone".into(),
+        "derived one generic founding's complete coordinate set - Market, credit, action context, Custody compartments, capability root, prepared controller checkpoint, and FundingLedgerV2 list - from the finalized record graph alone".into(),
         "proved DCLTPCB2 admits only the terminal Lock request its founding determines".into(),
         "proved a reordered controller-ledger pair refuses and rolls the whole bootstrap back to a fee-only debit".into(),
-        "executed DCLTPCB2: projected replay at SourceFunded, empty Hoard vault, funded source compartment, and exact Resolution and Trading FundingLedgerV2 accounts in one rollback domain".into(),
+        "executed DCLTPCB2: projected replay at SourceFunded, empty Hoard vault, funded source compartment, and a CustodyStaged checkpoint while both prepared FundingLedgerV2 accounts remained byte- and lamport-exact".into(),
         format!(
-            "compiled the exact bounded DCLTPCB2 transaction with payer, three ComputeBudget declarations, and its canonical address table: {} complete keys ({} static, {} writable loaded, {} readonly loaded), {} signatures, {} message bytes, and {} fully signed packet bytes; +2 distinct keys reaches 64 and +3 reaches the refused 65-key boundary",
+            "compiled the exact bounded DCLTPCB2 transaction with payer, three ComputeBudget declarations, and its canonical address table: {} complete keys ({} static, {} writable loaded, {} readonly loaded), {} signatures, {} message bytes, and {} fully signed packet bytes; +4 distinct keys reaches 64 and +5 reaches the refused 65-key boundary",
             geometry.complete_keys,
             geometry.static_keys,
             geometry.loaded_writable,
@@ -3441,6 +3452,31 @@ fn append_distinct_census_accounts_v1(instruction: &Instruction, count: usize) -
     expanded
 }
 
+fn authenticate_cleanup_compiled_census_v1(
+    payer: Pubkey,
+    instruction: &Instruction,
+    base: CompiledMessageGeometryV1,
+) -> Result<()> {
+    let admitted = projected_bootstrap_compiled_geometry_v2(
+        payer,
+        &append_distinct_census_accounts_v1(instruction, 45),
+    )?;
+    let refused = projected_bootstrap_compiled_geometry_v2(
+        payer,
+        &append_distinct_census_accounts_v1(instruction, 46),
+    )?;
+    if base.complete_keys != CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1
+        || admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        || refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
+    {
+        return Err(Error::new(format!(
+            "controller cleanup census refused: base {}, +45 {}, +46 {}",
+            base.complete_keys, admitted.complete_keys, refused.complete_keys,
+        )));
+    }
+    Ok(())
+}
+
 /// Every coordinate one generic founding determines, derived once.
 struct FoundingCoordinates {
     generation: u64,
@@ -3452,6 +3488,7 @@ struct FoundingCoordinates {
     source_replay: Pubkey,
     projected_replay: Pubkey,
     custody_authority: Pubkey,
+    controller_funding_checkpoint: Pubkey,
     context: [u8; 32],
     principal_cap_sets: u64,
     capability_entry_count: u16,
@@ -3843,6 +3880,19 @@ fn derive_founding_coordinates(
             "founding artifact and terminal Lock disagree about the Realize revision",
         ));
     }
+    let controller_funding_checkpoint = Pubkey::find_program_address(
+        &ControllerFundingCheckpointDerivationV1::new(
+            release_set,
+            market_bytes,
+            generation,
+            records.manifest.digest,
+            funding_list_id.to_bytes(),
+        )
+        .map_err(|error| Error::new(format!("controller funding checkpoint: {error:?}")))?
+        .seed_components(),
+        &trading,
+    )
+    .0;
 
     Ok(FoundingCoordinates {
         generation,
@@ -3854,6 +3904,7 @@ fn derive_founding_coordinates(
         source_replay,
         projected_replay,
         custody_authority,
+        controller_funding_checkpoint,
         context,
         principal_cap_sets,
         capability_entry_count: manifest.entry_count(),
@@ -3926,7 +3977,316 @@ fn identity_of(bytes: [u8; 32]) -> Result<Identity> {
     Identity::new(bytes).map_err(|error| Error::new(format!("identity: {error:?}")))
 }
 
-/// Build the exact 90-account `DCLTPCB2` frame.
+/// Build the separate exact controller-funding preparation frame.
+#[allow(clippy::too_many_arguments)]
+fn build_controller_funding_prepare_v1(
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    records: &MarketRecords,
+    found_raw: Pubkey,
+    lock_raw: Pubkey,
+    projection_witness: Pubkey,
+) -> Result<Instruction> {
+    let trading = pubkey(&plan.trading.program_id)?;
+    let trading_programdata = pubkey(&plan.trading.programdata_id)?;
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let resolution_programdata = pubkey(&plan.resolution.programdata_id)?;
+    let resolution_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == resolution)
+        .ok_or_else(|| Error::new("controller-funding prepare omitted Resolution ledger"))?;
+    let trading_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == trading)
+        .ok_or_else(|| Error::new("controller-funding prepare omitted Trading ledger"))?;
+    let project_found = ProjectFoundRequestV2::new(Request::administrative(
+        Action::Found,
+        coordinates.generation,
+        identity_of(coordinates.market.to_bytes())?,
+    ))
+    .map_err(|error| Error::new(format!("controller-funding ProjectFound: {error:?}")))?;
+    let request = PreMarketFundingRequestV2 {
+        project_found,
+        manifest: records.manifest.digest,
+        selected_mask: resolution_ledger.selected_mask,
+        funding_source: projection_witness.to_bytes(),
+        ledger: resolution_ledger.address.to_bytes(),
+        prestate_digest: pre_market_funding_prestate_digest_v1(
+            resolution_ledger.address.to_bytes(),
+            system_program::ID.to_bytes(),
+            0,
+            0,
+        ),
+        expected_project_found_receipt_digest: coordinates.lock.projection_receipt_digest,
+    }
+    .encode()
+    .map_err(|error| Error::new(format!("controller-funding Resolution request: {error:?}")))?;
+    let caller_authority = Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::from_bytes(
+            hex32(&plan.release_set_id)?,
+            coordinates.market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            records.manifest.digest,
+            Sha256::digest(request).into(),
+        )
+        .map_err(|error| Error::new(format!("controller-funding authority: {error:?}")))?
+        .as_slices(),
+        &trading,
+    )
+    .0;
+
+    let mut accounts = vec![
+        AccountMeta::new_readonly(found_raw, false),
+        AccountMeta::new_readonly(lock_raw, false),
+        AccountMeta::new_readonly(sysvar::instructions::ID, false),
+        AccountMeta::new_readonly(resolution, false),
+        AccountMeta::new_readonly(resolution_programdata, false),
+        AccountMeta::new_readonly(caller_authority, false),
+        AccountMeta::new_readonly(trading, false),
+        AccountMeta::new_readonly(trading_programdata, false),
+        AccountMeta::new(resolution_ledger.address, false),
+        AccountMeta::new(trading_ledger.address, false),
+        AccountMeta::new(coordinates.controller_funding_checkpoint, false),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+    ];
+    for (index, key) in found_snapshot_keys(
+        plan,
+        projection_witness,
+        coordinates.market,
+        coordinates.credit,
+        records,
+    )?
+    .into_iter()
+    .enumerate()
+    {
+        accounts.push(match index {
+            0 => AccountMeta::new(key, true),
+            2 => AccountMeta::new(key, false),
+            _ => AccountMeta::new_readonly(key, false),
+        });
+    }
+    if accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 {
+        return Err(Error::new(
+            "assembled controller-funding prepare frame did not match 49 accounts",
+        ));
+    }
+    Ok(Instruction {
+        program_id: trading,
+        accounts,
+        data: CONTROLLER_FUNDING_PREPARE_MAGIC_V1.to_vec(),
+    })
+}
+
+fn authenticate_controller_funding_checkpoint_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    projection_witness: Pubkey,
+    expected_phase: ControllerFundingCheckpointPhaseV1,
+) -> Result<ControllerFundingCheckpointV1> {
+    let trading = pubkey(&plan.trading.program_id)?;
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let checkpoint_account = rpc.required_account(
+        coordinates.controller_funding_checkpoint,
+        "controller funding checkpoint",
+    )?;
+    if checkpoint_account.owner != trading
+        || checkpoint_account.data.len() != CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1
+        || checkpoint_account.lamports
+            != rpc.minimum_balance(CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1)?
+    {
+        return Err(Error::new(
+            "controller funding checkpoint owner, width, or Rent changed",
+        ));
+    }
+    let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_account.data)
+        .map_err(|error| Error::new(format!("controller funding checkpoint: {error:?}")))?;
+    let input = checkpoint.input_ref();
+    let resolution_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == resolution)
+        .ok_or_else(|| Error::new("checkpoint verifier omitted Resolution ledger"))?;
+    let trading_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == trading)
+        .ok_or_else(|| Error::new("checkpoint verifier omitted Trading ledger"))?;
+    for ledger in [resolution_ledger, trading_ledger] {
+        let account = rpc.required_account(ledger.address, "controller funding ledger")?;
+        if account.owner != ledger.controller
+            || account.lamports != ledger.required_lamports
+            || account.data != ledger.bytes
+        {
+            return Err(Error::new(
+                "controller funding ledger differs from its exact initial Pending poststate",
+            ));
+        }
+    }
+    let expected_ladder_digest = if expected_phase == ControllerFundingCheckpointPhaseV1::Prepared {
+        [0; 32]
+    } else {
+        controller_funding_custody_ladder_digest_v1(rpc, coordinates)?
+    };
+    let resolution_ledger_digest: [u8; 32] = Sha256::digest(&resolution_ledger.bytes).into();
+    let trading_ledger_digest: [u8; 32] = Sha256::digest(&trading_ledger.bytes).into();
+    if checkpoint.phase() != expected_phase
+        || input.release_set != hex32(&plan.release_set_id)?
+        || input.market != coordinates.market.to_bytes()
+        || input.generation != coordinates.generation
+        || input.funding_list != coordinates.found.funding_list_id().to_bytes()
+        || input.resolution_ledger != resolution_ledger.address.to_bytes()
+        || input.resolution_ledger_digest != resolution_ledger_digest
+        || input.trading_ledger != trading_ledger.address.to_bytes()
+        || input.trading_ledger_digest != trading_ledger_digest
+        || input.funding_source != projection_witness.to_bytes()
+        || input.rent_credit != coordinates.credit.to_bytes()
+        || input.project_found_receipt_digest != coordinates.lock.projection_receipt_digest
+        || input.expiry_slot != coordinates.lock.expiry_slot
+        || checkpoint.custody_ladder_digest() != expected_ladder_digest
+    {
+        return Err(Error::new(
+            "controller funding checkpoint changed identity, ledger, refund, or phase facts",
+        ));
+    }
+    Ok(checkpoint)
+}
+
+fn controller_funding_custody_ladder_digest_v1(
+    rpc: &mut Rpc,
+    coordinates: &FoundingCoordinates,
+) -> Result<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    hasher.update(CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1);
+    for key in [
+        coordinates.projected_replay,
+        coordinates.hoard_vault,
+        coordinates.source_vault,
+        coordinates.source_replay,
+    ] {
+        let account = rpc.required_account(key, "controller funding Custody ladder")?;
+        hasher.update(key.as_ref());
+        hasher.update(account.owner.as_ref());
+        hasher.update(account.lamports.to_le_bytes());
+        hasher.update((account.data.len() as u64).to_le_bytes());
+        hasher.update(&account.data);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn authenticate_controller_funding_cleanup_checkpoint_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    funding_source: Pubkey,
+    expected_phase: ControllerFundingCheckpointPhaseV1,
+) -> Result<ControllerFundingCheckpointV1> {
+    if !matches!(
+        expected_phase,
+        ControllerFundingCheckpointPhaseV1::CustodyAborted
+            | ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed
+            | ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed
+    ) {
+        return Err(Error::new(
+            "cleanup checkpoint verifier received a non-cleanup phase",
+        ));
+    }
+    let trading = pubkey(&plan.trading.program_id)?;
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let checkpoint_account = rpc.required_account(
+        coordinates.controller_funding_checkpoint,
+        "controller funding cleanup checkpoint",
+    )?;
+    if checkpoint_account.owner != trading
+        || checkpoint_account.data.len() != CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1
+        || checkpoint_account.lamports
+            != rpc.minimum_balance(CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1)?
+    {
+        return Err(Error::new(
+            "controller funding cleanup checkpoint owner, width, or Rent changed",
+        ));
+    }
+    let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_account.data)
+        .map_err(|error| Error::new(format!("controller funding cleanup checkpoint: {error:?}")))?;
+    let input = checkpoint.input_ref();
+    if checkpoint.phase() != expected_phase
+        || checkpoint.revision() != expected_phase as u64
+        || input.release_set != hex32(&plan.release_set_id)?
+        || input.market != coordinates.market.to_bytes()
+        || input.generation != coordinates.generation
+        || input.funding_list != coordinates.found.funding_list_id().to_bytes()
+        || input.funding_source != funding_source.to_bytes()
+        || input.rent_credit != coordinates.credit.to_bytes()
+        || input.project_found_receipt_digest != coordinates.lock.projection_receipt_digest
+        || input.expiry_slot != coordinates.lock.expiry_slot
+    {
+        return Err(Error::new(
+            "controller funding cleanup checkpoint changed identity, refund, or phase facts",
+        ));
+    }
+    let resolution_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == resolution)
+        .ok_or_else(|| Error::new("cleanup checkpoint omitted Resolution ledger"))?;
+    let trading_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == trading)
+        .ok_or_else(|| Error::new("cleanup checkpoint omitted Trading ledger"))?;
+    for (controller, ledger) in [
+        (ControllerFundingControllerV1::Resolution, resolution_ledger),
+        (ControllerFundingControllerV1::Trading, trading_ledger),
+    ] {
+        let should_be_closed = matches!(
+            expected_phase,
+            ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed
+                | ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed
+        ) && checkpoint.canonical_first_controller() == controller;
+        let observed = rpc.account(ledger.address)?;
+        if should_be_closed {
+            if observed.is_some_and(|account| account.lamports != 0 || !account.data.is_empty()) {
+                return Err(Error::new(
+                    "cleanup checkpoint left the canonical first ledger live",
+                ));
+            }
+        } else if observed.is_none_or(|account| {
+            account.owner != ledger.controller
+                || account.lamports != ledger.required_lamports
+                || account.data != ledger.bytes
+        }) {
+            return Err(Error::new(
+                "cleanup checkpoint remaining ledger differs from exact Pending prestate",
+            ));
+        }
+    }
+    let cleanup = checkpoint
+        .cleanup()
+        .ok_or_else(|| Error::new("cleanup checkpoint omitted persisted cleanup evidence"))?;
+    if cleanup.transition_slot() <= input.expiry_slot
+        || cleanup.prior_checkpoint_digest() == [0; 32]
+        || (matches!(
+            expected_phase,
+            ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed
+                | ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed
+        ) && (cleanup.first_controller() != Some(checkpoint.canonical_first_controller())
+            || cleanup.first_mask()
+                != checkpoint.controller_mask(checkpoint.canonical_first_controller())
+            || cleanup.first_ledger_prestate_digest() == [0; 32]
+            || cleanup.first_ledger_closed_digest() == [0; 32]
+            || cleanup.first_close_receipt_digest() == [0; 32]
+            || cleanup.remaining_ledger_prestate_digest() == [0; 32]))
+    {
+        return Err(Error::new(
+            "controller funding cleanup checkpoint omitted exact transition evidence",
+        ));
+    }
+    Ok(checkpoint)
+}
+
+/// Build the exact 88-account `DCLTPCB2` frame.
 ///
 /// Privileges are the outer's own assertion, not a guess: the route refuses a
 /// frame that under-privileges an account rather than failing opaquely inside
@@ -4064,7 +4424,6 @@ fn build_projected_custody_bootstrap_v2(
         ));
     }
     let resolution = pubkey(&plan.resolution.program_id)?;
-    let resolution_programdata = pubkey(&plan.resolution.programdata_id)?;
     let resolution_ledger = coordinates
         .funding_ledgers
         .iter()
@@ -4088,51 +4447,15 @@ fn build_projected_custody_bootstrap_v2(
             "Direct DCLTPCB2 requires the selected Direct bit and its exact Resolution complement",
         ));
     }
-    let project_found = ProjectFoundRequestV2::new(Request::administrative(
-        Action::Found,
-        coordinates.generation,
-        identity_of(coordinates.market.to_bytes())?,
-    ))
-    .map_err(|error| Error::new(format!("DCLTPCB2 ProjectFound request: {error:?}")))?;
-    let prestate_digest = pre_market_funding_prestate_digest_v1(
-        resolution_ledger.address.to_bytes(),
-        system_program::ID.to_bytes(),
-        0,
-        0,
-    );
-    let pre_market = PreMarketFundingRequestV1 {
-        project_found,
-        manifest: records.manifest.digest,
-        selected_mask: resolution_ledger.selected_mask,
-        funding_source: payer.to_bytes(),
-        ledger: resolution_ledger.address.to_bytes(),
-        prestate_digest,
-    }
-    .encode()
-    .map_err(|error| Error::new(format!("DCLTPCB2 Resolution request: {error:?}")))?;
-    let caller_authority = Pubkey::find_program_address(
-        &CallerAuthoritySeedsV1::from_bytes(
-            hex32(&plan.release_set_id)?,
-            coordinates.market.to_bytes(),
-            ExecutionRoleV1::Trading,
-            records.manifest.digest,
-            Sha256::digest(pre_market).into(),
-        )
-        .map_err(|error| Error::new(format!("DCLTPCB2 caller authority: {error:?}")))?
-        .as_slices(),
-        &trading,
-    )
-    .0;
-    accounts.push(AccountMeta::new_readonly(resolution, false));
-    accounts.push(AccountMeta::new_readonly(resolution_programdata, false));
-    accounts.push(AccountMeta::new_readonly(caller_authority, false));
-    accounts.push(AccountMeta::new(resolution_ledger.address, false));
-    accounts.push(AccountMeta::new(trading_ledger.address, false));
+    accounts.push(AccountMeta::new(
+        coordinates.controller_funding_checkpoint,
+        false,
+    ));
+    accounts.push(AccountMeta::new_readonly(resolution_ledger.address, false));
+    accounts.push(AccountMeta::new_readonly(trading_ledger.address, false));
     if accounts.len() != PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNTS_V2
-        || accounts[PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_PROGRAM_V2].pubkey != resolution
-        || accounts[PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_PROGRAMDATA_V2].pubkey
-            != resolution_programdata
-        || accounts[PROJECTED_CUSTODY_BOOTSTRAP_CALLER_AUTHORITY_V2].pubkey != caller_authority
+        || accounts[PROJECTED_CUSTODY_BOOTSTRAP_CHECKPOINT_V2].pubkey
+            != coordinates.controller_funding_checkpoint
         || accounts[PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_LEDGER_V2].pubkey
             != resolution_ledger.address
         || accounts[PROJECTED_CUSTODY_BOOTSTRAP_TRADING_LEDGER_V2].pubkey != trading_ledger.address
@@ -4360,9 +4683,11 @@ impl PrestateLaneV1 {
     /// The label its honest `DCLTPCB2` transaction carries.
     const fn prestate_label(self) -> &'static str {
         match self {
-            Self::Founding => "create projected custody and controller funding (DCLTPCB2)",
+            Self::Founding => {
+                "stage projected custody against prepared controller funding (DCLTPCB2)"
+            }
             Self::SourceAbort => {
-                "stage projected custody and controller funding for the expiry abort (DCLTPCB2)"
+                "stage projected custody against prepared controller funding for the expiry abort (DCLTPCB2)"
             }
         }
     }
@@ -4428,6 +4753,17 @@ fn execute_projected_custody_bootstrap(
         expiry_slot,
     )?;
     let principal = coordinates.lock.amount;
+    let controller_funding_lamports = coordinates
+        .funding_ledgers
+        .iter()
+        .try_fold(
+            rpc.minimum_balance(CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1)?,
+            |total, ledger| total.checked_add(ledger.required_lamports),
+        )
+        .ok_or_else(|| Error::new("controller funding capacity overflow"))?;
+    let projection_witness_lamports = market_rent
+        .checked_add(controller_funding_lamports)
+        .ok_or_else(|| Error::new("projection witness capacity overflow"))?;
 
     // One Token-2022 account owned by the party the principal is refundable to.
     let source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER);
@@ -4442,7 +4778,11 @@ fn execute_projected_custody_bootstrap(
     transactions.push(rpc.send_with_signers(
         "fund the founding principal supplier and its rent-capacity witness",
         &[
-            transfer(&payer.pubkey(), &projection_witness.pubkey(), market_rent),
+            transfer(
+                &payer.pubkey(),
+                &projection_witness.pubkey(),
+                projection_witness_lamports,
+            ),
             create_account(
                 &payer.pubkey(),
                 &source_funder.pubkey(),
@@ -4588,6 +4928,196 @@ fn execute_projected_custody_bootstrap(
         None
     };
 
+    let controller_funding_prepare = build_controller_funding_prepare_v1(
+        plan,
+        &coordinates,
+        records,
+        found_record.raw,
+        lock_record.raw,
+        projection_witness.pubkey(),
+    )?;
+    let controller_funding_prepare_geometry =
+        projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &controller_funding_prepare)?;
+    let controller_funding_prepare_admitted = projected_bootstrap_compiled_geometry_v2(
+        payer.pubkey(),
+        &append_distinct_census_accounts_v1(&controller_funding_prepare, 13),
+    )?;
+    let controller_funding_prepare_refused = projected_bootstrap_compiled_geometry_v2(
+        payer.pubkey(),
+        &append_distinct_census_accounts_v1(&controller_funding_prepare, 14),
+    )?;
+    if controller_funding_prepare_geometry.complete_keys
+        != CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1
+        || controller_funding_prepare_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        || controller_funding_prepare_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
+    {
+        return Err(Error::new(format!(
+            "DCLTCFQ1 census refused: base {} keys, +13 {} keys, +14 {} keys; expected exactly {}, {}, {}",
+            controller_funding_prepare_geometry.complete_keys,
+            controller_funding_prepare_admitted.complete_keys,
+            controller_funding_prepare_refused.complete_keys,
+            CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1,
+            DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+            DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1,
+        )));
+    }
+    let recovering_prepare = lane == PrestateLaneV1::Founding
+        && submission_recorder.as_deref().is_some_and(|recorder| {
+            recorder
+                .current(FoundingSubmissionOperationV1::Dcltcfq1)
+                .is_some()
+        });
+    if !recovering_prepare {
+        for (label, key) in coordinates
+            .funding_ledgers
+            .iter()
+            .map(|ledger| ("controller funding ledger", ledger.address))
+            .chain(std::iter::once((
+                "controller funding checkpoint",
+                coordinates.controller_funding_checkpoint,
+            )))
+        {
+            if rpc.account(key)?.is_some() {
+                return Err(Error::new(format!(
+                    "{label} existed before its DCLTCFQ1 preparation"
+                )));
+            }
+        }
+    }
+    let (prepare_routing, prepare_tables) = publish_routing_table(
+        rpc,
+        payer,
+        "DCLTCFQ1",
+        std::slice::from_ref(&controller_funding_prepare),
+        transactions,
+    )?;
+    let prepare_accounts = coordinates
+        .funding_ledgers
+        .iter()
+        .map(|ledger| ledger.address)
+        .chain(std::iter::once(coordinates.controller_funding_checkpoint))
+        .chain(std::iter::once(projection_witness.pubkey()))
+        .chain(std::iter::once(coordinates.credit))
+        .collect::<Vec<_>>();
+    let prepare_honest = match submission_recorder.as_deref_mut() {
+        Some(recorder) if lane == PrestateLaneV1::Founding => {
+            let recovery_payload = serde_json::to_vec(&serde_json::json!({
+                "schema": "dclutch-market-controller-funding-prepare-recovery-v1",
+                "lane": lane.evidence_prefix(),
+                "checkpoint": coordinates.controller_funding_checkpoint.to_string(),
+                "ledgers": coordinates
+                    .funding_ledgers
+                    .iter()
+                    .map(|ledger| ledger.address.to_string())
+                    .collect::<Vec<_>>(),
+            }))?;
+            let mut completion = |rpc: &mut Rpc| {
+                authenticate_controller_funding_checkpoint_v1(
+                    rpc,
+                    plan,
+                    &coordinates,
+                    projection_witness.pubkey(),
+                    ControllerFundingCheckpointPhaseV1::Prepared,
+                )
+                .map(|_| ())
+            };
+            send_durable_founding_v1(
+                rpc,
+                "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
+                FoundingSubmissionOperationV1::Dcltcfq1,
+                std::slice::from_ref(&controller_funding_prepare),
+                &[payer, &projection_witness],
+                prepare_routing,
+                &prepare_tables,
+                founding_instruction_account_digest_v1(payer.pubkey(), &controller_funding_prepare),
+                &prepare_accounts,
+                &prepare_accounts,
+                recovery_payload,
+                recorder,
+                &mut completion,
+            )?
+        }
+        Some(_) | None => rpc.send_v0_on_founding_heap_with_signers(
+            "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
+            std::slice::from_ref(&controller_funding_prepare),
+            payer,
+            &[&projection_witness],
+            prepare_routing,
+            &prepare_tables,
+        )?,
+    };
+    transactions.push(prepare_honest);
+    authenticate_controller_funding_checkpoint_v1(
+        rpc,
+        plan,
+        &coordinates,
+        projection_witness.pubkey(),
+        ControllerFundingCheckpointPhaseV1::Prepared,
+    )?;
+    let prepared_abort = build_controller_funding_cleanup_v1(
+        rpc,
+        plan,
+        records,
+        &coordinates,
+        ControllerFundingCheckpointPhaseV1::Prepared,
+        CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
+    )?;
+    let prepared_abort_geometry =
+        projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &prepared_abort)?;
+    authenticate_cleanup_compiled_census_v1(
+        payer.pubkey(),
+        &prepared_abort,
+        prepared_abort_geometry,
+    )?;
+    let (prepared_abort_routing, prepared_abort_tables) = publish_routing_table(
+        rpc,
+        payer,
+        "DCLTCF1A",
+        std::slice::from_ref(&prepared_abort),
+        transactions,
+    )?;
+    let prepared_abort_probe = crate::seed::fresh_probe_address();
+    let refused_prepared_abort = rpc.send_v0_expected_failure_with_signers(
+        "DCLTCF1A refuses to close the first controller ledger before checkpoint expiry",
+        &[
+            transfer(&payer.pubkey(), &prepared_abort_probe, 1),
+            prepared_abort,
+        ],
+        payer,
+        &[],
+        prepared_abort_routing,
+        &prepared_abort_tables,
+    )?;
+    if rpc.account(prepared_abort_probe)?.is_some()
+        || refused_prepared_abort.fee_only_balance_change != Some(true)
+    {
+        return Err(Error::new(
+            "pre-expiry DCLTCF1A did not roll its whole transaction back",
+        ));
+    }
+    transactions.push(refused_prepared_abort);
+    authenticate_controller_funding_checkpoint_v1(
+        rpc,
+        plan,
+        &coordinates,
+        projection_witness.pubkey(),
+        ControllerFundingCheckpointPhaseV1::Prepared,
+    )?;
+    completed.push(format!(
+        "executed DCLTCFQ1: exact Resolution and Trading Pending ledgers plus their Prepared checkpoint; compiled {} complete keys, {} signatures, {} message bytes, {} packet bytes",
+        controller_funding_prepare_geometry.complete_keys,
+        controller_funding_prepare_geometry.required_signatures,
+        controller_funding_prepare_geometry.message_bytes,
+        controller_funding_prepare_geometry.packet_bytes,
+    ));
+    completed.push(format!(
+        "proved DCLTCF1A refuses before expiry with full rollback; compiled {} complete keys, {} signatures, {} message bytes, {} packet bytes",
+        prepared_abort_geometry.complete_keys,
+        prepared_abort_geometry.required_signatures,
+        prepared_abort_geometry.message_bytes,
+        prepared_abort_geometry.packet_bytes,
+    ));
+
     let bootstrap = build_projected_custody_bootstrap_v2(
         plan,
         &coordinates,
@@ -4603,11 +5133,11 @@ fn execute_projected_custody_bootstrap(
     let bootstrap_geometry = projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &bootstrap)?;
     let admitted_boundary = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&bootstrap, 2),
+        &append_distinct_census_accounts_v1(&bootstrap, 4),
     )?;
     let refused_boundary = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&bootstrap, 3),
+        &append_distinct_census_accounts_v1(&bootstrap, 5),
     )?;
     if bootstrap_geometry.complete_keys != PROJECTED_CUSTODY_BOOTSTRAP_COMPLETE_KEYS_V2
         || bootstrap_geometry.complete_keys > DEVNET_ACCOUNT_LOCK_LIMIT_V1
@@ -4615,7 +5145,7 @@ fn execute_projected_custody_bootstrap(
         || refused_boundary.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
     {
         return Err(Error::new(format!(
-            "DCLTPCB2 census refused: base {} keys, +2 {} keys, +3 {} keys; expected exactly {}, {}, {}",
+            "DCLTPCB2 census refused: base {} keys, +4 {} keys, +5 {} keys; expected exactly {}, {}, {}",
             bootstrap_geometry.complete_keys,
             admitted_boundary.complete_keys,
             refused_boundary.complete_keys,
@@ -4638,25 +5168,35 @@ fn execute_projected_custody_bootstrap(
         ("source_vault", coordinates.source_vault),
         ("source_replay", coordinates.source_replay),
     ];
+    let recovering_stage = lane == PrestateLaneV1::Founding
+        && submission_recorder.as_deref().is_some_and(|recorder| {
+            recorder
+                .current(FoundingSubmissionOperationV1::Dcltpcb2)
+                .is_some()
+        });
     let refuse_left_nothing = |rpc: &mut Rpc, label: &str| -> Result<()> {
         for (name, key) in created {
             if rpc.account(key)?.is_some() {
                 return Err(Error::new(format!("{label} left a {name} account")));
             }
         }
-        for funding in &coordinates.funding_ledgers {
-            if rpc.account(funding.address)?.is_some() {
-                return Err(Error::new(format!("{label} left a funded FundingLedgerV2")));
-            }
-        }
+        authenticate_controller_funding_checkpoint_v1(
+            rpc,
+            plan,
+            &coordinates,
+            projection_witness.pubkey(),
+            ControllerFundingCheckpointPhaseV1::Prepared,
+        )?;
         Ok(())
     };
-    refuse_left_nothing(rpc, "the founding prestate")?;
+    if !recovering_stage {
+        refuse_left_nothing(rpc, "the founding prestate")?;
+    }
 
     // Both bootstrap hostile cases belong to the founding lane. Re-running
     // them for the abort lane's prestate would cost two transactions and
     // 700,000 compute units to re-prove a coordinate that has not moved.
-    if lane == PrestateLaneV1::Founding {
+    if lane == PrestateLaneV1::Founding && !recovering_stage {
         // The bootstrap admits exactly one request: the terminal Lock this
         // founding determines. A well-formed non-terminal prestate is refused.
         let mut non_terminal = bootstrap.clone();
@@ -4709,13 +5249,15 @@ fn execute_projected_custody_bootstrap(
     // The staging transaction has to land before the prestate's own expiry, or
     // Custody's `initialize` refuses outright. Say so here rather than let a
     // slow validator turn into an opaque refusal three transactions later.
-    let staged_at = rpc.finalized_slot()?;
-    require_expiry_margin_v1(
-        "projected-Custody staging",
-        staged_at,
-        expiry_slot,
-        lane.minimum_staging_margin_slots(input)?,
-    )?;
+    if !recovering_stage {
+        let staged_at = rpc.finalized_slot()?;
+        require_expiry_margin_v1(
+            "projected-Custody staging",
+            staged_at,
+            expiry_slot,
+            lane.minimum_staging_margin_slots(input)?,
+        )?;
+    }
 
     let honest = if lane == PrestateLaneV1::Founding {
         match submission_recorder.as_deref_mut() {
@@ -4728,6 +5270,8 @@ fn execute_projected_custody_bootstrap(
                         .iter()
                         .map(|funding| funding.address),
                 );
+                prestate_addresses.push(coordinates.controller_funding_checkpoint);
+                prestate_addresses.push(source_funder.pubkey());
                 let root = Pubkey::new_from_array(coordinates.found.capability_root().to_bytes());
                 let trading = pubkey(&plan.trading.program_id)?;
                 let trading_ledger = coordinates
@@ -4755,6 +5299,10 @@ fn execute_projected_custody_bootstrap(
                 recovery_accounts.insert(
                     "founding_lifecycle_rent_credit".into(),
                     coordinates.credit.to_string(),
+                );
+                recovery_accounts.insert(
+                    "founding_source_funder".into(),
+                    source_funder.pubkey().to_string(),
                 );
                 let mut completion_addresses = recovery_accounts
                     .values()
@@ -4837,6 +5385,13 @@ fn execute_projected_custody_bootstrap(
     transactions.push(honest);
 
     authenticate_bootstrap_poststate(rpc, &coordinates, custody, token_program, mint, principal)?;
+    authenticate_controller_funding_checkpoint_v1(
+        rpc,
+        plan,
+        &coordinates,
+        projection_witness.pubkey(),
+        ControllerFundingCheckpointPhaseV1::CustodyStaged,
+    )?;
     let prefix = lane.evidence_prefix();
     for (label, key) in created {
         let account = rpc.required_account(key, label)?;
@@ -4933,6 +5488,7 @@ fn execute_projected_custody_bootstrap(
         PrestateLaneV1::SourceAbort => execute_source_abort_v1(
             rpc,
             plan,
+            records,
             &coordinates,
             expiry_slot,
             lock_record.raw,
@@ -4957,7 +5513,14 @@ fn execute_projected_custody_bootstrap(
 const PROJECTED_CUSTODY_ABORT_MAGIC_V1: [u8; 8] = *b"DCLTPCA1";
 
 /// Exact `DCLTPCA1` frame width: one raw request, Custody, and its own frame.
-const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize = 18;
+const PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1: usize = 18;
+const CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1: usize = 17;
+const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize =
+    PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1 + CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1;
+const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 32;
+const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 19;
+const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
+const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
 
 /// Unwind an expired founding's funded source compartment on a real validator.
 ///
@@ -4971,6 +5534,7 @@ const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize = 18;
 fn execute_source_abort_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
+    records: &MarketRecords,
     coordinates: &FoundingCoordinates,
     expiry_slot: u64,
     lock_raw_account: Pubkey,
@@ -4988,13 +5552,33 @@ fn execute_source_abort_v1(
     let principal = coordinates.lock.amount;
 
     let abort = build_projected_custody_abort_v1(
+        rpc,
         plan,
+        records,
         coordinates,
         lock_raw_account,
         beneficiary.pubkey(),
         destination,
         mint,
     )?;
+    let abort_geometry = projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &abort)?;
+    let abort_admitted = projected_bootstrap_compiled_geometry_v2(
+        payer.pubkey(),
+        &append_distinct_census_accounts_v1(&abort, 32),
+    )?;
+    let abort_refused = projected_bootstrap_compiled_geometry_v2(
+        payer.pubkey(),
+        &append_distinct_census_accounts_v1(&abort, 33),
+    )?;
+    if abort_geometry.complete_keys != PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1
+        || abort_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        || abort_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
+    {
+        return Err(Error::new(format!(
+            "DCLTPCA1 census refused: base {}, +32 {}, +33 {}",
+            abort_geometry.complete_keys, abort_admitted.complete_keys, abort_refused.complete_keys,
+        )));
+    }
     let (routing, tables) = publish_routing_table(
         rpc,
         payer,
@@ -5048,6 +5632,37 @@ fn execute_source_abort_v1(
     let credit_before = rpc
         .required_account(coordinates.credit, "abort lifecycle credit")?
         .lamports;
+    let checkpoint_before = rpc.required_account(
+        coordinates.controller_funding_checkpoint,
+        "staged controller funding checkpoint",
+    )?;
+    let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_before.data)
+        .map_err(|error| Error::new(format!("staged controller funding checkpoint: {error:?}")))?;
+    let controller_funding_source = Pubkey::new_from_array(checkpoint.input_ref().funding_source);
+    let controller_funding_source_before = rpc
+        .required_account(
+            controller_funding_source,
+            "controller funding refund source",
+        )?
+        .lamports;
+    let controller_rent_refund = coordinates
+        .funding_ledgers
+        .iter()
+        .try_fold(
+            rpc.minimum_balance(CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1)?,
+            |total, ledger| total.checked_add(rpc.minimum_balance(ledger.bytes.len()).ok()?),
+        )
+        .ok_or_else(|| Error::new("controller funding Rent refund overflow"))?;
+    let controller_native_refund = coordinates
+        .funding_ledgers
+        .iter()
+        .try_fold(0_u64, |total, ledger| {
+            ledger
+                .required_lamports
+                .checked_sub(rpc.minimum_balance(ledger.bytes.len()).ok()?)
+                .and_then(|value| total.checked_add(value))
+        })
+        .ok_or_else(|| Error::new("controller funding native refund overflow"))?;
     let destination_before = token_amount(rpc, destination, "abort refund destination")?;
     transactions.push(rpc.send_v0_with_signers(
         "unwind an expired founding's funded source compartment (DCLTPCA1)",
@@ -5057,6 +5672,89 @@ fn execute_source_abort_v1(
         routing,
         &tables,
     )?);
+    authenticate_source_abort_custody_poststate_v1(
+        rpc,
+        coordinates,
+        destination,
+        destination_before,
+        principal,
+    )?;
+    authenticate_controller_funding_cleanup_checkpoint_v1(
+        rpc,
+        plan,
+        coordinates,
+        controller_funding_source,
+        ControllerFundingCheckpointPhaseV1::CustodyAborted,
+    )?;
+
+    let cleanup_step1 = build_controller_funding_cleanup_v1(
+        rpc,
+        plan,
+        records,
+        coordinates,
+        ControllerFundingCheckpointPhaseV1::CustodyAborted,
+        CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
+    )?;
+    let cleanup_step1_geometry =
+        projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &cleanup_step1)?;
+    authenticate_cleanup_compiled_census_v1(
+        payer.pubkey(),
+        &cleanup_step1,
+        cleanup_step1_geometry,
+    )?;
+    let (cleanup_step1_routing, cleanup_step1_tables) = publish_routing_table(
+        rpc,
+        payer,
+        "DCLTCF1A",
+        std::slice::from_ref(&cleanup_step1),
+        transactions,
+    )?;
+    transactions.push(rpc.send_v0_with_signers(
+        "close the canonical first expired controller ledger (DCLTCF1A)",
+        std::slice::from_ref(&cleanup_step1),
+        payer,
+        &[],
+        cleanup_step1_routing,
+        &cleanup_step1_tables,
+    )?);
+    authenticate_controller_funding_cleanup_checkpoint_v1(
+        rpc,
+        plan,
+        coordinates,
+        controller_funding_source,
+        ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed,
+    )?;
+
+    let cleanup_step2 = build_controller_funding_cleanup_v1(
+        rpc,
+        plan,
+        records,
+        coordinates,
+        ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed,
+        CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
+    )?;
+    let cleanup_step2_geometry =
+        projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &cleanup_step2)?;
+    authenticate_cleanup_compiled_census_v1(
+        payer.pubkey(),
+        &cleanup_step2,
+        cleanup_step2_geometry,
+    )?;
+    let (cleanup_step2_routing, cleanup_step2_tables) = publish_routing_table(
+        rpc,
+        payer,
+        "DCLTCF2A",
+        std::slice::from_ref(&cleanup_step2),
+        transactions,
+    )?;
+    transactions.push(rpc.send_v0_with_signers(
+        "close the remaining expired controller ledger and checkpoint (DCLTCF2A)",
+        std::slice::from_ref(&cleanup_step2),
+        payer,
+        &[],
+        cleanup_step2_routing,
+        &cleanup_step2_tables,
+    )?);
     authenticate_source_abort_poststate_v1(
         rpc,
         coordinates,
@@ -5064,6 +5762,10 @@ fn execute_source_abort_v1(
         destination_before,
         credit_before,
         principal,
+        controller_funding_source,
+        controller_funding_source_before,
+        controller_rent_refund,
+        controller_native_refund,
     )?;
     let credit_account = rpc.required_account(coordinates.credit, "abort lifecycle credit")?;
     accounts.insert(
@@ -5088,12 +5790,25 @@ fn execute_source_abort_v1(
     completed.push(
         "executed DCLTPCA1 after expiry: the source principal is back with the party that supplied it, and the source vault, source replay, empty Hoard vault, and projection are all closed to the lifecycle credit".into(),
     );
+    completed.push(format!(
+        "compiled the exact staged DCLTPCA1 with {} complete keys, {} signatures, {} message bytes, and {} packet bytes; DCLTCF1A with {} complete keys and {} packet bytes; and DCLTCF2A with {} complete keys and {} packet bytes",
+        abort_geometry.complete_keys,
+        abort_geometry.required_signatures,
+        abort_geometry.message_bytes,
+        abort_geometry.packet_bytes,
+        cleanup_step1_geometry.complete_keys,
+        cleanup_step1_geometry.packet_bytes,
+        cleanup_step2_geometry.complete_keys,
+        cleanup_step2_geometry.packet_bytes,
+    ));
     Ok(())
 }
 
-/// Build the exact 18-account `DCLTPCA1` frame.
+/// Build the exact 35-account staged `DCLTPCA1` frame.
 fn build_projected_custody_abort_v1(
+    rpc: &mut Rpc,
     plan: &SuccessorPlan,
+    records: &MarketRecords,
     coordinates: &FoundingCoordinates,
     lock_raw_account: Pubkey,
     beneficiary: Pubkey,
@@ -5124,7 +5839,7 @@ fn build_projected_custody_abort_v1(
     )
     .0;
 
-    let accounts = vec![
+    let mut accounts = vec![
         AccountMeta::new_readonly(lock_raw_account, false),
         AccountMeta::new_readonly(custody, false),
         // Custody's own sixteen-account abort frame.
@@ -5147,15 +5862,173 @@ fn build_projected_custody_abort_v1(
         AccountMeta::new_readonly(token_program, false),
         AccountMeta::new_readonly(coordinates.market, false),
     ];
+    if accounts.len() != PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1 {
+        return Err(Error::new(
+            "assembled Custody abort prefix did not match its exact width",
+        ));
+    }
+    accounts.extend(build_controller_funding_abort_accounts_v1(
+        rpc,
+        plan,
+        records,
+        coordinates,
+        ControllerFundingCheckpointPhaseV1::CustodyStaged,
+    )?);
     if accounts.len() != PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1 {
         return Err(Error::new(
-            "assembled abort frame did not match its exact width",
+            "assembled staged abort frame did not match 35 accounts",
         ));
     }
     Ok(Instruction {
         program_id: trading,
         accounts,
         data: PROJECTED_CUSTODY_ABORT_MAGIC_V1.to_vec(),
+    })
+}
+
+fn build_controller_funding_abort_accounts_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    records: &MarketRecords,
+    coordinates: &FoundingCoordinates,
+    expected_phase: ControllerFundingCheckpointPhaseV1,
+) -> Result<Vec<AccountMeta>> {
+    let trading = pubkey(&plan.trading.program_id)?;
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let checkpoint_account = rpc.required_account(
+        coordinates.controller_funding_checkpoint,
+        "controller funding checkpoint",
+    )?;
+    let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_account.data)
+        .map_err(|error| Error::new(format!("controller funding checkpoint: {error:?}")))?;
+    if checkpoint_account.owner != trading || checkpoint.phase() != expected_phase {
+        return Err(Error::new(
+            "controller funding abort observed a foreign checkpoint owner or phase",
+        ));
+    }
+    let input = checkpoint.input_ref();
+    let resolution_ledger_key = Pubkey::new_from_array(input.resolution_ledger);
+    let trading_ledger_key = Pubkey::new_from_array(input.trading_ledger);
+    let resolution_should_be_closed = matches!(
+        expected_phase,
+        ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed
+            | ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed
+    ) && checkpoint.canonical_first_controller()
+        == ControllerFundingControllerV1::Resolution;
+    let resolution_ledger = match rpc.account(resolution_ledger_key)? {
+        Some(account) => account,
+        None if resolution_should_be_closed => RpcAccount {
+            lamports: 0,
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: Vec::new(),
+        },
+        None => {
+            return Err(Error::new(
+                "controller funding Resolution ledger disappeared before its cleanup step",
+            ));
+        }
+    };
+    if resolution_should_be_closed {
+        if resolution_ledger.owner != system_program::ID
+            || resolution_ledger.lamports != 0
+            || !resolution_ledger.data.is_empty()
+        {
+            return Err(Error::new(
+                "controller funding Resolution ledger differed from exact closed state",
+            ));
+        }
+    } else if resolution_ledger.owner != resolution
+        || resolution_ledger.lamports == 0
+        || resolution_ledger.data.is_empty()
+    {
+        return Err(Error::new(
+            "controller funding Resolution ledger differed from live Pending state",
+        ));
+    }
+    let ledger_account_digest = pre_market_funding_ledger_account_digest_v1(
+        resolution_ledger_key.to_bytes(),
+        resolution_ledger.owner.to_bytes(),
+        resolution_ledger.lamports,
+        &resolution_ledger.data,
+    );
+    let request = PreMarketFundingAbortRequestV1 {
+        checkpoint_phase: checkpoint.phase() as u8,
+        checkpoint_revision: checkpoint.revision(),
+        release_set: input.release_set,
+        checkpoint: coordinates.controller_funding_checkpoint.to_bytes(),
+        checkpoint_digest: Sha256::digest(&checkpoint_account.data).into(),
+        market: input.market,
+        generation: input.generation,
+        manifest: input.manifest,
+        funding_list: input.funding_list,
+        selected_mask: input.resolution_mask,
+        ledger: input.resolution_ledger,
+        ledger_account_digest,
+        funding_source: input.funding_source,
+        rent_credit: input.rent_credit,
+        expiry_slot: input.expiry_slot,
+    }
+    .encode()
+    .map_err(|error| Error::new(format!("controller funding abort request: {error:?}")))?;
+    let caller = Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::from_bytes(
+            input.release_set,
+            input.market,
+            ExecutionRoleV1::Trading,
+            input.manifest,
+            Sha256::digest(request).into(),
+        )
+        .map_err(|error| Error::new(format!("controller funding abort authority: {error:?}")))?
+        .as_slices(),
+        &trading,
+    )
+    .0;
+    let accounts = vec![
+        AccountMeta::new_readonly(caller, false),
+        AccountMeta::new_readonly(trading, false),
+        AccountMeta::new_readonly(pubkey(&plan.trading.programdata_id)?, false),
+        AccountMeta::new_readonly(resolution, false),
+        AccountMeta::new_readonly(pubkey(&plan.resolution.programdata_id)?, false),
+        AccountMeta::new(coordinates.controller_funding_checkpoint, false),
+        AccountMeta::new(resolution_ledger_key, false),
+        AccountMeta::new(Pubkey::new_from_array(input.funding_source), false),
+        AccountMeta::new(Pubkey::new_from_array(input.rent_credit), false),
+        AccountMeta::new_readonly(pubkey(&plan.activation)?, false),
+        AccountMeta::new_readonly(pubkey(&plan.registry.program_id)?, false),
+        AccountMeta::new_readonly(records.manifest.raw, false),
+        AccountMeta::new_readonly(records.manifest.staging, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new(trading_ledger_key, false),
+    ];
+    if accounts.len() != CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1 {
+        return Err(Error::new("controller funding abort suffix width changed"));
+    }
+    Ok(accounts)
+}
+
+fn build_controller_funding_cleanup_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    records: &MarketRecords,
+    coordinates: &FoundingCoordinates,
+    expected_phase: ControllerFundingCheckpointPhaseV1,
+    instruction_data: [u8; 8],
+) -> Result<Instruction> {
+    let accounts = build_controller_funding_abort_accounts_v1(
+        rpc,
+        plan,
+        records,
+        coordinates,
+        expected_phase,
+    )?;
+    Ok(Instruction {
+        program_id: pubkey(&plan.trading.program_id)?,
+        accounts,
+        data: instruction_data.to_vec(),
     })
 }
 
@@ -5168,12 +6041,11 @@ fn token_amount(rpc: &mut Rpc, key: Pubkey, label: &str) -> Result<u64> {
 }
 
 /// Require the abort to have returned the principal and closed all four.
-fn authenticate_source_abort_poststate_v1(
+fn authenticate_source_abort_custody_poststate_v1(
     rpc: &mut Rpc,
     coordinates: &FoundingCoordinates,
     destination: Pubkey,
     destination_before: u64,
-    credit_before: u64,
     principal: u64,
 ) -> Result<()> {
     if token_amount(rpc, destination, "abort refund destination")?
@@ -5183,8 +6055,6 @@ fn authenticate_source_abort_poststate_v1(
             "the abort did not return exactly the source principal to its supplier",
         ));
     }
-    // All four accounts the ladder created are gone. A closed account with zero
-    // lamports does not exist afterwards, which is what `account` reports.
     for (label, key) in [
         ("projected replay", coordinates.projected_replay),
         ("source vault", coordinates.source_vault),
@@ -5197,6 +6067,59 @@ fn authenticate_source_abort_poststate_v1(
             return Err(Error::new(format!("the abort left the {label} behind")));
         }
     }
+    Ok(())
+}
+
+fn authenticate_source_abort_poststate_v1(
+    rpc: &mut Rpc,
+    coordinates: &FoundingCoordinates,
+    destination: Pubkey,
+    destination_before: u64,
+    credit_before: u64,
+    principal: u64,
+    controller_funding_source: Pubkey,
+    controller_funding_source_before: u64,
+    controller_rent_refund: u64,
+    controller_native_refund: u64,
+) -> Result<()> {
+    authenticate_source_abort_custody_poststate_v1(
+        rpc,
+        coordinates,
+        destination,
+        destination_before,
+        principal,
+    )?;
+    for (label, key) in coordinates
+        .funding_ledgers
+        .iter()
+        .map(|ledger| ("controller funding ledger", ledger.address))
+        .chain(std::iter::once((
+            "controller funding checkpoint",
+            coordinates.controller_funding_checkpoint,
+        )))
+    {
+        if rpc
+            .account(key)?
+            .is_some_and(|account| account.lamports != 0 || !account.data.is_empty())
+        {
+            return Err(Error::new(format!("the abort left the {label} behind")));
+        }
+    }
+    let funding_source_after = rpc
+        .required_account(
+            controller_funding_source,
+            "controller funding refund source",
+        )?
+        .lamports;
+    if funding_source_after
+        != controller_funding_source_before
+            .checked_add(controller_native_refund)
+            .ok_or_else(|| Error::new("controller funding native refund overflow"))?
+    {
+        return Err(Error::new(
+            "the abort did not return exact controller native principal to its original source",
+        ));
+    }
     // And their rent went where it was always going, exactly.
     let credit_after = rpc
         .required_account(coordinates.credit, "abort lifecycle credit")?
@@ -5206,6 +6129,7 @@ fn authenticate_source_abort_poststate_v1(
         .and_then(|value| value.checked_add(coordinates.lock.funding_source_state_rent_lamports))
         .and_then(|value| value.checked_add(coordinates.lock.vault_rent_lamports))
         .and_then(|value| value.checked_add(coordinates.lock.state_rent_lamports))
+        .and_then(|value| value.checked_add(controller_rent_refund))
         .ok_or_else(|| Error::new("abort rent arithmetic overflow"))?;
     if credit_after != expected {
         return Err(Error::new(format!(
@@ -5314,9 +6238,9 @@ const GENERIC_MARKET_FOUNDING_MAGIC_V2: [u8; 8] = *b"DCLTGMF2";
 /// reads back, then Lock (14), Found (28 fixed + tail + 15 suffix), Realize
 /// (12), Claims (32), and Open (23). The total is
 /// `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2 + physical_funding_count`.
-const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2: usize = 129;
+const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2: usize = 130;
 const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V2: usize = 2;
-const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V2: usize = 59;
+const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V2: usize = 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GenericMarketFoundingLockExpectationV2 {
@@ -5539,7 +6463,7 @@ fn authenticate_generic_market_founding_lock_census_v2(
     if census.complete_keys != GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V2
         || census.required_signatures != 1
         || census.static_keys != 3
-        || census.loaded_writable != 11
+        || census.loaded_writable != 12
         || census.loaded_readonly != 45
     {
         return Err(Error::new(format!(
@@ -6161,6 +7085,16 @@ fn build_generic_market_founding_v2(
     push(sysvar::clock::ID, false, &mut accounts);
     push(sysvar::rent::ID, false, &mut accounts);
 
+    // The durable CustodyStaged checkpoint is authenticated before Lock and
+    // consumed only after the exact Open acknowledgement and unchanged
+    // Pending controller ledgers. It is therefore the final physical account
+    // in the outer frame and writable solely for its close-last transition.
+    push(
+        coordinates.controller_funding_checkpoint,
+        true,
+        &mut accounts,
+    );
+
     let expected = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2
         .checked_add(coordinates.funding_ledgers.len())
         .ok_or_else(|| Error::new("founding frame width overflow"))?;
@@ -6197,9 +7131,9 @@ fn build_generic_market_founding_v2(
     // Transaction admission is checked from the compiled bounded-v0 message,
     // after payer, ComputeBudget, and canonical ALT placement are known. A
     // frame-only `distinct + 2` estimate is not an admission proof.
-    if distinct_writable.len() != 11 {
+    if distinct_writable.len() != 12 {
         return Err(Error::new(format!(
-            "the founding frame declared {} writable keys, not the eleven the outer requires",
+            "the founding frame declared {} writable keys, not the twelve the outer requires",
             distinct_writable.len()
         )));
     }
@@ -6310,6 +7244,26 @@ fn execute_generic_market_founding(
     )?;
     let initial_founding_census =
         authenticate_generic_market_founding_lock_census_v2(payer.pubkey(), &prepared_founding)?;
+    let open_admitted = compiled_complete_lock_census_v1(
+        payer.pubkey(),
+        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 4),
+    )?;
+    let open_refused = compiled_complete_lock_census_v1(
+        payer.pubkey(),
+        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 5),
+    )?;
+    if open_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        || open_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
+        || require_devnet_complete_key_limit_v1(open_admitted).is_err()
+        || require_devnet_complete_key_limit_v1(open_refused).is_ok()
+    {
+        return Err(Error::new(format!(
+            "DCLTGMF2 boundary census refused: base {}, +4 {}, +5 {}",
+            initial_founding_census.complete_keys,
+            open_admitted.complete_keys,
+            open_refused.complete_keys,
+        )));
+    }
     eprintln!(
         "campaign: DCLTGMF2 pre-mutation compiled-message lock census: {} complete keys ({} static, {} writable loaded, {} readonly loaded), digest {}",
         initial_founding_census.complete_keys,
@@ -6790,6 +7744,25 @@ fn authenticate_open_market_poststate_v1(
         return Err(Error::new(
             "the projected replay was not realized into the Market's normal Custody replay",
         ));
+    }
+    if rpc
+        .account(coordinates.controller_funding_checkpoint)?
+        .is_some_and(|account| account.lamports != 0 || !account.data.is_empty())
+    {
+        return Err(Error::new(
+            "the Open acknowledgement finalized without consuming the controller funding checkpoint",
+        ));
+    }
+    for ledger in &coordinates.funding_ledgers {
+        let account = rpc.required_account(ledger.address, "Open controller funding ledger")?;
+        if account.owner != ledger.controller
+            || account.lamports != ledger.required_lamports
+            || account.data != ledger.bytes
+        {
+            return Err(Error::new(
+                "Open changed a Pending controller funding ledger while consuming its checkpoint",
+            ));
+        }
     }
     Ok(())
 }
@@ -7560,7 +8533,7 @@ mod tests {
         let input = demo_market_input(registry, direct.compiler()).expect("demo market input");
         let bytes = decode_hex(&input.capability_manifest_hex).expect("manifest bytes");
         let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
-        let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5;
+        let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6;
         assert!(direct_founding_controller_masks_v1(manifest, expected).is_ok());
         assert!(direct_founding_controller_masks_v1(manifest, [0x5a; 32]).is_err());
     }
@@ -7569,7 +8542,7 @@ mod tests {
         let payer = Pubkey::new_from_array([1; 32]);
         let beneficiary = Pubkey::new_from_array([2; 32]);
         let program_id = Pubkey::new_from_array([3; 32]);
-        let distinct = (0_u8..58)
+        let distinct = (0_u8..56)
             .map(|index| Pubkey::new_from_array([index.saturating_add(4); 32]))
             .collect::<Vec<_>>();
         let mut accounts = vec![
@@ -7600,14 +8573,14 @@ mod tests {
     fn generic_market_founding_census_fixture_v2() -> (Pubkey, PreparedGenericMarketFoundingV2) {
         let payer = Pubkey::new_from_array([0xf1; 32]);
         let program_id = Pubkey::new_from_array([0xf2; 32]);
-        let distinct = (0_u8..56)
+        let distinct = (0_u8..57)
             .map(|index| Pubkey::new_from_array([index.saturating_add(1); 32]))
             .collect::<Vec<_>>();
         let mut accounts = distinct
             .iter()
             .enumerate()
             .map(|(index, key)| {
-                if index < 11 {
+                if index < 12 {
                     AccountMeta::new(*key, false)
                 } else {
                     AccountMeta::new_readonly(*key, false)
@@ -7638,29 +8611,188 @@ mod tests {
         )
     }
 
+    fn controller_funding_prepare_census_fixture_v1() -> (Pubkey, Instruction) {
+        let payer = Pubkey::new_from_array([0xc1; 32]);
+        let projection_witness = Pubkey::new_from_array([0xc2; 32]);
+        let program_id = Pubkey::new_from_array([0xc3; 32]);
+        let mut accounts = (0_u8..CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 as u8)
+            .map(|index| {
+                let key = Pubkey::new_from_array([index.saturating_add(1); 32]);
+                if matches!(index, 8 | 9 | 10 | 14) {
+                    AccountMeta::new(key, false)
+                } else {
+                    AccountMeta::new_readonly(key, false)
+                }
+            })
+            .collect::<Vec<_>>();
+        accounts[6].pubkey = program_id;
+        accounts[12] = AccountMeta::new(projection_witness, true);
+        (
+            payer,
+            Instruction {
+                program_id,
+                accounts,
+                data: CONTROLLER_FUNDING_PREPARE_MAGIC_V1.to_vec(),
+            },
+        )
+    }
+
+    fn controller_funding_cleanup_census_fixture_v1(data: [u8; 8]) -> (Pubkey, Instruction) {
+        let payer = Pubkey::new_from_array([0xd1; 32]);
+        let program_id = Pubkey::new_from_array([0xd2; 32]);
+        let mut accounts = (0_u8..CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1 as u8)
+            .map(|index| {
+                let key = Pubkey::new_from_array([index.saturating_add(1); 32]);
+                if matches!(index, 5 | 6 | 7 | 8 | 16) {
+                    AccountMeta::new(key, false)
+                } else {
+                    AccountMeta::new_readonly(key, false)
+                }
+            })
+            .collect::<Vec<_>>();
+        accounts[1].pubkey = program_id;
+        (
+            payer,
+            Instruction {
+                program_id,
+                accounts,
+                data: data.to_vec(),
+            },
+        )
+    }
+
+    fn staged_abort_census_fixture_v1() -> (Pubkey, Instruction) {
+        let payer = Pubkey::new_from_array([0xe1; 32]);
+        let beneficiary = Pubkey::new_from_array([0xe2; 32]);
+        let program_id = Pubkey::new_from_array([0xe3; 32]);
+        let distinct = (0_u8..30)
+            .map(|index| Pubkey::new_from_array([index.saturating_add(1); 32]))
+            .collect::<Vec<_>>();
+        let mut accounts = distinct
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                if index < 11 {
+                    AccountMeta::new(*key, false)
+                } else {
+                    AccountMeta::new_readonly(*key, false)
+                }
+            })
+            .collect::<Vec<_>>();
+        accounts[6].pubkey = program_id;
+        accounts[13] = AccountMeta::new_readonly(beneficiary, true);
+        let unique_width = accounts.len();
+        while accounts.len() < PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1 {
+            accounts.push(accounts[accounts.len() % unique_width].clone());
+        }
+        (
+            payer,
+            Instruction {
+                program_id,
+                accounts,
+                data: PROJECTED_CUSTODY_ABORT_MAGIC_V1.to_vec(),
+            },
+        )
+    }
+
     #[test]
-    fn projected_bootstrap_actual_compiler_census_pins_the_62_64_65_wall() {
+    fn controller_funding_prepare_compiler_census_pins_the_51_64_65_wall() {
+        let (payer, prepare) = controller_funding_prepare_census_fixture_v1();
+        let base = projected_bootstrap_compiled_geometry_v2(payer, &prepare).expect("base census");
+        let admitted = projected_bootstrap_compiled_geometry_v2(
+            payer,
+            &append_distinct_census_accounts_v1(&prepare, 13),
+        )
+        .expect("64-key census");
+        let refused = projected_bootstrap_compiled_geometry_v2(
+            payer,
+            &append_distinct_census_accounts_v1(&prepare, 14),
+        )
+        .expect("65-key census");
+        assert_eq!(
+            base.complete_keys,
+            CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1
+        );
+        assert_eq!(base.required_signatures, 2);
+        assert_eq!(base.static_keys, 4);
+        assert_eq!(base.loaded_writable, 4);
+        assert_eq!(base.loaded_readonly, 43);
+        assert_eq!(base.message_bytes, 336);
+        assert_eq!(base.packet_bytes, 465);
+        assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
+        assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
+    }
+
+    #[test]
+    fn controller_cleanup_compiler_census_pins_both_19_64_65_walls() {
+        for data in [
+            CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
+            CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
+        ] {
+            let (payer, instruction) = controller_funding_cleanup_census_fixture_v1(data);
+            let base = projected_bootstrap_compiled_geometry_v2(payer, &instruction)
+                .expect("cleanup base census");
+            authenticate_cleanup_compiled_census_v1(payer, &instruction, base)
+                .expect("cleanup boundary census");
+            assert_eq!(base.complete_keys, 19);
+            assert_eq!(base.required_signatures, 1);
+            assert_eq!(base.static_keys, 3);
+            assert_eq!(base.loaded_writable, 5);
+            assert_eq!(base.loaded_readonly, 11);
+            assert_eq!(base.message_bytes, 241);
+            assert_eq!(base.packet_bytes, 306);
+        }
+    }
+
+    #[test]
+    fn staged_abort_compiler_census_pins_the_32_64_65_wall() {
+        let (payer, instruction) = staged_abort_census_fixture_v1();
+        let base = projected_bootstrap_compiled_geometry_v2(payer, &instruction)
+            .expect("staged abort base census");
+        let admitted = projected_bootstrap_compiled_geometry_v2(
+            payer,
+            &append_distinct_census_accounts_v1(&instruction, 32),
+        )
+        .expect("64-key staged abort census");
+        let refused = projected_bootstrap_compiled_geometry_v2(
+            payer,
+            &append_distinct_census_accounts_v1(&instruction, 33),
+        )
+        .expect("65-key staged abort census");
+        assert_eq!(base.complete_keys, PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1);
+        assert_eq!(base.required_signatures, 2);
+        assert_eq!(base.static_keys, 4);
+        assert_eq!(base.loaded_writable, 10);
+        assert_eq!(base.loaded_readonly, 18);
+        assert_eq!(base.message_bytes, 303);
+        assert_eq!(base.packet_bytes, 432);
+        assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
+        assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
+    }
+
+    #[test]
+    fn projected_bootstrap_actual_compiler_census_pins_the_60_64_65_wall() {
         let (payer, base) = projected_bootstrap_census_fixture_v2();
         let base_geometry =
             projected_bootstrap_compiled_geometry_v2(payer, &base).expect("base census");
         let admitted = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&base, 2),
+            &append_distinct_census_accounts_v1(&base, 4),
         )
         .expect("64-key census");
         let refused = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&base, 3),
+            &append_distinct_census_accounts_v1(&base, 5),
         )
         .expect("65-key census");
 
-        assert_eq!(base_geometry.complete_keys, 62);
+        assert_eq!(base_geometry.complete_keys, 60);
         assert_eq!(base_geometry.required_signatures, 2);
         assert_eq!(base_geometry.static_keys, 4);
         assert_eq!(base_geometry.loaded_writable, 7);
-        assert_eq!(base_geometry.loaded_readonly, 51);
-        assert_eq!(base_geometry.message_bytes, 388);
-        assert_eq!(base_geometry.packet_bytes, 517);
+        assert_eq!(base_geometry.loaded_readonly, 49);
+        assert_eq!(base_geometry.message_bytes, 384);
+        assert_eq!(base_geometry.packet_bytes, 513);
         assert_eq!(admitted.complete_keys, 64);
         assert_eq!(admitted.message_bytes, 392);
         assert_eq!(admitted.packet_bytes, 521);
@@ -7670,18 +8802,18 @@ mod tests {
     }
 
     #[test]
-    fn generic_founding_final_compiler_census_pins_the_59_key_shape() {
+    fn generic_founding_final_compiler_census_pins_the_60_key_shape() {
         let (payer, prepared) = generic_market_founding_census_fixture_v2();
         let census = authenticate_generic_market_founding_lock_census_v2(payer, &prepared)
             .expect("canonical DCLTGMF2 census");
-        assert_eq!(census.complete_keys, 59);
+        assert_eq!(census.complete_keys, 60);
         assert_eq!(census.required_signatures, 1);
         assert_eq!(census.static_keys, 3);
-        assert_eq!(census.loaded_writable, 11);
+        assert_eq!(census.loaded_writable, 12);
         assert_eq!(census.loaded_readonly, 45);
         assert_eq!(
             hex(&census.key_privilege_digest),
-            "0f48017b92eda4e9e5d6d9e8eb8038710dade54a1914861bb5b796c5dce751bb"
+            "a2ee6343d2649aef9f7365d9457a28a4741250339b157fa4dcb14bda1041f5dd"
         );
         assert_eq!(
             census,
@@ -7695,12 +8827,12 @@ mod tests {
         let (payer, prepared) = generic_market_founding_census_fixture_v2();
         let admitted = compiled_complete_lock_census_v1(
             payer,
-            &append_distinct_census_accounts_v1(&prepared.instruction, 5),
+            &append_distinct_census_accounts_v1(&prepared.instruction, 4),
         )
         .expect("64-key census");
         let refused = compiled_complete_lock_census_v1(
             payer,
-            &append_distinct_census_accounts_v1(&prepared.instruction, 6),
+            &append_distinct_census_accounts_v1(&prepared.instruction, 5),
         )
         .expect("65-key census");
         assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
@@ -7713,7 +8845,7 @@ mod tests {
     fn generic_founding_65_key_drift_plans_zero_writes_or_transactions() {
         let (payer, mut prepared) = generic_market_founding_census_fixture_v2();
         let width = prepared.instruction.accounts.len();
-        for offset in 0_u8..6 {
+        for offset in 0_u8..5 {
             prepared.instruction.accounts[width - 1 - usize::from(offset)].pubkey =
                 Pubkey::new_from_array([0xa0 + offset; 32]);
         }
@@ -7762,7 +8894,7 @@ mod tests {
         assert!(authenticate_generic_market_founding_lock_census_v2(payer, &reordered).is_err());
 
         let mut privilege = prepared.clone();
-        privilege.instruction.accounts[11].is_writable = true;
+        privilege.instruction.accounts[12].is_writable = true;
         assert!(authenticate_generic_market_founding_lock_census_v2(payer, &privilege).is_err());
         privilege.lock_expectation.frame_digest =
             exact_instruction_frame_digest_v1(&privilege.instruction);
