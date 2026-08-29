@@ -1916,7 +1916,7 @@ fn audit_set_journal_with_runner(
     for role in upgrade_rows {
         let baseline = role.baseline.as_ref().expect("mixed closure checked");
         let elf_path = set_role_elf_path(&gate_path, &role.role)?;
-        let role_args = UpgradeArgsV1 {
+        let mut role_args = UpgradeArgsV1 {
             origin: args.origin.clone(),
             role: role.role.clone(),
             program_id: parse_pubkey(&role.program_id, "deployment-set Program")?,
@@ -1951,6 +1951,13 @@ fn audit_set_journal_with_runner(
         };
         let admission = admit_upgrade(&role_args)?;
         let loaded_receipt = load_receipt(&role_args.receipt_path)?;
+        if let Some(receipt) = &loaded_receipt
+            && receipt.buffer_adopted
+        {
+            role_args.buffer_pubkey = parse_pubkey(&receipt.buffer_pubkey, "receipt Buffer")?;
+            role_args.adopt_existing_buffer = true;
+            role_args.buffer_keypair = PathBuf::new();
+        }
         let receipt_phase = loaded_receipt.as_ref().map(|receipt| receipt.phase.clone());
         if role.receipt.sha256.is_some() && loaded_receipt.is_none() {
             return Err(Error::new("pinned deployment-set receipt disappeared"));
@@ -3242,8 +3249,16 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             authority_keypair: PathBuf::from("/offline-upgrade-authority-not-read"),
             fee_payer: payer,
             fee_payer_keypair: PathBuf::from("/offline-fee-payer-not-read"),
-            buffer_pubkey: Pubkey::default(),
-            buffer_keypair: PathBuf::from("/offline-buffer-not-read"),
+            buffer_pubkey: if receipt.buffer_adopted {
+                parse_pubkey(&receipt.buffer_pubkey, "receipt Buffer")?
+            } else {
+                Pubkey::default()
+            },
+            buffer_keypair: if receipt.buffer_adopted {
+                PathBuf::new()
+            } else {
+                PathBuf::from("/offline-buffer-not-read")
+            },
             deployment_set_journal_path: journal_path.to_path_buf(),
             elf_path: elf_path.clone(),
             checked_release_gate_path: gate_path.clone(),
@@ -3263,7 +3278,7 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             execute: false,
             preflight: false,
             stop_after_buffer_ready: false,
-            adopt_existing_buffer: false,
+            adopt_existing_buffer: receipt.buffer_adopted,
             adopt_finalized_cli_upgrade_signature: None,
         };
         let admission = admit_upgrade(&role_args)?;
