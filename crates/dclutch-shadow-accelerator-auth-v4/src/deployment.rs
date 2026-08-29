@@ -10,7 +10,7 @@ use dclutch_registry_contract::{
     require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
+use solana_program::{account_info::AccountInfo, hash::hash};
 use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::ShadowAcceleratorAuthErrorV4;
@@ -82,10 +82,8 @@ fn authenticate_deployment_v2(
         .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     let program_view =
         ProgramV3View::parse(&program_bytes).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
-    let expected_programdata =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
     if program_view.programdata() != release.programdata()
-        || programdata.key != &expected_programdata
+        || program_view.programdata() != programdata.key.to_bytes()
     {
         return Err(ShadowAcceleratorAuthErrorV4::Content);
     }

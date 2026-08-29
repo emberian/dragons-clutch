@@ -278,6 +278,51 @@ fn the_reentrant_case_now_succeeds_as_a_cache_read() {
     );
 }
 
+/// One canonical search can authenticate every role in the same cache; the
+/// opaque bump reproduces byte-identical coordinates and a substituted bump
+/// refuses before any cache byte is admitted.
+#[test]
+fn one_search_witness_reauthenticates_exact_cache_and_wrong_bump_refuses() {
+    let fixture = Fixture::new(8);
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+    let release_set = fixture.release_set_id.to_bytes();
+    let (first, bump) = authenticate_activated_role_and_bump_v1(
+        &registry,
+        &cache,
+        &release_set,
+        ExecutionRoleV1::Trading,
+        &fixture.program,
+        &fixture.programdata,
+    )
+    .expect("canonical search");
+    let reused = authenticate_activated_role_with_bump_v1(
+        &registry,
+        &cache,
+        &release_set,
+        bump,
+        ExecutionRoleV1::Trading,
+        &fixture.program,
+        &fixture.programdata,
+    )
+    .expect("create at authenticated bump");
+    assert_eq!(first.to_bytes(), reused.to_bytes());
+
+    let wrong = AuthenticatedActivationCacheBumpV1(bump.0.wrapping_sub(1));
+    assert_eq!(
+        authenticate_activated_role_with_bump_v1(
+            &registry,
+            &cache,
+            &release_set,
+            wrong,
+            ExecutionRoleV1::Claims,
+            &fixture.program,
+            &fixture.programdata,
+        ),
+        Err(ActivationAuthErrorV1::ActivationCache),
+    );
+}
+
 /// The Registry's own handler and the child-local read are the same function.
 #[test]
 fn the_registry_handler_and_the_child_read_agree_byte_for_byte() {

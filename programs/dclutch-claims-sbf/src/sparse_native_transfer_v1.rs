@@ -33,14 +33,15 @@ use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_and_bump_v1, authenticate_activated_role_with_bump_v1,
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
     pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::sysvar;
-
-use super::authenticate_activated_role;
 
 /// Exact fixed account frame for one sparse transfer.
 pub const SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1: usize =
@@ -379,34 +380,41 @@ fn authenticate_releases(
     request: SparseNativeTransferV1,
 ) -> Result<(), ProgramError> {
     let input = request.input();
-    let receipts = [
-        authenticate_activated_role(
-            accounts.registry,
-            accounts.cache,
-            execution_role(input.caller_role),
-            accounts.caller_program,
-            accounts.caller_programdata,
-            &input.release_set,
-        ),
-        authenticate_activated_role(
-            accounts.registry,
-            accounts.cache,
-            ExecutionRoleV1::Claims,
-            accounts.claims_program,
-            accounts.claims_programdata,
-            &input.release_set,
-        ),
-        authenticate_activated_role(
-            accounts.registry,
-            accounts.cache,
-            ExecutionRoleV1::Core,
-            accounts.core_program,
-            accounts.core_programdata,
-            &input.release_set,
-        ),
-    ];
-    for receipt in receipts {
-        let receipt = receipt.map_err(|_| SparseNativeTransferSbfErrorV1::Release)?;
+    // All three roles are authenticated from one immutable Registry cache.
+    // Search its canonical address once, then reuse the opaque bump witness for
+    // the byte-identical Claims and Core checks. The reuse entrypoint still
+    // reproduces and compares the PDA with `create_program_address`; only the
+    // repeated 256-way search is removed.
+    let (caller, cache_bump) = authenticate_activated_role_and_bump_v1(
+        accounts.registry,
+        accounts.cache,
+        &input.release_set,
+        execution_role(input.caller_role),
+        accounts.caller_program,
+        accounts.caller_programdata,
+    )
+    .map_err(|_| SparseNativeTransferSbfErrorV1::Release)?;
+    let claims = authenticate_activated_role_with_bump_v1(
+        accounts.registry,
+        accounts.cache,
+        &input.release_set,
+        cache_bump,
+        ExecutionRoleV1::Claims,
+        accounts.claims_program,
+        accounts.claims_programdata,
+    )
+    .map_err(|_| SparseNativeTransferSbfErrorV1::Release)?;
+    let core = authenticate_activated_role_with_bump_v1(
+        accounts.registry,
+        accounts.cache,
+        &input.release_set,
+        cache_bump,
+        ExecutionRoleV1::Core,
+        accounts.core_program,
+        accounts.core_programdata,
+    )
+    .map_err(|_| SparseNativeTransferSbfErrorV1::Release)?;
+    for receipt in [caller, claims, core] {
         if receipt.execution_release_set_id().as_bytes() != &input.release_set {
             return Err(SparseNativeTransferSbfErrorV1::Release.into());
         }
