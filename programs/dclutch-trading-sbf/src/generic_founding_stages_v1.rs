@@ -394,6 +394,7 @@ fn authenticate_open_join_v1(
     {
         return Err(TradingSbfError::Release.into());
     }
+    let market = account(open_window, OPEN_MARKET)?;
     if claims.claims_program() != claims_program.key.to_bytes()
         || claims.trading_program() != program_id.to_bytes()
         || claims.release_set() != found.release_set().to_bytes()
@@ -405,7 +406,13 @@ fn authenticate_open_join_v1(
         || claims.generation() != found.generation()
         || claims.quantity() != found.quantity()
         || claims.basis_scale() != found.basis_scale()
-        || account(open_window, OPEN_MARKET)?.key.to_bytes() != found.market().to_bytes()
+        || market.key.to_bytes() != found.market().to_bytes()
+        // The market this stage opens must already be the one stage 1 created
+        // and Core owns. A stage-2 submission that arrives before stage 1 finds
+        // a still-vacant, system-owned market here and refuses fast at this
+        // named check, rather than paying for a CPI only to have Core's Market
+        // authenticator refuse the same fact behind a remapped code.
+        || market.owner != core.key
         || claims.aggregate() != account(open_window, OPEN_AGGREGATE)?.key.to_bytes()
         || claims.position() != account(open_window, OPEN_POSITION)?.key.to_bytes()
         || claims.admission() != account(open_window, OPEN_ADMISSION)?.key.to_bytes()
