@@ -992,17 +992,14 @@ async fn real_trading_elf_executes_the_accepted_transition_through_reservation()
     let read_back = checkpoint_body(&mut context, &scenario).await;
     let evidence = evaluation_evidence(&scenario, &read_back);
     for (key, body) in evidence.installed.iter() {
-        context.set_account(
-            key,
-            &AccountSharedData::from(data_account(MANIFEST_PRODUCER, body.clone())),
-        );
+        context.set_account(key, &AccountSharedData::from(data_account(TRADING, body.clone())));
     }
     let packet = build_dealer_scenario_checkpoint_evaluate_v1(
         TRADING,
         payer,
         scenario.checkpoint,
         sysvar::clock::ID,
-        MANIFEST_PRODUCER,
+        TRADING,
         evidence.receipt_address,
         CANDIDATE_BANK,
         CANDIDATE_OBLIGATION,
@@ -1070,7 +1067,7 @@ async fn real_trading_elf_executes_the_accepted_transition_through_reservation()
         scenario.waist.registry,
         reservation.receipt_address,
         reservation.reservation_state,
-        MANIFEST_PRODUCER,
+        TRADING,
         EFFECTS,
         EFFECT_BODY,
         0,
@@ -1139,7 +1136,7 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
         kind: DealerScenarioCustodyRequestKindV1::Canonical,
         ordinal: 0,
         effect_count: 1,
-        producer_program: MANIFEST_PRODUCER.to_bytes(),
+        producer_program: TRADING.to_bytes(),
         checkpoint: scenario.checkpoint.to_bytes(),
         request_digest: scenario.request_digest,
         source_after: 90,
@@ -1151,7 +1148,7 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
     .to_vec();
     let manifest = DealerScenarioCustodyEffectManifestV1 {
         effect_count: 1,
-        producer_program: MANIFEST_PRODUCER.to_bytes(),
+        producer_program: TRADING.to_bytes(),
         checkpoint: scenario.checkpoint.to_bytes(),
         request_digest: scenario.request_digest,
         effect_accounts: core::array::from_fn(|index| {
@@ -1178,7 +1175,7 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
     let candidate_obligation = vec![0xc2; 32];
     let claims_delta = vec![0xc3; 48];
     let receipt = derive_dealer_scenario_evaluation_receipt_v1(
-        MANIFEST_PRODUCER,
+        TRADING,
         scenario.checkpoint,
         checkpoint_body,
         DealerScenarioEvaluationBodiesV1 {
@@ -1192,7 +1189,7 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
     .expect("producer derives its receipt from the checkpoint it read");
     let receipt_body = receipt.encode().expect("receipt encodes").to_vec();
     let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
-        MANIFEST_PRODUCER,
+        TRADING,
         scenario.checkpoint,
         scenario.request_digest,
     );
@@ -1369,24 +1366,22 @@ async fn a_substituted_candidate_body_cannot_seal_an_evaluation() {
     let read_back = checkpoint_body(&mut context, &scenario).await;
     let evidence = evaluation_evidence(&scenario, &read_back);
     for (key, body) in evidence.installed.iter() {
-        context.set_account(
-            key,
-            &AccountSharedData::from(data_account(MANIFEST_PRODUCER, body.clone())),
-        );
+        context.set_account(key, &AccountSharedData::from(data_account(TRADING, body.clone())));
     }
 
     // The receipt is the one the producer really derived. What changes is the
-    // candidate bank it promised: same account, same owner, a different body.
+    // candidate bank it promised: same account, same owner, same width, a
+    // different body -- so nothing shallower than the digest can answer it.
     context.set_account(
         &CANDIDATE_BANK,
-        &AccountSharedData::from(data_account(MANIFEST_PRODUCER, vec![0xc4; 64])),
+        &AccountSharedData::from(data_account(TRADING, vec![0xc4; 64])),
     );
     let packet = build_dealer_scenario_checkpoint_evaluate_v1(
         TRADING,
         payer,
         scenario.checkpoint,
         sysvar::clock::ID,
-        MANIFEST_PRODUCER,
+        TRADING,
         evidence.receipt_address,
         CANDIDATE_BANK,
         CANDIDATE_OBLIGATION,
@@ -1506,7 +1501,7 @@ fn transcript(
         registry_program: named(4),
         reservation_receipt: named(5),
         reservation_state: named(6),
-        effect_producer: MANIFEST_PRODUCER,
+        effect_producer: TRADING,
         effect_manifest: EFFECTS,
         effect_body: EFFECT_BODY,
     }];
@@ -1556,7 +1551,7 @@ fn transcript(
         membership_manifest: scenario.membership_manifest,
         pages: &scenario.pages,
         evaluation: DealerAcceptedEvaluationAccountsV4 {
-            producer_program: MANIFEST_PRODUCER,
+            producer_program: TRADING,
             evaluation_receipt: receipt_address,
             candidate_bank: CANDIDATE_BANK,
             candidate_obligation: CANDIDATE_OBLIGATION,
@@ -1576,7 +1571,7 @@ async fn the_accepted_transcript_is_ordered_and_wholly_lock_bounded() {
     let scenario = scenario();
     let payer = Pubkey::new_from_array([0x7a; 32]);
     let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
-        MANIFEST_PRODUCER,
+        TRADING,
         scenario.checkpoint,
         scenario.request_digest,
     );
@@ -1651,17 +1646,14 @@ async fn prepare_through_evaluation(
     let read_back = checkpoint_body(context, scenario).await;
     let evidence = evaluation_evidence(scenario, &read_back);
     for (key, body) in evidence.installed.iter() {
-        context.set_account(
-            key,
-            &AccountSharedData::from(data_account(MANIFEST_PRODUCER, body.clone())),
-        );
+        context.set_account(key, &AccountSharedData::from(data_account(TRADING, body.clone())));
     }
     let packet = build_dealer_scenario_checkpoint_evaluate_v1(
         TRADING,
         payer,
         scenario.checkpoint,
         sysvar::clock::ID,
-        MANIFEST_PRODUCER,
+        TRADING,
         evidence.receipt_address,
         CANDIDATE_BANK,
         CANDIDATE_OBLIGATION,
@@ -1918,7 +1910,7 @@ fn reserve_instruction(
         scenario.waist.registry,
         reservation.receipt_address,
         reservation.reservation_state,
-        MANIFEST_PRODUCER,
+        TRADING,
         EFFECTS,
         EFFECT_BODY,
         0,
@@ -2101,7 +2093,7 @@ async fn a_commit_refuses_before_any_value_is_locked() {
     // route that spends locked value, so the phase is the first thing it reads
     // and the whole of the rest of its frame never gets a say.
     let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
-        MANIFEST_PRODUCER,
+        TRADING,
         scenario.checkpoint,
         scenario.request_digest,
     );
