@@ -3414,14 +3414,17 @@ fn authenticate_fresh_admission_plan_v1(
             "fresh admission owner/payer profile or exact balance refused",
         ));
     }
-    if compiled
-        .message
-        .address_table_lookups()
-        .is_some_and(|lookups| !lookups.is_empty())
-    {
-        return Err(Error::new(
-            "fresh canonical admission unexpectedly depended on a lookup table",
-        ));
+    // A static admission must stay static; a routed one may load only through
+    // the exact frozen tables the caller named on the command line. Any other
+    // table in the compiled message is a substitution and refuses.
+    if let Some(lookups) = compiled.message.address_table_lookups() {
+        for lookup in lookups {
+            if !arguments.routing_tables.contains(&lookup.account_key) {
+                return Err(Error::new(
+                    "fresh canonical admission unexpectedly depended on a lookup table",
+                ));
+            }
+        }
     }
     let reconstructed = IntentV1 {
         plan_sha256: report.intent.plan_sha256.clone(),
