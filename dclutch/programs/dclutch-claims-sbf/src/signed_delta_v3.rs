@@ -566,18 +566,41 @@ fn authenticate_releases(
 ) -> Result<(), ProgramError> {
     let release_set = plan.release_set();
     // Core and Claims are authenticated for every role, at their own
-    // coordinates. The CALLER coordinates are only a third role when the caller
-    // actually is Trading: a Core caller passes its own program there and is
-    // already covered by the first entry, and a Claims caller has no external
-    // program at all -- so for `Claims` those two coordinates are pinned to this
-    // program instead, leaving nothing in the frame unauthenticated.
-    let caller_is_trading = plan.caller_role() == CallerRole::Trading;
-    if plan.caller_role() == CallerRole::Claims
-        && (accounts.caller_program.key != accounts.claims_program.key
-            || accounts.caller_programdata.key != accounts.claims_programdata.key)
-    {
-        return Err(SignedDeltaSbfErrorV3::Release.into());
-    }
+    // coordinates. The CALLER coordinates carry a third role only when the
+    // caller really is Trading; for the other two roles they must equal a
+    // coordinate this route already authenticates as exactly that role, and
+    // [`caller_coordinate`] says which.
+    //
+    // This is not bookkeeping. `authenticate_authority` derives this route's
+    // whole authority as a PDA under `accounts.caller_program` with
+    // `execution_role(caller_role)` in its seeds, so an unpinned caller
+    // coordinate is an unpinned authority. Role `Core` used to assert in a
+    // comment that it was "already covered by the first entry" and pin nothing:
+    // the first entry authenticates `core_program`, a DIFFERENT coordinate.
+    // Any executable program could sit at the caller coordinate and the
+    // authority the route demanded was a PDA under it -- which is exactly the
+    // signature no external submitter is supposed to be able to produce.
+    // `rational_representation_v2::authenticate_release_batch` already makes
+    // this pin for the same role; the three sibling routes never omitted it.
+    let caller_is_trading = match caller_coordinate(plan.caller_role()) {
+        CallerCoordinateV3::Caller => true,
+        CallerCoordinateV3::Core => {
+            if accounts.caller_program.key != accounts.core_program.key
+                || accounts.caller_programdata.key != accounts.core_programdata.key
+            {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+            false
+        }
+        CallerCoordinateV3::Claims => {
+            if accounts.caller_program.key != accounts.claims_program.key
+                || accounts.caller_programdata.key != accounts.claims_programdata.key
+            {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+            false
+        }
+    };
     let requested: [Option<RequestedRoleV3<'_, '_>>; 3] = [
         Some((
             ExecutionRoleV1::Core,
@@ -863,6 +886,36 @@ fn commit_candidates(
     Ok(())
 }
 
+/// Which coordinate of the frame must hold the caller program for one role.
+///
+/// The authority for this route is a PDA under whatever sits at the caller
+/// coordinate, seeded with `execution_role(role)`. So that coordinate must hold
+/// the program the Registry authenticated for exactly that role -- either
+/// because the caller coordinates are themselves authenticated as a third role
+/// ([`Self::Caller`], only Trading), or because they are pinned to the
+/// coordinate that already is ([`Self::Core`], [`Self::Claims`]).
+///
+/// Being an enum rather than a pair of `if`s is the point: there is no variant
+/// meaning "unpinned and unauthenticated", which is what role `Core` silently
+/// was, and a fourth role cannot be added without choosing one of these.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallerCoordinateV3 {
+    /// The caller coordinates carry their own third Registry-authenticated role.
+    Caller,
+    /// The caller coordinates must equal the Core program coordinates.
+    Core,
+    /// The caller coordinates must equal the Claims program coordinates.
+    Claims,
+}
+
+const fn caller_coordinate(role: CallerRole) -> CallerCoordinateV3 {
+    match role {
+        CallerRole::Core => CallerCoordinateV3::Core,
+        CallerRole::Claims => CallerCoordinateV3::Claims,
+        CallerRole::Trading => CallerCoordinateV3::Caller,
+    }
+}
+
 const fn execution_role(role: CallerRole) -> ExecutionRoleV1 {
     match role {
         CallerRole::Core => ExecutionRoleV1::Core,
@@ -911,6 +964,59 @@ mod tests {
         DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SIGNED_DELTA_PLAN_MAGIC_V3,
         SignedDeltaPlanInputV3, SignedDeltaPositionV3, SignedDeltaV3, plan_bytes,
     };
+
+    /// Every caller role's coordinate is authenticated as that same role.
+    ///
+    /// The expectation here is derived from the AUTHORITY side --
+    /// `execution_role`, the role that actually goes into the seeds the
+    /// authority PDA is derived with -- and never from the pin under test, so
+    /// this cannot agree with a wrong pin by construction. Under the code this
+    /// replaced, `Core` was pinned to nothing and added no Registry entry, so
+    /// its coordinate was authenticated as no role at all and this assertion
+    /// had no true branch to take.
+    ///
+    /// Read as one sentence: whatever program the authority is derived under
+    /// must be a program the Registry authenticated for exactly the role in
+    /// that authority's seeds.
+    #[test]
+    fn every_caller_role_coordinate_is_authenticated_as_that_role() {
+        for role in [CallerRole::Core, CallerRole::Claims, CallerRole::Trading] {
+            let authenticated_as = match caller_coordinate(role) {
+                // The caller coordinates are themselves the third Registry
+                // entry, which `authenticate_releases` requests as Trading.
+                CallerCoordinateV3::Caller => ExecutionRoleV1::Trading,
+                // Or they are pinned equal to a coordinate the route always
+                // authenticates, as the role that entry is requested under.
+                CallerCoordinateV3::Core => ExecutionRoleV1::Core,
+                CallerCoordinateV3::Claims => ExecutionRoleV1::Claims,
+            };
+            assert_eq!(
+                authenticated_as,
+                execution_role(role),
+                "the authority for {role:?} is derived under a program \
+                 authenticated as {authenticated_as:?}, not as its own role"
+            );
+        }
+    }
+
+    /// Only Trading brings an external program to the caller coordinates.
+    ///
+    /// This is the fact that makes the third Registry entry conditional. If a
+    /// future role were given [`CallerCoordinateV3::Caller`] without also being
+    /// requested as its own role, the assertion above would fail; if it were
+    /// given a pin, this one records that it brings no new program.
+    #[test]
+    fn only_a_trading_caller_carries_a_program_of_its_own() {
+        assert_eq!(
+            caller_coordinate(CallerRole::Trading),
+            CallerCoordinateV3::Caller
+        );
+        assert_eq!(caller_coordinate(CallerRole::Core), CallerCoordinateV3::Core);
+        assert_eq!(
+            caller_coordinate(CallerRole::Claims),
+            CallerCoordinateV3::Claims
+        );
+    }
 
     fn delta(direction: DeltaDirectionV3, magnitude: u64) -> SignedDeltaV3 {
         SignedDeltaV3::new(direction, magnitude).expect("delta")

@@ -12,6 +12,7 @@ import {
   type ActivityEntryV1,
   type ActivityV1,
 } from '@/lib/activity';
+import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { parseMarketAddressListV1, shortAddressV1 } from '@/lib/marketDiscovery';
 import { parsePortfolioOwnerV1 } from '@/lib/portfolio';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
@@ -76,7 +77,12 @@ export default function ActivityWorkspace() {
   const [ownerOverride, setOwnerOverride] = useState<string | null>(null);
   const [addressListOverride, setAddressListOverride] = useState<string | null>(null);
   const owner = ownerOverride ?? (linked.kind === 'ready' ? linked.owner : '');
-  const addressList = addressListOverride ?? (linked.kind === 'ready' ? linked.marketAddresses.join('\n') : '');
+  // A link's own market list wins, then the public cut's market if one is
+  // named. Without that last fallback the launch page's "Read activity" call
+  // to action lands a reader on a form asking for a Market address they have
+  // no way to know -- at exactly the moment we most want them to succeed.
+  const addressList = addressListOverride
+    ?? (linked.kind === 'ready' ? linked.marketAddresses.join('\n') : (PUBLIC_DEVNET_CUT_V1.market ?? ''));
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No signature history has been read.' });
   const activity = state.kind === 'ready' ? state.activity : null;
 
