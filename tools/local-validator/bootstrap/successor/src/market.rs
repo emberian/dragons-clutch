@@ -144,13 +144,13 @@ use crate::{
 use founding_submission_journal::{
     FoundingFinalizationV1, FoundingPreSendProjectionV1, FoundingSubmissionBindingV1,
     FoundingSubmissionJournalV1, FoundingSubmissionOperationV1, FoundingSubmissionPhaseV1,
-    FoundingSubmissionPlanV1, FoundingSubmissionRecoveryV1,
-    authenticate_bound_founding_submission_prefix_v1, authenticate_founding_packet_fresh_v1,
-    authenticate_founding_submission_v1, dispatch_founding_submission_v1,
-    finalize_founding_submission_v1, founding_submission_finalized_poststates_v1,
-    founding_submission_message_v1, founding_submission_packet_v1,
-    founding_submission_recovery_payload_v1, founding_submission_recovery_v1,
-    UnresolvedFeeMarkerV1, UnresolvedFeeResolutionV1, mark_unresolved_founding_submission_v1,
+    FoundingSubmissionPlanV1, FoundingSubmissionRecoveryV1, UnresolvedFeeMarkerV1,
+    UnresolvedFeeResolutionV1, authenticate_bound_founding_submission_prefix_v1,
+    authenticate_founding_packet_fresh_v1, authenticate_founding_submission_v1,
+    dispatch_founding_submission_v1, finalize_founding_submission_v1,
+    founding_submission_finalized_poststates_v1, founding_submission_message_v1,
+    founding_submission_packet_v1, founding_submission_recovery_payload_v1,
+    founding_submission_recovery_v1, mark_unresolved_founding_submission_v1,
     plan_founding_submission_v1, prepare_founding_submission_v1, submit_founding_submission_v1,
     visit_founding_pre_send_boundary_v1,
 };
@@ -905,9 +905,7 @@ pub(crate) fn resolve_stranded_founding_submissions_v1(
                 .map_err(|error| Error::new(format!("stranded durable signature: {error}")))?;
             let finalized = rpc
                 .finalized_signed_packet(label, signature, false)?
-                .ok_or_else(|| {
-                    Error::new("the chain does not serve the transaction at sealing")
-                })?;
+                .ok_or_else(|| Error::new("the chain does not serve the transaction at sealing"))?;
             // `finalize_observed_…` requires Submitted exactly; a stranded
             // Dispatching row whose packet nevertheless finalized advances
             // through Submitted locally first -- the same one-adjacent-phase

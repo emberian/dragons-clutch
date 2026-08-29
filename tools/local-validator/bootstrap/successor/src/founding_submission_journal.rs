@@ -779,8 +779,7 @@ pub(crate) fn authenticate_founding_submission_v1(
         if marker.unresolved_fee_bound_lamports != journal.exact_fee_lamports
             || match marker.resolution {
                 UnresolvedFeeResolutionV1::ChainStatusOnly => {
-                    marker.checked_at_slot == 0
-                        || marker.status_slot.is_none_or(|slot| slot == 0)
+                    marker.checked_at_slot == 0 || marker.status_slot.is_none_or(|slot| slot == 0)
                 }
                 UnresolvedFeeResolutionV1::ChainUnserved => {
                     marker.checked_at_slot == 0 || marker.status_slot.is_some()
@@ -1625,8 +1624,8 @@ mod tests {
         let dispatching =
             dispatch_founding_submission_v1(&binding, &prepared).expect("dispatching");
         let signature = dispatching.expected_signature.clone().expect("signature");
-        let submitted = submit_founding_submission_v1(&binding, &dispatching, &signature)
-            .expect("submitted");
+        let submitted =
+            submit_founding_submission_v1(&binding, &dispatching, &signature).expect("submitted");
         (binding, submitted)
     }
 
@@ -1755,7 +1754,10 @@ mod tests {
             },
         )
         .expect("finalized");
-        assert_eq!(finalized.unresolved_fee, None, "a resolved row carries no unknown");
+        assert_eq!(
+            finalized.unresolved_fee, None,
+            "a resolved row carries no unknown"
+        );
         authenticate_founding_submission_v1(&binding, &finalized).expect("loadable");
     }
 
