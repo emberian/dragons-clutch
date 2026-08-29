@@ -2706,9 +2706,11 @@ fn authenticate_collateral_return_data(
     observed: Option<&Value>,
     expected: Option<&str>,
 ) -> Result<()> {
-    if observed.is_none_or(|value| !value.is_null()) || expected.is_some() {
+    // The RPC omits `returnData` entirely when a transaction set none; an
+    // absent field and an explicit null are the same finalized fact.
+    if observed.is_some_and(|value| !value.is_null()) || expected.is_some() {
         return Err(Error::new(
-            "System/Token-2022 collateral transaction must have an explicit null returnData",
+            "System/Token-2022 collateral transaction must have no returnData",
         ));
     }
     Ok(())
