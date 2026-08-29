@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 
+import Anchor from '@/components/Anchor';
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import {
   PLAIN_POSITION_PAYOUT_BLOCK_V1,
@@ -148,12 +149,12 @@ export default function RedeemFlow({
       </div>
       <p className="direct-status">{flow.state.note}</p>
     </>}
-    {flow.kind === 'submitted' && <p className="direct-status" aria-live="polite">Submitted as <code>{flow.signature}</code> · {flow.confirmation}…</p>}
+    {flow.kind === 'submitted' && <p className="direct-status" aria-live="polite">Submitted as <code>{flow.signature}</code> · {flow.confirmation}… <Anchor href={`/explorer?view=transaction&q=${encodeURIComponent(flow.signature)}`}>Open your transaction in the explorer →</Anchor></p>}
     {flow.kind === 'confirmed' && <>
       <div className="portfolio-claim">
         <span>Replay created and confirmed</span>
         <strong>{flow.confirmation}</strong>
-        <p>Signature <code>{flow.signature}</code>. The Claims-role Custody replay now exists at <code>{flow.replayAddress}</code> with next revision {flow.nextRevision} — the exact cursor a payout replays against.</p>
+        <p>Signature <code>{flow.signature}</code>. The Claims-role Custody replay now exists at <code>{flow.replayAddress}</code> with next revision {flow.nextRevision} — the exact cursor a payout replays against. <Anchor href={`/explorer?view=transaction&q=${encodeURIComponent(flow.signature)}`}>Open your transaction in the explorer →</Anchor></p>
       </div>
       <p className="market-capability-refusal"><span>payout leg</span>{PLAIN_POSITION_PAYOUT_BLOCK_V1}</p>
     </>}

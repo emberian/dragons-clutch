@@ -5,7 +5,7 @@ import DirectTradeWorkspace from './DirectTradeWorkspace';
 import { HOT_FIXED_ACCOUNT_COUNT_V3 } from '@/lib/generated/directInlineV3';
 
 describe('Direct V3 trade workbench', () => {
-  it('presents a real chain-derived route and explicit transaction boundary', () => {
+  it('presents a real chain-derived route through explicit submission', () => {
     const html = renderToStaticMarkup(<DirectTradeWorkspace />);
     expect(html).toContain('Direct trade');
     expect(html).toContain('Operator tool');
@@ -18,9 +18,10 @@ describe('Direct V3 trade workbench', () => {
     expect(html).toContain('never duplicates them');
     expect(html).toContain('Build exact unsigned v0 transaction');
     expect(html).toContain('Sign as transaction payer');
+    expect(html).toContain('Submit fully signed transaction');
     expect(html).toContain('Download exact packet');
-    expect(html).toContain('Submission is deliberately outside this workbench');
-    expect(html).not.toContain('Submit signed transaction');
+    expect(html).toContain('you can submit the exact packet shown here');
+    expect(html).toContain('submit only after you review the exact packet');
     expect(html).toContain('No chain state has been read.');
     expect(html).not.toContain('sample market');
     expect(html).not.toContain('mock balance');

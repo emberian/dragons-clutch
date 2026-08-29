@@ -23,8 +23,10 @@ import {
   type WalletSignedTransactionV1,
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
+  submitSignedTransactionV1,
 } from '@/lib/walletHandoff';
 
+import Anchor from './Anchor';
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
@@ -194,6 +196,7 @@ export default function DirectTradeWorkspace() {
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
   const wallets = useWalletDirectoryV1();
   const [signed, setSigned] = useState<WalletSignedTransactionV1 | null>(null);
+  const [submittedSignature, setSubmittedSignature] = useState<string | null>(null);
 
   const inspection = routeState.kind === 'ready' ? routeState.inspection : null;
   const preview = useMemo(() => {
@@ -207,16 +210,16 @@ export default function DirectTradeWorkspace() {
 
   function updateParticipant(side: 'seller' | 'buyer', field: keyof ParticipantFields, value: string) {
     setForm((current) => ({ ...current, [side]: { ...current[side], [field]: value.trim() } }));
-    setPlan(null); setSigned(null);
+    setPlan(null); setSigned(null); setSubmittedSignature(null);
   }
 
   function updateField<K extends keyof Omit<FormFields, 'seller' | 'buyer'>>(field: K, value: FormFields[K]) {
     setForm((current) => ({ ...current, [field]: value }));
-    setPlan(null); setSigned(null);
+    setPlan(null); setSigned(null); setSubmittedSignature(null);
   }
 
   async function inspectRoute(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setRouteState({ kind: 'loading', message: 'Reacquiring the exact route at one finalized floor…' }); setPlan(null); setSigned(null);
+    event.preventDefault(); setRouteState({ kind: 'loading', message: 'Reacquiring the exact route at one finalized floor…' }); setPlan(null); setSigned(null); setSubmittedSignature(null);
     try {
       const manifest = parseRouteManifest(routeText, decodeCheckedInfrastructure(infrastructureText));
       const next = await inspectDirectHotRouteV3(new SolanaRpcClient(endpoint), manifest);
@@ -231,7 +234,7 @@ export default function DirectTradeWorkspace() {
   }
 
   function buildTransaction(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setPlan(null); setSigned(null);
+    event.preventDefault(); setPlan(null); setSigned(null); setSubmittedSignature(null);
     if (inspection === null) return;
     try {
       const seller = signedIntent(form.seller, 0, form, inspection);
@@ -268,7 +271,17 @@ export default function DirectTradeWorkspace() {
     if (plan === null || inspection === null) return;
     try {
       const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
-      setSigned(next); setWalletStatus(next.complete ? 'Transaction payer signature complete. Nothing has been submitted.' : 'Wallet added one authorized signature; more signatures remain.');
+      setSigned(next); setSubmittedSignature(null); setWalletStatus(next.complete ? 'Your transaction is fully signed and ready to submit.' : 'Your wallet added one authorized signature; more signatures are still needed.');
+    } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
+  }
+
+  async function submitTransaction() {
+    if (signed === null || !signed.complete) return;
+    try {
+      setWalletStatus('Submitting your exact signed transaction to this RPC endpoint…');
+      const signature = await submitSignedTransactionV1(new SolanaRpcClient(endpoint), signed.transaction);
+      setSubmittedSignature(signature);
+      setWalletStatus('Your transaction was accepted for processing. Check its finalized result in the explorer.');
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
   }
 
@@ -307,12 +320,12 @@ export default function DirectTradeWorkspace() {
     </form>
 
     <section className="trade-v3-card signing-card">
-      <header><span>03</span><div><h2>Wallet handoff and exact packet export</h2><p>Connecting reads only identity. Maker and transaction signing are separate explicit wallet requests. Submission is deliberately outside this workbench.</p></div></header>
+      <header><span>03</span><div><h2>Sign, submit, and inspect</h2><p>Connecting reads only your identity. Maker and transaction signing are separate explicit wallet requests. After every required signature is present, you can submit the exact packet shown here.</p></div></header>
       <WalletDirectory directory={wallets} purpose="payer / maker identity" onConnected={adoptIdentity} />
-      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT · evidence ${plan.nativeEvidenceInstructionIndex} → Trading ${plan.tradingInstructionIndex}` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it for an external submitter.` : 'No transaction signature requested.'}</p></article></div>
+      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT · evidence ${plan.nativeEvidenceInstructionIndex} → Trading ${plan.tradingInstructionIndex}` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={signed === null || !signed.complete} onClick={() => void submitTransaction()}>Submit fully signed transaction</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes.${signed.complete ? ' You can submit it from this page.' : ''}` : 'No transaction signature requested.'}</p>{submittedSignature !== null && <p><Anchor href={`/explorer?view=transaction&q=${encodeURIComponent(submittedSignature)}`}>Open your submitted transaction in the explorer →</Anchor></p>}</article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transaction material</summary><dl><div><dt>Required signer</dt><dd>{plan.requiredSigners.join(', ')}</dd></div><div><dt>Wire bytes</dt><dd>{signed ? base64(signed.wireBytes) : base64(plan.wireBytes)}</dd></div><div><dt>Native evidence bytes</dt><dd>{hex(plan.nativeEvidenceBytes)}</dd></div><div><dt>Trading message references</dt><dd>instruction {plan.tradingInstructionIndex} · offsets {plan.nativeMessageOffsets.join(', ')} · 172 bytes each</dd></div><div><dt>Request bytes</dt><dd>{hex(plan.requestBytes)}</dd></div></dl></details>}
     </section>
 
-    <footer className="product-footer"><span>Chain state and checked release evidence are authoritative.</span><span>No automatic wallet request · no submission path</span></footer>
+    <footer className="product-footer"><span>Chain state and checked release evidence are authoritative.</span><span>No automatic wallet request · submit only after you review the exact packet</span></footer>
   </main>;
 }
