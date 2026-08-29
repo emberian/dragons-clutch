@@ -488,6 +488,15 @@ pub enum ResolutionCoreOperatorErrorV3 {
     Frame,
     /// Fixed-width request construction refused.
     Encoding,
+    /// The material bought an ordered recovery walk no live route can walk.
+    ///
+    /// Liveness census R2 / queue Q2. Mirrors the on-chain weld
+    /// (`CoreSbfError::RecoveryWalkUnavailable`, `0x3011`): `CreateFund` will
+    /// not mint a `SourceResolutionStateV2` whose only terminal transition,
+    /// `exhaust_after_primary_deadline`, refuses the very material it is being
+    /// created over. Building the instruction anyway would only move the
+    /// refusal from here to the validator.
+    RecoveryWalkUnavailable,
 }
 
 /// Construct the canonical Core `CreateFund` effect from finalized chain state.
@@ -561,7 +570,12 @@ pub fn build_resolution_create_fund_v3(
     // Keep these decoded authorities live in the builder rather than accepting
     // caller-selected entry coordinates.
     match (material.recovery_policy(), recovery_policy) {
-        (Some(_), Some(policy)) if policy.attempt_count() == 1 => {}
+        // Q2 weld, mirroring `CoreSbfError::RecoveryWalkUnavailable` (0x3011).
+        // A shape that authenticates perfectly and can never terminalize is
+        // still a shape this builder must not construct.
+        (Some(_), Some(policy)) if policy.attempt_count() == 1 => {
+            return Err(ResolutionCoreOperatorErrorV3::RecoveryWalkUnavailable);
+        }
         (None, None) => {}
         _ => return Err(ResolutionCoreOperatorErrorV3::Record),
     }

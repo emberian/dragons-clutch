@@ -12,6 +12,11 @@ use dclutch_market_core_codec::{
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
 };
+use dclutch_resolution_codec::ResolutionCoreActionV1;
+use dclutch_source_contract::{
+    ContentId, Error as SourceError, SourceMaterialV3, SourceResolutionStateV2, WindowKind,
+    WindowSpecV1,
+};
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
@@ -23,6 +28,7 @@ use solana_program::{
 
 use crate::{
     CAPABILITY_PREFIX_BYTES_V1, CAPABILITY_ROLE_PREFIX_BYTES_V2, CoreSbfError, process_instruction,
+    resolution::recovery_walk_has_a_live_route,
 };
 
 const PACKET_DATA_BYTES: usize = 1_232;
@@ -238,4 +244,132 @@ fn maximum_profile_general_activation_fits_one_lookup_v0_packet() {
     assert_eq!(uncompressed_bytes, 2_524);
     assert_eq!(compressed_bytes, 1_070);
     assert!(compressed_bytes <= PACKET_DATA_BYTES);
+}
+
+/// Liveness census R2 / queue Q2 — the weld and the fact that justifies it.
+///
+/// The weld (`resolution::recovery_walk_has_a_live_route`) is only defensible
+/// while the recovery walk is genuinely unwalkable, so this test re-executes
+/// that premise here, beside the weld, rather than citing it. If somebody makes
+/// the ordered ladder live, the first two assertions change shape and this test
+/// goes red pointing at the conjunct to delete — which is exactly the signal a
+/// weld should carry.
+#[test]
+fn create_fund_refuses_a_material_whose_recovery_walk_no_route_can_walk() {
+    fn content(tag: u8) -> ContentId {
+        let mut bytes = [0_u8; 32];
+        bytes[0] = tag;
+        ContentId::new(bytes).expect("nonzero Source content ID")
+    }
+    fn market(tag: u8) -> [u8; 32] {
+        let mut bytes = [0_u8; 32];
+        bytes[0] = tag;
+        bytes
+    }
+    fn primary_state() -> SourceResolutionStateV2 {
+        SourceResolutionStateV2::fresh(market(1), 9, content(2), market(3), 7, 0, 0)
+            .expect("fresh Primary resolution state")
+            .state()
+    }
+
+    // A terminal window whose deadline is `end + max_age` = 1_000_600.
+    let window = WindowSpecV1::new(
+        content(4),
+        WindowKind::Terminal,
+        1_000_000 - 600,
+        1_000_000,
+        600,
+        1,
+        content(9),
+    )
+    .expect("terminal window");
+    let bought_recovery = SourceMaterialV3::explicitly_unbounded(
+        content(3),
+        content(4),
+        content(5),
+        content(6),
+        Some(content(8)),
+        content(7),
+    );
+    let bought_none = SourceMaterialV3::explicitly_unbounded(
+        content(3),
+        content(4),
+        content(5),
+        content(6),
+        None,
+        content(7),
+    );
+
+    // The premise, both halves. A no-recovery market walks to Exhausted one
+    // second past the deadline; a recovery market is refused there forever, and
+    // the ladder that was meant to serve it has no live route to serve it with
+    // (`funded::process_funded_transition`'s only call site is under
+    // `#[cfg(any())]`). So the second market has no terminal at all.
+    let mut walkable = primary_state();
+    assert_eq!(
+        walkable.exhaust_after_primary_deadline(
+            content(2),
+            bought_none,
+            content(5),
+            window,
+            9,
+            1_000_601,
+        ),
+        Ok(())
+    );
+    let mut stranded = primary_state();
+    assert_eq!(
+        stranded.exhaust_after_primary_deadline(
+            content(2),
+            bought_recovery,
+            content(5),
+            window,
+            9,
+            1_000_601,
+        ),
+        Err(SourceError::RecoveryNotExhausted),
+        "the premise of the Q2 weld: a recovery market cannot be walked to failure"
+    );
+    assert_eq!(
+        stranded.exhaust_after_primary_deadline(
+            content(2),
+            bought_recovery,
+            content(5),
+            window,
+            9,
+            i64::MAX,
+        ),
+        Err(SourceError::RecoveryNotExhausted),
+        "and no later second changes that — the strand is permanent, not a wait"
+    );
+
+    // Therefore CreateFund does not mint that state.
+    assert!(!recovery_walk_has_a_live_route(
+        ResolutionCoreActionV1::CreateFund
+    ));
+    assert_eq!(CoreSbfError::RecoveryWalkUnavailable as u32, 0x3011);
+}
+
+/// A weld may not strand what it finds: it refuses creation, never an exit.
+#[test]
+fn the_recovery_weld_takes_no_route_from_a_fund_that_already_exists() {
+    for action in [
+        ResolutionCoreActionV1::VerifyFundReady,
+        ResolutionCoreActionV1::CloseFund,
+        ResolutionCoreActionV1::AdmitTerminal,
+    ] {
+        assert!(
+            recovery_walk_has_a_live_route(action),
+            "welding {action:?} would remove a route from an existing state"
+        );
+    }
+    assert_ne!(
+        CoreSbfError::RecoveryWalkUnavailable as u32,
+        CoreSbfError::ReleaseSuperseded as u32
+    );
+    assert!(
+        (CoreSbfError::RecoveryWalkUnavailable as u32) < 0x4000
+            && (CoreSbfError::RecoveryWalkUnavailable as u32) >= 0x3000,
+        "the weld's refusal must stay inside Core's registered band"
+    );
 }

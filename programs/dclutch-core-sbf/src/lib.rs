@@ -132,6 +132,25 @@ pub enum CoreSbfError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x3010,
+    /// A Source material bought a recovery walk that no live route can walk.
+    ///
+    /// Liveness census R2/Q2 (`docs/evidence/LIVENESS_CENSUS_2026_08_29.md`).
+    /// `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses any
+    /// material carrying a recovery policy
+    /// (`source_resolution_v2.rs`, `Error::RecoveryNotExhausted`), and the
+    /// ordered ladder that was supposed to consume those paid-for legs has no
+    /// live call site — `funded::process_funded_transition` is reachable only
+    /// from a `#[cfg(any())]` function. So a resolution fund created over such
+    /// a material admits neither the success capture nor the failure walk at
+    /// its deadline: it has no terminal at all, and every holder's principal
+    /// stays in it forever.
+    ///
+    /// `CreateFund` is therefore refused for a recovery-policy material. This
+    /// is a weld, not a design: it refuses to *create* the un-terminalizable
+    /// resolution state. `VerifyFundReady` and `CloseFund` are deliberately
+    /// untouched, so any state that already exists keeps every route it has.
+    /// The weld lifts when the ladder gets a live route.
+    RecoveryWalkUnavailable = 0x3011,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -142,7 +161,7 @@ const _: () = assert!(
     "CoreSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (CoreSbfError::ReleaseSuperseded as u32)
+    (CoreSbfError::RecoveryWalkUnavailable as u32)
         < dclutch_refusal_registry::CORE_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "CoreSbfError must not run past its registered refusal band"
 );
