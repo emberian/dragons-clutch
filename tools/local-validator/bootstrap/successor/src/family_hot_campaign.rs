@@ -86,10 +86,9 @@ use dclutch_general_adapter_contract::{
         general_local_state_len_v3,
     },
     release_v3::GENERAL_ACTIONS_V3,
-    runtime_selection::{
-        RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2,
-    },
+    runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2},
     runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
+    state_artifacts_v3::{GeneralReadonlyEvidenceKindV3, general_readonly_evidence_v3},
 };
 use dclutch_general_codec::{
     Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
@@ -144,6 +143,11 @@ const RUNTIME_CONFIG_COORDINATE: u16 = 1;
 const RUNTIME_PRODUCT_COORDINATE: u16 = 2;
 /// Runtime coordinate carrying the primary General state.
 const RUNTIME_PRIMARY_STATE_COORDINATE: u16 = 5;
+
+/// The candidate the selection cursor already holds.
+const FIRST_CANDIDATE_V1: [u8; 32] = [0xb4; 32];
+/// The strictly better candidate `Consider` submits against it.
+const BEST_CANDIDATE_V1: [u8; 32] = [0xb5; 32];
 
 /// Which family a campaign drives.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -627,13 +631,7 @@ fn execute_general_action_v1(
         page_keys.push(key);
     }
 
-    let mut runtime_data: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
-    runtime_data.insert(RUNTIME_CONFIG_COORDINATE, general_config_v1(width)?);
-    runtime_data.insert(RUNTIME_PRODUCT_COORDINATE, general_product_record_v1());
-    runtime_data.insert(
-        RUNTIME_PRIMARY_STATE_COORDINATE,
-        general_open_selection_v1(width)?,
-    );
+    let runtime_data = general_runtime_data_v1(action, width)?;
 
     let fixed_count = usize::from(
         general_account_profile_fixed_count_v3(action)
@@ -877,9 +875,13 @@ fn compile_general_request_v1(action: Action) -> Result<Vec<u8>> {
         expected_revision: 1,
         candidate_id: match action {
             Action::Freeze => None,
-            _ => Some([0xb4; 32]),
+            // Consider names the candidate it is submitting, not the one the
+            // cursor already holds.
+            Action::Consider => Some(BEST_CANDIDATE_V1),
+            _ => Some(FIRST_CANDIDATE_V1),
         },
-        page_index: 0,
+        // The page index is the submitted candidate's own coordinate.
+        page_index: u32::from(action == Action::Consider) * 2,
         execution_index: 0,
         manifest_order_index: 0,
         state_bump: 1,
@@ -925,8 +927,11 @@ fn general_config_v1(width: u32) -> Result<Vec<u8>> {
     .to_vec())
 }
 
-/// One open best-valid-submitted selection state.
-fn general_open_selection_v1(width: u32) -> Result<Vec<u8>> {
+/// The campaign's selection policy.
+///
+/// The last active criterion must be `MinimizeCandidateId`: the policy is a
+/// total order or it is not a decision procedure, and the codec enforces that.
+fn general_policy_v1() -> Result<SelectionPolicyV1> {
     let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
     *criteria
         .get_mut(1)
@@ -936,11 +941,23 @@ fn general_open_selection_v1(width: u32) -> Result<Vec<u8>> {
         .get_mut(2)
         .ok_or_else(|| Error::new("selection criteria width"))? =
         SelectionCriterion::MinimizeCandidateId;
-    let policy = SelectionPolicyV1 {
+    Ok(SelectionPolicyV1 {
         policy_id: [0xb3; 32],
         criterion_count: 3,
         criteria,
-    };
+    })
+}
+
+/// One runtime-width verified candidate.
+fn general_verified_candidate_v1(
+    width: u32,
+    candidate_id: [u8; 32],
+    candidate_coordinate: u32,
+    revision: u64,
+    filled_lots: u64,
+    quote_debit: u64,
+    quote_credit: u64,
+) -> Result<Vec<u8>> {
     let count = usize::try_from(width).map_err(|_| Error::new("outcome count"))?;
     let mut verified = vec![
         0_u8;
@@ -951,14 +968,14 @@ fn general_open_selection_v1(width: u32) -> Result<Vec<u8>> {
         VerifiedCandidateHeaderV2 {
             outcome_count: width,
             page_count: 1,
-            candidate_coordinate: 1,
-            revision: 1,
-            candidate_id: [0xb4; 32],
+            candidate_coordinate,
+            revision,
+            candidate_id,
             product_id: general_product_id_v1(),
             batch_id: [0xb2; 32],
-            filled_lots: 7,
-            quote_debit: 7,
-            quote_credit: 0,
+            filled_lots,
+            quote_debit,
+            quote_credit,
             price_scale: u64::from(width),
         },
         &vec![7; count],
@@ -966,28 +983,125 @@ fn general_open_selection_v1(width: u32) -> Result<Vec<u8>> {
         &mut verified,
     )
     .map_err(|error| Error::new(format!("verified candidate: {error:?}")))?;
-    let vacant = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
-    let mut scratch = vacant;
-    let mut open = vacant;
-    consider_verified_candidate_v2(policy, &vacant, &verified, 0, &mut scratch, &mut open)
-        .map_err(|error| Error::new(format!("open selection: {error:?}")))?;
-    let state_len = general_local_state_len_v3(GeneralLocalStateKindV3::Selection, width)
-        .map_err(|error| Error::new(format!("selection state width: {error:?}")))?;
-    let mut state_scratch = vec![0_u8; state_len];
+    Ok(verified)
+}
+
+/// Fold one verified candidate into a prior selection cursor.
+fn general_selection_body_v1(
+    prior: &[u8; RUNTIME_SELECTION_CURSOR_BYTES_V2],
+    verified: &[u8],
+    submitted_count: u64,
+) -> Result<[u8; RUNTIME_SELECTION_CURSOR_BYTES_V2]> {
+    let policy = general_policy_v1()?;
+    let mut scratch = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    let mut next = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    consider_verified_candidate_v2(
+        policy,
+        prior,
+        verified,
+        submitted_count,
+        &mut scratch,
+        &mut next,
+    )
+    .map_err(|error| Error::new(format!("consider candidate: {error:?}")))?;
+    Ok(next)
+}
+
+/// Wrap one cursor body in its General local-state envelope.
+fn general_local_state_v1(
+    kind: GeneralLocalStateKindV3,
+    width: u32,
+    body: &[u8],
+) -> Result<Vec<u8>> {
+    let state_len = general_local_state_len_v3(kind, width)
+        .map_err(|error| Error::new(format!("local state width: {error:?}")))?;
+    let mut scratch = vec![0_u8; state_len];
     let mut state = vec![0_u8; state_len];
     encode_general_local_state_v3_atomic(
         GeneralLocalStateHeaderV3 {
-            kind: GeneralLocalStateKindV3::Selection,
+            kind,
             bump: 1,
             rent_principal: 1,
             beneficiary: [0xc1; 32],
         },
-        &open,
-        &mut state_scratch,
+        body,
+        &mut scratch,
         &mut state,
     )
-    .map_err(|error| Error::new(format!("selection envelope: {error:?}")))?;
+    .map_err(|error| Error::new(format!("local state envelope: {error:?}")))?;
     Ok(state)
+}
+
+/// The coordinate one action's readonly evidence of a given kind occupies.
+fn general_evidence_coordinate_v1(
+    action: Action,
+    kind: GeneralReadonlyEvidenceKindV3,
+) -> Result<u16> {
+    let mut index = 0_u16;
+    while let Ok(evidence) = general_readonly_evidence_v3(action, index) {
+        if evidence.kind == kind {
+            return Ok(evidence.coordinate);
+        }
+        index = index
+            .checked_add(1)
+            .ok_or_else(|| Error::new("evidence index overflow"))?;
+    }
+    Err(Error::new(format!(
+        "{action:?} declares no readonly evidence of kind {kind:?}"
+    )))
+}
+
+/// The runtime accounts one action reads, by logical coordinate.
+///
+/// Only the selection tier is modelled. Freeze needs the open cursor alone;
+/// Consider additionally needs its policy and the candidate being submitted,
+/// and those two are what turn its typed refusal into an acceptance. The
+/// settlement five each need a settlement cursor, a runtime verifier and a
+/// manifest that this campaign does not build yet — they still execute, and
+/// their ACK says `refused` for exactly that reason rather than for a
+/// transport one.
+fn general_runtime_data_v1(action: Action, width: u32) -> Result<BTreeMap<u16, Vec<u8>>> {
+    let mut runtime = BTreeMap::new();
+    runtime.insert(RUNTIME_CONFIG_COORDINATE, general_config_v1(width)?);
+    runtime.insert(RUNTIME_PRODUCT_COORDINATE, general_product_record_v1());
+    let vacant = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    let first = general_verified_candidate_v1(width, FIRST_CANDIDATE_V1, 1, 1, 7, 7, 0)?;
+    let opened = general_selection_body_v1(&vacant, &first, 0)?;
+    match action {
+        Action::Consider => {
+            // The cursor already holds the first candidate; Consider submits a
+            // strictly better one and must replace it.
+            let better = general_verified_candidate_v1(width, BEST_CANDIDATE_V1, 2, 2, 9, 8, 0)?;
+            runtime.insert(
+                RUNTIME_PRIMARY_STATE_COORDINATE,
+                general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &opened)?,
+            );
+            runtime.insert(
+                general_evidence_coordinate_v1(
+                    action,
+                    GeneralReadonlyEvidenceKindV3::SelectionPolicy,
+                )?,
+                general_policy_v1()?
+                    .to_bytes()
+                    .map_err(|error| Error::new(format!("policy bytes: {error:?}")))?
+                    .to_vec(),
+            );
+            runtime.insert(
+                general_evidence_coordinate_v1(
+                    action,
+                    GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
+                )?,
+                better,
+            );
+        }
+        _ => {
+            runtime.insert(
+                RUNTIME_PRIMARY_STATE_COORDINATE,
+                general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &opened)?,
+            );
+        }
+    }
+    Ok(runtime)
 }
 
 /// The canonical register bank one action reads.
