@@ -24,6 +24,7 @@ import CellStrip from '@/components/charts/CellStrip';
 import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
 import JoinPanel from '@/components/JoinPanel';
 import MarketTradePanel from '@/components/MarketTradePanel';
+import RefusedMarketStory from '@/components/RefusedMarketStory';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
 
@@ -158,6 +159,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
+  const refused = card !== null && card.status === 'refused' ? card : null;
 
   const read = useCallback(async () => {
     setState({ kind: 'loading', message: 'Reading this Market, the Realm record and capability manifest it commits to, and the Claims aggregate holding its liabilities, behind one finalized floor…' });
@@ -234,8 +236,9 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
 
     <section className="trade-v3-card">
       <header><span>01</span><div><h2>Overview</h2><p>What this account is, and the immutable identities it committed to when it was founded.</p></div><SectionProvenance provenance={marketProvenance} /></header>
+      {refused !== null && <RefusedMarketStory refusal={refused.refusal} observedSlot={refused.observedSlot} address={address} />}
       {decoded === null
-        ? <p className="market-empty">No decoded Market root. Nothing about phase, generation, or identity is asserted until one finalized read succeeds.</p>
+        ? refused === null && <p className="market-empty">No decoded Market root. Nothing about phase, generation, or identity is asserted until one finalized read succeeds.</p>
         : <>
           <dl className="detail-facts">
             <CopyableAddress label="Market address" address={decoded.address} />
@@ -268,10 +271,9 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             ))}
           </ul>
         </>}
-      {card !== null && card.status === 'refused' && <p className="market-refusal">{card.refusal}</p>}
     </section>
 
-    <section className="trade-v3-card">
+    {refused === null && <section className="trade-v3-card">
       <header><span>02</span><div><h2>Economics</h2><p>Raw u64 atoms, read where the chain keeps them. A Core Market root carries no supply vector and no Hoard figure, so this section is not decoded from the Market at all: the per-claim supplies come from the Claims LiabilityBasisV2 aggregate this Market derives, and the Hoard is stated as underivable rather than guessed.</p></div><SectionProvenance provenance={liabilityProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No decoded economic state. A zero is a fact a read has to justify, so none is shown here.</p>
@@ -336,21 +338,21 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               </dl>
               : <p className="market-hoard-note">No terminal receipt is written, so no claim is winning and no claim can be redeemed. This is the account&apos;s own state, not a missing read.</p>}
           </>}
-    </section>
+    </section>}
 
-    <section className="trade-v3-card">
+    {refused === null && <section className="trade-v3-card">
       <header><span>03</span><div><h2>Realm</h2><p>The Market names its Realm by content identity. The Realm account read here is the content-addressed program address of that identity, so the collateral binding is derived, never supplied.</p></div><SectionProvenance provenance={realmProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No Realm was reacquired, because no Market root has been decoded.</p>
         : <Realm collateral={decoded.collateral} />}
-    </section>
+    </section>}
 
-    <section className="trade-v3-card">
+    {refused === null && <section className="trade-v3-card">
       <header><span>04</span><div><h2>Capabilities</h2><p>A capability exists only if this Market&apos;s own authenticated manifest lists it. Each entry opens to its exact identities, activation policy, dependency list, and immutable funding quote — quoted in seven segregated compartments with separate native-lamport and Realm-collateral totals, never merged into one number.</p></div><SectionProvenance provenance={capabilityProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No capability manifest identity exists to authenticate, because no Market root has been decoded.</p>
         : <Capabilities capabilities={decoded.capabilities} />}
-    </section>
+    </section>}
 
     {decoded !== null && <JoinPanel
       endpoint={deployment.endpoint}
