@@ -1,5 +1,20 @@
 # Private-validator lifecycle gate
 
+Before spending a host build or validator launch, run the source-only execution
+model:
+
+```sh
+python3 tools/release/private-validator-lifecycle/preflight.py \
+  --repo /absolute/clean/dclutch --through full-probe
+```
+
+It joins the runner to every required Rust dispatch and accepted help function,
+schema handoff, signer-role projection, fixture/supply invariant, current
+generic-founding lock census, Direct message geometry, Pyth/Resolution order,
+zero-payout burn, and terminal handoff. It performs no build, RPC, key read, or
+validator action. The detailed derivation is in
+`docs/evidence/PRIVATE_LIFECYCLE_OFFLINE_EXECUTION_MODEL_2026_08_28.md`.
+
 `run.py` is the release-level localhost supervisor for one exact checked
 dClutch source commit. It is not devnet evidence and it never accepts a
 caller-supplied RPC URL.

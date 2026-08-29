@@ -2612,7 +2612,7 @@ fn absolute(value: String, label: &str) -> Result<PathBuf> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "\n  dclutch-local-successor-bootstrap local-private-validator-pyth-vaa-provision-v1 \\\n+     --rpc-url http://127.0.0.1:PORT/ --payer PUBKEY --encoded-vaa PUBKEY \\\n+     --update-account PUBKEY --journal-dir ABSOLUTE_EXISTING_DIR \\\n+     --facts-output ABSOLUTE_JSON --payer-keypair ABSOLUTE_DISPOSABLE_JSON \\\n+     --encoded-vaa-keypair ABSOLUTE_DISPOSABLE_JSON [--execute]\n\nThis command is \
+    "\n  dclutch-local-successor-bootstrap local-private-validator-pyth-vaa-provision-v1 \\\n     --rpc-url http://127.0.0.1:PORT/ --payer PUBKEY --encoded-vaa PUBKEY \\\n     --update-account PUBKEY --journal-dir ABSOLUTE_EXISTING_DIR \\\n     --facts-output ABSOLUTE_JSON --payer-keypair ABSOLUTE_DISPOSABLE_JSON \\\n     --encoded-vaa-keypair ABSOLUTE_DISPOSABLE_JSON [--execute]\n\nThis command is \
      owned-loopback-only. It authenticates the slot-zero captured Router and Receiver ELFs, \
      executes their real prerequisite initialization and signed-VAA verification through \
      crash-safe exact-packet journals, and emits the existing \

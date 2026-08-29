@@ -250,7 +250,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "\n  dclutch-local-successor-bootstrap local-private-validator-wallet-terminal-payout-v1 \\\n+     --rpc-url http://127.0.0.1:PORT --input ABSOLUTE_JSON \\\n+     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_JSON \\\n+     --owner-keypair ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \\\n+     --evidence ABSOLUTE_JSON [--execute]\n\nThis command only admits an owned loopback validator. Preflight performs finalized reads and opens no key. Execute advances one canonical ALT or payout action; every signed packet and expected signature are fsynced before its sole send, and ambiguous recovery only polls that signature."
+    "\n  dclutch-local-successor-bootstrap local-private-validator-wallet-terminal-payout-v1 \\\n     --rpc-url http://127.0.0.1:PORT --input ABSOLUTE_JSON \\\n     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_JSON \\\n     --owner-keypair ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \\\n     --evidence ABSOLUTE_JSON [--execute]\n\nThis command only admits an owned loopback validator. Preflight performs finalized reads and opens no key. Execute advances one canonical ALT or payout action; every signed packet and expected signature are fsynced before its sole send, and ambiguous recovery only polls that signature."
 }
 
 fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
