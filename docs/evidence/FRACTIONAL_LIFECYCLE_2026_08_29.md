@@ -146,6 +146,48 @@ above the supported width, which is the earliest point that trap can be closed.
 Refusing a *founding* above that width is a separate decision and belongs to
 whoever owns founding. It has not been made.
 
+## The private-validator exterior
+
+`tools/fractional-exterior/` drives the open-market pair against a real
+localhost validator -- the same pinned `solana-test-validator` the successor
+launcher wraps -- consumed at the process boundary. It shares no code, build or
+workspace with any other tool.
+
+```
+cd /Users/ember/dev/dclutch
+cargo run --manifest-path tools/fractional-exterior/Cargo.toml -- \
+  run --elf-dir <dir holding the five real ELFs> --out <absolute output dir>
+```
+
+`prepare` stages the fixture as 35 genesis account files without starting
+anything; `verify` re-reads the journal. Wrap and WholeUnwrap both commit, with
+the same conservation and the same actor identity as the ProgramTest campaign,
+and a rerun on a fresh ledger produces a byte-identical canonical journal
+(digest `628b9fca…`).
+
+The journal is split on purpose. `canonical.json` holds what the protocol did --
+exact instruction bytes, account frame, acceptance, refusal, poststate -- and
+must be byte-identical across runs. `observed.jsonl` holds what this particular
+cluster did: signatures, slots, wire bytes. A signature in the canonical section
+would make "byte-identical" unachievable and the discipline meaningless.
+
+Three facts only a cluster can teach, because ProgramTest enforces none of them:
+
+- **A Fractional action does not fit a legacy transaction.** The 31-account
+  frame plus a 416-byte request compiles to 2,192 bytes against Solana's
+  1,232-byte packet, so a real cluster requires an address lookup table. Through
+  the table the same action is 820 bytes. The static topology census predicted
+  this; the exterior is where it is paid.
+- **The compute budget must be requested.** The 200,000-unit default is nowhere
+  near enough, and the failure is `Program failed to complete`, which names
+  nothing.
+- **The lookup table's `recent_slot` must already be in SlotHashes.** ProgramTest
+  warps a slot to arrange that; a cluster is waited on.
+
+The two terminal actions are not covered: they need the Custody composition
+staged and its replay cursor created by a real earlier transaction, which is a
+second exterior sequence rather than two more entries.
+
 ## Traps worth knowing before touching this
 
 - **Quantity units are not symmetric.** `Wrap` counts native Claims;
