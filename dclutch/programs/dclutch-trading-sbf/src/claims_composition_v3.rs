@@ -95,9 +95,25 @@ pub enum ClaimsRouteReceiptV3 {
     Close(ProtocolPositionCloseReceiptV2),
 }
 
+/// Which layer owns the sparse-transfer post-resource/body join.
+///
+/// Generic Claims routes verify the returned aggregate/source/destination
+/// commitment immediately. Direct ordinary already has a stronger typed
+/// finalization join after every child CPI: it compares the exact returned
+/// receipt inside the child transcript and hashes each actual poststate body
+/// against the independently projected candidate. Rehashing all three bodies
+/// here as well proves the same conjunction twice on the hottest path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SparsePostResourceVerificationV3 {
+    /// Hash the actual child bodies and compare the returned commitment here.
+    Immediate,
+    /// Defer the body join to Direct's typed finalization verifier.
+    DirectFinalization,
+}
+
 /// Invoke and verify one preflighted Claims route in global EffectProgram order.
 #[allow(clippy::too_many_arguments)]
-pub fn execute_claims_route_v3<'info>(
+pub(crate) fn execute_claims_route_v3<'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
     composition: ClaimsCompositionV3<'_>,
@@ -111,6 +127,7 @@ pub fn execute_claims_route_v3<'info>(
     prior_receipt: Option<&[u8]>,
     buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
+    sparse_post_resource_verification: SparsePostResourceVerificationV3,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if effect
         .account_count(tail_count)
@@ -214,9 +231,14 @@ pub fn execute_claims_route_v3<'info>(
                     .position_count(),
             )?)
         }
-        ReceiptKindV3::SparseNativeTransfer => {
-            PostResourceEvidenceV3::Single(sparse_native_post_resource_digest(&buffers.accounts)?)
-        }
+        ReceiptKindV3::SparseNativeTransfer => match sparse_post_resource_verification {
+            SparsePostResourceVerificationV3::Immediate => PostResourceEvidenceV3::Single(
+                sparse_native_post_resource_digest(&buffers.accounts)?,
+            ),
+            SparsePostResourceVerificationV3::DirectFinalization => {
+                PostResourceEvidenceV3::DeferredDirect
+            }
+        },
         ReceiptKindV3::Founding => {
             PostResourceEvidenceV3::Founding(founding_post_resource_digests(&buffers.accounts)?)
         }
@@ -349,6 +371,9 @@ enum PostResourceEvidenceV3 {
     Single([u8; 32]),
     Founding(FoundingPostResourceDigestsV5),
     FractionalRoot([u8; 32]),
+    /// The authenticated sparse receipt is joined to actual bodies by the
+    /// typed Direct finalization verifier after the complete child walk.
+    DeferredDirect,
 }
 
 fn composition_owns_route(composition: ClaimsCompositionV3<'_>, route: u16) -> bool {
@@ -643,6 +668,7 @@ fn verify_route_receipt(
                 PostResourceEvidenceV3::Single(value) => Some(value),
                 _ => None,
             },
+            expected_post_resources == PostResourceEvidenceV3::DeferredDirect,
         ),
         ReceiptKindV3::Founding => verify_founding_receipt(
             request,
@@ -993,6 +1019,7 @@ fn verify_sparse_native_receipt(
     request_digest: [u8; 32],
     claims_program: [u8; 32],
     expected_post_resource_digest: Option<[u8; 32]>,
+    deferred_to_direct: bool,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     let request = SparseNativeTransferV1::decode(request).map_err(|_| TradingSbfError::Content)?;
     let receipt =
@@ -1002,7 +1029,9 @@ fn verify_sparse_native_receipt(
         .map_err(|_| TradingSbfError::Transition)?;
     if receipt.packet_digest() != request_digest
         || receipt.claims_program() != claims_program
-        || Some(receipt.post_resource_digest()) != expected_post_resource_digest
+        || (!deferred_to_direct
+            && Some(receipt.post_resource_digest()) != expected_post_resource_digest)
+        || (deferred_to_direct && expected_post_resource_digest.is_some())
     {
         return Err(TradingSbfError::Transition.into());
     }
@@ -2319,6 +2348,43 @@ mod tests {
             ),
             Ok(ClaimsRouteReceiptV3::SparseNativeTransfer(_))
         ));
+        // Direct's complete typed finalization compares this exact receipt in
+        // the child transcript and hashes the three actual account bodies
+        // itself. Only that explicit policy may defer the duplicate hash here;
+        // packet and selected-producer authentication remain mandatory.
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::SparseNativeTransfer,
+                &request_bytes,
+                &receipt,
+                claims,
+                id(30),
+                PostResourceEvidenceV3::DeferredDirect,
+            ),
+            Ok(ClaimsRouteReceiptV3::SparseNativeTransfer(_))
+        ));
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::SparseNativeTransfer,
+                &request_bytes,
+                &receipt,
+                id(99),
+                id(30),
+                PostResourceEvidenceV3::DeferredDirect,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::SparseNativeTransfer,
+                &request_bytes,
+                &receipt,
+                claims,
+                id(30),
+                PostResourceEvidenceV3::None,
+            )
+            .is_err()
+        );
         assert!(
             verify_route_receipt(
                 ReceiptKindV3::SparseNativeTransfer,
