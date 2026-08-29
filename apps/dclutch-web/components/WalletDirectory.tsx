@@ -173,7 +173,7 @@ export default function WalletDirectory({
       {directory.address !== null && <button type="button" className="wallet-choice" onClick={directory.forget}>Forget identity</button>}
     </div>}
     <p aria-live="polite">{state.message}</p>
-    <p>Connecting reads a public address only. Requesting a signature is always a separate explicit action, and stays unavailable wherever a checked release does not recognize the outer.</p>
+    <p>Connecting reads a public address only. Asking you to sign is always a separate, explicit step — and it stays unavailable anywhere the deployed programs would not recognise what was being signed.</p>
     <p>Only wallets that register through the Wallet Standard are listed. A wallet that exposes nothing but a legacy injected page provider is not discoverable here and is not silently probed for.</p>
     {refusals.length > 0 && <details>
       <summary>{refusals.length} announced registration{refusals.length === 1 ? '' : 's'} refused</summary>

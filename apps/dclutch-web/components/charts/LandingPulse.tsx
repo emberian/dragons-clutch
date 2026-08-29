@@ -28,9 +28,9 @@ import NumberStrip, { type NumberStripStatV1 } from './NumberStrip';
 export type PulseState = Readonly<{ stats: ReadonlyArray<NumberStripStatV1>; provenance: string }>;
 
 const UNREAD: ReadonlyArray<NumberStripStatV1> = Object.freeze([
-  Object.freeze({ label: 'Current markets listed', value: null, detail: 'compatible finalized Core Market accounts' }),
-  Object.freeze({ label: 'Collateral in listed markets', value: null, detail: 'Hoard principal, raw atoms' }),
-  Object.freeze({ label: 'Resolutions in listed markets', value: null, detail: 'terminal receipts written' }),
+  Object.freeze({ label: 'Current markets listed', value: null, detail: 'markets on this deployment, whatever stage they are at' }),
+  Object.freeze({ label: 'Collateral in listed markets', value: null, detail: 'locked in their vaults, in raw units' }),
+  Object.freeze({ label: 'Resolutions in listed markets', value: null, detail: 'markets that have reached their answer' }),
 ]);
 
 type ProgramScanEnumerationV1 = Extract<MarketEnumerationV1, Readonly<{ mode: 'program-scan' }>>;
@@ -38,19 +38,19 @@ type ProgramScanEnumerationV1 = Extract<MarketEnumerationV1, Readonly<{ mode: 'p
 function incompatibleDisclosure(enumeration: ProgramScanEnumerationV1): string {
   const count = enumeration.incompatibleMarketAccounts.length;
   return count === 0
-    ? 'The Core program owns no historical incompatible Market account at this floor.'
-    : `The same scan found ${count} historical DCLTCOR2 Market account${count === 1 ? '' : 's'} in the old 352-byte layout. ${count === 1 ? 'It is' : 'They are'} incompatible with this reader and not listed as current.`;
+    ? 'The same scan found no older markets that this page cannot read.'
+    : `The same scan found ${count} older market${count === 1 ? '' : 's'} in a layout this page cannot read, so ${count === 1 ? 'it is' : 'they are'} not counted above.`;
 }
 
 /** The truthful zero-current state, kept pure so the legacy-account case is pinned by tests. */
 export function emptyCurrentMarketPulseV1(deploymentLabel: string, enumeration: ProgramScanEnumerationV1): PulseState {
   return Object.freeze({
     stats: Object.freeze([
-      Object.freeze({ label: 'Current markets listed', value: '0', detail: 'compatible finalized Core Market accounts' }),
-      Object.freeze({ label: 'Collateral in listed markets', value: '0', detail: 'no current compatible Market is listed' }),
-      Object.freeze({ label: 'Resolutions in listed markets', value: '0', detail: 'no current compatible Market is listed' }),
+      Object.freeze({ label: 'Current markets listed', value: '0', detail: 'no market this reader can read exists here yet' }),
+      Object.freeze({ label: 'Collateral in listed markets', value: '0', detail: 'there is no market to hold any' }),
+      Object.freeze({ label: 'Resolutions in listed markets', value: '0', detail: 'there is no market to resolve' }),
     ]),
-    provenance: `Read finalized off ${deploymentLabel} at slot ${enumeration.scanSlot}: zero current compatible Markets are listed. ${incompatibleDisclosure(enumeration)}`,
+    provenance: `Read live from ${deploymentLabel} at slot ${enumeration.scanSlot}: this deployment holds no market this page can read. ${incompatibleDisclosure(enumeration)}`,
   });
 }
 
@@ -91,21 +91,33 @@ export default function LandingPulse() {
         // vault that refused authentication may still hold principal, so the
         // sum is unread rather than zero.
         const locked = hoards.length === 0
-          ? { value: null, detail: 'no Hoard was derivable at this floor, so no sum is asserted' }
+          ? { value: null, detail: 'their vaults could not be read, so no total is claimed' }
           : mints.size > 1
-            ? { value: null, detail: `${mints.size} different collateral mints — their atoms never add` }
+            ? { value: null, detail: `${mints.size} different collateral tokens — their units do not add up` }
             : {
               value: hoards.reduce((total, hoard) => total + BigInt(hoard.principalAtoms), 0n).toString(),
-              detail: `raw atoms across ${hoards.length} Hoard${hoards.length === 1 ? '' : 's'}, one mint`,
+              detail: `raw units across ${hoards.length} vault${hoards.length === 1 ? '' : 's'}, one collateral token`,
             };
         const resolutions = decoded.filter((card) => card.settlement.status === 'terminal').length;
+        // A market existing and a market being open are different facts, and
+        // the count alone conflates them. Devnet currently holds nine Markets,
+        // every one of them still in Founding, on a site that correctly says no
+        // market is open — a reader seeing "9" and "none is open" deserves the
+        // sentence that reconciles them rather than being left to guess.
+        const open = decoded.filter((card) => card.phase === 'Open').length;
         settle({
           stats: Object.freeze([
-            Object.freeze({ label: 'Current markets listed', value: String(decoded.length), detail: 'compatible finalized Core Market accounts' }),
+            Object.freeze({
+              label: 'Current markets listed',
+              value: String(decoded.length),
+              detail: open === 0
+                ? 'none of them open for trading yet'
+                : `${open} open for trading`,
+            }),
             Object.freeze({ label: 'Collateral in listed markets', value: locked.value, detail: locked.detail }),
-            Object.freeze({ label: 'Resolutions in listed markets', value: String(resolutions), detail: 'terminal receipts written' }),
+            Object.freeze({ label: 'Resolutions in listed markets', value: String(resolutions), detail: 'markets that have reached their answer' }),
           ]),
-          provenance: `Read finalized off ${deployment.label} at floor ${discovery.floorSlot}, from the deployment's own program addresses. ${incompatibleDisclosure(enumeration)}`,
+          provenance: `Read live from ${deployment.label} at slot ${discovery.floorSlot}, straight from the deployment's own programs. ${incompatibleDisclosure(enumeration)}`,
         });
       } catch (error) {
         settle({ stats: UNREAD, provenance: `Refused: ${error instanceof Error ? error.message : 'the read failed without a usable reason'}` });
