@@ -5,6 +5,7 @@ set -euo pipefail
 
 DEVNET_GENESIS=EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 URL=""; ACK=""; STATE=""; PAYER=""; SESSION=""; MARKET=""; MINT=""; SOURCE=""
+PAYOUT_PLAN=""; PAYOUT_EVIDENCE=""; PAYOUT_INPUT_DIR=""; BOOTSTRAP_BIN=""; REDEEM_MAX_STEPS=12
 TOKEN_PROGRAM=TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
 PARTICIPANTS=2; WALLET_LAMPORTS=20000000; TOKEN_ATOMS=0; TRADES=""; REPLAY=false; EXECUTE=false
 
@@ -16,13 +17,19 @@ usage() { printf '%s\n' \
   '  --wallet-lamports N          exact SOL funding target per participant (default 20000000)' \
   '  --collateral-mint ADDRESS --collateral-source ACCOUNT --token-atoms N' \
   '  --session FILE --market ADDRESS --trades TSV   rows: seller buyer route outcome fill price' \
-  '  --replay                     run terminal-only Claims replay for every participant'; }
+  '  --replay --payout-input-dir DIR' \
+  '                              one explicit Rust-projected wallet-N.json per participant' \
+  '  --payout-plan FILE --payout-evidence FILE' \
+  '                              alternative completed-campaign projection input (requires its checked ALT plan)'; }
 die() { echo "REFUSED: $*" >&2; exit 2; }
 need_value() { [ "$#" -ge 2 ] || die "$1 needs a value"; }
 while [ "$#" -gt 0 ]; do case "$1" in
   --rpc-url) need_value "$@"; URL="$2"; shift 2 ;; --i-mean-devnet) need_value "$@"; ACK="$2"; shift 2 ;;
   --state-dir) need_value "$@"; STATE="$2"; shift 2 ;; --payer-keypair) need_value "$@"; PAYER="$2"; shift 2 ;;
   --session) need_value "$@"; SESSION="$2"; shift 2 ;; --market) need_value "$@"; MARKET="$2"; shift 2 ;;
+  --payout-plan) need_value "$@"; PAYOUT_PLAN="$2"; shift 2 ;; --payout-evidence) need_value "$@"; PAYOUT_EVIDENCE="$2"; shift 2 ;;
+  --payout-input-dir) need_value "$@"; PAYOUT_INPUT_DIR="$2"; shift 2 ;;
+  --bootstrap-bin) need_value "$@"; BOOTSTRAP_BIN="$2"; shift 2 ;; --redeem-max-steps) need_value "$@"; REDEEM_MAX_STEPS="$2"; shift 2 ;;
   --collateral-mint) need_value "$@"; MINT="$2"; shift 2 ;; --collateral-source) need_value "$@"; SOURCE="$2"; shift 2 ;;
   --token-program) need_value "$@"; TOKEN_PROGRAM="$2"; shift 2 ;; --participants) need_value "$@"; PARTICIPANTS="$2"; shift 2 ;;
   --wallet-lamports) need_value "$@"; WALLET_LAMPORTS="$2"; shift 2 ;; --token-atoms) need_value "$@"; TOKEN_ATOMS="$2"; shift 2 ;;
@@ -33,6 +40,7 @@ while [ "$#" -gt 0 ]; do case "$1" in
 case "$URL" in https://*) ;; *) die "external RPC must be https" ;; esac
 [[ "$PARTICIPANTS" =~ ^[2-9][0-9]*$ ]] || die "--participants must be an integer >= 2"
 [[ "$WALLET_LAMPORTS" =~ ^[0-9]+$ && "$TOKEN_ATOMS" =~ ^[0-9]+$ ]] || die "amounts must be unsigned integers"
+[[ "$REDEEM_MAX_STEPS" =~ ^[1-9][0-9]*$ && "$REDEEM_MAX_STEPS" -le 64 ]] || die "--redeem-max-steps must be 1..64"
 GENESIS="$(solana genesis-hash --url "$URL")"
 [ "$GENESIS" = "$DEVNET_GENESIS" ] || die "RPC answered genesis $GENESIS, not acknowledged devnet"
 
@@ -90,7 +98,59 @@ if [ -n "$TRADES" ]; then
     signature="$(awk '/^submitted / {print $2; exit}' "$log")"; [ -z "$signature" ] || { printf '%s\n' "$signature" > "$marker"; chmod 600 "$marker"; }; [ "$status" -eq 0 ] || die "trade row $index did not confirm; log: $log"
   done < "$TRADES"
 fi
-if [ "$REPLAY" = true ]; then [ -n "$SESSION" ] && [ -n "$MARKET" ] || die "--replay requires --session and --market"
-  for n in $(seq 1 "$PARTICIPANTS"); do require_execute "Claims replay for wallet-$n"; dclutch --rpc "$URL" --session "$SESSION" redeem --market "$MARKET" --keypair "$(key "wallet-$n")"; done; fi
+if [ "$REPLAY" = true ]; then
+  [ -n "$SESSION" ] && [ -n "$MARKET" ] || die "--replay requires --session and --market"
+  if [ -n "$PAYOUT_INPUT_DIR" ]; then
+    [ -z "$PAYOUT_PLAN" ] && [ -z "$PAYOUT_EVIDENCE" ] || die "choose --payout-input-dir or --payout-plan/--payout-evidence, not both"
+    [ -d "$PAYOUT_INPUT_DIR" ] || die "--payout-input-dir is not a directory"
+  else
+    [ -n "$PAYOUT_PLAN" ] && [ -n "$PAYOUT_EVIDENCE" ] || die "--replay requires --payout-input-dir or --payout-plan plus --payout-evidence"
+    [ -r "$PAYOUT_PLAN" ] && [ -r "$PAYOUT_EVIDENCE" ] || die "payout plan/evidence must be readable explicit terminal artifacts"
+  fi
+  [ -z "$BOOTSTRAP_BIN" ] || [ -x "$BOOTSTRAP_BIN" ] || die "--bootstrap-bin is not executable"
+  mkdir -p "$STATE/redemptions"
+  for n in $(seq 1 "$PARTICIPANTS"); do
+    name="wallet-$n"; owner="$(address "$name")"; recipient="$(token "$name")"; private="$(key "$name")"
+    [ -n "$recipient" ] || die "wallet payout for $name requires its explicit collateral recipient account"
+    payout_marker="$STATE/redemptions/$name.payout.signature"
+    replay_marker="$STATE/redemptions/$name.replay.signature"
+    if [ -f "$payout_marker" ]; then
+      solana confirm --url "$URL" "$(cat "$payout_marker")" >/dev/null || die "recorded payout for $name is not confirmed"
+      continue
+    fi
+    require_execute "wallet terminal payout for $name"
+    journal="$STATE/redemptions/$name.payout-journal.json"
+    alt_plan="$STATE/redemptions/$name.lookup-table-plan.json"
+    for step in $(seq 1 "$REDEEM_MAX_STEPS"); do
+      log="$STATE/logs/redeem-$name-$step.log"
+      command=(dclutch --rpc "$URL" --session "$SESSION" redeem --market "$MARKET" --payer "$owner" --recipient "$recipient" --keypair "$private" --i-mean-devnet "$ACK" --payout-journal "$journal")
+      if [ -n "$PAYOUT_INPUT_DIR" ]; then
+        input="$PAYOUT_INPUT_DIR/$name.json"; [ -r "$input" ] || die "wallet payout input is not readable: $input"
+        command+=(--payout-input "$input")
+      else
+        command+=(--spec "$PAYOUT_PLAN" --payout-evidence "$PAYOUT_EVIDENCE" --payout-alt-plan "$alt_plan")
+      fi
+      [ -z "$BOOTSTRAP_BIN" ] || command+=(--bootstrap-bin "$BOOTSTRAP_BIN")
+      set +e; "${command[@]}" 2>&1 | tee "$log"; status=${PIPESTATUS[0]}; set -e
+      replay_signature="$(sed -n 's/.*"status":"replay-finalized".*"signature":"\([^"]*\)".*/\1/p' "$log" | head -n 1)"
+      [ -z "$replay_signature" ] || { printf '%s\n' "$replay_signature" > "$replay_marker"; chmod 600 "$replay_marker"; solana confirm --url "$URL" "$replay_signature" >/dev/null || die "Claims replay for $name was not confirmed"; }
+      payout_signature="$(sed -n 's/.*"status":"finalized".*"signature":"\([^"]*\)".*/\1/p' "$log" | head -n 1)"
+      if [ -n "$payout_signature" ]; then
+        printf '%s\n' "$payout_signature" > "$payout_marker"; chmod 600 "$payout_marker"
+        solana confirm --url "$URL" "$payout_signature" >/dev/null || die "wallet payout for $name was not confirmed"
+        break
+      fi
+      [ "$status" -eq 0 ] || die "redeem step $step for $name did not complete; the CLI journal remains at $journal and log is $log"
+    done
+    [ -f "$payout_marker" ] || die "redeem for $name made no finalized payout in $REDEEM_MAX_STEPS steps; terminal state was not faked and the durable journal remains at $journal"
+  done
+fi
 echo '== reconciliation (public chain facts) =='
-for n in $(seq 1 "$PARTICIPANTS"); do name="wallet-$n"; public="$(address "$name")"; echo "$name $public $(solana balance --lamports --url "$URL" "$public") lamports"; [ -z "$SESSION" ] || dclutch --rpc "$URL" --session "$SESSION" portfolio "$public"; done
+for n in $(seq 1 "$PARTICIPANTS"); do
+  name="wallet-$n"; public="$(address "$name")"; recipient="$(token "$name")"
+  echo "$name $public $(solana balance --lamports --url "$URL" "$public") lamports"
+  if [ -n "$recipient" ]; then
+    echo "$name collateral $recipient $(spl-token --url "$URL" --program-id "$TOKEN_PROGRAM" balance "$recipient")"
+  fi
+  [ -z "$SESSION" ] || dclutch --rpc "$URL" --session "$SESSION" portfolio "$public"
+done
