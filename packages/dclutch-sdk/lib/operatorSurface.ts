@@ -81,8 +81,18 @@ export type OperatorSurfaceSnapshotV1 = Readonly<{
     genesisHash: string;
     activationCache: string;
     executionReleaseSetId: string;
+    /** Live deployment slots, read from each ProgramData header this run. */
     deploymentSlots: Readonly<Record<OperatorRole, string>>;
     upgradeAuthorities: Readonly<Record<OperatorRole, string>>;
+    /**
+     * Roles whose live slot is past the one the shipped manifest recorded.
+     *
+     * Upgrading in place at a permanent address is ordinary, so this reports
+     * the manifest's age rather than a fault. The upgrade AUTHORITY is still
+     * asserted exactly against the activated release above, which is where
+     * this preset's authenticity actually lives.
+     */
+    upgradedSinceRecord: ReadonlyArray<OperatorRole>;
     routeSpecificReleaseAdmission: RouteSpecificReleaseAdmissionV1;
   }>;
   realm: null | Readonly<{
@@ -276,11 +286,22 @@ function exactLoaderPair(
   const observedAuthority = new PublicKey(programData.data.slice(13, 45)).toBase58();
   if (observedAuthority !== expectedAuthority) throw new Error(`${role} ProgramData upgrade authority differs from the activated exact-authority release`);
   const observedSlot = littleU64(programData.data, 4, `${role} ProgramData deployment slot`);
-  if (observedSlot !== recordedSlot) {
-    const direction = BigInt(observedSlot) > BigInt(recordedSlot)
-      ? 'ReleaseSupersededByUpgrade: the program has moved since this preset was checked'
-      : 'DeploymentSlotMismatch: this is a stale or wrong-generation observation';
-    throw new Error(`${role} ${direction}; the preset records slot ${recordedSlot}, and finalized chain state reports ${observedSlot}`);
+  // The deployment slot is STATE, not identity. Every check above -- Loader
+  // ownership, the executable flag, the 36-byte Program body, its link to this
+  // ProgramData, the canonical PDA, the mutable header, and the exact upgrade
+  // AUTHORITY -- survives an upgrade in place. The slot does not, by design.
+  //
+  // Asserting it against a slot baked into the shipped manifest made an
+  // ordinary upgrade indistinguishable from an attack, and the manifest loses
+  // that race by construction: it is fixed at build time and the chain moves
+  // afterwards. Five of seven devnet roles moved on 2026-08-29 and every
+  // caller of this preset refused from then on, for no fault at all.
+  //
+  // Backwards is still refused. The genesis hash pinned the cluster, so a
+  // deployment slot EARLIER than the recorded one cannot be a later state of
+  // this program; it is a stale or wrong-generation observation.
+  if (BigInt(observedSlot) < BigInt(recordedSlot)) {
+    throw new Error(`${role} DeploymentSlotMismatch: this is a stale or wrong-generation observation; the preset records slot ${recordedSlot}, and finalized chain state reports the earlier ${observedSlot}`);
   }
   return Object.freeze({ deploymentSlot: observedSlot, upgradeAuthority: observedAuthority });
 }
@@ -390,6 +411,9 @@ export async function acquireOperatorSurfaceV1(
       executionReleaseSetId: activation.releaseSetId,
       deploymentSlots: Object.freeze(deploymentSlots),
       upgradeAuthorities: Object.freeze(upgradeAuthorities),
+      upgradedSinceRecord: Object.freeze(OPERATOR_ROLES.filter(
+        (role) => BigInt(deploymentSlots[role]) > BigInt(deploymentPreset.evidence[role].deploymentSlot),
+      )),
       routeSpecificReleaseAdmission: ROUTE_SPECIFIC_RELEASE_ADMISSION_UNPROVEN_V1,
     });
   }

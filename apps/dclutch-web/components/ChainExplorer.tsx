@@ -600,7 +600,7 @@ function ProgramCard({ card }: Readonly<{ card: ProtocolProgramCardV1 }>) {
       <p className="xp-node-address"><Jump view="account" value={card.address}>{compact(card.address, 10)}</Jump></p>
       <dl className="fact-list">
         {card.ownerLabel === null ? null : <div><dt>Loader</dt><dd>{card.ownerLabel}</dd></div>}
-        {card.deploymentSlot === null ? null : <div><dt>Deployed at slot</dt><dd>{card.deploymentSlot}</dd></div>}
+        {card.deploymentSlot === null ? null : <div><dt>First deployed at slot</dt><dd>{card.deploymentSlot}</dd></div>}
       </dl>
       <small className="xp-quiet"><Jump view="scan" value={card.address} title={`Scan the accounts ${roleTitle(card.role)} owns`}>scan its accounts →</Jump></small>
     </article>

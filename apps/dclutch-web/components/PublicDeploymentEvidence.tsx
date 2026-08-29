@@ -26,11 +26,11 @@ export function publicDeploymentEvidenceDocumentV1(): Readonly<Record<string, un
       Object.freeze({
         program: DEVNET_DEPLOYMENT_V1.programs[role],
         programData: DEVNET_PROGRAM_EVIDENCE_V1[role].programData,
-        observedDeploymentSlot: DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot,
+        firstDeploymentSlot: DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot,
       }),
     ]))),
     evidence: 'docs/evidence/DEPLOY_1.md §2',
-    note: 'These are Solana devnet test programs. The addresses are permanent; the programs are mutable and have been upgraded in place since, keeping those addresses, so each observedDeploymentSlot is the slot of the ORIGINAL DEPLOY-1 deployment recorded in the evidence below and not the slot the program sits at today. Read the ProgramData account for the current one. The app reads current chain state before it describes an action as available.',
+    note: 'These are Solana devnet test programs. The addresses are permanent; the programs are mutable and have been upgraded in place since, keeping those addresses. firstDeploymentSlot is the slot of the ORIGINAL DEPLOY-1 deployment recorded in the evidence below — a historical fact that does not age — and it is NOT where the program sits today. This document is a static projection and cannot observe a chain. For the current slot, read the ProgramData account — which the /operate deployment inspector now does live, reporting each role that has been upgraded since this app was built.',
   });
 }
 

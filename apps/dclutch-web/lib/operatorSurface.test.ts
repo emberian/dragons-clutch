@@ -157,19 +157,44 @@ describe('unified chain-derived operator surface', () => {
       genesisHash: LIVE_DEVNET_OPERATOR_PRESET_V1.genesisHash,
       activationCache: LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache,
       deploymentSlots: Object.fromEntries(OPERATOR_ROLES.map((role) => [role, DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot])),
+      upgradedSinceRecord: [],
     });
     expect(snapshot.market).toBeNull();
   });
 
-  it('names a stale slot and refuses a partial finalized deployment instead of falling back', async () => {
+  it('reports an upgraded role rather than refusing it, and reads the live slot', async () => {
+    // An upgrade in place is what devnet does. Before this, the shipped
+    // manifest's slot was asserted as equality and five of the seven roles had
+    // moved past it, so the whole preset refused and /operate could not
+    // inspect anything at all.
     const role = 'trading';
     const programData = LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].programData;
-    const moved = (BigInt(LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].deploymentSlot) + 1n).toString();
-    await expect(acquireOperatorSurfaceV1(
+    const moved = (BigInt(LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].deploymentSlot) + 4_000n).toString();
+    const snapshot = await acquireOperatorSurfaceV1(
       checkedPresetClient({ [programData]: loaderProgramData(moved) }),
       LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
       LIVE_DEVNET_OPERATOR_PRESET_V1,
-    )).rejects.toThrow(/trading ReleaseSupersededByUpgrade.*preset records slot.*finalized chain state reports/);
+    );
+    // The slot reported is the one on chain, not the one that shipped.
+    expect(snapshot.deploymentPreset?.deploymentSlots[role]).toBe(moved);
+    expect(snapshot.deploymentPreset?.upgradedSinceRecord).toEqual([role]);
+    // Every role that did not move stays absent from the notice.
+    expect(snapshot.deploymentPreset?.deploymentSlots.core)
+      .toBe(DEVNET_PROGRAM_EVIDENCE_V1.core.deploymentSlot);
+  });
+
+  it('still refuses a slot EARLIER than the record, and a partial finalized deployment', async () => {
+    // Backwards is not an upgrade. The genesis hash already pinned the
+    // cluster, so a deployment slot older than the recorded one cannot be a
+    // later state of this program: it is a stale or wrong-generation read.
+    const role = 'trading';
+    const programData = LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].programData;
+    const earlier = (BigInt(LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].deploymentSlot) - 1n).toString();
+    await expect(acquireOperatorSurfaceV1(
+      checkedPresetClient({ [programData]: loaderProgramData(earlier) }),
+      LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
+      LIVE_DEVNET_OPERATOR_PRESET_V1,
+    )).rejects.toThrow(/trading DeploymentSlotMismatch.*preset records slot.*reports the earlier/);
 
     await expect(acquireOperatorSurfaceV1(
       checkedPresetClient({ [LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache]: null }),
