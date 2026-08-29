@@ -1224,6 +1224,15 @@ struct EvaluationEvidence {
 /// purely by the digests the receipt commits, and the effect bodies themselves
 /// are authenticated later, at reservation.
 fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> EvaluationEvidence {
+    evaluation_evidence_with_delta(scenario, checkpoint_body, None)
+}
+
+/// The same evidence, optionally over a delta the evaluator chose to publish.
+fn evaluation_evidence_with_delta(
+    scenario: &Scenario,
+    checkpoint_body: &[u8],
+    published_delta: Option<Vec<u8>>,
+) -> EvaluationEvidence {
     let effect_body = DealerScenarioCustodyEffectV1 {
         kind: DealerScenarioCustodyRequestKindV1::Canonical,
         ordinal: 0,
@@ -1268,10 +1277,12 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
     // Commit requires this body to be byte-identical to the SignedDelta packet
     // carried inside the request, so the evaluator cannot promise Claims one
     // delta and publish another.
-    let claims_delta = DealerScenarioTradeRequestV3::decode(&scenario.request_bytes)
-        .expect("canonical request decodes")
-        .claims_packet()
-        .to_vec();
+    let claims_delta = published_delta.unwrap_or_else(|| {
+        DealerScenarioTradeRequestV3::decode(&scenario.request_bytes)
+            .expect("canonical request decodes")
+            .claims_packet()
+            .to_vec()
+    });
     let receipt = derive_dealer_scenario_evaluation_receipt_v1(
         TRADING,
         scenario.checkpoint,
@@ -1713,6 +1724,15 @@ async fn prepare_through_evaluation(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
 ) -> DealerScenarioCheckpointJournalV1 {
+    prepare_through_evaluation_with_delta(context, scenario, None).await
+}
+
+/// The same, over a delta the evaluator chose to publish and seal.
+async fn prepare_through_evaluation_with_delta(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+    published_delta: Option<Vec<u8>>,
+) -> DealerScenarioCheckpointJournalV1 {
     let mut journal = DealerScenarioCheckpointJournalV1::planned(TRADING, scenario.request_digest)
         .expect("planned journal");
     create_checkpoint(context, scenario).await;
@@ -1743,7 +1763,7 @@ async fn prepare_through_evaluation(
             .expect("journal records the page");
     }
     let read_back = checkpoint_body(context, scenario).await;
-    let evidence = evaluation_evidence(scenario, &read_back);
+    let evidence = evaluation_evidence_with_delta(scenario, &read_back, published_delta);
     for (key, body) in evidence.installed.iter() {
         context.set_account(key, &AccountSharedData::from(data_account(TRADING, body.clone())));
     }
@@ -2100,10 +2120,19 @@ async fn evaluated_with_reservation_evidence(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
 ) -> (ReservationEvidence, Vec<u8>) {
-    let mut journal = prepare_through_evaluation(context, scenario).await;
+    evaluated_with_published_delta(context, scenario, None).await
+}
+
+/// The same, over a delta the evaluator chose to publish and seal.
+async fn evaluated_with_published_delta(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+    published_delta: Option<Vec<u8>>,
+) -> (ReservationEvidence, Vec<u8>) {
+    let mut journal = prepare_through_evaluation_with_delta(context, scenario, published_delta.clone()).await;
     let _ = &mut journal;
     let after_evaluation = checkpoint_body(context, scenario).await;
-    let evidence = evaluation_evidence(scenario, &after_evaluation);
+    let evidence = evaluation_evidence_with_delta(scenario, &after_evaluation, published_delta);
     let reservation = reservation_evidence(
         scenario,
         &after_evaluation,
@@ -2577,4 +2606,176 @@ async fn submit_v0(
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
+}
+
+
+/// Drive one scenario to a reserved checkpoint and return its commit inputs.
+async fn reserved_with_commit_inputs(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+) -> (ReservationEvidence, Pubkey, Vec<u8>) {
+    reserved_with_published_delta(context, scenario, None).await
+}
+
+/// The same, over a delta the evaluator chose to publish and seal.
+async fn reserved_with_published_delta(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+    published_delta: Option<Vec<u8>>,
+) -> (ReservationEvidence, Pubkey, Vec<u8>) {
+    let (reservation, _) =
+        evaluated_with_published_delta(context, scenario, published_delta).await;
+    let payer = context.payer.pubkey();
+    let instruction = reserve_instruction(
+        scenario,
+        payer,
+        &reservation,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+    );
+    submit(context, instruction, &[])
+        .await
+        .expect("ProgramTest processing")
+        .result
+        .expect("the reservation must be ingested");
+    let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
+        TRADING,
+        scenario.checkpoint,
+        scenario.request_digest,
+    );
+    let reserved = checkpoint_body(context, scenario).await;
+    (reservation, receipt_address, reserved)
+}
+
+/// Build, table and submit one commit, returning what the chain reported.
+async fn submit_commit(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+    bank: DealerScenarioCommitAccountsV1,
+) -> solana_program_test::BanksTransactionResultWithMetadata {
+    let payer = context.payer.pubkey();
+    let mut addresses = bank
+        .claims_accounts
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    addresses.extend([
+        bank.checkpoint,
+        bank.clock,
+        bank.request,
+        bank.evaluation_receipt,
+        bank.candidate_bank,
+        bank.candidate_obligation,
+        bank.claims_delta,
+        bank.effects,
+        bank.root,
+        bank.obligation,
+        bank.custody_program,
+        bank.custody_programdata,
+        bank.batch,
+    ]);
+    for proof in bank.effect_accounts.iter().take(usize::from(bank.effect_count)) {
+        addresses.extend([proof.reservation_receipt, proof.reservation_state]);
+    }
+    addresses.retain(|key| *key != payer && *key != TRADING);
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    let packet = build_dealer_scenario_commit_v1(
+        bank,
+        Hash::default(),
+        &[OperatorLookupTable {
+            key: Pubkey::new_from_array([0x7b; 32]),
+            addresses: addresses.clone(),
+        }],
+    )
+    .expect("commit packet");
+    let table = create_live_lookup_table(context, &addresses).await;
+    let _ = scenario;
+    submit_v0(context, packet.instruction, table, &addresses)
+        .await
+        .expect("ProgramTest processing")
+}
+
+#[tokio::test]
+async fn a_commit_refuses_a_claims_delta_that_is_not_the_request_packet() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+
+    // A consistent lie, not a torn one. The evaluator publishes a delta that is
+    // not the request's packet and seals that same body in its receipt, so
+    // every digest agrees with itself and only the packet identity can refuse
+    // it. Substituting the body after evaluation would have been answered one
+    // check earlier, by the receipt digest, and would not have reached this at
+    // all -- the same early-stop trap the reservation producer case taught.
+    let mut published = DealerScenarioTradeRequestV3::decode(&scenario.request_bytes)
+        .expect("canonical request decodes")
+        .claims_packet()
+        .to_vec();
+    *published.last_mut().expect("packet is not empty") ^= 0xff;
+    let (reservation, receipt_address, reserved) =
+        reserved_with_published_delta(&mut context, &scenario, Some(published)).await;
+    let payer = context.payer.pubkey();
+
+    let bank = commit_bank(&scenario, payer, receipt_address, &reservation);
+    let processed = submit_commit(&mut context, &scenario, bank).await;
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "a delta that is not the request's packet must refuse; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        reserved,
+        "a refused commit must not advance the checkpoint"
+    );
+}
+
+#[tokio::test]
+async fn a_commit_refuses_a_locked_batch_that_names_another_receipt() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let (reservation, receipt_address, reserved) =
+        reserved_with_commit_inputs(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+
+    // The batch keeps its PDA, its Custody owner, its width and its structural
+    // validity. Only the receipt digest it records changes, so the checkpoint
+    // and the batch now disagree about which reservation was ingested.
+    let original = context
+        .banks_client
+        .get_account(reservation.batch)
+        .await
+        .expect("batch query")
+        .expect("batch exists");
+    let mut batch = DealerScenarioReservationBatchV1::decode(&original.data)
+        .expect("canonical batch decodes");
+    batch.receipt_digests = core::array::from_fn(|index| {
+        if index == 0 { [0x7c; 32] } else { [0_u8; 32] }
+    });
+    let substituted = batch.encode().expect("substituted batch encodes").to_vec();
+    assert_eq!(
+        substituted.len(),
+        original.data.len(),
+        "the substitution must keep the batch width"
+    );
+    context.set_account(
+        &reservation.batch,
+        &AccountSharedData::from(data_account(scenario.waist.custody_program, substituted)),
+    );
+
+    let bank = commit_bank(&scenario, payer, receipt_address, &reservation);
+    let processed = submit_commit(&mut context, &scenario, bank).await;
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "a batch naming another receipt must refuse; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        reserved,
+        "a refused commit must not advance the checkpoint"
+    );
 }
