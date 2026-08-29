@@ -1580,6 +1580,63 @@ name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-claims-affine-batch-program-test"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-product-runtime-v2-operator",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-claims-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-economic-slice-kernel",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-fractional-claims-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-rational-representation-v2-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
+ "dclutch-sha256-adapter",
+ "dclutch-source-contract",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
+ "spl-associated-token-account-interface",
+ "spl-token-2022-interface",
+]
+
+[[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
@@ -1619,6 +1676,7 @@ dependencies = [
  "dclutch-dealer-codec",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
+ "dclutch-fractional-atomic-program-test",
  "dclutch-market-core-codec",
  "dclutch-operator",
  "dclutch-product-payoff-v2-codec",
@@ -1720,6 +1778,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-fractional-atomic-program-test"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-claims-affine-batch-program-test",
+ "dclutch-claims-sbf",
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-fractional-atomic-test-caller-sbf",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-fractional-claims-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-product-runtime-v2-operator",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-fractional-atomic-test-caller-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-fractional-claim-contract",
+ "dclutch-refusal-registry",
+ "dclutch-release-set-contract",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-fractional-claim-contract"
 version = "0.1.0"
 dependencies = [
@@ -1741,6 +1841,17 @@ name = "dclutch-fractional-claim-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
+name = "dclutch-fractional-claims-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-sha256-adapter",
+ "sha2 0.10.9",
 ]
 
 [[package]]
