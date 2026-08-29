@@ -3342,6 +3342,13 @@ fn authenticate_fresh_admission_plan_v1(
         finality: Finality::Finalized,
     };
     rebind_admission_observation_v1(&mut snapshot.operator, observation);
+    // The frozen routing tables rebind exactly like the semantic accounts:
+    // their content cannot change (deactivation slot is u64::MAX and the
+    // founding froze the extension plan), and the v0 compiler demands the
+    // instruction observation on every table it loads through.
+    for table in &mut snapshot.routing_tables {
+        table.observation = observation;
+    }
     let unsigned = plan_user_position_admission_v1(&snapshot.operator).map_err(|error| {
         Error::new(format!(
             "fresh User Position admission reconstruction refused: {error:?}"
@@ -3362,7 +3369,7 @@ fn authenticate_fresh_admission_plan_v1(
         &unsigned.instructions,
         recent_blockhash,
         observation,
-        &[],
+        &snapshot.routing_tables,
     )
     .map_err(|error| Error::new(format!("recompile admission message: {error:?}")))?;
     let message = compiled.message.serialize();
