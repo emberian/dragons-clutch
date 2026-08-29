@@ -1824,6 +1824,36 @@ class ActivityTests(unittest.TestCase):
                 activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
             self.assertFalse((self.work / "private" / "caller-count").exists())
 
+    def test_progressive_devnet_callers_refuse_one_shot_adapter_contract(self) -> None:
+        write_json(self.scenario, v3_devnet_scenario_value())
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {"fixture": "checked-release"})
+        write_json(market, {"fixture": "market"})
+        write_json(
+            self.manifest,
+            v3_devnet_manifest_value(self.scenario, checked_release, market),
+        )
+        manifest = self.parsed()
+
+        with self.assertRaisesRegex(
+            activity.Refusal,
+            "progressive caller devnet-direct-trade-v1 under a one-shot dispatch contract",
+        ):
+            activity.validate_only(manifest)
+
+        invoked = self.root / "caller-invoked"
+        caller = executable(
+            self.root / "progressive-successor",
+            f"#!/bin/sh\ntouch '{invoked}'\nexit 0\n",
+        )
+        with self.assertRaisesRegex(activity.Refusal, "progressive caller"):
+            activity.probe_callers(
+                manifest,
+                {"dclutch-cli": caller, "successor": caller},
+            )
+        self.assertFalse(invoked.exists())
+
     def test_poll_only_fresh_and_partial_states_never_dispatch(self) -> None:
         manifest = self.parsed()
         caller = fake_caller(self.root / "recovery-caller")

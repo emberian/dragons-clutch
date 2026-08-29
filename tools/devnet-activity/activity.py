@@ -104,6 +104,18 @@ ACTIVITY_EVENT_KIND_ORDER = (
     "payout",
     "retirement",
 )
+# These public callers intentionally advance exactly one durable action per
+# invocation and require the same authenticated session to be invoked again.
+# An activity adapter has a different crash contract: it invokes its child once,
+# marks the whole adapter dispatching, and thereafter only polls the named
+# completion. Admitting either command here would therefore strand the first
+# non-terminal action while presenting the manifest as executable.
+PROGRESSIVE_SUCCESSOR_COMMANDS = frozenset(
+    {
+        "devnet-direct-trade-v1",
+        "devnet-terminal-sequence-v1",
+    }
+)
 ACTIVITY_RECONCILIATION_INVARIANTS = (
     "all-listed-signatures-finalized",
     "required-completion-transactions-successful",
@@ -1897,6 +1909,22 @@ def validate_caller_command(adapter_id: str, caller: str, argv: tuple[str, ...],
         raise Refusal(f"adapter {adapter_id} offers a devnet caller to owned loopback")
     if target == "devnet" and command == "intent":
         raise Refusal("an off-chain Direct intent cannot count as devnet Direct mutation")
+
+
+def require_one_shot_adapter_commands(manifest: Manifest) -> None:
+    """Refuse stepwise callers until the harness owns progressive recovery."""
+
+    for adapter in manifest.adapters:
+        if (
+            adapter.caller == "successor"
+            and adapter.argv[0] in PROGRESSIVE_SUCCESSOR_COMMANDS
+        ):
+            raise Refusal(
+                f"adapter {adapter.adapter_id} uses progressive caller "
+                f"{adapter.argv[0]} under a one-shot dispatch contract; "
+                "a progressive adapter must durably re-invoke each accepted "
+                "step and recover its child journals before polling terminal completion"
+            )
 
 
 def pointer(value: Any, path: str, label: str) -> Any:
@@ -3733,6 +3761,7 @@ def caller_binaries(dclutch_bin: Path, successor_bin: Path) -> dict[str, Path]:
 
 def probe_callers(manifest: Manifest, binaries: Mapping[str, Path]) -> dict[str, str]:
     """Prove each exact public command is dispatched before any wallet access."""
+    require_one_shot_adapter_commands(manifest)
     digests = {name: sha256_file(path) for name, path in binaries.items()}
     observed: set[tuple[str, str]] = set()
     for adapter in manifest.adapters:
@@ -5662,6 +5691,7 @@ def validate_only(manifest: Manifest) -> None:
     # no reason to construct an RPC or inspect a wallet.
     if not manifest.adapters:
         raise Refusal("activity manifest has no caller-backed adapters")
+    require_one_shot_adapter_commands(manifest)
 
 
 def stop(work: Path, reason: str) -> None:
