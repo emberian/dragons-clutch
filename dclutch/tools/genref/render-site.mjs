@@ -653,6 +653,41 @@ function servedBy(abs) {
   return null;
 }
 
+// The app export writes `route.html`; Pages serves its canonical public URL as
+// `/route`. Unlike that extensionless form, `/route/` is not an asset match,
+// so it needs an explicit redirect before a cold request reaches 404.html.
+// Check the assembled production artifact instead of trusting the source file:
+// the export's route set and its copied `_redirects` rules must stay together.
+function checkPagesTrailingSlashRoutes() {
+  const redirectsPath = path.join(outDir, "_redirects");
+  if (!isFile(redirectsPath)) {
+    console.error("render-site: missing Pages _redirects routing artifact");
+    return 1;
+  }
+  const redirects = new Set(
+    fs
+      .readFileSync(redirectsPath, "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#")),
+  );
+  let failures = 0;
+  for (const entry of fs.readdirSync(outDir).sort()) {
+    if (!entry.endsWith(".html") || entry === "index.html" || entry === "404.html") {
+      continue;
+    }
+    const route = `/${entry.slice(0, -".html".length)}`;
+    const required = `${route}/ ${route} 308`;
+    if (!redirects.has(required)) {
+      console.error(
+        `render-site: missing trailing-slash redirect ${JSON.stringify(required)}`,
+      );
+      failures++;
+    }
+  }
+  return failures;
+}
+
 // Routes the export declares dynamic: `/markets/:address` is rendered from a
 // path parameter, so no prerendered file exists and no href in a STATIC page
 // can name one. If one ever does, this list is the place to justify it.
@@ -664,6 +699,7 @@ function servedBy(abs) {
 const DYNAMIC_PREFIXES = ["/markets/"];
 
 let checkedPages = 0;
+broken += checkPagesTrailingSlashRoutes();
 for (const file of walkOut(outDir)) {
   if (!file.endsWith(".html")) continue;
   checkedPages++;

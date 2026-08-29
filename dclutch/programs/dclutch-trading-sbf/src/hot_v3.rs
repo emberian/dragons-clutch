@@ -188,7 +188,7 @@ use crate::{
         ChildReceiptBankV3, ExpectedReceiptProvenanceV4, receipt_dependency_width_v3,
         require_chain_receipt_width_v3,
     },
-    claims_composition_v3::claims_child_wire_capacity_v3,
+    claims_composition_v3::{SparsePostResourceVerificationV3, claims_child_wire_capacity_v3},
     core_composition_v3::{
         CoreCompositionParentV3, execute_core_route_v3, preflight_core_route_v3,
     },
@@ -286,9 +286,7 @@ use crate::resolution_composition_v3::{
     feature = "dealer-family"
 ))]
 use crate::{
-    claims_composition_v3::{
-        ClaimsRouteReceiptV3, SparsePostResourceVerificationV3, execute_claims_route_v3,
-    },
+    claims_composition_v3::{ClaimsRouteReceiptV3, execute_claims_route_v3},
     custody_composition_v3::{
         CustodyCompositionParentV3, execute_custody_route_v3, preflight_custody_route_v3,
     },

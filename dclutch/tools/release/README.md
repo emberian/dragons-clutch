@@ -1,5 +1,37 @@
 # Checked-release tooling
 
+## Final generated convergence
+
+After every protocol and caller source lane is frozen, converge all generated
+repository projections once from one clean, exact commit:
+
+```sh
+tools/release/final-generated-convergence.py --plan
+tools/release/final-generated-convergence.py \
+  --write --expected-head <full-40-hex-commit>
+tools/release/final-generated-convergence.py \
+  --check --expected-head <same-full-40-hex-commit>
+```
+
+The writer runs entirely offline and in this fixed order: every tracked Cargo
+workspace lock, every paired SDK/web `abi:*` writer, both ABI coverage
+ratchets, `tools/genref/generate.sh`, `tools/sbom/sbom_check.py`, then the full
+read-only verification again. It refuses a moving or dirty source tree, a
+workspace without its adjacent tracked lock, an ABI writer without a matching
+byte verifier, and any generated change outside these owners:
+
+- adjacent `Cargo.lock` files for tracked Cargo workspace roots;
+- `packages/dclutch-sdk/lib/generated/` and
+  `apps/dclutch-web/lib/generated/`;
+- `docs/reference/`, wholly owned by GENREF;
+- `tools/sbom/SBOM.md` and `tools/sbom/NOTICES.md`.
+
+ABI coverage is intentionally not rewritten by this batch. A new hand-stated
+magic, domain, or byte coordinate must be converted to a generated authority
+or receive explicit review before its ratchet baseline changes. A stale lock
+that cannot resolve offline likewise stops the batch; do not weaken a version
+constraint merely to make SBOM generation proceed.
+
 `checked-release-candidate.sh` builds the complete offline release candidate.
 It is local evidence, not a deployment, and it never signs, submits, funds, or
 publishes anything.

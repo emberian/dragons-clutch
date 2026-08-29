@@ -1,0 +1,26 @@
+# Canonical Pages URLs omit the trailing slash because the export emits
+# `route.html`. Preserve trailing-slash bookmarks and cold loads by redirecting
+# them to the same extensionless page before Pages looks up the static asset.
+/activity/ /activity 308
+/bounty/ /bounty 308
+/console/ /console 308
+/create/ /create 308
+/direct/ /direct 308
+/evidence/ /evidence 308
+/explorer/ /explorer 308
+/found/ /found 308
+/general/ /general 308
+/liquidity/ /liquidity 308
+/live/ /live 308
+/local/ /local 308
+/market/ /market 308
+/markets/ /markets 308
+/operate/ /operate 308
+/portfolio/ /portfolio 308
+/product-v2/ /product-v2 308
+/redeem/ /redeem 308
+/release/ /release 308
+/resolution/ /resolution 308
+/smoke/ /smoke 308
+/trade/ /trade 308
+/workbench/ /workbench 308
