@@ -101,7 +101,7 @@ type InfrastructureRpc = Pick<
   'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption'
 >;
 
-type ActivatedProjectionV1 = Readonly<{
+export type ActivatedProjectionV1 = Readonly<{
   releaseSetId: string;
   releaseSet: ExecutionReleaseSetV1;
   artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>;
@@ -203,7 +203,7 @@ function releaseSetBytes(artifacts: Readonly<Record<RegistryRole, ArtifactReleas
   return output;
 }
 
-async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram: string, address: string): Promise<ActivatedProjectionV1> {
+export async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram: string, address: string): Promise<ActivatedProjectionV1> {
   if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('activation cache has the wrong exact width, magic, schema, or profile');
   }

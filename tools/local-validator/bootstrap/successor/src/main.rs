@@ -37,6 +37,7 @@ mod private_lifecycle;
 mod pyth_vaa_provisioning;
 mod relayed;
 mod release_capture;
+mod release_identity;
 mod rpc;
 mod runtime;
 mod seed;

@@ -2670,6 +2670,9 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     // Key-free detectors first. Their authenticated result is fsynced before
     // the process opens any keypair file.
     let (substrate, observed_roles) = substrate_state(&mut rpc, &plan)?;
+    // The activated release must be the one actually running. Costs no extra
+    // RPC: substrate_state already read every role's live slot and ELF digest.
+    crate::release_identity::authenticate_activated_release_is_live_v1(&plan, &observed_roles)?;
     let mut states = vec![(StageV1::Substrate, substrate)];
     states.push((StageV1::Publication, publication_state(&mut rpc, &plan)?));
     states.push((StageV1::Initialize, initialize_state(&mut rpc, &plan)?));

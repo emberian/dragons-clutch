@@ -1380,7 +1380,7 @@ fn activation_input(plan: &SuccessorPlan, label: &str) -> Result<ArtifactActivat
 /// finalized record bodies. This is a projection builder, not a deployment
 /// authenticator: live ProgramData is admitted separately by substrate
 /// preflight and again by Registry while each role transaction executes.
-fn expected_activation(plan: &SuccessorPlan) -> Result<ActivatedExecutionReleaseSetV1> {
+pub(crate) fn expected_activation(plan: &SuccessorPlan) -> Result<ActivatedExecutionReleaseSetV1> {
     let release_set_pair = plan
         .records
         .get("execution_release_set")
