@@ -1173,6 +1173,108 @@ const TERMINAL_WIDTH: usize = 8;
 /// its own workspace; the operator's constant carries the same measurement and
 /// names this test.
 const SUPPORTED_TERMINAL_WIDTH: usize = 64;
+/// Lamports a funded failure walk pays the third party who finishes a market
+/// whose own relayer went silent.
+///
+/// A `ResolutionFailure` certificate whose `work_paid` is zero is refused by
+/// `validate_shape`, so the same fact that lets a holder exit at failure terms
+/// is the fact that records the walker being paid. The quantity is the one
+/// executed against the real Resolution ELF by the relayed campaign
+/// (`WALK_BOUNTY_LAMPORTS`, `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`).
+const FAILURE_WALK_BOUNTY_LAMPORTS: u64 = 250_000;
+
+/// Which terminal one campaign settles against.
+///
+/// Separating these from the action is what lets the campaign drive the two
+/// terminal *kinds* rather than only the two terminal *actions*: a market that
+/// a provider resolved, and a market that nobody resolved and that ended on its
+/// own pre-disclosed failure terms.
+#[derive(Clone, Copy)]
+struct TerminalTermsV1 {
+    /// Representation width, which is also the Product's outcome count.
+    width: usize,
+    /// The terminal coordinate Core committed to.
+    winner: u32,
+    /// The representation coordinate the holder holds and settles at.
+    coordinate: u32,
+    /// The exact Lean-owned certificate kind Resolution wrote.
+    kind: ResolutionCertificateKindV2,
+}
+
+impl TerminalTermsV1 {
+    /// A provider-backed resolution, with the holder at the usual coordinate.
+    ///
+    /// `winner` is what separates the two terminal actions: equal to the
+    /// holder's coordinate it redeems, anywhere else it pays exactly zero.
+    const fn provider(width: usize, winner: u32) -> Self {
+        Self {
+            width,
+            winner,
+            coordinate: OUTCOME,
+            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+        }
+    }
+
+    /// The market's own pre-disclosed failure terms.
+    ///
+    /// Product Runtime V2 reserves the FINAL result coordinate for explicit
+    /// failure, and `ResolutionCertificateV2::validate_terminal_product`
+    /// enforces that from both directions: an ordinary success may not select
+    /// it, and a `ResolutionFailure` must select exactly it. So the failure
+    /// region is not a flag on this fixture -- it is a coordinate, and the
+    /// holder who exits at failure terms is the holder standing on it.
+    fn failure(width: usize) -> Self {
+        let selector =
+            u32::try_from(width.checked_sub(1).expect("a Product has outcomes")).expect("selector");
+        Self {
+            width,
+            winner: selector,
+            coordinate: selector,
+            kind: ResolutionCertificateKindV2::ResolutionFailure,
+        }
+    }
+}
+
+/// The exact certificate bytes Resolution wrote for one terminal.
+///
+/// None of the fields that differ by kind is a choice this campaign made.
+/// `validate_shape` forces every one of them: a provider-backed success must
+/// carry a route, provider evidence and a result; a `ResolutionFailure` must
+/// carry NO route, NO provider evidence and NO result at all, must carry the
+/// funding allocation it consumed, and must carry nonzero work paid. `to_bytes`
+/// refuses any other combination, so this campaign cannot state failure terms
+/// that Resolution itself could not have written.
+fn terminal_certificate_bytes(
+    terms: TerminalTermsV1,
+    core_market: Pubkey,
+    product_record_digest: [u8; 32],
+) -> Vec<u8> {
+    let failed = matches!(terms.kind, ResolutionCertificateKindV2::ResolutionFailure);
+    ResolutionCertificateV2 {
+        kind: terms.kind,
+        market: core_market.to_bytes(),
+        route: if failed { [0; 32] } else { [0x87; 32] },
+        source_material: RESOLUTION_POLICY,
+        product_record_digest,
+        provider_evidence: if failed { [0; 32] } else { [0x88; 32] },
+        // A failure certificate names the Source material whose funding paid
+        // for the walk; a success consumed no failure allocation.
+        funding_allocation: if failed { RESOLUTION_POLICY } else { [0; 32] },
+        receipt_account: CERTIFICATE_ACCOUNT.to_bytes(),
+        generation: GENERATION,
+        attempt_index: 0,
+        schedule_index: 0,
+        selector: terms.winner,
+        work_paid: if failed { FAILURE_WALK_BOUNTY_LAMPORTS } else { 0 },
+        funding_remaining: 0,
+        result_numerator: i128::from(!failed),
+        result_denominator: u64::from(!failed),
+        observed_at: u64::from(!failed),
+    }
+    .to_bytes()
+    .expect("canonical Resolution certificate")
+    .to_vec()
+}
 
 /// Base Token-2022 Mint with no mint or freeze authority.
 ///
@@ -1190,6 +1292,8 @@ fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
 
 struct TerminalFixture {
     shared: NarrowFixtureV2,
+    /// The representation coordinate the holder holds and settles at.
+    coordinate: u32,
     release_set: [u8; 32],
     activation_cache: Pubkey,
     caller_authority: Pubkey,
@@ -1208,14 +1312,19 @@ struct TerminalFixture {
 
 /// Stage a resolved Market with its full Custody composition.
 ///
-/// `winner` selects the terminal outcome, which is what separates the two
+/// `terms.winner` selects the terminal outcome, which is what separates the two
 /// terminal actions: burning shards at the winner redeems collateral, burning
-/// them anywhere else pays exactly zero. Everything else is identical.
+/// them anywhere else pays exactly zero. `terms.kind` selects which terminal
+/// Resolution wrote -- a provider-backed success, or the market's own failure
+/// terms -- and `terms.coordinate` is where the holder stands. Everything else
+/// is identical across all of them.
 fn terminal_fixture(
-    width: usize,
-    winner: u32,
+    terms: TerminalTermsV1,
     action: FractionalExposureActionV2,
 ) -> (ProgramTest, TerminalFixture) {
+    let width = terms.width;
+    let winner = terms.winner;
+    let coordinate = usize::try_from(terms.coordinate).expect("representation coordinate");
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1294,6 +1403,7 @@ fn terminal_fixture(
     let compile = |reserve_owner: Pubkey| {
         compile_narrow_fixture_v2(NarrowFixtureInputV2 {
             outcome_count: width,
+            funded_coordinate: coordinate,
             registry_program: REGISTRY_PROGRAM_ID,
             core_program: CORE_PROGRAM_ID,
             claims_program: CLAIMS_PROGRAM_ID,
@@ -1303,7 +1413,6 @@ fn terminal_fixture(
             generation: GENERATION,
             actor_owner: actor,
             reserve_owner,
-            funded_coordinate: OUTCOME as usize,
             funded_balance: ACTOR_FUNDED_BALANCE - WRAP_NATIVE_CLAIMS,
             reserve_balance: WRAP_NATIVE_CLAIMS,
             position_revision: POSITION_REVISION,
@@ -1325,7 +1434,11 @@ fn terminal_fixture(
             bytes
         })
         .collect();
-    let shard_mint = Pubkey::new_from_array(shard_mints[OUTCOME as usize]);
+    let shard_mint = Pubkey::new_from_array(
+        *shard_mints
+            .get(coordinate)
+            .expect("a shard Mint at the settled coordinate"),
+    );
     let behavior_record = finalized(
         REGISTRY_PROGRAM_ID,
         TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
@@ -1450,32 +1563,11 @@ fn terminal_fixture(
 
     // The certificate is a flat account whose authority is that Core's state
     // names it; its own bytes must rejoin every Core identity.
-    let certificate_bytes = ResolutionCertificateV2 {
-        kind: ResolutionCertificateKindV2::ResolutionSuccess,
-        market: core_market.to_bytes(),
-        route: [0x87; 32],
-        source_material: RESOLUTION_POLICY,
-        product_record_digest: shared.product.digest,
-        provider_evidence: [0x88; 32],
-        funding_allocation: [0; 32],
-        receipt_account: CERTIFICATE_ACCOUNT.to_bytes(),
-        generation: GENERATION,
-        attempt_index: 0,
-        schedule_index: 0,
-        selector: winner,
-        work_paid: 0,
-        funding_remaining: 0,
-        result_numerator: 1,
-        result_denominator: 1,
-        observed_at: 1,
-    }
-    .to_bytes()
-    .expect("canonical Resolution certificate");
     add_account(
         &mut test,
         CERTIFICATE_ACCOUNT,
         CLAIMS_PROGRAM_ID,
-        certificate_bytes.to_vec(),
+        terminal_certificate_bytes(terms, core_market, shared.product.digest),
     );
 
     let custody_authority = Pubkey::find_program_address(
@@ -1568,7 +1660,7 @@ fn terminal_fixture(
             terminal_digest: CERTIFICATE_ACCOUNT.to_bytes(),
             expected_revision: ROOT_REVISION,
             quantity: TERMINAL_SHARDS,
-            representation_coordinate: OUTCOME,
+            representation_coordinate: terms.coordinate,
         },
     )
     .expect("canonical Fractional terminal request");
@@ -1592,6 +1684,7 @@ fn terminal_fixture(
         test,
         TerminalFixture {
             shared,
+            coordinate: terms.coordinate,
             release_set,
             activation_cache: activation_cache_key,
             caller_authority,
@@ -1761,8 +1854,7 @@ async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &Termi
 #[tokio::test]
 async fn the_claims_role_custody_replay_is_created_by_the_real_route() {
     let (test, fixture) = terminal_fixture(
-        TERMINAL_WIDTH,
-        OUTCOME,
+        TerminalTermsV1::provider(TERMINAL_WIDTH, OUTCOME),
         FractionalExposureActionV2::TerminalRedeem,
     );
     let mut context = test.start_with_context().await;
@@ -1790,8 +1882,7 @@ fn terminal_observe(fixture: &TerminalFixture) -> [Pubkey; 5] {
 #[tokio::test]
 async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
     let (test, fixture) = terminal_fixture(
-        TERMINAL_WIDTH,
-        LOSING_COORDINATE,
+        TerminalTermsV1::provider(TERMINAL_WIDTH, LOSING_COORDINATE),
         FractionalExposureActionV2::TerminalZeroBurn,
     );
     let mut context = test.start_with_context().await;
@@ -1802,7 +1893,7 @@ async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
     let replay_before = account(&mut context, fixture.custody_replay).await;
     assert_eq!(mint_supply(&before[0]), TERMINAL_SHARDS);
     assert_eq!(token_amount(&before[1]), TERMINAL_SHARDS);
-    assert_eq!(balance(&before[2], OUTCOME as usize), WRAP_NATIVE_CLAIMS);
+    assert_eq!(balance(&before[2], fixture.coordinate as usize), WRAP_NATIVE_CLAIMS);
 
     let (accepted, logs, units, result) = submit(
         &mut context,
@@ -1824,7 +1915,7 @@ async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
     // The shards are gone and the locked native Claims are released.
     assert_eq!(mint_supply(&after[0]), 0, "every shard is burned");
     assert_eq!(token_amount(&after[1]), 0);
-    assert_eq!(balance(&after[2], OUTCOME as usize), 0);
+    assert_eq!(balance(&after[2], fixture.coordinate as usize), 0);
     // Not one collateral atom moved, in either direction.
     assert_eq!(
         token_amount(&after[3]),
@@ -1863,8 +1954,7 @@ async fn observe5(context: &mut ProgramTestContext, keys: [Pubkey; 5]) -> [Accou
 #[tokio::test]
 async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
     let (test, fixture) = terminal_fixture(
-        TERMINAL_WIDTH,
-        OUTCOME,
+        TerminalTermsV1::provider(TERMINAL_WIDTH, OUTCOME),
         FractionalExposureActionV2::TerminalRedeem,
     );
     let mut context = test.start_with_context().await;
@@ -1893,7 +1983,7 @@ async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
     let after = observe5(&mut context, keys).await;
     assert_eq!(mint_supply(&after[0]), 0, "every redeemed shard is burned");
     assert_eq!(token_amount(&after[1]), 0);
-    assert_eq!(balance(&after[2], OUTCOME as usize), 0);
+    assert_eq!(balance(&after[2], fixture.coordinate as usize), 0);
 
     // Collateral is conserved: whatever left the Hoard arrived at the recipient.
     let paid = token_amount(&after[4]) - token_amount(&before[4]);
@@ -1918,6 +2008,198 @@ async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
     );
 }
 
+/// A holder exits a market NOBODY resolved, at the terms it disclosed up front.
+///
+/// This is the far end of the funded failure walk. The relayed campaign proves
+/// the first half against the real Resolution and Core ELFs -- a source goes
+/// silent, a wallet that is nobody walks the market past its own deadline and
+/// is paid a fixed bounty, and Core admits the resulting `ResolutionFailure`
+/// certificate so the Market ends Terminal at the Product's pre-disclosed
+/// failure region
+/// (`crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs` and
+/// `resolution_core_v3_lifecycle.rs`'s
+/// `a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms`).
+/// What had never executed anywhere is the half that a person actually cares
+/// about: taking the collateral home afterwards. Every terminal settlement in
+/// this tree, in every campaign, settled a certificate a provider stood behind.
+///
+/// So this is not a variant of the winning redemption. It is the first time any
+/// route in the tree has moved a collateral atom on the authority of a market's
+/// own failure. The whole 44-account frame is authenticated the same way, the
+/// same real Custody program signs the same real Token-2022 transfer, and the
+/// campaign checks conservation rather than that the transaction passed.
+#[tokio::test]
+async fn a_holder_exits_at_failure_terms_when_nobody_resolved_the_market() {
+    let terms = TerminalTermsV1::failure(TERMINAL_WIDTH);
+    let (test, fixture) = terminal_fixture(terms, FractionalExposureActionV2::TerminalRedeem);
+    let mut context = test.start_with_context().await;
+    create_custody_replay(&mut context, &fixture).await;
+
+    let custody_caller = paying_custody_caller(&fixture, terms.winner);
+    let keys = terminal_observe(&fixture);
+    let before = observe5(&mut context, keys).await;
+    assert_eq!(mint_supply(&before[0]), TERMINAL_SHARDS);
+    assert_eq!(token_amount(&before[3]), HOARD_ATOMS);
+    assert_eq!(token_amount(&before[4]), RECIPIENT_ATOMS);
+
+    let (accepted, logs, units, result) = submit(
+        &mut context,
+        terminal_instruction(&fixture, custody_caller, false),
+    )
+    .await;
+    assert!(
+        accepted,
+        "a holder must be able to exit on a market's own failure terms: {result:?}"
+    );
+    assert!(
+        logs.iter()
+            .any(|line| line.contains(&CUSTODY_PROGRAM_ID.to_string())),
+        "the exit must really enter the Custody program"
+    );
+    assert!(units > 30_000, "{units} compute units");
+
+    let after = observe5(&mut context, keys).await;
+    assert_eq!(mint_supply(&after[0]), 0, "every redeemed shard is burned");
+    assert_eq!(token_amount(&after[1]), 0);
+    assert_eq!(balance(&after[2], fixture.coordinate as usize), 0);
+
+    // Collateral is conserved to the atom: whatever left the Hoard arrived at
+    // the holder, and the pair sums to exactly what it opened with.
+    let paid = token_amount(&after[4]) - token_amount(&before[4]);
+    assert!(paid > 0, "failure terms must actually pay the holder");
+    assert_eq!(
+        token_amount(&before[3]) - token_amount(&after[3]),
+        paid,
+        "every atom the holder gained left the Hoard"
+    );
+    assert_eq!(
+        token_amount(&after[3]) + token_amount(&after[4]),
+        HOARD_ATOMS + RECIPIENT_ATOMS
+    );
+
+    // And the Custody cursor advanced exactly once, so the collateral moved
+    // under a replay-protected order rather than a repeatable one.
+    let replay_after = account(&mut context, fixture.custody_replay).await;
+    assert_eq!(
+        CustodyReplayV1::decode(&replay_after.data)
+            .expect("replay decodes")
+            .next_revision,
+        CUSTODY_EXPECTED_REVISION + 1,
+    );
+
+    // Replayed, the identical exit is refused and nothing moves a second time.
+    //
+    // The gate that bites is named rather than assumed: `ClaimsSbfError::Token`,
+    // because a Fractional exit BURNS the instrument it settles, so the second
+    // attempt has no shards left to burn and the Token-2022 profile refuses
+    // before the settlement's own optimistic revisions are ever compared. That
+    // is the honest depth of this hostile -- the Custody cursor is not what
+    // answers here; the stale-cursor gate is driven directly by
+    // `a_stale_custody_cursor_refuses_the_second_wallet_payout` in
+    // `programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs`.
+    let replayed = terminal_instruction(&fixture, custody_caller, false);
+    context
+        .get_new_latest_blockhash()
+        .await
+        .expect("a distinct blockhash, so the replay is a new transaction");
+    let (replay_accepted, _logs, _units, replay_result) = submit(&mut context, replayed).await;
+    assert!(!replay_accepted, "a settled exit must not settle twice");
+    assert_eq!(
+        custom_refusal(&replay_result),
+        Some(0x5009),
+        "ClaimsSbfError::Token: the exit burned the claim it settled, so a \
+         second exit has nothing left to burn"
+    );
+    let settled = observe5(&mut context, keys).await;
+    assert_eq!(after, settled, "a refused replay moves nothing");
+    let replay_cursor = account(&mut context, fixture.custody_replay).await;
+    assert_eq!(
+        CustodyReplayV1::decode(&replay_cursor.data)
+            .expect("replay decodes")
+            .next_revision,
+        CUSTODY_EXPECTED_REVISION + 1,
+        "and the Custody cursor advanced once in total, not twice"
+    );
+}
+
+/// A provider may not resolve INTO the market's pre-disclosed failure region.
+///
+/// One field apart from the exit above -- the certificate kind, and the shape
+/// `validate_shape` forces to go with it. `validate_terminal_product` reserves
+/// the final result coordinate for explicit failure, so a success certificate
+/// that selects it is refused even though Core's own winner, the selector, the
+/// market, the generation and the Product record all agree. Its negative
+/// control is the test above, which is the identical fixture with the honest
+/// kind and which commits.
+#[tokio::test]
+async fn a_provider_success_may_not_occupy_the_pre_disclosed_failure_cell() {
+    let honest = TerminalTermsV1::failure(TERMINAL_WIDTH);
+    let (test, fixture) = terminal_fixture(
+        TerminalTermsV1 {
+            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            ..honest
+        },
+        FractionalExposureActionV2::TerminalRedeem,
+    );
+    let mut context = test.start_with_context().await;
+    create_custody_replay(&mut context, &fixture).await;
+
+    let custody_caller = paying_custody_caller(&fixture, honest.winner);
+    let keys = terminal_observe(&fixture);
+    let before = observe5(&mut context, keys).await;
+    let (accepted, _logs, _units, result) = submit(
+        &mut context,
+        terminal_instruction(&fixture, custody_caller, false),
+    )
+    .await;
+    assert!(!accepted);
+    assert_eq!(
+        custom_refusal(&result),
+        Some(0x5002),
+        "ClaimsSbfError::Identity: validate_terminal_product reserves the final \
+         coordinate for explicit failure"
+    );
+    assert_eq!(before, observe5(&mut context, keys).await);
+}
+
+/// And failure terms may not be claimed for an ordinary coordinate.
+///
+/// The mirror of the test above, and it differs from the committed winning
+/// redemption by exactly ONE BYTE: the certificate kind. Everything else --
+/// the winner, the selector, the holder's coordinate, the derived Custody
+/// caller, the payout, the whole 44-account frame -- is byte-identical to
+/// `the_winning_coordinate_redeems_collateral_from_the_markets_hoard`, which
+/// commits. That test is this one's negative control.
+#[tokio::test]
+async fn failure_terms_may_not_be_claimed_for_an_ordinary_coordinate() {
+    let (test, fixture) = terminal_fixture(
+        TerminalTermsV1 {
+            kind: ResolutionCertificateKindV2::ResolutionFailure,
+            ..TerminalTermsV1::provider(TERMINAL_WIDTH, OUTCOME)
+        },
+        FractionalExposureActionV2::TerminalRedeem,
+    );
+    let mut context = test.start_with_context().await;
+    create_custody_replay(&mut context, &fixture).await;
+
+    let custody_caller = paying_custody_caller(&fixture, OUTCOME);
+    let keys = terminal_observe(&fixture);
+    let before = observe5(&mut context, keys).await;
+    let (accepted, _logs, _units, result) = submit(
+        &mut context,
+        terminal_instruction(&fixture, custody_caller, false),
+    )
+    .await;
+    assert!(!accepted);
+    assert_eq!(
+        custom_refusal(&result),
+        Some(0x5002),
+        "ClaimsSbfError::Identity: a ResolutionFailure must select exactly the \
+         final coordinate, and this one selects an ordinary cell"
+    );
+    assert_eq!(before, observe5(&mut context, keys).await);
+}
+
 /// A paying redemption needs the derived Custody caller, not the Claims program.
 ///
 /// On the zero-payout path coordinate 23 must literally BE the Claims program,
@@ -1935,8 +2217,7 @@ async fn the_winning_coordinate_redeems_collateral_from_the_markets_hoard() {
 #[tokio::test]
 async fn a_paying_redemption_refuses_the_zero_payout_custody_caller() {
     let (test, fixture) = terminal_fixture(
-        TERMINAL_WIDTH,
-        OUTCOME,
+        TerminalTermsV1::provider(TERMINAL_WIDTH, OUTCOME),
         FractionalExposureActionV2::TerminalRedeem,
     );
     let mut context = test.start_with_context().await;
@@ -2015,7 +2296,7 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
         expected_position_revision: POSITION_REVISION,
         expected_custody_revision: CUSTODY_EXPECTED_REVISION,
         quantity: WRAP_NATIVE_CLAIMS,
-        claim_index: OUTCOME,
+        claim_index: fixture.coordinate,
         transfer_index: 0,
     })
     .expect("terminal settlement request");
@@ -2069,7 +2350,7 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
             request_id: terminal_digest,
             caller_role: CallerRole::Trading,
             terminal: TerminalScenarioV3::Categorical(winner),
-            claim_index: OUTCOME,
+            claim_index: fixture.coordinate,
             quantity: WRAP_NATIVE_CLAIMS,
             expected_generation: GENERATION,
             expected_market_revision: market.revision,
@@ -2173,8 +2454,7 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
 async fn the_terminal_settlement_has_headroom_at_the_supported_width_and_none_far_above_it() {
     async fn settles(width: usize) -> (bool, u64) {
         let (test, fixture) = terminal_fixture(
-            width,
-            LOSING_COORDINATE,
+            TerminalTermsV1::provider(width, LOSING_COORDINATE),
             FractionalExposureActionV2::TerminalZeroBurn,
         );
         let mut context = test.start_with_context().await;
