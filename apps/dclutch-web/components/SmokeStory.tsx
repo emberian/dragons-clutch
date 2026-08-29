@@ -53,7 +53,7 @@ export default function SmokeStory() {
 
     <section className="trade-v3-card">
       <header><span>03</span><div><h2>Adversarial truth · the abandoned market</h2><p>We will switch the messenger off on purpose. Then you finish the market and get paid for it.</p></div></header>
-      <p className="direct-status">This is the test most markets never dare to run: what happens when everyone responsible walks away? Here, the market has already set money aside for exactly this moment. Once the deadline passes, any wallet — yours — can send one ordinary transaction that closes the market to its pre-announced fallback outcome and collects the posted bounty for doing it. No permission, no account, no special software.</p>
+      <p className="direct-status">This is the test most markets never dare to run: what happens when everyone responsible walks away? Here, the market has already set money aside for exactly this moment. Once the deadline passes, any wallet — yours — can send one ordinary transaction that closes the market to its pre-announced fallback outcome and collects the posted bounty for doing it. No permission, no account, no special software. <strong>That is how it will work; none of these markets is open yet</strong>, so today this is a description rather than an invitation.</p>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/bounty">How to collect the bounty →</Anchor>
       </div>

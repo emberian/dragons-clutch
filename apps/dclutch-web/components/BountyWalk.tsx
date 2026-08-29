@@ -53,6 +53,7 @@ export default function BountyWalk() {
         <p className="eyebrow">The failure walk · anyone can finish an abandoned market</p>
         <h1>Get paid to close<br /><em>an abandoned market.</em></h1>
         <p>If a market&apos;s data source goes silent, the market does not get stuck. After its deadline, any wallet can push it to the fallback outcome it promised before it opened — and collect a bounty the market set aside for exactly this. You need a wallet and a little SOL for the fee. Nothing else: no account, no permission, no relationship with anyone involved.</p>
+        <p><strong>You cannot do this today.</strong> No market is open, so there is none to close and no bounty to collect. This page walks the design, and the command below stops at a preview.</p>
       </div>
       <aside>
         <span>Where this stands</span>
