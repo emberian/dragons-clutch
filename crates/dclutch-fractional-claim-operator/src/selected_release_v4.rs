@@ -103,9 +103,17 @@ pub const FRACTIONAL_SELECTED_ACTIONS_V4: [FractionalExposureActionV2;
 ///   units 463k 519k 593k 731k 897k 1356k   1393k   exhausted
 /// ```
 ///
+/// The arithmetic maximum is 98, and this constant is deliberately not 98. At
+/// that width the margin is 6,672 units out of 1,400,000 -- under half a
+/// percent -- which is inside build-to-build variation: width 98 settles
+/// against one build of the same committed source and exhausts the budget
+/// against another. A published bound may not depend on which machine compiled
+/// Claims, so the supported width keeps roughly a third of the budget in
+/// reserve instead.
+///
 /// Measured against real ELFs by
-/// `the_terminal_settlement_fits_to_width_98_and_no_further` in
-/// `programs/dclutch-claims-sbf/program-test/fractional-atomic/`.
+/// `the_terminal_settlement_has_headroom_at_the_supported_width_and_none_far_above_it`
+/// in `programs/dclutch-claims-sbf/program-test/fractional-atomic/`.
 ///
 /// A release publishes `TerminalRedeem` and `TerminalZeroBurn` among its four
 /// actions, so publishing above this width would publish a capability that can
@@ -116,7 +124,7 @@ pub const FRACTIONAL_SELECTED_ACTIONS_V4: [FractionalExposureActionV2;
 /// This constant and the campaign that measures it must move together: if the
 /// terminal path's compute cost changes, that test fails rather than this
 /// number silently becoming a lie.
-pub const FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4: u32 = 98;
+pub const FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4: u32 = 64;
 
 /// Canonical publication magic.
 pub const FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4: [u8; 8] = *b"DCFRPB04";

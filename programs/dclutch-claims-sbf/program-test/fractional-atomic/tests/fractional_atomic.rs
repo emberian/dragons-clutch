@@ -1137,6 +1137,14 @@ const LOSING_COORDINATE: u32 = 1;
 /// Claims representation root, so its compute cost grows with the width in a
 /// way the open-market actions' does not. See the ceiling campaign below.
 const TERMINAL_WIDTH: usize = 8;
+/// The supported Fractional representation width.
+///
+/// Must equal `FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4` in
+/// `dclutch-fractional-claim-operator`, which refuses to publish a capability
+/// above it. The two are duplicated rather than shared because this campaign is
+/// its own workspace; the operator's constant carries the same measurement and
+/// names this test.
+const SUPPORTED_TERMINAL_WIDTH: usize = 64;
 
 /// Base Token-2022 Mint with no mint or freeze authority.
 ///
@@ -2032,27 +2040,31 @@ fn paying_custody_caller(fixture: &TerminalFixture, winner: u32) -> Pubkey {
     .0
 }
 
-/// The terminal settlement stops fitting a transaction above width 98.
+/// The terminal settlement has real headroom at width 64 and none at 128.
 ///
-/// This is the sharpest edge in the family and it is not where anything else
-/// says it should be. Three separate layers admit a representation width of
-/// 256 -- the `U8` action selector's index space, the Fractional terms codec,
-/// and `MAX_COMPOSITION_REPRESENTATION_WIDTH_V3` -- but a terminal settlement
-/// translates every Product result coordinate onto every Claims representation
-/// root, and that work grows until it exhausts the transaction:
+/// A terminal settlement translates every Product result coordinate onto every
+/// Claims representation root, so its cost grows with the width in a way the
+/// open-market actions' does not:
 ///
 /// ```text
 ///   width   8   16   32   48   64    96      98      99
 ///   units 463k 519k 593k 731k 897k 1356k   1393k   exhausted
 /// ```
 ///
-/// So a Fractional Market wider than 98 outcomes can be founded, and can be
-/// wrapped into, and can never be redeemed from. That is a trap rather than a
-/// limit, which is why it is pinned here rather than left as a note: the
-/// margin at 98 is under seven thousand units, so any compute regression in
-/// the terminal path lowers the real ceiling, and this test says so.
+/// The arithmetic maximum is 98, and this test deliberately does NOT pin it.
+/// At 98 the margin is 6,672 units out of 1,400,000 -- under half a percent --
+/// and that is inside build-to-build variation: 98 settles against one build of
+/// the same committed source and exhausts the budget against another. A bound
+/// that depends on which machine compiled Claims is not a bound.
+///
+/// So the campaign pins a width with margin that survives a rebuild, and pins
+/// that the far side genuinely does not settle. Three separate layers admit 256
+/// -- the `U8` selector's index space, the Fractional terms codec, and
+/// `MAX_COMPOSITION_REPRESENTATION_WIDTH_V3` -- and none of them is wrong; the
+/// terminal route is simply narrower than all of them, and a Market wider than
+/// this can be founded, wrapped into, and never redeemed from.
 #[tokio::test]
-async fn the_terminal_settlement_fits_to_width_98_and_no_further() {
+async fn the_terminal_settlement_has_headroom_at_the_supported_width_and_none_far_above_it() {
     async fn settles(width: usize) -> (bool, u64) {
         let (test, fixture) = terminal_fixture(
             width,
@@ -2069,11 +2081,17 @@ async fn the_terminal_settlement_fits_to_width_98_and_no_further() {
         (accepted, units)
     }
 
-    let (last_fits, units) = settles(98).await;
-    assert!(last_fits, "width 98 is the widest terminal settlement that fits");
-    assert!(units < 1_400_000, "{units} units");
+    let supported = SUPPORTED_TERMINAL_WIDTH;
+    let (fits, units) = settles(supported).await;
+    assert!(fits, "the supported width must settle");
+    // A fifth of the budget in reserve, so a modest compute regression upstream
+    // does not silently make published capabilities unredeemable.
+    assert!(
+        units < 1_120_000,
+        "the supported width must keep real headroom, used {units} of 1,400,000"
+    );
 
-    let (over, exhausted) = settles(99).await;
-    assert!(!over, "width 99 must not settle");
+    let (over, exhausted) = settles(128).await;
+    assert!(!over, "width 128 must not settle");
     assert_eq!(exhausted, 1_400_000, "and it fails by exhausting the budget");
 }
