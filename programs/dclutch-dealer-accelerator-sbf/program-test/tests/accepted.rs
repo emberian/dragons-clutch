@@ -17,18 +17,24 @@
 //! quotes nothing, and holds no inventory. It is not an AMM, an order book, or a
 //! quote surface.
 
-use std::vec::Vec;
+use std::{env, vec::Vec};
 
 use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
     scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1,
-    scenario_custody_reservation_v1::DealerScenarioCustodyEffectManifestV1,
+    scenario_custody_reservation_v1::{
+        DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1, DealerScenarioCustodyEffectManifestV1,
+        DealerScenarioCustodyEffectV1, DealerScenarioCustodyRequestKindV1,
+    },
     scenario_membership_manifest_v1::{
         DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
     },
-    scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1,
+    scenario_reservation_receipt_v1::{
+        DEALER_SCENARIO_MAX_RESERVATIONS_V1, DEALER_SCENARIO_RESERVATION_RECEIPT_PDA_DOMAIN_V1,
+        DealerScenarioReservationActionV1, DealerScenarioReservationReceiptV1,
+    },
 };
 use dclutch_operator::{
     dealer_scenario_checkpoint_v1::{
@@ -37,7 +43,7 @@ use dclutch_operator::{
         DealerAcceptedTranscriptInputV4, DealerScenarioCommitAccountsV1,
         DealerScenarioCommitEffectAccountsV1, DealerScenarioEvaluationBodiesV1,
         build_dealer_accepted_transcript_v4, build_dealer_scenario_checkpoint_cleanup_v1,
-        build_dealer_scenario_checkpoint_create_v1,
+        build_dealer_scenario_checkpoint_create_v1, build_dealer_scenario_checkpoint_reserve_v1,
         build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
         dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
         dealer_scenario_membership_manifest_address_v1,
@@ -134,7 +140,20 @@ const ALL_ROLES: [ExecutionRoleV1; 5] = [
 ];
 
 /// Deployment slot every role in this release set is pinned to.
-const WAIST_SLOT: u64 = 77;
+///
+/// Genesis writes slot zero and the bank runs above it, so an immutable
+/// slot-pinned release is the only generation loadable here.
+const WAIST_SLOT: u64 = 0;
+
+/// Read one real artifact the campaign is evidence about.
+fn elf(name: &str) -> Vec<u8> {
+    let directory = env::var("SBF_OUT_DIR").expect(
+        "SBF_OUT_DIR is required: this campaign is real-ELF evidence and refuses to run without \
+         the artifacts under test",
+    );
+    std::fs::read(std::path::Path::new(&directory).join(format!("{name}.so")))
+        .expect("the campaign refuses to run without its real artifact")
+}
 
 /// The genuine release waist the reservation route authenticates against.
 ///
@@ -153,6 +172,7 @@ struct ReleaseWaist {
     cache_body: Vec<u8>,
     program_body: Vec<u8>,
     programdata_body: Vec<u8>,
+    custody_elf: Vec<u8>,
 }
 
 /// The exact 36-byte Loader V3 Program account body.
@@ -204,7 +224,9 @@ fn release_waist() -> ReleaseWaist {
     let custody_program = Pubkey::new_from_array([0xe1; 32]);
     let custody_programdata =
         Pubkey::find_program_address(&[custody_program.as_ref()], &bpf_loader_upgradeable::ID).0;
-    let elf = vec![0xe2_u8; 96];
+    // The Custody role is pinned to a real deployed artifact, not a stand-in:
+    // the activation binds this exact ELF digest and slot.
+    let elf = elf("dclutch_custody_sbf");
     let release = ArtifactReleaseV1::new(
         ProgramIdentityV1::new(custody_program.to_bytes()).expect("program identity"),
         ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity"),
@@ -259,6 +281,7 @@ fn release_waist() -> ReleaseWaist {
         cache_body,
         program_body: loader_program_body(custody_programdata),
         programdata_body: loader_programdata_body(WAIST_SLOT, None, &elf),
+        custody_elf: elf,
     }
 }
 
@@ -520,21 +543,14 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         data_account(system_program::ID, Vec::new()),
     );
     add_executable(&mut test, MANIFEST_PRODUCER);
-    // The genuine release waist reservation authenticates against.
-    test.add_account(scenario.waist.registry, Account {
-        lamports: 1,
-        data: Vec::new(),
-        owner: solana_sdk_ids::native_loader::ID,
-        executable: true,
-        rent_epoch: 0,
-    });
-    test.add_account(scenario.waist.custody_program, Account {
-        lamports: Rent::default().minimum_balance(scenario.waist.program_body.len()).max(1),
-        data: scenario.waist.program_body.clone(),
-        owner: bpf_loader_upgradeable::ID,
-        executable: true,
-        rent_epoch: 0,
-    });
+    // The genuine release waist reservation authenticates against. The Custody
+    // role is installed as a real loadable deployment and its ProgramData is
+    // then written to the exact slot and authority the activation pinned.
+    add_executable(&mut test, scenario.waist.registry);
+    test.add_upgradeable_program_to_genesis(
+        "dclutch_custody_sbf",
+        &scenario.waist.custody_program,
+    );
     test.add_account(
         scenario.waist.custody_programdata,
         data_account(bpf_loader_upgradeable::ID, scenario.waist.programdata_body.clone()),
@@ -685,7 +701,7 @@ async fn create_checkpoint(context: &mut ProgramTestContext, scenario: &Scenario
 }
 
 #[tokio::test]
-async fn real_trading_elf_executes_the_accepted_transition_through_evaluation() {
+async fn real_trading_elf_executes_the_accepted_transition_through_reservation() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
     let mut journal = DealerScenarioCheckpointJournalV1::planned(TRADING, scenario.request_digest)
@@ -831,6 +847,72 @@ async fn real_trading_elf_executes_the_accepted_transition_through_evaluation() 
         .record_evaluated(sealed, 1, hash(&after_evaluation).to_bytes())
         .expect("journal records the evaluation it observed");
 
+    // Custody locks the value the commit will spend. Trading does not call
+    // Custody to learn this: it authenticates the Custody-owned receipt out of
+    // the activated release set, then re-reads the reservation account and
+    // refuses any poststate the receipt did not commit.
+    let reservation =
+        reservation_evidence(&scenario, &after_evaluation, evidence.effects_digest);
+    for (key, body) in reservation.installed.iter() {
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(scenario.waist.custody_program, body.clone())),
+        );
+    }
+    let packet = build_dealer_scenario_checkpoint_reserve_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        sysvar::clock::ID,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+        scenario.waist.registry,
+        reservation.receipt_address,
+        reservation.reservation_state,
+        MANIFEST_PRODUCER,
+        EFFECTS,
+        EFFECT_BODY,
+        0,
+        Hash::default(),
+        &[],
+    )
+    .expect("reserve packet");
+    assert_eq!(
+        packet.route,
+        DealerScenarioCheckpointRouteV1::Reserve(0),
+        "the reservation is the zeroth evaluated effect"
+    );
+    assert!(
+        packet.lock_census.unique_account_lock_count <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "reservation must be lock-bounded"
+    );
+    peak_locks = peak_locks.max(packet.lock_census.unique_account_lock_count);
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert!(
+        processed.result.is_ok(),
+        "the reservation must be ingested; observed {:?} logs {:?}",
+        processed.result,
+        processed.metadata.as_ref().map(|value| &value.log_messages)
+    );
+    let after_reservation = checkpoint_body(&mut context, &scenario).await;
+    assert_ne!(
+        after_reservation, after_evaluation,
+        "ingesting a reservation advances the checkpoint"
+    );
+    let returned = processed
+        .metadata
+        .as_ref()
+        .and_then(|value| value.return_data.as_ref())
+        .map(|value| value.data.clone())
+        .expect("reservation returns its receipt digest");
+    let reserved = <[u8; 32]>::try_from(returned.as_slice()).expect("32-byte receipt digest");
+    journal
+        .record_reservation(0, reserved, hash(&after_reservation).to_bytes())
+        .expect("journal records the reservation it observed");
+
     assert!(
         peak_locks <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
         "the executed transcript's peak lock count is {peak_locks}, which must stay inside the \
@@ -842,6 +924,7 @@ async fn real_trading_elf_executes_the_accepted_transition_through_evaluation() 
 struct EvaluationEvidence {
     receipt_address: Pubkey,
     receipt_body: Vec<u8>,
+    effects_digest: [u8; 32],
     installed: Vec<(Pubkey, Vec<u8>)>,
 }
 
@@ -852,7 +935,20 @@ struct EvaluationEvidence {
 /// purely by the digests the receipt commits, and the effect bodies themselves
 /// are authenticated later, at reservation.
 fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> EvaluationEvidence {
-    let effect_body = vec![0xc7; 96];
+    let effect_body = DealerScenarioCustodyEffectV1 {
+        kind: DealerScenarioCustodyRequestKindV1::Canonical,
+        ordinal: 0,
+        effect_count: 1,
+        producer_program: MANIFEST_PRODUCER.to_bytes(),
+        checkpoint: scenario.checkpoint.to_bytes(),
+        request_digest: scenario.request_digest,
+        source_after: 90,
+        destination_after: 110,
+        request_payload: [0_u8; DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1],
+    }
+    .encode()
+    .expect("canonical effect body encodes")
+    .to_vec();
     let manifest = DealerScenarioCustodyEffectManifestV1 {
         effect_count: 1,
         producer_program: MANIFEST_PRODUCER.to_bytes(),
@@ -903,6 +999,7 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
     EvaluationEvidence {
         receipt_address,
         receipt_body: receipt_body.clone(),
+        effects_digest: hash(&effects_body).to_bytes(),
         installed: vec![
             (receipt_address, receipt_body),
             (CANDIDATE_BANK, candidate_bank),
@@ -1537,4 +1634,62 @@ async fn an_expired_checkpoint_refuses_a_substituted_rent_beneficiary() {
         before,
         "a refused close must leave the checkpoint intact"
     );
+}
+
+
+/// Custody-owned reservation evidence for one evaluated effect.
+struct ReservationEvidence {
+    receipt_address: Pubkey,
+    reservation_state: Pubkey,
+    installed: Vec<(Pubkey, Vec<u8>)>,
+}
+
+/// Publish the Custody reservation receipt Trading will accept for one effect.
+///
+/// The receipt is Custody-owned and Custody-derived: its address is scoped to
+/// the checkpoint, the request, the action and the ordinal, and it commits both
+/// the exact checkpoint bytes Custody observed and the reservation account's
+/// poststate. Trading re-reads the reservation account and refuses any receipt
+/// whose poststate does not match what is actually on chain.
+fn reservation_evidence(
+    scenario: &Scenario,
+    checkpoint_body: &[u8],
+    effects_digest: [u8; 32],
+) -> ReservationEvidence {
+    let reservation_state = Pubkey::new_from_array([0xe8; 32]);
+    let reservation_body = vec![0xe9_u8; 64];
+    let receipt = DealerScenarioReservationReceiptV1 {
+        action: DealerScenarioReservationActionV1::Reserve,
+        effect_ordinal: 0,
+        effect_count: 1,
+        producer_program: scenario.waist.custody_program.to_bytes(),
+        checkpoint: scenario.checkpoint.to_bytes(),
+        checkpoint_prestate_digest: hash(checkpoint_body).to_bytes(),
+        request_digest: scenario.request_digest,
+        effects_digest,
+        reservation: reservation_state.to_bytes(),
+        reservation_prestate_digest: hash(&[] as &[u8]).to_bytes(),
+        reservation_poststate_digest: hash(&reservation_body).to_bytes(),
+        prior_receipt_digest: [0_u8; 32],
+    };
+    let receipt_address = Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_RESERVATION_RECEIPT_PDA_DOMAIN_V1,
+            scenario.checkpoint.as_ref(),
+            &scenario.request_digest,
+            &[DealerScenarioReservationActionV1::Reserve as u8],
+            &[0],
+        ],
+        &scenario.waist.custody_program,
+    )
+    .0;
+    let receipt_body = receipt.encode().expect("reservation receipt encodes").to_vec();
+    ReservationEvidence {
+        receipt_address,
+        reservation_state,
+        installed: vec![
+            (receipt_address, receipt_body),
+            (reservation_state, reservation_body),
+        ],
+    }
 }
