@@ -45,7 +45,9 @@ on a local test chain you can run yourself.
   devnet trading today; there is no independent indexer.
 - A TypeScript SDK ([`packages/dclutch-sdk`](packages/dclutch-sdk)) and a
   command-line client ([`packages/dclutch-cli`](packages/dclutch-cli))
-  drive the same flows from code and from a terminal.
+  build and check the same flows from code and from a terminal. The CLI
+  founds a market and joins one; its `buy` and `sell` refuse, and its
+  failure walk previews without submitting.
 
 Not done yet: the Structured product family is still being built, the
 General and Dealer trading paths have not run their first live trades, and

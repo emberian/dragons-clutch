@@ -169,9 +169,12 @@ poststates from finalized history.
 
 ## Redeeming
 
-The payout constructor and finalizer have local execution evidence. There is
-no current devnet Market that can use this route, so the example below is for
-a local validator or a compatible custom deployment. The full flow has three
+Payout is not open. There is no devnet Market that can use this route, and
+the accepted local run stops after admitting a participant, so there is no
+chain you can execute this against today either. Read what follows as the
+shape the flow will have, not as a path you can run — the constructor and
+finalizer below are real and tested, and what is missing is a resolved
+market to point them at. The full flow has three
 separately finalized parts: create the market's
 payment record if it does not exist, publish and freeze the payout lookup
 table, then sign the payout itself. Do not combine those steps into one
