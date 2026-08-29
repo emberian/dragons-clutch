@@ -20,6 +20,7 @@ export const COLD_CLIENT_CHAIN_STEPS_V1 = Object.freeze([
   'resolution.inspect',
   'redeem.inspect',
   'redeem.prepare-unsigned',
+  'retirement.inspect',
 ] as const);
 
 export type ColdClientChainStepV1 = typeof COLD_CLIENT_CHAIN_STEPS_V1[number];
@@ -162,6 +163,7 @@ function enforceDependencies(
     case 'direct.inspect':
     case 'resolution.inspect':
     case 'redeem.inspect':
+    case 'retirement.inspect':
       if (!ready(prior, 'market.inspect')) throw new Error(`${result.step} became ready without an authenticated Market`);
       break;
     case 'direct.preview-unsigned':

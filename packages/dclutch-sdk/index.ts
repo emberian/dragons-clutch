@@ -53,6 +53,7 @@ export * from './lib/solanaLimits';
 export * from './lib/claimsCustodyReplay';
 export * from './lib/walletTerminalPayoutV3';
 export * from './lib/resolutionCertificateV2';
+export * from './lib/aggregateRetirement';
 
 // Founding and infrastructure: the record graph a market stands on.
 export * from './lib/coreFound';

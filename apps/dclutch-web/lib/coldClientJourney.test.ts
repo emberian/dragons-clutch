@@ -52,7 +52,7 @@ function adapter(runStep = vi.fn(async (step: ColdClientChainStepV1) => outcome(
 }
 
 describe('cold-client public journey contract', () => {
-  it('walks discovery through unsigned Direct and redeem preparation in one fixed order', async () => {
+  it('walks discovery through unsigned Direct, redeem preparation, and retirement inspection in one fixed order', async () => {
     const harness = adapter();
     const report = await runColdClientJourneyV1(harness, {
       deploymentKey: 'checked-devnet-v7',
@@ -68,6 +68,7 @@ describe('cold-client public journey contract', () => {
     expect(report.steps.find((step) => step.step === 'direct.inspect')?.truths).toContainEqual(expect.objectContaining({ subject: 'Direct capability', verdict: 'authenticated' }));
     expect(report.steps.find((step) => step.step === 'direct.preview-unsigned')?.artifact?.kind).toBe('unsigned-preview');
     expect(report.steps.find((step) => step.step === 'redeem.prepare-unsigned')?.artifact?.kind).toBe('unsigned-transaction');
+    expect(report.steps.find((step) => step.step === 'retirement.inspect')).toMatchObject({ status: 'ready' });
     expect(report.injectedTransactionIds).toEqual(['injected-finalized-transaction-id']);
     expect(report).toMatchObject({ signingRequested: false, submissionRequested: false });
     expect(Object.keys(harness)).not.toContain('sign');
@@ -103,5 +104,20 @@ describe('cold-client public journey contract', () => {
     await expect(runColdClientJourneyV1(adapter(), {
       deploymentKey: 'checked-devnet-v7', marketAddress: MARKET, walletAddress: WALLET, redeemPlan: '{}',
     })).rejects.toThrow('Direct preview became ready without');
+  });
+
+  it('refuses a cold retirement result that claims readiness without an authenticated Market', async () => {
+    const runStep = vi.fn(async (step: ColdClientChainStepV1) => {
+      if (step === 'market.inspect') return Object.freeze({ step, status: 'refused' as const, reason: 'The Market bytes did not authenticate.' });
+      if (step === 'participant.inspect' || step === 'direct.inspect' || step === 'direct.preview-unsigned'
+          || step === 'resolution.inspect' || step === 'redeem.inspect' || step === 'redeem.prepare-unsigned') {
+        return Object.freeze({ step, status: 'unavailable' as const, reason: 'No authenticated Market exists for this step.' });
+      }
+      return outcome(step);
+    });
+    await expect(runColdClientJourneyV1(adapter(runStep), {
+      deploymentKey: 'checked-devnet-v7', marketAddress: MARKET, walletAddress: WALLET,
+      directTicket: '{}', redeemPlan: '{}',
+    })).rejects.toThrow('retirement.inspect became ready without an authenticated Market');
   });
 });

@@ -21,6 +21,7 @@ import {
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
 import CellStrip from '@/components/charts/CellStrip';
+import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
 import MarketTradePanel from '@/components/MarketTradePanel';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
@@ -360,6 +361,16 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       custodyProgramId={deployment.programs.custody}
       rentProgramId={deployment.programs.rent}
       liability={decoded.liability}
+    />}
+
+    {decoded !== null && <AggregateRetirementStatus
+      endpoint={deployment.endpoint}
+      coreProgramId={deployment.programs.core}
+      claimsProgramId={deployment.programs.claims}
+      marketAddress={address}
+      marketPhase={decoded.phase}
+      marketGeneration={decoded.generation}
+      minimumContextSlot={state.kind === 'ready' ? state.detail.floorSlot : decoded.observedSlot}
     />}
 
     <footer className="product-footer">

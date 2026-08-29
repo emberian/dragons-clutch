@@ -50,6 +50,8 @@
     "abi:rational-terminal-v3:verify": "node scripts/generate-rational-terminal-hot-v3.mjs --check",
     "abi:resolution-certificate-v2": "node scripts/generate-resolution-certificate-v2.mjs",
     "abi:resolution-certificate-v2:verify": "node scripts/generate-resolution-certificate-v2.mjs --check",
+    "abi:aggregate-retirement": "node scripts/generate-aggregate-retirement-v1.mjs",
+    "abi:aggregate-retirement:verify": "node scripts/generate-aggregate-retirement-v1.mjs --check",
     "abi:product-v2-payoff": "node scripts/generate-product-v2-payoff.mjs",
     "abi:product-v2-payoff:verify": "node scripts/generate-product-v2-payoff.mjs --check",
     "abi:product-runtime-v2-admission": "node scripts/generate-product-runtime-v2-admission.mjs",
