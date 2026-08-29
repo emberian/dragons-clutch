@@ -32,8 +32,9 @@ use dclutch_fractional_claim_contract::{
     decode_fractional_capability_root_v4, plan_fractional_physical_v3,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsV2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
 use dclutch_fractional_claims_kernel::{
     FractionalExposureSignedDeltaInputV2, PreparedFractionalExposureSignedDeltaV2,
@@ -133,6 +134,35 @@ fn process_open(
 }
 
 #[inline(never)]
+/// The selection-config identity one authenticated terms record determines.
+///
+/// This is the runtime half of the Fractional config split, and it is
+/// deliberately a RECOMPUTATION rather than a field-by-field comparison
+/// against a supplied config account.
+///
+/// The manifest-named config is a market-free projection of the terms, so the
+/// terms determine it exactly. Claims already holds authenticated terms and
+/// already holds an authenticated `header.selection().config()` (the root PDA
+/// is verified against the header's own seeds), so re-deriving the config and
+/// comparing digests answers "do these terms execute the instrument this
+/// Market selected?" byte-exactly, with no config account in the frame, no
+/// frame change, and no second statement of which fields are market-free --
+/// the kernel's projection is the sole author of that.
+///
+/// A field-by-field join against a supplied record would be weaker (it checks
+/// the fields someone remembered to list) and would cost two frame accounts.
+fn fractional_selected_config_id_v1(
+    terms: FractionalExposureTermsV2<'_>,
+) -> Result<[u8; 32], ProgramError> {
+    let mut bytes = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut bytes,
+    )
+    .map_err(|_| ClaimsSbfError::SelectionConfig)?;
+    Ok(digest(&bytes))
+}
+
 fn authenticate_open_inputs(
     accounts: &[AccountInfo<'_>],
     request: &FractionalExposureRequestV2,
@@ -217,11 +247,16 @@ fn authenticate_open_inputs(
     let header = composite_root.header();
     let (expected_root, expected_bump) =
         Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key);
+    // The config split, pinned on its own so the refusal names its own cause:
+    // the Market selected a config, and these terms must be the terms that
+    // config admits.
+    if header.selection().config().to_bytes() != fractional_selected_config_id_v1(terms)? {
+        return Err(ClaimsSbfError::SelectionConfig.into());
+    }
     if root_account.key != &expected_root
         || root_account.owner != trading_program.key
         || header.release_set().to_bytes() != request.input().release_set
         || header.market() != request.input().market
-        || header.selection().config().to_bytes() != request.input().terms
         || root_input.bump != expected_bump
         || root_input.terms != request.input().terms
         || root_input.market != request.input().market
@@ -690,11 +725,16 @@ fn process_terminal(
     let header = composite_root.header();
     let (expected_root, expected_bump) =
         Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key);
+    // The config split, pinned on its own so the refusal names its own cause:
+    // the Market selected a config, and these terms must be the terms that
+    // config admits.
+    if header.selection().config().to_bytes() != fractional_selected_config_id_v1(terms)? {
+        return Err(ClaimsSbfError::SelectionConfig.into());
+    }
     if root_account.key != &expected_root
         || root_account.owner != trading_program.key
         || header.release_set().to_bytes() != request.input().release_set
         || header.market() != request.input().market
-        || header.selection().config().to_bytes() != request.input().terms
         || root_input.bump != expected_bump
         || root_input.terms != request.input().terms
         || root_input.market != request.input().market

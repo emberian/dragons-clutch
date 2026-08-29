@@ -87,6 +87,45 @@ const EXPOSURE_ID: [u8; 32] = [0x7a; 32];
 const TOKEN_ACCOUNT_BYTES: usize = 165;
 
 /// Deterministic actor identity: it must sign, so it needs a real key.
+/// The selection-config identity the split makes a root header carry.
+///
+/// Before the config split this campaign planted `config = SHA-256(terms)`,
+/// which is exactly the arrangement the split removed: a manifest naming that
+/// identity is a SHA-256 fixed point, so no founded Market could ever have
+/// produced this root. The fixture now plants the identity a REAL activation
+/// would write -- the digest of the market-free selection config the terms
+/// project to -- so the campaign exercises the shape the chain will actually
+/// present instead of one only a planted root can have.
+fn selection_config_digest(terms_bytes: &[u8]) -> [u8; 32] {
+    use dclutch_fractional_claim_kernel::{
+        FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+        FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
+        encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
+    };
+    use sha2::{Digest as _, Sha256};
+    let terms_digest: [u8; 32] = Sha256::digest(terms_bytes).into();
+    let terms = FractionalExposureTermsV2::decode(
+        terms_bytes,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: terms_digest,
+            finalized_terms_id: terms_digest,
+            recomputed_terms_digest: terms_digest,
+            finalized_terms_digest: terms_digest,
+            record_authenticated: true,
+        },
+    )
+    .expect("campaign terms decode");
+    let mut config = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut config,
+    )
+    .expect("campaign selection config");
+    Sha256::digest(config).into()
+}
+
 fn actor_keypair() -> Keypair {
     Keypair::new_from_array([0x5c; 32])
 }
@@ -475,7 +514,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
-        ContentId::new(terms_record.digest).expect("config"),
+        ContentId::new(selection_config_digest(&terms_record.bytes)).expect("config"),
     )
     .expect("capability execution selection");
     let header = CapabilityRootHeaderV1::new(
@@ -1482,7 +1521,7 @@ fn terminal_fixture(
         ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
-        ContentId::new(terms_record.digest).expect("config"),
+        ContentId::new(selection_config_digest(&terms_record.bytes)).expect("config"),
     )
     .expect("capability execution selection");
     let header = CapabilityRootHeaderV1::new(
