@@ -6403,12 +6403,13 @@ fn execute_projected_custody_bootstrap(
 /// utility does not depend on an SBF program crate.
 const PROJECTED_CUSTODY_ABORT_MAGIC_V1: [u8; 8] = *b"DCLTPCA1";
 
-/// Exact `DCLTPCA1` frame width: one raw request, Custody, and its own frame.
-const PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1: usize = 18;
+/// Exact `DCLTPCA1` frame width: one raw request, Custody's checked Loader
+/// pair, and Custody's own frame.
+const PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1: usize = 19;
 const CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1: usize = 17;
 const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize =
     PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1 + CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1;
-const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 32;
+const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 33;
 const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 19;
 const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
 const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
@@ -6455,18 +6456,18 @@ fn execute_source_abort_v1(
     let abort_geometry = projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &abort)?;
     let abort_admitted = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&abort, 32),
+        &append_distinct_census_accounts_v1(&abort, 31),
     )?;
     let abort_refused = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&abort, 33),
+        &append_distinct_census_accounts_v1(&abort, 32),
     )?;
     if abort_geometry.complete_keys != PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1
         || abort_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
         || abort_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
     {
         return Err(Error::new(format!(
-            "DCLTPCA1 census refused: base {}, +32 {}, +33 {}",
+            "DCLTPCA1 census refused: base {}, +31 {}, +32 {}",
             abort_geometry.complete_keys, abort_admitted.complete_keys, abort_refused.complete_keys,
         )));
     }
@@ -6695,7 +6696,7 @@ fn execute_source_abort_v1(
     Ok(())
 }
 
-/// Build the exact 35-account staged `DCLTPCA1` frame.
+/// Build the exact 36-account staged `DCLTPCA1` frame.
 fn build_projected_custody_abort_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
@@ -6708,6 +6709,7 @@ fn build_projected_custody_abort_v1(
 ) -> Result<Instruction> {
     let trading = pubkey(&plan.trading.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
+    let custody_programdata = pubkey(&plan.custody.programdata_id)?;
     let cache = pubkey(&plan.activation)?;
     let registry = pubkey(&plan.registry.program_id)?;
     let trading_programdata = pubkey(&plan.trading.programdata_id)?;
@@ -6733,6 +6735,7 @@ fn build_projected_custody_abort_v1(
     let mut accounts = vec![
         AccountMeta::new_readonly(lock_raw_account, false),
         AccountMeta::new_readonly(custody, false),
+        AccountMeta::new_readonly(custody_programdata, false),
         // Custody's own sixteen-account abort frame.
         AccountMeta::new_readonly(caller, false),
         AccountMeta::new(coordinates.projected_replay, false),
@@ -6767,7 +6770,7 @@ fn build_projected_custody_abort_v1(
     )?);
     if accounts.len() != PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1 {
         return Err(Error::new(
-            "assembled staged abort frame did not match 35 accounts",
+            "assembled staged abort frame did not match 36 accounts",
         ));
     }
     Ok(Instruction {
@@ -6939,9 +6942,10 @@ fn authenticate_source_abort_custody_poststate_v1(
     destination_before: u64,
     principal: u64,
 ) -> Result<()> {
-    if token_amount(rpc, destination, "abort refund destination")?
-        != destination_before.saturating_add(principal)
-    {
+    let expected_destination = destination_before
+        .checked_add(principal)
+        .ok_or_else(|| Error::new("source-abort token refund overflow"))?;
+    if token_amount(rpc, destination, "abort refund destination")? != expected_destination {
         return Err(Error::new(
             "the abort did not return exactly the source principal to its supplier",
         ));
@@ -10277,7 +10281,7 @@ mod tests {
         let payer = Pubkey::new_from_array([0xe1; 32]);
         let beneficiary = Pubkey::new_from_array([0xe2; 32]);
         let program_id = Pubkey::new_from_array([0xe3; 32]);
-        let distinct = (0_u8..30)
+        let distinct = (0_u8..31)
             .map(|index| Pubkey::new_from_array([index.saturating_add(1); 32]))
             .collect::<Vec<_>>();
         let mut accounts = distinct
@@ -10291,8 +10295,8 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        accounts[6].pubkey = program_id;
-        accounts[13] = AccountMeta::new_readonly(beneficiary, true);
+        accounts[7].pubkey = program_id;
+        accounts[14] = AccountMeta::new_readonly(beneficiary, true);
         let unique_width = accounts.len();
         while accounts.len() < PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1 {
             accounts.push(accounts[accounts.len() % unique_width].clone());
@@ -10627,18 +10631,18 @@ mod tests {
     }
 
     #[test]
-    fn staged_abort_compiler_census_pins_the_32_64_65_wall() {
+    fn staged_abort_compiler_census_pins_the_33_64_65_wall() {
         let (payer, instruction) = staged_abort_census_fixture_v1();
         let base = projected_bootstrap_compiled_geometry_v2(payer, &instruction)
             .expect("staged abort base census");
         let admitted = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&instruction, 32),
+            &append_distinct_census_accounts_v1(&instruction, 31),
         )
         .expect("64-key staged abort census");
         let refused = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&instruction, 33),
+            &append_distinct_census_accounts_v1(&instruction, 32),
         )
         .expect("65-key staged abort census");
         assert_eq!(base.complete_keys, PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1);

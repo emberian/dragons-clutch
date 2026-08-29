@@ -80,6 +80,7 @@ use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::TradingSbfError;
+use crate::execution_strategy_v2::authenticate_activated_current_deployment;
 use crate::generic_market_founding_v1::{
     authenticate_instructions_sysvar_v1, authenticate_projected_lock_join_v1,
 };
@@ -200,7 +201,8 @@ pub const PROJECTED_CUSTODY_ABORT_INSTRUCTION_BYTES_V1: usize = 8;
 
 const ABORT_LOCK_RAW: usize = 0;
 const ABORT_CUSTODY_PROGRAM: usize = 1;
-const ABORT_SUB_FRAME_START: usize = 2;
+const ABORT_CUSTODY_PROGRAMDATA: usize = 2;
+const ABORT_SUB_FRAME_START: usize = 3;
 
 /// Exact total physical frame width for one founding-source abort.
 pub const PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1: usize =
@@ -642,6 +644,11 @@ fn authenticate_expired_checkpoint_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
+    authenticate_cleanup_current_deployments_v1(
+        program_id,
+        accounts,
+        checkpoint.input_ref().release_set,
+    )?;
     let resolution_ledger = account(accounts, FUNDING_ABORT_RESOLUTION_LEDGER)?;
     let trading_ledger = account(accounts, FUNDING_ABORT_TRADING_LEDGER)?;
     let first_closed = expected_kind == ControllerFundingCheckpointAbortKindV1::FirstLedgerClosed;
@@ -691,6 +698,76 @@ fn authenticate_expired_checkpoint_v1(
     }
     authenticate_resolution_abort_authority_v1(program_id, accounts, checkpoint)?;
     Ok(checkpoint)
+}
+
+/// Re-pin both programs that can mutate one controller-cleanup transaction.
+///
+/// A Resolution CPI authenticates these deployments too, but either canonical
+/// order has one Trading-local ledger close. The outer therefore owns the
+/// invariant on every call, including a suffix resumed after either program
+/// was upgraded between transactions.
+#[inline(never)]
+fn authenticate_cleanup_current_deployments_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    release_set: [u8; 32],
+) -> Result<(), ProgramError> {
+    let cache = account(accounts, FUNDING_ABORT_ACTIVATION_CACHE)?;
+    let registry = account(accounts, FUNDING_ABORT_REGISTRY)?;
+    let trading_program = account(accounts, FUNDING_ABORT_CALLER_PROGRAM)?;
+    let trading_programdata = account(accounts, FUNDING_ABORT_CALLER_PROGRAMDATA)?;
+    let resolution_program = account(accounts, FUNDING_ABORT_RESOLUTION_PROGRAM)?;
+    let resolution_programdata = account(accounts, FUNDING_ABORT_RESOLUTION_PROGRAMDATA)?;
+    if cache.key
+        != &Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set], registry.key).0
+        || cache.owner != registry.key
+        || cache.is_signer
+        || cache.is_writable
+        || cache.executable
+        || !registry.executable
+        || trading_program.key != program_id
+        || !trading_program.executable
+        || !resolution_program.executable
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    let data = cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    if activated
+        .execution_release_set_id()
+        .map_err(|_| TradingSbfError::Release)?
+        .to_bytes()
+        != release_set
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    let trading = activated
+        .role(ExecutionRoleV1::Trading)
+        .map_err(|_| TradingSbfError::Release)?;
+    let resolution = activated
+        .role(ExecutionRoleV1::Resolution)
+        .map_err(|_| TradingSbfError::Release)?;
+    if trading.release().program().to_bytes() != program_id.to_bytes()
+        || resolution.release().program().to_bytes() != resolution_program.key.to_bytes()
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    drop(data);
+    authenticate_activated_current_deployment(
+        trading.release(),
+        trading_program,
+        trading_programdata,
+    )
+    .map_err(ProgramError::from)?;
+    authenticate_activated_current_deployment(
+        resolution.release(),
+        resolution_program,
+        resolution_programdata,
+    )
+    .map_err(ProgramError::from)
 }
 
 /// Authenticate the single canonical account-zero PDA even when this suffix
@@ -1281,12 +1358,19 @@ pub fn process_projected_custody_abort_v1(
     // not authenticate against the projection anyway; refusing here says so.
     let lock = decode_projected_request(&lock_raw)?;
     let custody_program = account(accounts, ABORT_CUSTODY_PROGRAM)?;
+    let custody_programdata = account(accounts, ABORT_CUSTODY_PROGRAMDATA)?;
     let sub_frame = subslice(
         accounts,
         ABORT_SUB_FRAME_START,
         PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
     )?;
-    authenticate_abort_programs_v1(program_id, custody_program, sub_frame, &lock)?;
+    authenticate_abort_programs_v1(
+        program_id,
+        custody_program,
+        custody_programdata,
+        sub_frame,
+        &lock,
+    )?;
     let abort = lock.founding_source_abort_v1();
     let raw = encode_projected_request_boxed(&abort)?;
     invoke_projected_child(
@@ -1422,9 +1506,11 @@ fn projected_abort_poststate_digest_v1(
 fn authenticate_abort_programs_v1(
     program_id: &Pubkey,
     custody_program: &AccountInfo<'_>,
+    custody_programdata: &AccountInfo<'_>,
     sub_frame: &[AccountInfo<'_>],
     lock: &ProjectedCustodyRequestV1,
 ) -> Result<(), ProgramError> {
+    let cache = account(sub_frame, COMMON_CACHE)?;
     let registry = account(sub_frame, COMMON_REGISTRY)?;
     let caller_program = account(sub_frame, COMMON_CALLER_PROGRAM)?;
     if !custody_program.executable
@@ -1434,10 +1520,45 @@ fn authenticate_abort_programs_v1(
         || !caller_program.executable
         || caller_program.key != program_id
         || caller_program.key.to_bytes() != lock.caller_program
+        || cache.key
+            != &Pubkey::find_program_address(
+                &[ACTIVATION_PDA_DOMAIN_V1, &lock.release_set],
+                registry.key,
+            )
+            .0
+        || cache.owner != registry.key
+        || cache.is_signer
+        || cache.is_writable
+        || cache.executable
     {
         return Err(TradingSbfError::Release.into());
     }
-    Ok(())
+    let data = cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    if activated
+        .execution_release_set_id()
+        .map_err(|_| TradingSbfError::Release)?
+        .to_bytes()
+        != lock.release_set
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    let custody = activated
+        .role(ExecutionRoleV1::Custody)
+        .map_err(|_| TradingSbfError::Release)?;
+    if custody.release().program().to_bytes() != custody_program.key.to_bytes() {
+        return Err(TradingSbfError::Release.into());
+    }
+    drop(data);
+    authenticate_activated_current_deployment(
+        custody.release(),
+        custody_program,
+        custody_programdata,
+    )
+    .map_err(ProgramError::from)
 }
 
 /// Return whether bytes select the sole projected-Custody V2 bootstrap route.
@@ -3585,13 +3706,13 @@ mod tests {
         ));
         assert_eq!(PROJECTED_CUSTODY_ABORT_INSTRUCTION_BYTES_V1, 8);
         // Two readonly-and-program accounts, then Custody's own abort frame.
-        assert_eq!(PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1, 18);
+        assert_eq!(PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1, 19);
         assert_eq!(
             PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1,
             ABORT_SUB_FRAME_START + PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1
         );
-        assert_eq!(PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2, 35);
-        assert_eq!(STAGED_ABORT_FUNDING_START, 18);
+        assert_eq!(PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2, 36);
+        assert_eq!(STAGED_ABORT_FUNDING_START, 19);
         assert_eq!(CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1, 17);
         assert!(is_controller_funding_cleanup_step1_v1(
             &CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1
