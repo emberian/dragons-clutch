@@ -42,11 +42,11 @@ recorded; execution campaigns run on a keyed endpoint with fresh evidence.
 |---|---|
 | deployer / retained authority / Direct fee recipient | `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP` |
 | campaign payer | `GZQoAjVBaNh7KcGDSjjMaFBcTaJPbYxhkDYHudYb88ic` |
-| collateral mint (attempt 3) | `EUztpHQNUyi7X19yYa5BJEpNmCiVwS2L8CFVDyLSaGZc` |
-| collateral raw-atom wallet | `J16VAi5orcpTYJNYcFGYRBypJ5KjS21bY7c2Rii8JeBU` |
-| founding beneficiary | `4JbuXbcAnVi95itMiZFu6sAhb7AgvYsv34hwpuweVhFQ` |
-| founding projection witness | `4sDPhUBKLCbFxBc45XWBuRwcNG8tw78tct9MgxeVZFTY` |
-| founding source funder | `DXCBPpfxhJfLrXEuhUwNt8TgM3atocHomrKLUa17rzvp` |
+| collateral mint (attempt 6, the live one) | `GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA` |
+| collateral raw-atom wallet | `EybzHgWfAbc7yW1HkgmDcrUPhWtYywEvTP2EaNBpE4LX` |
+| founding beneficiary | `5QnMv6S3uiWGWgiVyiDs9Ai3QN4cqS2i7EsJwnZ3FJej` |
+| founding projection witness | `9vdQnsz5LyhLnjru3ycVgqGVWKYGPk5L4VFMbpg1vcGn` |
+| founding source funder (fresh per attempt; the ladder CREATES it as the Token-2022 principal account) | `8p2yvHUEwyRdtgWjBsmfizV1XNPYxMF51PTjQVScyHkJ` |
 | founding founder (identity) | `6LkyGdwJcCWaGRZPc9DKYqtabvABgXuyPLTHeGJvRdoS` |
 | substituted founder (identity) | `9s9ZmJxmc6G2GVZZfU5iqVbQLgJgBppqfcTeX5X8F5ox` |
 | participant 1 | `5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf` |
@@ -84,3 +84,39 @@ Final balances: TBD at close.
 - no keyed RPC URL reaches a commit, an evidence JSON (origins are redacted by
   the drivers), or the frontend;
 - mainnet untouched.
+
+## Cohort-2: the Upgrade that makes devnet foundable
+
+The definitive finding of this session: the live first cohort (source
+`d3cf6bbf`) could never found a Market — its own Trading forwards the DCLTCFQ1
+funding source as `found[0]` (a signer) into the Resolution CPI, while its own
+Resolution refuses any signer in the found window. `5ca145e8` (landed 78
+minutes after that cohort was cut) is the fix. Every founding attempt in
+recorded history refused at exactly this CPI (`0x8000 AccountFrame`, ~8.2k CU
+into Resolution), reproduced here with three progressively-coherent clients
+before reading both programs settled it.
+
+Cohort-2 source: `5e78c3ed` (= `e4aa2bbd^`) — carries `5ca145e8` (CFQ1),
+`da5460b3` (provider under Core caller PDA), `4953bada` (terminal settlement
+on a resolved Market — the dead-terminal fix), `f30cf078` (PCB2 completion
+set), and predates the `emit_series_consume_artifacts_v4` frame regression, so
+the all-13 checked gate emits with **zero** SBF frame diagnostics:
+gate `4f5d5d8b6b9115ff2b5a9826f48de517bbafe95a6442c41ffb1614c369fe1a19`,
+built on hbox at `/tank/dregg-build/dclutch-cohort2-gate`.
+
+Upgrade mechanics (permanent IDs retained, retained authority signing):
+hand-authored v3 deployment-set journal (auditor-green), per-role key-free
+baseline, CLI `program extend` where capacity demanded it (the loader enforces
+a 10,240-byte minimum extension), CLI `write-buffer` on a keyed RPC origin,
+driver arm with `--adopt-existing-buffer`, CLI `program deploy --buffer`,
+driver attach via `--adopt-finalized-cli-upgrade-signature` completing the
+digest-bound receipt. Extensions: resolution +10,240 B, trading +10,240 B,
+core +57,240 B.
+
+| role | upgrade signature |
+|---|---|
+| custody | `3K6ik9Ah7xzBtYgvm6ZuaNs7C3GCNnPiwP5XX1b9gDG1EyjbU9AEN7ei8kYk4umPt3dXCXqiFwLEecBjunFVKtwF` |
+| resolution | `D1BVSBR79UscDbvpUYSmsnoPpbYiYUymUYhaMUc5rv4bfEDwZCb9ZXQza4X3Hr5Yrt1Hb81W8nBF7tmtbYXpmFM` |
+| claims | `3hGhX2VeDQPTdk6tHyJhBPie2xHrni7tnTRUba6vYmyCbD3eKBhGPuMEvJqHCNW2SxaiWGWbVkDGaHnR29GerYSf` |
+| trading | TBD |
+| core | TBD |
