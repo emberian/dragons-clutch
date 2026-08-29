@@ -440,18 +440,25 @@ fn require_terminal_composition_evidence(evidence: &CampaignTerminalEvidenceV1) 
     Ok(())
 }
 
+/// Accounts the Direct exterior creates permissionlessly ON FIRST USE.
+///
+/// Since f581af6b made the Direct exterior callable, nothing at founding
+/// creates these two: the first trade does. Their ADDRESSES are known at
+/// founding and are carried in the checkpoint, but no account exists to
+/// collect evidence from until the route that creates them has run.
+const DIRECT_FIRST_USE_LABELS_V1: [&str; 2] =
+    ["direct_capability_root", "direct_trading_funding_ledger"];
+
 pub(crate) fn require_direct_retirement_evidence(
     evidence: &CampaignTerminalEvidenceV1,
 ) -> Result<()> {
+    // The record labels are published AT FOUNDING and are unconditional. These
+    // are artifacts, not state, and a campaign that reached terminal without
+    // them is missing something founding was supposed to leave behind.
     for label in DIRECT_BEGIN_RETIRING_LABELS_V1
         .into_iter()
         .chain(DIRECT_NATIVE_CLOSE_LABELS_V1)
-        .chain([
-            "direct_program_set_record",
-            "direct_execution_config_record",
-            "direct_capability_root",
-            "direct_trading_funding_ledger",
-        ])
+        .chain(["direct_program_set_record", "direct_execution_config_record"])
     {
         required_account(evidence, label).map_err(|_| {
             Error::new(format!(
@@ -459,7 +466,45 @@ pub(crate) fn require_direct_retirement_evidence(
             ))
         })?;
     }
-    Ok(())
+    require_direct_first_use_evidence_v1(evidence)
+}
+
+/// Demand the first-use accounts EXACTLY WHEN the route that creates them ran.
+///
+/// This used to demand both unconditionally, which under first-use creation
+/// walls every lifecycle that reaches terminal before trading — the campaign
+/// evidence collector cannot produce evidence for an account nothing has
+/// created yet. Demanding it anyway would not be strictness, it would be
+/// requiring a fact that cannot exist.
+///
+/// The strictness that IS real is kept, and it is the pairing. Both accounts
+/// are created by the same first-use path, so the admissible states are both
+/// absent (nothing traded — a terminal reached from founding) or both present
+/// (trading ran, and a terminal WITH trades must still account for its root).
+/// Exactly one present is neither, and is refused: it means the collector saw
+/// the route run and dropped half of what it left behind, which is precisely
+/// the silent-omission failure the unconditional demand was there to catch.
+pub(crate) fn require_direct_first_use_evidence_v1(
+    evidence: &CampaignTerminalEvidenceV1,
+) -> Result<()> {
+    let present: Vec<&str> = DIRECT_FIRST_USE_LABELS_V1
+        .into_iter()
+        .filter(|label| evidence.accounts.contains_key(*label))
+        .collect();
+    if present.is_empty() || present.len() == DIRECT_FIRST_USE_LABELS_V1.len() {
+        return Ok(());
+    }
+    let missing: Vec<&str> = DIRECT_FIRST_USE_LABELS_V1
+        .into_iter()
+        .filter(|label| !evidence.accounts.contains_key(*label))
+        .collect();
+    Err(Error::new(format!(
+        "terminal sequence is blocked: the Direct first-use accounts are created together by the \
+         first trade, so campaign evidence must carry all of them or none. It carries {} and \
+         omits {}.",
+        present.join(", "),
+        missing.join(", ")
+    )))
 }
 
 pub(crate) fn authenticate_campaign_market_v1(
@@ -829,6 +874,68 @@ mod tests {
         assert!(error.to_string().contains("canonical native-composition"));
         for label in TERMINAL_COMPOSITION_LABELS_V1 {
             assert!(error.to_string().contains(label));
+        }
+    }
+
+    fn account_evidence_for_tests() -> CampaignAccountEvidenceV1 {
+        CampaignAccountEvidenceV1 {
+            address: Pubkey::new_unique().to_string(),
+            owner: Pubkey::new_unique().to_string(),
+            lamports: 1,
+            executable: false,
+            data_len: 1,
+            data_sha256: hex(&[5; 32]),
+            account_sha256: hex(&[6; 32]),
+        }
+    }
+
+    fn evidence_with_labels(labels: &[&str]) -> CampaignTerminalEvidenceV1 {
+        let mut accounts = BTreeMap::new();
+        for label in labels {
+            accounts.insert((*label).to_owned(), account_evidence_for_tests());
+        }
+        CampaignTerminalEvidenceV1 {
+            plan_sha256: hex(&[1; 32]),
+            market_sha256: hex(&[3; 32]),
+            founding_custody_context: hex(&[2; 32]),
+            direct_selected_manifest_entry_index: 0,
+            accounts,
+        }
+    }
+
+    /// A terminal reached BEFORE any trade owes no first-use evidence.
+    ///
+    /// Since f581af6b the Direct exterior creates these permissionlessly on
+    /// first use, so nothing at founding creates them. Demanding them anyway
+    /// walled every lifecycle that reached terminal without trading, which is
+    /// not strictness -- it is requiring a fact that cannot exist yet.
+    #[test]
+    fn a_terminal_before_trading_owes_no_first_use_evidence() {
+        require_direct_first_use_evidence_v1(&evidence_with_labels(&[]))
+            .expect("a pre-trade terminal owes nothing");
+    }
+
+    /// A terminal WITH trades still owes the whole first-use set.
+    #[test]
+    fn a_terminal_with_trades_owes_the_whole_first_use_set() {
+        require_direct_first_use_evidence_v1(&evidence_with_labels(&DIRECT_FIRST_USE_LABELS_V1))
+            .expect("a complete first-use set is admissible");
+    }
+
+    /// Half a first-use set is a dropped observation, not a pre-trade terminal.
+    ///
+    /// This is the strictness worth keeping: both accounts are created by the
+    /// same first trade, so exactly one present means the collector saw the
+    /// route run and lost the rest.
+    #[test]
+    fn half_a_first_use_set_is_refused_as_a_dropped_observation() {
+        for label in DIRECT_FIRST_USE_LABELS_V1 {
+            let refusal = require_direct_first_use_evidence_v1(&evidence_with_labels(&[label]))
+                .expect_err("half a set must refuse");
+            assert!(
+                refusal.to_string().contains("all of them or none"),
+                "{label}: {refusal}"
+            );
         }
     }
 
