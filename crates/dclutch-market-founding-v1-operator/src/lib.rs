@@ -1,10 +1,17 @@
-//! Artifact-derived construction for atomic generic Market founding.
+//! Artifact-derived construction for generic Market founding.
 //!
 //! This crate accepts the exact bytes of the Registry-selected founding
 //! artifact plus its selected content identity.  It emits the two Core child
 //! requests and their invocation-scoped Trading authorities.  Callers cannot
 //! separately supply release, Market, founder, custody, width, rent, or
 //! revision truth.
+//!
+//! The two stages it derives are the same whether they are dispatched by the
+//! composed `DCLTGMF3` route (both in one transaction) or the two-stage
+//! `DCLTGFP1`/`DCLTGMO1` routes (one each, joined by the Core-owned permit).
+//! The `Open` stage's request and its distinct Trading authority are emitted
+//! here so the second transaction can be constructed without re-deriving any
+//! artifact truth.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

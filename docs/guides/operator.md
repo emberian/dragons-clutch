@@ -42,9 +42,16 @@ ordered stages:
    the empty Hoard, creates the one-shot projected custody state, funds the
    named obligations, and records the exact controller-owned funding ledgers.
    It does not create claims or open the market.
-3. **Found atomically.** The `DCLTGMF3` transaction locks custody, creates the
-   market, makes it real, sets up claims, and opens trading last in one
-   all-or-nothing rollback domain.
+3. **Found.** The `DCLTGMF3` transaction locks custody, creates the market,
+   makes it real, sets up claims, and opens trading last in one all-or-nothing
+   rollback domain. When that composed transaction does not fit under the
+   compute limit, the same stages run as two transactions instead: `DCLTGFP1`
+   commits the market and escrows a one-shot Core permit, and the
+   permissionless `DCLTGMO1` consumes the permit to open the market last.
+   Founding through the split is atomic economically rather than
+   transactionally: the permit pins every coordinate of the open, so the
+   market can only open on the terms the first stage committed, and the escrow
+   carries a refund path so nothing strands between the two transactions.
 
 This is the current source-tree route targeted for the next devnet program
 update. It has passed the compiled-message lock census, but it has not opened a
