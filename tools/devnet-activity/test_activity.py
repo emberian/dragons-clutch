@@ -35,6 +35,7 @@ SPEC.loader.exec_module(activity)
 
 
 FUNDER = "F" * 32
+EXTERNAL_FUNDER = "E" * 32
 WALLET = "2" * 32
 SIGNATURE = "3" * 64
 ACTIVITY_SIGNATURE = "4" * 64
@@ -406,6 +407,23 @@ raise SystemExit({exit_code})
     )
 
 
+def fake_sign_only_solana(path: Path, signature: str) -> Path:
+    message = base64.b64encode(b"\x02" * 100).decode()
+    return executable(
+        path,
+        f"""#!/usr/bin/env python3
+import json
+print(json.dumps({{
+  'blockhash': '{'B' * 32}',
+  'signers': ['{FUNDER}={signature}'],
+  'absent': [],
+  'badSig': [],
+  'message': '{message}'
+}}))
+""",
+    )
+
+
 def fake_caller(path: Path, *, exit_code: int = 0, schema: str = "dclutch-local-private-validator-lifecycle-v1") -> Path:
     return executable(
         path,
@@ -428,18 +446,26 @@ raise SystemExit({exit_code})
     )
 
 
-def funding_transaction(amount: int = 10_000, fee: int = 5_000, memo: str = "") -> dict[str, object]:
+def funding_transaction(
+    amount: int = 10_000,
+    fee: int = 5_000,
+    memo: str = "",
+    *,
+    source: str = FUNDER,
+    destination: str = WALLET,
+    source_balance: int = 100_000,
+) -> dict[str, object]:
     return {
         "slot": 99,
         "transaction": {
             "message": {
                 "accountKeys": [
-                    {"pubkey": FUNDER, "signer": True, "writable": True},
-                    {"pubkey": WALLET, "signer": False, "writable": True},
+                    {"pubkey": source, "signer": True, "writable": True},
+                    {"pubkey": destination, "signer": False, "writable": True},
                     {"pubkey": "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr", "signer": False, "writable": False},
                 ],
                 "instructions": [
-                    {"program": "system", "parsed": {"type": "transfer", "info": {"source": FUNDER, "destination": WALLET, "lamports": amount}}},
+                    {"program": "system", "parsed": {"type": "transfer", "info": {"source": source, "destination": destination, "lamports": amount}}},
                     {"program": "spl-memo", "parsed": memo},
                 ],
             }
@@ -447,8 +473,8 @@ def funding_transaction(amount: int = 10_000, fee: int = 5_000, memo: str = "") 
         "meta": {
             "err": None,
             "fee": fee,
-            "preBalances": [100_000, 0, 0],
-            "postBalances": [100_000 - amount - fee, amount, 0],
+            "preBalances": [source_balance, 0, 0],
+            "postBalances": [source_balance - amount - fee, amount, 0],
             "preTokenBalances": [],
             "postTokenBalances": [],
         },
@@ -484,6 +510,7 @@ class RpcState:
         self.signature_errors: dict[str, object] = {}
         self.balances: dict[str, int] = {}
         self.multiple_accounts: list[object | None] = []
+        self.sent_signature: str | None = None
 
 
 @contextmanager
@@ -505,6 +532,16 @@ def rpc_server(state: RpcState):
                     "context": {"slot": 102},
                     "value": state.multiple_accounts,
                 }
+            elif method == "getLatestBlockhash":
+                result = {
+                    "context": {"slot": 103},
+                    "value": {
+                        "blockhash": "B" * 32,
+                        "lastValidBlockHeight": 1234,
+                    },
+                }
+            elif method == "sendTransaction":
+                result = state.sent_signature
             elif method == "getTransaction":
                 result = state.transactions.get(body["params"][0])
             elif method == "getSignaturesForAddress":
@@ -713,6 +750,129 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(finalized["phase"], "Finalized")
         self.assertEqual(finalized["signature"], signature)
         self.assertEqual(finalized["feeLamports"], "5000")
+        activity.atomic_write_json(path, finalized)
+        post_closure = activity.write_post_init_funding_closure(
+            manifest,
+            self.work,
+            FUNDER,
+            "a" * 64,
+            "b" * 64,
+        )
+        self.assertEqual(post_closure["totalTransferLamports"], "10000")
+        self.assertEqual(post_closure["totalFeeLamports"], "5000")
+        self.assertNotIn("packetBase64", json.dumps(post_closure))
+        initial_path = activity.funding_closure_path(self.work, manifest)
+        initial = {
+            "schema": activity.INITIAL_FUNDING_CLOSURE_SCHEMA,
+            "totalTransferLamports": "100000",
+            "totalFundingFeeLamports": "5000",
+        }
+        activity.atomic_write_json(initial_path, initial)
+        lifecycle = activity.write_funding_lifecycle(
+            manifest,
+            self.work,
+            activity.authenticated_state(initial_path, "initial closure"),
+            post_closure,
+        )
+        self.assertEqual(lifecycle["externalTransferLamports"], "100000")
+        self.assertEqual(lifecycle["postInitTransferLamports"], "10000")
+        self.assertEqual(lifecycle["grossFundingFeeLamports"], "10000")
+
+    def test_post_init_controller_signs_sends_and_closes_exact_plan(self) -> None:
+        self.write_v3()
+        manifest = self.parsed()
+        assert manifest.campaign is not None
+        public_ledger_path = activity.wallet_paths(self.work)[2]
+        activity.atomic_write_json(
+            public_ledger_path,
+            {
+                "schema": activity.WALLET_LEDGER_SCHEMA,
+                "manifestSha256": manifest.sha256,
+                "scenarioSha256": manifest.scenario.sha256,
+                "wallets": [],
+            },
+            mode=0o644,
+        )
+        initial = activity.new_funding_journal(
+            manifest,
+            "deployer",
+            FUNDER,
+            EXTERNAL_FUNDER,
+            100_000,
+            None,
+        )
+        initial_final = activity.verify_funding_transaction(
+            funding_transaction(
+                amount=100_000,
+                memo=initial["memo"],
+                source=EXTERNAL_FUNDER,
+                destination=FUNDER,
+                source_balance=200_000,
+            ),
+            initial,
+            SIGNATURE,
+        )
+        activity.atomic_write_json(
+            activity.funding_journal_path(self.work, "deployer"), initial_final
+        )
+        initial_closure = activity.write_funding_closure(
+            manifest,
+            self.work,
+            manifest.scenario.genesis_hash,
+            None,
+            EXTERNAL_FUNDER,
+        )
+        initial_closure_sha256 = digest(
+            activity.funding_closure_path(self.work, manifest)
+        )
+        activity.atomic_write_json(
+            activity.adapter_journal_path(self.work, "founding"),
+            {"phase": "finalized"},
+        )
+        payer_keypair = self.root / "campaign-payer.json"
+        payer_keypair.write_text(SECRET_MARKER, encoding="utf-8")
+        payer_keypair.chmod(0o600)
+        private_wallets = {
+            "deployer": {"keypair": str(payer_keypair), "address": FUNDER},
+        }
+        public_wallets = {
+            "deployer": {"address": FUNDER},
+            "alice": {"address": WALLET},
+        }
+        expected_signature = base58_encode(b"\x01" * 64)
+        solana = fake_sign_only_solana(self.root / "solana-sign-only", expected_signature)
+        state = RpcState()
+        state.sent_signature = expected_signature
+        with rpc_server(state) as rpc_url:
+            manifest = dataclasses.replace(manifest, rpc_url=rpc_url)
+
+            def send_and_install(packet: str) -> str:
+                journal = activity.authenticated_state(
+                    activity.post_init_funding_journal_path(self.work, "fund-alice"),
+                    "dispatching post-init",
+                )
+                state.transactions[expected_signature] = funding_transaction(
+                    memo=journal["memo"]
+                )
+                return expected_signature
+
+            rpc = activity.Rpc(rpc_url)
+            with mock.patch.object(rpc, "send_transaction", side_effect=send_and_install):
+                status = activity.run_post_init_funding(
+                    manifest,
+                    self.work,
+                    solana,
+                    private_wallets,
+                    public_wallets,
+                    rpc,
+                    None,
+                    initial_closure_sha256,
+                    poll_only=False,
+                )
+        self.assertEqual(status, "post-init-complete")
+        self.assertEqual(initial_closure["totalTransferLamports"], "100000")
+        self.assertTrue(activity.post_init_funding_closure_path(self.work).exists())
+        self.assertTrue(activity.funding_lifecycle_path(self.work).exists())
 
     def test_cycle_and_preflight_only_direct_refuse(self) -> None:
         changed = scenario_value()

@@ -171,6 +171,25 @@ def read_exact_json(path: Path, label: str) -> Any:
         raise Refusal(f"{label} is not exact JSON: {error}") from error
 
 
+def parse_exact_json_bytes(payload: bytes, label: str) -> Any:
+    def pairs(rows: list[tuple[str, Any]]) -> dict[str, Any]:
+        output: dict[str, Any] = {}
+        for key, value in rows:
+            if key in output:
+                raise Refusal(f"{label} duplicated JSON key {key!r}")
+            output[key] = value
+        return output
+
+    if len(payload) > 2 * 1024 * 1024:
+        raise Refusal(f"{label} exceeds 2 MiB")
+    try:
+        return json.loads(payload, object_pairs_hook=pairs)
+    except Refusal:
+        raise
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise Refusal(f"{label} is not exact JSON: {error}") from error
+
+
 def exact_keys(value: Mapping[str, Any], expected: Iterable[str], label: str) -> None:
     observed = set(value)
     wanted = set(expected)
@@ -1299,6 +1318,44 @@ class Rpc:
             raise Refusal("campaign fresh signer coordinates are not all absent")
         return slot
 
+    def latest_blockhash(self) -> tuple[int, str, int]:
+        result = exact_object(
+            self.call("getLatestBlockhash", [{"commitment": "finalized"}]),
+            "getLatestBlockhash result",
+        )
+        context = exact_object(result.get("context"), "getLatestBlockhash context")
+        value = exact_object(result.get("value"), "getLatestBlockhash value")
+        slot = context.get("slot")
+        blockhash = pubkey_text(value.get("blockhash"), "latest blockhash")
+        last_valid = value.get("lastValidBlockHeight")
+        if (
+            not isinstance(slot, int)
+            or isinstance(slot, bool)
+            or slot < 0
+            or not isinstance(last_valid, int)
+            or isinstance(last_valid, bool)
+            or last_valid < 0
+        ):
+            raise Refusal("getLatestBlockhash returned another finalized boundary")
+        return slot, blockhash, last_valid
+
+    def send_transaction(self, packet_base64: str) -> str:
+        return signature_text(
+            self.call(
+                "sendTransaction",
+                [
+                    packet_base64,
+                    {
+                        "encoding": "base64",
+                        "preflightCommitment": "finalized",
+                        "skipPreflight": False,
+                        "maxRetries": 0,
+                    },
+                ],
+            ),
+            "sendTransaction signature",
+        )
+
     def transaction(self, signature: str) -> dict[str, Any] | None:
         result = self.call(
             "getTransaction",
@@ -2300,6 +2357,449 @@ def finalize_post_init_funding_journal(
     return finalized
 
 
+def validate_post_init_funding_journal(
+    manifest: Manifest,
+    spec: PostInitFundingSpec,
+    journal: Mapping[str, Any],
+    payer_address: str,
+    wallet_address: str,
+    authorization_sha256: str | None,
+    initial_funding_closure_sha256: str,
+) -> str:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no post-init funding")
+    expected = {
+        "schema": POST_INIT_FUNDING_JOURNAL_SCHEMA,
+        "manifestSha256": manifest.sha256,
+        "scenarioSha256": manifest.scenario.sha256,
+        "clusterTarget": manifest.scenario.cluster_target,
+        "postInitFundingPlanSha256": post_init_funding_plan_sha256(manifest),
+        "initialFundingClosureSha256": initial_funding_closure_sha256,
+        "journalId": spec.journal_id,
+        "afterAdapter": spec.after_adapter_id,
+        "payerWalletRef": manifest.campaign.payer_wallet_ref,
+        "funderAddress": payer_address,
+        "walletId": spec.wallet_ref,
+        "walletAddress": wallet_address,
+        "transferLamports": str(spec.transfer_lamports),
+        "authorizationSha256": authorization_sha256,
+    }
+    for key, value in expected.items():
+        if journal.get(key) != value:
+            raise Refusal(f"post-init funding {spec.journal_id} changed {key}")
+    phase = text(journal.get("phase"), f"post-init funding {spec.journal_id} phase", 16)
+    if phase not in {"Planned", "Prepared", "Dispatching", "Submitted", "Finalized"}:
+        raise Refusal(f"post-init funding {spec.journal_id} has another phase")
+    return phase
+
+
+def post_init_funding_phases(manifest: Manifest, work: Path) -> dict[str, str]:
+    if manifest.campaign is None:
+        return {}
+    directory = work / "journals" / "post-init-funding"
+    if not directory.exists():
+        return {}
+    if directory.is_symlink() or not directory.is_dir():
+        raise Refusal("post-init funding journal directory changed kind")
+    accepted = {spec.journal_id for spec in manifest.campaign.post_init_funding}
+    observed = {path.stem: path for path in directory.glob("*.json")}
+    if unknown := set(observed) - accepted:
+        raise Refusal(f"post-init funding has unknown journals {sorted(unknown)}")
+    phases: dict[str, str] = {}
+    for journal_id, path in observed.items():
+        journal = authenticated_state(path, f"post-init funding {journal_id}")
+        if (
+            journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA
+            or journal.get("manifestSha256") != manifest.sha256
+            or journal.get("scenarioSha256") != manifest.scenario.sha256
+            or journal.get("journalId") != journal_id
+        ):
+            raise Refusal(f"post-init funding {journal_id} belongs to another run")
+        phase = text(journal.get("phase"), f"post-init funding {journal_id} phase", 16)
+        if phase not in {"Planned", "Prepared", "Dispatching", "Submitted", "Finalized"}:
+            raise Refusal(f"post-init funding {journal_id} has another phase")
+        phases[journal_id] = phase
+    return phases
+
+
+def sign_post_init_funding_packet(
+    manifest: Manifest,
+    solana: Path,
+    payer_keypair: Path,
+    recipient: str,
+    journal: Mapping[str, Any],
+    rpc: Rpc,
+) -> dict[str, Any]:
+    _, blockhash, last_valid = rpc.latest_blockhash()
+    result = run_checked(
+        [
+            str(solana),
+            "transfer",
+            "--url",
+            manifest.rpc_url,
+            "--keypair",
+            str(payer_keypair),
+            "--from",
+            str(payer_keypair),
+            "--fee-payer",
+            str(payer_keypair),
+            "--commitment",
+            "finalized",
+            "--output",
+            "json-compact",
+            "--allow-unfunded-recipient",
+            "--with-memo",
+            text(journal.get("memo"), "post-init funding memo", 128),
+            "--blockhash",
+            blockhash,
+            "--sign-only",
+            "--dump-transaction-message",
+            recipient,
+            sol_text(
+                decimal(
+                    journal.get("transferLamports"),
+                    "post-init funding transfer",
+                    positive=True,
+                )
+            ),
+        ]
+    )
+    if result.returncode != 0:
+        raise Refusal(
+            "post-init sign-only packet construction refused: "
+            + result.stderr.decode(errors="replace")[-1000:]
+        )
+    sign_only = exact_object(
+        parse_exact_json_bytes(result.stdout, "post-init sign-only output"),
+        "post-init sign-only output",
+    )
+    return prepare_post_init_funding_journal(
+        journal, sign_only, blockhash, last_valid
+    )
+
+
+def post_init_funding_closure_path(work: Path) -> Path:
+    return work / "public" / "post-init-funding-closure.json"
+
+
+def post_init_funding_closure_rows(
+    manifest: Manifest,
+    work: Path,
+    payer_address: str,
+    authorization_sha256: str | None,
+    initial_funding_closure_sha256: str,
+) -> tuple[list[dict[str, str]], int, int]:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no post-init funding closure")
+    rows: list[dict[str, str]] = []
+    transfer_total = 0
+    fee_total = 0
+    for spec in manifest.campaign.post_init_funding:
+        path = post_init_funding_journal_path(work, spec.journal_id)
+        journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+        wallet_address = pubkey_text(
+            journal.get("walletAddress"), f"post-init funding {spec.journal_id} wallet"
+        )
+        phase = validate_post_init_funding_journal(
+            manifest,
+            spec,
+            journal,
+            payer_address,
+            wallet_address,
+            authorization_sha256,
+            initial_funding_closure_sha256,
+        )
+        if phase != "Finalized":
+            raise Refusal(f"post-init funding {spec.journal_id} is not Finalized")
+        transfer = decimal(
+            journal.get("transferLamports"),
+            f"post-init funding {spec.journal_id} transfer",
+            positive=True,
+        )
+        fee = decimal(
+            journal.get("feeLamports"), f"post-init funding {spec.journal_id} fee"
+        )
+        if decimal(journal.get("walletPreLamports"), "post-init wallet prebalance") != 0:
+            raise Refusal(f"post-init funding {spec.journal_id} target was not vacant")
+        rows.append(
+            {
+                "id": spec.journal_id,
+                "walletRef": spec.wallet_ref,
+                "address": wallet_address,
+                "afterAdapter": spec.after_adapter_id,
+                "journalPath": f"journals/post-init-funding/{spec.journal_id}.json",
+                "journalSha256": sha256_file(path),
+                "signature": signature_text(
+                    journal.get("signature"),
+                    f"post-init funding {spec.journal_id} signature",
+                ),
+                "slot": str(
+                    decimal(
+                        journal.get("slot"), f"post-init funding {spec.journal_id} slot"
+                    )
+                ),
+                "transferLamports": str(transfer),
+                "feeLamports": str(fee),
+                "payerPreLamports": str(
+                    decimal(
+                        journal.get("funderPreLamports"),
+                        f"post-init funding {spec.journal_id} payer prebalance",
+                    )
+                ),
+                "payerPostLamports": str(
+                    decimal(
+                        journal.get("funderPostLamports"),
+                        f"post-init funding {spec.journal_id} payer postbalance",
+                    )
+                ),
+            }
+        )
+        transfer_total += transfer
+        fee_total += fee
+        if transfer_total > 2**64 - 1 or fee_total > 2**64 - 1:
+            raise Refusal("post-init funding closure totals exceed u64")
+    return rows, transfer_total, fee_total
+
+
+def write_post_init_funding_closure(
+    manifest: Manifest,
+    work: Path,
+    payer_address: str,
+    authorization_sha256: str | None,
+    initial_funding_closure_sha256: str,
+) -> dict[str, Any]:
+    rows, transfer_total, fee_total = post_init_funding_closure_rows(
+        manifest,
+        work,
+        payer_address,
+        authorization_sha256,
+        initial_funding_closure_sha256,
+    )
+    expected = {
+        "schema": POST_INIT_FUNDING_CLOSURE_SCHEMA,
+        "manifestSha256": manifest.sha256,
+        "scenarioSha256": manifest.scenario.sha256,
+        "postInitFundingPlanSha256": post_init_funding_plan_sha256(manifest),
+        "initialFundingClosureSha256": initial_funding_closure_sha256,
+        "authorizationSha256": authorization_sha256,
+        "payerAddress": payer_address,
+        "journals": rows,
+        "totalTransferLamports": str(transfer_total),
+        "totalFeeLamports": str(fee_total),
+    }
+    path = post_init_funding_closure_path(work)
+    if path.exists():
+        prior = authenticated_state(path, "post-init funding closure")
+        for key, value in expected.items():
+            if prior.get(key) != value:
+                raise Refusal(f"post-init funding closure changed {key}")
+        return prior
+    atomic_write_json(path, {**expected, "closedAt": utc_now()}, mode=0o644)
+    return authenticated_state(path, "post-init funding closure")
+
+
+def funding_lifecycle_path(work: Path) -> Path:
+    return work / "public" / "funding-lifecycle.json"
+
+
+def write_funding_lifecycle(
+    manifest: Manifest,
+    work: Path,
+    initial_closure: Mapping[str, Any],
+    post_init_closure: Mapping[str, Any],
+) -> dict[str, Any]:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no v3 funding lifecycle")
+    initial_path = funding_closure_path(work, manifest)
+    post_path = post_init_funding_closure_path(work)
+    checked_release_sha256 = sha256_file(manifest.inputs["checked-release"])
+    market_sha256 = sha256_file(manifest.inputs["market"])
+    initial_transfer = decimal(
+        initial_closure.get("totalTransferLamports"), "initial funding transfer total"
+    )
+    initial_fee = decimal(
+        initial_closure.get("totalFundingFeeLamports"), "initial funding fee total"
+    )
+    post_transfer = decimal(
+        post_init_closure.get("totalTransferLamports"), "post-init transfer total"
+    )
+    post_fee = decimal(post_init_closure.get("totalFeeLamports"), "post-init fee total")
+    expected = {
+        "schema": FUNDING_LIFECYCLE_SCHEMA,
+        "manifestSha256": manifest.sha256,
+        "scenarioSha256": manifest.scenario.sha256,
+        "checkedReleaseSha256": checked_release_sha256,
+        "marketSha256": market_sha256,
+        "postInitFundingPlanSha256": post_init_funding_plan_sha256(manifest),
+        "initialFundingClosureSha256": sha256_file(initial_path),
+        "postInitFundingClosureSha256": sha256_file(post_path),
+        "externalTransferLamports": str(initial_transfer),
+        "externalFundingFeeLamports": str(initial_fee),
+        "postInitTransferLamports": str(post_transfer),
+        "postInitFeeLamports": str(post_fee),
+        "grossFundingTransferLamports": str(initial_transfer + post_transfer),
+        "grossFundingFeeLamports": str(initial_fee + post_fee),
+    }
+    path = funding_lifecycle_path(work)
+    if path.exists():
+        prior = authenticated_state(path, "funding lifecycle")
+        for key, value in expected.items():
+            if prior.get(key) != value:
+                raise Refusal(f"funding lifecycle changed {key}")
+        return prior
+    atomic_write_json(path, {**expected, "closedAt": utc_now()}, mode=0o644)
+    return authenticated_state(path, "funding lifecycle")
+
+
+def run_post_init_funding(
+    manifest: Manifest,
+    work: Path,
+    solana: Path | None,
+    private_wallets: Mapping[str, Mapping[str, Any]],
+    public_wallets: Mapping[str, Mapping[str, Any]],
+    rpc: Rpc,
+    authorization_sha256: str | None,
+    initial_funding_closure_sha256: str,
+    *,
+    poll_only: bool,
+) -> str:
+    if manifest.campaign is None:
+        return "not-applicable"
+    founding_path = adapter_journal_path(work, manifest.campaign.founding_adapter_id)
+    if not founding_path.exists() or authenticated_state(
+        founding_path, "founding adapter journal"
+    ).get("phase") != "finalized":
+        raise Refusal("post-init funding requires finalized founding completion")
+    payer_ref = manifest.campaign.payer_wallet_ref
+    payer_address = pubkey_text(
+        public_wallets[payer_ref].get("address"), "post-init campaign payer"
+    )
+    payer_keypair = None
+    if not poll_only:
+        if solana is None:
+            raise Refusal("new post-init funding requires an accepted solana CLI")
+        payer_keypair = canonical_existing_file(
+            text(private_wallets[payer_ref].get("keypair"), "campaign payer keypair"),
+            "campaign payer keypair",
+        )
+    pending = False
+    for spec in manifest.campaign.post_init_funding:
+        wallet_address = pubkey_text(
+            public_wallets[spec.wallet_ref].get("address"),
+            f"post-init funding {spec.journal_id} wallet",
+        )
+        path = post_init_funding_journal_path(work, spec.journal_id)
+        prepared_now = False
+        if path.exists():
+            journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+        else:
+            if poll_only:
+                return "post-init-not-started"
+            journal = new_post_init_funding_journal(
+                manifest,
+                spec,
+                payer_address,
+                wallet_address,
+                authorization_sha256,
+                initial_funding_closure_sha256,
+            )
+            atomic_write_json(path, journal)
+            journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+        phase = validate_post_init_funding_journal(
+            manifest,
+            spec,
+            journal,
+            payer_address,
+            wallet_address,
+            authorization_sha256,
+            initial_funding_closure_sha256,
+        )
+        if phase == "Planned":
+            if poll_only:
+                return "post-init-planned"
+            assert solana is not None and payer_keypair is not None
+            prepared = sign_post_init_funding_packet(
+                manifest,
+                solana,
+                payer_keypair,
+                wallet_address,
+                journal,
+                rpc,
+            )
+            atomic_write_json(path, prepared)
+            journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+            phase = "Prepared"
+            prepared_now = True
+        if phase == "Prepared":
+            if poll_only or not prepared_now:
+                return "post-init-prepared-no-dispatch-marker"
+            dispatching = dispatching_post_init_funding_journal(journal)
+            atomic_write_json(path, dispatching)
+            journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+            phase = "Dispatching"
+            assert solana is not None
+            returned_signature = rpc.send_transaction(
+                text(journal.get("packetBase64"), "post-init packet", 4096)
+            )
+            submitted = submitted_post_init_funding_journal(
+                journal, returned_signature
+            )
+            atomic_write_json(path, submitted)
+            journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+            phase = "Submitted"
+        if phase in {"Dispatching", "Submitted"}:
+            signature = signature_text(
+                journal.get("expectedSignature"),
+                f"post-init funding {spec.journal_id} signature",
+            )
+            transaction = rpc.transaction(signature)
+            if transaction is None:
+                pending = True
+                break
+            finalized = finalize_post_init_funding_journal(journal, transaction)
+            if decimal(finalized.get("walletPreLamports"), "post-init wallet prebalance") != 0:
+                raise Refusal(f"post-init funding {spec.journal_id} target was not vacant")
+            atomic_write_json(path, finalized)
+            journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+            phase = "Finalized"
+        if phase == "Finalized":
+            signature = signature_text(
+                journal.get("signature"), f"post-init funding {spec.journal_id} signature"
+            )
+            transaction = rpc.transaction(signature)
+            if transaction is None:
+                raise Refusal(f"post-init funding {spec.journal_id} transaction disappeared")
+            verified = verify_funding_transaction(transaction, journal, signature)
+            for key in (
+                "signature",
+                "slot",
+                "feeLamports",
+                "funderPreLamports",
+                "funderPostLamports",
+                "walletPreLamports",
+                "walletPostLamports",
+                "transactionSha256",
+            ):
+                if verified.get(key) != journal.get(key):
+                    raise Refusal(f"post-init funding {spec.journal_id} changed {key}")
+            if decimal(journal.get("walletPreLamports"), "post-init wallet prebalance") != 0:
+                raise Refusal(f"post-init funding {spec.journal_id} target was not vacant")
+    if pending:
+        return "post-init-pending"
+    initial_closure = authenticate_funding_closure(
+        manifest, work, initial_funding_closure_sha256
+    )
+    post_closure = write_post_init_funding_closure(
+        manifest,
+        work,
+        payer_address,
+        authorization_sha256,
+        initial_funding_closure_sha256,
+    )
+    write_funding_lifecycle(manifest, work, initial_closure, post_closure)
+    return "post-init-complete"
+
+
 def adapter_journal_path(work: Path, adapter_id: str) -> Path:
     return work / "journals" / "activity" / f"{adapter_id}.json"
 
@@ -2894,6 +3394,7 @@ def run_activity(
     successor_bin: Path,
     keygen: Path | None,
     live_authorization: Path | None,
+    solana_bin: Path | None = None,
     *,
     poll_only: bool,
 ) -> str:
@@ -2902,7 +3403,8 @@ def run_activity(
     submitted_ids = {adapter_id for adapter_id, phase in initial_phases.items() if phase in {"dispatching", "finalized"}}
     initial_funding_phases = funding_journal_phases(manifest, work) if poll_only else {}
     pending_funding_ids = {wallet_id for wallet_id, phase in initial_funding_phases.items() if phase == "dispatching"}
-    if poll_only and not submitted_ids and not pending_funding_ids:
+    post_init_phases = post_init_funding_phases(manifest, work) if poll_only else {}
+    if poll_only and not submitted_ids and not pending_funding_ids and not post_init_phases:
         return "no-pending-submissions"
     binary_digests = {name: sha256_file(path) for name, path in binaries.items()} if poll_only else probe_callers(manifest, binaries)
     authorization_sha256 = require_live_authorization(
@@ -2928,6 +3430,15 @@ def run_activity(
     require_finalized_funding(
         manifest, work, authorization_sha256, closure_sha256
     )
+    if manifest.campaign is not None:
+        initial_closure_path = canonical_existing_file(
+            funding_closure_path(work, manifest), "initial funding closure"
+        )
+        initial_closure_sha256 = sha256_file(initial_closure_path)
+        if closure_sha256 is not None and closure_sha256 != initial_closure_sha256:
+            raise Refusal("live authorization changed the initial funding closure")
+    else:
+        initial_closure_sha256 = None
     private_wallets = {row["id"]: exact_object(row, "private wallet") for row in exact_list(private["wallets"], "private wallets")}
     public_wallets = {row["id"]: exact_object(row, "public wallet") for row in exact_list(public["wallets"], "public wallets")}
     wallet_addresses = {wallet_id: pubkey_text(row.get("address"), f"wallet {wallet_id} address") for wallet_id, row in public_wallets.items()}
@@ -2943,15 +3454,7 @@ def run_activity(
         for adapter in manifest.adapters
     }
     by_id = {item.adapter_id: item for item in manifest.adapters}
-    dispatch_adapters = (
-        tuple(manifest.adapters)
-        if manifest.campaign is None
-        else tuple(
-            adapter
-            for adapter in manifest.adapters
-            if adapter.adapter_id == manifest.campaign.founding_adapter_id
-        )
-    )
+    dispatch_adapters = tuple(manifest.adapters)
     dispatch_ids = {adapter.adapter_id for adapter in dispatch_adapters}
     completed: set[str] = set()
     for adapter in manifest.adapters:
@@ -2964,11 +3467,29 @@ def run_activity(
                 await_completion(manifest, adapter, path, completion_path, rpc, wallet_addresses)
                 completed.add(adapter.adapter_id)
     if manifest.campaign is not None and any(
-        adapter.adapter_id not in dispatch_ids
+        adapter.adapter_id != manifest.campaign.founding_adapter_id
         and adapter_journal_path(work, adapter.adapter_id).exists()
         for adapter in manifest.adapters
-    ):
+    ) and not funding_lifecycle_path(work).exists():
         raise Refusal("v3 downstream activity exists before post-init funding closure")
+    if (
+        manifest.campaign is not None
+        and manifest.campaign.founding_adapter_id in completed
+    ):
+        assert initial_closure_sha256 is not None
+        post_init_status = run_post_init_funding(
+            manifest,
+            work,
+            solana_bin,
+            private_wallets,
+            public_wallets,
+            rpc,
+            authorization_sha256,
+            initial_closure_sha256,
+            poll_only=poll_only,
+        )
+        if post_init_status != "post-init-complete":
+            return post_init_status
     if poll_only:
         for adapter in dispatch_adapters:
             if adapter.adapter_id in completed:
@@ -2984,8 +3505,6 @@ def run_activity(
             elif journal["phase"] != "planned":
                 raise Refusal(f"poll-only activity found another adapter phase {adapter.adapter_id}")
         final_phases = activity_journal_phases(manifest, work)
-        if manifest.campaign is not None and completed.issuperset(dispatch_ids):
-            return "post-init-funding-held"
         return "complete" if len(final_phases) == len(manifest.adapters) and set(final_phases.values()) == {"finalized"} else "partial-recovery"
 
     limiter = DispatchLimiter(manifest.scenario.limits.min_dispatch_interval_ms)
@@ -2994,6 +3513,25 @@ def run_activity(
     first_error: BaseException | None = None
     with ThreadPoolExecutor(max_workers=manifest.scenario.limits.max_concurrency) as executor:
         while not dispatch_ids.issubset(completed):
+            if (
+                manifest.campaign is not None
+                and manifest.campaign.founding_adapter_id in completed
+                and not funding_lifecycle_path(work).exists()
+            ):
+                assert initial_closure_sha256 is not None
+                post_init_status = run_post_init_funding(
+                    manifest,
+                    work,
+                    solana_bin,
+                    private_wallets,
+                    public_wallets,
+                    rpc,
+                    authorization_sha256,
+                    initial_closure_sha256,
+                    poll_only=False,
+                )
+                if post_init_status != "post-init-complete":
+                    return post_init_status
             if first_error is None and not stop_requested(work):
                 for adapter in sorted(dispatch_adapters, key=lambda item: item.adapter_id):
                     if adapter.adapter_id in completed or adapter in running.values():
@@ -3037,8 +3575,6 @@ def run_activity(
                         first_error = error
         if first_error is not None:
             raise first_error
-    if manifest.campaign is not None:
-        return "post-init-funding-held"
     return "complete"
 
 
@@ -3860,6 +4396,7 @@ def parser() -> argparse.ArgumentParser:
     activity_run.add_argument("--dclutch-bin", required=True)
     activity_run.add_argument("--successor-bin", required=True)
     activity_run.add_argument("--solana-keygen", required=True)
+    activity_run.add_argument("--solana-bin")
     activity_run.add_argument("--live-authorization")
     resume = sub.add_parser("resume")
     resume.add_argument("--dclutch-bin", required=True)
@@ -3910,6 +4447,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             successor_bin = canonical_existing_file(arguments.successor_bin, "successor CLI", executable=True)
             keygen = canonical_existing_file(arguments.solana_keygen, "solana-keygen", executable=True)
             live = None if arguments.live_authorization is None else Path(arguments.live_authorization)
+            solana_bin = (
+                None
+                if getattr(arguments, "solana_bin", None) is None
+                else canonical_existing_file(
+                    arguments.solana_bin, "solana CLI", executable=True
+                )
+            )
             run_activity(
                 manifest,
                 work,
@@ -3917,6 +4461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 successor_bin,
                 keygen,
                 live,
+                solana_bin,
                 poll_only=arguments.command == "resume",
             )
         elif arguments.command == "reconcile":
