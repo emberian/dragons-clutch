@@ -2064,6 +2064,7 @@ dependencies = [
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
+ "dclutch-dealer-codec",
  "dclutch-direct-codec",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",

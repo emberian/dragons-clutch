@@ -3,7 +3,7 @@
 //! Selector 9 has one runtime-width semantic path.  This module re-executes
 //! that path from the exact SignedDelta-bearing family request, derives the
 //! complete candidate register bank, and lets the canonical Profile13 artifact
-//! select all eight variable account spans. Callers cannot supply a Position
+//! select all nine protected account spans. Callers cannot supply a Position
 //! count, readonly evidence width, Custody-route bitmap, or packed
 //! account width separately.
 //!
@@ -19,7 +19,9 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
     HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+    HotExecutionEnvelopeV3,
 };
+use dclutch_dealer_codec::config_v4::DEALER_CONFIG_BYTES_V4;
 use dclutch_trading_sbf::{
     admitted_composition_v3::admitted_caller_authority_count_v3,
     dealer::{
@@ -41,7 +43,10 @@ use dclutch_trading_sbf::{
         },
     },
 };
-use solana_program::instruction::AccountMeta;
+use solana_program::{
+    hash::hash,
+    instruction::{AccountMeta, Instruction},
+};
 
 const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = 8;
 const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize = 6;
@@ -57,7 +62,7 @@ const DEALER_HOT_INJECTED_PHYSICAL_INDICES_V4: [usize; DEALER_HOT_INJECTED_ACCOU
 /// Same-finalized physical inputs after common Hot authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerScenarioHotMetaStateV4<'a> {
-    /// Exact common Hot38 prefix in canonical ABI order.
+    /// Exact common Hot39 prefix in canonical ABI order.
     pub fixed_accounts: &'a [ObservedAccountMetaV3],
     /// Eight admitted-AOT extras followed by exact caller-authority pages.
     pub strategy_accounts: &'a [ObservedAccountMetaV3],
@@ -90,12 +95,52 @@ pub struct DealerScenarioHotMetaReportV4 {
     /// Exact packed physical AccountProfile account count, including the five
     /// common injected accounts.
     pub runtime_physical_account_count: usize,
-    /// Exact admitted-AOT caller-authority page count for `101 + N` scalars and
+    /// Exact admitted-AOT caller-authority page count for `102 + N` scalars and
     /// 117 identities.
     pub caller_authority_count: usize,
-    /// Canonical transaction metas in `Hot38 || strategy || packed suffix`
+    /// Canonical transaction metas in `Hot39 || strategy || packed suffix`
     /// order. No signer or submission is performed.
     pub instruction_accounts: Vec<AccountMeta>,
+}
+
+/// Chain-derived selector-9 semantics before physical account validation.
+///
+/// This is the missing seam between the Dealer semantic owner and a bundle
+/// builder.  Span widths and caller-authority pages are outputs here, never
+/// fixture inputs, so a caller cannot choose a smaller admitted frame than the
+/// transition it asks the accelerator to evaluate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerScenarioHotSemanticReportV4 {
+    /// Canonical scenario-solvent plan re-derived from the request.
+    pub semantic_plan: ScenarioAtomicPlanV3,
+    /// Exact nine Profile13 protected-span widths.
+    pub dynamic_span_counts: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
+    /// Exact admitted-AOT caller-authority page count.
+    pub caller_authority_count: usize,
+    /// Candidate scalar register bank the accelerator must return.
+    pub candidate_scalars: Vec<u64>,
+    /// Candidate identity register bank the accelerator must return.
+    pub candidate_identities: Vec<[u8; 32]>,
+    /// Exact projected Custody requests in canonical semantic order.
+    pub custody_effects: [Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    /// Exact candidate obligation account body.
+    pub candidate_obligation_state: Vec<u8>,
+}
+
+/// Exact unsigned Trading instruction and its lock census.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerScenarioHotInstructionV4 {
+    /// Canonical Trading Hot instruction; no signing or submission occurs.
+    pub instruction: Instruction,
+    /// Semantic and physical projection which authorized the instruction.
+    pub report: DealerScenarioHotMetaReportV4,
+    /// Total account-meta entries in the instruction.
+    pub account_meta_count: usize,
+    /// Pairwise-distinct instruction locks: metas plus the invoked program.
+    ///
+    /// A transaction payer is deliberately outside this unsigned-instruction
+    /// constructor and therefore outside this count.
+    pub unique_account_lock_count: usize,
 }
 
 /// Stable refusal from selector-9 semantic/meta projection.
@@ -113,18 +158,16 @@ pub enum DealerScenarioHotMetaErrorV4 {
     Arithmetic,
 }
 
-/// Re-execute selector 9 and derive its complete unsigned account-meta list.
+/// Re-execute selector 9 before constructing any physical frame.
 ///
-/// The returned dynamic spans are derived only from the canonical semantic
-/// composer and candidate register projection.  In particular, a caller
-/// cannot smuggle a second custody bitmap or Claims Position count into the
-/// physical account frame.
-pub fn project_dealer_scenario_hot_metas_v4(
-    state: DealerScenarioHotMetaStateV4<'_>,
+/// The returned registers are the authoritative candidate bank; the returned
+/// span counts are projected from those same registers.  This ordering is
+/// important for Dealer: six Custody spans are transition-owned, not written
+/// by the family request, while the trailing input-bank span is Hot-owned.
+pub fn project_dealer_scenario_hot_semantics_v4(
     semantic: DealerScenarioSemanticStateV4<'_>,
     family_request: &[u8],
-) -> Result<DealerScenarioHotMetaReportV4, DealerScenarioHotMetaErrorV4> {
-    let observation = validate_common_observation(state, semantic)?;
+) -> Result<DealerScenarioHotSemanticReportV4, DealerScenarioHotMetaErrorV4> {
     let request = DealerScenarioTradeRequestV3::decode(family_request)
         .map_err(|_| DealerScenarioHotMetaErrorV4::Semantics)?;
     let width =
@@ -165,8 +208,8 @@ pub fn project_dealer_scenario_hot_metas_v4(
         &mut custody_effects,
     )
     .map_err(|_| DealerScenarioHotMetaErrorV4::Semantics)?;
-    let mut scalars = vec![0_u64; scalar_count];
-    let mut identities = vec![[0_u8; 32]; identity_count];
+    let mut candidate_scalars = vec![0_u64; scalar_count];
+    let mut candidate_identities = vec![[0_u8; 32]; identity_count];
     project_dealer_scenario_hot_registers_v4(
         request,
         &prepared.plan,
@@ -174,36 +217,104 @@ pub fn project_dealer_scenario_hot_metas_v4(
         &custody_effects,
         semantic.chain.trading_program,
         semantic.chain.now,
-        &mut scalars,
-        &mut identities,
+        &mut candidate_scalars,
+        &mut candidate_identities,
     )
     .map_err(|_| DealerScenarioHotMetaErrorV4::Semantics)?;
-
-    let profile = authenticate_account_profile(state)?;
-    if usize::from(profile.common_scalar_count()) != scalar_count
-        || usize::from(profile.common_identity_count()) != identity_count
-    {
+    let mut dynamic_span_counts = [0_u32; DEALER_SCENARIO_PROFILE_SPANS_V4];
+    // Profile13's span selectors have one semantic owner: the candidate bank
+    // emitted above.  The physical profile independently authenticates this
+    // same projection once its account bytes are available.
+    let mut profile_scratch = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+    let mut profile_bytes = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+    encode_dealer_scenario_account_profile_v4_atomic(
+        DealerScenarioAccountProfileInputV4 {
+            common_data_lengths: [
+                1,
+                u32::try_from(DEALER_CONFIG_BYTES_V4)
+                    .map_err(|_| DealerScenarioHotMetaErrorV4::Arithmetic)?,
+                1,
+                1,
+                1,
+            ],
+        },
+        &mut profile_scratch,
+        &mut profile_bytes,
+    )
+    .map_err(|_| DealerScenarioHotMetaErrorV4::AccountProfile)?;
+    let profile = AccountProfileV2::decode(&profile_bytes)
+        .map_err(|_| DealerScenarioHotMetaErrorV4::AccountProfile)?;
+    profile
+        .dynamic_span_widths_from_scalars(&candidate_scalars, &mut dynamic_span_counts)
+        .map_err(|_| DealerScenarioHotMetaErrorV4::AccountProfile)?;
+    if usize::from(profile.dynamic_fixed_span_count()) != DEALER_SCENARIO_PROFILE_SPANS_V4 {
         return Err(DealerScenarioHotMetaErrorV4::AccountProfile);
     }
-    let mut dynamic_span_counts = [0_u32; DEALER_SCENARIO_PROFILE_SPANS_V4];
-    profile
-        .dynamic_span_widths_from_scalars(&scalars, &mut dynamic_span_counts)
-        .map_err(|_| DealerScenarioHotMetaErrorV4::AccountProfile)?;
-    let runtime_physical_account_count = validate_runtime_accounts(
-        state,
-        profile,
-        request.width,
-        &dynamic_span_counts,
-        observation,
-    )?;
     let caller_authority_count = admitted_caller_authority_count_v3(
         u32::try_from(scalar_count).map_err(|_| DealerScenarioHotMetaErrorV4::Arithmetic)?,
         u32::try_from(identity_count).map_err(|_| DealerScenarioHotMetaErrorV4::Arithmetic)?,
     )
     .map_err(|_| DealerScenarioHotMetaErrorV4::AccountGeometry)?;
+    Ok(DealerScenarioHotSemanticReportV4 {
+        semantic_plan: prepared.plan,
+        dynamic_span_counts,
+        caller_authority_count,
+        candidate_scalars,
+        candidate_identities,
+        custody_effects,
+        candidate_obligation_state,
+    })
+}
+
+/// Re-execute selector 9 and derive its complete unsigned account-meta list.
+///
+/// The returned dynamic spans are derived only from the canonical semantic
+/// composer and candidate register projection.  In particular, a caller
+/// cannot smuggle a second custody bitmap or Claims Position count into the
+/// physical account frame.
+pub fn project_dealer_scenario_hot_metas_v4(
+    state: DealerScenarioHotMetaStateV4<'_>,
+    semantic: DealerScenarioSemanticStateV4<'_>,
+    family_request: &[u8],
+) -> Result<DealerScenarioHotMetaReportV4, DealerScenarioHotMetaErrorV4> {
+    let observation = validate_common_observation(state, semantic)?;
+    let request = DealerScenarioTradeRequestV3::decode(family_request)
+        .map_err(|_| DealerScenarioHotMetaErrorV4::Semantics)?;
+    let projected = project_dealer_scenario_hot_semantics_v4(semantic, family_request)?;
+
+    let profile = authenticate_account_profile(state)?;
+    let expected_scalars = usize::from(profile.common_scalar_count())
+        .checked_add(
+            usize::try_from(request.width).map_err(|_| DealerScenarioHotMetaErrorV4::Arithmetic)?,
+        )
+        .ok_or(DealerScenarioHotMetaErrorV4::Arithmetic)?;
+    if expected_scalars != projected.candidate_scalars.len()
+        || usize::from(profile.common_scalar_count())
+            != usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
+        || usize::from(profile.common_identity_count()) != projected.candidate_identities.len()
+    {
+        return Err(DealerScenarioHotMetaErrorV4::AccountProfile);
+    }
+    let mut authenticated_span_counts = [0_u32; DEALER_SCENARIO_PROFILE_SPANS_V4];
+    profile
+        .dynamic_span_widths_from_scalars(
+            &projected.candidate_scalars,
+            &mut authenticated_span_counts,
+        )
+        .map_err(|_| DealerScenarioHotMetaErrorV4::AccountProfile)?;
+    if authenticated_span_counts != projected.dynamic_span_counts {
+        return Err(DealerScenarioHotMetaErrorV4::AccountProfile);
+    }
+    let runtime_physical_account_count = validate_runtime_accounts(
+        state,
+        profile,
+        request.width,
+        &projected.dynamic_span_counts,
+        observation,
+    )?;
     if state.strategy_accounts.len()
         != ADMITTED_AOT_FIXED_EXTRAS_V3
-            .checked_add(caller_authority_count)
+            .checked_add(projected.caller_authority_count)
             .ok_or(DealerScenarioHotMetaErrorV4::Arithmetic)?
         || state
             .strategy_accounts
@@ -229,11 +340,76 @@ pub fn project_dealer_scenario_hot_metas_v4(
     instruction_accounts.extend(state.runtime_suffix_accounts.iter().map(account_meta));
     Ok(DealerScenarioHotMetaReportV4 {
         observation,
-        semantic_plan: prepared.plan,
-        dynamic_span_counts,
+        semantic_plan: projected.semantic_plan,
+        dynamic_span_counts: projected.dynamic_span_counts,
         runtime_physical_account_count,
-        caller_authority_count,
+        caller_authority_count: projected.caller_authority_count,
         instruction_accounts,
+    })
+}
+
+/// Build the exact unsigned Trading instruction from one same-finalized view.
+///
+/// The root prestate digest is derived from the observed root bytes. Release,
+/// Market, generation, program identity, account order, and all dynamic widths
+/// are taken from authenticated semantic or physical inputs; none are accepted
+/// as parallel caller fields.
+pub fn build_dealer_scenario_hot_instruction_v4(
+    state: DealerScenarioHotMetaStateV4<'_>,
+    semantic: DealerScenarioSemanticStateV4<'_>,
+    family_request: &[u8],
+) -> Result<DealerScenarioHotInstructionV4, DealerScenarioHotMetaErrorV4> {
+    let report = project_dealer_scenario_hot_metas_v4(state, semantic, family_request)?;
+    let root = fixed(state, HOT_ROOT_ACCOUNT_V3)?;
+    let trading = fixed(state, HOT_TRADING_PROGRAM_ACCOUNT_V3)?;
+    let market = fixed(state, HOT_MARKET_ACCOUNT_V3)?;
+    if trading.account.key.to_bytes() != semantic.chain.trading_program
+        || market.account.key.to_bytes() != semantic.chain.market
+        || root.account.key.to_bytes() != semantic.chain.child_root
+    {
+        return Err(DealerScenarioHotMetaErrorV4::Observation);
+    }
+    let envelope = HotExecutionEnvelopeV3::new(
+        u32::try_from(family_request.len())
+            .map_err(|_| DealerScenarioHotMetaErrorV4::Arithmetic)?,
+        semantic.chain.release_set,
+        semantic.chain.market,
+        semantic.chain.generation,
+        hash(&root.account.data).to_bytes(),
+    )
+    .map_err(|_| DealerScenarioHotMetaErrorV4::Semantics)?;
+    let mut data = Vec::with_capacity(
+        envelope
+            .to_bytes()
+            .len()
+            .checked_add(family_request.len())
+            .ok_or(DealerScenarioHotMetaErrorV4::Arithmetic)?,
+    );
+    data.extend_from_slice(&envelope.to_bytes());
+    data.extend_from_slice(family_request);
+    let account_meta_count = report.instruction_accounts.len();
+    let mut unique = Vec::with_capacity(account_meta_count);
+    for meta in &report.instruction_accounts {
+        if !unique.contains(&meta.pubkey) {
+            unique.push(meta.pubkey);
+        }
+    }
+    // The Trading program is already a fixed Hot-frame meta today.  Count it
+    // only when a future profile omits it; Solana message compilation de-dupes
+    // the invoked program against instruction metas.
+    if !unique.contains(&trading.account.key) {
+        unique.push(trading.account.key);
+    }
+    let unique_account_lock_count = unique.len();
+    Ok(DealerScenarioHotInstructionV4 {
+        instruction: Instruction {
+            program_id: trading.account.key,
+            accounts: report.instruction_accounts.clone(),
+            data,
+        },
+        report,
+        account_meta_count,
+        unique_account_lock_count,
     })
 }
 
@@ -403,15 +579,32 @@ fn account_meta(value: &ObservedAccountMetaV3) -> AccountMeta {
 mod tests {
     use super::*;
     use crate::ObservedAccount;
+    use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
+    use dclutch_custody_contract::{
+        CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1,
+    };
+    use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
     use dclutch_trading_sbf::dealer::v3_trade_profile::dealer_scenario_logical_frame_v4;
     use dclutch_trading_sbf::dealer::v3_trade_profile::{
         DealerScenarioAccountProfileInputV4, encode_dealer_scenario_account_profile_v4_atomic,
+    };
+    use dclutch_trading_sbf::dealer::{
+        v3_obligation::{
+            DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
+            DEALER_OBLIGATION_PDA_DOMAIN_V3, DEALER_OBLIGATION_VERSION_V3,
+            DealerObligationProjectionV3,
+        },
+        v3_trade::{
+            DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3,
+            ScenarioTradeDirectionV3, ScenarioTradeIntentV3, build_scenario_trade_request_v3,
+            scenario_trade_max_request_bytes_v3,
+        },
     };
     use solana_program::pubkey::Pubkey;
 
     fn observation() -> Observation {
         Observation {
-            slot: 11,
+            slot: 20,
             unix_timestamp: 12,
             finality: Finality::Finalized,
         }
@@ -600,6 +793,230 @@ mod tests {
         assert_eq!(
             authenticate_account_profile(substituted),
             Err(DealerScenarioHotMetaErrorV4::AccountProfile)
+        );
+    }
+
+    fn obligation_bytes(
+        market: [u8; 32],
+        product: [u8; 32],
+        basis: [u8; 32],
+        owner: [u8; 32],
+        child: [u8; 32],
+        revision: u64,
+        values: &[u64],
+    ) -> Vec<u8> {
+        let mut bytes = vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + values.len() * 8];
+        bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+        bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+        bytes[12..16].copy_from_slice(
+            &u32::try_from(values.len())
+                .expect("small obligation width")
+                .to_le_bytes(),
+        );
+        bytes[16..24].copy_from_slice(&revision.to_le_bytes());
+        for (offset, value) in [
+            (24, market),
+            (56, product),
+            (88, basis),
+            (120, owner),
+            (152, child),
+        ] {
+            bytes[offset..offset + 32].copy_from_slice(&value);
+        }
+        for (index, value) in values.iter().enumerate() {
+            let offset = DEALER_OBLIGATION_HEADER_BYTES_V3 + index * 8;
+            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn program_set() -> Vec<u8> {
+        let mut bytes = vec![0; 72];
+        bytes[..8].copy_from_slice(b"DCLTCPS1");
+        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[10..12].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[12..16].copy_from_slice(&DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3.to_le_bytes());
+        bytes[16] = 2;
+        bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[32..36].copy_from_slice(&u32::from(DEALER_SCENARIO_TRADE_ACTION_V3).to_le_bytes());
+        bytes[36..68].copy_from_slice(&[42; 32]);
+        bytes
+    }
+
+    #[test]
+    fn admitted_bundle_derives_transition_owned_spans_and_exact_lock_census() {
+        let trading = [1; 32];
+        let custody = [12; 32];
+        let release = [6; 32];
+        let market = [2; 32];
+        let product = [3; 32];
+        let basis = [4; 32];
+        let dealer = [5; 32];
+        let child = [7; 32];
+        let counterparty = [8; 32];
+        let counterparty_account = [9; 32];
+        let realm = [13; 32];
+        let mint = [14; 32];
+        let token_program = [15; 32];
+        let obligation_state =
+            obligation_bytes(market, product, basis, dealer, child, 7, &[12, 20, 10]);
+        let current_obligation =
+            DealerObligationProjectionV3::decode(&obligation_state).expect("obligation");
+        let obligation = Pubkey::find_program_address(
+            &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child],
+            &Pubkey::new_from_array(trading),
+        )
+        .0
+        .to_bytes();
+        let dealer_inventory = [2, 10, 0];
+        let counterparty_inventory = [20, 5, 9];
+        let chain = ScenarioTradeChainProjectionV3 {
+            trading_program: trading,
+            release_set: release,
+            market,
+            child_root: child,
+            obligation_address: obligation,
+            current_obligation,
+            dealer_position: ClaimsInventoryObservation {
+                market_id: market,
+                product_id: product,
+                liability_basis_id: basis,
+                position_owner: dealer,
+                revision: 9,
+                inventory: &dealer_inventory,
+            },
+            counterparty_position: ClaimsInventoryObservation {
+                market_id: market,
+                product_id: product,
+                liability_basis_id: basis,
+                position_owner: counterparty,
+                revision: 11,
+                inventory: &counterparty_inventory,
+            },
+            product_record_digest: [10; 32],
+            linked_basis_record_digest: [11; 32],
+            counterparty_account,
+            principal_balance: 100,
+            locked_capital_floor: 0,
+            claims_revision: 8,
+            generation: 17,
+            now: 20,
+            expires_at: 25,
+            terminal: false,
+        };
+        let intent = ScenarioTradeIntentV3 {
+            direction: ScenarioTradeDirectionV3::CounterpartyPaysDealer,
+            principal: 10,
+            realized_fee: 1,
+            acquired: &[3, 0, 4],
+            delivered: &[0, 1, 0],
+            candidate_obligations: &[10, 19, 13],
+        };
+        let set_bytes = program_set();
+        let set = CapabilityProgramSetV1::decode(&set_bytes).expect("program set");
+        let mut request = vec![0; scenario_trade_max_request_bytes_v3(3).expect("request bound")];
+        let built_request =
+            build_scenario_trade_request_v3(chain, intent, set, &mut request).expect("request");
+        request.truncate(built_request.request_bytes);
+        let vault = |context, compartment| {
+            Pubkey::find_program_address(
+                &CustodyVaultSeedsV1::new(market, release, context, compartment).as_slices(),
+                &Pubkey::new_from_array(custody),
+            )
+            .0
+            .to_bytes()
+        };
+        let semantic = DealerScenarioSemanticStateV4 {
+            chain,
+            context: ScenarioComposerContextV3 {
+                trading_program: trading,
+                custody_program: custody,
+                release_set: release,
+                market,
+                realm,
+                child_root: child,
+                obligation_account: obligation,
+                mint,
+                token_program,
+                parent_request_digest: hash(&request).to_bytes(),
+                generation: 17,
+                custody_replay_revision: 7,
+                locked_capital_floor: 0,
+            },
+            collateral: ScenarioCollateralFrameV3 {
+                principal_vault: vault(child, CompartmentV1::TradingPrincipal),
+                principal_balance: 100,
+                fee_vault: vault(child, CompartmentV1::FeeVault),
+                fee_balance: 9,
+                hoard_vault: vault(market, CompartmentV1::HoardPrincipal),
+                hoard_balance: 100,
+                counterparty_account,
+                counterparty_owner: counterparty,
+                counterparty_external_delegate: Pubkey::find_program_address(
+                    &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &market, &release],
+                    &Pubkey::new_from_array(custody),
+                )
+                .0
+                .to_bytes(),
+                counterparty_external_delegated_amount: 11,
+                counterparty_balance: 100,
+            },
+        };
+        let projection = project_dealer_scenario_hot_semantics_v4(semantic, &request)
+            .expect("semantic projection");
+        assert_eq!(projection.dynamic_span_counts[4], 2);
+        assert_eq!(projection.dynamic_span_counts[8], 6);
+        assert_eq!(projection.caller_authority_count, 6);
+        assert_eq!(
+            projection.candidate_scalars.len(),
+            usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4) + 3
+        );
+        assert_eq!(projection.candidate_identities.len(), 117);
+
+        let spans = projection.dynamic_span_counts;
+        let (mut fixed_accounts, suffix) = runtime_fixture(3, spans);
+        fixed_accounts[HOT_MARKET_ACCOUNT_V3].account.key = Pubkey::new_from_array(market);
+        fixed_accounts[HOT_ROOT_ACCOUNT_V3].account.key = Pubkey::new_from_array(child);
+        fixed_accounts[HOT_TRADING_PROGRAM_ACCOUNT_V3].account.key =
+            Pubkey::new_from_array(trading);
+        let mut strategy_accounts = (0..8 + projection.caller_authority_count)
+            .map(|index| meta(200 + index, 0, false, false, index == 6))
+            .collect::<Vec<_>>();
+        strategy_accounts[6].account.executable = true;
+        let built = build_dealer_scenario_hot_instruction_v4(
+            DealerScenarioHotMetaStateV4 {
+                fixed_accounts: &fixed_accounts,
+                strategy_accounts: &strategy_accounts,
+                runtime_suffix_accounts: &suffix,
+            },
+            semantic,
+            &request,
+        )
+        .expect("caller-backed instruction");
+        assert_eq!(built.report.dynamic_span_counts, spans);
+        assert_eq!(built.report.caller_authority_count, 6);
+        assert_eq!(built.account_meta_count, 122);
+        assert_eq!(built.instruction.accounts.len(), 122);
+        assert_eq!(built.unique_account_lock_count, 121);
+        let (envelope, family) = HotExecutionEnvelopeV3::split_instruction(&built.instruction.data)
+            .expect("Hot instruction");
+        assert_eq!(family, request);
+        assert_eq!(envelope.release_set(), release);
+        assert_eq!(envelope.market(), market);
+        assert_eq!(envelope.generation(), 17);
+
+        strategy_accounts.pop();
+        assert_eq!(
+            build_dealer_scenario_hot_instruction_v4(
+                DealerScenarioHotMetaStateV4 {
+                    fixed_accounts: &fixed_accounts,
+                    strategy_accounts: &strategy_accounts,
+                    runtime_suffix_accounts: &suffix,
+                },
+                semantic,
+                &request,
+            ),
+            Err(DealerScenarioHotMetaErrorV4::AccountGeometry)
         );
     }
 }
