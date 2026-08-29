@@ -6458,6 +6458,35 @@ mod tests {
             .is_ok()
         );
 
+        let mut local_zero = exact.clone();
+        for mutation in &mut local_zero.mutations {
+            mutation.fee_lamports = 0;
+        }
+        local_zero.evidence_sha256 =
+            direct_evidence_digest_v1(&local_zero).expect("zero-fee digest");
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &local_zero,
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_ok()
+        );
+
+        let mut public_zero = local_zero;
+        public_zero.schema = direct_evidence_schema_v1("devnet")
+            .expect("devnet evidence schema")
+            .into();
+        public_zero.cluster = "devnet".into();
+        public_zero.evidence_sha256 =
+            direct_evidence_digest_v1(&public_zero).expect("public zero-fee digest");
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &public_zero,
+                ExpectedClusterV1::Devnet,
+            )
+            .is_err()
+        );
+
         let mut reordered = exact.clone();
         reordered.positions.swap(0, 1);
         reordered.evidence_sha256 = direct_evidence_digest_v1(&reordered).expect("digest");
