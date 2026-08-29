@@ -11,8 +11,11 @@ The active work lives in the [`dclutch/`](dclutch/) subtree, vendored here
 from its working tree in waves. **Start at
 [`dclutch/README.md`](dclutch/README.md).**
 
-Nothing in this repository is live: no deployment you can use, no live
-market, nothing value-bearing. Everything runs on local test chains.
+Seven upgradeable program identities are parked on Solana devnet, and the
+public app reads that development deployment. There is not yet an open devnet
+market you can trade, and nothing here is deployed on mainnet or value-bearing.
+Local validators remain the primary place where the complete lifecycle is
+exercised while the next devnet upgrade is prepared.
 
 ## Layout
 
@@ -48,8 +51,9 @@ carried forward.
 
 ## Security
 
-There is no release, no official deployment, and no live market. Security
-policy and threat model: [`SECURITY.md`](SECURITY.md).
+There is no mainnet release and no live value-bearing market. Devnet execution
+and local-validator evidence are development evidence, not mainnet assurance.
+Security policy and threat model: [`SECURITY.md`](SECURITY.md).
 
 ## License and provenance
 

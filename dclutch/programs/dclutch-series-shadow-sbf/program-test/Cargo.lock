@@ -1537,6 +1537,7 @@ name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1812,9 +1813,9 @@ dependencies = [
  "dclutch-refusal-registry",
  "dclutch-request-profile-contract",
  "dclutch-series-v3-kernel",
+ "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",
  "dclutch-transition-vm",
- "sha2 0.10.9",
  "solana-program",
  "solana-sdk-ids",
 ]

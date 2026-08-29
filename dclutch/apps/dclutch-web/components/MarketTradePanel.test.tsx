@@ -16,6 +16,8 @@ describe('the market-detail trade panel', () => {
     registryProgramId={null}
     claimsProgramId={null}
     tradingProgramId={null}
+    custodyProgramId={null}
+    rentProgramId={null}
     liability={null}
   />);
 
@@ -49,7 +51,8 @@ describe('the market-detail trade panel', () => {
     expect(html).toContain('does not accept a pasted route or ask for a signature');
     expect(html).toContain('A Claims Position holds claim balances');
     expect(html).toContain('never used as your collateral account');
-    expect(html).toContain('authenticated participant-admission dossier');
+    expect(html).toContain('authenticate your participant accounts');
+    expect(html).toContain('calculate an unsigned crossing');
     expect(html).toContain('canonical public route manifest');
     expect(html).toContain('exact finalized receipt and poststate');
     expect(html).toContain('Browser data is an untrusted projection');

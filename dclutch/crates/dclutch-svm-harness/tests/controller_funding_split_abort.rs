@@ -8,17 +8,27 @@
 //! Resolution alone consumes most of the compute ceiling, so pretending both
 //! closes are atomic would strand every expired founding on devnet.
 
-use std::{env, fs, path::PathBuf};
+use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
-    CompartmentFundingV1, ContentId as CapabilityContentId,
-    ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointInputV1,
-    ControllerFundingCheckpointV1, FundingAmountsV1, FundingLedgerV2, FundingQuoteV1,
-    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
+    CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+    CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1, CapabilityEntryV1,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1,
+    ContentId as CapabilityContentId, ControllerFundingCheckpointDerivationV1,
+    ControllerFundingCheckpointInputV1, ControllerFundingCheckpointV1, FundingAmountsV1,
+    FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_custody_contract::{
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
+    CustodyReplayV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
+    OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
+    ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1,
+    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodySourceReplaySeedsV1,
+    ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
+};
 use dclutch_market_core_codec::{Identity, generic_founding_funding_list_id_v1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
@@ -30,10 +40,18 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2,
+        LifecycleRentCreditV2,
+    },
+};
 use dclutch_resolution_codec::{
     PreMarketFundingAbortRequestV1, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_ledger_account_digest_v1,
 };
+use dclutch_token_svm::{ACCOUNT_BYTES, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID};
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
     hash::{hash, hashv},
@@ -41,25 +59,37 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
+use solana_program_option::COption;
+use solana_program_pack::Pack;
 use solana_program_test::{ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
+use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x41; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x42; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x43; 32]);
+const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x44; 32]);
+const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x45; 32]);
 const GENERATION: u64 = 7;
 const EXPIRY_SLOT: u64 = 3;
 const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
 const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
 const CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1: usize = 17;
+const PROJECTED_CUSTODY_ABORT_MAGIC_V1: [u8; 8] = *b"DCLTPCA1";
+const PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2: usize = 36;
+const PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1: usize =
+    PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2 - CONTROLLER_FUNDING_ABORT_ACCOUNT_COUNT_V1;
 const TRADING_SEMANTIC_RELEASE_ID: [u8; 32] = [0x71; 32];
+const CUSTODY_SEMANTIC_RELEASE_ID: [u8; 32] = [0x72; 32];
+const SOURCE_ABORT_PRINCIPAL: u64 = 500;
 
 struct Elves {
     trading: Vec<u8>,
     resolution: Vec<u8>,
     registry: Vec<u8>,
+    custody: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -104,6 +134,7 @@ fn artifacts() -> Elves {
         resolution: fs::read(directory.join("dclutch_resolution_proof_sbf.so"))
             .expect("Resolution ELF"),
         registry: fs::read(directory.join("dclutch_registry_sbf.so")).expect("Registry ELF"),
+        custody: fs::read(directory.join("dclutch_custody_sbf.so")).expect("Custody ELF"),
     }
 }
 
@@ -361,6 +392,14 @@ fn fixture_with_slot_pin_hostile(
         0,
         None,
     );
+    add_program(
+        &mut test,
+        "dclutch_custody_sbf",
+        CUSTODY_PROGRAM_ID,
+        &elves.custody,
+        0,
+        None,
+    );
 
     let trading_release = match slot_pin_hostile {
         Some(SlotPinHostile::LaterTradingDeployment) => release_with_pin(
@@ -404,12 +443,17 @@ fn fixture_with_slot_pin_hostile(
             &elves.resolution,
         ),
     };
+    let custody_release = release(
+        CUSTODY_PROGRAM_ID,
+        CUSTODY_SEMANTIC_RELEASE_ID,
+        &elves.custody,
+    );
     let release_set = ExecutionReleaseSetV1::new(
         binding(trading_release),
         binding(trading_release),
         binding(trading_release),
         binding(resolution_release),
-        binding(trading_release),
+        binding(custody_release),
     )
     .expect("release set");
     let release_set_id = hash(&release_set.to_bytes()).to_bytes();
@@ -421,7 +465,7 @@ fn fixture_with_slot_pin_hostile(
         (ExecutionRoleV1::Claims, trading_release),
         (ExecutionRoleV1::Trading, trading_release),
         (ExecutionRoleV1::Resolution, resolution_release),
-        (ExecutionRoleV1::Custody, trading_release),
+        (ExecutionRoleV1::Custody, custody_release),
     ] {
         activate_execution_role_into_v1(
             &mut activation_data,
@@ -726,15 +770,26 @@ fn assert_same(left: &Snapshot, right: &Snapshot, context: &str) {
 }
 
 async fn process(context: &mut ProgramTestContext, instruction: Instruction) -> bool {
+    process_with_signers(context, instruction, &[]).await
+}
+
+async fn process_with_signers(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    signers: &[&Keypair],
+) -> bool {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
+    let mut all_signers = Vec::with_capacity(signers.len() + 1);
+    all_signers.push(&context.payer);
+    all_signers.extend_from_slice(signers);
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &all_signers,
         blockhash,
     );
     context
@@ -742,6 +797,437 @@ async fn process(context: &mut ProgramTestContext, instruction: Instruction) -> 
         .process_transaction(transaction)
         .await
         .is_ok()
+}
+
+fn token_mint_data(supply: u64) -> Vec<u8> {
+    let mut bytes = vec![0_u8; SplMint::LEN];
+    SplMint::pack(
+        SplMint {
+            mint_authority: COption::None,
+            supply,
+            decimals: 6,
+            is_initialized: true,
+            freeze_authority: COption::None,
+        },
+        &mut bytes,
+    )
+    .expect("Token-2022 Mint");
+    bytes
+}
+
+fn token_account_data(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
+    let mut bytes = vec![0_u8; SplAccount::LEN];
+    SplAccount::pack(
+        SplAccount {
+            mint,
+            owner,
+            amount,
+            delegate: COption::None,
+            state: AccountState::Initialized,
+            is_native: COption::None,
+            delegated_amount: 0,
+            close_authority: COption::None,
+        },
+        &mut bytes,
+    )
+    .expect("Token-2022 account");
+    bytes
+}
+
+fn token_amount(account: &Account) -> u64 {
+    SplAccount::unpack(&account.data)
+        .expect("Token-2022 account")
+        .amount
+}
+
+fn custody_ladder_digest(observations: &[(Pubkey, Pubkey, u64, &[u8])]) -> [u8; 32] {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1);
+    for (key, owner, lamports, data) in observations {
+        preimage.extend_from_slice(key.as_ref());
+        preimage.extend_from_slice(owner.as_ref());
+        preimage.extend_from_slice(&lamports.to_le_bytes());
+        preimage.extend_from_slice(
+            &u64::try_from(data.len())
+                .expect("account width")
+                .to_le_bytes(),
+        );
+        preimage.extend_from_slice(data);
+    }
+    hash(&preimage).to_bytes()
+}
+
+struct SourceAbortFixture {
+    base: Fixture,
+    beneficiary: Keypair,
+    instruction: Instruction,
+    projected_state: Pubkey,
+    source_vault: Pubkey,
+    source_replay: Pubkey,
+    hoard_vault: Pubkey,
+    destination: Pubkey,
+    custody_rent_total: u64,
+}
+
+fn source_abort_fixture() -> SourceAbortFixture {
+    let mut base = fixture(0, true);
+    let beneficiary = Keypair::new();
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+    let mint = Pubkey::new_from_array([0xb1; 32]);
+    let destination = Pubkey::new_from_array([0xb2; 32]);
+    let checkpoint =
+        ControllerFundingCheckpointV1::decode(&base.checkpoint_data).expect("staged checkpoint");
+    let mut input = checkpoint.input();
+    let release_set = input.release_set;
+    let market = Pubkey::new_from_array(input.market);
+    let generation = input.generation;
+    let generation_bytes = generation.to_le_bytes();
+    let (rent_credit, rent_credit_bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            market.as_ref(),
+            &generation_bytes,
+        ],
+        &RENT_PROGRAM_ID,
+    );
+    let rent = Rent::default();
+    let state_rent = rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V2);
+    let vault_rent = rent.minimum_balance(ACCOUNT_BYTES);
+    let source_replay_rent = rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1);
+    let collateral_release = PRODUCTION_ADAPTER_RELEASES
+        .iter()
+        .copied()
+        .find(|release| release.token_program() == TOKEN_2022_PROGRAM_ID)
+        .expect("Token-2022 release");
+    let mut lock = ProjectedCustodyRequestV1 {
+        operation: ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+        caller_role: ProjectedCallerRoleV1::TradingCapability,
+        market: market.to_bytes(),
+        generation,
+        realm: [0xc1; 32],
+        product_record: [0xc2; 32],
+        product: [0xc3; 32],
+        source: [0xc4; 32],
+        release_set,
+        projection_receipt_digest: [0xc5; 32],
+        parent_capability_root: [0xc6; 32],
+        context_digest: [0xc7; 32],
+        caller_program: base.trading_program.to_bytes(),
+        payer: [0xc8; 32],
+        core_program: base.trading_program.to_bytes(),
+        rent_program: RENT_PROGRAM_ID.to_bytes(),
+        refund_owner: beneficiary.pubkey().to_bytes(),
+        rent_credit: rent_credit.to_bytes(),
+        hoard_vault: [0xc9; 32],
+        funding_source_vault: [0xca; 32],
+        funding_source_context: [0xcb; 32],
+        funding_source_compartment: CompartmentV1::Settlement,
+        mint: mint.to_bytes(),
+        token_program: token_program.to_bytes(),
+        collateral_release: hash(&collateral_release.to_bytes()).to_bytes(),
+        expiry_slot: EXPIRY_SLOT,
+        expected_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+        resulting_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1 + 1,
+        amount: SOURCE_ABORT_PRINCIPAL,
+        state_rent_lamports: state_rent,
+        vault_rent_lamports: vault_rent,
+        funding_source_replay_revision: SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
+        funding_source_state_rent_lamports: source_replay_rent,
+        funding_source_vault_rent_lamports: vault_rent,
+    };
+    let (projected_state, projected_bump) = Pubkey::find_program_address(
+        &ProjectedCustodyStateSeedsV2::from_request(lock).as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    );
+    let hoard_vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            lock.market,
+            lock.release_set,
+            lock.context_digest,
+            CompartmentV1::HoardPrincipal,
+        )
+        .as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let source_vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            lock.market,
+            lock.release_set,
+            lock.funding_source_context,
+            lock.funding_source_compartment,
+        )
+        .as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    lock.hoard_vault = hoard_vault.to_bytes();
+    lock.funding_source_vault = source_vault.to_bytes();
+    lock.validate().expect("terminal projected Lock");
+    let source_replay = Pubkey::find_program_address(
+        &ProjectedCustodySourceReplaySeedsV1::from_request(lock).as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let custody_authority = Pubkey::find_program_address(
+        &[
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            &lock.market,
+            &lock.release_set,
+        ],
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let open_source = lock
+        .founding_prestate_stage_v1(FoundingPrestateStageV1::OpenSourceCompartment)
+        .expect("OpenSourceCompartment request");
+    let open_source_bytes = open_source.encode().expect("OpenSourceCompartment bytes");
+    let open_source_digest = hash(&open_source_bytes).to_bytes();
+    let source_poststate_commitment = hashv(&[
+        &open_source_digest,
+        source_vault.as_ref(),
+        source_replay.as_ref(),
+        &SOURCE_ABORT_PRINCIPAL.to_le_bytes(),
+    ])
+    .to_bytes();
+    let projected_data = ProjectedCustodyStateV2 {
+        phase: ProjectedCustodyPhaseV1::SourceFunded,
+        request: open_source,
+        next_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+        locked_amount: SOURCE_ABORT_PRINCIPAL,
+        principal_cap_sets: u64::MAX,
+        last_request_digest: open_source_digest,
+        bump: projected_bump,
+    }
+    .encode()
+    .expect("SourceFunded state")
+    .to_vec();
+    let source_replay_data = CustodyReplayV1 {
+        caller_role: CallerRoleV1::Trading,
+        release_set,
+        market: market.to_bytes(),
+        realm: lock.realm,
+        context: lock.funding_source_context,
+        caller_program: base.trading_program.to_bytes(),
+        rent_refund: rent_credit.to_bytes(),
+        open_vault_count: 1,
+        next_revision: SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
+        generation,
+        last_request_digest: open_source_digest,
+        last_poststate_commitment: source_poststate_commitment,
+    }
+    .to_bytes()
+    .expect("source replay")
+    .to_vec();
+    let source_data = token_account_data(mint, custody_authority, SOURCE_ABORT_PRINCIPAL);
+    let hoard_data = token_account_data(mint, custody_authority, 0);
+    let destination_data = token_account_data(mint, beneficiary.pubkey(), 40);
+    let ladder_digest = custody_ladder_digest(&[
+        (
+            projected_state,
+            CUSTODY_PROGRAM_ID,
+            state_rent,
+            &projected_data,
+        ),
+        (hoard_vault, token_program, vault_rent, &hoard_data),
+        (source_vault, token_program, vault_rent, &source_data),
+        (
+            source_replay,
+            CUSTODY_PROGRAM_ID,
+            source_replay_rent,
+            &source_replay_data,
+        ),
+    ]);
+    let lock_bytes = lock.encode().expect("terminal Lock bytes");
+    input.rent_credit = rent_credit.to_bytes();
+    input.lock_request_digest = hash(&lock_bytes).to_bytes();
+    let staged = ControllerFundingCheckpointV1::prepared(input)
+        .expect("Prepared checkpoint")
+        .stage_custody(2, ladder_digest)
+        .expect("exact CustodyStaged checkpoint");
+    base.checkpoint_data = staged.encode().to_vec();
+    base.rent_credit = rent_credit;
+    let checkpoint_lamports = rent.minimum_balance(base.checkpoint_data.len());
+    base.test
+        .as_mut()
+        .expect("unstarted ProgramTest")
+        .add_account(
+            base.checkpoint,
+            Account {
+                lamports: checkpoint_lamports,
+                data: base.checkpoint_data.clone(),
+                owner: base.trading_program,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    let credit_data = LifecycleRentCreditV2::new(
+        RefundAuthority::new([0xcc; 32]).expect("refund wallet"),
+        LifecycleAccountIdV2::new(market.to_bytes()).expect("Market"),
+        LifecycleAccountIdV2::new(release_set).expect("release set"),
+        generation,
+        rent_credit_bump,
+    )
+    .expect("LifecycleRentCredit")
+    .to_bytes()
+    .to_vec();
+    for (key, account) in [
+        (
+            rent_credit,
+            Account {
+                lamports: rent.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2),
+                data: credit_data,
+                owner: RENT_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        ),
+        (
+            projected_state,
+            Account {
+                lamports: state_rent,
+                data: projected_data,
+                owner: CUSTODY_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        ),
+        (
+            source_vault,
+            Account {
+                lamports: vault_rent,
+                data: source_data,
+                owner: token_program,
+                executable: false,
+                rent_epoch: 0,
+            },
+        ),
+        (
+            source_replay,
+            Account {
+                lamports: source_replay_rent,
+                data: source_replay_data,
+                owner: CUSTODY_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        ),
+        (
+            hoard_vault,
+            Account {
+                lamports: vault_rent,
+                data: hoard_data,
+                owner: token_program,
+                executable: false,
+                rent_epoch: 0,
+            },
+        ),
+        (
+            destination,
+            Account {
+                lamports: rent.minimum_balance(ACCOUNT_BYTES),
+                data: destination_data,
+                owner: token_program,
+                executable: false,
+                rent_epoch: 0,
+            },
+        ),
+        (
+            mint,
+            Account {
+                lamports: rent.minimum_balance(SplMint::LEN),
+                data: token_mint_data(SOURCE_ABORT_PRINCIPAL + 40),
+                owner: token_program,
+                executable: false,
+                rent_epoch: 0,
+            },
+        ),
+    ] {
+        base.test
+            .as_mut()
+            .expect("unstarted ProgramTest")
+            .add_account(key, account);
+    }
+    let lock_raw = Pubkey::new_from_array([0xb3; 32]);
+    base.test
+        .as_mut()
+        .expect("unstarted ProgramTest")
+        .add_account(
+            lock_raw,
+            Account {
+                lamports: rent.minimum_balance(lock_bytes.len()),
+                data: lock_bytes.to_vec(),
+                owner: REGISTRY_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    let abort = lock.founding_source_abort_v1();
+    let abort_bytes = abort.encode().expect("abort bytes");
+    let caller = Pubkey::find_program_address(
+        &ProjectedCustodyCallerSeedsV1::new(abort, hash(&abort_bytes).to_bytes()).as_slices(),
+        &base.trading_program,
+    )
+    .0;
+
+    let checkpoint_digest = hash(&base.checkpoint_data).to_bytes();
+    let authority = Pubkey::find_program_address(
+        &[
+            CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+            base.checkpoint.as_ref(),
+            &checkpoint_digest,
+        ],
+        &base.trading_program,
+    )
+    .0;
+    base.instruction.accounts[0].pubkey = authority;
+    base.instruction.accounts[8].pubkey = rent_credit;
+    let mut accounts = vec![
+        AccountMeta::new_readonly(lock_raw, false),
+        AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata(CUSTODY_PROGRAM_ID), false),
+        AccountMeta::new_readonly(caller, false),
+        AccountMeta::new(projected_state, false),
+        base.instruction.accounts[9].clone(),
+        base.instruction.accounts[10].clone(),
+        AccountMeta::new_readonly(base.trading_program, false),
+        AccountMeta::new_readonly(programdata(base.trading_program), false),
+        AccountMeta::new(rent_credit, false),
+        AccountMeta::new(source_vault, false),
+        AccountMeta::new(source_replay, false),
+        AccountMeta::new(hoard_vault, false),
+        AccountMeta::new(destination, false),
+        AccountMeta::new_readonly(beneficiary.pubkey(), true),
+        AccountMeta::new_readonly(custody_authority, false),
+        AccountMeta::new_readonly(mint, false),
+        AccountMeta::new_readonly(token_program, false),
+        AccountMeta::new_readonly(market, false),
+    ];
+    accounts.extend(base.instruction.accounts.iter().cloned());
+    assert_eq!(
+        accounts.len(),
+        PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2
+    );
+    let instruction = Instruction {
+        program_id: base.trading_program,
+        accounts,
+        data: PROJECTED_CUSTODY_ABORT_MAGIC_V1.to_vec(),
+    };
+    SourceAbortFixture {
+        base,
+        beneficiary,
+        instruction,
+        projected_state,
+        source_vault,
+        source_replay,
+        hoard_vault,
+        destination,
+        custody_rent_total: state_rent
+            .checked_add(vault_rent)
+            .and_then(|value| value.checked_add(source_replay_rent))
+            .and_then(|value| value.checked_add(vault_rent))
+            .expect("Custody rent total"),
+    }
 }
 
 fn cleanup_instruction(fixture: &Fixture, snapshot: &Snapshot, magic: [u8; 8]) -> Instruction {
@@ -962,6 +1448,250 @@ async fn trading_first_refund_rolls_back_then_closes_exactly() {
 #[tokio::test]
 async fn resolution_first_refund_rolls_back_then_closes_exactly() {
     exercise_canonical_refund_order(3).await;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SourceAbortSnapshot {
+    checkpoint: Option<Account>,
+    resolution_ledger: Option<Account>,
+    trading_ledger: Option<Account>,
+    funding_source: Account,
+    rent_credit: Account,
+    projected_state: Option<Account>,
+    source_vault: Option<Account>,
+    source_replay: Option<Account>,
+    hoard_vault: Option<Account>,
+    destination: Account,
+}
+
+async fn source_abort_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &SourceAbortFixture,
+) -> SourceAbortSnapshot {
+    SourceAbortSnapshot {
+        checkpoint: observed(context, fixture.base.checkpoint).await,
+        resolution_ledger: observed(context, fixture.base.resolution_ledger).await,
+        trading_ledger: observed(context, fixture.base.trading_ledger).await,
+        funding_source: observed(context, fixture.base.funding_source)
+            .await
+            .expect("controller funding source"),
+        rent_credit: observed(context, fixture.base.rent_credit)
+            .await
+            .expect("LifecycleRentCredit"),
+        projected_state: observed(context, fixture.projected_state).await,
+        source_vault: observed(context, fixture.source_vault).await,
+        source_replay: observed(context, fixture.source_replay).await,
+        hoard_vault: observed(context, fixture.hoard_vault).await,
+        destination: observed(context, fixture.destination)
+            .await
+            .expect("refund destination"),
+    }
+}
+
+fn source_abort_lamport_total(snapshot: &SourceAbortSnapshot) -> u64 {
+    [
+        snapshot.checkpoint.as_ref(),
+        snapshot.resolution_ledger.as_ref(),
+        snapshot.trading_ledger.as_ref(),
+        Some(&snapshot.funding_source),
+        Some(&snapshot.rent_credit),
+        snapshot.projected_state.as_ref(),
+        snapshot.source_vault.as_ref(),
+        snapshot.source_replay.as_ref(),
+        snapshot.hoard_vault.as_ref(),
+        Some(&snapshot.destination),
+    ]
+    .into_iter()
+    .flatten()
+    .try_fold(0_u64, |total, account| total.checked_add(account.lamports))
+    .expect("closed-domain lamport total")
+}
+
+#[tokio::test]
+async fn real_custody_source_abort_then_controller_suffix_is_exact_and_resumable() {
+    let mut fixture = source_abort_fixture();
+    assert_eq!(
+        fixture.instruction.accounts.len(),
+        PROJECTED_CUSTODY_STAGED_ABORT_ACCOUNT_COUNT_V2
+    );
+    let mut complete_keys =
+        BTreeSet::from([fixture.base.trading_program, fixture.beneficiary.pubkey()]);
+    complete_keys.extend(fixture.instruction.accounts.iter().map(|meta| meta.pubkey));
+    // The compiled successor transaction also carries the distinct payer and
+    // ComputeBudget program. The beneficiary and Trading program are already
+    // physical metas in this frame.
+    assert_eq!(
+        complete_keys.len() + 2,
+        33,
+        "exact DCLTPCA1 complete-key census"
+    );
+    assert_eq!(
+        fixture
+            .instruction
+            .accounts
+            .iter()
+            .filter(|meta| meta.is_signer)
+            .count()
+            + 1,
+        2,
+        "payer plus refund owner are the exact signatures"
+    );
+    let mut context = fixture
+        .base
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let before = source_abort_snapshot(&mut context, &fixture).await;
+    let initial_total = source_abort_lamport_total(&before);
+    let destination_before = token_amount(&before.destination);
+    assert_eq!(
+        token_amount(before.source_vault.as_ref().expect("funded source")),
+        SOURCE_ABORT_PRINCIPAL
+    );
+
+    assert!(
+        !process_with_signers(
+            &mut context,
+            fixture.instruction.clone(),
+            &[&fixture.beneficiary],
+        )
+        .await,
+        "DCLTPCA1 must refuse while the founding is still satisfiable"
+    );
+    assert_eq!(
+        source_abort_snapshot(&mut context, &fixture).await,
+        before,
+        "the pre-expiry Custody CPI and checkpoint write roll back together"
+    );
+
+    context
+        .warp_to_slot(EXPIRY_SLOT + 1)
+        .expect("past SourceAbort expiry");
+    let expired = source_abort_snapshot(&mut context, &fixture).await;
+    let mut wrong_anchor = fixture.instruction.clone();
+    wrong_anchor.accounts[PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1].pubkey =
+        sysvar::instructions::ID;
+    assert!(
+        !process_with_signers(&mut context, wrong_anchor, &[&fixture.beneficiary]).await,
+        "DCLTPCA1 refuses an unrelated phase-2 anchor"
+    );
+    assert_eq!(
+        source_abort_snapshot(&mut context, &fixture).await,
+        expired,
+        "anchor substitution cannot enter Custody or advance the checkpoint"
+    );
+    assert!(
+        process_with_signers(
+            &mut context,
+            fixture.instruction.clone(),
+            &[&fixture.beneficiary],
+        )
+        .await,
+        "real Custody abort persists before controller cleanup"
+    );
+    let after_abort = source_abort_snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        ControllerFundingCheckpointV1::decode(
+            &after_abort
+                .checkpoint
+                .as_ref()
+                .expect("abort checkpoint")
+                .data,
+        )
+        .expect("abort checkpoint")
+        .phase(),
+        dclutch_capability_contract::ControllerFundingCheckpointPhaseV1::CustodyAborted
+    );
+    assert!(after_abort.projected_state.is_none());
+    assert!(after_abort.source_vault.is_none());
+    assert!(after_abort.source_replay.is_none());
+    assert!(after_abort.hoard_vault.is_none());
+    assert_eq!(
+        token_amount(&after_abort.destination),
+        destination_before + SOURCE_ABORT_PRINCIPAL,
+        "only the original supplier receives the exact principal"
+    );
+    assert_eq!(
+        after_abort.rent_credit.lamports,
+        before.rent_credit.lamports + fixture.custody_rent_total,
+        "all four Custody rents return to the lifecycle credit"
+    );
+    assert_eq!(after_abort.resolution_ledger, before.resolution_ledger);
+    assert_eq!(after_abort.trading_ledger, before.trading_ledger);
+    assert_eq!(source_abort_lamport_total(&after_abort), initial_total);
+
+    assert!(
+        !process_with_signers(
+            &mut context,
+            fixture.instruction.clone(),
+            &[&fixture.beneficiary],
+        )
+        .await,
+        "a finalized Custody prefix is not replayable"
+    );
+    assert_eq!(
+        source_abort_snapshot(&mut context, &fixture).await,
+        after_abort,
+        "prefix replay cannot disturb the crash-recovery phase owner"
+    );
+
+    let abort_base = snapshot(&mut context, &fixture.base).await;
+    let first = cleanup_instruction(
+        &fixture.base,
+        &abort_base,
+        CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
+    );
+    assert!(
+        process(&mut context, first).await,
+        "a new process may resume the canonical first ledger close"
+    );
+    let first_closed = source_abort_snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        ControllerFundingCheckpointV1::decode(
+            &first_closed
+                .checkpoint
+                .as_ref()
+                .expect("first-close checkpoint")
+                .data,
+        )
+        .expect("first-close checkpoint")
+        .phase(),
+        dclutch_capability_contract::ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed
+    );
+    assert_eq!(source_abort_lamport_total(&first_closed), initial_total);
+
+    let first_base = snapshot(&mut context, &fixture.base).await;
+    let second = cleanup_instruction(
+        &fixture.base,
+        &first_base,
+        CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
+    );
+    assert!(
+        process(&mut context, second).await,
+        "a second restart closes only the authenticated remaining suffix"
+    );
+    let terminal = source_abort_snapshot(&mut context, &fixture).await;
+    assert!(terminal.checkpoint.is_none());
+    assert!(terminal.resolution_ledger.is_none());
+    assert!(terminal.trading_ledger.is_none());
+    assert_eq!(source_abort_lamport_total(&terminal), initial_total);
+    assert_eq!(
+        terminal.funding_source.lamports,
+        before.funding_source.lamports
+            + fixture.base.resolution_principal
+            + fixture.base.trading_principal,
+        "only controller-native principal returns to its immutable source"
+    );
+    let controller_rent = (fixture.base.resolution_lamports - fixture.base.resolution_principal)
+        + (fixture.base.trading_lamports - fixture.base.trading_principal)
+        + before.checkpoint.as_ref().expect("checkpoint").lamports;
+    assert_eq!(
+        terminal.rent_credit.lamports,
+        before.rent_credit.lamports + fixture.custody_rent_total + controller_rent,
+        "Custody, both ledger rents, and checkpoint rent retain one owner"
+    );
 }
 
 #[tokio::test]

@@ -41,6 +41,7 @@ export * from './lib/failureWalk';
 // Direct inspection: chain-derived route state, exact intent/arithmetic
 // previews, and the walls between a market and an accepted trade caller.
 export * from './lib/directTradeSpine';
+export * from './lib/directParticipant';
 export * from './lib/directMakerReplay';
 export * from './lib/directTicket';
 export * from './lib/directInlinePublicV3';
@@ -52,6 +53,7 @@ export * from './lib/solanaLimits';
 export * from './lib/claimsCustodyReplay';
 export * from './lib/walletTerminalPayoutV3';
 export * from './lib/resolutionCertificateV2';
+export * from './lib/aggregateRetirement';
 
 // Founding and infrastructure: the record graph a market stands on.
 export * from './lib/coreFound';

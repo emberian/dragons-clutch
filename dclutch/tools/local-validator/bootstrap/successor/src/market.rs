@@ -14,7 +14,8 @@ use dclutch_capability_contract::{
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
     FundingLedgerV2, MAX_DEPENDENCIES_PER_CAPABILITY,
     controller_funding_checkpoint::{
-        CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
+        CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+        CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
         ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointPhaseV1,
         ControllerFundingCheckpointV1, ControllerFundingControllerV1,
     },
@@ -6847,38 +6848,56 @@ fn build_controller_funding_abort_accounts_v1(
         resolution_ledger.lamports,
         &resolution_ledger.data,
     );
-    let request = PreMarketFundingAbortRequestV1 {
-        checkpoint_phase: checkpoint.phase() as u8,
-        checkpoint_revision: checkpoint.revision(),
-        release_set: input.release_set,
-        checkpoint: coordinates.controller_funding_checkpoint.to_bytes(),
-        checkpoint_digest: Sha256::digest(&checkpoint_account.data).into(),
-        market: input.market,
-        generation: input.generation,
-        manifest: input.manifest,
-        funding_list: input.funding_list,
-        selected_mask: input.resolution_mask,
-        ledger: input.resolution_ledger,
-        ledger_account_digest,
-        funding_source: input.funding_source,
-        rent_credit: input.rent_credit,
-        expiry_slot: input.expiry_slot,
-    }
-    .encode()
-    .map_err(|error| Error::new(format!("controller funding abort request: {error:?}")))?;
-    let caller = Pubkey::find_program_address(
-        &CallerAuthoritySeedsV1::from_bytes(
-            input.release_set,
-            input.market,
-            ExecutionRoleV1::Trading,
-            input.manifest,
-            Sha256::digest(request).into(),
+    let checkpoint_digest: [u8; 32] = Sha256::digest(&checkpoint_account.data).into();
+    let caller = if expected_phase == ControllerFundingCheckpointPhaseV1::CustodyStaged {
+        // No Resolution ledger close is authorized until Custody has committed
+        // SourceAbort and advanced the semantic checkpoint to phase 3. Bind
+        // the first cleanup transaction to the exact phase-2 checkpoint with
+        // a Trading-owned, non-signing anchor instead of encoding a forbidden
+        // phase-2 Resolution abort packet.
+        Pubkey::find_program_address(
+            &[
+                CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+                coordinates.controller_funding_checkpoint.as_ref(),
+                &checkpoint_digest,
+            ],
+            &trading,
         )
-        .map_err(|error| Error::new(format!("controller funding abort authority: {error:?}")))?
-        .as_slices(),
-        &trading,
-    )
-    .0;
+        .0
+    } else {
+        let request = PreMarketFundingAbortRequestV1 {
+            checkpoint_phase: checkpoint.phase() as u8,
+            checkpoint_revision: checkpoint.revision(),
+            release_set: input.release_set,
+            checkpoint: coordinates.controller_funding_checkpoint.to_bytes(),
+            checkpoint_digest,
+            market: input.market,
+            generation: input.generation,
+            manifest: input.manifest,
+            funding_list: input.funding_list,
+            selected_mask: input.resolution_mask,
+            ledger: input.resolution_ledger,
+            ledger_account_digest,
+            funding_source: input.funding_source,
+            rent_credit: input.rent_credit,
+            expiry_slot: input.expiry_slot,
+        }
+        .encode()
+        .map_err(|error| Error::new(format!("controller funding abort request: {error:?}")))?;
+        Pubkey::find_program_address(
+            &CallerAuthoritySeedsV1::from_bytes(
+                input.release_set,
+                input.market,
+                ExecutionRoleV1::Trading,
+                input.manifest,
+                Sha256::digest(request).into(),
+            )
+            .map_err(|error| Error::new(format!("controller funding abort authority: {error:?}")))?
+            .as_slices(),
+            &trading,
+        )
+        .0
+    };
     let accounts = vec![
         AccountMeta::new_readonly(caller, false),
         AccountMeta::new_readonly(trading, false),
@@ -10649,9 +10668,9 @@ mod tests {
         assert_eq!(base.required_signatures, 2);
         assert_eq!(base.static_keys, 4);
         assert_eq!(base.loaded_writable, 10);
-        assert_eq!(base.loaded_readonly, 18);
-        assert_eq!(base.message_bytes, 303);
-        assert_eq!(base.packet_bytes, 432);
+        assert_eq!(base.loaded_readonly, 19);
+        assert_eq!(base.message_bytes, 305);
+        assert_eq!(base.packet_bytes, 434);
         assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
         assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
     }

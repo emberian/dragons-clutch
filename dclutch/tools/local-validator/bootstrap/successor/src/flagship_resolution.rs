@@ -3753,6 +3753,7 @@ fn finalized_compute_units(meta: &Value, label: &str) -> Result<u64> {
 fn table_transaction_status(
     rpc: &mut Rpc,
     journal: &TableProvisionJournalV1,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<TableTransactionStatusV1> {
     let intent = journal
         .intent
@@ -3800,6 +3801,8 @@ fn table_transaction_status(
             .get("fee")
             .and_then(Value::as_u64)
             .ok_or_else(|| Error::new("finalized table transaction omitted fee"))?;
+        expected_cluster
+            .authenticate_finalized_fee(fee_lamports, "Resolution table transaction")?;
         let compute_units_consumed = finalized_compute_units(meta, "table transaction")?;
         let pre_balances = meta
             .get("preBalances")
@@ -4064,14 +4067,21 @@ fn authenticate_table_action_poststate(
     Ok(())
 }
 
-fn table_fee_for_message(rpc: &mut Rpc, message_base64: &str) -> Result<u64> {
-    rpc.call(
-        "getFeeForMessage",
-        &json!([message_base64, {"commitment":"finalized"}]),
-    )?
-    .get("value")
-    .and_then(Value::as_u64)
-    .ok_or_else(|| Error::new("getFeeForMessage omitted exact table fee"))
+fn table_fee_for_message(
+    rpc: &mut Rpc,
+    message_base64: &str,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<u64> {
+    let fee = rpc
+        .call(
+            "getFeeForMessage",
+            &json!([message_base64, {"commitment":"finalized"}]),
+        )?
+        .get("value")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new("getFeeForMessage omitted exact table fee"))?;
+    expected_cluster.authenticate_finalized_fee(fee, "Resolution table fee quote")?;
+    Ok(fee)
 }
 
 fn table_message_balances(
@@ -4109,6 +4119,7 @@ fn authenticate_table_dispatch_prestate(
     rpc: &mut Rpc,
     intent: &TableProvisionIntentV1,
     message: &Message,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<()> {
     let current_height = rpc
         .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
@@ -4126,7 +4137,9 @@ fn authenticate_table_dispatch_prestate(
             "table message prestate changed before dispatch or identical-byte recovery",
         ));
     }
-    if table_fee_for_message(rpc, &intent.unsigned_message_base64)? != intent.exact_fee_lamports {
+    if table_fee_for_message(rpc, &intent.unsigned_message_base64, expected_cluster)?
+        != intent.exact_fee_lamports
+    {
         return Err(Error::new(
             "table exact fee differs from the canonical durable message",
         ));
@@ -4140,9 +4153,10 @@ fn reconcile_table_attempt(
     checkpoint: &ProducerCheckpointV1,
     selected: &SelectedInputV1,
     journal: &mut TableProvisionJournalV1,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<bool> {
     validate_table_signed_packet(journal)?;
-    match table_transaction_status(rpc, journal)? {
+    match table_transaction_status(rpc, journal, expected_cluster)? {
         TableTransactionStatusV1::Pending => Ok(false),
         TableTransactionStatusV1::Finalized {
             slot,
@@ -4217,7 +4231,7 @@ fn run_table_provisioner(
                 }
                 validate_table_signed_packet(&journal)?;
                 let message = validate_table_intent(&checkpoint, &selected, intent)?;
-                authenticate_table_dispatch_prestate(&mut rpc, intent, &message)?;
+                authenticate_table_dispatch_prestate(&mut rpc, intent, &message, expected_cluster)?;
                 journal.phase = DurablePhaseV1::Dispatching;
                 write_json(&journal_path, &journal)?;
             }
@@ -4228,6 +4242,7 @@ fn run_table_provisioner(
                     &checkpoint,
                     &selected,
                     &mut journal,
+                    expected_cluster,
                 )? {
                     println!("{}", serde_json::to_string_pretty(&journal)?);
                     return Ok(());
@@ -4244,6 +4259,7 @@ fn run_table_provisioner(
                     &checkpoint,
                     &selected,
                     &mut journal,
+                    expected_cluster,
                 )?;
                 println!("{}", serde_json::to_string_pretty(&journal)?);
                 return Ok(());
@@ -4255,6 +4271,7 @@ fn run_table_provisioner(
                     &checkpoint,
                     &selected,
                     &mut journal,
+                    expected_cluster,
                 )?;
                 let receipt = journal
                     .finalized
@@ -4277,7 +4294,7 @@ fn run_table_provisioner(
         if journal.phase == DurablePhaseV1::Dispatching {
             let intent = journal.intent.as_ref().expect("checked intent");
             let message = validate_table_intent(&checkpoint, &selected, intent)?;
-            authenticate_table_dispatch_prestate(&mut rpc, intent, &message)?;
+            authenticate_table_dispatch_prestate(&mut rpc, intent, &message, expected_cluster)?;
             submit_journaled_table_transaction(&mut rpc, &journal)?;
             journal.phase = DurablePhaseV1::Submitted;
             write_json(&journal_path, &journal)?;
@@ -4287,6 +4304,7 @@ fn run_table_provisioner(
                 &checkpoint,
                 &selected,
                 &mut journal,
+                expected_cluster,
             )?;
             println!("{}", serde_json::to_string_pretty(&journal)?);
             return Ok(());
@@ -4324,7 +4342,8 @@ fn run_table_provisioner(
         let message_bytes = bincode::serialize(&message)
             .map_err(|error| Error::new(format!("serialize unsigned table message: {error}")))?;
         let message_base64 = BASE64.encode(&message_bytes);
-        let exact_fee_lamports = table_fee_for_message(&mut rpc, &message_base64)?;
+        let exact_fee_lamports =
+            table_fee_for_message(&mut rpc, &message_base64, expected_cluster)?;
         let (observation_slot, pre_balances, pre_accounts) =
             table_message_balances(&mut rpc, &message, snapshot.observation.slot)?;
         let table_key = selected.table(stage)?;
@@ -4370,7 +4389,7 @@ fn run_table_provisioner(
         .clone()
         .ok_or_else(|| Error::new("planned table intent vanished"))?;
     let message = validate_table_intent(&checkpoint, &selected, &intent)?;
-    authenticate_table_dispatch_prestate(&mut rpc, &intent, &message)?;
+    authenticate_table_dispatch_prestate(&mut rpc, &intent, &message, expected_cluster)?;
     let authority = load_keypair(
         arguments.authority_keypair.as_ref(),
         "authority",
@@ -4391,7 +4410,12 @@ fn run_table_provisioner(
     journal.phase = DurablePhaseV1::SignedNotSubmitted;
     validate_table_signed_packet(&journal)?;
     write_json(&journal_path, &journal)?;
-    authenticate_table_dispatch_prestate(&mut rpc, &intent, &transaction.message)?;
+    authenticate_table_dispatch_prestate(
+        &mut rpc,
+        &intent,
+        &transaction.message,
+        expected_cluster,
+    )?;
     // Dispatching is durable before transport. Recovery polls first and may
     // resend only these identical authenticated bytes under the same signature.
     journal.phase = DurablePhaseV1::Dispatching;
@@ -4407,6 +4431,7 @@ fn run_table_provisioner(
         &checkpoint,
         &selected,
         &mut journal,
+        expected_cluster,
     )?;
     println!("{}", serde_json::to_string_pretty(&journal)?);
     Ok(())
@@ -4962,7 +4987,7 @@ fn prepare_stage(
     let message_bytes = bincode::serialize(&routed.message)
         .map_err(|error| Error::new(format!("serialize provider v0 message: {error}")))?;
     let message_base64 = BASE64.encode(&message_bytes);
-    let exact_fee_lamports = table_fee_for_message(rpc, &message_base64)?;
+    let exact_fee_lamports = table_fee_for_message(rpc, &message_base64, expected_cluster)?;
     let (balance_slot, pre_balances, pre_accounts) =
         versioned_message_balances(rpc, &resolved, snapshot.observation.slot)?;
     let mut address_hasher = Sha256::new();
@@ -5348,7 +5373,9 @@ fn authenticate_provider_prestate(
             "provider full resolved account prestate changed",
         ));
     }
-    if table_fee_for_message(rpc, &plan.message_base64)? != plan.exact_fee_lamports {
+    if table_fee_for_message(rpc, &plan.message_base64, expected_cluster)?
+        != plan.exact_fee_lamports
+    {
         return Err(Error::new(
             "provider exact fee differs from the canonical durable message",
         ));
@@ -5603,6 +5630,8 @@ fn finish_provider_stage(
     finalized: ProviderFinalizedTransactionV1,
     expected_cluster: ExpectedClusterV1,
 ) -> Result<StageReceiptV1> {
+    expected_cluster
+        .authenticate_finalized_fee(finalized.fee_lamports, "Resolution finalized transaction")?;
     let post = observe(rpc, selected, plan.stage, finalized.slot)?;
     let return_bytes = BASE64
         .decode(&finalized.return_data_base64)
@@ -5946,7 +5975,7 @@ fn run_with_expected_cluster(
             authenticate_current_deployments(&selected, &snapshot)?;
             authenticate_selected_pyth_release(&selected, &snapshot, false, expected_cluster)?;
             verify_terminal(&selected, &snapshot)?;
-            require_terminal_receipts(&checkpoint)?;
+            require_terminal_receipts(&checkpoint, expected_cluster)?;
             checkpoint.verified_terminal = true;
             write_checkpoint(&checkpoint_path, &checkpoint)?;
             println!("{}", serde_json::to_string_pretty(&checkpoint)?);
@@ -5995,11 +6024,14 @@ fn load_checkpoint(
     if let Some(plan) = &checkpoint.stage_plan {
         plan.validate()?;
     }
-    authenticate_receipt_prefix(&checkpoint)?;
+    authenticate_receipt_prefix(&checkpoint, expected_cluster)?;
     Ok(checkpoint)
 }
 
-fn authenticate_receipt_prefix(checkpoint: &CheckpointV1) -> Result<()> {
+fn authenticate_receipt_prefix(
+    checkpoint: &CheckpointV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
     let expected = [
         ReceiptStageV1::Submit,
         ReceiptStageV1::ProviderExecute,
@@ -6020,7 +6052,6 @@ fn authenticate_receipt_prefix(checkpoint: &CheckpointV1) -> Result<()> {
                 receipt.stage != expected_stage
                     || receipt.signature.is_empty()
                     || receipt.slot == 0
-                    || receipt.fee_lamports == 0
                     || receipt.compute_units_consumed == 0
                     || hex32(&receipt.signed_transaction_sha256).is_err()
                     || hex32(&receipt.return_data_sha256).is_err()
@@ -6040,11 +6071,18 @@ fn authenticate_receipt_prefix(checkpoint: &CheckpointV1) -> Result<()> {
             "checkpoint receipts are missing, substituted, out of order, or disagree with terminal completion",
         ));
     }
+    for receipt in &checkpoint.receipts {
+        expected_cluster
+            .authenticate_finalized_fee(receipt.fee_lamports, "Resolution finalized mutation")?;
+    }
     Ok(())
 }
 
-fn require_terminal_receipts(checkpoint: &CheckpointV1) -> Result<()> {
-    authenticate_receipt_prefix(checkpoint)?;
+fn require_terminal_receipts(
+    checkpoint: &CheckpointV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    authenticate_receipt_prefix(checkpoint, expected_cluster)?;
     if checkpoint.receipts.len() != 4 || checkpoint.stage_plan.is_some() {
         return Err(Error::new(
             "Core terminal state cannot finalize an incomplete four-mutation checkpoint",
@@ -7175,24 +7213,31 @@ mod tests {
             receipts: receipts.clone(),
             verified_terminal: true,
         };
-        assert!(authenticate_receipt_prefix(&complete).is_ok());
-        assert!(require_terminal_receipts(&complete).is_ok());
+        assert!(authenticate_receipt_prefix(&complete, ExpectedClusterV1::Devnet).is_ok());
+        assert!(require_terminal_receipts(&complete, ExpectedClusterV1::Devnet).is_ok());
+
+        let mut zero_fee = complete.clone();
+        zero_fee.receipts[0].fee_lamports = 0;
+        assert!(authenticate_receipt_prefix(&zero_fee, ExpectedClusterV1::OwnedLoopback).is_ok());
+        assert!(authenticate_receipt_prefix(&zero_fee, ExpectedClusterV1::Devnet).is_err());
 
         let mut duplicate_signature = complete.clone();
         duplicate_signature.receipts[2].signature =
             duplicate_signature.receipts[1].signature.clone();
-        assert!(authenticate_receipt_prefix(&duplicate_signature).is_err());
+        assert!(
+            authenticate_receipt_prefix(&duplicate_signature, ExpectedClusterV1::Devnet).is_err()
+        );
         let mut same_slot = complete.clone();
         same_slot.receipts[2].slot = same_slot.receipts[1].slot;
-        assert!(authenticate_receipt_prefix(&same_slot).is_err());
+        assert!(authenticate_receipt_prefix(&same_slot, ExpectedClusterV1::Devnet).is_err());
         let mut reordered = complete.clone();
         reordered.receipts.swap(1, 2);
-        assert!(authenticate_receipt_prefix(&reordered).is_err());
+        assert!(authenticate_receipt_prefix(&reordered, ExpectedClusterV1::Devnet).is_err());
         let mut missing_accept = complete.clone();
         missing_accept.receipts.remove(2);
         missing_accept.verified_terminal = false;
-        assert!(authenticate_receipt_prefix(&missing_accept).is_err());
-        assert!(require_terminal_receipts(&missing_accept).is_err());
+        assert!(authenticate_receipt_prefix(&missing_accept, ExpectedClusterV1::Devnet).is_err());
+        assert!(require_terminal_receipts(&missing_accept, ExpectedClusterV1::Devnet).is_err());
     }
 
     #[test]

@@ -34,6 +34,10 @@ pub const CONTROLLER_FUNDING_CHECKPOINT_PDA_DOMAIN_V1: &[u8] = b"dclutch/control
 /// little-endian lamports, little-endian data length, and exact data.
 pub const CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1: &[u8] =
     b"dclutch/controller-funding/custody-ladder/v1";
+/// Trading PDA domain that binds the Custody-staged abort to one exact
+/// pre-abort checkpoint without claiming that Resolution has authorized a
+/// ledger close.
+pub const CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1: &[u8] = b"dclutch/cf-abort-anchor/v1";
 /// Exact number of accounts committed by the Custody ladder digest.
 pub const CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1: usize = 4;
 /// Domain for one exact controller-ledger account state before or after close.

@@ -5,6 +5,8 @@ use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use solana_sdk::pubkey::Pubkey;
 
+mod aggregate_retirement_exterior;
+mod aggregate_retirement_journal;
 mod campaign;
 mod cluster;
 mod direct_market;
@@ -136,6 +138,9 @@ fn run() -> Result<()> {
         }
         Some("local-private-validator-wallet-terminal-payout-v1") => {
             wallet_terminal_payout_exterior::run(arguments.collect())
+        }
+        Some(command) if command == aggregate_retirement_exterior::COMMAND_V1 => {
+            aggregate_retirement_exterior::run(arguments.collect())
         }
         Some("devnet-direct-trade-v1") => direct_trade::run_devnet(arguments.collect()),
         Some("local-private-validator-direct-trade-v1") => {
@@ -1499,6 +1504,7 @@ fn usage() {
     println!("{}", terminal_lifecycle::owned_loopback_usage());
     println!("{}", terminal_sequence::usage());
     println!("{}", terminal_sequence::owned_loopback_usage());
+    println!("{}", aggregate_retirement_exterior::usage());
     println!("{}", user_position_admission::usage());
     println!("{}", user_position_admission::local_usage());
     println!("{}", pyth_vaa_provisioning::usage());

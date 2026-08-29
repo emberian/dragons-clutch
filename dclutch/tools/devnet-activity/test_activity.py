@@ -371,6 +371,79 @@ def v3_manifest_value(
     }
 
 
+def v3_devnet_scenario_value() -> dict[str, object]:
+    value = v3_scenario_value()
+    body = value["body"]
+    assert isinstance(body, dict)
+    body["clusterTarget"] = "devnet"
+    body["genesisHash"] = activity.DEVNET_GENESIS_HASH
+    body["limits"] = limits("devnet")
+    operations = body["operations"]
+    assert isinstance(operations, list)
+    for raw in operations:
+        assert isinstance(raw, dict)
+        if raw["kind"] == "direct":
+            raw["callerAvailability"] = "public-executable"
+            raw["callerSchema"] = "dclutch-devnet-direct-operation-v1"
+            raw["mutationExpected"] = True
+    value["bodySha256"] = hashlib.sha256(
+        json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    return value
+
+
+def v3_devnet_manifest_value(
+    scenario: Path, checked_release: Path, market: Path
+) -> dict[str, object]:
+    value = v3_manifest_value(scenario, checked_release, market)
+    value["target"] = {
+        "kind": "devnet",
+        "rpcUrl": activity.DEVNET_MANIFEST_RPC_URL,
+        "devnetGenesisHash": activity.DEVNET_GENESIS_HASH,
+    }
+    founding = value["adapters"][0]
+    founding["completion"]["requiredTransactionLabels"] = [
+        "DCLTCFQ1",
+        "DCLTPCB2",
+        "DCLTGMF2",
+        "core-funding-create-v1",
+        "resolution-funding-activate-v1",
+        "core-funding-accept-v1",
+    ]
+    adapters = [founding]
+    prior = "founding"
+    for operation_id, kind, command in (
+        ("participant", "participant", "devnet-user-position-admission-v1"),
+        ("direct", "direct", "devnet-direct-trade-v1"),
+        ("resolve", "resolve", "devnet-terminal-sequence-v1"),
+        ("redeem", "redeem", "devnet-terminal-sequence-v1"),
+        ("retire", "retire", "devnet-terminal-sequence-v1"),
+    ):
+        adapter_id = f"live-{operation_id}"
+        adapters.append(
+            {
+                "id": adapter_id,
+                "covers": [operation_id],
+                "caller": "successor",
+                "argv": [command, "--execute"],
+                "dependsOn": [prior],
+                "wallets": ["alice"],
+                "mutation": True,
+                "completion": {
+                    "path": f"{{{{work}}}}/receipts/{operation_id}.json",
+                    "schema": f"dclutch-devnet-{kind}-completion-v1",
+                    "signaturePointers": ["/signature"],
+                    "transactionListPointer": None,
+                    "requiredTransactionLabels": [],
+                    "requiredValues": {"/completed": True},
+                },
+            }
+        )
+        prior = adapter_id
+    value["adapters"] = adapters
+    return value
+
+
 def executable(path: Path, source: str) -> Path:
     path.write_text(source, encoding="utf-8")
     path.chmod(0o755)
@@ -606,6 +679,155 @@ class ActivityTests(unittest.TestCase):
         write_json(self.manifest, value)
         return value
 
+    def write_activity_bundle_template(self):
+        write_json(self.scenario, v3_devnet_scenario_value())
+        checked_release = self.root / "bundle-checked-release.json"
+        market = self.root / "bundle-market.json"
+        write_json(checked_release, {"fixture": "checked-release"})
+        write_json(market, {"fixture": "market"})
+        write_json(
+            self.manifest,
+            v3_devnet_manifest_value(self.scenario, checked_release, market),
+        )
+        manifest = self.parsed()
+        binaries = []
+        binary_paths = {}
+        for index, role in enumerate(activity.ACTIVITY_BUNDLE_BINARY_ROLES):
+            path = executable(
+                self.root / f"bundle-{role}",
+                f"#!/bin/sh\n# distinct fixture {index}\nexit 0\n",
+            )
+            binary_paths[role] = path
+            binaries.append(
+                {"role": role, "path": str(path), "sha256": digest(path)}
+            )
+        bundle = self.root / "activity-bundle.json"
+        value = {
+            "schema": activity.ACTIVITY_ARTIFACT_BUNDLE_SCHEMA,
+            "stage": "template",
+            "cluster": {
+                "kind": "devnet",
+                "genesisHash": activity.DEVNET_GENESIS_HASH,
+            },
+            "artifacts": {
+                "manifest": {
+                    "path": str(self.manifest),
+                    "sha256": digest(self.manifest),
+                    "schema": activity.MANIFEST_SCHEMA,
+                },
+                "scenario": {
+                    "path": str(self.scenario),
+                    "sha256": digest(self.scenario),
+                    "schema": "dclutch-devnet-economic-scenario-v1",
+                },
+                "checkedRelease": {
+                    "path": str(checked_release),
+                    "sha256": digest(checked_release),
+                },
+                "market": {"path": str(market), "sha256": digest(market)},
+                "harness": {
+                    "path": str(Path(activity.__file__).resolve()),
+                    "sha256": digest(Path(activity.__file__).resolve()),
+                    "sourceCommit": "e" * 40,
+                },
+                "liveAuthorization": None,
+                "walletLedger": None,
+                "reconciliation": None,
+            },
+            "binaries": binaries,
+            "ensemble": activity.canonical_activity_ensemble(manifest),
+            "bindings": {
+                "walletAddresses": [
+                    {"walletRef": wallet.wallet_id, "address": None}
+                    for wallet in manifest.scenario.wallets
+                ],
+                "activitySignatures": [],
+            },
+        }
+        activity.atomic_write_json(bundle, value)
+        return bundle, manifest, value, binary_paths
+
+    def advance_activity_bundle_ready(
+        self, bundle: Path, manifest, value, binary_paths
+    ):
+        addresses = {
+            wallet.wallet_id: base58_encode(bytes([index + 1]) * 32)
+            for index, wallet in enumerate(manifest.scenario.wallets)
+        }
+        ledger = self.root / "bundle-wallet-ledger.json"
+        activity.atomic_write_json(
+            ledger,
+            {
+                "schema": activity.WALLET_LEDGER_SCHEMA,
+                "manifestSha256": manifest.sha256,
+                "scenarioSha256": manifest.scenario.sha256,
+                "scenarioId": manifest.scenario.scenario_id,
+                "clusterTarget": "devnet",
+                "wallets": [
+                    {
+                        "id": wallet.wallet_id,
+                        "address": addresses[wallet.wallet_id],
+                        "roles": list(wallet.roles),
+                        "fundingLamports": str(wallet.funding_lamports),
+                    }
+                    for wallet in manifest.scenario.wallets
+                ],
+            },
+            mode=0o644,
+        )
+        authorization = self.root / "bundle-live-authorization.json"
+        now = dt.datetime.now(dt.timezone.utc)
+        checked_release = Path(value["artifacts"]["checkedRelease"]["path"])
+        market = Path(value["artifacts"]["market"]["path"])
+        write_json(
+            authorization,
+            {
+                "schema": activity.V3_BOUNDED_AUTHORIZATION_SCHEMA,
+                "manifestSha256": manifest.sha256,
+                "scenarioSha256": manifest.scenario.sha256,
+                "devnetGenesisHash": activity.DEVNET_GENESIS_HASH,
+                "marketRef": manifest.scenario.market_ref,
+                "notBefore": (now - dt.timedelta(minutes=1)).isoformat(),
+                "expiresAt": (now + dt.timedelta(hours=1)).isoformat(),
+                "authorization": "authorize-bounded-devnet-activity-v3-live-send",
+                "maxCycles": 1,
+                "maxSpendLamports": "15000",
+                "maxFeeLamports": "10000",
+                "maxPostInitTransferLamports": "10000",
+                "maxPostInitFeeLamports": "5000",
+                "initialFundingClosureSha256": "1" * 64,
+                "postInitFundingPlanSha256": activity.post_init_funding_plan_sha256(
+                    manifest
+                ),
+                "checkedReleaseSha256": digest(checked_release),
+                "marketSha256": digest(market),
+                "acceptedHarnessSha256": digest(Path(activity.__file__).resolve()),
+                "acceptedHarnessSourceCommit": "e" * 40,
+                "dclutchSha256": digest(binary_paths["dclutch"]),
+                "successorSha256": digest(binary_paths["successor"]),
+                "solanaKeygenSha256": digest(binary_paths["solana-keygen"]),
+                "solanaSha256": digest(binary_paths["solana"]),
+            },
+        )
+        ready = json.loads(json.dumps(value))
+        ready["stage"] = "ready"
+        ready["artifacts"]["liveAuthorization"] = {
+            "path": str(authorization),
+            "sha256": digest(authorization),
+            "schema": activity.V3_BOUNDED_AUTHORIZATION_SCHEMA,
+        }
+        ready["artifacts"]["walletLedger"] = {
+            "path": str(ledger),
+            "sha256": digest(ledger),
+            "schema": activity.WALLET_LEDGER_SCHEMA,
+        }
+        ready["bindings"]["walletAddresses"] = [
+            {"walletRef": wallet.wallet_id, "address": addresses[wallet.wallet_id]}
+            for wallet in manifest.scenario.wallets
+        ]
+        activity.atomic_write_json(bundle, ready)
+        return ready, addresses
+
     def prepare_finalized_funding(self, manifest, state: RpcState) -> None:
         activity.prepare_wallets(manifest, self.work, self.keygen)
         journal = activity.new_funding_journal(manifest, "alice", WALLET, FUNDER, 10_000, None)
@@ -679,6 +901,201 @@ class ActivityTests(unittest.TestCase):
         write_json(self.manifest, changed)
         with self.assertRaisesRegex(activity.Refusal, "zero prefunding"):
             self.parsed()
+
+    def test_activity_bundle_template_derives_exact_ensemble_without_keys_or_rpc(self) -> None:
+        bundle, manifest, value, _ = self.write_activity_bundle_template()
+        parsed = activity.parse_activity_artifact_bundle(
+            bundle, required_stage="template"
+        )
+        self.assertEqual(parsed["ensemble"], activity.canonical_activity_ensemble(manifest))
+        self.assertEqual(
+            parsed["ensemble"]["expectedReconciliation"]["eventKindOrder"],
+            list(activity.ACTIVITY_EVENT_KIND_ORDER),
+        )
+        self.assertEqual(
+            [row["fundingPhase"] for row in parsed["ensemble"]["wallets"]],
+            [
+                "initial-payer-only",
+                "atomic-create-unfunded",
+                "atomic-create-unfunded",
+                "atomic-create-unfunded",
+                "atomic-create-unfunded",
+                "atomic-create-unfunded",
+                "post-init",
+            ],
+        )
+
+        hostile = json.loads(json.dumps(value))
+        hostile["ensemble"]["actions"][2]["eventKind"] = "participant"
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "ensemble differs"):
+            activity.parse_activity_artifact_bundle(bundle)
+
+        nonmutating = dataclasses.replace(
+            manifest,
+            scenario=dataclasses.replace(
+                manifest.scenario,
+                operations=tuple(
+                    dataclasses.replace(operation, mutation_expected=False)
+                    if operation.kind == "direct"
+                    else operation
+                    for operation in manifest.scenario.operations
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(activity.Refusal, "nonmutating lifecycle gap"):
+            activity.canonical_activity_ensemble(nonmutating)
+
+        hostile = json.loads(json.dumps(value))
+        hostile["cluster"]["kind"] = "mainnet"
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "not exact Solana devnet"):
+            activity.parse_activity_artifact_bundle(bundle)
+
+    def test_activity_bundle_ready_binds_four_binaries_authorization_and_wallet_ledger(self) -> None:
+        bundle, manifest, value, binary_paths = self.write_activity_bundle_template()
+        ready, addresses = self.advance_activity_bundle_ready(
+            bundle, manifest, value, binary_paths
+        )
+        parsed = activity.parse_activity_artifact_bundle(bundle, required_stage="ready")
+        self.assertEqual(
+            [row["address"] for row in parsed["bindings"]["walletAddresses"]],
+            list(addresses.values()),
+        )
+        self.assertEqual(
+            [row["role"] for row in parsed["binaries"]],
+            list(activity.ACTIVITY_BUNDLE_BINARY_ROLES),
+        )
+
+        hostile = json.loads(json.dumps(ready))
+        hostile["bindings"]["walletAddresses"][1]["address"] = base58_encode(
+            b"\x19" * 32
+        )
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "differ from wallet ledger"):
+            activity.parse_activity_artifact_bundle(bundle)
+
+        hostile = json.loads(json.dumps(ready))
+        hostile["binaries"][0]["sha256"] = hostile["binaries"][1]["sha256"]
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "digest changed"):
+            activity.parse_activity_artifact_bundle(bundle)
+
+    def test_activity_bundle_reconciled_injects_only_authenticated_signature_rows(self) -> None:
+        bundle, manifest, value, binary_paths = self.write_activity_bundle_template()
+        ready, addresses = self.advance_activity_bundle_ready(
+            bundle, manifest, value, binary_paths
+        )
+        activity_rows = []
+        expected_signature_rows = []
+        next_signature = 21
+        next_slot = 100
+        for index, adapter in enumerate(manifest.adapters):
+            transaction_count = max(
+                1, len(adapter.completion.required_transaction_labels)
+            )
+            signatures = []
+            transactions = []
+            for transaction_index in range(transaction_count):
+                signature = base58_encode(bytes([next_signature]) * 64)
+                next_signature += 1
+                signatures.append(signature)
+                transactions.append(
+                    {
+                        "signature": signature,
+                        "slot": str(next_slot),
+                        "succeeded": True,
+                        "feeLamports": "5000",
+                        "transactionSha256": f"{next_slot:064x}",
+                    }
+                )
+                next_slot += 1
+                expected_signature_rows.append(
+                    {
+                        "adapterId": adapter.adapter_id,
+                        "transactionIndex": transaction_index,
+                        "signature": signature,
+                    }
+                )
+            activity_rows.append(
+                {
+                    "adapterId": adapter.adapter_id,
+                    "signatures": signatures,
+                    "transactions": transactions,
+                }
+            )
+        reconciliation = self.root / "bundle-reconciliation.json"
+        activity.atomic_write_json(
+            reconciliation,
+            {
+                "schema": activity.RECONCILIATION_SCHEMA,
+                "manifestSha256": manifest.sha256,
+                "scenarioSha256": manifest.scenario.sha256,
+                "scenarioId": manifest.scenario.scenario_id,
+                "clusterTarget": "devnet",
+                "genesisHash": activity.DEVNET_GENESIS_HASH,
+                "reconciledAt": "2026-08-28T12:00:00Z",
+                "wallets": [
+                    {"walletId": wallet.wallet_id, "address": addresses[wallet.wallet_id]}
+                    for wallet in manifest.scenario.wallets
+                ],
+                "postInitFunding": [],
+                "fundingLifecycleSha256": "f" * 64,
+                "activity": activity_rows,
+                "expectedObservedLamportDeltas": {},
+                "expectedObservedTokenDeltas": [],
+                "untrustedProjectionUsed": False,
+            },
+            mode=0o644,
+        )
+        original_reconciliation = json.loads(reconciliation.read_text())
+        reconciled = json.loads(json.dumps(ready))
+        reconciled["stage"] = "reconciled"
+        reconciled["artifacts"]["reconciliation"] = {
+            "path": str(reconciliation),
+            "sha256": digest(reconciliation),
+            "schema": activity.RECONCILIATION_SCHEMA,
+        }
+        reconciled["bindings"]["activitySignatures"] = expected_signature_rows
+        activity.atomic_write_json(bundle, reconciled)
+        activity.parse_activity_artifact_bundle(bundle, required_stage="reconciled")
+
+        hostile = json.loads(json.dumps(reconciled))
+        hostile["bindings"]["activitySignatures"][0]["signature"] = base58_encode(
+            b"\x55" * 64
+        )
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "differ from reconciliation"):
+            activity.parse_activity_artifact_bundle(bundle)
+
+        changed_reconciliation = json.loads(reconciliation.read_text())
+        changed_reconciliation["activity"][2]["transactions"][0]["slot"] = "99"
+        activity.atomic_write_json(reconciliation, changed_reconciliation)
+        hostile = json.loads(json.dumps(reconciled))
+        hostile["artifacts"]["reconciliation"]["sha256"] = digest(reconciliation)
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "slots regress"):
+            activity.parse_activity_artifact_bundle(bundle)
+
+        duplicate_funding = json.loads(json.dumps(original_reconciliation))
+        duplicate_funding["postInitFunding"] = [
+            {"signature": expected_signature_rows[0]["signature"]}
+        ]
+        activity.atomic_write_json(reconciliation, duplicate_funding)
+        hostile = json.loads(json.dumps(reconciled))
+        hostile["artifacts"]["reconciliation"]["sha256"] = digest(reconciliation)
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "funding/activity signature"):
+            activity.parse_activity_artifact_bundle(bundle)
+
+        failed_required = json.loads(json.dumps(original_reconciliation))
+        failed_required["activity"][0]["transactions"][0]["succeeded"] = False
+        activity.atomic_write_json(reconciliation, failed_required)
+        hostile = json.loads(json.dumps(reconciled))
+        hostile["artifacts"]["reconciliation"]["sha256"] = digest(reconciliation)
+        activity.atomic_write_json(bundle, hostile)
+        with self.assertRaisesRegex(activity.Refusal, "too few successful"):
+            activity.parse_activity_artifact_bundle(bundle)
 
     def test_campaign_freshness_reads_five_absences_at_one_finalized_boundary(self) -> None:
         state = RpcState()
@@ -1011,6 +1428,24 @@ class ActivityTests(unittest.TestCase):
         hostile["meta"]["postBalances"][1] = 9_999  # type: ignore[index]
         with self.assertRaisesRegex(activity.Refusal, "exact wallet amount"):
             activity.verify_funding_transaction(hostile, journal, SIGNATURE)
+
+        zero_fee = funding_transaction(memo=journal["memo"])
+        zero_fee["meta"]["fee"] = 0  # type: ignore[index]
+        zero_fee["meta"]["postBalances"][0] = 90_000  # type: ignore[index]
+        with self.assertRaisesRegex(activity.Refusal, "positive exact public-devnet"):
+            activity.verify_funding_transaction(zero_fee, journal, SIGNATURE)
+        for substituted in (None, False, -1, "0"):
+            malformed = funding_transaction(memo=journal["memo"])
+            malformed["meta"]["fee"] = substituted  # type: ignore[index]
+            with self.assertRaisesRegex(activity.Refusal, "positive exact public-devnet"):
+                activity.verify_funding_transaction(malformed, journal, SIGNATURE)
+        self.assertEqual(activity.devnet_fee_decimal("5000", "fee"), 5_000)
+        for substituted in (None, False, -1, 0, "0", "00", "-1"):
+            with self.assertRaises(activity.Refusal):
+                if isinstance(substituted, str) or substituted is None:
+                    activity.devnet_fee_decimal(substituted, "fee")
+                else:
+                    activity.devnet_fee_integer(substituted, "fee")
 
         devnet_scenario = dataclasses.replace(manifest.scenario, cluster_target="devnet")
         devnet = dataclasses.replace(

@@ -478,6 +478,21 @@ impl MarketPrincipalCapSetsV1 {
             }
         }
     }
+
+    /// Decide one complete-set growth against the carried runtime cap.
+    ///
+    /// `outstanding_sets` is the Claims aggregate supply before the operation
+    /// and `added_sets` is the exact aggregate credit proposed by the
+    /// operation. The checked sum is the only total compared with the cap.
+    /// Overflow is an excess, including under the explicit unbounded sentinel:
+    /// no runtime cap admits a complete-set count the `u64` wire cannot carry.
+    pub const fn admit_growth(self, outstanding_sets: u64, added_sets: u64) -> Result<()> {
+        let total = match outstanding_sets.checked_add(added_sets) {
+            Some(total) => total,
+            None => return Err(Error::PrincipalExceedsCapacity),
+        };
+        self.admit(total)
+    }
 }
 
 impl MarketPrincipalCapV1 {
@@ -826,6 +841,24 @@ mod tests {
         assert_eq!(
             admit_principal_growth(MarketPrincipalCapV1::Unbounded, u128::MAX, 1),
             Err(Error::PrincipalExceedsCapacity)
+        );
+    }
+
+    /// Runtime split routes consume the projected complete-set cap, not the
+    /// atom-denominated Source graph. The boundary and overflow refusal remain
+    /// identical in those exact wire units.
+    #[test]
+    fn projected_set_growth_admits_the_boundary_and_refuses_excess_or_overflow() {
+        let cap = MarketPrincipalCapSetsV1::Bounded(10);
+        assert_eq!(cap.admit_growth(7, 3), Ok(()));
+        assert_eq!(cap.admit_growth(7, 4), Err(Error::PrincipalExceedsCapacity));
+        assert_eq!(
+            MarketPrincipalCapSetsV1::Unbounded.admit_growth(u64::MAX, 1),
+            Err(Error::PrincipalExceedsCapacity)
+        );
+        assert_eq!(
+            MarketPrincipalCapSetsV1::Absent.admit_growth(0, 1),
+            Err(Error::PrincipalCapacityUnstated)
         );
     }
 

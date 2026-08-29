@@ -644,7 +644,13 @@ fn account_meta(value: &ObservedAccountMetaV3) -> AccountMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObservedAccount;
+    use crate::{
+        ObservedAccount,
+        dealer_scenario_checkpoint_v1::{
+            DealerScenarioFinalCommitFixedAccountsV1,
+            project_dealer_scenario_final_commit_topology_v1,
+        },
+    };
     use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
     use dclutch_custody_contract::{
         CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1,
@@ -821,6 +827,37 @@ mod tests {
                 .expect("packed geometry");
             assert_eq!(observed, suffix.len() + DEALER_HOT_INJECTED_ACCOUNTS_V4);
         }
+    }
+
+    #[test]
+    fn final_commit_topology_reports_dense_selector_nine_lock_wall() {
+        let spans = [14, 14, 14, 14, 2, 14, 14, 0, 6];
+        let (fixed_accounts, suffix) = runtime_fixture(4, spans);
+        let topology = project_dealer_scenario_final_commit_topology_v1(
+            DealerScenarioHotMetaStateV4 {
+                fixed_accounts: &fixed_accounts,
+                strategy_accounts: &[],
+                runtime_suffix_accounts: &suffix,
+            },
+            4,
+            spans,
+            DealerScenarioFinalCommitFixedAccountsV1 {
+                payer: Pubkey::new_from_array([255; 32]),
+                trading_program: Pubkey::new_from_array([254; 32]),
+                checkpoint: Pubkey::new_from_array([253; 32]),
+                clock: Pubkey::new_from_array([252; 32]),
+                request: Pubkey::new_from_array([251; 32]),
+                evaluation_receipt: Pubkey::new_from_array([250; 32]),
+                candidate_bank: Pubkey::new_from_array([249; 32]),
+                candidate_obligation: Pubkey::new_from_array([248; 32]),
+                claims_delta: Pubkey::new_from_array([247; 32]),
+                effects: Pubkey::new_from_array([246; 32]),
+            },
+        )
+        .expect("topology");
+        assert_eq!(topology.effect_accounts.len(), 117);
+        assert_eq!(topology.unique_account_lock_count, 119);
+        assert!(!topology.fits_devnet_lock_limit);
     }
 
     #[test]
@@ -1104,6 +1141,105 @@ mod tests {
         assert_eq!(built.account_meta_count, 122);
         assert_eq!(built.instruction.accounts.len(), 122);
         assert_eq!(built.unique_account_lock_count, 121);
+        let final_topology =
+            crate::dealer_scenario_checkpoint_v1::project_dealer_scenario_final_commit_topology_v1(
+                DealerScenarioHotMetaStateV4 {
+                    fixed_accounts: &fixed_accounts,
+                    strategy_accounts: &strategy_accounts,
+                    runtime_suffix_accounts: &suffix,
+                },
+                3,
+                spans,
+                crate::dealer_scenario_checkpoint_v1::DealerScenarioFinalCommitFixedAccountsV1 {
+                    payer: Pubkey::new_from_array([250; 32]),
+                    trading_program: Pubkey::new_from_array(trading),
+                    checkpoint: Pubkey::new_from_array([249; 32]),
+                    clock: Pubkey::new_from_array([248; 32]),
+                    request: Pubkey::new_from_array([247; 32]),
+                    evaluation_receipt: Pubkey::new_from_array([246; 32]),
+                    candidate_bank: Pubkey::new_from_array([245; 32]),
+                    candidate_obligation: Pubkey::new_from_array([244; 32]),
+                    claims_delta: Pubkey::new_from_array([243; 32]),
+                    effects: Pubkey::new_from_array([242; 32]),
+                },
+            )
+            .expect("final topology");
+        assert_eq!(final_topology.effect_accounts.len(), 75);
+        assert_eq!(final_topology.unique_account_lock_count, 77);
+        assert!(!final_topology.fits_devnet_lock_limit);
+        let checkpoint = Pubkey::new_from_array([249; 32]);
+        let request_digest = hash(&request).to_bytes();
+        let canonical = crate::dealer_scenario_checkpoint_v1::project_dealer_scenario_canonical_membership_pages_v1(
+            DealerScenarioHotMetaStateV4 {
+                fixed_accounts: &fixed_accounts,
+                strategy_accounts: &strategy_accounts,
+                runtime_suffix_accounts: &suffix,
+            },
+            Pubkey::new_from_array([241; 32]),
+            checkpoint,
+            request_digest,
+        ).expect("canonical pages");
+        let flattened = canonical
+            .pages
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(canonical.manifest.total_account_count, 121);
+        assert_eq!(
+            canonical.manifest.page_account_counts,
+            [21, 20, 20, 20, 20, 20]
+        );
+        assert_eq!(
+            usize::from(canonical.manifest.total_account_count),
+            flattened.len()
+        );
+        assert!(
+            canonical
+                .pages
+                .iter()
+                .all(|page| !page.is_empty() && page.len() <= 48)
+        );
+        assert!(
+            flattened
+                .windows(2)
+                .all(|pair| pair[0].to_bytes() < pair[1].to_bytes())
+        );
+        let reservation_receipts =
+            [230_u8, 231, 232, 233].map(|byte| Pubkey::new_from_array([byte; 32]));
+        let reservation_states =
+            [234_u8, 235, 236, 237].map(|byte| Pubkey::new_from_array([byte; 32]));
+        let reserved = crate::dealer_scenario_checkpoint_v1::project_dealer_scenario_reserved_final_topology_v1(
+            DealerScenarioHotMetaStateV4 {
+                fixed_accounts: &fixed_accounts,
+                strategy_accounts: &strategy_accounts,
+                runtime_suffix_accounts: &suffix,
+            },
+            3,
+            spans,
+            crate::dealer_scenario_checkpoint_v1::DealerScenarioReservedFinalAccountsV1 {
+                fixed: crate::dealer_scenario_checkpoint_v1::DealerScenarioFinalCommitFixedAccountsV1 {
+                    payer: Pubkey::new_from_array([250; 32]),
+                    trading_program: Pubkey::new_from_array(trading),
+                    checkpoint,
+                    clock: Pubkey::new_from_array([248; 32]),
+                    request: Pubkey::new_from_array([247; 32]),
+                    evaluation_receipt: Pubkey::new_from_array([246; 32]),
+                    candidate_bank: Pubkey::new_from_array([245; 32]),
+                    candidate_obligation: Pubkey::new_from_array([244; 32]),
+                    claims_delta: Pubkey::new_from_array([243; 32]),
+                    effects: Pubkey::new_from_array([242; 32]),
+                },
+                custody_program: Pubkey::new_from_array(custody),
+                reservation_receipts,
+                reservation_states,
+                effect_count: projection.semantic_plan.custody_count,
+            },
+        ).expect("reserved final topology");
+        assert_eq!(projection.semantic_plan.custody_count, 3);
+        assert_eq!(reserved.effect_accounts.len(), 39);
+        assert_eq!(reserved.unique_account_lock_count, 41);
+        assert!(reserved.fits_devnet_lock_limit);
         let transaction_census = census_dealer_scenario_transaction_locks_v1(
             Pubkey::new_from_array([250; 32]),
             core::slice::from_ref(&built.instruction),

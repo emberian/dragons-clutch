@@ -1983,6 +1983,14 @@ fn direct_setup_binding_v1(
     )
 }
 
+fn expected_direct_cluster_v1(validated: &ValidatedManifestV1) -> Result<ExpectedClusterV1> {
+    match validated.public.cluster.as_str() {
+        "devnet" => Ok(ExpectedClusterV1::Devnet),
+        "owned-loopback" => Ok(ExpectedClusterV1::OwnedLoopback),
+        _ => Err(refusal("Direct manifest cluster is not admitted")),
+    }
+}
+
 fn direct_setup_paths_v1(validated: &ValidatedManifestV1) -> Result<[PathBuf; 2]> {
     let root = exact_directory(&validated.private.journal_dir, "Direct journal directory")?;
     let setup = exact_directory(
@@ -2044,6 +2052,17 @@ fn load_direct_setup_journals_v1(validated: &ValidatedManifestV1) -> Result<Dire
             authenticate_direct_setup_journal_v1(&binding, replay, None)?;
         }
         (None, None) => {}
+    }
+    let expected_cluster = expected_direct_cluster_v1(validated)?;
+    for journal in replay.iter().chain(token.iter()) {
+        expected_cluster.authenticate_finalized_fee(
+            journal.exact_fee_lamports,
+            "Direct setup durable transaction",
+        )?;
+        if let Some(fee) = journal.fee_lamports {
+            expected_cluster
+                .authenticate_finalized_fee(fee, "Direct setup finalized transaction")?;
+        }
     }
     Ok(DirectSetupJournalsV1 { replay, token })
 }
@@ -2228,7 +2247,8 @@ fn direct_setup_planned_journal_v1(
             let (blockhash, last_valid_block_height) = latest_direct_blockhash_v1(rpc)?;
             let message = direct_setup_message_v1(planning, stage, blockhash);
             let encoded = BASE64.encode(message.serialize());
-            let fee = direct_fee_for_message_v1(rpc, &encoded)?;
+            let fee =
+                direct_fee_for_message_v1(rpc, &encoded, expected_direct_cluster_v1(validated)?)?;
             (blockhash, last_valid_block_height, fee)
         }
     };
@@ -3049,7 +3069,8 @@ fn build_direct_transaction_journal_v1(
     let message_bytes = bincode::serialize(&message)
         .map_err(|error| Error::new(format!("serialize Direct versioned message: {error}")))?;
     let message_base64 = BASE64.encode(&message_bytes);
-    let exact_fee_lamports = direct_fee_for_message_v1(rpc, &message_base64)?;
+    let exact_fee_lamports =
+        direct_fee_for_message_v1(rpc, &message_base64, expected_direct_cluster_v1(validated)?)?;
     let mut journal = base_direct_journal_v1(validated, planning, next)?;
     journal.message_base64 = Some(message_base64);
     journal.message_sha256 = Some(sha256_hex(&message_bytes));
@@ -3338,14 +3359,21 @@ fn latest_direct_blockhash_v1(rpc: &mut Rpc) -> Result<(SolanaHash, u64)> {
     Ok((blockhash, last_valid))
 }
 
-fn direct_fee_for_message_v1(rpc: &mut Rpc, message_base64: &str) -> Result<u64> {
-    rpc.call(
-        "getFeeForMessage",
-        &json!([message_base64, {"commitment":"finalized"}]),
-    )?
-    .get("value")
-    .and_then(Value::as_u64)
-    .ok_or_else(|| Error::new("Direct getFeeForMessage omitted exact fee"))
+fn direct_fee_for_message_v1(
+    rpc: &mut Rpc,
+    message_base64: &str,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<u64> {
+    let fee = rpc
+        .call(
+            "getFeeForMessage",
+            &json!([message_base64, {"commitment":"finalized"}]),
+        )?
+        .get("value")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new("Direct getFeeForMessage omitted exact fee"))?;
+    expected_cluster.authenticate_finalized_fee(fee, "Direct fee quote")?;
+    Ok(fee)
 }
 
 fn exact_direct_wire_bytes_v1(message: &VersionedMessage, signatures: u8) -> Result<usize> {
@@ -4655,6 +4683,10 @@ fn authenticate_embedded_direct_evidence_identity_v1(
             "embedded Direct finalized evidence identity, geometry, or digest changed",
         ));
     }
+    for row in &evidence.mutations {
+        expected_cluster
+            .authenticate_finalized_fee(row.fee_lamports, "Direct mutation evidence")?;
+    }
     Ok(())
 }
 
@@ -5873,6 +5905,12 @@ fn validate_journal(
             "Direct transaction journal durable intent is incomplete",
         ));
     }
+    expected_direct_cluster_v1(validated)?.authenticate_finalized_fee(
+        journal
+            .exact_fee_lamports
+            .ok_or_else(|| refusal("Direct transaction journal omitted its exact fee"))?,
+        "Direct durable transaction",
+    )?;
     match journal.phase {
         DirectTradeJournalPhaseV1::Planned => {
             if journal.signed_packet_base64.is_some()
@@ -6418,6 +6456,35 @@ mod tests {
                 ExpectedClusterV1::OwnedLoopback,
             )
             .is_ok()
+        );
+
+        let mut local_zero = exact.clone();
+        for mutation in &mut local_zero.mutations {
+            mutation.fee_lamports = 0;
+        }
+        local_zero.evidence_sha256 =
+            direct_evidence_digest_v1(&local_zero).expect("zero-fee digest");
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &local_zero,
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_ok()
+        );
+
+        let mut public_zero = local_zero;
+        public_zero.schema = direct_evidence_schema_v1("devnet")
+            .expect("devnet evidence schema")
+            .into();
+        public_zero.cluster = "devnet".into();
+        public_zero.evidence_sha256 =
+            direct_evidence_digest_v1(&public_zero).expect("public zero-fee digest");
+        assert!(
+            authenticate_embedded_direct_evidence_identity_v1(
+                &public_zero,
+                ExpectedClusterV1::Devnet,
+            )
+            .is_err()
         );
 
         let mut reordered = exact.clone();

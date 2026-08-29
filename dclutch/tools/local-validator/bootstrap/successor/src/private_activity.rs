@@ -759,9 +759,10 @@ fn adapt_founding(
             success_mutations.push(label);
         }
         let fee = u64_field(row, "fee_lamports", "campaign transaction")?;
+        ExpectedClusterV1::OwnedLoopback
+            .authenticate_finalized_fee(fee, "owned-loopback founding mutation")?;
         let compute = optional_u64_field(row, "compute_units_consumed", "campaign transaction")?;
         if row.get("transaction_metadata_available") != Some(&Value::Bool(true))
-            || fee == 0
             || compute == Some(0)
         {
             return Err(Error::new(
@@ -1254,6 +1255,8 @@ fn reopen_event(rpc: &mut Rpc, stage: &str, pending: PendingEventV1) -> Result<R
         return Err(Error::new("activity source signature is absent or failed"));
     }
     let fee = u64_field(meta, "fee", "finalized transaction meta")?;
+    ExpectedClusterV1::OwnedLoopback
+        .authenticate_finalized_fee(fee, "owned-loopback activity transaction")?;
     let compute = meta
         .get("computeUnitsConsumed")
         .and_then(Value::as_u64)
@@ -2943,6 +2946,19 @@ mod tests {
             .unwrap()
             .remove("computeUnitsConsumed");
         assert!(adapt_resolution(&[input.clone(), raw("checkpoint", missing_compute)]).is_err());
+
+        let mut zero_fee = checkpoint_value.clone();
+        zero_fee["receipts"][0]["feeLamports"] = Value::from(0_u64);
+        assert!(adapt_resolution(&[input.clone(), raw("checkpoint", zero_fee)]).is_ok());
+        let mut missing_fee = checkpoint_value.clone();
+        missing_fee["receipts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("feeLamports");
+        assert!(adapt_resolution(&[input.clone(), raw("checkpoint", missing_fee)]).is_err());
+        let mut boolean_fee = checkpoint_value.clone();
+        boolean_fee["receipts"][0]["feeLamports"] = Value::Bool(false);
+        assert!(adapt_resolution(&[input.clone(), raw("checkpoint", boolean_fee)]).is_err());
 
         let mut partial_execute = checkpoint_value.clone();
         partial_execute["verifiedTerminal"] = Value::Bool(false);

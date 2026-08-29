@@ -21,6 +21,8 @@ pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAcc
 pub mod capability_program_set_v2;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
 pub mod dealer_equity_hot_v3;
+/// Lock-bounded Dealer checkpoint callers and crash-safe journal.
+pub mod dealer_scenario_checkpoint_v1;
 /// Chain-derived Dealer scenario exact-fill physical-account projection.
 pub mod dealer_scenario_hot_v4;
 /// Exact delegated-allowance Custody successor CPI construction.

@@ -149,6 +149,7 @@ function gcd(left: bigint, right: bigint): bigint {
 
 export type DirectCrossingPlanV1 = Readonly<{
   ticket: SignedDirectIntentV3;
+  takerAddress: string;
   taker: CompactIntentV2Input;
   fill: bigint;
   executionPrice: bigint;
@@ -167,7 +168,7 @@ export type DirectCrossingPlanV1 = Readonly<{
  * the largest admissible fill at or below what the taker asked for.
  */
 export function planDirectCrossingV1(input: Readonly<{
-  route: Pick<DirectInlineHotRouteV3, 'market' | 'generation' | 'outcomeCount' | 'priceScale' | 'feeBasisPoints'>;
+  route: Pick<DirectInlineHotRouteV3, 'tradingProgram' | 'market' | 'generation' | 'outcomeCount' | 'priceScale' | 'feeBasisPoints'>;
   ticket: SignedDirectIntentV3;
   takerAddress: string;
   /** Opaque next nonce returned by the finalized MakerReplayRootV1 reader. */
@@ -181,6 +182,7 @@ export function planDirectCrossingV1(input: Readonly<{
   const takerAddress = canonicalKey(input.takerAddress, 'taker address');
   if (takerAddress === ticket.maker) throw new Error('the connected wallet is the ticket maker; a Direct fill needs two distinct makers');
   const takerNonce = requireAuthenticatedDirectMakerNonceV1(input.takerReplay, {
+    tradingProgram: input.route.tradingProgram,
     market: input.route.market,
     generation: input.route.generation,
     maker: takerAddress,
@@ -223,6 +225,7 @@ export function planDirectCrossingV1(input: Readonly<{
   const preview = previewDirectInlineV3(input.route, seller, buyer, fill, executionPrice, input.clockSlot);
   return Object.freeze({
     ticket,
+    takerAddress,
     taker,
     fill,
     executionPrice,
