@@ -95,6 +95,7 @@ const DEPLOYMENT_SET_JOURNAL_FLAG: &str = "--deployment-set-journal";
 const BUFFER_PUBKEY_FLAG: &str = "--buffer-pubkey";
 const BUFFER_KEYPAIR_FLAG: &str = "--buffer-keypair";
 const ADOPT_BUFFER_FLAG: &str = "--adopt-existing-buffer";
+const ADOPT_FINALIZED_CLI_SIGNATURE_FLAG: &str = "--adopt-finalized-cli-upgrade-signature";
 const BUFFER_METADATA_BYTES: usize = 37;
 const BUFFER_WRITER_LEASE_SCHEMA: &str = "dclutch-buffer-writer-lease-v2";
 const BUFFER_WRITER_PERMIT_SCHEMA: &str = "dclutch-buffer-writer-permit-v1";
@@ -229,6 +230,9 @@ struct UpgradeArgsV1 {
     /// Adopt a separately uploaded, authority-retained Buffer only after the
     /// full checked gate and current Loader prestate authenticate it exactly.
     adopt_existing_buffer: bool,
+    /// Attach one already-finalized exact Loader Upgrade submitted by the
+    /// Solana CLI, which remains the sole process allowed to open key files.
+    adopt_finalized_cli_upgrade_signature: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1943,6 +1947,7 @@ fn audit_set_journal_with_runner(
             preflight: true,
             stop_after_buffer_ready: false,
             adopt_existing_buffer: false,
+            adopt_finalized_cli_upgrade_signature: None,
         };
         let admission = admit_upgrade(&role_args)?;
         let loaded_receipt = load_receipt(&role_args.receipt_path)?;
@@ -3259,6 +3264,7 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             preflight: false,
             stop_after_buffer_ready: false,
             adopt_existing_buffer: false,
+            adopt_finalized_cli_upgrade_signature: None,
         };
         let admission = admit_upgrade(&role_args)?;
         validate_receipt_binding(
@@ -3470,6 +3476,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
                 | "--dump"
                 | "--solana-cli"
                 | "--expected-deployment-solana-cli-version"
+                | ADOPT_FINALIZED_CLI_SIGNATURE_FLAG
                 | TARGET_ACK_FLAG
                 | EXCLUSIVE_PAYER_ACK_FLAG
         ) {
@@ -3519,6 +3526,24 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
             "--buffer-pubkey must name a non-default persistent Buffer account",
         ));
     }
+    let adopt_finalized_cli_upgrade_signature = values
+        .get(ADOPT_FINALIZED_CLI_SIGNATURE_FLAG)
+        .map(|value| {
+            let signature = Signature::from_str(value)
+                .map_err(|error| Error::new(format!("finalized CLI Upgrade signature: {error}")))?;
+            if signature.to_string() != *value {
+                return Err(Error::new(
+                    "finalized CLI Upgrade signature is not canonical base58",
+                ));
+            }
+            Ok(value.clone())
+        })
+        .transpose()?;
+    if adopt_finalized_cli_upgrade_signature.is_some() && !adopt_existing_buffer {
+        return Err(Error::new(
+            "--adopt-finalized-cli-upgrade-signature requires --adopt-existing-buffer",
+        ));
+    }
     Ok(UpgradeArgsV1 {
         origin,
         role,
@@ -3565,6 +3590,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         preflight,
         stop_after_buffer_ready,
         adopt_existing_buffer,
+        adopt_finalized_cli_upgrade_signature,
     })
 }
 
@@ -3755,6 +3781,7 @@ fn extension_shadow_args(args: &ExtensionArgsV1) -> UpgradeArgsV1 {
         preflight: false,
         stop_after_buffer_ready: false,
         adopt_existing_buffer: false,
+        adopt_finalized_cli_upgrade_signature: None,
     }
 }
 
@@ -3802,12 +3829,23 @@ fn execute_with_runner(
                 "--stop-after-buffer-ready cannot reinterpret a receipt that already crossed the Loader Upgrade construction boundary",
             ));
         }
+        if args.adopt_finalized_cli_upgrade_signature.is_some()
+            && !(receipt.buffer_adopted && receipt.phase == ReceiptPhaseV1::BufferReady)
+        {
+            return Err(Error::new(
+                "--adopt-finalized-cli-upgrade-signature requires one exact adopted BufferReady receipt",
+            ));
+        }
     } else if args.dump_path.exists() {
         return Err(Error::new(format!(
             "dump target {} already exists without this operation's receipt; refusing to \
-             overwrite or reinterpret it",
+            overwrite or reinterpret it",
             args.dump_path.display()
         )));
+    } else if args.adopt_finalized_cli_upgrade_signature.is_some() {
+        return Err(Error::new(
+            "--adopt-finalized-cli-upgrade-signature cannot create or infer an Upgrade receipt",
+        ));
     }
 
     let cli_version = invoke(runner, args, &["--version".into()])?;
@@ -3970,14 +4008,39 @@ fn execute_with_runner(
                     | ReceiptPhaseV1::Submitted
             ) =>
         {
-            let audited_journal =
-                authenticate_phase_mutation_boundary(args, runner, receipt.phase.clone())?;
+            // A separately submitted CLI Upgrade can legitimately move the
+            // Loader state while this receipt remains BufferReady. Its exact
+            // finalized transaction/poststate owns that ambiguity just as a
+            // journaled Submitted packet does; the immutable set-plan check
+            // still refuses a role/path substitution below.
+            let audited_journal = if args.adopt_finalized_cli_upgrade_signature.is_some() {
+                None
+            } else {
+                authenticate_phase_mutation_boundary(args, runner, receipt.phase.clone())?
+            };
             require_mutation_permit(
                 args,
                 Some(&receipt.deployment_set_journal_sha256),
                 true,
                 audited_journal.as_deref(),
             )?;
+            if let Some(signature) = &args.adopt_finalized_cli_upgrade_signature {
+                let current = read_snapshot(runner, args, receipt.before_context_slot)?;
+                if current.loader == receipt.before {
+                    return Err(Error::new(
+                        "finalized CLI Upgrade signature was supplied but the exact Loader prestate has not moved",
+                    ));
+                }
+                receipt.phase = ReceiptPhaseV1::Submitted;
+                receipt.transaction_signature = Some(signature.clone());
+                receipt.solana_cli_output = Some(serde_json::json!({
+                    "transport": "solana-cli-program-deploy-adopted-v1",
+                    "signature": signature,
+                    "maxSignAttempts": 1,
+                }));
+                write_receipt(&args.receipt_path, &mut receipt)?;
+                return finish_submitted(runner, args, gate, candidate_live, &mut receipt);
+            }
             let current = read_snapshot(runner, args, receipt.before_context_slot)?;
             if receipt.phase != ReceiptPhaseV1::Submitted && current.loader != receipt.before {
                 return Err(Error::new(
@@ -5022,6 +5085,11 @@ fn continue_upgrade(
             ReceiptPhaseV1::BufferReady => {
                 if args.stop_after_buffer_ready {
                     return Ok(receipt.clone());
+                }
+                if receipt.buffer_adopted {
+                    return Err(Error::new(format!(
+                        "an adopted Buffer must be upgraded by the pinned Solana CLI, which is the sole process allowed to open key files; rerun with {ADOPT_FINALIZED_CLI_SIGNATURE_FLAG} after its finalized exact program deploy"
+                    )));
                 }
                 let query = loader_upgrade_query();
                 let unsigned = runner.prepare_loader_action(&query)?;
@@ -10038,6 +10106,7 @@ mod tests {
                 preflight: false,
                 stop_after_buffer_ready: false,
                 adopt_existing_buffer: false,
+                adopt_finalized_cli_upgrade_signature: None,
             };
             let carry_path = directory.0.join("carry-forward.json");
             fs::write(&carry_path, b"{}\n").expect("write carry placeholder");
@@ -12484,15 +12553,20 @@ mod tests {
 
         let mut resume_args = fixture.args.clone();
         resume_args.stop_after_buffer_ready = false;
+        resume_args.adopt_finalized_cli_upgrade_signature =
+            Some(Signature::from([7_u8; 64]).to_string());
         let mut resume = FakeRunner::new(&fixture);
         resume.version = resume_args.expected_deployment_solana_cli_version.clone();
         resume.buffer_written = true;
         resume.before_wallet = 1_100_000;
         resume.after_wallet = 1_085_000;
+        // The pinned Solana CLI is the only key-reading process. Model its
+        // already-finalized Loader mutation, then attach by exact signature.
+        resume.deployed = true;
         let complete = execute_with_runner(&resume_args, &mut resume)
-            .expect("adopted Buffer Upgrade refunds exact rent minus final fee");
+            .expect("finalized CLI Upgrade attaches and refunds exact rent minus final fee");
         assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
-        assert_eq!(resume.send_count, 1);
+        assert_eq!(resume.send_count, 0);
         let arithmetic = complete.arithmetic.expect("adopted arithmetic");
         assert_eq!(arithmetic.transaction_payer_pre_lamports, 1_000_000);
         assert_eq!(arithmetic.transaction_payer_post_lamports, 1_085_000);
