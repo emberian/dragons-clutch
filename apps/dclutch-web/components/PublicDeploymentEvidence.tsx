@@ -30,7 +30,7 @@ export function publicDeploymentEvidenceDocumentV1(): Readonly<Record<string, un
       }),
     ]))),
     evidence: 'docs/evidence/DEPLOY_1.md §2',
-    note: 'These are Solana devnet test programs. The addresses are permanent; the programs are mutable, so the app still reads current chain state before it describes an action as available.',
+    note: 'These are Solana devnet test programs. The addresses are permanent; the programs are mutable and have been upgraded in place since, keeping those addresses, so each observedDeploymentSlot is the slot of the ORIGINAL DEPLOY-1 deployment recorded in the evidence below and not the slot the program sits at today. Read the ProgramData account for the current one. The app reads current chain state before it describes an action as available.',
   });
 }
 
@@ -54,6 +54,6 @@ export default function PublicDeploymentEvidence({
       className="secondary-action"
       download={PUBLIC_DEPLOYMENT_EVIDENCE_FILENAME_V1}
       href={publicDeploymentEvidenceDownloadHrefV1()}
-    >Download the seven addresses and observed slots ↓</a>
+    >Download the seven addresses and their first deployment slots ↓</a>
   </div>;
 }
