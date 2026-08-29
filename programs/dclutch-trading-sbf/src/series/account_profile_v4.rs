@@ -204,6 +204,30 @@ pub fn encode_series_consume_account_profile_v4_atomic(
     Ok(())
 }
 
+/// Stamp the two Trading-owned state widths a Series release derives.
+///
+/// The composite root (coordinate 0) and the Ticket replay account
+/// (coordinate 59) have widths fixed by release constants rather than by
+/// deployment observation, so the release compiler derives them here — at the
+/// representatives and at every route alias, which
+/// [`encode_series_consume_account_profile_v4_atomic`] requires to agree.
+/// This module owns the alias table, so the caller cannot hold a second copy
+/// of it to keep in sync.
+pub fn stamp_series_release_owned_widths_v4(
+    lengths: &mut [u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+    root_bytes: u32,
+    ticket_bytes: u32,
+) {
+    for (coordinate, width) in [(ROOT, root_bytes), (TICKET_REPLAY, ticket_bytes)] {
+        lengths[coordinate] = width;
+        for (alias, representative) in ROUTE_ALIASES {
+            if *representative == coordinate {
+                lengths[*alias] = width;
+            }
+        }
+    }
+}
+
 fn fixed_rule(
     lengths: &[u32; FIXED_RULE_COUNT],
     coordinate: usize,

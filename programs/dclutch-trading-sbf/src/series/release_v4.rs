@@ -32,43 +32,85 @@
 //! executed campaign runs against its accelerator rather than through
 //! Trading's commit half — and it is not this module's job.
 //!
-//! # The two inputs this module refuses to invent
+//! # The one input this module refuses to invent
 //!
-//! `lifecycle` and `strategy` arrive as caller-supplied bytes rather than
-//! being encoded here, and that is deliberate in both cases.
+//! The generic assembler below still accepts `lifecycle` and `strategy` as
+//! caller bytes — it is the mechanism the canonical completion drives, and
+//! its tests exercise hostile substitutions through it. The canonical path is
+//! [`series_consume_selected_release_v4`], which derives everything the
+//! release set binds and leaves exactly one deployment fact as a parameter.
 //!
-//! **Lifecycle**: Series declares no `StateLifecyclePolicyV5` anywhere. Every
-//! other family has one. Writing it means deciding which created states it
-//! covers (Series creates a root *and* a Ticket), which rent-quote generation
-//! it pins, and who receives the refund — and Series already has a competing
-//! claim on that last one in [`super::lifecycle`], whose
-//! `ticket_capability_refund` suggests the Ticket's capability rent is spoken
-//! for by the funding path. A policy that also claimed it would be a second
-//! author for one lamport flow. That is a protocol decision, not a caller's,
-//! so it is a parameter until it is ruled on.
+//! **Lifecycle** is now EMITTED, not supplied: the 1b8228e9 ruling resolved
+//! the open decisions this header used to carry, and
+//! [`super::lifecycle_policy_v5`] encodes the root-only, derived,
+//! lamport-silent policy. The Ticket's capability rent stays spoken for by
+//! the funding path ([`super::commit_plans`]); a policy claiming it refuses
+//! at [`super::artifacts_v4`]'s `TicketAuthorship` wall.
 //!
-//! **Strategy**: the ShadowAot arm names the *deployed* accelerator's
-//! certificate program. That identity is a fact about a deployment, and a
-//! builder that invented one would produce a release addressed to an
-//! accelerator nobody runs.
+//! **Strategy** keeps the one honest hole: the ShadowAot arm names the
+//! *deployed* accelerator's certificate program. That identity is a fact
+//! about a deployment (`dclutch-series-shadow-sbf` builds fail-closed until a
+//! generated release is selected, so no local certificate exists to read),
+//! and a builder that invented one would produce a release addressed to an
+//! accelerator nobody runs. Every other strategy field is a schema constant
+//! or the digest of the transition this module itself emits, so
+//! [`encode_series_consume_strategy_v4`] takes precisely that one
+//! [`ContentId`] and nothing else.
 
-use dclutch_capability_program_contract::v4::{
-    ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
+extern crate alloc;
+
+use alloc::{vec, vec::Vec};
+
+use dclutch_account_profile_contract::{
+    lifecycle_v3::CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
+    v2::SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
+};
+use dclutch_capability_program_contract::{
+    set_v2::{
+        CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
+        encode_program_set_v2, encoded_program_set_bytes_v2,
+    },
+    v4::{
+        ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4,
+        CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    },
 };
 use dclutch_core_contract::ContentId;
+use dclutch_execution_strategy_contract::{
+    shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3},
+    v2::{
+        EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+        EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+        ExecutionStrategyProgramV2, StrategyDispositionV2,
+    },
+};
 use dclutch_series_v3_kernel::generated::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3;
+use dclutch_series_v3_kernel::request::SeriesActionV3;
 use solana_program::hash::hash;
 
 use super::{
     account_profile_v4::{
-        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,
-        encode_series_consume_account_profile_v4_atomic,
+        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
+        SeriesConsumeAccountProfileInputV4, encode_series_consume_account_profile_v4_atomic,
+        stamp_series_release_owned_widths_v4,
+    },
+    artifacts_v3::{
+        SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ACTION_SELECTOR_OFFSET_V3,
+        SERIES_ROOT_SCHEMA_PREIMAGE_V3, SERIES_SUCCESSOR_KIND_PREIMAGE_V3,
+        SERIES_TICKET_DERIVATION_PREIMAGE_V3,
     },
     consume_artifacts_v4::{
+        SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_EFFECT_BYTES_V4,
         SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4, SERIES_CONSUME_TRANSITION_BYTES_V4,
+        SeriesConsumeChildRequestsV4, encode_series_consume_effect_v4_from_requests_atomic,
         encode_series_consume_request_profile_v4_atomic,
         encode_series_consume_transition_v4_atomic,
     },
+    lifecycle_policy_v5::{
+        SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5, SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5,
+        encode_series_consume_state_lifecycle_v5_atomic,
+    },
+    state::{SERIES_STATE_BYTES_V3, SERIES_TICKET_STATE_BYTES_V3},
 };
 
 /// Stable refusal from Series release assembly.
@@ -258,6 +300,315 @@ fn identity(bytes: [u8; 32]) -> Result<ContentId> {
     ContentId::new(bytes).map_err(|_| SeriesReleaseErrorV4::ZeroIdentity)
 }
 
+/// Stable refusal from the canonical selected-release completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SeriesSelectedReleaseErrorV4 {
+    /// One of the three fully determined artifact emitters refused.
+    Emit,
+    /// The canonical lifecycle-policy emitter refused.
+    Lifecycle,
+    /// The occurrence-specific Effect emitter refused.
+    Effect,
+    /// The strategy grammar refused the derived tuple.
+    Strategy,
+    /// Descriptor assembly refused.
+    Descriptor,
+    /// ProgramSetV2 encoding refused.
+    ProgramSet,
+    /// A supplied release differed from its own canonical recompilation.
+    Publication,
+}
+
+/// Result alias for the selected-release completion.
+pub type SelectedResult<T> = core::result::Result<T, SeriesSelectedReleaseErrorV4>;
+
+/// Complete authenticated input for one selected Series Consume release.
+#[derive(Clone, Copy, Debug)]
+pub struct SeriesConsumeSelectedReleaseInputV4<'a> {
+    /// Finalized Series Template record identity the descriptor's config binds.
+    pub template: ContentId,
+    /// The one deployment fact: the deployed Shadow accelerator's certificate.
+    ///
+    /// See this module's header — everything else in the strategy is a schema
+    /// constant or a digest of bytes this compiler emits itself.
+    pub shadow_certificate_program: ContentId,
+    /// Exact canonical child requests the occurrence binds.
+    pub child_requests: SeriesConsumeChildRequestsV4<'a>,
+    /// Observed exact data widths at every fixed base coordinate.
+    ///
+    /// The two Trading-owned widths — the composite root and the Ticket
+    /// replay account — are release constants and are DERIVED over whatever
+    /// this array carries at those coordinates and their aliases; the caller
+    /// owns only the genuinely observed remainder (wallets, mints, sysvars,
+    /// role ProgramData).
+    pub observed_data_lengths: &'a [u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4],
+}
+
+/// Canonical Market-bindable publication for one selected Series release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesConsumeSelectedPublicationV4 {
+    /// Finalized Series Template record identity.
+    pub template: [u8; 32],
+    /// SHA-256 identity of the one-entry ProgramSetV2 bytes.
+    pub program_set_id: [u8; 32],
+    /// Exact Consume descriptor identity the set selects.
+    pub descriptor: [u8; 32],
+    /// Profile13 account-profile identity.
+    pub account_profile: [u8; 32],
+    /// Request-profile identity.
+    pub request_profile: [u8; 32],
+    /// Root-only `StateLifecyclePolicyV5` identity.
+    pub lifecycle: [u8; 32],
+    /// Transition-program identity.
+    pub transition: [u8; 32],
+    /// Occurrence-specific DCE5 Effect identity.
+    pub effect: [u8; 32],
+    /// ShadowAot strategy identity.
+    pub strategy: [u8; 32],
+    /// Deployed Shadow accelerator certificate the strategy names.
+    pub shadow_certificate_program: [u8; 32],
+    /// Exact mutable family root tail width the descriptor binds.
+    pub root_state_bytes: u32,
+}
+
+/// Canonical publication magic.
+pub const SERIES_CONSUME_PUBLICATION_MAGIC_V4: [u8; 8] = *b"DCSRPB04";
+/// Exact canonical publication width.
+pub const SERIES_CONSUME_PUBLICATION_BYTES_V4: usize =
+    16 + PUBLICATION_IDENTITY_COUNT * 32 + 8;
+
+const PUBLICATION_VERSION: u16 = 4;
+const PUBLICATION_IDENTITY_COUNT: usize = 10;
+const PUBLICATION_IDENTITY_START: usize = 16;
+const PUBLICATION_SCALAR_START: usize =
+    PUBLICATION_IDENTITY_START + PUBLICATION_IDENTITY_COUNT * 32;
+
+impl SeriesConsumeSelectedPublicationV4 {
+    /// Exact canonical publication bytes.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; SERIES_CONSUME_PUBLICATION_BYTES_V4] {
+        let mut output = [0_u8; SERIES_CONSUME_PUBLICATION_BYTES_V4];
+        output[..8].copy_from_slice(&SERIES_CONSUME_PUBLICATION_MAGIC_V4);
+        output[8..10].copy_from_slice(&PUBLICATION_VERSION.to_le_bytes());
+        for (index, identity) in self.identities().iter().enumerate() {
+            let start = PUBLICATION_IDENTITY_START + index * 32;
+            output[start..start + 32].copy_from_slice(identity);
+        }
+        output[PUBLICATION_SCALAR_START..PUBLICATION_SCALAR_START + 4]
+            .copy_from_slice(&self.root_state_bytes.to_le_bytes());
+        output
+    }
+
+    /// SHA-256 identity of [`Self::to_bytes`] with no extra domain prefix.
+    #[must_use]
+    pub fn publication_id(&self) -> [u8; 32] {
+        hash(&self.to_bytes()).to_bytes()
+    }
+
+    fn identities(&self) -> [[u8; 32]; PUBLICATION_IDENTITY_COUNT] {
+        [
+            self.template,
+            self.program_set_id,
+            self.descriptor,
+            self.account_profile,
+            self.request_profile,
+            self.lifecycle,
+            self.transition,
+            self.effect,
+            self.strategy,
+            self.shadow_certificate_program,
+        ]
+    }
+}
+
+/// One complete selected Series Consume release.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SeriesConsumeSelectedReleaseV4 {
+    /// The three fully determined artifacts, with their digests.
+    pub emitted: SeriesConsumeEmittedArtifactsV4,
+    /// Exact canonical root-only `StateLifecyclePolicyV5` bytes.
+    pub lifecycle: Vec<u8>,
+    /// Exact occurrence-specific DCE5 Effect bytes.
+    pub effect: Vec<u8>,
+    /// Exact ShadowAot `ExecutionStrategyProgramV2` bytes.
+    pub strategy: [u8; EXECUTION_STRATEGY_PROGRAM_BYTES_V2],
+    /// Exact `CapabilityProgramV4` descriptor bytes.
+    pub descriptor: [u8; CAPABILITY_PROGRAM_V4_BYTES],
+    /// Exact one-entry `CapabilityProgramSetV2` bytes.
+    pub program_set: Vec<u8>,
+    /// SHA-256 identity of `program_set`.
+    pub program_set_id: [u8; 32],
+    /// Canonical Market-bindable publication.
+    pub publication: SeriesConsumeSelectedPublicationV4,
+}
+
+/// Emit the exact ShadowAot strategy from the one deployment fact.
+///
+/// `transition_program` is the digest of the transition bytes this module
+/// emits; every schema below is a fixed constant of the strategy grammar for
+/// the ShadowAot disposition, whose transport must be the Shadow transcript
+/// pair. Nothing here is a field a human keeps in sync.
+pub fn encode_series_consume_strategy_v4(
+    shadow_certificate_program: ContentId,
+    transition_program: ContentId,
+) -> SelectedResult<[u8; EXECUTION_STRATEGY_PROGRAM_BYTES_V2]> {
+    let schema = |bytes: [u8; 32]| {
+        ContentId::new(bytes).map_err(|_| SeriesSelectedReleaseErrorV4::Strategy)
+    };
+    Ok(ExecutionStrategyProgramV2::new(
+        StrategyDispositionV2::ShadowAot,
+        schema(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        transition_program,
+        schema(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
+        Some(shadow_certificate_program),
+        schema(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2)?,
+        None,
+        schema(SHADOW_REQUEST_SCHEMA_ID_V3)?,
+        schema(SHADOW_ACK_SCHEMA_ID_V3)?,
+    )
+    .map_err(|_| SeriesSelectedReleaseErrorV4::Strategy)?
+    .to_bytes())
+}
+
+/// Compile the one canonical selected Series Consume release.
+///
+/// This is the completion the WAVE queue names: the artifacts assembled into
+/// a descriptor, the descriptor named by a one-entry `CapabilityProgramSetV2`
+/// selected by the Consume action byte, and the canonical publication a
+/// Market manifest binds. Every schema, preimage digest, and Trading-owned
+/// width is derived here; the inputs are the Template identity, the deployed
+/// accelerator certificate, the occurrence's child requests, and the observed
+/// external account widths.
+pub fn series_consume_selected_release_v4(
+    input: SeriesConsumeSelectedReleaseInputV4<'_>,
+) -> SelectedResult<SeriesConsumeSelectedReleaseV4> {
+    let mut lengths = *input.observed_data_lengths;
+    stamp_series_release_owned_widths_v4(
+        &mut lengths,
+        u32::try_from(SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5)
+            .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?,
+        u32::try_from(SERIES_TICKET_STATE_BYTES_V3)
+            .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?,
+    );
+    let emitted = emit_series_consume_artifacts_v4(SeriesConsumeAccountProfileInputV4 {
+        fixed_data_lengths: &lengths,
+    })
+    .map_err(|_| SeriesSelectedReleaseErrorV4::Emit)?;
+
+    let mut lifecycle_scratch = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
+    let mut lifecycle = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
+    encode_series_consume_state_lifecycle_v5_atomic(&mut lifecycle_scratch, &mut lifecycle)
+        .map_err(|_| SeriesSelectedReleaseErrorV4::Lifecycle)?;
+
+    let mut base_scratch = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
+    let mut base = vec![0_u8; SERIES_CONSUME_BASE_EFFECT_BYTES_V4];
+    let mut effect_scratch = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
+    let mut effect = vec![0_u8; SERIES_CONSUME_EFFECT_BYTES_V4];
+    encode_series_consume_effect_v4_from_requests_atomic(
+        input.child_requests,
+        &mut base_scratch,
+        &mut base,
+        &mut effect_scratch,
+        &mut effect,
+    )
+    .map_err(|_| SeriesSelectedReleaseErrorV4::Effect)?;
+
+    let strategy = encode_series_consume_strategy_v4(
+        input.shadow_certificate_program,
+        ContentId::new(emitted.transition_id())
+            .map_err(|_| SeriesSelectedReleaseErrorV4::Strategy)?,
+    )?;
+
+    let descriptor = assemble_series_consume_descriptor_v4(
+        &emitted,
+        SeriesConsumeSuppliedArtifactsV4 {
+            effect: &effect,
+            lifecycle: &lifecycle,
+            strategy: &strategy,
+            effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+            strategy_schema: EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+            lifecycle_schema: CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
+            request_profile_schema: dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+            transition_schema: dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+            account_profile_schema: ACCOUNT_PROFILE_SCHEMA_ID_V2,
+        },
+        hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes(),
+        hash(SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3).to_bytes(),
+        hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes(),
+        hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes(),
+        input.template.to_bytes(),
+        u32::try_from(SERIES_STATE_BYTES_V3).map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?,
+    )
+    .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?
+    .encode();
+
+    let descriptor_id = hash(&descriptor).to_bytes();
+    let entries = [CapabilityProgramSetEntryV2::new(
+        SeriesActionV3::Consume as u32,
+        CapabilityDescriptorReferenceV2::new(
+            ContentId::new(CAPABILITY_PROGRAM_SCHEMA_ID_V4)
+                .map_err(|_| SeriesSelectedReleaseErrorV4::ProgramSet)?,
+            ContentId::new(descriptor_id).map_err(|_| SeriesSelectedReleaseErrorV4::ProgramSet)?,
+        ),
+    )];
+    let width = encoded_program_set_bytes_v2(entries.len())
+        .map_err(|_| SeriesSelectedReleaseErrorV4::ProgramSet)?;
+    let mut program_set = vec![0_u8; width];
+    encode_program_set_v2(
+        SERIES_ACTION_SELECTOR_OFFSET_V3,
+        SelectorWidthV2::U8,
+        &entries,
+        &mut program_set,
+    )
+    .map_err(|_| SeriesSelectedReleaseErrorV4::ProgramSet)?;
+    let program_set_id = hash(&program_set).to_bytes();
+
+    let publication = SeriesConsumeSelectedPublicationV4 {
+        template: input.template.to_bytes(),
+        program_set_id,
+        descriptor: descriptor_id,
+        account_profile: emitted.account_profile_id(),
+        request_profile: emitted.request_profile_id(),
+        lifecycle: hash(&lifecycle).to_bytes(),
+        transition: emitted.transition_id(),
+        effect: hash(&effect).to_bytes(),
+        strategy: hash(&strategy).to_bytes(),
+        shadow_certificate_program: input.shadow_certificate_program.to_bytes(),
+        root_state_bytes: u32::try_from(SERIES_STATE_BYTES_V3)
+            .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?,
+    };
+    Ok(SeriesConsumeSelectedReleaseV4 {
+        emitted,
+        lifecycle,
+        effect,
+        strategy,
+        descriptor,
+        program_set,
+        program_set_id,
+        publication,
+    })
+}
+
+/// Hostile-rejoin one supplied selected release against its own inputs.
+///
+/// Recompiles the entire release from the same input and refuses any byte
+/// that differs, so a substituted artifact, descriptor, selector, or
+/// publication identity refuses even when each part is well formed on its
+/// own. This is the same shape `validate_fractional_selected_release_v4`
+/// gives the Fractional release.
+pub fn validate_series_consume_selected_release_v4(
+    release: &SeriesConsumeSelectedReleaseV4,
+    input: SeriesConsumeSelectedReleaseInputV4<'_>,
+) -> SelectedResult<()> {
+    let canonical = series_consume_selected_release_v4(input)?;
+    if *release != canonical
+        || release.publication.publication_id() != canonical.publication.publication_id()
+    {
+        return Err(SeriesSelectedReleaseErrorV4::Publication);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -342,6 +693,235 @@ mod tests {
             SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4
                 .iter()
                 .all(|line| !line.is_empty())
+        );
+    }
+
+    use crate::series::artifacts_v3::{
+        SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+    };
+    use crate::series::artifacts_v4::{
+        SeriesArtifactErrorV4, SeriesConsumeArtifactBytesV4, SeriesConsumeArtifactRegistersV4,
+        SeriesConsumeArtifactSelectionV4, authenticate_series_consume_artifacts_v4,
+    };
+
+    const TEMPLATE: [u8; 32] = [1; 32];
+
+    fn template() -> ContentId {
+        ContentId::new(TEMPLATE).expect("template identity")
+    }
+
+    fn certificate() -> ContentId {
+        ContentId::new([0x77; 32]).expect("certificate identity")
+    }
+
+    fn canonical_release() -> SeriesConsumeSelectedReleaseV4 {
+        let lock = [0x11_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+        let core = [0x22_u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
+        let realize = [0x33_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+        let claims = [0x44_u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3];
+        let observed = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
+        series_consume_selected_release_v4(SeriesConsumeSelectedReleaseInputV4 {
+            template: template(),
+            shadow_certificate_program: certificate(),
+            child_requests: SeriesConsumeChildRequestsV4 {
+                lock: &lock,
+                core: &core,
+                realize: &realize,
+                claims: &claims,
+            },
+            observed_data_lengths: &observed,
+        })
+        .expect("canonical selected Series release")
+    }
+
+    fn registers() -> ([u64; 7], [[u8; 32]; 6]) {
+        ([128, 64, 2, 32, 7, 9, 4], [[9_u8; 32]; 6])
+    }
+
+    /// Authenticate the canonical release exactly as the on-chain join would,
+    /// with the lifecycle policy (or the whole release) substituted.
+    fn authenticate(
+        release: &SeriesConsumeSelectedReleaseV4,
+        lifecycle: &[u8],
+        descriptor: &[u8],
+        program_set: &[u8],
+    ) -> core::result::Result<(), SeriesArtifactErrorV4> {
+        let request = crate::series::effect_v4::tests::request();
+        let (scalars, identities) = registers();
+        authenticate_series_consume_artifacts_v4(
+            SeriesConsumeArtifactSelectionV4 {
+                program_set: hash(program_set).to_bytes(),
+                template: template(),
+            },
+            SeriesConsumeArtifactBytesV4 {
+                program_set,
+                descriptor,
+                account_profile: &release.emitted.account_profile,
+                lifecycle_policy: lifecycle,
+                request_profile: &release.emitted.request_profile,
+                strategy: &release.strategy,
+                transition: &release.emitted.transition,
+                effect: &release.effect,
+            },
+            &request,
+            SeriesConsumeArtifactRegistersV4 {
+                tail_count: 0,
+                scalars: &scalars,
+                identities: &identities,
+                funding_count_hint: 7,
+            },
+        )
+        .map(|_| ())
+    }
+
+    /// Rebuild the descriptor and program set around substituted lifecycle
+    /// bytes, so a hostile policy reaches the verifier's lifecycle conjuncts
+    /// instead of dying at the content-identity wall.
+    fn release_around_lifecycle(
+        release: &SeriesConsumeSelectedReleaseV4,
+        lifecycle: &[u8],
+    ) -> ([u8; CAPABILITY_PROGRAM_V4_BYTES], Vec<u8>) {
+        let descriptor = assemble_series_consume_descriptor_v4(
+            &release.emitted,
+            SeriesConsumeSuppliedArtifactsV4 {
+                effect: &release.effect,
+                lifecycle,
+                strategy: &release.strategy,
+                effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+                strategy_schema: EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                lifecycle_schema: CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5,
+                request_profile_schema: dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                transition_schema: dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                account_profile_schema: ACCOUNT_PROFILE_SCHEMA_ID_V2,
+            },
+            hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes(),
+            hash(SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3).to_bytes(),
+            hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes(),
+            hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes(),
+            TEMPLATE,
+            u32::try_from(SERIES_STATE_BYTES_V3).expect("state width"),
+        )
+        .expect("hostile-lifecycle descriptor assembles")
+        .encode();
+        let entries = [CapabilityProgramSetEntryV2::new(
+            SeriesActionV3::Consume as u32,
+            CapabilityDescriptorReferenceV2::new(
+                ContentId::new(CAPABILITY_PROGRAM_SCHEMA_ID_V4).expect("schema"),
+                ContentId::new(hash(&descriptor).to_bytes()).expect("descriptor id"),
+            ),
+        )];
+        let width = encoded_program_set_bytes_v2(entries.len()).expect("set width");
+        let mut program_set = vec![0_u8; width];
+        encode_program_set_v2(
+            SERIES_ACTION_SELECTOR_OFFSET_V3,
+            SelectorWidthV2::U8,
+            &entries,
+            &mut program_set,
+        )
+        .expect("program set");
+        (descriptor, program_set)
+    }
+
+    /// The bar of the whole module: `authenticate_series_consume_artifacts_v4`
+    /// ACCEPTS a real assembled bundle — the first admissible Series release —
+    /// and the two ruled negative controls refuse at their exact conjuncts.
+    #[test]
+    fn the_first_admissible_series_release_authenticates_and_the_controls_refuse() {
+        let release = canonical_release();
+        assert_eq!(
+            authenticate(
+                &release,
+                &release.lifecycle,
+                &release.descriptor,
+                &release.program_set,
+            ),
+            Ok(())
+        );
+
+        // Negative control 1: a Prepare-only policy decodes, joins the
+        // profile, and is still refused at the nonzero-Consume-plan conjunct.
+        let prepare_only =
+            crate::series::artifacts_v4::tests::hostile_policy(SeriesActionV3::Prepare, 0, None);
+        let (descriptor, program_set) = release_around_lifecycle(&release, &prepare_only);
+        assert_eq!(
+            authenticate(&release, &prepare_only, &descriptor, &program_set),
+            Err(SeriesArtifactErrorV4::Lifecycle)
+        );
+
+        // Negative control 2: a Ticket-claiming policy is refused at the
+        // second-author pin, with the pin's own code.
+        let ticket_claiming =
+            crate::series::artifacts_v4::tests::hostile_policy(SeriesActionV3::Consume, 59, None);
+        let (descriptor, program_set) = release_around_lifecycle(&release, &ticket_claiming);
+        assert_eq!(
+            authenticate(&release, &ticket_claiming, &descriptor, &program_set),
+            Err(SeriesArtifactErrorV4::TicketAuthorship)
+        );
+    }
+
+    /// The canonical rejoin accepts the release it compiled and refuses any
+    /// substituted byte, publication identities included.
+    #[test]
+    fn the_selected_release_rejoins_and_refuses_substitution() {
+        let lock = [0x11_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+        let core = [0x22_u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
+        let realize = [0x33_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
+        let claims = [0x44_u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3];
+        let observed = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
+        let input = SeriesConsumeSelectedReleaseInputV4 {
+            template: template(),
+            shadow_certificate_program: certificate(),
+            child_requests: SeriesConsumeChildRequestsV4 {
+                lock: &lock,
+                core: &core,
+                realize: &realize,
+                claims: &claims,
+            },
+            observed_data_lengths: &observed,
+        };
+        let release = series_consume_selected_release_v4(input).expect("release");
+        assert_eq!(
+            validate_series_consume_selected_release_v4(&release, input),
+            Ok(())
+        );
+        assert_eq!(
+            release.publication.to_bytes().len(),
+            SERIES_CONSUME_PUBLICATION_BYTES_V4
+        );
+        assert_ne!(release.publication.publication_id(), [0_u8; 32]);
+
+        let mut substituted = release.clone();
+        let last = substituted.program_set.len() - 1;
+        substituted.program_set[last] ^= 1;
+        assert_eq!(
+            validate_series_consume_selected_release_v4(&substituted, input),
+            Err(SeriesSelectedReleaseErrorV4::Publication)
+        );
+        let mut relabeled = release.clone();
+        relabeled.publication.template = [2; 32];
+        assert_eq!(
+            validate_series_consume_selected_release_v4(&relabeled, input),
+            Err(SeriesSelectedReleaseErrorV4::Publication)
+        );
+    }
+
+    /// The strategy derives everything except the one deployment fact.
+    #[test]
+    fn the_strategy_binds_the_emitted_transition_and_the_named_certificate() {
+        let release = canonical_release();
+        let strategy = dclutch_execution_strategy_contract::v2::ExecutionStrategyProgramV2::decode(
+            &release.strategy,
+        )
+        .expect("strategy decodes");
+        assert_eq!(
+            strategy.transition_program().to_bytes(),
+            release.emitted.transition_id()
+        );
+        assert_eq!(release.publication.shadow_certificate_program, [0x77; 32]);
+        assert_eq!(
+            release.publication.root_state_bytes,
+            u32::try_from(SERIES_STATE_BYTES_V3).expect("state width")
         );
     }
 

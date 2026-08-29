@@ -609,7 +609,7 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     extern crate alloc;
 
     use alloc::vec;
@@ -689,10 +689,15 @@ mod tests {
         );
     }
 
-    /// Encode one hostile V5 policy whose Consume plan names `state` and,
+    /// Encode one hostile V5 policy whose `action` plan names `state` and,
     /// optionally, a RentCredit coordinate. Everything else is minimal and
-    /// well-formed, so the only wall left to refuse it is the Ticket pin.
-    fn hostile_policy(state: u16, rent_credit: Option<u16>) -> alloc::vec::Vec<u8> {
+    /// well-formed, so the only wall left to refuse it is the Ticket pin —
+    /// or, for a non-Consume action, the nonzero-Consume-plan conjunct.
+    pub(crate) fn hostile_policy(
+        action: SeriesActionV3,
+        state: u16,
+        rent_credit: Option<u16>,
+    ) -> alloc::vec::Vec<u8> {
         use dclutch_account_profile_contract::lifecycle_v3::{
             ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
             encode::{
@@ -701,7 +706,6 @@ mod tests {
                 LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
             },
         };
-        use dclutch_series_v3_kernel::request::SeriesActionV3;
 
         let recipes = [LifecycleRecipeInputV3 {
             state: LifecycleAccountCoordinateV3::fixed(state),
@@ -720,7 +724,7 @@ mod tests {
         // the state to the Ticket".
         let plans = [match rent_credit {
             None => LifecyclePlanInputV3 {
-                action: SeriesActionV3::Consume as u32,
+                action: action as u32,
                 operation: LifecycleOperationInputV3::Authenticate,
                 recipe: 0,
                 payer: None,
@@ -730,7 +734,7 @@ mod tests {
                 guard: LifecycleGuardInputV3::Always,
             },
             Some(credit) => LifecyclePlanInputV3 {
-                action: SeriesActionV3::Consume as u32,
+                action: action as u32,
                 operation: LifecycleOperationInputV3::Close,
                 recipe: 0,
                 payer: None,
@@ -784,17 +788,17 @@ mod tests {
         };
         // Claimed as the plan's own state.
         assert_eq!(
-            wall(&hostile_policy(59, None)),
+            wall(&hostile_policy(SeriesActionV3::Consume, 59, None)),
             Err(SeriesArtifactErrorV4::TicketAuthorship)
         );
         // Claimed as the refund destination of a root plan.
         assert_eq!(
-            wall(&hostile_policy(0, Some(59))),
+            wall(&hostile_policy(SeriesActionV3::Consume, 0, Some(59))),
             Err(SeriesArtifactErrorV4::TicketAuthorship)
         );
         // Claimed through the authenticated route alias (140 -> 59).
         assert_eq!(
-            wall(&hostile_policy(140, None)),
+            wall(&hostile_policy(SeriesActionV3::Consume, 140, None)),
             Err(SeriesArtifactErrorV4::TicketAuthorship)
         );
         // Control: the canonical root-only policy passes this exact wall.
