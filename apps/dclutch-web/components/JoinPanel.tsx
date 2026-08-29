@@ -168,9 +168,11 @@ export default function JoinPanel({
         </button>
       </div>}
 
-    {inspection.kind === 'refused' && <p className="market-refusal">Refused: {inspection.reason}</p>}
+    <div aria-live="polite">
+      {inspection.kind === 'refused' && <p className="market-refusal">Refused: {inspection.reason}</p>}
 
-    {inspection.kind === 'done' && wallets.address !== null
-      && <JoinStanding readiness={inspection.readiness} marketPhase={marketPhase} walletAddress={wallets.address} />}
+      {inspection.kind === 'done' && wallets.address !== null
+        && <JoinStanding readiness={inspection.readiness} marketPhase={marketPhase} walletAddress={wallets.address} />}
+    </div>
   </section>;
 }
