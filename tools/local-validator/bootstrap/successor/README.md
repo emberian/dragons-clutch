@@ -484,3 +484,114 @@ The report format is `dclutch-sponsored-push-exterior-report-v2`. It retains
 the reviewed instruction and prestate, the durable signed packet, finalized
 signature/fee/compute/log evidence, and the writable poststates in that one
 path. The keypair file and secret bytes never enter the report.
+
+## General and Series: one durable family caller
+
+`local-private-validator-general-hot-campaign-v1` drives all seven authored
+General actions against the real accelerator ELF on a local validator, and
+`local-private-validator-series-hot-campaign-v1` is its Series sibling. They
+share one journal ladder — `planned`, `prepared`, `submitted`, `finalized`,
+each phase renamed into place — because what the two families have in common
+is not their semantics but their transaction discipline.
+
+The campaign runs in **two phases**, and the first one deliberately opens no
+socket and no key file. Its output is a set of genesis account fixtures, and
+those have to exist before the validator they are loaded into does.
+
+### Phase 1: prepare the fixtures
+
+```sh
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -- \
+  local-private-validator-general-hot-campaign-v1 \
+  --accelerator ACCELERATOR_PROGRAM_PUBKEY \
+  --caller CALLER_PROGRAM_PUBKEY \
+  --account-dir /absolute/empty/dir/accounts \
+  --journal-dir /absolute/empty/dir/journals \
+  --evidence /absolute/path/evidence.json
+```
+
+This writes one `<address>.json` per account the accelerator reads and one
+planned journal per action. The addresses are **derived**, not fresh keypairs:
+the two phases run in different processes and must agree on them without
+passing a key, and nothing ever signs as these accounts.
+
+Why fixtures at all — a host cannot write into an account it does not own.
+These accounts hold data owned by the caller program, only the owning program
+could write them, and the readonly caller has no instruction that would. So
+they enter at genesis, exactly as the Loader pairs do.
+
+### Phase 2: start the validator and execute
+
+```sh
+solana-test-validator --ledger /absolute/new/ledger --reset \
+  --rpc-port 21400 --faucet-port 21402 --gossip-port 21403 \
+  --dynamic-port-range 21410-21441 --ticks-per-slot 16 \
+  --account-dir /absolute/empty/dir/accounts \
+  --bpf-program ACCELERATOR_PROGRAM_PUBKEY /abs/dclutch_general_accelerator_sbf.so \
+  --bpf-program CALLER_PROGRAM_PUBKEY /abs/dclutch_general_accelerator_test_caller_sbf.so
+```
+
+Build those two ELFs with `cargo build-sbf --manifest-path
+programs/dclutch-general-accelerator-sbf/Cargo.toml --sbf-out-dir DIR` and the
+same for `test-programs/general-caller`; their program ids are the pubkeys of
+the keypairs that build emits. Pick an RPC port block that is yours — the
+whole block is `BASE`, `BASE+2`, `BASE+3`, `BASE+10..BASE+41`, and lanes share
+a machine.
+
+Then rerun phase 1's command with the three flags that make it write:
+
+```sh
+  --execute --rpc-url http://127.0.0.1:21400 --payer-keypair /absolute/payer.json
+```
+
+### What it reaches, and what it does not
+
+Measured at runtime width 1, seven finalized transactions:
+
+| action | ACK | CU | legacy packet | accounts |
+|---|---|---:|---:|---:|
+| Consider | accepted | 34,825 | 863 | 33 |
+| Freeze | accepted | 31,371 | 797 | 31 |
+| InitializeSettlement | refused | 53,242 | 856 | 90 |
+| Collect | refused | 45,360 | 836 | 70 |
+| Materialize | refused | 44,504 | 834 | 68 |
+| Distribute | refused | 45,358 | 836 | 70 |
+| Close | refused | 52,704 | 853 | 87 |
+
+**The width is not a preference.** Six of the seven serialise to 1,273–1,329
+bytes at N=258 against Solana's 1,232-byte legacy ceiling, so a campaign
+claiming that width would be recording routes no validator would accept. N=1
+is where the packet clause holds.
+
+**A refused ACK is a real result, not a failure.** The accelerator returns a
+semantic refusal as a typed acknowledgment on a *succeeding* transaction. The
+five settlement actions refuse because this campaign builds only the selection
+tier of the runtime frame — no settlement cursor, runtime verifier or manifest
+— and that is named in `general_runtime_data_v1` rather than left to be
+inferred. The verifier in particular comes from a real batch with real orders
+and real escrows, which is the next lane on this path.
+
+**This is the evaluation half of the family.** The accelerator owns no
+account, signs nothing and performs no CPI. The commit half — Trading's
+`process_hot_execution_v3` writing the capability root and returning a
+`DCLTHAK3` ack — additionally needs a founded Market whose capability manifest
+selects General, and no driver in this tree founds one.
+`general_market_selection_requirements_v1` states the six facts such a Market
+must carry.
+
+**Series compiles its wire and refuses.** Its `DCLTSIX3` requests for Prepare,
+Consume and Expire are built and round-tripped through the kernel's own
+decoder, and then the command refuses, because `build_series_*_hot_v3` has no
+caller anywhere in the tree and `projected_open_composition_v4` has none
+either. The executable Series surface today is the Core occurrence route in
+`dclutch-core-sbf`. A caller that "ran" against a route nobody dispatches
+would be evidence of nothing.
+
+### Resuming
+
+The journal on disk is read before anything is written. Past `prepared` a run
+may only reauthenticate the persisted bytes and send them again; a `finalized`
+journal is polled rather than resubmitted. Rerunning a completed campaign
+produces byte-identical signatures and slots and submits nothing. A journal
+whose action, width, caller or family-request digest differs from the run in
+hand is refused rather than resumed.
