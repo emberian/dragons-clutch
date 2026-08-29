@@ -152,7 +152,7 @@ pub struct ProviderExecuteWritableAccountsV3<'a> {
     pub source_after: &'a ObservedAccount,
     /// Terminal certificate after allocation.
     pub certificate_after: &'a ObservedAccount,
-    /// Terminal Market after Core admission.
+    /// Unchanged Open Market after the caller-only Core wrapper.
     pub market_after: &'a ObservedAccount,
     /// Consumed provider lifecycle after execution.
     pub lifecycle_after: &'a ObservedAccount,
@@ -182,7 +182,8 @@ pub struct ProviderExecuteFinalizedInputV3<'a> {
     pub result_domain: &'a ObservedAccount,
     /// Exact unchanged provider update read by Resolution.
     pub update: &'a ObservedAccount,
-    /// Exact writable prestates and finalized poststates.
+    /// Exact mutated prestates plus the read-only Market observation and all
+    /// corresponding finalized poststates.
     pub writable: ProviderExecuteWritableAccountsV3<'a>,
 }
 
@@ -197,8 +198,8 @@ pub struct ProviderExecuteProjectionV3 {
     pub request: ProviderExecutionRequestV3,
     /// Canonically decoded and rejoined typed Resolution return data.
     pub receipt: ProviderExecutionReceiptV3,
-    /// Exact poststates in instruction writable order: Source, certificate,
-    /// Market, and lifecycle.
+    /// Exact observed poststates: Source, certificate, unchanged Market, and
+    /// lifecycle. Only Source, certificate, and lifecycle are writable.
     pub expected_writable_poststates: [ProviderExpectedAccountStateV3; 4],
 }
 
@@ -473,7 +474,7 @@ pub fn project_finalized_provider_execute_v3(
         PROVIDER_EXECUTE_ACCOUNT_COUNT_V3,
         11,
         &[1],
-        &[2, 3, 4, 37],
+        &[2, 3, 37],
     )?;
     let provider_start = REQUEST_BYTES;
     let provider_end = provider_start
@@ -779,7 +780,7 @@ pub fn project_finalized_provider_execute_v3(
         .to_bytes()
         .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?
         .to_vec();
-    let mut market = CoreState::decode(&w.market_before.data)
+    let market = CoreState::decode(&w.market_before.data)
         .map_err(|_| ProviderFinalizedProjectionErrorV3::Prestate)?;
     if w.market_before.owner != instruction.program_id
         || w.market_before.executable
@@ -793,16 +794,6 @@ pub fn project_finalized_provider_execute_v3(
     {
         return Err(ProviderFinalizedProjectionErrorV3::Prestate);
     }
-    market.phase = Phase::Terminal;
-    market.terminal_winner = receipt.selector;
-    market.terminal_receipt = Some(
-        dclutch_market_core_codec::Identity::new(request.certificate_account)
-            .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?,
-    );
-    let market_data = market
-        .encode()
-        .map_err(|_| ProviderFinalizedProjectionErrorV3::Transition)?
-        .to_vec();
     let expected = [
         state(
             w.source_after.key,
@@ -823,7 +814,7 @@ pub fn project_finalized_provider_execute_v3(
             instruction.program_id,
             w.market_before.lamports,
             false,
-            market_data,
+            w.market_before.data.clone(),
         ),
         state(
             w.lifecycle_after.key,
@@ -1854,7 +1845,7 @@ mod tests {
             dclutch_market_core_codec::Identity::new(registry.to_bytes()).expect("registry");
         let market_id =
             dclutch_market_core_codec::Identity::new(market_key.to_bytes()).expect("market");
-        let mut market = CoreState {
+        let market = CoreState {
             phase: Phase::Open,
             readiness: Readiness::Consumed,
             terminal_winner: 0,
@@ -1948,7 +1939,7 @@ mod tests {
             11,
             core,
             &[1],
-            &[2, 3, 4, 37],
+            &[2, 3, 37],
         );
         for (index, address) in [
             (0, caller_authority),
@@ -2084,12 +2075,6 @@ mod tests {
         let market_lamports = rent.minimum_balance(market.encode().expect("market").len());
         let lifecycle_lamports = rent.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
         let market_before_bytes = market.encode().expect("market").to_vec();
-        market.phase = Phase::Terminal;
-        market.terminal_winner = selector;
-        market.terminal_receipt = Some(
-            dclutch_market_core_codec::Identity::new(certificate_key.to_bytes())
-                .expect("certificate identity"),
-        );
         ExecuteCase {
             instruction: Instruction {
                 program_id: core,
@@ -2120,7 +2105,13 @@ mod tests {
                 certificate_lamports,
                 vec![],
             ),
-            market_before: account(20, market_key, core, market_lamports, market_before_bytes),
+            market_before: account(
+                20,
+                market_key,
+                core,
+                market_lamports,
+                market_before_bytes.clone(),
+            ),
             lifecycle_before: account(
                 20,
                 lifecycle_key,
@@ -2142,13 +2133,7 @@ mod tests {
                 certificate_lamports,
                 certificate.to_bytes().expect("certificate").to_vec(),
             ),
-            market_after: account(
-                30,
-                market_key,
-                core,
-                market_lamports,
-                market.encode().expect("terminal market").to_vec(),
-            ),
+            market_after: account(30, market_key, core, market_lamports, market_before_bytes),
             lifecycle_after: account(
                 30,
                 lifecycle_key,
@@ -2161,7 +2146,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_projection_rebuilds_four_poststates_and_refuses_cross_layer_substitution() {
+    fn execute_projection_rebuilds_resolution_writes_and_requires_an_unchanged_open_market() {
         let exact = execute_case();
         let projection =
             project_finalized_provider_execute_v3(exact.input()).expect("exact provider execute");
@@ -2171,7 +2156,7 @@ mod tests {
         );
         assert_eq!(
             projection.expected_writable_poststates[2].data,
-            exact.market_after.data
+            exact.market_before.data
         );
 
         let mut wrong_source = execute_case();
@@ -2182,7 +2167,7 @@ mod tests {
         );
 
         let mut wrong_market = execute_case();
-        wrong_market.market_after = wrong_market.market_before.clone();
+        wrong_market.market_after.data[0] ^= 1;
         wrong_market.market_after.observation = observation(30);
         assert_eq!(
             project_finalized_provider_execute_v3(wrong_market.input()),

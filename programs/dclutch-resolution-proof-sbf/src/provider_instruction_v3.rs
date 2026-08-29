@@ -124,7 +124,7 @@ pub(crate) fn process_provider_resolution_v3(
             PROVIDER_RESOLUTION_CORE_TAIL_START_V3
         }
     };
-    authenticate_privileges(program_id, accounts, tail_start, request.caller)?;
+    authenticate_privileges(program_id, accounts, tail_start)?;
     let frame = ProviderFrameV3 {
         accounts,
         tail_start,
@@ -447,13 +447,11 @@ fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     tail_start: usize,
-    caller: ProviderCallerV3,
 ) -> ProgramResult {
     for (index, account) in accounts.iter().enumerate() {
         let expected_executable = matches!(index, 7 | 11 | 13 | 15)
             || matches!(index, value if value == tail_start + 1 || value == tail_start + 4 || value == tail_start + 8);
-        let expected_signer = index == 1 || (index == 0 && caller != ProviderCallerV3::Resolution);
-        if account.is_signer != expected_signer
+        if account.is_signer != matches!(index, 0 | 1)
             || account.is_writable != (matches!(index, 2 | 3) || index == tail_start - 1)
             || account.executable != expected_executable
             || accounts

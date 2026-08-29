@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase, Readiness};
+use dclutch_market_core_codec::{Action, CoreState, Phase as CorePhase, Readiness, Request};
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -24,7 +24,6 @@ use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3,
     ProviderExecutionRequestV3, ProviderReclaimRequestV3, ProviderSubmitRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    provider_resolution_direct_intent_digest_v1,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
@@ -455,7 +454,7 @@ pub fn build_provider_submit_v3(
     })
 }
 
-/// Build the permissionless direct Resolution action that consumes one submitted provider update.
+/// Build the permissionless Core-caller action that consumes one submitted provider update.
 ///
 /// The only caller choices are resolver, positive terminal sequence, and the
 /// exact provider body already committed by the lifecycle. Market, Source,
@@ -629,8 +628,27 @@ pub fn build_provider_execute_v3(
         &deployment.resolution_program,
     )
     .0;
-    let mut provider_request = ProviderExecutionRequestV3 {
-        caller: ProviderCallerV3::Resolution,
+    let core_request = Request::administrative(
+        Action::ExecuteProvider,
+        market.identity.generation,
+        market.identity.market_id,
+    );
+    let core_bytes = core_request
+        .encode()
+        .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
+    let parent_request_digest = hash(&core_bytes).to_bytes();
+    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
+        release_set,
+        snapshot.market.key.to_bytes(),
+        ExecutionRoleV1::Core,
+        snapshot.source_state.key.to_bytes(),
+        parent_request_digest,
+    )
+    .map_err(|_| ProviderTransportOperatorErrorV3::Address)?;
+    let caller_authority =
+        Pubkey::find_program_address(&caller_seeds.as_slices(), &snapshot.market.owner).0;
+    let provider_request = ProviderExecutionRequestV3 {
+        caller: ProviderCallerV3::Core,
         generation: market.identity.generation,
         terminal_sequence: intent.terminal_sequence,
         market: snapshot.market.key.to_bytes(),
@@ -645,30 +663,14 @@ pub fn build_provider_execute_v3(
         expected_update_digest: lifecycle.update_digest,
         provider_submitter: lifecycle.provider_submitter,
         resolver: intent.resolver.to_bytes(),
-        caller_program: deployment.resolution_program.to_bytes(),
+        caller_program: snapshot.market.owner.to_bytes(),
         release_set,
         capability_program_set: [0; 32],
         selected_capability_program: [0; 32],
-        // Replaced below by the domain-separated digest of every other exact
-        // direct intent field. A nonzero placeholder lets the codec validate
-        // before the self-field is zeroed for hashing.
-        parent_request_digest: [0xff; 32],
+        parent_request_digest,
         post_params_body_digest: lifecycle.post_body_digest,
     };
-    provider_request.parent_request_digest =
-        provider_resolution_direct_intent_digest_v1(provider_request)
-            .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
-    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
-        release_set,
-        snapshot.market.key.to_bytes(),
-        ExecutionRoleV1::Resolution,
-        snapshot.source_state.key.to_bytes(),
-        provider_request.parent_request_digest,
-    )
-    .map_err(|_| ProviderTransportOperatorErrorV3::Address)?;
-    let caller_authority =
-        Pubkey::find_program_address(&caller_seeds.as_slices(), &deployment.resolution_program).0;
-    let mut data = Vec::new();
+    let mut data = core_bytes.to_vec();
     data.extend_from_slice(
         &provider_request
             .to_bytes()
@@ -773,7 +775,7 @@ pub fn build_provider_execute_v3(
     }
     Ok(ProviderTransportReportV3 {
         instruction: Instruction {
-            program_id: deployment.resolution_program,
+            program_id: snapshot.market.owner,
             accounts,
             data,
         },
@@ -905,10 +907,10 @@ pub fn compile_provider_submit_v0(
     compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
 }
 
-/// Compile one exact direct Resolution provider execution into an unsigned v0 message.
+/// Compile one exact Core-caller provider execution into an unsigned v0 message.
 ///
 /// The permissionless resolver is the fee payer and sole transaction signer;
-/// the direct intent PDA is a read-only coordinate and never a signer.
+/// the Core caller PDA becomes a signer only inside the onchain CPI.
 #[cfg(feature = "transaction-planning")]
 pub fn compile_provider_execute_v0(
     report: &ProviderTransportReportV3,
@@ -1031,11 +1033,21 @@ fn validate_execute_report(
     report: &ProviderTransportReportV3,
 ) -> Result<ProviderExecutionRequestV3, ProviderTransportTransactionErrorV3> {
     let accounts = &report.instruction.accounts;
-    let provider_end = PROVIDER_EXECUTION_REQUEST_BYTES_V3;
+    let core_end = dclutch_market_core_codec::REQUEST_BYTES;
+    let provider_end = core_end
+        .checked_add(PROVIDER_EXECUTION_REQUEST_BYTES_V3)
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    let core_bytes = report
+        .instruction
+        .data
+        .get(..core_end)
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    let core_request =
+        Request::decode(core_bytes).map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
     let provider_bytes = report
         .instruction
         .data
-        .get(..provider_end)
+        .get(core_end..provider_end)
         .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
     let request = ProviderExecutionRequestV3::decode(provider_bytes)
         .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
@@ -1045,24 +1057,26 @@ fn validate_execute_report(
         .get(provider_end..)
         .filter(|bytes| !bytes.is_empty())
         .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
-    if report.instruction.program_id != account_key(accounts, 15)?
+    if core_request.action != Action::ExecuteProvider
+        || report.instruction.program_id != account_key(accounts, 11)?
         || accounts.len() != PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
-        || request.caller != ProviderCallerV3::Resolution
-        || provider_resolution_direct_intent_digest_v1(request)
-            .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?
-            != request.parent_request_digest
+        || request.caller != ProviderCallerV3::Core
+        || request.market != core_request.market.to_bytes()
+        || request.generation != core_request.generation
+        || request.parent_request_digest != hash(core_bytes).to_bytes()
+        || request.caller_program != report.instruction.program_id.to_bytes()
         || account_key(accounts, 0)?
             != Pubkey::find_program_address(
                 &CallerAuthoritySeedsV1::from_bytes(
                     request.release_set,
                     request.market,
-                    ExecutionRoleV1::Resolution,
+                    ExecutionRoleV1::Core,
                     request.source_state,
                     request.parent_request_digest,
                 )
                 .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?
                 .as_slices(),
-                &account_key(accounts, 15)?,
+                &report.instruction.program_id,
             )
             .0
         || account_key(accounts, 1)?.to_bytes() != request.resolver
@@ -1278,14 +1292,23 @@ mod tests {
     }
 
     fn execute_report() -> ProviderTransportReportV3 {
-        let mut accounts = account_frame(PROVIDER_EXECUTE_ACCOUNT_COUNT_V3, 15);
+        let mut accounts = account_frame(PROVIDER_EXECUTE_ACCOUNT_COUNT_V3, 11);
         for index in [2, 3, 37] {
             accounts[index].is_writable = true;
         }
         accounts[1].is_signer = true;
-        let body = vec![0xa5; 64];
-        let mut request = ProviderExecutionRequestV3 {
-            caller: ProviderCallerV3::Resolution,
+        let core = Request::administrative(
+            Action::ExecuteProvider,
+            7,
+            dclutch_market_core_codec::Identity::new(accounts[4].pubkey.to_bytes())
+                .expect("market identity"),
+        );
+        let core_bytes = core.encode().expect("Core request");
+        // The captured Pyth post_update instruction is 102 bytes including its
+        // 8-byte discriminator. Resolution transports the exact 94-byte body.
+        let body = vec![0xa5; 94];
+        let request = ProviderExecutionRequestV3 {
+            caller: ProviderCallerV3::Core,
             generation: 7,
             terminal_sequence: 3,
             market: accounts[4].pubkey.to_bytes(),
@@ -1300,34 +1323,33 @@ mod tests {
             expected_update_digest: key(107).to_bytes(),
             provider_submitter: key(108).to_bytes(),
             resolver: accounts[1].pubkey.to_bytes(),
-            caller_program: accounts[15].pubkey.to_bytes(),
+            caller_program: accounts[11].pubkey.to_bytes(),
             release_set: key(110).to_bytes(),
             capability_program_set: [0; 32],
             selected_capability_program: [0; 32],
-            parent_request_digest: [0xff; 32],
+            parent_request_digest: hash(&core_bytes).to_bytes(),
             post_params_body_digest: hash(&body).to_bytes(),
         };
-        request.parent_request_digest = provider_resolution_direct_intent_digest_v1(request)
-            .expect("direct provider intent digest");
         let authority = Pubkey::find_program_address(
             &CallerAuthoritySeedsV1::from_bytes(
                 request.release_set,
                 request.market,
-                ExecutionRoleV1::Resolution,
+                ExecutionRoleV1::Core,
                 request.source_state,
                 request.parent_request_digest,
             )
             .expect("caller seeds")
             .as_slices(),
-            &accounts[15].pubkey,
+            &accounts[11].pubkey,
         )
         .0;
         accounts[0].pubkey = authority;
-        let mut data = request.to_bytes().expect("provider request").to_vec();
+        let mut data = core_bytes.to_vec();
+        data.extend_from_slice(&request.to_bytes().expect("provider request"));
         data.extend_from_slice(&body);
         ProviderTransportReportV3 {
             instruction: Instruction {
-                program_id: accounts[15].pubkey,
+                program_id: accounts[11].pubkey,
                 accounts,
                 data,
             },
@@ -1423,6 +1445,15 @@ mod tests {
     #[test]
     fn core_execution_requires_routing_and_only_the_resolver_signature() {
         let report = execute_report();
+        assert_eq!(PROVIDER_EXECUTE_ACCOUNT_COUNT_V3, 47);
+        assert_eq!(
+            report.instruction.accounts.len(),
+            PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
+        );
+        assert!(distinct(&report.instruction.accounts));
+        assert_eq!(dclutch_market_core_codec::REQUEST_BYTES, 72);
+        assert_eq!(PROVIDER_EXECUTION_REQUEST_BYTES_V3, 608);
+        assert_eq!(report.instruction.data.len(), 774);
         assert_eq!(
             compile_provider_execute_v0(&report, Hash::new_from_array([7; 32]), &[]),
             Err(ProviderTransportTransactionErrorV3::Routing(
@@ -1441,8 +1472,12 @@ mod tests {
             vec![report.instruction.accounts[1].pubkey]
         );
         assert_eq!(plan.message.required_signatures, 1);
-        assert!(plan.message.loaded_addresses > 0);
-        assert!(plan.message.wire_bytes <= dclutch_versioned_message_operator::PACKET_DATA_BYTES);
+        assert_eq!(plan.message.loaded_addresses, 45);
+        assert_eq!(plan.message.wire_bytes, 1_072);
+        assert_eq!(
+            dclutch_versioned_message_operator::PACKET_DATA_BYTES - plan.message.wire_bytes,
+            160,
+        );
     }
 
     #[test]
@@ -1473,6 +1508,15 @@ mod tests {
         assert_eq!(
             compile_provider_execute_v0(&execute, Hash::new_from_array([7; 32]), &[]),
             Err(ProviderTransportTransactionErrorV3::Frame)
+        );
+
+        let mut direct_resolution = execute_report();
+        direct_resolution.instruction.program_id =
+            direct_resolution.instruction.accounts[15].pubkey;
+        assert_eq!(
+            compile_provider_execute_v0(&direct_resolution, Hash::new_from_array([7; 32]), &[],),
+            Err(ProviderTransportTransactionErrorV3::Frame),
+            "the unsigned caller PDA cannot bypass the Core wrapper through a top-level Resolution instruction",
         );
     }
 }
