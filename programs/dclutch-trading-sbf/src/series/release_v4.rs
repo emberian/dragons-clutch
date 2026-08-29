@@ -839,15 +839,18 @@ mod tests {
             Ok(())
         );
 
-        // Negative control 1: a Prepare-only policy decodes, joins the
-        // profile, and is still refused at the nonzero-Consume-plan conjunct.
-        let prepare_only =
-            crate::series::artifacts_v4::tests::hostile_policy(SeriesActionV3::Prepare, 0, None);
-        let (descriptor, program_set) = release_around_lifecycle(&release, &prepare_only);
-        assert_eq!(
-            authenticate(&release, &prepare_only, &descriptor, &program_set),
-            Err(SeriesArtifactErrorV4::Lifecycle)
-        );
+        // Negative control 1: a Prepare-only or Expire-only policy decodes,
+        // joins the profile, and is still refused at the nonzero-Consume-plan
+        // conjunct.
+        for action in [SeriesActionV3::Prepare, SeriesActionV3::Expire] {
+            let single_action =
+                crate::series::artifacts_v4::tests::hostile_policy(action, 0, None);
+            let (descriptor, program_set) = release_around_lifecycle(&release, &single_action);
+            assert_eq!(
+                authenticate(&release, &single_action, &descriptor, &program_set),
+                Err(SeriesArtifactErrorV4::Lifecycle)
+            );
+        }
 
         // Negative control 2: a Ticket-claiming policy is refused at the
         // second-author pin, with the pin's own code.
