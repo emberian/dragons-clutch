@@ -5,12 +5,18 @@
 //! geometry-complete frame all the way through the real caller ELF into the
 //! real accelerator ELF, and pins which side of the CPI now owns the refusal.
 //!
-//! Neither is an acceptance test. `AcceleratorDispositionV2::Accepted` requires
-//! a complete Dealer scenario chain -- activation cache, Market, finalized
-//! records, Claims aggregate, Custody replay, Realm and collateral -- which is
-//! the unwritten campaign staged in `crate::dealer_chain`. What these pin is
-//! the depth the lane actually reaches, so a regression toward the two
+//! Neither is an acceptance test. `AcceleratorDispositionV2::Accepted` on the
+//! admitted-AOT path requires a complete Dealer scenario chain -- activation
+//! cache, Market, finalized records, Claims aggregate, Custody replay, Realm
+//! and collateral -- staged in `crate::dealer_chain`. What these pin is the
+//! depth the lane actually reaches, so a regression toward the two
 //! always-refuses frame bugs cannot pass unnoticed again.
+//!
+//! The accepted transition itself is executed in `tests/accepted.rs`, over the
+//! lock-bounded checkpoint routes rather than this unsplit frame. That is not a
+//! second story: the unsplit admitted instruction resolves 121 account locks
+//! against a 64-lock ceiling, so it is the split, not this frame, that a caller
+//! can ever send.
 
 use std::vec::Vec;
 
