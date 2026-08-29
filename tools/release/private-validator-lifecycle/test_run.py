@@ -961,8 +961,8 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         ordered = tuple(
             sorted(
                 (
-                    MODULE.PayoutTarget(PUBKEY_B, 1, PUBKEY_C),
-                    MODULE.PayoutTarget(PUBKEY_A, 0, PUBKEY_B),
+                    MODULE.PayoutTarget(PUBKEY_B, 1, PUBKEY_C, 100),
+                    MODULE.PayoutTarget(PUBKEY_A, 0, PUBKEY_B, 900),
                 ),
                 key=lambda row: (
                     MODULE.base58_bytes(row.owner, 32, "owner"),
@@ -1061,6 +1061,9 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 schedule_path, evidence
             )
             self.assertEqual(len(targets), 2)
+            self.assertEqual(
+                {target.quantity_atoms for target in targets}, {100, 900}
+            )
             self.assertEqual(len(metrics), 7)
             self.assertEqual(decoded["status"], "finalized")
 
@@ -1077,6 +1080,34 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             hostile.write_text(MODULE.json.dumps(schedule, sort_keys=True) + "\n")
             with self.assertRaisesRegex(MODULE.Refusal, "canonical"):
                 MODULE.accepted_direct_payout_schedule(hostile, evidence)
+
+            for label, quantity in (
+                ("missing", None),
+                ("noncanonical", "0900"),
+                ("overflow", str(1 << 64)),
+            ):
+                with self.subTest(quantity=label):
+                    hostile_claims = [dict(row) for row in claims]
+                    if quantity is None:
+                        del hostile_claims[0]["quantityAtoms"]
+                    else:
+                        hostile_claims[0]["quantityAtoms"] = quantity
+                    schedule["claims"] = hostile_claims
+                    schedule["scheduleSetSha256"] = MODULE.sha256_bytes(
+                        (
+                            MODULE.json.dumps(
+                                hostile_claims,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        ).encode()
+                    )
+                    hostile.write_text(
+                        MODULE.json.dumps(schedule, sort_keys=True) + "\n"
+                    )
+                    with self.assertRaises(MODULE.Refusal):
+                        MODULE.accepted_direct_payout_schedule(hostile, evidence)
 
     def test_resolution_v3_requires_four_cu_bound_mutating_receipts(self) -> None:
         receipts = [
@@ -1191,7 +1222,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
     def test_payout_input_joins_exact_target_and_refuses_lookup_substitution(
         self,
     ) -> None:
-        target = MODULE.PayoutTarget(PUBKEY_A, 1, PUBKEY_B)
+        target = MODULE.PayoutTarget(PUBKEY_A, 1, PUBKEY_B, 7)
         document = {
             "format": MODULE.PAYOUT_INPUT_SCHEMA,
             "market": PUBKEY_C,
@@ -1220,6 +1251,52 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.Refusal, "target identity"):
             MODULE.authenticate_payout_input(
                 {**document, "claimIndex": 2}, target, PUBKEY_C
+            )
+        with self.assertRaisesRegex(MODULE.Refusal, "frozen schedule"):
+            MODULE.authenticate_payout_input(
+                {**document, "quantity": "8"}, target, PUBKEY_C
+            )
+        with self.assertRaisesRegex(MODULE.Refusal, "canonical unsigned decimal"):
+            MODULE.authenticate_payout_input(
+                {**document, "quantity": "07"}, target, PUBKEY_C
+            )
+        with self.assertRaisesRegex(MODULE.Refusal, "fields changed"):
+            MODULE.authenticate_payout_input(
+                {key: value for key, value in document.items() if key != "quantity"},
+                target,
+                PUBKEY_C,
+            )
+
+    def test_resumed_payout_input_remains_bound_to_frozen_schedule_quantity(
+        self,
+    ) -> None:
+        target = MODULE.PayoutTarget(PUBKEY_A, 1, PUBKEY_B, 7)
+        document = {
+            "format": MODULE.PAYOUT_INPUT_SCHEMA,
+            "market": PUBKEY_C,
+            "owner": PUBKEY_A,
+            "recipientOwner": PUBKEY_A,
+            "recipient": PUBKEY_B,
+            "collateralMint": PUBKEY_A,
+            "tokenProgram": PUBKEY_B,
+            "quantity": "7",
+            "claimIndex": 1,
+            "transferIndex": 0,
+            "parentContext": "00" * 32,
+            "custodyContext": "11" * 32,
+            "releaseSet": "22" * 32,
+            "terminalCertificate": PUBKEY_C,
+            "programs": {},
+            "records": {},
+        }
+        self.assertEqual(
+            MODULE.authenticate_payout_input(document, target, PUBKEY_C), document
+        )
+        # A resumed producer may observe the Position after an unrelated mutation,
+        # but it cannot replace the Direct-owned schedule quantity.
+        with self.assertRaisesRegex(MODULE.Refusal, "frozen schedule"):
+            MODULE.authenticate_payout_input(
+                {**document, "quantity": "6"}, target, PUBKEY_C
             )
 
     def test_terminal_completion_requires_exact_four_phase_conservation(self) -> None:

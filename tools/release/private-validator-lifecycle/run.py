@@ -208,11 +208,12 @@ class Paths:
 
 @dataclasses.dataclass(frozen=True, order=True)
 class PayoutTarget:
-    """Direct-owned routing for one live nonzero claim, without a Direct DTO."""
+    """Direct-owned routing and quantity for one frozen live nonzero claim."""
 
     owner: str
     claim_index: int
     recipient: str
+    quantity_atoms: int
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -339,6 +340,12 @@ def canonical_payout_schedule(rows: Sequence[PayoutTarget]) -> tuple[PayoutTarge
             or not 0 <= target.claim_index <= 0xFFFFFFFF
         ):
             raise Refusal("payout claim index must be one canonical u32")
+        if (
+            isinstance(target.quantity_atoms, bool)
+            or not isinstance(target.quantity_atoms, int)
+            or not 1 <= target.quantity_atoms <= 0xFFFFFFFFFFFFFFFF
+        ):
+            raise Refusal("payout quantity must be one positive canonical u64")
         identity = (target.owner, target.claim_index)
         if identity in seen:
             raise Refusal("Direct payout schedule repeats an owner/claim pair")
@@ -1731,7 +1738,9 @@ def authenticate_payout_input(
         or payout.get("transferIndex") != 0
     ):
         raise Refusal("wallet payout input changed Direct's canonical target identity")
-    canonical_decimal(payout.get("quantity"), "wallet payout quantity")
+    quantity = canonical_decimal(payout.get("quantity"), "wallet payout quantity")
+    if quantity != target.quantity_atoms:
+        raise Refusal("wallet payout quantity changed Direct's frozen schedule")
     for field in ("collateralMint", "tokenProgram", "terminalCertificate"):
         canonical_pubkey(payout.get(field), f"wallet payout {field}")
     return payout
@@ -3190,8 +3199,14 @@ def accepted_direct_payout_schedule(
         )
         if claim_index > 0xFFFFFFFF:
             raise Refusal("Direct payout claim index exceeds u32")
-        canonical_decimal(row.get("quantityAtoms"), f"Direct payout quantity {index}")
-        canonical_rows.append(PayoutTarget(owner, claim_index, recipient))
+        quantity_atoms = canonical_decimal(
+            row.get("quantityAtoms"), f"Direct payout quantity {index}"
+        )
+        if quantity_atoms > 0xFFFFFFFFFFFFFFFF:
+            raise Refusal("Direct payout quantity exceeds u64")
+        canonical_rows.append(
+            PayoutTarget(owner, claim_index, recipient, quantity_atoms)
+        )
     encoded_claims = (
         json.dumps(claims, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
