@@ -198,18 +198,44 @@ fn require_frame(
             || (index == REFUND && action == DealerScenarioReservationActionV1::Rollback);
         let expected_signer = index == PAYER;
         let expected_executable = executable.contains(&index);
-        if current.is_writable != expected_writable
+        // The checkpoint's WRITABILITY is not this frame's to pin. Custody only
+        // reads the checkpoint here -- it authenticates the owner, the PDA and
+        // the phase, and writes nothing -- while the supported way to reserve is
+        // the operator's atomic producer-then-ingest pair, whose second
+        // instruction is Trading's ingest and necessarily takes the checkpoint
+        // WRITABLE. Solana merges account privileges across the instructions of
+        // one transaction, so a readonly pin here was not a constraint on this
+        // instruction at all: it was a constraint on the caller's other
+        // instruction, and it made the only shape in which a reservation can be
+        // both produced and joined unsubmittable. Identity, owner and phase
+        // stay pinned; signer and executable stay pinned.
+        let writability_pinned = index != CHECKPOINT;
+        if (writability_pinned && current.is_writable != expected_writable)
             || current.is_signer != expected_signer
             || current.executable != expected_executable
         {
             return Err(CustodySbfError::AccountFrame.into());
         }
     }
+    // Exactly the contradiction the activation frame already carries, one leg
+    // earlier, and it made this route unreachable for every scenario that could
+    // ever commit. Trading's evaluate refuses any effect manifest whose
+    // `producer_program` is not the Trading program, and its commit refuses one
+    // again on the same equality -- so a manifest that can be reserved against
+    // AND committed must name Trading as its producer. This frame carries the
+    // effect producer at `EFFECT_PRODUCER` and the calling Trading release at
+    // `TRADING_PROGRAM`, and then forbade any key from repeating. It was
+    // required to repeat one key and forbidden to repeat any key: unsatisfiable
+    // by construction, for every input. Pin the equality POSITIVELY and excuse
+    // that one slot from the census, as `require_activation_frame` does.
+    if account(accounts, EFFECT_PRODUCER)?.key != account(accounts, TRADING_PROGRAM)?.key {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
     if account(accounts, CLOCK)?.key != &sysvar::clock::ID
         || account(accounts, RENT)?.key != &sysvar::rent::ID
         || account(accounts, SYSTEM)?.key != &system_program::ID
         || account(accounts, REGISTRY)?.key == account(accounts, TRADING_PROGRAM)?.key
-        || has_duplicate_keys(accounts)
+        || has_duplicate_keys_except(accounts, EFFECT_PRODUCER)
     {
         return Err(CustodySbfError::AccountFrame.into());
     }

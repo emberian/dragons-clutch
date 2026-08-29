@@ -200,6 +200,22 @@ impl DealerDeliveryV1 {
         hash(&self.destination_bytes).to_bytes()
     }
 
+    /// The trading-principal vault as the reservation FOUND it.
+    ///
+    /// `source_bytes` is the vault the reservation LEFT. While the reservation
+    /// was staged, that body was the campaign's opening state; once Custody's
+    /// own reserve route runs it stops being staged and becomes a poststate the
+    /// chain has to reach, so what the campaign must install instead is the
+    /// vault before the debit: exactly the amount the reservation will lock
+    /// plus the amount it will leave behind.
+    pub fn source_prereservation_bytes(&self) -> Vec<u8> {
+        token_account_bytes(
+            self.mint,
+            token_account_owner(&self.source_bytes),
+            token_account_amount(&self.source_bytes).saturating_add(self.request.amount),
+        )
+    }
+
     /// Digest of the replay cursor the reservation batch pinned.
     pub fn replay_digest(&self) -> [u8; 32] {
         hash(&self.replay_bytes).to_bytes()
