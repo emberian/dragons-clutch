@@ -259,7 +259,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                         "label": label,
                         "signature": SIGNATURES[index],
                         "slot": index + 1,
-                        "fee_lamports": 5_000,
+                        "fee_lamports": 0,
                         "compute_units_consumed": 100_000 + index,
                         "error": None,
                         "transaction_metadata_available": True,
@@ -282,7 +282,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     "phase": "finalized",
                     "expectedSignature": SIGNATURES[index],
                     "finalizedSlot": index + 1,
-                    "feeLamports": 5_000,
+                    "feeLamports": 0,
                     "computeUnitsConsumed": 100_000 + index,
                     "intentSha256": "31" * 32,
                     "signedPacketSha256": "32" * 32,
@@ -680,7 +680,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
 
     def test_local_bankroll_transaction_binds_instruction_fee_cu_and_deltas(self) -> None:
         signature = SIGNATURES[0]
-        fee = 5_000
+        fee = 0
         source_post = 123_456
         source_pre = source_post + MODULE.LOCAL_TEST_BANKROLL_LAMPORTS + fee
         value = {
@@ -753,6 +753,14 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             MODULE.finalized_local_bankroll_transaction(
                 "http://127.0.0.1:8899", signature, PUBKEY_A, PUBKEY_B
             )
+        for hostile_fee in (True, -1, None):
+            hostile = {**value, "meta": {**value["meta"], "fee": hostile_fee}}
+            with mock.patch.object(
+                MODULE, "rpc", return_value=hostile
+            ), self.assertRaisesRegex(MODULE.Refusal, "omitted exact fee"):
+                MODULE.finalized_local_bankroll_transaction(
+                    "http://127.0.0.1:8899", signature, PUBKEY_A, PUBKEY_B
+                )
 
     def test_local_bankroll_receipt_is_create_new(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -906,7 +914,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         honest = {
             "signature": SIGNATURES[0],
             "slot": 9,
-            "feeLamports": 5_000,
+            "feeLamports": 0,
             "computeUnitsConsumed": 123,
         }
         self.assertEqual(
@@ -914,7 +922,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             {
                 "signature": SIGNATURES[0],
                 "slot": 9,
-                "fee_lamports": 5_000,
+                "fee_lamports": 0,
                 "compute_units_consumed": 123,
             },
         )
@@ -922,10 +930,31 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             ("signature", "not-base58"),
             ("slot", 0),
             ("feeLamports", True),
+            ("feeLamports", -1),
+            ("feeLamports", None),
             ("computeUnitsConsumed", None),
         ):
             with self.assertRaises(MODULE.Refusal):
                 MODULE.finalized_fact({**honest, field: value}, "hostile")
+        decimal = {
+            **honest,
+            "slot": "9",
+            "feeLamports": "0",
+            "computeUnitsConsumed": "123",
+        }
+        self.assertEqual(
+            MODULE.finalized_fact(decimal, "decimal", decimal_text=True)[
+                "fee_lamports"
+            ],
+            0,
+        )
+        for hostile_fee in (None, 0, -1, "-1", "00"):
+            with self.assertRaises(MODULE.Refusal):
+                MODULE.finalized_fact(
+                    {**decimal, "feeLamports": hostile_fee},
+                    "hostile decimal",
+                    decimal_text=True,
+                )
 
     def test_direct_payout_schedule_is_bounded_unique_and_canonical(self) -> None:
         ordered = tuple(
@@ -980,7 +1009,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                         "signature": SIGNATURES[index],
                         "slot": str(index + 1),
                         "feePayer": PUBKEY_A,
-                        "feeLamports": "5000",
+                        "feeLamports": "0",
                         "computeUnitsConsumed": str(100 + index),
                     }
                 )
@@ -1054,7 +1083,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 "stage": stage,
                 "signature": SIGNATURES[index],
                 "slot": 100 + index,
-                "feeLamports": 5_000,
+                "feeLamports": 0,
                 "computeUnitsConsumed": 100_000 + index,
             }
             for index, stage in enumerate(
@@ -1114,7 +1143,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         receipt = {
             "signature": SIGNATURES[0],
             "slot": 10,
-            "feeLamports": 5_000,
+            "feeLamports": 0,
             "computeUnitsConsumed": 42,
         }
         journal = {

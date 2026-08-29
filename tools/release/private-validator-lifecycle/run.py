@@ -251,6 +251,12 @@ def positive_integer(value: Any, label: str) -> int:
     return value
 
 
+def nonnegative_integer(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise Refusal(f"{label} must be one nonnegative integer")
+    return value
+
+
 def canonical_decimal(value: Any, label: str, *, positive: bool = True) -> int:
     if (
         not isinstance(value, str)
@@ -278,14 +284,26 @@ def finalized_fact(
 ) -> dict[str, Any]:
     if not isinstance(row, dict):
         raise Refusal(f"{label} must be one finalized evidence object")
-    number = canonical_decimal if decimal_text else positive_integer
+    slot = (
+        canonical_decimal(row.get(slot_key), f"{label} slot")
+        if decimal_text
+        else positive_integer(row.get(slot_key), f"{label} slot")
+    )
+    fee = (
+        canonical_decimal(row.get(fee_key), f"{label} fee", positive=False)
+        if decimal_text
+        else nonnegative_integer(row.get(fee_key), f"{label} fee")
+    )
+    compute = (
+        canonical_decimal(row.get(compute_key), f"{label} compute units")
+        if decimal_text
+        else positive_integer(row.get(compute_key), f"{label} compute units")
+    )
     return {
         "signature": canonical_signature(row.get(signature_key), f"{label} signature"),
-        "slot": number(row.get(slot_key), f"{label} slot"),
-        "fee_lamports": number(row.get(fee_key), f"{label} fee"),
-        "compute_units_consumed": number(
-            row.get(compute_key), f"{label} compute units"
-        ),
+        "slot": slot,
+        "fee_lamports": fee,
+        "compute_units_consumed": compute,
     }
 
 
@@ -1160,14 +1178,18 @@ def finalized_local_bankroll_transaction(
     pre = meta.get("preBalances")
     post = meta.get("postBalances")
     if (
-        not isinstance(fee, int)
-        or fee <= 0
+        isinstance(fee, bool)
+        or not isinstance(fee, int)
+        or fee < 0
+        or isinstance(compute, bool)
         or not isinstance(compute, int)
         or compute <= 0
         or not isinstance(pre, list)
         or not isinstance(post, list)
         or len(pre) != len(keys)
         or len(post) != len(keys)
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in pre)
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in post)
     ):
         raise Refusal("local bankroll transaction omitted exact fee, CU, or balances")
     source_index = key_rows.index(source)
@@ -2498,8 +2520,10 @@ def accepted_direct_payout_schedule(
             row.get("signature"), f"Direct mutation {index} signature"
         )
         slot = canonical_decimal(row.get("slot"), f"Direct mutation {index} slot")
-        fee = canonical_decimal(
-            row.get("feeLamports"), f"Direct mutation {index} fee"
+        canonical_decimal(
+            row.get("feeLamports"),
+            f"Direct mutation {index} fee",
+            positive=False,
         )
         units = canonical_decimal(
             row.get("computeUnitsConsumed"), f"Direct mutation {index} CU"
@@ -2525,8 +2549,6 @@ def accepted_direct_payout_schedule(
         occurrence = kind_counts.get(kind, 0)
         kind_counts[kind] = occurrence + 1
         compute_units[f"direct-{index:02d}-{kind}-{occurrence:02d}"] = units
-        if fee <= 0:
-            raise Refusal("Direct mutation fee is not positive")
     if (
         ranks != sorted(ranks)
         or ranks[0] != 0
@@ -2877,7 +2899,7 @@ def authenticate_campaign_completion(
         row = rows[label]
         canonical_signature(row.get("signature"), f"{label} signature")
         positive_integer(row.get("slot"), f"{label} finalized slot")
-        positive_integer(row.get("fee_lamports"), f"{label} fee")
+        nonnegative_integer(row.get("fee_lamports"), f"{label} fee")
         positive_integer(row.get("compute_units_consumed"), f"{label} CU")
         if row.get("error") is not None or row.get("transaction_metadata_available") is not True:
             raise Refusal("founding campaign mutation omitted exact finalized metadata")
