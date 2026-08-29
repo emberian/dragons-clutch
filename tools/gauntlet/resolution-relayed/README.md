@@ -97,3 +97,50 @@ twenty-two-account frame is 991 bytes and rides a bare legacy message.
 - `programs.json` — the campaign's pinned fixture program addresses.
 - `run-resolution-relayed.sh` — build (with the frame-diagnostic gate), run,
   fold, check witnesses, observe.
+
+## What happens after the walk
+
+The walk ends with a market nobody resolved sitting Terminal on its own terms.
+Two things now execute past that point, and until 2026-08-29 neither did.
+
+**Core terminalizes it.** `crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs`,
+`a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms`: Core admits
+the `ResolutionFailure` certificate a walk produced, so `terminal_winner` becomes
+the Product's own pre-disclosed failure region and the certificate lands at a
+different PDA from the one a provider-resolved terminal would occupy.
+
+**The holder exits.** Two Claims campaigns now redeem collateral against that
+certificate, which no route in the tree had ever done — every executed terminal
+settlement, in every campaign, had settled a certificate a provider stood behind.
+
+| Route | Campaign | Test |
+|---|---|---|
+| Wallet, role `Claims`, 36-account frame over an ALT, holder signs for itself | `programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs` | `a_wallet_held_position_exits_at_failure_terms_when_nobody_resolved_the_market` |
+| Fractional, role `Trading`, 44-account enclosing frame | `programs/dclutch-claims-sbf/program-test/fractional-atomic/tests/fractional_atomic.rs` | `a_holder_exits_at_failure_terms_when_nobody_resolved_the_market` |
+
+Both assert conservation rather than success: the Hoard falls by exactly what the
+recipient gains, the pair sums to its opening total, the settled coordinate is
+burned out of the holder and out of the aggregate's outstanding supply, every
+other coordinate stays byte-identical, and the Custody replay cursor advances
+exactly once.
+
+Both are pinned by hostiles that are ONE FIELD from a case that commits, because
+`ResolutionCertificateV2::validate_terminal_product` reserves the Product's final
+coordinate for explicit failure and admits an ordinary success strictly below it:
+a provider success may not occupy the failure region, and failure terms may not be
+claimed for an ordinary coordinate. The second differs from an already-committing
+redemption by exactly one byte — the certificate kind — and both refuse `0x5002`
+(`ClaimsSbfError::Identity`) inside the Claims ELF after the Custody composition,
+the Realm and the certificate account have all authenticated.
+
+The bounty is the link between the two halves: a `ResolutionFailure` certificate
+whose `work_paid` is zero is refused by `validate_shape`, so the same fact that
+lets a holder exit is the fact that records the walker being paid.
+
+**Still owed.** `TerminalScenarioV3::Failure` — the arm where a `GradedExactComplement`
+basis pays out its own pre-disclosed `failure_payouts` partition — has never
+executed against a real ELF. Both Claims campaigns carry `CategoricalQ1` bases,
+for which a `ResolutionFailure` certificate maps to `Categorical(terminal_winner)`
+instead (`programs/dclutch-claims-sbf/src/terminal_certificate_v3.rs:86-105`).
+Reaching it needs a Claims campaign with a graded basis and a failure-payout
+partition, which is a fixture, not a parameter.
