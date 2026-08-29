@@ -10,6 +10,7 @@
 //! input and are rechecked by the onchain child route.
 
 mod artifacts;
+mod atomic_v3;
 mod claims;
 mod composition;
 mod exposure_action_v2;
@@ -43,6 +44,10 @@ pub use artifacts::{
     FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
     FractionalFinalizedArtifactBundleV1, build_fractional_composed_artifact_bundle_v1,
     build_fractional_finalized_artifact_bundle_v1,
+};
+pub use atomic_v3::{
+    build_fractional_atomic_claims_instruction_v3,
+    build_fractional_terminal_atomic_claims_instruction_v3,
 };
 pub use claims::{
     FractionalClaimsPositionSnapshotV1, FractionalSignedDeltaChainObservationV1,
@@ -89,8 +94,9 @@ pub use token2022::{
     plan_fractional_token_effect_v1,
 };
 pub use topology_v3::{
-    FRACTIONAL_CHILD_ENVELOPE_BYTES_V3, FractionalFrameCensusV3, FractionalFrameKindV3,
-    TOKEN_2022_TRANSFER_CHECKED_BYTES, fractional_frame_census_v3,
+    FRACTIONAL_CHILD_ENVELOPE_BYTES_V3, FRACTIONAL_DEVNET_MAX_ACCOUNT_LOCKS_V3,
+    FractionalFrameCensusV3, FractionalFrameKindV3, TOKEN_2022_TRANSFER_CHECKED_BYTES,
+    admit_fractional_devnet_locks_v3, fractional_frame_census_v3,
 };
 
 /// Exact semantic coordinates obtained from authenticated chain state.

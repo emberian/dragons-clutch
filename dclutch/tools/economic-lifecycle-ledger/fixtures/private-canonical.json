@@ -1,0 +1,165 @@
+{
+  "schema": "dclutch-exact-economic-lifecycle-fixture-v1",
+  "fixtureId": "private-canonical-four-outcome",
+  "sourceAuthority": [
+    "tools/local-validator/bootstrap/successor/src/market.rs::demo_market_input",
+    "tools/local-validator/bootstrap/successor/src/direct_trade_producer.rs",
+    "tools/local-validator/bootstrap/successor/src/private_lifecycle.rs::project_direct_payout_claims_v1",
+    "tools/release/private-validator-lifecycle/run.py"
+  ],
+  "outcomeCount": 4,
+  "collateralMintSupplyAtoms": "1100000000",
+  "hoardCollateralAccount": "hoard-principal",
+  "feeCollateralAccount": "direct-fee-recipient",
+  "activityV3Authority": null,
+  "initial": {
+    "collateralAccounts": {
+      "direct-fee-recipient": "0",
+      "founder-direct-recipient": "0",
+      "founding-collateral-wallet": "1000000000",
+      "hoard-principal": "0",
+      "participant-collateral": "0",
+      "participant-fixture-source": "100000000"
+    },
+    "claimOwners": [
+      "founder",
+      "participant"
+    ]
+  },
+  "stages": [
+    {
+      "id": "founding",
+      "events": [
+        {
+          "kind": "complete-set",
+          "sourceCollateral": "founding-collateral-wallet",
+          "owner": "founder",
+          "quantityAtoms": "500000000"
+        }
+      ]
+    },
+    {
+      "id": "participant",
+      "events": [
+        {
+          "kind": "transfer-collateral",
+          "sourceCollateral": "participant-fixture-source",
+          "destinationCollateral": "participant-collateral",
+          "quantityAtoms": "100000000"
+        }
+      ]
+    },
+    {
+      "id": "direct-hot",
+      "events": [
+        {
+          "kind": "direct",
+          "sellerOwner": "founder",
+          "buyerOwner": "participant",
+          "sellerCollateral": "founder-direct-recipient",
+          "buyerCollateral": "participant-collateral",
+          "feeCollateral": "direct-fee-recipient",
+          "outcome": 0,
+          "fillAtoms": "100000000",
+          "executionPriceAtoms": "500000",
+          "priceScaleAtoms": "1000000",
+          "feeBasisPoints": 50,
+          "feeDenominator": "10000",
+          "expectedQuote": {
+            "grossCollateralAtoms": "50000000",
+            "grossRemainderAtoms": "0",
+            "sellerFeeAtoms": "250000",
+            "buyerFeeAtoms": "250000",
+            "sellerNetAtoms": "49750000",
+            "buyerDebitAtoms": "50250000",
+            "feeRecipientCreditAtoms": "500000"
+          }
+        }
+      ]
+    },
+    {
+      "id": "resolution",
+      "events": [
+        {
+          "kind": "resolve",
+          "payoutAtomsPerClaim": [
+            "1",
+            "0",
+            "0",
+            "0"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "payouts",
+      "events": [
+        {
+          "kind": "redeem",
+          "owner": "founder",
+          "recipientCollateral": "founder-direct-recipient",
+          "outcome": 0,
+          "quantityAtoms": "400000000"
+        },
+        {
+          "kind": "redeem",
+          "owner": "founder",
+          "recipientCollateral": "founder-direct-recipient",
+          "outcome": 1,
+          "quantityAtoms": "500000000"
+        },
+        {
+          "kind": "redeem",
+          "owner": "founder",
+          "recipientCollateral": "founder-direct-recipient",
+          "outcome": 2,
+          "quantityAtoms": "500000000"
+        },
+        {
+          "kind": "redeem",
+          "owner": "founder",
+          "recipientCollateral": "founder-direct-recipient",
+          "outcome": 3,
+          "quantityAtoms": "500000000"
+        },
+        {
+          "kind": "redeem",
+          "owner": "participant",
+          "recipientCollateral": "participant-collateral",
+          "outcome": 0,
+          "quantityAtoms": "100000000"
+        }
+      ]
+    },
+    {
+      "id": "aggregate-retirement",
+      "events": [
+        {
+          "kind": "retire"
+        }
+      ]
+    }
+  ],
+  "lamportContract": {
+    "requiredFundingTransfers": [
+      {
+        "source": "genesis-mint",
+        "destination": "lifecycle-payer",
+        "lamports": "100000000000"
+      }
+    ],
+    "aggregateRefundClasses": [
+      "market",
+      "rent-credit",
+      "claims-refund",
+      "custody-replay",
+      "hoard-vault"
+    ],
+    "notes": [
+      "The genesis source debit is 100000000000 lamports plus its exact transfer transaction fee.",
+      "Rent is refundable locked lamport principal, not spend while its account remains live.",
+      "Aggregate retirement refund is market + rentCredit + claimsRefund + custodyReplay + hoardVault.",
+      "If the aggregate fee payer is the refund wallet, subtract exactly the four aggregate transaction fees from its terminal balance."
+    ]
+  }
+}

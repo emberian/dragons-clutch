@@ -961,8 +961,8 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         ordered = tuple(
             sorted(
                 (
-                    MODULE.PayoutTarget(PUBKEY_B, 1, PUBKEY_C),
-                    MODULE.PayoutTarget(PUBKEY_A, 0, PUBKEY_B),
+                    MODULE.PayoutTarget(PUBKEY_B, 1, PUBKEY_C, 100),
+                    MODULE.PayoutTarget(PUBKEY_A, 0, PUBKEY_B, 900),
                 ),
                 key=lambda row: (
                     MODULE.base58_bytes(row.owner, 32, "owner"),
@@ -1061,6 +1061,9 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 schedule_path, evidence
             )
             self.assertEqual(len(targets), 2)
+            self.assertEqual(
+                {target.quantity_atoms for target in targets}, {100, 900}
+            )
             self.assertEqual(len(metrics), 7)
             self.assertEqual(decoded["status"], "finalized")
 
@@ -1078,7 +1081,38 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.Refusal, "canonical"):
                 MODULE.accepted_direct_payout_schedule(hostile, evidence)
 
+            for label, quantity in (
+                ("missing", None),
+                ("noncanonical", "0900"),
+                ("overflow", str(1 << 64)),
+            ):
+                with self.subTest(quantity=label):
+                    hostile_claims = [dict(row) for row in claims]
+                    if quantity is None:
+                        del hostile_claims[0]["quantityAtoms"]
+                    else:
+                        hostile_claims[0]["quantityAtoms"] = quantity
+                    schedule["claims"] = hostile_claims
+                    schedule["scheduleSetSha256"] = MODULE.sha256_bytes(
+                        (
+                            MODULE.json.dumps(
+                                hostile_claims,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        ).encode()
+                    )
+                    hostile.write_text(
+                        MODULE.json.dumps(schedule, sort_keys=True) + "\n"
+                    )
+                    with self.assertRaises(MODULE.Refusal):
+                        MODULE.accepted_direct_payout_schedule(hostile, evidence)
+
     def test_resolution_v3_requires_four_cu_bound_mutating_receipts(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        input_path = root / "resolution-input.json"
+        input_path.write_bytes(b"exact Resolution input\n")
         receipts = [
             {
                 "stage": stage,
@@ -1098,18 +1132,26 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         ]
         checkpoint = {
             "format": MODULE.RESOLUTION_CHECKPOINT_SCHEMA,
-            "inputSha256": "a" * 64,
+            "inputSha256": MODULE.sha256_file(input_path),
             "stagePlan": None,
             "receipts": receipts,
             "verifiedTerminal": True,
         }
-        self.assertEqual(len(MODULE.authenticate_resolution_checkpoint(checkpoint)), 4)
+        self.assertEqual(
+            len(
+                MODULE.authenticate_resolution_checkpoint(
+                    checkpoint, input_path=input_path
+                )
+            ),
+            4,
+        )
         with self.assertRaisesRegex(MODULE.Refusal, "owned-loopback|verified terminal"):
             MODULE.authenticate_resolution_checkpoint(
                 {
                     **checkpoint,
                     "format": "dclutch-owned-loopback-flagship-resolution-checkpoint-v1",
-                }
+                },
+                input_path=input_path,
             )
         with self.assertRaisesRegex(MODULE.Refusal, "compute units"):
             MODULE.authenticate_resolution_checkpoint(
@@ -1123,11 +1165,12 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                         }
                         for row in receipts
                     ],
-                }
+                },
+                input_path=input_path,
             )
         with self.assertRaisesRegex(MODULE.Refusal, "provider-execute/Core-accept"):
             MODULE.authenticate_resolution_checkpoint(
-                {**checkpoint, "receipts": receipts[:2]}
+                {**checkpoint, "receipts": receipts[:2]}, input_path=input_path
             )
         with self.assertRaisesRegex(MODULE.Refusal, "advance slots"):
             MODULE.authenticate_resolution_checkpoint(
@@ -1137,10 +1180,22 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                         {**row, "slot": 100 if index == 2 else row["slot"]}
                         for index, row in enumerate(receipts)
                     ],
-                }
+                },
+                input_path=input_path,
             )
 
     def test_resolution_table_v3_refuses_old_schema_and_missing_cu(self) -> None:
+        producer = {
+            "planSha256": "1" * 64,
+            "campaignEvidenceSha256": "2" * 64,
+            "pythFactsSha256": "3" * 64,
+            "market": PUBKEY_A,
+            "generation": 0,
+            "payer": PUBKEY_B,
+            "authority": PUBKEY_B,
+            "tables": {"submit": {}, "execute": {}, "reclaim": {}},
+            "plannedInput": {"accounts": {"market": PUBKEY_A}},
+        }
         receipt = {
             "signature": SIGNATURES[0],
             "slot": 10,
@@ -1149,7 +1204,9 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         }
         journal = {
             "format": MODULE.RESOLUTION_TABLE_SCHEMA,
-            "producerIdentitySha256": "b" * 64,
+            "producerIdentitySha256": MODULE.resolution_producer_identity_sha256(
+                producer
+            ),
             "phase": "finalized",
             "intent": None,
             "intentSha256": None,
@@ -1161,7 +1218,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         }
         self.assertEqual(
             MODULE.authenticate_resolution_table_journal(
-                journal, require_complete=True
+                journal, require_complete=True, producer=producer
             )[0]["compute_units_consumed"],
             42,
         )
@@ -1172,6 +1229,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     "format": "dclutch-owned-loopback-flagship-resolution-alt-journal-v2",
                 },
                 require_complete=True,
+                producer=producer,
             )
         with self.assertRaisesRegex(MODULE.Refusal, "compute units"):
             MODULE.authenticate_resolution_table_journal(
@@ -1186,12 +1244,112 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     ],
                 },
                 require_complete=True,
+                producer=producer,
+            )
+
+    def test_resolution_artifact_chain_refuses_self_consistent_substitutions(
+        self,
+    ) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        plan = root / "plan.json"
+        campaign = root / "campaign.json"
+        pyth = root / "pyth.json"
+        input_path = root / "input.json"
+        for path, body in (
+            (plan, b"plan\n"),
+            (campaign, b"campaign\n"),
+            (pyth, b"pyth\n"),
+            (input_path, b"input\n"),
+        ):
+            path.write_bytes(body)
+        planned_input = {
+            "format": MODULE.RESOLUTION_INPUT_SCHEMA,
+            "accounts": {"market": PUBKEY_A},
+        }
+        producer = {
+            "format": MODULE.RESOLUTION_PRODUCER_SCHEMA,
+            "planSha256": MODULE.sha256_file(plan),
+            "campaignEvidenceSha256": MODULE.sha256_file(campaign),
+            "pythFactsSha256": MODULE.sha256_file(pyth),
+            "observationSlot": 7,
+            "observationUnixTimestamp": 8,
+            "market": PUBKEY_A,
+            "generation": 0,
+            "payer": PUBKEY_B,
+            "authority": PUBKEY_B,
+            "tables": {"submit": {}, "execute": {}, "reclaim": {}},
+            "routes": {
+                "submit": {"action": "complete"},
+                "execute": {"action": "complete"},
+                "reclaim": {"action": "complete"},
+            },
+            "plannedInput": planned_input,
+            "flagshipInput": planned_input,
+        }
+        self.assertEqual(
+            MODULE.authenticate_resolution_producer(
+                producer,
+                require_complete=True,
+                plan=plan,
+                campaign_evidence=campaign,
+                pyth_facts=pyth,
+            ),
+            producer,
+        )
+
+        for field, body in (
+            ("planSha256", b"substituted plan\n"),
+            ("campaignEvidenceSha256", b"substituted campaign\n"),
+            ("pythFactsSha256", b"substituted pyth\n"),
+        ):
+            with self.subTest(field=field):
+                substituted = {**producer, field: MODULE.sha256_bytes(body)}
+                with self.assertRaisesRegex(MODULE.Refusal, "exact source file"):
+                    MODULE.authenticate_resolution_producer(
+                        substituted,
+                        require_complete=True,
+                        plan=plan,
+                        campaign_evidence=campaign,
+                        pyth_facts=pyth,
+                    )
+
+                table = {
+                    "format": MODULE.RESOLUTION_TABLE_SCHEMA,
+                    "producerIdentitySha256": (
+                        MODULE.resolution_producer_identity_sha256(substituted)
+                    ),
+                    "phase": "finalized",
+                    "intent": None,
+                    "intentSha256": None,
+                    "signedTransactionBase64": None,
+                    "signedTransactionSha256": None,
+                    "expectedSignature": None,
+                    "finalized": None,
+                    "receipts": [],
+                }
+                with self.assertRaisesRegex(
+                    MODULE.Refusal, "another producer identity"
+                ):
+                    MODULE.authenticate_resolution_table_journal(
+                        table, require_complete=True, producer=producer
+                    )
+
+        checkpoint = {
+            "format": MODULE.RESOLUTION_CHECKPOINT_SCHEMA,
+            "inputSha256": MODULE.sha256_bytes(b"substituted input\n"),
+            "stagePlan": None,
+            "receipts": [],
+            "verifiedTerminal": True,
+        }
+        with self.assertRaisesRegex(MODULE.Refusal, "another exact input file"):
+            MODULE.authenticate_resolution_checkpoint(
+                checkpoint, input_path=input_path
             )
 
     def test_payout_input_joins_exact_target_and_refuses_lookup_substitution(
         self,
     ) -> None:
-        target = MODULE.PayoutTarget(PUBKEY_A, 1, PUBKEY_B)
+        target = MODULE.PayoutTarget(PUBKEY_A, 1, PUBKEY_B, 7)
         document = {
             "format": MODULE.PAYOUT_INPUT_SCHEMA,
             "market": PUBKEY_C,
@@ -1220,6 +1378,52 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.Refusal, "target identity"):
             MODULE.authenticate_payout_input(
                 {**document, "claimIndex": 2}, target, PUBKEY_C
+            )
+        with self.assertRaisesRegex(MODULE.Refusal, "frozen schedule"):
+            MODULE.authenticate_payout_input(
+                {**document, "quantity": "8"}, target, PUBKEY_C
+            )
+        with self.assertRaisesRegex(MODULE.Refusal, "canonical unsigned decimal"):
+            MODULE.authenticate_payout_input(
+                {**document, "quantity": "07"}, target, PUBKEY_C
+            )
+        with self.assertRaisesRegex(MODULE.Refusal, "fields changed"):
+            MODULE.authenticate_payout_input(
+                {key: value for key, value in document.items() if key != "quantity"},
+                target,
+                PUBKEY_C,
+            )
+
+    def test_resumed_payout_input_remains_bound_to_frozen_schedule_quantity(
+        self,
+    ) -> None:
+        target = MODULE.PayoutTarget(PUBKEY_A, 1, PUBKEY_B, 7)
+        document = {
+            "format": MODULE.PAYOUT_INPUT_SCHEMA,
+            "market": PUBKEY_C,
+            "owner": PUBKEY_A,
+            "recipientOwner": PUBKEY_A,
+            "recipient": PUBKEY_B,
+            "collateralMint": PUBKEY_A,
+            "tokenProgram": PUBKEY_B,
+            "quantity": "7",
+            "claimIndex": 1,
+            "transferIndex": 0,
+            "parentContext": "00" * 32,
+            "custodyContext": "11" * 32,
+            "releaseSet": "22" * 32,
+            "terminalCertificate": PUBKEY_C,
+            "programs": {},
+            "records": {},
+        }
+        self.assertEqual(
+            MODULE.authenticate_payout_input(document, target, PUBKEY_C), document
+        )
+        # A resumed producer may observe the Position after an unrelated mutation,
+        # but it cannot replace the Direct-owned schedule quantity.
+        with self.assertRaisesRegex(MODULE.Refusal, "frozen schedule"):
+            MODULE.authenticate_payout_input(
+                {**document, "quantity": "6"}, target, PUBKEY_C
             )
 
     def test_terminal_completion_requires_exact_four_phase_conservation(self) -> None:

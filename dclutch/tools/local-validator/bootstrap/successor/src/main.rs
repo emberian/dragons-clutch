@@ -35,6 +35,7 @@ mod release_capture;
 mod rpc;
 mod runtime;
 mod seed;
+mod source_abort_exterior;
 mod sponsored_push;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
@@ -151,6 +152,9 @@ fn run() -> Result<()> {
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
+        Some(command) if command == source_abort_exterior::COMMAND_V1 => {
+            source_abort_exterior::run(arguments.collect())
+        }
         Some("local-private-validator-sponsored-push-v1") => {
             sponsored_push::run_owned_loopback(arguments.collect())
         }
@@ -1505,6 +1509,7 @@ fn usage() {
     println!("{}", terminal_sequence::usage());
     println!("{}", terminal_sequence::owned_loopback_usage());
     println!("{}", aggregate_retirement_exterior::usage());
+    println!("{}", source_abort_exterior::usage());
     println!("{}", user_position_admission::usage());
     println!("{}", user_position_admission::local_usage());
     println!("{}", pyth_vaa_provisioning::usage());

@@ -1,7 +1,7 @@
 # Fractional twin V3: selected-coordinate physics and bounded retirement
 
 Date: 2026-08-28
-Status: contract/operator rung; **not a live capability**
+Status: executable Claims/Trading child rung; **not a live capability**
 
 ## Decision
 
@@ -96,9 +96,9 @@ contract numbers, not real-ELF execution evidence:
 
 | Transaction | Unique locks | Instruction data | Fully signed v0 bytes | Packet margin |
 |---|---:|---:|---:|---:|
-| Wrap / WholeUnwrap | 26 | 417 | 672 | 560 |
+| Wrap / WholeUnwrap | 31 | 417 | 682 | 550 |
 | Direct TransferChecked | 5 | 10 | 222 | 1,010 |
-| TerminalRedeem / TerminalZeroBurn | 40 | 417 | 700 | 532 |
+| TerminalRedeem / TerminalZeroBurn | 44 | 417 | 708 | 524 |
 | Terminalize | 18 | 417 | 656 | 576 |
 | Retirement Begin | 8 | 289 | 508 | 724 |
 | Retirement Coordinate | 21 | 289 | 534 | 698 |
@@ -110,9 +110,53 @@ transactions, and one fixed Finish. Width changes transaction count, never a
 transaction frame. This is the architectural fix; the ALT is only packet
 compression.
 
+## Real SBF frame measurement
+
+The Claims link was freshly rebuilt from this worktree with the repository's
+measurement flags and then read with `tools/sbf-frame-sizes.py`:
+
+```text
+RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
+  CARGO_TARGET_DIR=<fresh> cargo build-sbf \
+  --manifest-path programs/dclutch-claims-sbf/Cargo.toml -- --locked
+```
+
+The build emitted zero SBF stack-overwrite diagnostics. The measurement object
+SHA-256 was
+`0172fc58454973ff637f9a91feb0f07ecfaba5af78e71cb42cab57aefeda0c85`.
+It contained 201 measured frames, none at or over 4,096 bytes. The relevant
+Fractional frames were:
+
+| Function | Static frame | Margin |
+|---|---:|---:|
+| open Claims + Token child | 3,904 | 192 |
+| boxed terminal Claims/Custody child | 3,200 | 896 |
+| terminal Fractional handler | 2,880 | 1,216 |
+| terminal receipt emission | 1,600 | 2,496 |
+
+The public Claims selector is split into bounded no-inline routing frames. The
+split changes neither instruction bytes nor family order; it prevents adding
+the Fractional family from causing the otherwise-green legacy selector to be
+recompiled as one 4,672-byte frame.
+
 ## What is implemented
 
 - exact physical action planning with denominator conservation;
+- a production Claims handler for the exact 31-account Wrap/WholeUnwrap frame;
+- a distinct production Claims handler for the exact 44-account terminal
+  frame, deriving its terminal Claims request from authenticated chain state;
+- native Claims mutation followed by Token-2022 mint/burn, and terminal
+  Claims/Custody settlement followed by Token-2022 burn, so a late child or
+  postcondition refusal aborts the enclosing SVM instruction;
+- exact 256-byte open and terminal receipts with family-request, Claims,
+  Custody, Token poststate, root, quantity, and payout bindings;
+- Trading composition admission for all four executable actions, with distinct
+  receipt kinds and two authenticated `invoke_signed` authorities: the exact
+  request caller PDA and the terms/Market Fractional-root PDA;
+- caller-side Claims instruction builders for the 31-account open and
+  44-account terminal frames that rederive both PDAs, selected record pairs,
+  canonical Claims Positions, selected Mint/Token accounts, terminal exposure
+  bytes, and every privilege;
 - explicit refusal of the old all-`K` retirement route;
 - exact hostile-decoded retirement request and cursor formats;
 - strict ordered cursor transitions and fixed-width finish evidence;
@@ -122,21 +166,19 @@ compression.
 
 ## What still blocks a live Fractional capability
 
-This rung intentionally stops before pretending a caller exists. Integration
-still requires:
+The native Claims/Token/Custody child and its Trading composition arm now
+exist. Integration still requires:
 
-1. a Claims child request/handler that atomically owns the native Claims plus
-   Token-2022/Custody mutations above, without importing Rational receipt
-   semantics;
-2. the matching Trading composition dispatch arm;
-3. generated EffectProgram, AccountProfile, RequestProfile, and
+1. generated EffectProgram, AccountProfile, RequestProfile, and
    ExecutionStrategy artifacts whose exact expanded frame matches the census;
-4. a migration or new producer-root version that authenticates the V3 cursor
+2. the outer Trading transition that advances the sole Fractional-root
+   revision only after the verified child receipt, plus its rollback campaign;
+3. a migration or new producer-root version that authenticates the V3 cursor
    PDA and its lifecycle rent;
-5. one-coordinate Claims Position close plus Token Mint close in the retirement
+4. one-coordinate Claims Position close plus Token Mint close in the retirement
    step, and fixed final Core/Lifecycle-Rent closure;
-6. a real-ELF caller-backed campaign, frame diagnostic, 20-seed CU mean, and
-   checked release bindings.
+5. a real-ELF caller-backed late-Token-failure rollback campaign, 20-seed CU
+   mean, and checked release bindings.
 
 Until those exist, the current 14-action release remains refused and this code
-must not be described as an executable or deployed Fractional market.
+must not be described as a complete executable or deployed Fractional market.

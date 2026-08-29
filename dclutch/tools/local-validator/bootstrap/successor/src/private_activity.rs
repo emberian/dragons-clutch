@@ -26,6 +26,10 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::{
     Error, Result,
+    aggregate_retirement_journal::{
+        AGGREGATE_RETIREMENT_COMPLETION_SCHEMA_V1, AggregateRetirementConservationReceiptV1,
+        AggregateRetirementOperationV1, authenticate_aggregate_retirement_conservation_receipt_v1,
+    },
     campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1,
     cluster::{ClusterOriginV1, DEVNET_GENESIS_HASH, ExpectedClusterV1, MAINNET_BETA_GENESIS_HASH},
     local_mutable::authenticate_checked_local_mutable_plan_v1,
@@ -55,8 +59,6 @@ const RESOLUTION_CHECKPOINT_FORMAT_V1: &str =
 const PAYOUT_INPUT_FORMAT_V1: &str = "dclutch-wallet-terminal-payout-plan-input-v1";
 const PAYOUT_EVIDENCE_SCHEMA_V1: &str =
     "dclutch-local-private-validator-wallet-terminal-payout-evidence-v1";
-const RETIREMENT_COMPLETION_SCHEMA_V1: &str =
-    "dclutch-owned-loopback-terminal-sequence-completion-v1";
 const PYTH_RECEIVER_PROGRAM_ID: &str = "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp";
 const PYTH_ROUTER_PROGRAM_ID: &str = "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL";
 const MAX_JSON_BYTES: u64 = 32 * 1024 * 1024;
@@ -73,7 +75,7 @@ const STAGES: [&str; 6] = [
 const FOUNDING_SUCCESS_MUTATIONS: [&str; 6] = [
     "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
     "stage projected custody against prepared controller funding (DCLTPCB2)",
-    "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
+    "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
     "core-funding-create-v1",
     "resolution-funding-activate-v1",
     "core-funding-accept-v1",
@@ -820,7 +822,7 @@ fn is_authorized_founding_label(label: &str) -> bool {
             | "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)"
             | "stage projected custody against prepared controller funding (DCLTPCB2)"
             | "pre-fund the founding's five program-allocated accounts"
-            | "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)"
+            | "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)"
             | "core-funding-create-v1"
             | "resolution-funding-activate-v1"
             | "core-funding-accept-v1"
@@ -828,14 +830,14 @@ fn is_authorized_founding_label(label: &str) -> bool {
         || label.starts_with("publish Product graph: ")
         || label.starts_with("create DCLTPCB2 routing address lookup table")
         || label.starts_with("extend DCLTPCB2 routing table page ")
-        || label.starts_with("create DCLTGMF2 routing address lookup table")
-        || label.starts_with("extend DCLTGMF2 routing table page ")
+        || label.starts_with("create DCLTGMF3 routing address lookup table")
+        || label.starts_with("extend DCLTGMF3 routing table page ")
 }
 
 fn authenticate_founding_success_mutations(labels: &[&str]) -> Result<()> {
     if labels != FOUNDING_SUCCESS_MUTATIONS {
         return Err(Error::new(
-            "founding history changed the exact DCLTCFQ1 -> DCLTPCB2 -> DCLTGMF2 -> CreateFund -> Activate -> Accept success order",
+            "founding history changed the exact DCLTCFQ1 -> DCLTPCB2 -> DCLTGMF3 -> CreateFund -> Activate -> Accept success order",
         ));
     }
     Ok(())
@@ -1120,108 +1122,81 @@ fn adapt_retirement(
     let source = one_source(sources, "completion")?;
     let source_ref = source_ref(
         source,
-        RETIREMENT_COMPLETION_SCHEMA_V1,
+        AGGREGATE_RETIREMENT_COMPLETION_SCHEMA_V1,
         "schema",
         "/status",
         &Value::String("finalized".into()),
     )?;
-    let root = object(Some(&source.value), "terminal completion")?;
-    if root.get("cluster").and_then(Value::as_str) != Some("owned-loopback") {
-        return Err(Error::new("terminal completion is not owned-loopback"));
+    let completion: AggregateRetirementConservationReceiptV1 =
+        exact_deserialize(&source.bytes, "aggregate retirement completion")?;
+    authenticate_aggregate_retirement_conservation_receipt_v1(&completion)?;
+    let (pending, kinds) = project_aggregate_retirement_completion(
+        &completion,
+        &source.relative,
+        &sha256(&source.bytes),
+    )?;
+    Ok((vec![source_ref], pending, kinds))
+}
+
+fn project_aggregate_retirement_completion(
+    completion: &AggregateRetirementConservationReceiptV1,
+    source_path: &str,
+    source_sha256: &str,
+) -> Result<(Vec<PendingEventV1>, BTreeMap<String, (String, String)>)> {
+    if completion.journals.len() != AggregateRetirementOperationV1::ORDERED.len()
+        || completion
+            .journals
+            .iter()
+            .map(|journal| journal.operation)
+            .ne(AggregateRetirementOperationV1::ORDERED)
+    {
+        return Err(Error::new(
+            "aggregate retirement completion did not contain exact ordered prepare, close-vault, close-replay, and finish rows",
+        ));
     }
-    let rows = array(root.get("journals"), "terminal completion journals")?;
-    let admitted = [
-        "resolution-receipt-prepay",
-        "core-begin-retiring",
-        "direct-begin-retiring",
-        "resolution-close-fund",
-        "direct-close-capability",
-        "retirement-replay-handoff",
-        "aggregate-retirement",
-    ];
-    let mut last = None;
-    let mut pending = Vec::new();
-    let mut kinds = BTreeMap::new();
-    for raw in rows {
-        let row = object(Some(raw), "terminal completion journal")?;
-        let mutation = object(row.get("mutation"), "terminal mutation")?;
-        let kind = string_field(mutation, "kind", "terminal mutation")?;
-        let Some(index) = admitted.iter().position(|candidate| *candidate == kind) else {
-            if kind.starts_with("lookup-") {
-                continue;
-            }
-            return Err(Error::new(
-                "terminal completion invented a retirement mutation",
-            ));
-        };
-        if last.is_some_and(|prior| index <= prior) {
-            return Err(Error::new(
-                "terminal protocol mutations are duplicated or reordered",
-            ));
-        }
-        last = Some(index);
-        if row.get("phase").and_then(Value::as_str) != Some("finalized") {
-            return Err(Error::new(
-                "terminal completion includes a provisional protocol journal",
-            ));
-        }
-        let mut negative = Vec::new();
-        let mut refunds = Vec::new();
-        for raw_delta in array(row.get("protocolLamportDeltas"), "protocol lamport deltas")? {
-            let delta = object(Some(raw_delta), "protocol lamport delta")?;
-            let address = pubkey_field(delta, "accountAddress", "protocol lamport delta")?;
-            let amount = canonical_signed_decimal(
-                string_field(delta, "deltaLamports", "protocol lamport delta")?,
-                "protocol lamport delta",
-            )?;
-            kinds.insert(
-                address.clone(),
-                ("protocol".into(), format!("retirement-{kind}")),
-            );
-            if amount < 0 {
-                negative.push(address);
-            } else if amount > 0 {
-                refunds.push(json!({"account": address, "lamports": amount.to_string()}));
-            }
-        }
-        let payer = pubkey_field(row, "feePayer", "terminal completion journal")?;
-        kinds.insert(payer, ("wallet".into(), "terminal-fee-payer".into()));
-        pending.push(PendingEventV1 {
-            operation: kind.into(),
-            signature: signature_field(row, "signature", "terminal completion journal")?,
-            expected_slot: canonical_decimal(
-                string_field(row, "finalizedSlot", "terminal completion journal")?,
-                "terminal finalized slot",
-                false,
-            )?,
-            expected_fee: canonical_decimal(
-                string_field(row, "transactionFeeLamports", "terminal completion journal")?,
-                "terminal fee",
-                false,
-            )?,
-            expected_compute: Some(canonical_decimal(
-                string_field(row, "computeUnitsConsumed", "terminal completion journal")?,
-                "terminal compute",
-                true,
-            )?),
-            source_path: source.relative.clone(),
-            source_sha256: sha256(&source.bytes),
+    let mut kinds = BTreeMap::from([
+        (
+            completion.market.clone(),
+            ("protocol".into(), "retirement-market".into()),
+        ),
+        (
+            completion.checkpoint.clone(),
+            ("protocol".into(), "retirement-checkpoint".into()),
+        ),
+        (
+            completion.rent_credit.clone(),
+            ("protocol".into(), "retirement-rent-credit".into()),
+        ),
+        (
+            completion.refund_wallet.clone(),
+            ("wallet".into(), "retirement-refund-wallet".into()),
+        ),
+    ]);
+    kinds.insert(
+        completion.payer.clone(),
+        ("wallet".into(), "retirement-fee-payer".into()),
+    );
+    let pending = completion
+        .journals
+        .iter()
+        .map(|journal| PendingEventV1 {
+            operation: journal.operation.label().into(),
+            signature: journal.signature.clone(),
+            expected_slot: journal.finalized_slot,
+            expected_fee: journal.fee_lamports,
+            expected_compute: Some(journal.compute_units_consumed),
+            source_path: source_path.into(),
+            source_sha256: source_sha256.into(),
             position: None,
             certificate: None,
             payout: None,
             retirement: Some(json!({
-                "stage": kind,
-                "_negativeCandidates": negative,
-                "refundLamports": refunds,
+                "stage": journal.operation.completion_name(),
+                "_deriveFinalizedLamports": true,
             })),
-        });
-    }
-    if last != Some(admitted.len() - 1) {
-        return Err(Error::new(
-            "terminal completion omitted aggregate retirement",
-        ));
-    }
-    Ok((vec![source_ref], pending, kinds))
+        })
+        .collect();
+    Ok((pending, kinds))
 }
 
 fn one_source<'a>(sources: &'a [RawSourceV1], role: &str) -> Result<&'a RawSourceV1> {
@@ -1617,12 +1592,24 @@ fn exact_retirement_closed_accounts(
     events: &[RpcEventV1],
     current: &BTreeMap<String, Option<Value>>,
 ) -> Result<BTreeSet<String>> {
+    if events.len() != AggregateRetirementOperationV1::ORDERED.len() {
+        return Err(Error::new(
+            "retirement activity requires four AggregateRetirement events",
+        ));
+    }
     let mut closed = BTreeSet::new();
-    for observed in events {
+    for (observed, operation) in events.iter().zip(AggregateRetirementOperationV1::ORDERED) {
         let retirement = object(
             observed.event.retirement.as_ref(),
             "finalized retirement projection",
         )?;
+        if observed.event.operation != operation.label()
+            || retirement.get("stage").and_then(Value::as_str) != Some(operation.completion_name())
+        {
+            return Err(Error::new(
+                "retirement activity changed exact prepare, close-vault, close-replay, finish order",
+            ));
+        }
         for candidate in array(
             retirement.get("closedAccounts"),
             "retirement closed accounts",
@@ -1718,20 +1705,34 @@ fn finalize_semantic_facts(
     }
     if let Some(raw) = event.retirement.take() {
         let value = object(Some(&raw), "pending retirement")?;
-        let negative = array(value.get("_negativeCandidates"), "retirement candidates")?;
+        if value.get("_deriveFinalizedLamports") != Some(&Value::Bool(true)) {
+            return Err(Error::new(
+                "retirement projection was not derived from finalized transaction lamports",
+            ));
+        }
         let mut closed = Vec::new();
-        for raw in negative {
-            let address = raw
-                .as_str()
-                .ok_or_else(|| Error::new("retirement closure candidate is not text"))?;
-            if current.get(address).is_some_and(Option::is_none) {
-                closed.push(address.to_owned());
+        let mut refunds = Vec::new();
+        for delta in &event.lamport_deltas {
+            let amount = canonical_signed_decimal(
+                delta
+                    .lamports
+                    .as_deref()
+                    .ok_or_else(|| Error::new("retirement lamport delta omitted lamports"))?,
+                "retirement finalized lamport delta",
+            )?;
+            if amount < 0 && current.get(&delta.account).is_some_and(Option::is_none) {
+                closed.push(delta.account.clone());
+            } else if amount > 0 {
+                refunds.push(json!({
+                    "account": delta.account.clone(),
+                    "lamports": amount.to_string(),
+                }));
             }
         }
         event.retirement = Some(json!({
             "stage": string_field(value, "stage", "pending retirement")?,
             "closedAccounts": closed,
-            "refundLamports": value.get("refundLamports").cloned().ok_or_else(|| Error::new("pending retirement omitted refunds"))?,
+            "refundLamports": refunds,
         }));
     }
     Ok(())
@@ -2799,9 +2800,18 @@ mod tests {
         }
     }
 
-    fn rpc_event(retirement: Value) -> RpcEventV1 {
+    fn retirement_rpc_event(
+        operation: AggregateRetirementOperationV1,
+        closed_accounts: Vec<String>,
+    ) -> RpcEventV1 {
+        let mut event = event(Some(json!({
+            "stage": operation.completion_name(),
+            "closedAccounts": closed_accounts,
+            "refundLamports": [],
+        })));
+        event.operation = operation.label().into();
         RpcEventV1 {
-            event: event(Some(retirement)),
+            event,
             transaction: Value::Null,
             token_identities: BTreeMap::new(),
             changed_addresses: BTreeSet::new(),
@@ -3061,6 +3071,90 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_completion_projects_exact_four_retirement_events() {
+        let keys = (0..5)
+            .map(|_| Pubkey::new_unique().to_string())
+            .collect::<Vec<_>>();
+        let journals = AggregateRetirementOperationV1::ORDERED
+            .into_iter()
+            .enumerate()
+            .map(|(index, operation)| {
+                json!({
+                    "operation": operation.completion_name(),
+                    "journalSha256": "11".repeat(32),
+                    "signature": Signature::new_unique().to_string(),
+                    "finalizedSlot": 100 + index as u64,
+                    "feeLamports": 5_000,
+                    "computeUnitsConsumed": 200 + index as u64,
+                    "packetSha256": "22".repeat(32),
+                    "poststateSha256": "33".repeat(32),
+                })
+            })
+            .collect::<Vec<_>>();
+        let completion: AggregateRetirementConservationReceiptV1 = serde_json::from_value(json!({
+            "schema": AGGREGATE_RETIREMENT_COMPLETION_SCHEMA_V1,
+            "status": "finalized",
+            "campaignSha256": "44".repeat(32),
+            "market": keys[0].clone(),
+            "checkpoint": keys[1].clone(),
+            "rentCredit": keys[2].clone(),
+            "refundWallet": keys[3].clone(),
+            "payer": keys[4].clone(),
+            "classifiedLamports": {
+                "market": 1,
+                "rentCredit": 2,
+                "claimsRefund": 3,
+                "custodyReplay": 4,
+                "hoardVault": 5,
+                "expectedRefundDelta": 15,
+                "refundWalletBefore": 100,
+            },
+            "totalTransactionFeesLamports": 20_000,
+            "terminalRefundWalletLamports": 115,
+            "journals": journals,
+            "receiptSha256": "55".repeat(32),
+        }))
+        .expect("typed completion");
+        let (pending, kinds) = project_aggregate_retirement_completion(
+            &completion,
+            "retirement/completion.json",
+            &"66".repeat(32),
+        )
+        .expect("four events");
+        assert_eq!(
+            pending
+                .iter()
+                .map(|event| event.operation.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "aggregate-retirement-prepare",
+                "aggregate-retirement-close-vault",
+                "aggregate-retirement-close-replay",
+                "aggregate-retirement-finish",
+            ]
+        );
+        assert_eq!(pending.len(), 4);
+        assert_eq!(kinds.len(), 5);
+
+        let mut old_singleton = completion.clone();
+        old_singleton.journals.truncate(1);
+        assert!(
+            project_aggregate_retirement_completion(
+                &old_singleton,
+                "source.json",
+                &"77".repeat(32)
+            )
+            .is_err()
+        );
+        let mut reordered = completion;
+        reordered.journals.swap(1, 2);
+        assert!(
+            project_aggregate_retirement_completion(&reordered, "source.json", &"77".repeat(32))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn loader_closure_refuses_count_bad_link_and_alias() {
         let mut pairs = (0..7)
             .map(|_| {
@@ -3099,25 +3193,49 @@ mod tests {
     }
 
     #[test]
-    fn retirement_closure_refuses_live_missing_and_duplicate_accounts() {
-        let address = Pubkey::new_unique().to_string();
-        let row = rpc_event(json!({
-            "stage": "aggregate-retirement",
-            "closedAccounts": [address],
+    fn retirement_closure_requires_four_rows_and_refuses_live_missing_or_duplicate_accounts() {
+        let vault = Pubkey::new_unique().to_string();
+        let replay = Pubkey::new_unique().to_string();
+        let market = Pubkey::new_unique().to_string();
+        let rows = vec![
+            retirement_rpc_event(AggregateRetirementOperationV1::Prepare, Vec::new()),
+            retirement_rpc_event(
+                AggregateRetirementOperationV1::CloseVault,
+                vec![vault.clone()],
+            ),
+            retirement_rpc_event(
+                AggregateRetirementOperationV1::CloseReplay,
+                vec![replay.clone()],
+            ),
+            retirement_rpc_event(AggregateRetirementOperationV1::Finish, vec![market.clone()]),
+        ];
+        let closed = BTreeMap::from([
+            (vault.clone(), None),
+            (replay.clone(), None),
+            (market.clone(), None),
+        ]);
+        assert_eq!(
+            exact_retirement_closed_accounts(&rows, &closed).unwrap(),
+            BTreeSet::from([market.clone(), replay.clone(), vault.clone()]),
+        );
+        assert!(exact_retirement_closed_accounts(&rows[..1], &closed).is_err());
+        let mut reordered = rows.clone();
+        reordered.swap(1, 2);
+        assert!(exact_retirement_closed_accounts(&reordered, &closed).is_err());
+        let live = BTreeMap::from([
+            (vault.clone(), Some(json!({}))),
+            (replay.clone(), None),
+            (market.clone(), None),
+        ]);
+        assert!(exact_retirement_closed_accounts(&rows, &live).is_err());
+        assert!(exact_retirement_closed_accounts(&rows, &BTreeMap::new()).is_err());
+        let mut duplicate = rows;
+        duplicate[3].event.retirement = Some(json!({
+            "stage": "finish",
+            "closedAccounts": [vault],
             "refundLamports": [],
         }));
-        let closed = BTreeMap::from([(address.clone(), None)]);
-        assert_eq!(
-            exact_retirement_closed_accounts(&[row.clone()], &closed)
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>(),
-            [address.clone()]
-        );
-        let live = BTreeMap::from([(address.clone(), Some(json!({})))]);
-        assert!(exact_retirement_closed_accounts(&[row.clone()], &live).is_err());
-        assert!(exact_retirement_closed_accounts(&[row.clone()], &BTreeMap::new()).is_err());
-        assert!(exact_retirement_closed_accounts(&[row.clone(), row], &closed).is_err());
+        assert!(exact_retirement_closed_accounts(&duplicate, &closed).is_err());
     }
 
     #[test]

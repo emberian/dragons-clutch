@@ -3132,7 +3132,9 @@ mod tests {
         rent::Rent,
         sysvar::SysvarSerialize,
     };
-    use solana_sdk_ids::{bpf_loader_upgradeable, ed25519_program, system_program, sysvar};
+    use solana_sdk_ids::{
+        bpf_loader_upgradeable, compute_budget, ed25519_program, system_program, sysvar,
+    };
 
     use super::{
         DirectClaimsRouteV3, DirectCustodyRouteV3, DirectHotFixedRouteV3,
@@ -5244,9 +5246,38 @@ mod tests {
         assert_eq!(plan.message.wire_bytes, 1_159);
         assert_eq!(plan.message.loaded_addresses, 57);
         assert_eq!(plan.message.message.static_account_keys().len(), 4);
+        let base_lock_count =
+            plan.message.message.static_account_keys().len() + plan.message.loaded_addresses;
+        assert_eq!(base_lock_count, 61);
         assert_eq!(
-            plan.message.message.static_account_keys().len() + plan.message.loaded_addresses,
-            61
+            plan.message.message.static_account_keys(),
+            &[
+                payer,
+                compute_budget::ID,
+                ed25519_program::ID,
+                report.instructions[2].program_id,
+            ]
+        );
+        let VersionedMessage::V0(message) = &plan.message.message else {
+            panic!("Direct Hot must compile as v0");
+        };
+        assert_eq!(message.instructions.len(), 3);
+        assert_eq!(message.instructions[2].accounts.len(), 78);
+        assert_eq!(physical.runtime_accounts.len(), 44);
+        assert_eq!(provision.addresses.len(), 57);
+        assert_eq!(message.address_table_lookups.len(), 1);
+        assert_eq!(
+            message.address_table_lookups[0].writable_indexes.len()
+                + message.address_table_lookups[0].readonly_indexes.len(),
+            57
+        );
+        assert_eq!(
+            admit_direct_inline_devnet_account_lock_count_v3(base_lock_count + 3),
+            Ok(())
+        );
+        assert_eq!(
+            admit_direct_inline_devnet_account_lock_count_v3(base_lock_count + 4),
+            Err(DirectInlineRoutedTransactionErrorV3::AccountLocks)
         );
         assert_eq!(
             crate::versioned::PACKET_DATA_BYTES - plan.message.wire_bytes,

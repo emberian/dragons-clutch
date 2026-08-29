@@ -729,7 +729,7 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "\n  dclutch-local-successor-bootstrap local-private-validator-aggregate-retirement-v1 \\\n+     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \\\n+     --evidence ABSOLUTE_JSON --market PUBKEY --source-receipt PUBKEY \\\n+     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\\n+     --lookup-table PUBKEY --campaign ABSOLUTE_JSON \\\n+     --journal-dir ABSOLUTE_DIRECTORY --completion ABSOLUTE_JSON [--execute]\n\nWithout \\
+    "\n  dclutch-local-successor-bootstrap local-private-validator-aggregate-retirement-v1 \\\n     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \\\n     --evidence ABSOLUTE_JSON --market PUBKEY --source-receipt PUBKEY \\\n     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\\n     --lookup-table PUBKEY --campaign ABSOLUTE_JSON \\\n     --journal-dir ABSOLUTE_DIRECTORY --completion ABSOLUTE_JSON [--execute]\n\nWithout \\
      --execute this command performs finalized owned-loopback reads, creates or authenticates the \\
      immutable four-packet campaign, and persists only the next unsigned Planned journal. Execute \\
      reads the named payer key only from Prepared, fsyncs Dispatching before the first send, polls \\

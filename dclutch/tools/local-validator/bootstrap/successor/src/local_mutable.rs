@@ -25,7 +25,7 @@ use dclutch_release_tool::{
     build_redeployed_checked_release, derive_execution_release_set,
     verify_checked_execution_release_set,
 };
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6;
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_program::rent::Rent;
@@ -483,7 +483,7 @@ fn local_semantic_release_preimage_v1(role: &str, source_revision: &str) -> Resu
         .map_err(|_| Error::new("Custody semantic source revision is not canonical"))?
         .to_vec(),
         "trading" => DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1.to_vec(),
-        "resolution" => RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6.to_vec(),
+        "resolution" => RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7.to_vec(),
         _ => {
             return Err(Error::new(format!(
                 "role {role:?} is not an execution semantic owner"
@@ -1413,19 +1413,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolution_local_projection_refuses_the_retired_v5_semantic_owner() {
+    fn resolution_local_projection_selects_v7_and_refuses_v6() {
         let preimage = local_semantic_release_preimage_v1(
             "resolution",
             "0123456789abcdef0123456789abcdef01234567",
         )
-        .expect("Resolution V6 semantic preimage");
+        .expect("Resolution V7 semantic preimage");
         assert_eq!(
             preimage,
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7
+        );
+        assert_eq!(
+            Sha256::digest(&preimage).as_slice(),
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7
         );
         assert_ne!(
             Sha256::digest(&preimage).as_slice(),
-            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6
         );
     }
 

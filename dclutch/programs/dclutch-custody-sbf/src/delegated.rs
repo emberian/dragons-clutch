@@ -61,7 +61,7 @@ fn execute_token_effect(
     let authority = account(accounts, 12)?;
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, custody, realm)?;
-    validate_custody_authority(program_id, authority, custody)?;
+    let authority_bump = validate_custody_authority(program_id, authority, custody)?;
     if request.delegate_before != authority.key.to_bytes()
         || source.key.to_bytes() != custody.source
         || destination.key.to_bytes() != custody.destination
@@ -87,7 +87,7 @@ fn execute_token_effect(
     {
         return Err(CustodySbfError::TokenState.into());
     }
-    invoke_exact_transfer(transfer_accounts, custody, before.decimals, program_id)?;
+    invoke_exact_transfer(transfer_accounts, custody, before.decimals, authority_bump)?;
     let after = authenticate_transfer_accounts(transfer_accounts, custody, realm.profile, false)?;
     let after_allowance = read_delegate(source, token_program, realm.profile)?;
     if before.source.checked_sub(custody.amount) != Some(after.source)

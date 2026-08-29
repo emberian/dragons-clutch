@@ -2020,10 +2020,17 @@ fn reconstruct_founding_checkpoint_v1(
     // Reissue the same persisted role indices the original attempt consumed.
     // No fresh or seeded key is admitted on devnet; campaign.rs has already
     // loaded every required role from an explicit file.
-    let mint_keypair = forge.keypair(role::COLLATERAL_MINT);
-    let wallet_keypair = forge.keypair(role::COLLATERAL_WALLET);
-    let mint = mint_keypair.pubkey();
-    let wallet = wallet_keypair.pubkey();
+    let (mint, wallet) = if consume_role_keys {
+        (
+            forge.keypair(role::COLLATERAL_MINT).pubkey(),
+            forge.keypair(role::COLLATERAL_WALLET).pubkey(),
+        )
+    } else {
+        (
+            forge.peek_pubkey(role::COLLATERAL_MINT)?,
+            forge.peek_pubkey(role::COLLATERAL_WALLET)?,
+        )
+    };
     let expected_supply = input
         .initial_collateral_atoms
         .checked_add(input.local_participant_fixture_liquidity_atoms)
@@ -2062,12 +2069,21 @@ fn reconstruct_founding_checkpoint_v1(
     ) {
         (0, None) => {}
         (LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1, Some(receipt)) => {
-            let source = forge
-                .keypair(LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1)
-                .pubkey();
-            let owner = forge
-                .keypair(LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1)
-                .pubkey();
+            let (source, owner) = if consume_role_keys {
+                (
+                    forge
+                        .keypair(LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1)
+                        .pubkey(),
+                    forge
+                        .keypair(LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1)
+                        .pubkey(),
+                )
+            } else {
+                (
+                    forge.peek_pubkey(LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1)?,
+                    forge.peek_pubkey(LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1)?,
+                )
+            };
             let source_account = rpc.required_account(
                 source,
                 "checkpoint local participant fixture collateral source",
@@ -6414,6 +6430,428 @@ const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 33;
 const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 19;
 const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
 const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
+
+/// The three durable mutations in an expired staged-founding recovery.
+///
+/// These labels are intentionally not founding-success labels. A caller may
+/// resume this suffix only from the onchain ControllerFundingCheckpoint phase,
+/// and no partial prefix is consumer evidence for an Open Market.
+#[derive(
+    Clone, Copy, Debug, serde::Deserialize, Eq, Ord, PartialEq, PartialOrd, serde::Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SourceAbortRecoveryOperationV1 {
+    Custody,
+    ControllerFirst,
+    ControllerTerminal,
+}
+
+impl SourceAbortRecoveryOperationV1 {
+    pub(crate) const ORDERED: [Self; 3] = [
+        Self::Custody,
+        Self::ControllerFirst,
+        Self::ControllerTerminal,
+    ];
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Custody => "source-abort-custody-v1",
+            Self::ControllerFirst => "source-abort-controller-first-v1",
+            Self::ControllerTerminal => "source-abort-controller-terminal-v1",
+        }
+    }
+
+    pub(crate) const fn expected_complete_keys(self) -> usize {
+        match self {
+            Self::Custody => PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1,
+            Self::ControllerFirst | Self::ControllerTerminal => {
+                CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1
+            }
+        }
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, serde::Deserialize, Eq, Ord, PartialEq, PartialOrd, serde::Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SourceAbortRecoveryPhaseV1 {
+    CustodyStaged,
+    CustodyAborted,
+    CustodyFirstLedgerClosed,
+    Complete,
+}
+
+impl SourceAbortRecoveryPhaseV1 {
+    pub(crate) const fn next_operation(self) -> Option<SourceAbortRecoveryOperationV1> {
+        match self {
+            Self::CustodyStaged => Some(SourceAbortRecoveryOperationV1::Custody),
+            Self::CustodyAborted => Some(SourceAbortRecoveryOperationV1::ControllerFirst),
+            Self::CustodyFirstLedgerClosed => {
+                Some(SourceAbortRecoveryOperationV1::ControllerTerminal)
+            }
+            Self::Complete => None,
+        }
+    }
+}
+
+/// Exact pre-mutation quantities needed to prove that the abort returned
+/// principal to its immutable supplier and rent to its immutable credit.
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct SourceAbortRecoveryBaselineV1 {
+    pub(crate) market: String,
+    pub(crate) controller_funding_checkpoint: String,
+    pub(crate) funding_ledgers: Vec<String>,
+    pub(crate) destination: String,
+    pub(crate) destination_before_atoms: u64,
+    pub(crate) principal_atoms: u64,
+    pub(crate) lifecycle_rent_credit: String,
+    pub(crate) lifecycle_rent_credit_before_lamports: u64,
+    pub(crate) controller_funding_source: String,
+    pub(crate) controller_funding_source_before_lamports: u64,
+    pub(crate) controller_rent_refund_lamports: u64,
+    pub(crate) controller_native_refund_lamports: u64,
+    pub(crate) beneficiary: String,
+    pub(crate) expiry_slot: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SourceAbortRecoveryPlanV1 {
+    pub(crate) phase: SourceAbortRecoveryPhaseV1,
+    pub(crate) operation: Option<SourceAbortRecoveryOperationV1>,
+    pub(crate) instruction: Option<Instruction>,
+    pub(crate) beneficiary: Pubkey,
+    pub(crate) complete_keys: Option<usize>,
+    pub(crate) message_bytes: Option<usize>,
+    pub(crate) packet_bytes: Option<usize>,
+}
+
+fn source_abort_context_from_checkpoint_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    actors: FoundingActorsV1,
+    checkpoint: &MarketExecutionCheckpointV1,
+) -> Result<RecoveredFoundingContextV1> {
+    if checkpoint.schema != DCLTPCB2_CHECKPOINT_SCHEMA_V1 {
+        return Err(Error::new(
+            "SourceAbort recovery requires the finalized DCLTPCB2 checkpoint schema",
+        ));
+    }
+    reconstruct_founding_checkpoint_v1(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        actors,
+        &mut Vec::new(),
+        checkpoint,
+        false,
+    )
+}
+
+pub(crate) fn capture_source_abort_recovery_baseline_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    actors: FoundingActorsV1,
+    checkpoint: &MarketExecutionCheckpointV1,
+) -> Result<SourceAbortRecoveryBaselineV1> {
+    let context = source_abort_context_from_checkpoint_v1(
+        rpc, plan, input, payer, forge, actors, checkpoint,
+    )?;
+    let coordinates = &context.coordinates;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+    authenticate_bootstrap_poststate(
+        rpc,
+        coordinates,
+        custody,
+        token_program,
+        context.mint,
+        coordinates.lock.amount,
+    )?;
+    let checkpoint_account = rpc.required_account(
+        coordinates.controller_funding_checkpoint,
+        "staged controller funding checkpoint",
+    )?;
+    let controller_checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_account.data)
+        .map_err(|error| Error::new(format!("staged controller funding checkpoint: {error:?}")))?;
+    if checkpoint_account.owner != pubkey(&plan.trading.program_id)?
+        || controller_checkpoint.phase() != ControllerFundingCheckpointPhaseV1::CustodyStaged
+    {
+        return Err(Error::new(
+            "SourceAbort baseline may be captured only from exact CustodyStaged state",
+        ));
+    }
+    if rpc.finalized_slot()? <= checkpoint.expiry_slot {
+        return Err(Error::new(
+            "SourceAbort baseline refuses while the staged founding remains satisfiable",
+        ));
+    }
+    let destination = forge.peek_pubkey(role::FOUNDING_SOURCE_FUNDER)?;
+    let beneficiary = forge.peek_pubkey(role::FOUNDING_BENEFICIARY)?;
+    let source_account = rpc.required_account(destination, "abort refund destination")?;
+    let parsed_source = TokenAccount::parse(&source_account.data)
+        .map_err(|error| Error::new(format!("abort refund destination: {error:?}")))?;
+    if source_account.owner != token_program || parsed_source.owner != beneficiary.to_bytes() {
+        return Err(Error::new(
+            "SourceAbort supplier account no longer names the immutable beneficiary",
+        ));
+    }
+    let controller_funding_source =
+        Pubkey::new_from_array(controller_checkpoint.input_ref().funding_source);
+    let controller_rent_refund_lamports = coordinates
+        .funding_ledgers
+        .iter()
+        .try_fold(
+            rpc.minimum_balance(CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1)?,
+            |total, ledger| total.checked_add(rpc.minimum_balance(ledger.bytes.len()).ok()?),
+        )
+        .ok_or_else(|| Error::new("controller funding Rent refund overflow"))?;
+    let controller_native_refund_lamports = coordinates
+        .funding_ledgers
+        .iter()
+        .try_fold(0_u64, |total, ledger| {
+            ledger
+                .required_lamports
+                .checked_sub(rpc.minimum_balance(ledger.bytes.len()).ok()?)
+                .and_then(|value| total.checked_add(value))
+        })
+        .ok_or_else(|| Error::new("controller funding native refund overflow"))?;
+    Ok(SourceAbortRecoveryBaselineV1 {
+        market: coordinates.market.to_string(),
+        controller_funding_checkpoint: coordinates.controller_funding_checkpoint.to_string(),
+        funding_ledgers: coordinates
+            .funding_ledgers
+            .iter()
+            .map(|ledger| ledger.address.to_string())
+            .collect(),
+        destination: destination.to_string(),
+        destination_before_atoms: parsed_source.amount,
+        principal_atoms: coordinates.lock.amount,
+        lifecycle_rent_credit: coordinates.credit.to_string(),
+        lifecycle_rent_credit_before_lamports: rpc
+            .required_account(coordinates.credit, "abort lifecycle credit")?
+            .lamports,
+        controller_funding_source: controller_funding_source.to_string(),
+        controller_funding_source_before_lamports: rpc
+            .required_account(
+                controller_funding_source,
+                "controller funding refund source",
+            )?
+            .lamports,
+        controller_rent_refund_lamports,
+        controller_native_refund_lamports,
+        beneficiary: beneficiary.to_string(),
+        expiry_slot: checkpoint.expiry_slot,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_source_abort_recovery_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    actors: FoundingActorsV1,
+    checkpoint: &MarketExecutionCheckpointV1,
+    baseline: &SourceAbortRecoveryBaselineV1,
+) -> Result<SourceAbortRecoveryPlanV1> {
+    let context = source_abort_context_from_checkpoint_v1(
+        rpc, plan, input, payer, forge, actors, checkpoint,
+    )?;
+    let coordinates = &context.coordinates;
+    let destination = pubkey(&baseline.destination)?;
+    let beneficiary = pubkey(&baseline.beneficiary)?;
+    let controller_funding_source = pubkey(&baseline.controller_funding_source)?;
+    if baseline.market != coordinates.market.to_string()
+        || baseline.controller_funding_checkpoint
+            != coordinates.controller_funding_checkpoint.to_string()
+        || baseline.funding_ledgers
+            != coordinates
+                .funding_ledgers
+                .iter()
+                .map(|ledger| ledger.address.to_string())
+                .collect::<Vec<_>>()
+        || baseline.lifecycle_rent_credit != coordinates.credit.to_string()
+        || baseline.principal_atoms != coordinates.lock.amount
+        || baseline.expiry_slot != checkpoint.expiry_slot
+        || forge.peek_pubkey(role::FOUNDING_SOURCE_FUNDER)? != destination
+        || forge.peek_pubkey(role::FOUNDING_BENEFICIARY)? != beneficiary
+    {
+        return Err(Error::new(
+            "SourceAbort recovery baseline differs from reconstructed founding coordinates",
+        ));
+    }
+    let checkpoint_account = rpc.account(coordinates.controller_funding_checkpoint)?;
+    let phase = match checkpoint_account {
+        Some(account) => {
+            let controller_checkpoint = ControllerFundingCheckpointV1::decode(&account.data)
+                .map_err(|error| Error::new(format!("SourceAbort checkpoint: {error:?}")))?;
+            if account.owner != pubkey(&plan.trading.program_id)? || account.executable {
+                return Err(Error::new("SourceAbort checkpoint owner changed"));
+            }
+            match controller_checkpoint.phase() {
+                ControllerFundingCheckpointPhaseV1::CustodyStaged => {
+                    if rpc.finalized_slot()? <= checkpoint.expiry_slot {
+                        return Err(Error::new(
+                            "SourceAbort refuses while the staged founding remains satisfiable",
+                        ));
+                    }
+                    authenticate_bootstrap_poststate(
+                        rpc,
+                        coordinates,
+                        pubkey(&plan.custody.program_id)?,
+                        Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+                        context.mint,
+                        coordinates.lock.amount,
+                    )?;
+                    SourceAbortRecoveryPhaseV1::CustodyStaged
+                }
+                ControllerFundingCheckpointPhaseV1::CustodyAborted => {
+                    authenticate_source_abort_custody_poststate_v1(
+                        rpc,
+                        coordinates,
+                        destination,
+                        baseline.destination_before_atoms,
+                        baseline.principal_atoms,
+                    )?;
+                    authenticate_controller_funding_cleanup_checkpoint_v1(
+                        rpc,
+                        plan,
+                        coordinates,
+                        controller_funding_source,
+                        ControllerFundingCheckpointPhaseV1::CustodyAborted,
+                    )?;
+                    SourceAbortRecoveryPhaseV1::CustodyAborted
+                }
+                ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed => {
+                    authenticate_source_abort_custody_poststate_v1(
+                        rpc,
+                        coordinates,
+                        destination,
+                        baseline.destination_before_atoms,
+                        baseline.principal_atoms,
+                    )?;
+                    authenticate_controller_funding_cleanup_checkpoint_v1(
+                        rpc,
+                        plan,
+                        coordinates,
+                        controller_funding_source,
+                        ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed,
+                    )?;
+                    SourceAbortRecoveryPhaseV1::CustodyFirstLedgerClosed
+                }
+                other => {
+                    return Err(Error::new(format!(
+                        "SourceAbort checkpoint phase {other:?} is not one of its exact suffix phases"
+                    )));
+                }
+            }
+        }
+        None => {
+            authenticate_source_abort_poststate_v1(
+                rpc,
+                coordinates,
+                destination,
+                baseline.destination_before_atoms,
+                baseline.lifecycle_rent_credit_before_lamports,
+                baseline.principal_atoms,
+                controller_funding_source,
+                baseline.controller_funding_source_before_lamports,
+                baseline.controller_rent_refund_lamports,
+                baseline.controller_native_refund_lamports,
+            )?;
+            SourceAbortRecoveryPhaseV1::Complete
+        }
+    };
+    let instruction = match phase {
+        SourceAbortRecoveryPhaseV1::CustodyStaged => Some(build_projected_custody_abort_v1(
+            rpc,
+            plan,
+            &context.records,
+            coordinates,
+            context.lock_record,
+            beneficiary,
+            destination,
+            context.mint,
+        )?),
+        SourceAbortRecoveryPhaseV1::CustodyAborted => Some(build_controller_funding_cleanup_v1(
+            rpc,
+            plan,
+            &context.records,
+            coordinates,
+            ControllerFundingCheckpointPhaseV1::CustodyAborted,
+            CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
+        )?),
+        SourceAbortRecoveryPhaseV1::CustodyFirstLedgerClosed => {
+            Some(build_controller_funding_cleanup_v1(
+                rpc,
+                plan,
+                &context.records,
+                coordinates,
+                ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed,
+                CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
+            )?)
+        }
+        SourceAbortRecoveryPhaseV1::Complete => None,
+    };
+    let operation = phase.next_operation();
+    let geometry = instruction
+        .as_ref()
+        .map(|instruction| projected_bootstrap_compiled_geometry_v2(payer.pubkey(), instruction))
+        .transpose()?;
+    if let (Some(operation), Some(instruction), Some(geometry)) =
+        (operation, instruction.as_ref(), geometry)
+    {
+        if geometry.complete_keys != operation.expected_complete_keys() {
+            return Err(Error::new(format!(
+                "{} compiled {} complete keys, expected {}",
+                operation.label(),
+                geometry.complete_keys,
+                operation.expected_complete_keys()
+            )));
+        }
+        match operation {
+            SourceAbortRecoveryOperationV1::Custody => {
+                let admitted = projected_bootstrap_compiled_geometry_v2(
+                    payer.pubkey(),
+                    &append_distinct_census_accounts_v1(instruction, 31),
+                )?;
+                let refused = projected_bootstrap_compiled_geometry_v2(
+                    payer.pubkey(),
+                    &append_distinct_census_accounts_v1(instruction, 32),
+                )?;
+                if admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
+                    || refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
+                {
+                    return Err(Error::new("DCLTPCA1 exterior 64/65 census changed"));
+                }
+            }
+            SourceAbortRecoveryOperationV1::ControllerFirst
+            | SourceAbortRecoveryOperationV1::ControllerTerminal => {
+                authenticate_cleanup_compiled_census_v1(payer.pubkey(), instruction, geometry)?;
+            }
+        }
+    }
+    Ok(SourceAbortRecoveryPlanV1 {
+        phase,
+        operation,
+        instruction,
+        beneficiary,
+        complete_keys: geometry.map(|value| value.complete_keys),
+        message_bytes: geometry.map(|value| value.message_bytes),
+        packet_bytes: geometry.map(|value| value.packet_bytes),
+    })
+}
 
 /// Unwind an expired founding's funded source compartment on a real validator.
 ///

@@ -71,9 +71,9 @@ fn compile_maximum_distinct(kind: FractionalFrameKindV3) -> (usize, usize, usize
 #[test]
 fn every_bounded_route_is_below_lock_and_packet_limits() {
     for (kind, expected_wire, expected_loaded) in [
-        (FractionalFrameKindV3::WrapOrWholeUnwrap, 672, 24),
+        (FractionalFrameKindV3::WrapOrWholeUnwrap, 682, 29),
         (FractionalFrameKindV3::DirectTransfer, 222, 3),
-        (FractionalFrameKindV3::TerminalRedeemOrZeroBurn, 700, 38),
+        (FractionalFrameKindV3::TerminalRedeemOrZeroBurn, 708, 42),
         (FractionalFrameKindV3::Terminalize, 656, 16),
         (FractionalFrameKindV3::RetirementBegin, 508, 6),
         (FractionalFrameKindV3::RetirementCoordinate, 534, 19),

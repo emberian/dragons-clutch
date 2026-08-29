@@ -27,7 +27,10 @@ use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_registry_activation_auth_v1::{
+    AuthenticatedActivationCacheBumpV1, authenticate_activated_role_with_bump_v1,
+    authenticate_activation_cache_bump_v1,
+};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
@@ -257,7 +260,7 @@ fn authenticate_common_frame(
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
-    let market_state = authenticate_market(accounts, request)?;
+    let market = authenticate_market(accounts, request)?;
     let caller_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set).map_err(|_| CustodySbfError::Release)?,
         request.market,
@@ -271,28 +274,34 @@ fn authenticate_common_frame(
     if caller_authority.key != &expected_caller {
         return Err(CustodySbfError::CallerAuthority.into());
     }
-    authenticate_calling_release(program_id, accounts, request, continuation)?;
+    authenticate_calling_release(
+        program_id,
+        accounts,
+        request,
+        continuation,
+        market.cache_bump,
+    )?;
     authenticate_replay_identity(program_id, replay, request)?;
-    Ok(market_state)
+    Ok(market.state)
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedMarketV1 {
+    state: CoreState,
+    cache_bump: AuthenticatedActivationCacheBumpV1,
 }
 
 #[inline(never)]
 fn authenticate_market(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
-) -> Result<CoreState, ProgramError> {
+) -> Result<AuthenticatedMarketV1, ProgramError> {
     let market = account(accounts, CORE_MARKET)?;
     let cache = account(accounts, ACTIVATION_CACHE)?;
     let registry = account(accounts, REGISTRY_PROGRAM)?;
-    let expected_cache = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, &request.release_set],
-        registry.key,
-    )
-    .0;
-    if cache.key != &expected_cache
-        || cache.owner != registry.key
-        || market.data_len() != STATE_BYTES
-    {
+    let cache_bump = authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)
+        .map_err(CustodySbfError::from)?;
+    if market.data_len() != STATE_BYTES {
         return Err(CustodySbfError::Release.into());
     }
     let core_program = {
@@ -339,7 +348,7 @@ fn authenticate_market(
     {
         return Err(CustodySbfError::Release.into());
     }
-    Ok(state)
+    Ok(AuthenticatedMarketV1 { state, cache_bump })
 }
 
 #[inline(never)]
@@ -348,6 +357,7 @@ fn authenticate_calling_release(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
     continuation: Option<RegistryContinuationRequestV1>,
+    cache_bump: AuthenticatedActivationCacheBumpV1,
 ) -> ProgramResult {
     if let Some(continuation) = continuation {
         return authenticate_registry_continuation(program_id, accounts, request, continuation);
@@ -363,10 +373,11 @@ fn authenticate_calling_release(
     // here is reentrancy and the route could not execute at all. The cache
     // account is Registry-owned at a Registry-derived address and carries the
     // whole of what `Reauthenticate` would have returned.
-    let receipt = authenticate_activated_role_v1(
+    let receipt = authenticate_activated_role_with_bump_v1(
         registry,
         cache,
         &request.release_set,
+        cache_bump,
         role,
         caller_program,
         caller_programdata,
@@ -771,7 +782,7 @@ fn open_vault(
     let system = account(accounts, 14)?;
     let rent_account = account(accounts, 15)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    validate_custody_authority(program_id, authority, request)?;
+    let _authority_bump = validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, false)?;
     if vault.owner != &system_program::ID
         || vault.lamports() != 0
@@ -843,7 +854,7 @@ fn execute_transfer(
     let authority = account(accounts, 12)?;
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    validate_custody_authority(program_id, authority, request)?;
+    let authority_bump = validate_custody_authority(program_id, authority, request)?;
     if source.key.to_bytes() != request.source
         || destination.key.to_bytes() != request.destination
         || source.owner != token_program.key
@@ -865,7 +876,7 @@ fn execute_transfer(
         token_program,
     };
     let before = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, true)?;
-    invoke_exact_transfer(transfer_accounts, request, before.decimals, program_id)?;
+    invoke_exact_transfer(transfer_accounts, request, before.decimals, authority_bump)?;
     let after = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, false)?;
     if before
         .source
@@ -924,7 +935,7 @@ fn close_vault(
     let token_program = account(accounts, 12)?;
     let rent_refund = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    validate_custody_authority(program_id, authority, request)?;
+    let authority_bump = validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, true)?;
     if rent_refund.key.to_bytes() != request.rent_refund {
         return Err(CustodySbfError::AccountFrame.into());
@@ -944,7 +955,7 @@ fn close_vault(
         authority,
         token_program,
         request,
-        program_id,
+        authority_bump,
     )?;
     if vault.lamports() != 0
         || rent_refund.lamports()
@@ -1151,17 +1162,20 @@ fn account<'a, 'info>(
         .ok_or_else(|| CustodySbfError::AccountFrame.into())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedCustodyAuthorityBumpV1(u8);
+
 fn validate_custody_authority(
     program_id: &Pubkey,
     authority: &AccountInfo<'_>,
     request: CustodyRequestV1,
-) -> ProgramResult {
+) -> Result<AuthenticatedCustodyAuthorityBumpV1, ProgramError> {
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
-    let expected = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).0;
+    let (expected, bump) = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
     if authority.key != &expected {
         return Err(CustodySbfError::TokenState.into());
     }
-    Ok(())
+    Ok(AuthenticatedCustodyAuthorityBumpV1(bump))
 }
 
 fn validate_vault_key(
@@ -1389,7 +1403,7 @@ fn invoke_exact_transfer(
     accounts: TransferAccounts<'_, '_>,
     request: CustodyRequestV1,
     decimals: u8,
-    program_id: &Pubkey,
+    authority_bump: AuthenticatedCustodyAuthorityBumpV1,
 ) -> ProgramResult {
     let specification = transfer_checked(
         request.token_program,
@@ -1403,8 +1417,7 @@ fn invoke_exact_transfer(
     .map_err(|_| CustodySbfError::TokenState)?;
     let instruction = token_instruction(&specification);
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
-    let bump = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).1;
-    let bump_seed = [bump];
+    let bump_seed = [authority_bump.0];
     let [domain, market, release] = authority_seeds.as_slices();
     invoke_signed(
         &instruction,
@@ -1426,7 +1439,7 @@ fn invoke_close<'a>(
     authority: &AccountInfo<'a>,
     token_program: &AccountInfo<'a>,
     request: CustodyRequestV1,
-    program_id: &Pubkey,
+    authority_bump: AuthenticatedCustodyAuthorityBumpV1,
 ) -> ProgramResult {
     let specification = close_account(
         request.token_program,
@@ -1437,8 +1450,7 @@ fn invoke_close<'a>(
     .map_err(|_| CustodySbfError::TokenState)?;
     let instruction = token_instruction(&specification);
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
-    let bump = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).1;
-    let bump_seed = [bump];
+    let bump_seed = [authority_bump.0];
     let [domain, market, release] = authority_seeds.as_slices();
     invoke_signed(
         &instruction,
@@ -1762,5 +1774,23 @@ mod tests {
                 Ok(release)
             );
         }
+    }
+
+    #[test]
+    fn authenticated_authority_bump_reproduces_exact_key_and_wrong_bump_does_not() {
+        let program = Pubkey::new_from_array([0x51; 32]);
+        let seeds = CustodyAuthoritySeedsV1::new([0x52; 32], [0x53; 32]);
+        let (canonical, bump) = Pubkey::find_program_address(&seeds.as_slices(), &program);
+        let witness = AuthenticatedCustodyAuthorityBumpV1(bump);
+        let [domain, market, release] = seeds.as_slices();
+        assert_eq!(
+            Pubkey::create_program_address(&[domain, market, release, &[witness.0]], &program,),
+            Ok(canonical),
+        );
+        let wrong = witness.0.wrapping_sub(1);
+        assert_ne!(
+            Pubkey::create_program_address(&[domain, market, release, &[wrong]], &program).ok(),
+            Some(canonical),
+        );
     }
 }

@@ -40,6 +40,7 @@ use solana_system_interface::instruction::{allocate, assign};
 pub mod affine_batch_v2;
 pub mod custody_replay_v1;
 pub mod founding_v5;
+pub mod fractional_atomic_v3;
 pub mod liability_basis_v2;
 pub mod market_closure_v1;
 mod product_runtime_v2;
@@ -242,6 +243,22 @@ pub fn process_instruction(
             instruction_data,
         );
     }
+    if instruction_data
+        .get(..dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.len())
+        == Some(dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice())
+    {
+        return fractional_atomic_v3::process(program_id, accounts, instruction_data);
+    }
+    process_non_fractional_instruction(program_id, accounts, instruction_data)
+}
+
+#[inline(never)]
+/// Process every pre-Fractional Claims instruction family.
+pub fn process_non_fractional_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
     if instruction_data.get(..CORE_EFFECT_MAGIC_V1.len()) == Some(CORE_EFFECT_MAGIC_V1.as_slice()) {
         return process_core_effect(program_id, accounts, instruction_data);
     }
@@ -271,6 +288,15 @@ pub fn process_instruction(
     ) {
         return terminal_settlement_v3::process(program_id, accounts, instruction_data);
     }
+    process_remaining_instruction(program_id, accounts, instruction_data)
+}
+
+#[inline(never)]
+fn process_remaining_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
     if instruction_data
         .get(..dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.len())
         == Some(

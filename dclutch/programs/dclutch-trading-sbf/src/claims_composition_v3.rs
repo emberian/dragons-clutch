@@ -33,6 +33,13 @@ use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
+use dclutch_fractional_claim_contract::{
+    FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_ATOMIC_ROOT_V3,
+    FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_ROOT_PDA_SEED_V1,
+    FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_TERMINAL_ROOT_V3,
+    FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
+    FractionalRootV1, FractionalTerminalAtomicReceiptV3,
+};
 use dclutch_rational_representation_v2_contract::{
     CallerRoleV2, RECEIPT_BYTES_V2 as REPRESENTATION_RECEIPT_BYTES_V2,
     REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationReceiptV2,
@@ -75,6 +82,10 @@ pub enum ClaimsRouteReceiptV3 {
     RationalLifecycle(LifecycleReceiptV2),
     /// One exact Rational representation mutation committed.
     RationalRepresentation(Box<RepresentationReceiptV2>),
+    /// One Claims+Token atomic Fractional wrap or whole unwrap committed.
+    FractionalAtomic(FractionalAtomicReceiptV3),
+    /// One Claims+Custody+Token terminal Fractional mutation committed.
+    FractionalTerminalAtomic(FractionalTerminalAtomicReceiptV3),
     /// Zero canonical Position and admission record were reclaimed.
     Close(ProtocolPositionCloseReceiptV2),
 }
@@ -143,15 +154,33 @@ pub fn execute_claims_route_v3<'info>(
         prior_receipt,
         receipt_kind.delivery(),
     )?;
+    let fractional_root = fractional_root_signer(
+        program_id,
+        receipt_kind,
+        request,
+        &buffers.accounts,
+        &mut buffers.metas,
+    )?;
     buffers.push_callee(claims_program)?;
     let bump_seed = [bump];
     let [domain, release, market, role, context, digest] = authority_seeds.as_slices();
-    buffers
-        .invoke(
-            claims_program.key,
-            &[&[domain, release, market, role, context, digest, &bump_seed]],
-        )
-        .map_err(|_| TradingSbfError::Transition)?;
+    let caller_signer = [domain, release, market, role, context, digest, &bump_seed];
+    if let Some(root) = fractional_root {
+        let root_bump = [root.bump];
+        let root_signer = [
+            FRACTIONAL_ROOT_PDA_SEED_V1,
+            root.terms.as_slice(),
+            root.market.as_slice(),
+            root_bump.as_slice(),
+        ];
+        buffers
+            .invoke(claims_program.key, &[&caller_signer, &root_signer])
+            .map_err(|_| TradingSbfError::Transition)?;
+    } else {
+        buffers
+            .invoke(claims_program.key, &[&caller_signer])
+            .map_err(|_| TradingSbfError::Transition)?;
+    }
     buffers.capture_return()?;
     if buffers.producer != *claims_program.key {
         return Err(TradingSbfError::Transition.into());
@@ -171,6 +200,22 @@ pub fn execute_claims_route_v3<'info>(
         ReceiptKindV3::Founding => {
             PostResourceEvidenceV3::Founding(founding_post_resource_digests(&buffers.accounts)?)
         }
+        ReceiptKindV3::FractionalAtomic => PostResourceEvidenceV3::FractionalRoot(
+            buffers
+                .accounts
+                .get(FRACTIONAL_ATOMIC_ROOT_V3)
+                .ok_or(TradingSbfError::Content)?
+                .key
+                .to_bytes(),
+        ),
+        ReceiptKindV3::FractionalTerminalAtomic => PostResourceEvidenceV3::FractionalRoot(
+            buffers
+                .accounts
+                .get(FRACTIONAL_TERMINAL_ROOT_V3)
+                .ok_or(TradingSbfError::Content)?
+                .key
+                .to_bytes(),
+        ),
         _ => PostResourceEvidenceV3::None,
     };
     verify_route_receipt(
@@ -221,6 +266,8 @@ enum ReceiptKindV3 {
     Founding,
     RationalLifecycle,
     RationalRepresentation,
+    FractionalAtomic,
+    FractionalTerminalAtomic,
     Close,
 }
 
@@ -251,7 +298,9 @@ impl ReceiptKindV3 {
             | Self::Affine
             | Self::SignedDelta
             | Self::RationalLifecycle
-            | Self::RationalRepresentation => ReceiptDeliveryV3::VerifiedOnly,
+            | Self::RationalRepresentation
+            | Self::FractionalAtomic
+            | Self::FractionalTerminalAtomic => ReceiptDeliveryV3::VerifiedOnly,
         }
     }
 }
@@ -269,6 +318,7 @@ enum PostResourceEvidenceV3 {
     None,
     Single([u8; 32]),
     Founding(FoundingPostResourceDigestsV5),
+    FractionalRoot([u8; 32]),
 }
 
 fn composition_owns_route(composition: ClaimsCompositionV3<'_>, route: u16) -> bool {
@@ -477,6 +527,32 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::RationalLifecycle))
+    } else if request.get(..8) == Some(FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let request =
+            FractionalExposureRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let receipt = match request.action() {
+            FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap => {
+                ReceiptKindV3::FractionalAtomic
+            }
+            FractionalExposureActionV2::TerminalRedeem
+            | FractionalExposureActionV2::TerminalZeroBurn => {
+                ReceiptKindV3::FractionalTerminalAtomic
+            }
+            _ => return Err(TradingSbfError::Content.into()),
+        };
+        let input = request.input();
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(input.release_set).map_err(|_| TradingSbfError::Content)?,
+            input.market,
+            ExecutionRoleV1::Trading,
+            input.terms,
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, receipt))
     } else {
         Err(TradingSbfError::Content.into())
     }
@@ -539,10 +615,140 @@ fn verify_route_receipt(
         ReceiptKindV3::RationalRepresentation => {
             verify_rational_representation_receipt(request, receipt, request_digest, claims_program)
         }
+        ReceiptKindV3::FractionalAtomic => verify_fractional_atomic_receipt(
+            request,
+            receipt,
+            request_digest,
+            match expected_post_resources {
+                PostResourceEvidenceV3::FractionalRoot(value) => Some(value),
+                _ => None,
+            },
+        ),
+        ReceiptKindV3::FractionalTerminalAtomic => verify_fractional_terminal_atomic_receipt(
+            request,
+            receipt,
+            request_digest,
+            match expected_post_resources {
+                PostResourceEvidenceV3::FractionalRoot(value) => Some(value),
+                _ => None,
+            },
+        ),
         ReceiptKindV3::Close => {
             verify_close_receipt(request, receipt, request_digest, claims_program)
         }
     }
+}
+
+#[inline(never)]
+fn verify_fractional_atomic_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    expected_root: Option<[u8; 32]>,
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    if receipt.len() != FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3 {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let request =
+        FractionalExposureRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt =
+        FractionalAtomicReceiptV3::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .verify_for(request, request_digest)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if expected_root != Some(receipt.root()) {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::FractionalAtomic(receipt))
+}
+
+#[inline(never)]
+fn verify_fractional_terminal_atomic_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    expected_root: Option<[u8; 32]>,
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    if receipt.len() != FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3 {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let request =
+        FractionalExposureRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = FractionalTerminalAtomicReceiptV3::decode(receipt)
+        .map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .verify_for(request, request_digest)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if expected_root != Some(receipt.root()) {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::FractionalTerminalAtomic(receipt))
+}
+
+#[derive(Clone, Copy)]
+struct FractionalRootSignerV3 {
+    bump: u8,
+    terms: [u8; 32],
+    market: [u8; 32],
+}
+
+fn fractional_root_signer(
+    program_id: &Pubkey,
+    kind: ReceiptKindV3,
+    request: &[u8],
+    accounts: &[AccountInfo<'_>],
+    metas: &mut [solana_program::instruction::AccountMeta],
+) -> Result<Option<FractionalRootSignerV3>, ProgramError> {
+    if !matches!(
+        kind,
+        ReceiptKindV3::FractionalAtomic | ReceiptKindV3::FractionalTerminalAtomic
+    ) {
+        return Ok(None);
+    }
+    let request =
+        FractionalExposureRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let root_index = match kind {
+        ReceiptKindV3::FractionalAtomic => FRACTIONAL_ATOMIC_ROOT_V3,
+        ReceiptKindV3::FractionalTerminalAtomic => FRACTIONAL_TERMINAL_ROOT_V3,
+        _ => return Err(TradingSbfError::Content.into()),
+    };
+    let root_account = accounts.get(root_index).ok_or(TradingSbfError::Content)?;
+    let root_data = root_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let root = FractionalRootV1::decode(&root_data).ok_or(TradingSbfError::Content)?;
+    let input = root.input();
+    let expected = Pubkey::create_program_address(
+        &[
+            FRACTIONAL_ROOT_PDA_SEED_V1,
+            input.terms.as_slice(),
+            input.market.as_slice(),
+            &[input.bump],
+        ],
+        program_id,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if root_account.key != &expected
+        || root_account.owner != program_id
+        || root_account.is_signer
+        || root_account.is_writable
+        || root_account.executable
+        || input.terms != request.input().terms
+        || input.market != request.input().market
+        || input.revision != request.input().expected_revision
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let meta = metas.get_mut(root_index).ok_or(TradingSbfError::Content)?;
+    if meta.pubkey != expected || meta.is_writable {
+        return Err(TradingSbfError::Content.into());
+    }
+    meta.is_signer = true;
+    Ok(Some(FractionalRootSignerV3 {
+        bump: input.bump,
+        terms: input.terms,
+        market: input.market,
+    }))
 }
 
 #[inline(never)]
@@ -1131,6 +1337,58 @@ mod tests {
         bytes
     }
 
+    fn fractional_bytes() -> Vec<u8> {
+        FractionalExposureRequestV2::new(
+            FractionalExposureActionV2::Wrap,
+            dclutch_fractional_claim_contract::FractionalExposureRequestInputV2 {
+                release_set: id(1),
+                market: id(2),
+                product_record: id(30),
+                result_domain: id(31),
+                terms: id(32),
+                token_behavior: id(33),
+                exposure: id(34),
+                owner: id(35),
+                source_token_account: [0; 32],
+                destination_token_account: id(36),
+                terminal_digest: [0; 32],
+                expected_revision: 4,
+                quantity: 2,
+                representation_coordinate: 1,
+            },
+        )
+        .expect("fractional request")
+        .to_bytes()
+        .expect("fractional bytes")
+        .to_vec()
+    }
+
+    fn fractional_terminal_bytes(action: FractionalExposureActionV2) -> Vec<u8> {
+        FractionalExposureRequestV2::new(
+            action,
+            dclutch_fractional_claim_contract::FractionalExposureRequestInputV2 {
+                release_set: id(1),
+                market: id(2),
+                product_record: id(30),
+                result_domain: id(31),
+                terms: id(32),
+                token_behavior: id(33),
+                exposure: id(34),
+                owner: id(35),
+                source_token_account: id(36),
+                destination_token_account: [0; 32],
+                terminal_digest: id(37),
+                expected_revision: 4,
+                quantity: 2,
+                representation_coordinate: 1,
+            },
+        )
+        .expect("fractional terminal request")
+        .to_bytes()
+        .expect("fractional terminal bytes")
+        .to_vec()
+    }
+
     fn representation_receipt_bytes(request_bytes: &[u8], claims: [u8; 32]) -> Vec<u8> {
         let request = RepresentationRequestV2::decode(request_bytes).expect("request");
         let header = request.header();
@@ -1413,6 +1671,227 @@ mod tests {
             Pubkey::find_program_address(&representation_seeds.as_slices(), &program).0,
             Pubkey::find_program_address(&affine_seeds.as_slices(), &program).0,
         );
+    }
+
+    #[test]
+    fn fractional_authority_receipt_and_second_root_signer_are_exact() {
+        let request = fractional_bytes();
+        let decoded = FractionalExposureRequestV2::decode(&request).expect("request");
+        let digest = hash(&request).to_bytes();
+        let (seeds, kind) = route_authority(&request, RouteKindV3::Once).expect("authority");
+        assert_eq!(kind, ReceiptKindV3::FractionalAtomic);
+        assert_eq!(seeds.context(), decoded.input().terms);
+        assert_eq!(seeds.role_request_digest(), digest);
+        assert!(route_authority(&request, RouteKindV3::AffineOnce).is_err());
+
+        let receipt = FractionalAtomicReceiptV3::new(
+            decoded.action(),
+            digest,
+            id(40),
+            id(41),
+            id(42),
+            id(43),
+            id(44),
+            5,
+            6,
+            7,
+            200,
+            200,
+            200,
+        )
+        .expect("receipt");
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::FractionalAtomic,
+                &request,
+                &receipt.to_bytes(),
+                id(20),
+                id(21),
+                PostResourceEvidenceV3::FractionalRoot(id(44)),
+            ),
+            Ok(ClaimsRouteReceiptV3::FractionalAtomic(_))
+        ));
+        let mut substituted = receipt.to_bytes();
+        substituted[16] ^= 1;
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::FractionalAtomic,
+                &request,
+                &substituted,
+                id(20),
+                id(21),
+                PostResourceEvidenceV3::FractionalRoot(id(44)),
+            )
+            .is_err()
+        );
+
+        let trading = Pubkey::new_from_array(id(21));
+        let (root_key, bump) = Pubkey::find_program_address(
+            &[
+                FRACTIONAL_ROOT_PDA_SEED_V1,
+                decoded.input().terms.as_slice(),
+                decoded.input().market.as_slice(),
+            ],
+            &trading,
+        );
+        let root = dclutch_fractional_claim_contract::FractionalRootV1::new(
+            dclutch_fractional_claim_contract::FractionalRootInputV1 {
+                bump,
+                terms: decoded.input().terms,
+                market: decoded.input().market,
+                rent_beneficiary: id(50),
+                revision: decoded.input().expected_revision,
+                historical_rent_principal: 1,
+            },
+        )
+        .expect("root");
+        let root_key = Box::leak(Box::new(root_key));
+        let root_owner = Box::leak(Box::new(trading));
+        let root_lamports = Box::leak(Box::new(1_u64));
+        let root_data = Box::leak(Box::new(root.to_bytes()));
+        let root_info = AccountInfo::new(
+            root_key,
+            false,
+            false,
+            root_lamports,
+            root_data,
+            root_owner,
+            false,
+        );
+        let mut accounts: Vec<_> = (0
+            ..dclutch_fractional_claim_contract::FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3)
+            .map(|_| account_info(false, false))
+            .collect();
+        accounts[FRACTIONAL_ATOMIC_ROOT_V3] = root_info;
+        let mut metas: Vec<_> = accounts
+            .iter()
+            .map(|account| {
+                solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+            })
+            .collect();
+        let signer = fractional_root_signer(
+            &trading,
+            ReceiptKindV3::FractionalAtomic,
+            &request,
+            &accounts,
+            &mut metas,
+        )
+        .expect("root signer")
+        .expect("present");
+        assert_eq!(signer.bump, bump);
+        assert!(metas[FRACTIONAL_ATOMIC_ROOT_V3].is_signer);
+        metas[FRACTIONAL_ATOMIC_ROOT_V3].pubkey = Pubkey::new_unique();
+        assert!(
+            fractional_root_signer(
+                &trading,
+                ReceiptKindV3::FractionalAtomic,
+                &request,
+                &accounts,
+                &mut metas,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fractional_terminal_uses_distinct_receipt_frame_and_exact_root_signer() {
+        for (action, payout) in [
+            (FractionalExposureActionV2::TerminalRedeem, 9_u64),
+            (FractionalExposureActionV2::TerminalZeroBurn, 0_u64),
+        ] {
+            let request = fractional_terminal_bytes(action);
+            let decoded = FractionalExposureRequestV2::decode(&request).expect("request");
+            let digest = hash(&request).to_bytes();
+            let (seeds, kind) = route_authority(&request, RouteKindV3::Once).expect("authority");
+            assert_eq!(kind, ReceiptKindV3::FractionalTerminalAtomic);
+            assert_eq!(seeds.context(), decoded.input().terms);
+            assert_eq!(seeds.role_request_digest(), digest);
+            assert!(route_authority(&request, RouteKindV3::AffineOnce).is_err());
+
+            let receipt = FractionalTerminalAtomicReceiptV3::new(
+                action,
+                digest,
+                id(40),
+                id(41),
+                id(42),
+                id(43),
+                id(44),
+                payout,
+                6,
+                7,
+                2,
+            )
+            .expect("terminal receipt");
+            assert!(matches!(
+                verify_route_receipt(
+                    ReceiptKindV3::FractionalTerminalAtomic,
+                    &request,
+                    &receipt.to_bytes(),
+                    id(20),
+                    id(21),
+                    PostResourceEvidenceV3::FractionalRoot(id(44)),
+                ),
+                Ok(ClaimsRouteReceiptV3::FractionalTerminalAtomic(_))
+            ));
+
+            let trading = Pubkey::new_from_array(id(21));
+            let (root_key, bump) = Pubkey::find_program_address(
+                &[
+                    FRACTIONAL_ROOT_PDA_SEED_V1,
+                    decoded.input().terms.as_slice(),
+                    decoded.input().market.as_slice(),
+                ],
+                &trading,
+            );
+            let root = dclutch_fractional_claim_contract::FractionalRootV1::new(
+                dclutch_fractional_claim_contract::FractionalRootInputV1 {
+                    bump,
+                    terms: decoded.input().terms,
+                    market: decoded.input().market,
+                    rent_beneficiary: id(50),
+                    revision: decoded.input().expected_revision,
+                    historical_rent_principal: 1,
+                },
+            )
+            .expect("root");
+            let root_key = Box::leak(Box::new(root_key));
+            let root_owner = Box::leak(Box::new(trading));
+            let root_lamports = Box::leak(Box::new(1_u64));
+            let root_data = Box::leak(Box::new(root.to_bytes()));
+            let root_info = AccountInfo::new(
+                root_key,
+                false,
+                false,
+                root_lamports,
+                root_data,
+                root_owner,
+                false,
+            );
+            let mut accounts: Vec<_> = (0
+                ..dclutch_fractional_claim_contract::FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3)
+                .map(|_| account_info(false, false))
+                .collect();
+            accounts[FRACTIONAL_TERMINAL_ROOT_V3] = root_info;
+            let mut metas: Vec<_> = accounts
+                .iter()
+                .map(|account| {
+                    solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+                })
+                .collect();
+            assert!(
+                fractional_root_signer(
+                    &trading,
+                    ReceiptKindV3::FractionalTerminalAtomic,
+                    &request,
+                    &accounts,
+                    &mut metas,
+                )
+                .expect("root signer")
+                .is_some()
+            );
+            assert!(metas[FRACTIONAL_TERMINAL_ROOT_V3].is_signer);
+            assert!(!metas[FRACTIONAL_ATOMIC_ROOT_V3].is_signer);
+        }
     }
 
     #[test]
