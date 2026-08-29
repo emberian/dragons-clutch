@@ -76,7 +76,7 @@ export default function RationalRetireReceiptPanel() {
       const latest = await new SolanaRpcClient(endpoint).latestMutationBlockhash(inspection.observedSlot);
       const next = buildRationalRetireReceiptCandidateV4(inspection, latest.blockhash);
       setCandidate(next);
-      setBuildStatus(`Unsigned v0 candidate: ${next.wireBytes.length} / 1232 bytes · ${next.loadedAddresses} ALT addresses · exact Claims frame 20+4×${next.supportCount}. You can now review, sign, and submit this checked route.`);
+      setBuildStatus(`Unsigned v0 candidate: ${next.wireBytes.length} / 1232 bytes · ${next.accountLocks} / 64 unique account locks · ${next.loadedAddresses} ALT addresses · exact Claims frame 20+4×${next.supportCount}. You can now review, sign, and submit this checked route.`);
     } catch (error) { setBuildStatus(`Refused: ${errorMessage(error)}`); }
   }
 
@@ -110,7 +110,7 @@ export default function RationalRetireReceiptPanel() {
   return <>
     <section className="trade-v3-card">
       <header><span>04</span><div><h2>Retire a zero-supply Structured receipt from descriptor truth</h2><p>Your wallet never supplies N, K, outcomes, coefficients, custody owners, Position addresses, or rent arithmetic. The browser derives them from finalized Product, descriptor, Claims, Token-2022, and lifecycle-scoped RentCreditV2 state.</p></div></header>
-      <div className="trade-v3-evidence"><article><span>Family wire</span><strong>fixed 400</strong><small>DCRLHC04 · RetireReceipt only</small></article><article><span>Claims frame</span><strong>20 + 4S</strong><small>S is ordered nonzero support within representation K</small></article><article><span>Payout</span><strong>none</strong><small>closure only; not a payout route</small></article><article><span>Execution</span><strong>checked release required</strong><small>signing appears only after the exact V4 route is authenticated</small></article></div>
+      <div className="trade-v3-evidence"><article><span>Family wire</span><strong>fixed 400</strong><small>DCRLHC04 · RetireReceipt only</small></article><article><span>Claims frame</span><strong>20 + 4S</strong><small>S is ordered nonzero support within representation K</small></article><article><span>Current lock limit</span><strong>S ≤ 3</strong><small>this one-shot route uses 50 + 4S unique locks; an ALT does not reduce that count</small></article><article><span>Execution</span><strong>checked release required</strong><small>signing appears only after the exact V4 route is authenticated</small></article></div>
     </section>
 
     <form className="trade-v3-card route-card" onSubmit={(event) => void inspect(event)}>
@@ -128,7 +128,7 @@ export default function RationalRetireReceiptPanel() {
       <button type="button" disabled={inspection === null} onClick={() => void build()}>Build exact unsigned v0 + ALT candidate</button><p className="direct-status" aria-live="polite">{buildStatus}</p>
       <div className="direct-actions"><button type="button" disabled={candidate === null || candidate.executionStatus !== 'ready'} onClick={() => void sign()}>Sign retirement transaction</button><button type="button" disabled={signed === null || !signed.complete} onClick={() => void submit()}>Submit fully signed retirement</button><button type="button" disabled={candidate === null} onClick={download}>Download unsigned candidate</button></div>
       {submittedSignature !== null && <p className="direct-status"><Anchor href={`/explorer?view=transaction&q=${encodeURIComponent(submittedSignature)}`}>Open your retirement transaction in the explorer →</Anchor></p>}
-      {candidate && <div className="direct-output"><dl><div><dt>Packet</dt><dd>{candidate.wireBytes.length} / 1232 bytes · {candidate.loadedAddresses} ALT addresses</dd></div><div><dt>Account frame</dt><dd>{candidate.accountCount} metas before message de-duplication</dd></div><div><dt>Signer</dt><dd>{candidate.requiredSigners.join(', ')}</dd></div><div><dt>Execution status</dt><dd>checked route ready for wallet signature</dd></div></dl><details className="trade-v3-bytes"><summary>Exact compact wire</summary><dl><div><dt>400-byte family · base64</dt><dd>{base64(candidate.familyBytes)}</dd></div><div><dt>528-byte Hot data · base64</dt><dd>{base64(candidate.outerBytes)}</dd></div><div><dt>v0 packet · base64</dt><dd>{base64(candidate.wireBytes)}</dd></div></dl></details></div>}
+      {candidate && <div className="direct-output"><dl><div><dt>Packet</dt><dd>{candidate.wireBytes.length} / 1232 bytes · {candidate.loadedAddresses} ALT addresses</dd></div><div><dt>Unique account locks</dt><dd>{candidate.accountLocks} / 64</dd></div><div><dt>Account frame</dt><dd>{candidate.accountCount} metas before message de-duplication</dd></div><div><dt>Signer</dt><dd>{candidate.requiredSigners.join(', ')}</dd></div><div><dt>Execution status</dt><dd>checked route ready for wallet signature</dd></div></dl><details className="trade-v3-bytes"><summary>Exact compact wire</summary><dl><div><dt>400-byte family · base64</dt><dd>{base64(candidate.familyBytes)}</dd></div><div><dt>528-byte Hot data · base64</dt><dd>{base64(candidate.outerBytes)}</dd></div><div><dt>v0 packet · base64</dt><dd>{base64(candidate.wireBytes)}</dd></div></dl></details></div>}
     </section>
   </>;
 }

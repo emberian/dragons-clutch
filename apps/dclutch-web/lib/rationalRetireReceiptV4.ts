@@ -32,6 +32,7 @@ import {
   PRODUCT_RECORD_SCHEMA_ID_V2,
   RESULT_DOMAIN_SCHEMA_ID_V2,
 } from './generated/coreFound';
+import { MAX_TX_ACCOUNT_LOCKS_V2 } from './generated/genericFoundingV1';
 import * as Hot from './generated/directInlineV3';
 import {
   ACTIVATION_CACHE_BYTES,
@@ -140,6 +141,7 @@ export type RationalRetireReceiptCandidateV4 = Readonly<{
   wireBytes: Uint8Array;
   requiredSigners: ReadonlyArray<string>;
   loadedAddresses: number;
+  accountLocks: number;
   accountCount: number;
   supportCount: number;
   executionStatus: 'ready';
@@ -897,9 +899,13 @@ export function buildRationalRetireReceiptCandidateV4(
   if (requiredSigners.length !== 1 || requiredSigners[0] !== inspection.payer) throw new Error('compact RetireReceipt has an unexpected wallet signer set');
   const loadedAddresses = transaction.message.addressTableLookups.reduce((total, lookup) => total + lookup.readonlyIndexes.length + lookup.writableIndexes.length, 0);
   if (loadedAddresses === 0) throw new Error('selected ALT did not contribute to compact RetireReceipt');
+  const accountLocks = transaction.message.staticAccountKeys.length + loadedAddresses;
+  if (accountLocks > MAX_TX_ACCOUNT_LOCKS_V2) {
+    throw new Error(`compact RetireReceipt needs ${accountLocks} unique account locks, above devnet's ${MAX_TX_ACCOUNT_LOCKS_V2}-lock limit`);
+  }
   return Object.freeze({
     transaction, instruction, familyBytes: inspection.familyBytes, outerBytes: outer, wireBytes,
-    requiredSigners, loadedAddresses, accountCount: keys.length, supportCount: inspection.support.length,
+    requiredSigners, loadedAddresses, accountLocks, accountCount: keys.length, supportCount: inspection.support.length,
     executionStatus: 'ready',
   });
 }
