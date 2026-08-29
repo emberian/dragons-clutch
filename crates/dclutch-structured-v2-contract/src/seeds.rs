@@ -80,12 +80,47 @@ use dclutch_structured_v2_kernel::{
 pub const STRUCTURED_ROOT_PDA_SEED_V2: &[u8] = b"dclutch:structured-root:v2";
 
 /// Claims PDA seed for one Structured V2 receipt Mint.
-pub const STRUCTURED_RECEIPT_MINT_PDA_SEED_V2: &[u8] = b"dclutch:structured-receipt-mint:v2";
+///
+/// `structured` is abbreviated for the same reason
+/// `PROJECTED_CUSTODY_CALLER_PDA_DOMAIN_V1` in `dclutch-custody-contract` is:
+/// a PDA seed may be at most [`MAX_PDA_SEED_BYTES`] bytes, and the
+/// unabbreviated `dclutch:structured-receipt-mint:v2` is thirty-four. That
+/// spelling names a seed ORDER no adapter could ever execute --
+/// `find_program_address` refuses every bump for an over-long seed, so the
+/// receipt Mint it describes had no derivable address at all. The static
+/// assertion below is what keeps that from being written again silently.
+pub const STRUCTURED_RECEIPT_MINT_PDA_SEED_V2: &[u8] = b"dclutch:struct-receipt-mint:v2";
 
 /// Claims PDA seed for one Structured V2 shard custody Token account.
-pub const STRUCTURED_SHARD_CUSTODY_PDA_SEED_V2: &[u8] = b"dclutch:structured-shard-custody:v2";
+///
+/// Abbreviated for the same reason as the receipt Mint seed above: the
+/// unabbreviated `dclutch:structured-shard-custody:v2` is thirty-five bytes and
+/// could never derive an address.
+pub const STRUCTURED_SHARD_CUSTODY_PDA_SEED_V2: &[u8] = b"dclutch:struct-shard-custody:v2";
+
+/// Maximum bytes in one Solana program-derived-address seed.
+pub const MAX_PDA_SEED_BYTES: usize = 32;
+
+// A seed domain longer than 32 bytes can never derive an address, so a module
+// whose stated job is to be the authority on the exact seed ORDER must not be
+// able to publish an order that no adapter could execute. These three are the
+// module's whole seed surface.
+const _: () = assert!(
+    STRUCTURED_ROOT_PDA_SEED_V2.len() <= MAX_PDA_SEED_BYTES,
+    "a PDA seed domain longer than 32 bytes can never derive an address"
+);
+const _: () = assert!(
+    STRUCTURED_RECEIPT_MINT_PDA_SEED_V2.len() <= MAX_PDA_SEED_BYTES,
+    "a PDA seed domain longer than 32 bytes can never derive an address"
+);
+const _: () = assert!(
+    STRUCTURED_SHARD_CUSTODY_PDA_SEED_V2.len() <= MAX_PDA_SEED_BYTES,
+    "a PDA seed domain longer than 32 bytes can never derive an address"
+);
 
 /// Domain separating the excised-terms preimage from the terms bytes themselves.
+///
+/// This one is hashed rather than seeded, so it is deliberately NOT length-bound.
 pub const STRUCTURED_RECEIPT_MINT_PREIMAGE_DOMAIN_V2: &[u8] =
     b"dclutch/structured-receipt-mint-preimage/v2";
 
@@ -339,6 +374,43 @@ mod tests {
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
+    }
+
+    /// Every seed-order assertion below compares `as_slices()` against the very
+    /// constant it is built from, so all of them hold for any spelling -- they
+    /// pin the ORDER and are blind to the bytes. These two pin the bytes.
+    ///
+    /// The length bound is the one that matters: a domain over
+    /// [`MAX_PDA_SEED_BYTES`] makes `find_program_address` refuse every bump, so
+    /// the resource it names has no derivable address and the seed order this
+    /// module publishes could not be executed by any adapter. The
+    /// `structured-receipt-mint` and `structured-shard-custody` spellings were
+    /// thirty-four and thirty-five bytes and did exactly that.
+    #[test]
+    fn every_seed_domain_is_short_enough_to_actually_derive() {
+        for domain in [
+            STRUCTURED_ROOT_PDA_SEED_V2,
+            STRUCTURED_RECEIPT_MINT_PDA_SEED_V2,
+            STRUCTURED_SHARD_CUSTODY_PDA_SEED_V2,
+        ] {
+            assert!(
+                domain.len() <= MAX_PDA_SEED_BYTES,
+                "a PDA seed domain longer than 32 bytes can never derive an address"
+            );
+        }
+    }
+
+    #[test]
+    fn seed_domains_are_the_exact_published_spellings() {
+        assert_eq!(STRUCTURED_ROOT_PDA_SEED_V2, b"dclutch:structured-root:v2");
+        assert_eq!(
+            STRUCTURED_RECEIPT_MINT_PDA_SEED_V2,
+            b"dclutch:struct-receipt-mint:v2"
+        );
+        assert_eq!(
+            STRUCTURED_SHARD_CUSTODY_PDA_SEED_V2,
+            b"dclutch:struct-shard-custody:v2"
+        );
     }
 
     #[test]
