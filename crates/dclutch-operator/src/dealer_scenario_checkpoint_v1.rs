@@ -11,7 +11,12 @@ use dclutch_capability_program_contract::hot_v3::{
 };
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_dealer_codec::scenario_checkpoint_v1::{
-    DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
+    DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, DEALER_SCENARIO_CLAIMS_PRESTATE_DOMAIN_V1,
+    DEALER_SCENARIO_CUSTODY_PRESTATE_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
+    DealerScenarioCheckpointV1,
+};
+use dclutch_dealer_codec::scenario_evaluation_receipt_v1::{
+    DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1, DealerScenarioEvaluationReceiptV1,
 };
 use dclutch_dealer_codec::scenario_custody_reservation_v1::{
     DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1, DealerScenarioCustodyEffectManifestV1,
@@ -1855,6 +1860,114 @@ impl DealerScenarioCheckpointJournalV1 {
         self.cleaned = true;
         Ok(())
     }
+}
+
+/// Producer-owned bodies one evaluation seals, as observed on chain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerScenarioEvaluationBodiesV1<'a> {
+    /// Exact selected scalar-then-identity candidate bank body.
+    pub candidate_bank: &'a [u8],
+    /// Exact candidate obligation body.
+    pub candidate_obligation: &'a [u8],
+    /// Exact expected Claims delta body.
+    pub claims_delta: &'a [u8],
+    /// Exact ordered Custody-effects manifest body.
+    pub effects: &'a [u8],
+}
+
+/// Producer-owned evaluation receipt PDA for one checkpoint and request.
+#[must_use]
+pub fn dealer_scenario_evaluation_receipt_address_v1(
+    producer_program: Pubkey,
+    checkpoint: Pubkey,
+    request_digest: [u8; 32],
+) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1,
+            checkpoint.as_ref(),
+            &request_digest,
+        ],
+        &producer_program,
+    )
+    .0
+}
+
+/// Derive the one evaluation receipt Trading will accept for this checkpoint.
+///
+/// An evaluator can only seal a checkpoint it actually read: both prestate
+/// digests fold the complete ordered page transcript the checkpoint already
+/// carries, so a receipt cannot be written before the pages exist, and a
+/// receipt written against a different transcript cannot pass. The four body
+/// digests are taken from the bodies themselves, which is what stops a producer
+/// from promising one candidate and publishing another.
+///
+/// The checkpoint body is the exact account data as observed on chain; its
+/// SHA-256 is the prestate the receipt commits to, so any later mutation of the
+/// checkpoint invalidates the receipt rather than silently re-binding it.
+pub fn derive_dealer_scenario_evaluation_receipt_v1(
+    producer_program: Pubkey,
+    checkpoint: Pubkey,
+    checkpoint_body: &[u8],
+    bodies: DealerScenarioEvaluationBodiesV1<'_>,
+    custody_effect_count: u8,
+) -> Result<DealerScenarioEvaluationReceiptV1, DealerScenarioCheckpointOperatorErrorV1> {
+    let active = usize::from(custody_effect_count);
+    if producer_program == Pubkey::default()
+        || checkpoint == Pubkey::default()
+        || active == 0
+        || active > DEALER_SCENARIO_MAX_RESERVATIONS_V1
+        || bodies.candidate_bank.is_empty()
+        || bodies.candidate_obligation.is_empty()
+        || bodies.claims_delta.is_empty()
+        || bodies.effects.is_empty()
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let state = DealerScenarioCheckpointV1::decode(checkpoint_body)
+        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    let input = state.input();
+    Ok(DealerScenarioEvaluationReceiptV1 {
+        custody_effect_count,
+        producer_program: producer_program.to_bytes(),
+        checkpoint: checkpoint.to_bytes(),
+        checkpoint_prestate_digest: hash(checkpoint_body).to_bytes(),
+        request_digest: input.request_digest,
+        claims_prestate_digest: joined_transcript_digest_v1(
+            DEALER_SCENARIO_CLAIMS_PRESTATE_DOMAIN_V1,
+            state,
+        )?,
+        custody_prestate_digest: joined_transcript_digest_v1(
+            DEALER_SCENARIO_CUSTODY_PRESTATE_DOMAIN_V1,
+            state,
+        )?,
+        candidate_bank_digest: hash(bodies.candidate_bank).to_bytes(),
+        candidate_obligation_digest: hash(bodies.candidate_obligation).to_bytes(),
+        claims_delta_digest: hash(bodies.claims_delta).to_bytes(),
+        effects_digest: hash(bodies.effects).to_bytes(),
+    })
+}
+
+/// Fold the complete ordered page transcript under one separation domain.
+fn joined_transcript_digest_v1(
+    domain: &[u8],
+    state: DealerScenarioCheckpointV1,
+) -> Result<[u8; 32], DealerScenarioCheckpointOperatorErrorV1> {
+    let mut digests = Vec::with_capacity(DEALER_SCENARIO_PREPARATION_PAGES_V1);
+    for page in 0..DEALER_SCENARIO_PREPARATION_PAGES_V1 {
+        digests.push(
+            state
+                .page_receipt_digest(
+                    u8::try_from(page)
+                        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+                )
+                .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Journal)?,
+        );
+    }
+    let input = state.input();
+    let mut parts = vec![domain, input.request_digest.as_slice()];
+    parts.extend(digests.iter().map(<[u8; 32]>::as_slice));
+    Ok(hashv(&parts).to_bytes())
 }
 
 /// Producer-owned evidence one sealed evaluation names.

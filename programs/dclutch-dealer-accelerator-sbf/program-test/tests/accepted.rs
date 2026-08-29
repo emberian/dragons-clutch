@@ -23,15 +23,20 @@ use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
     scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1,
+    scenario_custody_reservation_v1::DealerScenarioCustodyEffectManifestV1,
     scenario_membership_manifest_v1::{
         DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
     },
+    scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1,
 };
 use dclutch_operator::{
     dealer_scenario_checkpoint_v1::{
         DealerScenarioCheckpointJournalV1, DealerScenarioCheckpointRouteV1,
-        build_dealer_scenario_checkpoint_create_v1, build_dealer_scenario_checkpoint_page_v1,
-        dealer_scenario_checkpoint_address_v1, dealer_scenario_membership_manifest_address_v1,
+        DealerScenarioEvaluationBodiesV1, build_dealer_scenario_checkpoint_create_v1,
+        build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
+        dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
+        dealer_scenario_membership_manifest_address_v1,
+        derive_dealer_scenario_evaluation_receipt_v1,
         project_dealer_scenario_canonical_membership_pages_v1,
     },
     dealer_scenario_hot_v4::{DealerScenarioHotMetaStateV4, SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1},
@@ -79,9 +84,21 @@ const CHILD_ROOT: Pubkey = Pubkey::new_from_array([0xd5; 32]);
 const MARKET: Pubkey = Pubkey::new_from_array([0xd6; 32]);
 /// Exact immutable Dealer request account.
 const REQUEST: Pubkey = Pubkey::new_from_array([0xd7; 32]);
+/// Producer-owned exact candidate register bank.
+const CANDIDATE_BANK: Pubkey = Pubkey::new_from_array([0xd8; 32]);
+/// Producer-owned exact candidate obligation body.
+const CANDIDATE_OBLIGATION: Pubkey = Pubkey::new_from_array([0xd9; 32]);
+/// Producer-owned exact expected Claims delta body.
+const CLAIMS_DELTA: Pubkey = Pubkey::new_from_array([0xda; 32]);
+/// Producer-owned ordered Custody-effect manifest.
+const EFFECTS: Pubkey = Pubkey::new_from_array([0xdb; 32]);
+/// Producer-owned single Custody effect body the manifest names.
+const EFFECT_BODY: Pubkey = Pubkey::new_from_array([0xdc; 32]);
 
 /// The refusal Trading raises when a route's account content is not canonical.
 const TRADING_CONTENT: u32 = 0x4003;
+/// The refusal Trading raises when a checked data-defined transition refuses.
+const TRADING_TRANSITION: u32 = 0x4004;
 
 /// Runtime Product outcome width this scenario transitions.
 const WIDTH: u32 = 3;
@@ -479,7 +496,7 @@ async fn create_checkpoint(context: &mut ProgramTestContext, scenario: &Scenario
 }
 
 #[tokio::test]
-async fn real_trading_elf_executes_the_accepted_transition_preparation() {
+async fn real_trading_elf_executes_the_accepted_transition_through_evaluation() {
     let scenario = scenario();
     let mut context = program_test(&scenario).start_with_context().await;
     let mut journal = DealerScenarioCheckpointJournalV1::planned(TRADING, scenario.request_digest)
@@ -564,11 +581,148 @@ async fn real_trading_elf_executes_the_accepted_transition_preparation() {
         scenario.membership.len(),
         "every member of the frame was carried exactly once"
     );
+    // The evaluator seals what it read. Both prestate digests fold the complete
+    // ordered transcript the checkpoint now carries, so this receipt could not
+    // have existed before the pages did.
+    let read_back = checkpoint_body(&mut context, &scenario).await;
+    let evidence = evaluation_evidence(&scenario, &read_back);
+    for (key, body) in evidence.installed.iter() {
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(MANIFEST_PRODUCER, body.clone())),
+        );
+    }
+    let packet = build_dealer_scenario_checkpoint_evaluate_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        sysvar::clock::ID,
+        MANIFEST_PRODUCER,
+        evidence.receipt_address,
+        CANDIDATE_BANK,
+        CANDIDATE_OBLIGATION,
+        CLAIMS_DELTA,
+        EFFECTS,
+        Hash::default(),
+        &[],
+    )
+    .expect("evaluate packet");
+    assert!(
+        packet.lock_census.unique_account_lock_count <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "evaluation must be lock-bounded"
+    );
+    peak_locks = peak_locks.max(packet.lock_census.unique_account_lock_count);
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert!(
+        processed.result.is_ok(),
+        "evaluation must seal; observed {:?} logs {:?}",
+        processed.result,
+        processed.metadata.as_ref().map(|value| &value.log_messages)
+    );
+    let returned = processed
+        .metadata
+        .as_ref()
+        .and_then(|value| value.return_data.as_ref())
+        .map(|value| value.data.clone())
+        .expect("evaluation returns its sealed receipt digest");
+    let sealed = <[u8; 32]>::try_from(returned.as_slice()).expect("32-byte receipt digest");
+    assert_eq!(
+        sealed,
+        hash(&evidence.receipt_body).to_bytes(),
+        "the sealed digest is the receipt body the producer published"
+    );
+    let after_evaluation = checkpoint_body(&mut context, &scenario).await;
+    assert_ne!(
+        after_evaluation, read_back,
+        "sealing an evaluation advances the checkpoint"
+    );
+    journal
+        .record_evaluated(sealed, 1, hash(&after_evaluation).to_bytes())
+        .expect("journal records the evaluation it observed");
+
     assert!(
         peak_locks <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
         "the executed transcript's peak lock count is {peak_locks}, which must stay inside the \
          64-lock ceiling the unsplit 121-account instruction cannot meet"
     );
+}
+
+/// Producer-owned evaluation evidence for one checkpoint body.
+struct EvaluationEvidence {
+    receipt_address: Pubkey,
+    receipt_body: Vec<u8>,
+    installed: Vec<(Pubkey, Vec<u8>)>,
+}
+
+/// Publish the evaluator's bodies and derive the receipt Trading will accept.
+///
+/// Only the manifest is a typed protocol body here: the candidate bank, the
+/// candidate obligation and the Claims delta are authenticated at this route
+/// purely by the digests the receipt commits, and the effect bodies themselves
+/// are authenticated later, at reservation.
+fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> EvaluationEvidence {
+    let effect_body = vec![0xc7; 96];
+    let manifest = DealerScenarioCustodyEffectManifestV1 {
+        effect_count: 1,
+        producer_program: MANIFEST_PRODUCER.to_bytes(),
+        checkpoint: scenario.checkpoint.to_bytes(),
+        request_digest: scenario.request_digest,
+        effect_accounts: core::array::from_fn(|index| {
+            if index == 0 {
+                EFFECT_BODY.to_bytes()
+            } else {
+                [0_u8; 32]
+            }
+        }),
+        effect_digests: core::array::from_fn(|index| {
+            if index == 0 {
+                hash(&effect_body).to_bytes()
+            } else {
+                [0_u8; 32]
+            }
+        }),
+    };
+    assert_eq!(
+        DEALER_SCENARIO_MAX_RESERVATIONS_V1, 4,
+        "the manifest carries a fixed reservation width"
+    );
+    let effects_body = manifest.encode().expect("effect manifest encodes").to_vec();
+    let candidate_bank = vec![0xc1; 64];
+    let candidate_obligation = vec![0xc2; 32];
+    let claims_delta = vec![0xc3; 48];
+    let receipt = derive_dealer_scenario_evaluation_receipt_v1(
+        MANIFEST_PRODUCER,
+        scenario.checkpoint,
+        checkpoint_body,
+        DealerScenarioEvaluationBodiesV1 {
+            candidate_bank: &candidate_bank,
+            candidate_obligation: &candidate_obligation,
+            claims_delta: &claims_delta,
+            effects: &effects_body,
+        },
+        1,
+    )
+    .expect("producer derives its receipt from the checkpoint it read");
+    let receipt_body = receipt.encode().expect("receipt encodes").to_vec();
+    let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
+        MANIFEST_PRODUCER,
+        scenario.checkpoint,
+        scenario.request_digest,
+    );
+    EvaluationEvidence {
+        receipt_address,
+        receipt_body: receipt_body.clone(),
+        installed: vec![
+            (receipt_address, receipt_body),
+            (CANDIDATE_BANK, candidate_bank),
+            (CANDIDATE_OBLIGATION, candidate_obligation),
+            (CLAIMS_DELTA, claims_delta),
+            (EFFECTS, effects_body),
+            (EFFECT_BODY, effect_body),
+        ],
+    }
 }
 
 #[tokio::test]
@@ -708,6 +862,67 @@ async fn a_replayed_page_ordinal_refuses_after_it_already_committed() {
         checkpoint_body(&mut context, &scenario).await,
         after_first,
         "a refused replay must not advance the checkpoint"
+    );
+}
+
+#[tokio::test]
+async fn a_substituted_candidate_body_cannot_seal_an_evaluation() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    create_checkpoint(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+    for (page_index, page) in scenario.pages.iter().enumerate() {
+        let ordinal = u8::try_from(page_index).expect("six pages");
+        let (instruction, _) = page_instruction(&scenario, payer, ordinal, page);
+        submit(&mut context, instruction, &[])
+            .await
+            .expect("ProgramTest processing")
+            .result
+            .expect("every page must commit before evaluation");
+    }
+    let read_back = checkpoint_body(&mut context, &scenario).await;
+    let evidence = evaluation_evidence(&scenario, &read_back);
+    for (key, body) in evidence.installed.iter() {
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(MANIFEST_PRODUCER, body.clone())),
+        );
+    }
+
+    // The receipt is the one the producer really derived. What changes is the
+    // candidate bank it promised: same account, same owner, a different body.
+    context.set_account(
+        &CANDIDATE_BANK,
+        &AccountSharedData::from(data_account(MANIFEST_PRODUCER, vec![0xc4; 64])),
+    );
+    let packet = build_dealer_scenario_checkpoint_evaluate_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        sysvar::clock::ID,
+        MANIFEST_PRODUCER,
+        evidence.receipt_address,
+        CANDIDATE_BANK,
+        CANDIDATE_OBLIGATION,
+        CLAIMS_DELTA,
+        EFFECTS,
+        Hash::default(),
+        &[],
+    )
+    .expect("evaluate packet");
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "a candidate body the receipt did not commit must refuse; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        read_back,
+        "a refused evaluation must not advance the checkpoint"
     );
 }
 
