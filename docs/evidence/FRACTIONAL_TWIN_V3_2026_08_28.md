@@ -182,3 +182,32 @@ exist. Integration still requires:
 
 Until those exist, the current 14-action release remains refused and this code
 must not be described as a complete executable or deployed Fractional market.
+
+## Update 2026-08-29: first execution, and the width wall it found
+
+`programs/dclutch-claims-sbf/program-test/fractional-atomic/` now executes the
+production `fractional_atomic_v3` handler against real ELFs. The route needed a
+caller able to sign the Trading caller-authority and the Fractional root in one
+`invoke_signed`; `test-programs/fractional-atomic-caller/` is that caller.
+
+Executed: the transaction enters the real Claims ELF at CPI depth two and
+consumes 37,281 compute units inside the Fractional route before refusing. The
+exact 31-account frame, both `invoke_signed` authorities, the four finalized
+record pairs, the activated release set, the decoded root, and the Token-2022
+Mint controller all authenticate against real bytes.
+
+Not executed, and blocked on a decision rather than on work:
+
+- `fractional_exposure_terms_bytes_v2` refuses a representation width above
+  **256**, so a Fractional capability names at most 256 shard Mints;
+- `validate_common` requires `market.claim_count == terms.representation_width()`;
+- the shared Claims LBV2 fixture, and the runtime width this evidence profile is
+  built around, is **258**.
+
+So no Fractional capability can bind a Market wider than 256 outcomes, and the
+258-outcome fixture cannot carry one at all. The wrap therefore refuses with
+`ClaimsSbfError::Economic`. Resolving it means either raising the terms ceiling
+or bounding Fractional Markets at 256 and giving the campaign its own narrower
+Product/LBV2 fixture. Until then Fractional Wrap has no committed on-chain
+effect, and no rollback, transfer, or terminal Claims/Custody/Token campaign
+exists.
