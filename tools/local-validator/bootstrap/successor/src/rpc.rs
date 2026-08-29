@@ -861,6 +861,20 @@ impl Rpc {
         payer: &Keypair,
         table: &ObservedAccount,
     ) -> Result<SignedVersionedPacketV1> {
+        self.prepare_signed_v0_packet_with_signers(label, instructions, payer, &[], table)
+    }
+
+    /// Sign one exact routed v0 packet with its complete signer set without
+    /// submitting it. The additional signatures are covered by the same
+    /// durable packet digest and are reauthenticated on every restart.
+    pub(crate) fn prepare_signed_v0_packet_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        table: &ObservedAccount,
+    ) -> Result<SignedVersionedPacketV1> {
         let bounded = bounded_instructions(instructions, None)
             .map_err(|error| Error::new(format!("{label}: {error}")))?;
         let (blockhash, last_valid_block_height) = self.latest_blockhash_with_height()?;
@@ -878,7 +892,10 @@ impl Rpc {
                 routed.wire_bytes
             )));
         }
-        let transaction = VersionedTransaction::try_new(routed.message, &[payer])
+        let mut signers = Vec::with_capacity(additional_signers.len() + 1);
+        signers.push(payer);
+        signers.extend_from_slice(additional_signers);
+        let transaction = VersionedTransaction::try_new(routed.message, &signers)
             .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
         let signature = transaction
             .signatures

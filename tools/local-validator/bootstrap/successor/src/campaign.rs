@@ -894,7 +894,7 @@ fn parse_exact_market_json_v1(bytes: &[u8]) -> Result<Value> {
 /// must not be reinterpreted as a different input family. Both structs deny
 /// unknown fields, and the graduation envelope is authenticated all the way
 /// back into the inner source graph before its market is returned.
-fn load_market_input(bytes: &[u8]) -> Result<crate::model::MarketRunInput> {
+pub(crate) fn load_market_input(bytes: &[u8]) -> Result<crate::model::MarketRunInput> {
     // Parse the original bytes with a recursive visitor before any ordinary
     // `Value` normalization can collapse an earlier object member. This is the
     // same refusal boundary as the RPC parser but stays local to the campaign
@@ -2492,7 +2492,10 @@ fn authenticate_live_checked_role(
     Ok(())
 }
 
-fn authenticate_checked_live_substrate(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+pub(crate) fn authenticate_checked_live_substrate(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+) -> Result<()> {
     let (roles, floor): (Vec<(&str, &ProgramPin)>, u64) =
         if let Some(set) = plan.checked_upgrade_set.as_ref() {
             let floor = set
