@@ -1,7 +1,7 @@
 # Runtime-width and CU architecture change matrix
 
-Date: 2026-08-28  
-Accepted source reviewed: `3d11642387c637bc168538d754b5bc90fe677799`  
+Date: 2026-08-28
+Accepted source reviewed: `3d11642387c637bc168538d754b5bc90fe677799`
 Scope: architecture audit of the externally reachable lifecycle and the SBF
 links that can carry it. This is not a checked release or deployment record.
 
