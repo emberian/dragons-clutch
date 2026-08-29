@@ -135,34 +135,73 @@ overhead, per Mint. That figure is this change's own, read off the Token-2022
 instruction log, and is the only number here that belongs to this change alone.
 
 The committed-leg totals are not, and the difference is worth stating rather
-than averaging away. Measured at `f7c960b9`: `activate_receipt` 254,337,
-`activate_coordinate` 405,138, `retire_coordinate` 340,832, `retire_receipt`
-264,515. Re-measured at `2e3257d6` an hour later: 237,836 / 448,637 / 343,831 /
-267,514. Concurrent lanes changed shared Claims code between the two runs, so
-neither set attributes to this fix — quote them only with the commit beside
-them. All eight are far under the 1,400,000 meter the campaign's census witness
-pins, which is the property that actually had to hold.
+than averaging away. The same four legs, measured three times in one afternoon:
 
-## Named debt, not fixed here
+| Commit | `activate_receipt` | `activate_coordinate` | `retire_coordinate` | `retire_receipt` |
+| --- | --- | --- | --- | --- |
+| `f7c960b9` | 254,337 | 405,138 | 340,832 | 264,515 |
+| `2e3257d6` | 237,836 | 448,637 | 343,831 | 267,514 |
+| `d9018470` | 225,842 | 379,643 | 295,836 | 242,020 |
 
-**SEAM §4 is the same defect seen from the wallet side, and this fix makes its
-disjointness exact.** `dclutch-rational-representation-v2-operator`'s
-`authenticate_mint` (`src/lib.rs:1151`) calls `Mint::parse(observed.data)`,
-which refuses anything but exactly 82 bytes. Both of its call sites — `:667` and
-`:1045` — are precisely the receipt Mint and the shard Mint this lifecycle
-writes, which are now definitively 238 bytes. 82 and 238 are disjoint, so every
-`construct_*` builder behind it refuses before it can build a transaction.
+Concurrent lanes changed shared Claims code between every pair of runs, so not
+one of these deltas attributes to this fix — quote a Claims CU number only with
+the commit beside it. What actually had to hold is the property, not any row:
+every figure is far under the 1,400,000 meter the campaign's census witness
+pins.
 
-It is deliberately not fixed here, and the reason is a design question rather
-than caution: `authenticate_mint` **reads** the supply rather than pinning it,
-and both extension-aware profiles in `token-svm` require an expected supply.
-Passing back a supply read from the same bytes would be a vacuous assertion. A
-correct fix needs a third, deliberately weaker public entry point in `token-svm`
-that authenticates shape, authorities, decimals and freeze while returning the
-supply — a new public API, with the judgment that implies. Its probe is cheap
-and pure-Rust: make `tests/operator.rs:558`'s `mint_data()` return the 238-byte
-shape, then `cargo test -p dclutch-rational-representation-v2-operator --test
-operator`.
+## The wallet side, closed in round 2 (`d9018470`)
+
+SEAM §4 was the same defect from the other end, and the round-1 fix made its
+disjointness exact rather than approximate.
+`dclutch-rational-representation-v2-operator`'s `authenticate_mint` called
+`Mint::parse`, which admits exactly 82 bytes. Both of its call sites — `:667`
+and `:1045` — are precisely the receipt and shard Mints, now definitively 238.
+So every `construct_*` builder behind it refused before it could build a
+transaction, and all five published wallet actions were unreachable.
+
+**A builder that cannot read the account the program reads is not stricter than
+the program. It is unreachable.**
+
+**One parse, two entry points.** `Token2022BehaviorProfileV2::read_mint`
+authenticates identity, ownership, controller, freeze absence, base-state shape
+and the exact required extension set, and *reports* the supply. `check_mint` is
+now `read_mint` plus the supply equality, so the two differ on exactly one axis
+and cannot drift — the same consolidation the round-1 fix applied to the TLV
+walker, for the same reason.
+
+**Why the weaker profile is honest and not a loophole.** The operator is the
+party that *discovers* the supply and stages it into `expected_receipt_supply`,
+which `parse_behavior_mint` then pins on-chain. An expected supply at that call
+could only be the number just read from those same bytes; comparing a value to
+itself authenticates nothing while reading like a check. The doc on `read_mint`
+says exactly that and routes every caller with an independent expectation back
+to `check_mint`.
+
+**The fixtures stopped inventing.** `tests/operator.rs`'s `mint_data` built a
+bare 82-byte legacy Mint — each side of the seam fabricating precisely the bytes
+it expected, which is why both sides were green and the composition was dead.
+Receipt and shard Mints now come from `behavior_mint_data`, built by the
+official Token-2022 library and sized by that library's own
+`try_calculate_account_len`. The collateral Mint stays 82 bytes, correctly: it
+is zero-extension by declaration.
+
+**The control is two-sided on one fixture, and both halves fail on the old code
+in opposite directions.** The real 238-byte shape now builds all five actions;
+the same Mint with its extension storage truncated away — byte-for-byte the old
+82-byte shape, with nothing newly invented — is refused by every builder with
+`InvalidToken`. A one-sided negative would have been satisfied by a builder that
+refused everything. In `token-svm`, `read_mint` is separately held to refusing
+on the extension **set** and never on the length, proved with a wrong-set Mint
+of *identical* length to the canonical one: a length check cannot tell those two
+apart, and the walk can.
+
+Green: `token-svm` 39/39, operator 5/5, `bearer-v2-operator` 21/21, and both
+round-1 real-ELF campaigns re-run as the regression gate.
+
+**The fan-out is closed, not merely bounded.** Every other `Mint::parse` caller
+in the tree is either a collateral Mint — zero-extension by declaration — or
+already slices to `MINT_BYTES` before parsing, which is extension-tolerant.
+Exactly one caller was wrong.
 
 ## The doctrine this cost
 
