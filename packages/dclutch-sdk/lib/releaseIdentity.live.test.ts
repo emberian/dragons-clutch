@@ -29,6 +29,17 @@ const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
  */
 const CURRENT_ACTIVATION_CACHE_V1 = '77PrN82TY4rrQwUjyKBM14A1n3qxktHrN8vd2RcacovK';
 
+/**
+ * A cache that is permanently NOT current: DEPLOY-1's, from cohort-1.
+ *
+ * Activation never deletes a superseded cache, so this address will stay
+ * decodable, Registry-owned and 1288 bytes wide forever, and will never again
+ * describe the running programs. That makes it a stable input for the
+ * follow-the-chain test — unlike the manifest's hint, which is supposed to be
+ * current and so cannot be relied on to be stale.
+ */
+const SUPERSEDED_ACTIVATION_CACHE_V1 = 'Hz6BXyxyf66teABb6Pr6ev9jCZBJJpP5Q9p4sYJwJSkj';
+
 describe('live devnet release identity', () => {
   live('reads the release the chain is running and selects this build\'s ABI table for it', async () => {
     const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
@@ -70,18 +81,24 @@ describe('live devnet release identity', () => {
   /**
    * The manifest constant is a HINT, and this proves the client outlives it.
    *
-   * `DEVNET_DEPLOYMENT_V1.activationCache` names
-   * `Hz6BXyxyf66teABb6Pr6ev9jCZBJJpP5Q9p4sYJwJSkj` — DEPLOY-1's cache, from
-   * cohort-1. Devnet has since run cohorts 2, 3, 4 and 5, each activating a new
-   * release set at a new cache address, and the shipped constant never followed.
-   * The stale cache still exists, is still Registry-owned and still carries
-   * `DCLTACT1`, so every cheap health check on it passes; only its CONTENT is
-   * four cohorts behind, and its pinned deployment slots match nothing on chain.
+   * The hint under test is named here rather than read from the manifest, and
+   * that is the point of this edit. When this test was written the manifest
+   * itself shipped a stale address, so passing `DEVNET_DEPLOYMENT_V1
+   * .activationCache` exercised the follow path by accident — and the test would
+   * have started passing VACUOUSLY, through the manifest branch, the moment
+   * anyone fixed the manifest. Which is what happened.
+   *
+   * `SUPERSEDED_ACTIVATION_CACHE_V1` is cohort-1's cache from DEPLOY-1. A
+   * superseded cache is never deleted, so it is a permanent devnet fact and a
+   * permanent input: it still exists, is still Registry-owned, still carries
+   * `DCLTACT1` and still has the exact 1288-byte width, so every cheap health
+   * check on it passes. Only its CONTENT is behind, and its pinned deployment
+   * slots match nothing on chain.
    *
    * That matters because `ArtifactReleaseV1::authenticate_deployment` pins the
    * deployment slot and ELF digest on chain, so every route that reauthenticates
    * a role against this cache must refuse — and `CORE_FOUND_ACCOUNT_LABELS_V3`
-   * index 24 is the activation cache, so a client that trusted the constant
+   * index 24 is the activation cache, so a client that trusted a stale constant
    * would pass this dead address straight into the 37-account Found frame.
    *
    * Opening a session against that stale hint must nonetheless succeed, by
@@ -89,7 +106,39 @@ describe('live devnet release identity', () => {
    * stays green when cohort-6 lands and moves the answer again, which is the
    * entire point: no human updates a constant.
    */
-  live('opens a working session from the STALE manifest hint by following the chain', async () => {
+  live('opens a working session from a SUPERSEDED hint by following the chain', async () => {
+    const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
+    const hint = SUPERSEDED_ACTIVATION_CACHE_V1;
+
+    const session = await openReleaseBoundSessionV1(client, {
+      registryProgram: DEVNET_DEPLOYMENT_V1.programs.registry,
+      activationCache: hint,
+    });
+
+    expect(session.identity.activationCache).not.toBe(hint);
+    expect(session.source.kind).toBe('discovered');
+    if (session.source.kind !== 'discovered') throw new Error('unreachable');
+    expect(session.source.supersededManifestCache).toBe(hint);
+    expect(session.source.note).toContain(hint);
+    expect(session.source.note).toContain(session.identity.activationCache);
+
+    // And the stale hint really is stale, named slot by slot.
+    const stale = await readExecutionReleaseIdentityV1(client, {
+      registryProgram: DEVNET_DEPLOYMENT_V1.programs.registry,
+      activationCache: hint,
+    });
+    await expect(authenticateReleaseCurrencyV1(client, stale)).rejects.toThrow(/SUPERSEDED/);
+  }, 60_000);
+
+  /**
+   * And the manifest's own hint, whatever it currently says, opens a session.
+   *
+   * This does NOT assert which branch it takes. Right after a generation it is
+   * `manifest`; after the next cohort lands it becomes `discovered`; both are
+   * correct and the client is upgrade-proof either way. Asserting the branch
+   * here would just re-create the coupling the test above was freed from.
+   */
+  live('opens a working session from whatever the manifest currently ships', async () => {
     const client = new SolanaRpcClient(DEVNET_DEPLOYMENT_V1.endpoint);
     const shipped = DEVNET_DEPLOYMENT_V1.activationCache;
     expect(shipped).not.toBeNull();
@@ -99,19 +148,8 @@ describe('live devnet release identity', () => {
       activationCache: shipped,
     });
 
-    expect(session.identity.activationCache).not.toBe(shipped);
-    expect(session.source.kind).toBe('discovered');
-    if (session.source.kind !== 'discovered') throw new Error('unreachable');
-    expect(session.source.supersededManifestCache).toBe(shipped);
-    expect(session.source.note).toContain(shipped as string);
-    expect(session.source.note).toContain(session.identity.activationCache);
-
-    // And the stale hint really is stale, named slot by slot.
-    const stale = await readExecutionReleaseIdentityV1(client, {
-      registryProgram: DEVNET_DEPLOYMENT_V1.programs.registry,
-      activationCache: shipped as string,
-    });
-    await expect(authenticateReleaseCurrencyV1(client, stale)).rejects.toThrow(/SUPERSEDED/);
+    await expect(authenticateReleaseCurrencyV1(client, session.identity)).resolves.toBeUndefined();
+    expect(['manifest', 'discovered']).toContain(session.source.kind);
   }, 60_000);
 
   live('discovery alone finds the current cache with no hint at all', async () => {

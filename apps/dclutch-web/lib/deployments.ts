@@ -59,7 +59,20 @@ export type DeploymentV1 = Readonly<{
   genesisHash: string | null;
   /** The seven role program ids. */
   programs: Readonly<Record<ProtocolRoleV1, string>>;
-  /** The Registry activation cache, when the deployment has activated a release set. */
+  /**
+   * A BOOTSTRAP HINT for the Registry activation cache — never the answer.
+   *
+   * A cohort activates a new release set, which mints a new cache at a new PDA,
+   * and superseded caches are never deleted. So this address ages the moment a
+   * cohort lands, and it will age again. `openReleaseBoundSessionV1` treats it
+   * as a hint it may follow past: it reads the hint, and when the hint's pinned
+   * deployment slots no longer match the live programs it discovers the current
+   * cache from the chain and binds to that instead. A stale value here costs a
+   * reader accuracy, not a session.
+   *
+   * Keep it honest anyway, and generate it rather than typing it:
+   * `node packages/dclutch-sdk/scripts/derive-activation-hint.mjs --write`.
+   */
   activationCache: string | null;
   /** One sentence: where these addresses come from. */
   provenance: string;
@@ -85,7 +98,15 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
     trading: '5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk',
     core: 'HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N',
   }),
-  activationCache: 'Hz6BXyxyf66teABb6Pr6ev9jCZBJJpP5Q9p4sYJwJSkj',
+  // Bootstrap hint, GENERATED — do not hand-edit. Regenerate with
+  // `node packages/dclutch-sdk/scripts/derive-activation-hint.mjs --write`.
+  //
+  // The one cache of those the Registry owns whose five pinned deployment
+  // slots equalled the five live ProgramData slots in a single reading.
+  // Release set 094336271db1146f09f6ff419488af2d3174da762d3b2b468fac635754aa862d,
+  // pinning Core at deployment slot 489926024.
+  // A session follows past this when it ages out; a reader cannot.
+  activationCache: '77PrN82TY4rrQwUjyKBM14A1n3qxktHrN8vd2RcacovK',
   provenance: 'DEPLOY-1’s permanent devnet substrate, deployed 2026-08-27 and byte-verified (docs/evidence/DEPLOY_1.md §2).',
 });
 
