@@ -86,10 +86,10 @@ pub const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3: usize =
 pub const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3: usize =
     GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3 + 1;
 
-const FOUND_RAW: usize = 0;
-const LOCK_RAW: usize = 1;
-const REALIZE_RAW: usize = 2;
-const CLAIMS_RAW: usize = 3;
+pub(crate) const FOUND_RAW: usize = 0;
+pub(crate) const LOCK_RAW: usize = 1;
+pub(crate) const REALIZE_RAW: usize = 2;
+pub(crate) const CLAIMS_RAW: usize = 3;
 
 const CORE_FOUND_CORE_PROGRAM: usize = 13;
 /// Trading-program index inside the Found window.
@@ -247,14 +247,14 @@ pub fn process_generic_market_founding_v3(
     Ok(())
 }
 
-struct GenericFoundingFrameV1<'accounts, 'info> {
-    lock: &'accounts [AccountInfo<'info>],
-    found: &'accounts [AccountInfo<'info>],
-    realize: &'accounts [AccountInfo<'info>],
-    claims: &'accounts [AccountInfo<'info>],
-    open: &'accounts [AccountInfo<'info>],
-    checkpoint: &'accounts AccountInfo<'info>,
-    funding_count: usize,
+pub(crate) struct GenericFoundingFrameV1<'accounts, 'info> {
+    pub(crate) lock: &'accounts [AccountInfo<'info>],
+    pub(crate) found: &'accounts [AccountInfo<'info>],
+    pub(crate) realize: &'accounts [AccountInfo<'info>],
+    pub(crate) claims: &'accounts [AccountInfo<'info>],
+    pub(crate) open: &'accounts [AccountInfo<'info>],
+    pub(crate) checkpoint: &'accounts AccountInfo<'info>,
+    pub(crate) funding_count: usize,
 }
 
 impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
@@ -384,7 +384,7 @@ fn staged_project_found_digest_v1(
 }
 
 #[inline(never)]
-fn authenticate_staged_checkpoint_v1(
+pub(crate) fn authenticate_staged_checkpoint_v1(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     found: &GenericFoundingRequestV1,
@@ -535,7 +535,7 @@ fn founding_custody_ladder_digest_v1(
     Ok(hash(&preimage).to_bytes())
 }
 
-fn authenticate_unchanged_pending_ledgers_v1(
+pub(crate) fn authenticate_unchanged_pending_ledgers_v1(
     frame: &GenericFoundingFrameV1<'_, '_>,
     checkpoint: ControllerFundingCheckpointV1,
 ) -> Result<(), ProgramError> {
@@ -543,7 +543,7 @@ fn authenticate_unchanged_pending_ledgers_v1(
 }
 
 #[inline(never)]
-fn close_open_consumed_checkpoint_v1(
+pub(crate) fn close_open_consumed_checkpoint_v1(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     checkpoint: ControllerFundingCheckpointV1,
@@ -588,7 +588,7 @@ fn close_open_consumed_checkpoint_v1(
 }
 
 #[inline(never)]
-fn authenticate_request_join(
+pub(crate) fn authenticate_request_join(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     found: &GenericFoundingRequestV1,
@@ -767,7 +767,7 @@ fn projected_caller_from_bump_v3(
 ///
 /// Core and Claims independently canonical-search the same complete seed
 /// vector. The bump is invocation evidence, never persisted authority.
-fn role_caller_from_bump_v3(
+pub(crate) fn role_caller_from_bump_v3(
     seeds: &CallerAuthoritySeedsV1,
     program_id: &Pubkey,
     bump: u8,
@@ -790,7 +790,7 @@ fn role_caller_from_bump_v3(
 }
 
 #[inline(never)]
-fn execute_lock(
+pub(crate) fn execute_lock(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     request: &ProjectedCustodyRequestV1,
@@ -839,7 +839,7 @@ fn execute_lock(
 }
 
 #[inline(never)]
-fn execute_core_found(
+pub(crate) fn execute_core_found(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     request: &GenericFoundingRequestV1,
@@ -880,7 +880,7 @@ fn execute_core_found(
 }
 
 #[inline(never)]
-fn authenticate_found_to_claims(
+pub(crate) fn authenticate_found_to_claims(
     frame: &GenericFoundingFrameV1<'_, '_>,
     found_ack_raw: &[u8],
     claims: &ClaimsFoundingRequestV5,
@@ -898,7 +898,7 @@ fn authenticate_found_to_claims(
 }
 
 #[inline(never)]
-fn execute_realize(
+pub(crate) fn execute_realize(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     request: &ProjectedCustodyRequestV1,
@@ -932,7 +932,7 @@ fn execute_realize(
 }
 
 #[inline(never)]
-fn authenticate_realize_receipt(
+pub(crate) fn authenticate_realize_receipt(
     frame: &GenericFoundingFrameV1<'_, '_>,
     found: &GenericFoundingRequestV1,
     realize: &ProjectedCustodyRequestV1,
@@ -970,7 +970,7 @@ fn authenticate_realize_receipt(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn execute_claims(
+pub(crate) fn execute_claims(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     request: &ClaimsFoundingRequestV5,
@@ -1163,7 +1163,7 @@ fn authenticate_core_ack(
 }
 
 #[inline(never)]
-fn invoke_child<'info>(
+pub(crate) fn invoke_child<'info>(
     child_program: &AccountInfo<'info>,
     accounts: &[AccountInfo<'info>],
     data: &[u8],
@@ -1201,7 +1201,7 @@ fn invoke_child<'info>(
     Ok(returned)
 }
 
-fn caller_seeds(
+pub(crate) fn caller_seeds(
     request: &GenericFoundingRequestV1,
     request_digest: [u8; 32],
 ) -> Result<CallerAuthoritySeedsV1, ProgramError> {
@@ -1239,7 +1239,7 @@ pub(crate) fn authenticate_instructions_sysvar_v1(
     Ok(())
 }
 
-fn authenticate_raw_accounts(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
+pub(crate) fn authenticate_raw_accounts(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
     if accounts.len() != GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 {
         return Err(TradingSbfError::Content.into());
     }
@@ -1257,7 +1257,7 @@ fn authenticate_raw_accounts(accounts: &[AccountInfo<'_>]) -> Result<(), Program
     Ok(())
 }
 
-fn raw_account_bytes(
+pub(crate) fn raw_account_bytes(
     accounts: &[AccountInfo<'_>],
     index: usize,
     width: usize,
@@ -1273,7 +1273,7 @@ fn raw_account_bytes(
         .map_err(|_| TradingSbfError::Content.into())
 }
 
-fn decode_found_request(bytes: &[u8]) -> Result<Box<GenericFoundingRequestV1>, ProgramError> {
+pub(crate) fn decode_found_request(bytes: &[u8]) -> Result<Box<GenericFoundingRequestV1>, ProgramError> {
     let request = GenericFoundingRequestV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
     if request.stage() != GenericFoundingStageV1::FoundAndPermit {
         return Err(TradingSbfError::Content.into());
@@ -1281,13 +1281,13 @@ fn decode_found_request(bytes: &[u8]) -> Result<Box<GenericFoundingRequestV1>, P
     Ok(Box::new(request))
 }
 
-fn decode_projected_request(bytes: &[u8]) -> Result<Box<ProjectedCustodyRequestV1>, ProgramError> {
+pub(crate) fn decode_projected_request(bytes: &[u8]) -> Result<Box<ProjectedCustodyRequestV1>, ProgramError> {
     ProjectedCustodyRequestV1::decode(bytes)
         .map(Box::new)
         .map_err(|_| TradingSbfError::Content.into())
 }
 
-fn decode_claims_request(bytes: &[u8]) -> Result<Box<ClaimsFoundingRequestV5>, ProgramError> {
+pub(crate) fn decode_claims_request(bytes: &[u8]) -> Result<Box<ClaimsFoundingRequestV5>, ProgramError> {
     ClaimsFoundingRequestV5::decode(bytes)
         .map(Box::new)
         .map_err(|_| TradingSbfError::Content.into())
@@ -1311,7 +1311,7 @@ fn decode_claims_receipt(bytes: &[u8]) -> Result<Box<ClaimsFoundingReceiptV5>, P
         .map_err(|_| TradingSbfError::Transition.into())
 }
 
-fn account<'accounts, 'info>(
+pub(crate) fn account<'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],
     index: usize,
 ) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
@@ -1320,7 +1320,7 @@ fn account<'accounts, 'info>(
         .ok_or_else(|| TradingSbfError::Content.into())
 }
 
-fn subslice<'accounts, 'info>(
+pub(crate) fn subslice<'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],
     start: usize,
     count: usize,

@@ -1196,9 +1196,12 @@ const fn hot_cu_profile_lifts_every_route_v1() -> bool {
 /// carry `RequestHeapFrame` and to present the instructions sysvar - without
 /// both, the declaration is inert and the route keeps the default ceiling.
 ///
-/// The two entries are the one-time, ALT-backed founding transactions:
+/// The entries are the one-time, ALT-backed founding transactions:
 ///
-/// - `DCLTGMF3`, the atomic Lock/Found/Realize/Claims/Open route;
+/// - `DCLTGMF3`, the composed Lock/Found/Realize/Claims/Open route;
+/// - `DCLTGFP1`, the split founding's stage 1 — the same frame and the same
+///   child allocation profile minus only the Open window, so it inherits the
+///   same declaration for the same measured reason;
 /// - `DCLTPCB2`, projected-Custody bootstrap, which commit `328fead` measured
 ///   dying out of memory and diagnosed precisely: it "holds three stages' worth
 ///   of allocations live [...] against an allocator that never frees, so its
@@ -1215,6 +1218,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
         feature = "dealer-family"
     ))]
     if crate::generic_market_founding_v1::is_generic_market_founding_v3(instruction_data)
+        || crate::generic_founding_stages_v1::is_generic_found_and_permit_v1(instruction_data)
         || crate::projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2(
             instruction_data,
         )
@@ -2770,8 +2774,16 @@ mod tests {
                 founding[..8].copy_from_slice(
                     &crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V3,
                 );
+                let mut stage1 = vec![
+                    0_u8;
+                    crate::generic_founding_stages_v1::GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1
+                ];
+                stage1[..8].copy_from_slice(
+                    &crate::generic_founding_stages_v1::GENERIC_FOUND_AND_PERMIT_MAGIC_V1,
+                );
                 for magic in [
                     founding,
+                    stage1,
                     crate::projected_custody_bootstrap_v1::PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2
                         .to_vec(),
                 ] {
@@ -2783,6 +2795,21 @@ mod tests {
                         magic.get(..7).expect("prefix")
                     ));
                 }
+                // The split founding's stage 2 stays on the 32 KiB discipline:
+                // its frame is two raw accounts and Core's 21-account Open
+                // window, and keeping it off this list is a deliberate
+                // property, not an omission.
+                let mut open = vec![
+                    0_u8;
+                    crate::generic_founding_stages_v1::GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1
+                ];
+                open[..8].copy_from_slice(
+                    &crate::generic_founding_stages_v1::GENERIC_MARKET_OPEN_MAGIC_V1,
+                );
+                assert!(crate::generic_founding_stages_v1::is_generic_market_open_v1(
+                    &open
+                ));
+                assert!(!declares_extended_heap_profile_v1(&open));
             }
         }
     }

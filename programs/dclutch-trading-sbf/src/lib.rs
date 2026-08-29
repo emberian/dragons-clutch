@@ -86,6 +86,13 @@ mod dynamic_accounts_v4;
 pub mod entrypoint_adapter;
 /// Registry-authenticated family-neutral Execution Strategy V2 admission.
 pub mod execution_strategy_v2;
+/// Two-stage generic Market founding: Found-and-permit, then commit-last Open.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+pub mod generic_founding_stages_v1;
 /// Generic atomic Custody→Core→Claims Market founding and commit-last Open.
 #[cfg(any(
     feature = "families",
@@ -374,6 +381,30 @@ pub fn process_instruction(
     ))]
     if generic_market_founding_v1::is_generic_market_founding_v3(instruction_data) {
         return generic_market_founding_v1::process_generic_market_founding_v3(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if generic_founding_stages_v1::is_generic_found_and_permit_v1(instruction_data) {
+        return generic_founding_stages_v1::process_generic_found_and_permit_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if generic_founding_stages_v1::is_generic_market_open_v1(instruction_data) {
+        return generic_founding_stages_v1::process_generic_market_open_v1(
             program_id,
             accounts,
             instruction_data,
