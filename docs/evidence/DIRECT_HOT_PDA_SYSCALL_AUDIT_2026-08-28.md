@@ -92,4 +92,3 @@ shape removes 15.
   slot, authority, and ELF-pin refusals.
 - Custody tests reproduce the exact authority address from the carried bump and
   prove a wrong bump cannot reproduce that key.
-
