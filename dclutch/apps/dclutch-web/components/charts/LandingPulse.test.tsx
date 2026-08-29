@@ -27,9 +27,14 @@ describe('LandingPulse', () => {
       ]),
     });
     expect(state.stats[0]).toMatchObject({ label: 'Current markets listed', value: '0' });
-    expect(state.provenance).toContain('zero current compatible Markets are listed');
-    expect(state.provenance).toContain('2 historical DCLTCOR2 Market accounts');
-    expect(state.provenance).toContain('not listed as current');
+    // The facts are unchanged; who they are addressed to is not. A reader on
+    // the landing page does not know what DCLTCOR2 or a 352-byte layout is,
+    // and does not need to in order to understand that some older markets
+    // exist and are not in the count.
+    expect(state.provenance).toContain('holds no market this page can read');
+    expect(state.provenance).toContain('2 older markets');
+    expect(state.provenance).toContain('not counted above');
     expect(state.provenance).not.toContain('owns no Market');
+    expect(state.provenance).not.toContain('DCLTCOR2');
   });
 });
