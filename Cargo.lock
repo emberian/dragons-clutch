@@ -2531,6 +2531,7 @@ dependencies = [
  "dclutch-pyth-svm",
  "dclutch-record-contract",
  "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-relay-contract",

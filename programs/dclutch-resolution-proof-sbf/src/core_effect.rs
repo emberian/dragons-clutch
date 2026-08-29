@@ -57,7 +57,7 @@ use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
-    authenticate_rent, deployment_observation,
+    authenticate_rent, cached_deployment_observation,
 };
 
 /// Exact fixed instruction width for one canonical Core envelope and Resolution request.
@@ -916,17 +916,17 @@ fn authenticate_direct_close_release(
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    core.authenticate_current_deployment(deployment_observation(
+    core.authenticate_current_deployment(cached_deployment_observation(
         direct.core_program,
         direct.core_programdata,
-        core.release().programdata(),
+        core.release(),
     )?)
     .map_err(|_| ResolutionError::ResolutionDeployment)?;
     resolution
-        .authenticate_current_deployment(deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             direct.resolution_program,
             direct.resolution_programdata,
-            resolution.release().programdata(),
+            resolution.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
@@ -1107,17 +1107,17 @@ fn authenticate_direct_activation(
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    core.authenticate_current_deployment(deployment_observation(
+    core.authenticate_current_deployment(cached_deployment_observation(
         direct.core_program,
         direct.core_programdata,
-        core.release().programdata(),
+        core.release(),
     )?)
     .map_err(|_| ResolutionError::ResolutionDeployment)?;
     resolution
-        .authenticate_current_deployment(deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             direct.resolution_program,
             direct.resolution_programdata,
-            resolution.release().programdata(),
+            resolution.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
@@ -1804,17 +1804,17 @@ fn authenticate_activation(
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    let core_observation = deployment_observation(
+    let core_observation = cached_deployment_observation(
         common.core_program,
         common.core_programdata,
-        core.release().programdata(),
+        core.release(),
     )?;
     core.authenticate_current_deployment(core_observation)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let resolution_observation = deployment_observation(
+    let resolution_observation = cached_deployment_observation(
         common.resolution_program,
         common.resolution_programdata,
-        resolution.release().programdata(),
+        resolution.release(),
     )?;
     resolution
         .authenticate_current_deployment(resolution_observation)
