@@ -1554,7 +1554,11 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
     // does not exist yet: every projected-Custody stage asserts the inverse of
     // a live Market, so the Found37 Market above cannot be reused.
     let mut founding_custody_context = None;
-    for lane in [PrestateLaneV1::Founding, PrestateLaneV1::SourceAbort] {
+    // The success driver owns exactly one opening ladder. SourceAbort is a
+    // separately named validation lane with its own terminal evidence; it must
+    // never make an otherwise-complete public/private founding wait for an
+    // expiry or append cleanup transactions to the success receipt.
+    for lane in SUCCESS_PRESTATE_LANES_V1 {
         let context = execute_projected_custody_bootstrap(
             rpc,
             plan,
@@ -1911,9 +1915,11 @@ fn authenticate_prepared_resume_assets_v1(
     context: &RecoveredFoundingContextV1,
 ) -> Result<()> {
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
-    let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY).pubkey();
-    let source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER).pubkey();
-    let projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS).pubkey();
+    // Reauthentication is read-only with respect to the persisted role
+    // issuance sequence. The resumed executor below must still consume the
+    // exact index-0 keys named by DCLTCFQ1; advancing here would silently move
+    // every signer/PDA in the suffix to index 1.
+    let (beneficiary, source_funder, projection_witness) = prepared_resume_role_pubkeys_v1(forge)?;
     for (label, key) in [
         ("collateral_wallet", context.collateral_wallet),
         ("founding_source_funder", source_funder),
@@ -1981,6 +1987,14 @@ fn authenticate_prepared_resume_assets_v1(
     Ok(())
 }
 
+fn prepared_resume_role_pubkeys_v1(forge: &KeyForge) -> Result<(Pubkey, Pubkey, Pubkey)> {
+    Ok((
+        forge.peek_pubkey(role::FOUNDING_BENEFICIARY)?,
+        forge.peek_pubkey(role::FOUNDING_SOURCE_FUNDER)?,
+        forge.peek_pubkey(role::FOUNDING_PROJECTION_WITNESS)?,
+    ))
+}
+
 /// Resume after DCLTCFQ1 finalized but before DCLTPCB2 was planned. The
 /// durable checkpoint reconstructs every prefix coordinate and exact mutable
 /// balance; this route enters at DCLTPCB2 and never recreates collateral,
@@ -2040,29 +2054,6 @@ pub(crate) fn resume_found_market_from_prepared_checkpoint(
         context.found31_market,
         PrestateLaneV1::Founding,
         Some(prepared_checkpoint),
-        payer,
-        forge,
-        transactions,
-        &mut accounts,
-        &mut completed,
-        prepared_checkpoint
-            .local_participant_fixture_liquidity
-            .as_ref(),
-        checkpoint,
-        submission_recorder.as_deref_mut(),
-    )?;
-    execute_projected_custody_bootstrap(
-        rpc,
-        plan,
-        input,
-        &context.records,
-        context.identity_template,
-        context.product,
-        context.mint,
-        context.collateral_wallet,
-        context.found31_market,
-        PrestateLaneV1::SourceAbort,
-        None,
         payer,
         forge,
         transactions,
@@ -4966,6 +4957,11 @@ enum PrestateLaneV1 {
     /// broken at the moment somebody needs it.
     SourceAbort,
 }
+
+/// The public/private success receipt has one and only one projected-Custody
+/// lane. Expiry cleanup is driven by its separately named validation command
+/// and therefore never appears as an incidental suffix here.
+const SUCCESS_PRESTATE_LANES_V1: [PrestateLaneV1; 1] = [PrestateLaneV1::Founding];
 
 impl PrestateLaneV1 {
     /// The generation this lane's Market occupies.
@@ -8851,6 +8847,33 @@ mod tests {
         input.local_participant_fixture_liquidity_atoms =
             LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1 - 1;
         assert!(SourceAbortExpiryPolicyV1::from_input(&input).is_err());
+    }
+
+    #[test]
+    fn success_policy_excludes_source_abort_and_prepared_auth_preserves_role_indices() {
+        assert_eq!(SUCCESS_PRESTATE_LANES_V1, [PrestateLaneV1::Founding]);
+
+        let forge = KeyForge::parse(
+            Some("1111111111111111111111111111111111111111111111111111111111111111"),
+            "http://127.0.0.1:8899",
+        )
+        .expect("loopback seeded forge");
+        let expected = prepared_resume_role_pubkeys_v1(&forge).expect("read-only role projection");
+        assert_eq!(
+            forge.keypair(role::FOUNDING_BENEFICIARY).pubkey(),
+            expected.0,
+            "Prepared authentication must not advance the beneficiary role"
+        );
+        assert_eq!(
+            forge.keypair(role::FOUNDING_SOURCE_FUNDER).pubkey(),
+            expected.1,
+            "Prepared authentication must not advance the source-funder role"
+        );
+        assert_eq!(
+            forge.keypair(role::FOUNDING_PROJECTION_WITNESS).pubkey(),
+            expected.2,
+            "Prepared authentication must not advance the projection-witness role"
+        );
     }
 
     #[test]
