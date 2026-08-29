@@ -110,9 +110,9 @@ const PRODUCER_FACTS_FORMAT: &str = "dclutch-flagship-pyth-update-facts-v1";
 const PRODUCER_CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-producer-v1";
 const LOCAL_PRODUCER_CHECKPOINT_FORMAT: &str =
     "dclutch-owned-loopback-flagship-resolution-producer-v1";
-const TABLE_PROVISION_JOURNAL_FORMAT: &str = "dclutch-flagship-resolution-alt-journal-v2";
+const TABLE_PROVISION_JOURNAL_FORMAT: &str = "dclutch-flagship-resolution-alt-journal-v3";
 const LOCAL_TABLE_PROVISION_JOURNAL_FORMAT: &str =
-    "dclutch-owned-loopback-flagship-resolution-alt-journal-v2";
+    "dclutch-owned-loopback-flagship-resolution-alt-journal-v3";
 const CAMPAIGN_FORMAT: &str = "dclutch-successor-campaign-report-v1";
 const PLAN_FORMAT: &str = "dclutch-local-successor-infrastructure-plan-v2";
 /// Provisional operator delay after the terminal window. It is not a protocol
@@ -411,14 +411,15 @@ struct TableProvisionIntentV1 {
 enum DurablePhaseV1 {
     Planned,
     SignedNotSubmitted,
+    Dispatching,
     Submitted,
     Finalized,
 }
 
 fn authenticate_send_boundary(phase: DurablePhaseV1) -> Result<()> {
-    if phase != DurablePhaseV1::Submitted {
+    if phase != DurablePhaseV1::Dispatching {
         return Err(Error::new(
-            "durable packet send requires a fsynced Submitted phase",
+            "durable packet send requires a fsynced Dispatching phase",
         ));
     }
     Ok(())
@@ -1992,7 +1993,9 @@ impl StagePlanV1 {
                     && self.signed_transaction_sha256.is_none()
                     && self.expected_signature.is_none()
                     && self.finalized.is_none() => {}
-            DurablePhaseV1::SignedNotSubmitted | DurablePhaseV1::Submitted
+            DurablePhaseV1::SignedNotSubmitted
+            | DurablePhaseV1::Dispatching
+            | DurablePhaseV1::Submitted
                 if self.signed_transaction_base64.is_some()
                     && self.signed_transaction_sha256.is_some()
                     && self.expected_signature.is_some()
@@ -2666,7 +2669,9 @@ fn load_table_journal(
                 && journal.expected_signature.is_none()
                 && journal.finalized.is_none()
         }
-        DurablePhaseV1::SignedNotSubmitted | DurablePhaseV1::Submitted => {
+        DurablePhaseV1::SignedNotSubmitted
+        | DurablePhaseV1::Dispatching
+        | DurablePhaseV1::Submitted => {
             journal.intent.is_some()
                 && journal.intent_sha256.is_some()
                 && journal.signed_transaction_base64.is_some()
@@ -4100,6 +4105,35 @@ fn table_message_balances(
     Ok((slot, balances, states))
 }
 
+fn authenticate_table_dispatch_prestate(
+    rpc: &mut Rpc,
+    intent: &TableProvisionIntentV1,
+    message: &Message,
+) -> Result<()> {
+    let current_height = rpc
+        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+        .as_u64()
+        .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))?;
+    if current_height > intent.last_valid_block_height {
+        return Err(Error::new(
+            "durable table packet expired before dispatch or identical-byte recovery",
+        ));
+    }
+    let (_, current_balances, current_accounts) =
+        table_message_balances(rpc, message, intent.observation_slot)?;
+    if current_balances != intent.pre_balances || current_accounts != intent.pre_accounts {
+        return Err(Error::new(
+            "table message prestate changed before dispatch or identical-byte recovery",
+        ));
+    }
+    if table_fee_for_message(rpc, &intent.unsigned_message_base64)? != intent.exact_fee_lamports {
+        return Err(Error::new(
+            "table exact fee differs from the canonical durable message",
+        ));
+    }
+    Ok(())
+}
+
 fn reconcile_table_attempt(
     rpc: &mut Rpc,
     path: &Path,
@@ -4176,7 +4210,34 @@ fn run_table_provisioner(
         let intent = journal.intent.as_ref().expect("checked intent");
         validate_table_intent(&checkpoint, &selected, intent)?;
         match journal.phase {
-            DurablePhaseV1::SignedNotSubmitted | DurablePhaseV1::Submitted => {
+            DurablePhaseV1::SignedNotSubmitted => {
+                if !arguments.execute {
+                    println!("{}", serde_json::to_string_pretty(&journal)?);
+                    return Ok(());
+                }
+                validate_table_signed_packet(&journal)?;
+                let message = validate_table_intent(&checkpoint, &selected, intent)?;
+                authenticate_table_dispatch_prestate(&mut rpc, intent, &message)?;
+                journal.phase = DurablePhaseV1::Dispatching;
+                write_json(&journal_path, &journal)?;
+            }
+            DurablePhaseV1::Dispatching => {
+                if reconcile_table_attempt(
+                    &mut rpc,
+                    &journal_path,
+                    &checkpoint,
+                    &selected,
+                    &mut journal,
+                )? {
+                    println!("{}", serde_json::to_string_pretty(&journal)?);
+                    return Ok(());
+                }
+                if !arguments.execute {
+                    println!("{}", serde_json::to_string_pretty(&journal)?);
+                    return Ok(());
+                }
+            }
+            DurablePhaseV1::Submitted => {
                 reconcile_table_attempt(
                     &mut rpc,
                     &journal_path,
@@ -4212,6 +4273,23 @@ fn run_table_provisioner(
                 return Ok(());
             }
             DurablePhaseV1::Planned => {}
+        }
+        if journal.phase == DurablePhaseV1::Dispatching {
+            let intent = journal.intent.as_ref().expect("checked intent");
+            let message = validate_table_intent(&checkpoint, &selected, intent)?;
+            authenticate_table_dispatch_prestate(&mut rpc, intent, &message)?;
+            submit_journaled_table_transaction(&mut rpc, &journal)?;
+            journal.phase = DurablePhaseV1::Submitted;
+            write_json(&journal_path, &journal)?;
+            reconcile_table_attempt(
+                &mut rpc,
+                &journal_path,
+                &checkpoint,
+                &selected,
+                &mut journal,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&journal)?);
+            return Ok(());
         }
     }
     if journal.intent.is_none() {
@@ -4292,27 +4370,7 @@ fn run_table_provisioner(
         .clone()
         .ok_or_else(|| Error::new("planned table intent vanished"))?;
     let message = validate_table_intent(&checkpoint, &selected, &intent)?;
-    let current_height = rpc
-        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
-        .as_u64()
-        .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))?;
-    if current_height > intent.last_valid_block_height {
-        return Err(Error::new(
-            "planned table blockhash expired before key access; preserve the journal and produce a new authorized attempt",
-        ));
-    }
-    let (_, current_balances, current_accounts) =
-        table_message_balances(&mut rpc, &message, intent.observation_slot)?;
-    if current_balances != intent.pre_balances || current_accounts != intent.pre_accounts {
-        return Err(Error::new("table message prestate changed before signing"));
-    }
-    if table_fee_for_message(&mut rpc, &intent.unsigned_message_base64)?
-        != intent.exact_fee_lamports
-    {
-        return Err(Error::new(
-            "table exact fee differs from the canonical durable message",
-        ));
-    }
+    authenticate_table_dispatch_prestate(&mut rpc, &intent, &message)?;
     let authority = load_keypair(
         arguments.authority_keypair.as_ref(),
         "authority",
@@ -4333,16 +4391,16 @@ fn run_table_provisioner(
     journal.phase = DurablePhaseV1::SignedNotSubmitted;
     validate_table_signed_packet(&journal)?;
     write_json(&journal_path, &journal)?;
-    let (_, current_balances, current_accounts) =
-        table_message_balances(&mut rpc, &transaction.message, intent.observation_slot)?;
-    if current_balances != intent.pre_balances || current_accounts != intent.pre_accounts {
-        return Err(Error::new("table message prestate changed after signing"));
-    }
-    // Submitted is durable before the sole send. A crash after this write is poll-only,
-    // so the exact packet can never be replayed by recovery.
-    journal.phase = DurablePhaseV1::Submitted;
+    authenticate_table_dispatch_prestate(&mut rpc, &intent, &transaction.message)?;
+    // Dispatching is durable before transport. Recovery polls first and may
+    // resend only these identical authenticated bytes under the same signature.
+    journal.phase = DurablePhaseV1::Dispatching;
     write_json(&journal_path, &journal)?;
     submit_journaled_table_transaction(&mut rpc, &journal)?;
+    // Submitted is written only after the transport call returned the exact
+    // durable signature. Recovery from here is permanently poll-only.
+    journal.phase = DurablePhaseV1::Submitted;
+    write_json(&journal_path, &journal)?;
     reconcile_table_attempt(
         &mut rpc,
         &journal_path,
@@ -5767,7 +5825,42 @@ fn run_with_expected_cluster(
                     }
                     continue;
                 }
-                DurablePhaseV1::SignedNotSubmitted | DurablePhaseV1::Submitted => {
+                DurablePhaseV1::SignedNotSubmitted => {
+                    if !arguments.execute {
+                        println!("{}", serde_json::to_string_pretty(&checkpoint)?);
+                        return Ok(());
+                    }
+                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
+                    plan.phase = DurablePhaseV1::Dispatching;
+                    write_checkpoint(&checkpoint_path, &checkpoint)?;
+                    continue;
+                }
+                DurablePhaseV1::Dispatching => {
+                    if let Some(finalized) = provider_transaction_status(&mut rpc, &selected, plan)?
+                    {
+                        let receipt = finish_provider_stage(
+                            &mut rpc,
+                            &selected,
+                            plan,
+                            finalized,
+                            expected_cluster,
+                        )?;
+                        plan.phase = DurablePhaseV1::Finalized;
+                        plan.finalized = Some(receipt);
+                        write_checkpoint(&checkpoint_path, &checkpoint)?;
+                        continue;
+                    }
+                    if !arguments.execute {
+                        println!("{}", serde_json::to_string_pretty(&checkpoint)?);
+                        return Ok(());
+                    }
+                    authenticate_provider_prestate(&mut rpc, &selected, plan, expected_cluster)?;
+                    send_provider_packet_once(&mut rpc, plan)?;
+                    plan.phase = DurablePhaseV1::Submitted;
+                    write_checkpoint(&checkpoint_path, &checkpoint)?;
+                    continue;
+                }
+                DurablePhaseV1::Submitted => {
                     if let Some(finalized) = provider_transaction_status(&mut rpc, &selected, plan)?
                     {
                         let receipt = finish_provider_stage(
@@ -5781,7 +5874,8 @@ fn run_with_expected_cluster(
                         plan.finalized = Some(receipt);
                         write_checkpoint(&checkpoint_path, &checkpoint)?;
                     }
-                    // Both ambiguous signed phases are permanently poll-only.
+                    // Submitted recovery is permanently poll-only and never
+                    // accesses a key or retransmits a packet.
                     println!("{}", serde_json::to_string_pretty(&checkpoint)?);
                     return Ok(());
                 }
@@ -5804,14 +5898,20 @@ fn run_with_expected_cluster(
                     checkpoint
                         .stage_plan
                         .as_mut()
-                        .ok_or_else(|| Error::new("submitted provider plan disappeared"))?
-                        .phase = DurablePhaseV1::Submitted;
+                        .ok_or_else(|| Error::new("dispatching provider plan disappeared"))?
+                        .phase = DurablePhaseV1::Dispatching;
                     write_checkpoint(&checkpoint_path, &checkpoint)?;
                     let plan = checkpoint
                         .stage_plan
                         .as_ref()
-                        .ok_or_else(|| Error::new("submitted provider plan disappeared"))?;
+                        .ok_or_else(|| Error::new("dispatching provider plan disappeared"))?;
                     send_provider_packet_once(&mut rpc, plan)?;
+                    checkpoint
+                        .stage_plan
+                        .as_mut()
+                        .ok_or_else(|| Error::new("submitted provider plan disappeared"))?
+                        .phase = DurablePhaseV1::Submitted;
+                    write_checkpoint(&checkpoint_path, &checkpoint)?;
                     if let Some(finalized) = provider_transaction_status(
                         &mut rpc,
                         &selected,
@@ -7152,6 +7252,26 @@ mod tests {
             )
             .is_err()
         );
+        let old_v2_journal = TableProvisionJournalV1 {
+            format: "dclutch-owned-loopback-flagship-resolution-alt-journal-v2".into(),
+            producer_identity_sha256: "aa".repeat(32),
+            phase: DurablePhaseV1::Finalized,
+            intent: None,
+            intent_sha256: None,
+            signed_transaction_base64: None,
+            signed_transaction_sha256: None,
+            expected_signature: None,
+            finalized: None,
+            receipts: Vec::new(),
+        };
+        assert!(
+            authenticate_table_journal_identity(
+                &old_v2_journal,
+                &"aa".repeat(32),
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -7242,10 +7362,11 @@ mod tests {
     }
 
     #[test]
-    fn durable_send_boundary_refuses_every_phase_except_fsynced_submitted() {
+    fn durable_send_boundary_refuses_every_phase_except_fsynced_dispatching() {
         assert!(authenticate_send_boundary(DurablePhaseV1::Planned).is_err());
         assert!(authenticate_send_boundary(DurablePhaseV1::SignedNotSubmitted).is_err());
-        assert!(authenticate_send_boundary(DurablePhaseV1::Submitted).is_ok());
+        assert!(authenticate_send_boundary(DurablePhaseV1::Dispatching).is_ok());
+        assert!(authenticate_send_boundary(DurablePhaseV1::Submitted).is_err());
         assert!(authenticate_send_boundary(DurablePhaseV1::Finalized).is_err());
     }
 
