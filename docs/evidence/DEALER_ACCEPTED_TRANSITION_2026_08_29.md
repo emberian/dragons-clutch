@@ -150,7 +150,7 @@ reason a delivery can be submitted at most once.
 derives that whole collateral graph once, in the direction Custody derives it, so
 no coordinate is chosen twice.
 
-## Two more protocol defects, both always-refuses
+## Two more always-refuses defects, and the guard that was missing
 
 The delivery leg was unreachable for **every batch that could ever have
 committed**, for two independent reasons. Both are the same family as the two
@@ -176,6 +176,21 @@ pinned by identity and excluded from that census.
 
 Worth generalizing: a "no unset field" guard written as a comparison against the
 default public key is a trap in any frame that carries the System program.
+
+A sweep of the tree for that pattern found no other live instance — two earlier
+ones already carry their own remediation comments — but it did turn up the mirror
+image. `build_dealer_scenario_reservation_bundle_v1` put whatever Clock, Rent and
+System program a caller handed it straight into the frame, with no pin and no
+census, while Custody refuses that frame unless all three are the real ones. It
+could build a packet the chain can only reject. The System program is again the
+coordinate that hid: because its address is thirty-two zero bytes, the fixture's
+made-up non-zero address looked more plausible than the real value, so the test
+asserting that packet's shape was asserting nothing. All three are now pinned by
+identity and the fixture names the real ones.
+
+Not a guard that cannot be satisfied, this time, but a guard that was never
+written — and both were found by the same question: which identities does the
+other side of this seam pin, and does this side agree?
 
 The operator's own activation test passed against the unbuildable frame, because
 it supplied an arbitrary producer and an arbitrary system program — neither of
