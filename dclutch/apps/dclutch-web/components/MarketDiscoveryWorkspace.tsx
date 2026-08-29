@@ -184,7 +184,7 @@ export default function MarketDiscoveryWorkspace() {
       <div>
         <p className="eyebrow">Markets on {deployment.label} · finalized reads only</p>
         <h1>Every market on devnet.<br /><em>Read live, or not at all.</em></h1>
-        <p>This is the whole current-compatible market list of the {deployment.label} deployment, enumerated from the Core program itself — no index, no curation. Older markets this build cannot read are listed separately rather than hidden. Each card shows only what the chain actually says: what phase the market is in and who it commits to, how many claims exist and what is holding them, what it is collateralized in, and what the market is allowed to do. There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.</p>
+        <p>This is every market on the {deployment.label} deployment that this page can read, enumerated from the Core program itself — no index, no curation. Older markets this build cannot read are listed separately rather than hidden. Each card shows only what the chain actually says: what phase the market is in and who it commits to, how many claims exist and what is holding them, what it is collateralized in, and what the market is allowed to do. There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.</p>
       </div>
       <aside>
         <span>Provenance</span>
@@ -196,7 +196,7 @@ export default function MarketDiscoveryWorkspace() {
     <section className="trade-v3-card">
       <header>
         <span>01</span>
-        <div><h2>The current markets</h2><p>One card per current-compatible Market the Core program owns at one finalized floor. Historical incompatible accounts are counted and disclosed separately. A card is decoded or refused; it is never partially invented. Supplies come from the Claims aggregate, never from the root, in raw u64 atoms.</p></div>
+        <div><h2>The current markets</h2><p>One card per market the Core program owns and this page can read, all at the same moment on the chain. Older markets in a layout it cannot read are counted and named separately rather than dropped. A card is either read or refused; it is never partly invented. Claim counts come from the accounts that actually hold the claims, in raw units.</p></div>
         <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read the chain'}</button></div>
       </header>
       {state.kind === 'refused'

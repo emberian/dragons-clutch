@@ -18,7 +18,9 @@ describe('Market discovery route', () => {
     expect(html).toContain('Markets on Devnet');
     expect(html).toContain('Reading the finalized market list…');
     expect(html).toContain('enumerated from the Core program itself');
-    expect(html).toContain('whole current-compatible market list');
+    // "current-compatible" is our word for "a market this build can read".
+    expect(html).toContain('every market on the Devnet deployment that this page can read');
+    expect(html).not.toContain('current-compatible');
     // The one button is a refresh, disabled while the auto-load is in flight.
     expect(html).toContain('>Reading…</button>');
   });
@@ -35,16 +37,16 @@ describe('Market discovery route', () => {
   it('states the provenance and refusal contract every card is held to', () => {
     expect(html).toContain('CHAIN · finalized slot');
     expect(html).toContain('REFUSED');
-    expect(html).toContain('never partially invented');
+    expect(html).toContain('never partly invented');
   });
 
   it('presents raw atoms and never a market-data metric', () => {
-    expect(html).toContain('raw u64 atoms');
+    expect(html).toContain('in raw units');
     expect(html).toContain('No volume · no odds · no probability · no yield');
     // Market-data vocabulary may appear only inside the sentences that refuse it.
     const disclaimers = [
       'There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.',
-      'Supplies come from the Claims aggregate, never from the root, in raw u64 atoms.',
+      'Claim counts come from the accounts that actually hold the claims, in raw units.',
       'No volume · no odds · no probability · no yield',
     ];
     let remainder = html;

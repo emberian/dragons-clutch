@@ -40,7 +40,6 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     CoreSbfError,
-    frame::require_distinct,
     records::authenticate_finalized_record,
     release::{RoleDeploymentAccounts, authenticate_roles, identity},
 };
@@ -78,11 +77,11 @@ pub(crate) fn process(
     selection: CapabilityExecutionSelectionV1,
     funding_header: CapabilityFundingHeaderV2,
 ) -> Result<(), ProgramError> {
-    if request.action == Action::CloseCapability {
-        require_close_capability_aliases(accounts, funding_header.physical_count())?;
-    } else {
-        require_distinct(accounts)?;
-    }
+    // Every action, not only Close: Trading re-authenticates the same seven
+    // infrastructure accounts at child-tail 8..14 on the activation path too, so
+    // the repeats are structural and a blanket `require_distinct` here refuses
+    // every input. See `require_authenticated_suffix_aliases`.
+    require_authenticated_suffix_aliases(accounts, funding_header.physical_count())?;
     let route = Route::parse(accounts, funding_header.physical_count())?;
     route.validate(program_id)?;
     let market = route.market;
@@ -248,8 +247,27 @@ pub(crate) fn process(
 /// Registry, and Rent sysvar before it invokes Trading. Trading deliberately
 /// authenticates those same accounts again at child-tail coordinates 8..14.
 /// They therefore appear twice in the top-level frame. No other alias is part
-/// of the close ABI.
-fn require_close_capability_aliases(
+/// of the capability ABI.
+///
+/// **This is every action's requirement, not Close's.** Trading reaches those
+/// coordinates through `AuthenticatedSuffixV2::parse`, which `outer.rs` calls
+/// from `process_activation` and `process_close` alike, so the seven repeats are
+/// structural for both. Until 2026-08-29 only Close ran this census and every
+/// other action ran a blanket `require_distinct`, which forbids the very repeats
+/// the route cannot omit -- `ActivateCapability` refused every possible input
+/// before `Route::parse` was even reached. The simplest witness needs no state
+/// reasoning: Core requires the Rent sysvar at its own fixed coordinate and
+/// Trading requires it again at child-tail 14, and there is one Rent sysvar.
+///
+/// Note the census below is not weakened by admitting them. Each of the seven is
+/// pinned POSITIVELY first -- required to be the specific account the frame says
+/// it is -- and only that exact pair is then excused from the all-pairs
+/// duplicate check. Every other collision, including a third copy of an aliased
+/// account or a cross-pair swap, still refuses.
+///
+/// (`CapabilityRouteLayoutV1::close_alias_pairs` in `dclutch-market-core-codec`
+/// keeps its older name; the pairs it returns were never close-specific.)
+fn require_authenticated_suffix_aliases(
     accounts: &[AccountInfo<'_>],
     physical_count: u8,
 ) -> Result<(), CoreSbfError> {
@@ -1034,10 +1052,55 @@ mod tests {
         accounts
     }
 
+    /// The census every non-Close action used to run cannot accept this route.
+    ///
+    /// `require_distinct` forbids any repeated key, and the frame the route
+    /// REQUIRES carries seven, because Trading re-authenticates the same
+    /// infrastructure accounts at child-tail 8..14 through
+    /// `AuthenticatedSuffixV2::parse` -- which `outer.rs` calls from
+    /// `process_activation` as well as `process_close`. So until 2026-08-29
+    /// `ActivateCapability` refused every possible input before `Route::parse`
+    /// was reached, and the route was not undriven for want of a builder: it
+    /// could not be driven.
+    ///
+    /// This asserts the two halves that make that a contradiction rather than a
+    /// preference -- the canonical frame is exactly what the alias census
+    /// demands, and exactly what the old census refuses.
+    #[test]
+    fn the_frame_this_route_requires_is_the_frame_a_blanket_census_refuses() {
+        let canonical = canonical_close_frame();
+        assert_eq!(
+            require_authenticated_suffix_aliases(&canonical, 1),
+            Ok(()),
+            "the seven aliases are required, so the canonical frame must pass"
+        );
+        assert_eq!(
+            crate::frame::require_distinct(&canonical),
+            Err(CoreSbfError::AccountFrame),
+            "and a blanket no-duplicate census refuses that same required frame"
+        );
+
+        // Not a quirk of one coordinate: every one of the seven is a repeat on
+        // its own, so removing any single alias still leaves the blanket census
+        // refusing. The simplest witness needs no state reasoning at all --
+        // Core requires the Rent sysvar at its own coordinate and Trading
+        // requires it again at child-tail 14, and there is one Rent sysvar.
+        let pairs = CapabilityRouteLayoutV1::new(1, 20)
+            .expect("layout")
+            .close_alias_pairs();
+        assert_eq!(pairs.len(), 7);
+        for (left, right) in pairs {
+            assert_eq!(
+                canonical[left].key, canonical[right].key,
+                "coordinate {left} and child-tail coordinate {right} are one account"
+            );
+        }
+    }
+
     #[test]
     fn close_alias_policy_admits_only_the_seven_authenticated_suffix_pairs() {
         let exact = canonical_close_frame();
-        assert_eq!(require_close_capability_aliases(&exact, 1), Ok(()));
+        assert_eq!(require_authenticated_suffix_aliases(&exact, 1), Ok(()));
 
         let pairs = CapabilityRouteLayoutV1::new(1, 20)
             .expect("layout")
@@ -1046,7 +1109,7 @@ mod tests {
             let mut missing = canonical_close_frame();
             missing[right] = test_account(Pubkey::new_unique());
             assert_eq!(
-                require_close_capability_aliases(&missing, 1),
+                require_authenticated_suffix_aliases(&missing, 1),
                 Err(CoreSbfError::AccountFrame)
             );
         }
@@ -1054,7 +1117,7 @@ mod tests {
         let mut third_alias = canonical_close_frame();
         third_alias[0] = third_alias[pairs[0].0].clone();
         assert_eq!(
-            require_close_capability_aliases(&third_alias, 1),
+            require_authenticated_suffix_aliases(&third_alias, 1),
             Err(CoreSbfError::AccountFrame)
         );
 
@@ -1062,21 +1125,21 @@ mod tests {
         cross_pair[pairs[1].0] = cross_pair[pairs[0].0].clone();
         cross_pair[pairs[1].1] = cross_pair[pairs[0].0].clone();
         assert_eq!(
-            require_close_capability_aliases(&cross_pair, 1),
+            require_authenticated_suffix_aliases(&cross_pair, 1),
             Err(CoreSbfError::AccountFrame)
         );
 
         let mut shifted = canonical_close_frame();
         shifted[pairs[0].1] = shifted[pairs[1].0].clone();
         assert_eq!(
-            require_close_capability_aliases(&shifted, 1),
+            require_authenticated_suffix_aliases(&shifted, 1),
             Err(CoreSbfError::AccountFrame)
         );
 
         let mut extra = canonical_close_frame();
         extra[36] = extra[35].clone();
         assert_eq!(
-            require_close_capability_aliases(&extra, 1),
+            require_authenticated_suffix_aliases(&extra, 1),
             Err(CoreSbfError::AccountFrame)
         );
     }
