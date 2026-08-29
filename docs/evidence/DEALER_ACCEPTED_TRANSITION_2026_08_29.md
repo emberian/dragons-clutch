@@ -29,7 +29,9 @@ bash programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh
 ```
 
 Measured cold on 2026-08-29 from a deleted target directory: **3m05s wall, exit
-0, 26 tests across four targets**, 21 of them the accepted campaign. The runner
+0, 26 tests across four targets**, 21 of them the accepted campaign. Re-measured
+warm on the same day with the delivery leg landed: **exit 0, 27 tests across the
+same four targets**, 22 of them the accepted campaign. The runner
 builds five real artifacts — the Dealer accelerator, its test caller, Trading,
 Custody, Claims and Core — and stages them as real loadable deployments.
 
@@ -54,10 +56,12 @@ fit the 1,232-byte packet ceiling with static addresses. A real caller must
 build an address lookup table and submit commit as a v0 transaction. The
 campaign creates a live table on chain and does exactly that.
 
-## The two endings
+## The endings
 
-The lifecycle has two terminal shapes, and both are executed. They are not a
-chain; the second is not reachable from the first, by design.
+The lifecycle has two terminal shapes for the checkpoint, and both are executed.
+They are not a chain; the second is not reachable from the first, by design. A
+committed checkpoint has a third continuation, delivery, which is executed too
+and has its own section below.
 
 **Committed.** `Create → Page(0..5) → Evaluate → Reserve → Commit`. Trading
 authenticates the whole frame and invokes the real Claims program at CPI depth
@@ -90,6 +94,95 @@ succeeded:
 - the obligation account is replaced by exactly the candidate body the request
   committed to, which commit independently re-derives from the current body and
   the request's own candidate vector.
+
+## The delivery leg, executed
+
+Delivery is the third terminal shape, and it is now executed too:
+
+**Delivered.** `Create → Page(0..5) → Evaluate → Reserve → Commit → Deliver`.
+Custody re-authenticates the whole graph beneath the request — Market, Realm,
+replay cursor, adapter profile, Mint, custody authority and vault addresses —
+then invokes the real token program, moves the locked collateral out of its
+escrow, closes the escrow, advances the replay cursor and writes its receipt.
+
+It is not reachable any other way. `activate_batch` refuses every checkpoint
+whose phase is not `Committed`, so delivery is chained after the executed commit
+rather than staged beside it.
+
+The case asserts where the value went:
+
+- the destination is credited **exactly** the amount the reservation locked;
+- the escrow is **closed**, not merely emptied — the account is gone;
+- every lamport of escrow rent reaches the beneficiary fixed at reservation;
+- the source vault the reservation already debited is byte-identical afterwards;
+- the standard Custody replay cursor advances exactly one revision for one
+  delivered effect;
+- the batch and the reservation state are both `Activated`, and the activation
+  receipt exists naming the checkpoint, request digest and batch it delivered.
+
+Three things the leg needed, beyond what reservation needed:
+
+**A real nested Custody request in each effect body.** The effect bank is built
+by the semantic owner, `encode_dealer_scenario_custody_effect_artifacts_v1`, from
+a `ScenarioCustodyEffectV3` carrying a real `CustodyRequestV1`. A zero payload
+reserves and can never deliver: `require_activation_effect_join` decodes
+`effect.custody` and joins its release set, Market, Realm, caller program, parent
+request digest, generation, transfer index, Mint and token program against the
+batch.
+
+**A content-addressed Realm.** `require_realm_authority` checks
+`hash(realm body) == request.realm`, so the campaign cannot *name* a Realm
+identity: it builds the record and every layer below — the Core Market's own
+`CoreState` included — restates the digest. The Realm's
+`collateral_adapter_release_id` must hash-match an entry of
+`PRODUCTION_ADAPTER_RELEASES` or Custody refuses `Realm`; the legacy adapter is
+selected because `solana-program-test` genesis already carries the real token
+program at the address that adapter names, so the transfer and the close are
+executed by a real ELF with no external artifact and no environment variable.
+The one-command reproduction is unchanged.
+
+**A real replay cursor.** `CustodyReplayV1` at its derived PDA, Custody-owned,
+whose byte image must hash to what the reservation batch pinned, and whose
+`next_revision` must be exactly the request's `expected_revision`. It is the
+reason a delivery can be submitted at most once.
+
+`programs/dclutch-dealer-accelerator-sbf/program-test/src/custody_delivery.rs`
+derives that whole collateral graph once, in the direction Custody derives it, so
+no coordinate is chosen twice.
+
+## Two more protocol defects, both always-refuses
+
+The delivery leg was unreachable for **every batch that could ever have
+committed**, for two independent reasons. Both are the same family as the two
+above: an identity two sides derive independently and disagree about, invisible
+to either side's own tests.
+
+**The effect producer could not be in the frame.** Trading's commit refuses any
+effect manifest whose `producer_program` is not the Trading program itself
+(`dealer_scenario_checkpoint_v1.rs`, two sites, `program_id` equality). Custody's
+activation frame carries the effect producer at index 9 *and* the calling Trading
+release at index 3, and then runs a duplicate-key census over the whole frame. The
+frame was required to repeat one key and forbidden to repeat any key. Both the
+operator builder and the on-chain check refused, unconditionally. The equality is
+now pinned positively on both sides, and that one slot is excused from the
+census — because the protocol itself mandates the repetition.
+
+**The System program's address is the default public key.**
+`build_dealer_scenario_activation_v1` refused any frame containing
+`Pubkey::default()`, as a guard against unset fields. The activation frame
+mandatorily carries the System program, whose address is thirty-two zero bytes.
+No activation packet could be built, for any input. The System program is now
+pinned by identity and excluded from that census.
+
+Worth generalizing: a "no unset field" guard written as a comparison against the
+default public key is a trap in any frame that carries the System program.
+
+The operator's own activation test passed against the unbuildable frame, because
+it supplied an arbitrary producer and an arbitrary system program — neither of
+which the protocol admits. Corrected to the real frame, its lock census
+legitimately drops from 37 to 36 (the producer is not a distinct lock) and its
+wire size rises from 285 to 315 bytes (the System program cannot live in a lookup
+table, so it is always a static address).
 
 ## The Claims graph is consumed, not reinvented
 
@@ -169,25 +262,24 @@ not the hostile it claims to be.
 
 ## Named debt
 
-**The Custody delivery leg is not executed.** It is the only unexecuted leg.
-Given one bounded attempt on 2026-08-29 it opened a second graph wall, and was
-stopped rather than half-built. It needs, precisely:
+**The reservation evidence is staged, not Custody-produced.** The reservation
+batch, state and receipt are installed as Custody-owned accounts carrying real
+coordinates and real digests — the executed routes authenticate them exactly as
+they would authenticate Custody's own output, and delivery refuses unless those
+digests are what the chain actually holds. But Custody's reserve route did not
+write them. That is the same evidence class the reserve leg already had, now
+carried one leg further.
 
-- a real nested Custody request inside each effect body — the campaign currently
-  publishes a canonical effect with a zero request payload, which satisfies
-  reservation but not `require_activation_effect_join`, which decodes
-  `effect.custody` and joins its release set, market, realm, caller program,
-  parent request digest, generation, transfer index, mint and token program
-  against the batch;
-- a real Mint and real escrow, destination and source token accounts — the
-  activation frame is 20 common accounts plus 4 per effect, three of them
-  writable, with `ACT_MINT` and an executable `ACT_TOKEN_PROGRAM`;
-- a real `CustodyReplayV1` cursor at `ACT_REPLAY`, which activation advances.
+**The membership frame still names placeholder collateral coordinates.** The
+six-page unsplit topology census carries a synthetic mint and token program,
+while the executed delivery uses the real ones. No executed route joins the two —
+the unsplit form is unsubmittable, so nothing reads the census's collateral
+coordinates — but a scenario naming two mints is exactly the shape that hides a
+defect, and it should be collapsed onto the real Realm-selected pair.
 
-Entry points already built and unconsumed:
-`build_dealer_scenario_activation_v1` and
-`encode_dealer_scenario_custody_effect_artifacts_v1` (which builds real effect
-bodies from `ScenarioCustodyEffectV3`, the path the campaign bypassed).
+**One effect, one coordinate.** The delivery is a single-effect batch. The
+activation frame admits up to four, and the operator builder is exercised at four
+in its own tests, but only one is executed end to end here.
 
 **The campaign trades one representation coordinate.** FRAC's fixture funds one
 coordinate per Position, and the Dealer intent validator requires `acquired` and

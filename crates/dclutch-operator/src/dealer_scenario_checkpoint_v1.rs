@@ -194,6 +194,20 @@ pub struct DealerScenarioActivationEffectAccountsV1 {
     pub destination: Pubkey,
 }
 
+/// The System program, whose address is thirty-two zero bytes.
+///
+/// It is named here because that address is also `Pubkey::default()`, so a
+/// frame carrying the System program cannot be checked for unset fields by
+/// comparing against the default.
+pub const SYSTEM_PROGRAM_ID_V1: Pubkey = Pubkey::new_from_array([0; 32]);
+
+/// Position of the effect producer in the Custody activation frame.
+///
+/// It is the one coordinate the frame is required to repeat: commit pins the
+/// effect manifest's producer to the Trading program, which the frame already
+/// carries as the calling release.
+pub const DEALER_SCENARIO_ACTIVATION_EFFECT_PRODUCER_INDEX_V1: usize = 9;
+
 /// Complete common and ordered effect account bank for Custody activation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerScenarioActivationAccountsV1 {
@@ -1423,7 +1437,24 @@ pub fn build_dealer_scenario_activation_v1(
             AccountMeta::new(effect.destination, false),
         ]);
     }
-    let keys = metas.iter().map(|meta| meta.pubkey).collect::<Vec<_>>();
+    // Trading's commit refuses any effect manifest whose producer is not the
+    // Trading program, so a committed batch's activation frame necessarily
+    // carries that key twice. The census excuses exactly that slot and pins the
+    // equality instead; without this the route is unbuildable for every batch
+    // that ever committed.
+    let mut keys = metas.iter().map(|meta| meta.pubkey).collect::<Vec<_>>();
+    if accounts.effect_producer != accounts.trading_program {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    keys.remove(DEALER_SCENARIO_ACTIVATION_EFFECT_PRODUCER_INDEX_V1);
+    // The System program's address IS the default public key, and this frame
+    // mandatorily carries it. A blanket "no unset field" census over the whole
+    // frame therefore refuses every activation packet that could ever be built.
+    // Pin the System program by identity and census the rest.
+    if accounts.system_program != SYSTEM_PROGRAM_ID_V1 {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    keys.retain(|key| *key != SYSTEM_PROGRAM_ID_V1);
     if accounts.custody_program == Pubkey::default()
         || keys.contains(&Pubkey::default())
         || has_duplicate_keys(&keys)
@@ -2486,7 +2517,9 @@ mod tests {
             realm_staging: key(37),
             custody_replay: key(38),
             checkpoint: key(39),
-            effect_producer: key(40),
+            // Commit pins the effect manifest's producer to the Trading program
+            // itself, so the frame carries that identity twice by construction.
+            effect_producer: key(34),
             effect_manifest: key(41),
             batch: key(42),
             activation_receipt: key(43),
@@ -2496,7 +2529,7 @@ mod tests {
             payer: key(47),
             refund_beneficiary: key(48),
             rent: key(50),
-            system_program: key(51),
+            system_program: SYSTEM_PROGRAM_ID_V1,
             effects,
             effect_count: 4,
         };
@@ -2514,9 +2547,13 @@ mod tests {
             core::slice::from_ref(&table),
         )
         .expect("activation");
-        assert_eq!(packet.lock_census.unique_account_lock_count, 37);
-        assert_eq!(packet.wire_bytes, 285);
-        assert_eq!(packet.loaded_addresses, 35);
+        // One lock fewer than the frame has slots: the effect producer is the
+        // Trading program the frame already carries.
+        assert_eq!(packet.lock_census.unique_account_lock_count, 36);
+        // The System program is thirty-two zero bytes and no lookup table can
+        // carry it, so it is always a static address in this frame.
+        assert_eq!(packet.wire_bytes, 315);
+        assert_eq!(packet.loaded_addresses, 33);
         assert_eq!(packet.instruction.accounts.len(), 36);
         assert_eq!(packet.instruction.accounts[22].pubkey, key(62));
         assert!(packet.instruction.accounts[22].is_writable);

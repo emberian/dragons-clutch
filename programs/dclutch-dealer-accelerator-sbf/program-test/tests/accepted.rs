@@ -34,14 +34,19 @@ use dclutch_fractional_atomic_program_test::narrow_fixture::{
     NarrowFixtureInputV2, NarrowFixtureV2, NarrowPositionV2, compile_narrow_fixture_v2,
 };
 use dclutch_claims_svm::signed_delta_v3::SignedDeltaPlanV3;
-use dclutch_custody_contract::{CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1};
+use dclutch_custody_contract::{
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
+};
+use dclutch_dealer_accelerator_program_test::custody_delivery::{
+    DealerDeliveryInputV1, DealerDeliveryRealmV1, DealerDeliveryV1, dealer_delivery_realm_v1,
+    stage_dealer_delivery_v1, token_account_amount,
+};
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
     scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1,
     scenario_custody_reservation_v1::{
-        DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1,
-        DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1, DealerScenarioCustodyEffectManifestV1,
-        DealerScenarioCustodyEffectV1, DealerScenarioCustodyRequestKindV1,
+        DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+        DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1, DealerScenarioActivationReceiptV1,
         DealerScenarioReservationBatchStatusV1, DealerScenarioReservationBatchV1,
         DealerScenarioReservationStateStatusV1, DealerScenarioReservationStateV1,
     },
@@ -59,7 +64,10 @@ use dclutch_operator::{
         DealerAcceptedEvaluationAccountsV4, DealerAcceptedReservationAccountsV4,
         DealerAcceptedTranscriptInputV4, DealerScenarioCommitAccountsV1,
         DealerScenarioCommitEffectAccountsV1, DealerScenarioEvaluationBodiesV1,
-        build_dealer_accepted_transcript_v4, build_dealer_scenario_checkpoint_cleanup_v1,
+        DealerScenarioActivationAccountsV1, DealerScenarioActivationEffectAccountsV1,
+        build_dealer_accepted_transcript_v4, build_dealer_scenario_activation_v1,
+        build_dealer_scenario_checkpoint_cleanup_v1,
+        encode_dealer_scenario_custody_effect_artifacts_v1,
         build_dealer_scenario_checkpoint_create_v1, build_dealer_scenario_checkpoint_reserve_v1,
         build_dealer_scenario_commit_v1,
         build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
@@ -89,7 +97,8 @@ use dclutch_release_set_contract::{
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use dclutch_core_contract::ContentId;
 use dclutch_trading_sbf::dealer::{
-    v3_composer::{ScenarioCollateralFrameV3, ScenarioComposerContextV3},
+    v3_composer::{ScenarioCollateralFrameV3, ScenarioComposerContextV3, ScenarioCustodyEffectV3},
+    v3_multi_lp::MultiLpCustodyRequestV3,
     v3_obligation::stage_scenario_obligation_replacement_v3,
     v3_trade_profile::{
         DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DEALER_SCENARIO_PROFILE_SPANS_V4,
@@ -175,21 +184,30 @@ const CLAIMS_SIGNED_DELTA_STATE: u32 = 0x5204;
 const WIDTH: u32 = 3;
 /// Representation coordinate the Claims graph funds and this scenario trades at.
 const FUNDED_COORDINATE: usize = 0;
-/// Immutable Realm identity the Claims graph is founded under.
-const SCENARIO_REALM: [u8; 32] = [0xb6; 32];
+/// External collateral token account the delivered effect credits.
+const DEALER_COLLATERAL_ACCOUNT: Pubkey = Pubkey::new_from_array([0xde; 32]);
+/// Collateral atoms the reservation locked and the delivery moves.
+const DELIVERY_AMOUNT: u64 = 10;
+/// Source-vault balance after the reservation debited it.
+const DELIVERY_SOURCE_AFTER: u64 = 90;
+/// Destination balance before the delivery credits it.
+const DELIVERY_DESTINATION_BEFORE: u64 = 100;
+/// Revision the standard Custody replay cursor stands at before delivery.
+const DELIVERY_REPLAY_REVISION: u64 = 7;
 /// Immutable Custody replay namespace for this Market.
 const SCENARIO_CUSTODY_CONTEXT: [u8; 32] = [0xbb; 32];
 /// Market generation every layer of this scenario restates.
 const SCENARIO_GENERATION: u64 = 17;
 /// Claims aggregate revision this scenario trades against.
 ///
-/// The narrow fixture plants the pre-founding revision zero, which is right for
-/// a founding campaign and unreachable for this one: the Dealer projection
-/// refuses a Position at revision zero, because a Dealer trade is against
-/// Positions that have already been transacted. The graph is re-encoded through
-/// the supported Claims encoders at a live revision rather than byte-patched.
+/// The aggregate is re-encoded to it through the supported Claims encoder
+/// rather than byte-patched; the fixture does not parameterize this one.
 const LIVE_CLAIMS_REVISION: u64 = 4;
 /// Position revision both Claims Positions carry.
+///
+/// The Dealer projection refuses a Position at revision zero, because a Dealer
+/// trade is against Positions that have already been transacted. The narrow
+/// fixture takes this as an input and plants both Positions at it.
 const LIVE_POSITION_REVISION: u64 = 3;
 /// Last slot at which this scenario's checkpoint may still be advanced.
 ///
@@ -582,11 +600,16 @@ struct Scenario {
     core_market: Pubkey,
     unsplit_account_lock_count: usize,
     waist: ReleaseWaist,
+    realm: DealerDeliveryRealmV1,
+    delivery: DealerDeliveryV1,
 }
 
 /// Derive one complete scenario: request, checkpoint, canonical membership.
 fn scenario() -> Scenario {
     let waist = release_waist();
+    // A Realm is content-addressed by its own body, so the scenario cannot name
+    // one: it builds the record first and every layer below restates the digest.
+    let realm = dealer_delivery_realm_v1(waist.registry);
     let dealer = Keypair::new();
     // The Claims aggregate graph is compiled by the Fractional narrow fixture,
     // which is parameterized by outcome width precisely so a second campaign can
@@ -598,7 +621,7 @@ fn scenario() -> Scenario {
         core_program: waist.core_program,
         claims_program: waist.claims_program,
         release_set: waist.release_set_id,
-        realm_id: SCENARIO_REALM,
+        realm_id: realm.digest,
         custody_context: SCENARIO_CUSTODY_CONTEXT,
         generation: SCENARIO_GENERATION,
         actor_owner: dealer.pubkey(),
@@ -701,6 +724,28 @@ fn scenario() -> Scenario {
     )
     .expect("candidate obligation replacement");
     let checkpoint = dealer_scenario_checkpoint_address_v1(TRADING, request_digest);
+    // The collateral graph the later delivery executes against. Every address in
+    // it is derived from the request the effect will carry, in the direction
+    // Custody derives it, so the escrow is reachable only through the
+    // reservation that owns it.
+    let delivery = stage_dealer_delivery_v1(DealerDeliveryInputV1 {
+        custody_program: waist.custody_program,
+        trading_program: TRADING,
+        release_set: waist.release_set_id,
+        market: fixture.core_market,
+        realm: realm.digest,
+        context: SCENARIO_CUSTODY_CONTEXT,
+        generation: SCENARIO_GENERATION,
+        checkpoint,
+        request_digest,
+        destination: DEALER_COLLATERAL_ACCOUNT,
+        destination_owner: dealer.pubkey(),
+        replay_rent_refund: BENEFICIARY,
+        amount: DELIVERY_AMOUNT,
+        source_after: DELIVERY_SOURCE_AFTER,
+        destination_before: DELIVERY_DESTINATION_BEFORE,
+        replay_revision: DELIVERY_REPLAY_REVISION,
+    });
     let membership_manifest =
         dealer_scenario_membership_manifest_address_v1(MANIFEST_PRODUCER, checkpoint, request_digest);
 
@@ -728,7 +773,7 @@ fn scenario() -> Scenario {
             custody_program: waist.custody_program.to_bytes(),
             release_set: waist.release_set_id,
             market,
-            realm: SCENARIO_REALM,
+            realm: realm.digest,
             child_root: child,
             obligation_account: obligation.to_bytes(),
             mint: [0xb7; 32],
@@ -850,6 +895,8 @@ fn scenario() -> Scenario {
         fixture,
         unsplit_account_lock_count: unsplit.unique_account_lock_count,
         waist,
+        realm,
+        delivery,
     }
 }
 
@@ -1003,6 +1050,38 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         scenario.waist.activation_cache,
         data_account(scenario.waist.registry, scenario.waist.cache_body.clone()),
     );
+    // The collateral graph the delivery leg executes against: the Realm at the
+    // address its own digest derives, its vacant staging cursor beside it, the
+    // Mint the Realm selects, and the three token accounts the reservation left.
+    // The token program itself is not installed here -- ProgramTest genesis
+    // already carries the real one at the address the Realm's adapter names.
+    let delivery = &scenario.delivery;
+    test.add_account(
+        scenario.realm.raw,
+        data_account(scenario.waist.registry, scenario.realm.bytes.clone()),
+    );
+    test.add_account(scenario.realm.staging, Account {
+        lamports: 0,
+        data: Vec::new(),
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    });
+    test.add_account(
+        delivery.mint,
+        data_account(delivery.token_program, delivery.mint_bytes.clone()),
+    );
+    for (key, body) in [
+        (delivery.source, &delivery.source_bytes),
+        (delivery.escrow, &delivery.escrow_bytes),
+        (delivery.destination, &delivery.destination_bytes),
+    ] {
+        test.add_account(key, data_account(delivery.token_program, body.clone()));
+    }
+    test.add_account(
+        delivery.replay,
+        data_account(scenario.waist.custody_program, delivery.replay_bytes.clone()),
+    );
     // Install the frame exactly as the projection observed it: same identities,
     // same owners, same widths. The pages carry these accounts, so what the
     // campaign pages is the frame itself and not a stand-in for it.
@@ -1027,6 +1106,14 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         COUNTERPARTY,
         COUNTERPARTY_ACCOUNT,
         scenario.core_market,
+        scenario.realm.raw,
+        scenario.realm.staging,
+        delivery.mint,
+        delivery.token_program,
+        delivery.source,
+        delivery.escrow,
+        delivery.destination,
+        delivery.replay,
     ];
     reserved.extend(scenario.claims_graph_keys());
     for (key, account) in &scenario.frame_accounts {
@@ -1420,45 +1507,56 @@ fn evaluation_evidence_with_delta(
     checkpoint_body: &[u8],
     published_delta: Option<Vec<u8>>,
 ) -> EvaluationEvidence {
-    let effect_body = DealerScenarioCustodyEffectV1 {
-        kind: DealerScenarioCustodyRequestKindV1::Canonical,
-        ordinal: 0,
-        effect_count: 1,
-        producer_program: TRADING.to_bytes(),
-        checkpoint: scenario.checkpoint.to_bytes(),
-        request_digest: scenario.request_digest,
-        source_after: 90,
-        destination_after: 110,
-        request_payload: [0_u8; DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1],
-    }
-    .encode()
-    .expect("canonical effect body encodes")
-    .to_vec();
-    let manifest = DealerScenarioCustodyEffectManifestV1 {
-        effect_count: 1,
-        producer_program: TRADING.to_bytes(),
-        checkpoint: scenario.checkpoint.to_bytes(),
-        request_digest: scenario.request_digest,
-        effect_accounts: core::array::from_fn(|index| {
+    // The effect bank is built by the semantic owner from the scenario's own
+    // Custody effect, not restated here. The nested request is real: activation
+    // decodes it and joins its release set, Market, Realm, caller program,
+    // parent request digest, generation, transfer index, Mint and token program
+    // against the batch, so a zero payload reserves and can never deliver.
+    let effects = [
+        Some(ScenarioCustodyEffectV3 {
+            request: MultiLpCustodyRequestV3::Canonical(scenario.delivery.request),
+            source_after: DELIVERY_SOURCE_AFTER,
+            destination_after: DELIVERY_DESTINATION_BEFORE
+                .checked_add(DELIVERY_AMOUNT)
+                .expect("destination after"),
+        }),
+        None,
+        None,
+        None,
+    ];
+    let artifacts = encode_dealer_scenario_custody_effect_artifacts_v1(
+        TRADING,
+        scenario.checkpoint,
+        scenario.request_digest,
+        core::array::from_fn(|index| {
             if index == 0 {
-                EFFECT_BODY.to_bytes()
+                EFFECT_BODY
             } else {
-                [0_u8; 32]
+                Pubkey::default()
             }
         }),
-        effect_digests: core::array::from_fn(|index| {
-            if index == 0 {
-                hash(&effect_body).to_bytes()
-            } else {
-                [0_u8; 32]
-            }
-        }),
-    };
+        &effects,
+        1,
+    )
+    .expect("evaluator-owned effect bank");
     assert_eq!(
         DEALER_SCENARIO_MAX_RESERVATIONS_V1, 4,
         "the manifest carries a fixed reservation width"
     );
-    let effects_body = manifest.encode().expect("effect manifest encodes").to_vec();
+    let effect_body = artifacts
+        .effect_bodies
+        .first()
+        .copied()
+        .flatten()
+        .expect("the zeroth effect body")
+        .encode()
+        .expect("canonical effect body encodes")
+        .to_vec();
+    let effects_body = artifacts
+        .manifest
+        .encode()
+        .expect("effect manifest encodes")
+        .to_vec();
     let candidate_bank = vec![0xc1; 64];
     let candidate_obligation = scenario.candidate_obligation_bytes.clone();
     // Commit requires this body to be byte-identical to the SignedDelta packet
@@ -2158,16 +2256,9 @@ fn reservation_evidence(
     effect_digest: [u8; 32],
 ) -> ReservationEvidence {
     let custody = scenario.waist.custody_program;
+    let delivery = &scenario.delivery;
     let batch = dealer_scenario_reservation_batch_address_v1(custody, scenario.checkpoint);
-    let reservation_state = Pubkey::find_program_address(
-        &[
-            DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1,
-            scenario.checkpoint.as_ref(),
-            &[0],
-        ],
-        &custody,
-    )
-    .0;
+    let reservation_state = delivery.reservation_state;
     let state_body = DealerScenarioReservationStateV1 {
         status: DealerScenarioReservationStateStatusV1::Active,
         ordinal: 0,
@@ -2177,19 +2268,22 @@ fn reservation_evidence(
         request_digest: scenario.request_digest,
         effects_digest,
         effect_digest,
-        source: [0xf3; 32],
-        destination: [0xf4; 32],
-        escrow: [0xf5; 32],
-        mint: [0xf6; 32],
-        token_program: [0xf7; 32],
+        // Every coordinate here is the chain's, not the campaign's: activation
+        // re-reads the escrow and the destination and refuses unless the
+        // reservation's digests are what those accounts actually hold.
+        source: delivery.source.to_bytes(),
+        destination: delivery.destination.to_bytes(),
+        escrow: delivery.escrow.to_bytes(),
+        mint: delivery.mint.to_bytes(),
+        token_program: delivery.token_program.to_bytes(),
         source_prestate_digest: [0xf8; 32],
-        destination_prestate_digest: [0xf9; 32],
-        effect_poststate_digest: [0xfa; 32],
+        destination_prestate_digest: delivery.destination_digest(),
+        effect_poststate_digest: delivery.escrow_digest(),
         source_poststate_digest: [0xfb; 32],
-        amount: 10,
-        source_after: 90,
-        destination_before: 100,
-        escrow_after: 10,
+        amount: DELIVERY_AMOUNT,
+        source_after: DELIVERY_SOURCE_AFTER,
+        destination_before: DELIVERY_DESTINATION_BEFORE,
+        escrow_after: DELIVERY_AMOUNT,
     }
     .encode()
     .expect("reservation state encodes")
@@ -2227,13 +2321,13 @@ fn reservation_evidence(
         rollback_count: 0,
         release_set: scenario.waist.release_set_id,
         market: scenario.core_market.to_bytes(),
-        realm: SCENARIO_REALM,
+        realm: scenario.realm.digest,
         trading_program: TRADING.to_bytes(),
         checkpoint: scenario.checkpoint.to_bytes(),
         request_digest: scenario.request_digest,
         effects_digest,
-        replay: [0xfc; 32],
-        replay_prestate_digest: [0xfd; 32],
+        replay: delivery.replay.to_bytes(),
+        replay_prestate_digest: delivery.replay_digest(),
         refund_beneficiary: BENEFICIARY.to_bytes(),
         expires_at: SCENARIO_EXPIRES_AT,
         generation: SCENARIO_GENERATION,
@@ -3296,4 +3390,275 @@ async fn a_commit_refuses_a_claims_position_table_out_of_canonical_order() {
         dealer_before,
         "a refused commit must not move the Claims Positions"
     );
+}
+
+/// Read one account's exact body, or nothing when it does not exist.
+async fn account_body(context: &mut ProgramTestContext, key: Pubkey) -> Option<Vec<u8>> {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("account read")
+        .map(|account| account.data)
+}
+
+/// Read one account's lamports, treating an absent account as zero.
+async fn account_lamports(context: &mut ProgramTestContext, key: Pubkey) -> u64 {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("account read")
+        .map_or(0, |account| account.lamports)
+}
+
+/// Drive the whole accepted transition to a committed checkpoint.
+///
+/// Delivery is not reachable any other way: `activate_batch` refuses every
+/// checkpoint whose phase is not `Committed`, so the delivery leg is chained
+/// after the executed commit rather than staged beside it.
+async fn committed_with_delivery_inputs(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+) -> ReservationEvidence {
+    let (reservation, receipt_address, _reserved) =
+        reserved_with_commit_inputs(context, scenario).await;
+    let bank = commit_bank(scenario, context.payer.pubkey(), receipt_address, &reservation);
+    let processed = submit_commit(context, scenario, bank).await;
+    processed
+        .result
+        .expect("the commit must land before anything can be delivered");
+    reservation
+}
+
+/// The exact activation account bank for this scenario's single effect.
+fn activation_bank(
+    scenario: &Scenario,
+    reservation: &ReservationEvidence,
+    payer: Pubkey,
+) -> DealerScenarioActivationAccountsV1 {
+    let delivery = &scenario.delivery;
+    DealerScenarioActivationAccountsV1 {
+        custody_program: scenario.waist.custody_program,
+        market: scenario.core_market,
+        activation_cache: scenario.waist.activation_cache,
+        registry_program: scenario.waist.registry,
+        trading_program: TRADING,
+        trading_programdata: scenario.waist.trading_programdata,
+        realm: scenario.realm.raw,
+        realm_staging: scenario.realm.staging,
+        custody_replay: delivery.replay,
+        checkpoint: scenario.checkpoint,
+        effect_producer: TRADING,
+        effect_manifest: EFFECTS,
+        batch: reservation.batch,
+        activation_receipt: delivery.activation_receipt,
+        mint: delivery.mint,
+        custody_authority: delivery.custody_authority,
+        token_program: delivery.token_program,
+        payer,
+        refund_beneficiary: BENEFICIARY,
+        rent: sysvar::rent::ID,
+        system_program: system_program::ID,
+        effects: core::array::from_fn(|index| {
+            if index == 0 {
+                DealerScenarioActivationEffectAccountsV1 {
+                    effect_body: EFFECT_BODY,
+                    reservation_state: delivery.reservation_state,
+                    escrow: delivery.escrow,
+                    destination: delivery.destination,
+                }
+            } else {
+                DealerScenarioActivationEffectAccountsV1::default()
+            }
+        }),
+        effect_count: 1,
+    }
+}
+
+/// Every address the activation packet resolves, minus the payer's own.
+fn activation_table_addresses(
+    bank: &DealerScenarioActivationAccountsV1,
+    payer: Pubkey,
+) -> Vec<Pubkey> {
+    let mut addresses = vec![
+        bank.market,
+        bank.activation_cache,
+        bank.registry_program,
+        bank.trading_program,
+        bank.trading_programdata,
+        bank.realm,
+        bank.realm_staging,
+        bank.custody_replay,
+        bank.checkpoint,
+        bank.effect_manifest,
+        bank.batch,
+        bank.activation_receipt,
+        bank.mint,
+        bank.custody_authority,
+        bank.token_program,
+        bank.refund_beneficiary,
+        bank.rent,
+        bank.system_program,
+    ];
+    for effect in bank.effects.iter().take(usize::from(bank.effect_count)) {
+        addresses.extend([
+            effect.effect_body,
+            effect.reservation_state,
+            effect.escrow,
+            effect.destination,
+        ]);
+    }
+    addresses.retain(|key| *key != payer);
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    addresses
+}
+
+/// Build, table and submit one delivery, returning what the chain reported.
+async fn submit_activation(
+    context: &mut ProgramTestContext,
+    bank: DealerScenarioActivationAccountsV1,
+) -> solana_program_test::BanksTransactionResultWithMetadata {
+    let payer = context.payer.pubkey();
+    let addresses = activation_table_addresses(&bank, payer);
+    let packet = build_dealer_scenario_activation_v1(
+        bank,
+        Hash::default(),
+        &[OperatorLookupTable {
+            key: Pubkey::new_from_array([0x7c; 32]),
+            addresses: addresses.clone(),
+        }],
+    )
+    .expect("activation packet");
+    let table = create_live_lookup_table(context, &addresses).await;
+    submit_v0(context, packet.instruction, table, &addresses)
+        .await
+        .expect("ProgramTest processing")
+}
+
+#[tokio::test]
+async fn the_delivery_moves_the_locked_collateral_and_closes_its_escrow() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let reservation = committed_with_delivery_inputs(&mut context, &scenario).await;
+    let delivery = &scenario.delivery;
+
+    // What the chain holds before delivery, read back rather than assumed.
+    let escrow_before = account_body(&mut context, delivery.escrow)
+        .await
+        .expect("the escrow exists while value is locked");
+    let destination_before = account_body(&mut context, delivery.destination)
+        .await
+        .expect("the destination exists");
+    let source_before = account_body(&mut context, delivery.source)
+        .await
+        .expect("the source vault exists");
+    let escrow_rent = account_lamports(&mut context, delivery.escrow).await;
+    let beneficiary_before = account_lamports(&mut context, BENEFICIARY).await;
+    assert_eq!(token_account_amount(&escrow_before), DELIVERY_AMOUNT);
+    assert_eq!(
+        token_account_amount(&destination_before),
+        DELIVERY_DESTINATION_BEFORE
+    );
+    let replay_before = CustodyReplayV1::decode(
+        &account_body(&mut context, delivery.replay)
+            .await
+            .expect("the replay cursor exists"),
+    )
+    .expect("canonical replay cursor");
+    assert_eq!(replay_before.next_revision, DELIVERY_REPLAY_REVISION);
+    assert!(
+        account_body(&mut context, delivery.activation_receipt)
+            .await
+            .is_none_or(|body| body.is_empty()),
+        "the activation receipt must be vacant before delivery"
+    );
+
+    let payer = context.payer.pubkey();
+    let processed = submit_activation(&mut context, activation_bank(&scenario, &reservation, payer))
+        .await;
+    processed
+        .result
+        .as_ref()
+        .expect("the delivery must execute against the real Custody ELF");
+
+    // Conservation: exactly what left the escrow arrived at the destination,
+    // the escrow is gone, and the source vault the reservation already debited
+    // is untouched by the delivery.
+    let destination_after = account_body(&mut context, delivery.destination)
+        .await
+        .expect("the destination survives delivery");
+    assert_eq!(
+        token_account_amount(&destination_after),
+        DELIVERY_DESTINATION_BEFORE
+            .checked_add(DELIVERY_AMOUNT)
+            .expect("credited destination"),
+        "the destination is credited exactly the locked amount"
+    );
+    assert_eq!(
+        account_body(&mut context, delivery.escrow).await,
+        None,
+        "the escrow is closed, not merely emptied"
+    );
+    assert_eq!(
+        account_body(&mut context, delivery.source).await,
+        Some(source_before),
+        "delivery does not touch the source vault the reservation debited"
+    );
+    assert_eq!(
+        account_lamports(&mut context, BENEFICIARY).await,
+        beneficiary_before
+            .checked_add(escrow_rent)
+            .expect("refunded rent"),
+        "every lamport of escrow rent reaches the beneficiary fixed at reservation"
+    );
+
+    // The replay cursor advanced exactly once, and the batch is terminal.
+    let replay_after = CustodyReplayV1::decode(
+        &account_body(&mut context, delivery.replay)
+            .await
+            .expect("the replay cursor survives delivery"),
+    )
+    .expect("canonical replay cursor");
+    assert_eq!(
+        replay_after.next_revision,
+        DELIVERY_REPLAY_REVISION
+            .checked_add(1)
+            .expect("advanced revision"),
+        "one delivered effect advances the cursor exactly one revision"
+    );
+    let batch_after = DealerScenarioReservationBatchV1::decode(
+        &account_body(&mut context, reservation.batch)
+            .await
+            .expect("the batch survives delivery"),
+    )
+    .expect("canonical batch");
+    assert_eq!(
+        batch_after.status,
+        DealerScenarioReservationBatchStatusV1::Activated,
+        "a delivered batch is terminal"
+    );
+    let state_after = DealerScenarioReservationStateV1::decode(
+        &account_body(&mut context, delivery.reservation_state)
+            .await
+            .expect("the reservation state survives delivery"),
+    )
+    .expect("canonical reservation state");
+    assert_eq!(
+        state_after.status,
+        DealerScenarioReservationStateStatusV1::Activated
+    );
+    assert_eq!(state_after.escrow_after, 0);
+
+    // And the receipt exists, naming the checkpoint it delivered.
+    let receipt = DealerScenarioActivationReceiptV1::decode(
+        &account_body(&mut context, delivery.activation_receipt)
+            .await
+            .expect("delivery creates its receipt"),
+    )
+    .expect("canonical activation receipt");
+    assert_eq!(receipt.checkpoint, scenario.checkpoint.to_bytes());
+    assert_eq!(receipt.request_digest, scenario.request_digest);
+    assert_eq!(receipt.batch, reservation.batch.to_bytes());
 }

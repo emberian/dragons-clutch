@@ -1060,10 +1060,20 @@ fn require_activation_frame(
             return Err(CustodySbfError::AccountFrame.into());
         }
     }
+    // The effect producer is not an independent identity. Trading's commit
+    // route refuses any effect manifest whose `producer_program` is not the
+    // Trading program itself, so every committed batch reaching delivery names
+    // Trading as its producer; the frame carries the same key twice by
+    // construction. Pin that equality positively and take the producer slot out
+    // of the duplicate census, because a frame that must repeat one key and is
+    // also forbidden to repeat any key cannot be built at all.
+    if account(accounts, ACT_EFFECT_PRODUCER)?.key != account(accounts, TRADING_PROGRAM)?.key {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
     if account(accounts, ACT_RENT)?.key != &sysvar::rent::ID
         || account(accounts, ACT_SYSTEM)?.key != &system_program::ID
         || account(accounts, REGISTRY)?.key == account(accounts, TRADING_PROGRAM)?.key
-        || has_duplicate_keys(accounts)
+        || has_duplicate_keys_except(accounts, ACT_EFFECT_PRODUCER)
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
@@ -1765,6 +1775,27 @@ fn has_duplicate_keys(accounts: &[AccountInfo<'_>]) -> bool {
             .get(..index)
             .is_some_and(|prefix| prefix.iter().any(|prior| prior.key == current.key))
     })
+}
+
+/// The same census with one coordinate excused, for the sole slot the protocol
+/// itself requires to repeat an identity the frame already carries.
+fn has_duplicate_keys_except(accounts: &[AccountInfo<'_>], excused: usize) -> bool {
+    accounts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != excused)
+        .any(|(index, current)| {
+            accounts
+                .get(..index)
+                .is_some_and(|prefix| {
+                    prefix
+                        .iter()
+                        .enumerate()
+                        .any(|(prior_index, prior)| {
+                            prior_index != excused && prior.key == current.key
+                        })
+                })
+        })
 }
 
 // The transaction lock cap counts the program itself in addition to the frame.
