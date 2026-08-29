@@ -215,6 +215,9 @@ struct UpgradeArgsV1 {
     exclusive_payer_window_acknowledgment: Option<String>,
     execute: bool,
     preflight: bool,
+    /// Upload and authenticate the exact persistent Buffer, then return at the
+    /// durable BufferReady phase without constructing a Loader Upgrade.
+    stop_after_buffer_ready: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1704,7 +1707,8 @@ pub(crate) fn usage() -> &'static str {
      --baseline ABSOLUTE_JSON \\
      --receipt ABSOLUTE_JSON --dump ABSOLUTE_SO \\
      --solana-cli ABSOLUTE_EXECUTABLE --i-accept-upgrade ROLE:PUBKEY \
-     (--preflight | --i-kept-fee-payer-exclusive ROLE:PUBKEY:PAYER --execute)\n\n\
+     (--preflight | --i-kept-fee-payer-exclusive ROLE:PUBKEY:PAYER --execute \
+      [--stop-after-buffer-ready])\n\n\
      With --preflight, you run the complete gate, source, baseline, CLI-version, devnet-genesis, \
      and one-context Program/ProgramData/payer admission without opening either keypair path, \
      writing a receipt or dump, or invoking a program command. With --execute, you update exactly \
@@ -1721,7 +1725,10 @@ pub(crate) fn usage() -> &'static str {
      the checked raw ELF with zeros only to the separately captured baseline width. Execute first \
      uploads the exact ELF to the journaled Buffer with one CLI signing attempt, then authenticates \
      every bounded Buffer-history transaction, fee, payer delta, rent movement, offset, and byte \
-     range. It constructs and journals the exact Upgrade message and signed packet before one \
+     range. With --stop-after-buffer-ready it returns at that durable phase and cannot prepare, \
+     sign, or send a Loader Upgrade; a later execution must omit the flag while repeating every \
+     exact acknowledgment and reauthentication. Otherwise it constructs and journals the exact \
+     Upgrade message and signed packet before one \
      `sendTransaction` call with `maxRetries=0`. Restarts poll that signature; only a finalized \
      expiry with unchanged prestate can prepare a different blockhash and packet. The command \
      requires the deployment slot to advance, resolves the exact journaled finalized transaction, \
@@ -1849,6 +1856,7 @@ fn audit_set_journal_with_runner(
             )),
             execute: false,
             preflight: true,
+            stop_after_buffer_ready: false,
         };
         let admission = admit_upgrade(&role_args)?;
         if admission.gate.solana_cli_version != journal.solana_cli_version {
@@ -3135,6 +3143,7 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             )),
             execute: false,
             preflight: false,
+            stop_after_buffer_ready: false,
         };
         let admission = admit_upgrade(&role_args)?;
         if admission.gate.solana_cli_version != journal.solana_cli_version {
@@ -3291,8 +3300,18 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
     let mut values = std::collections::BTreeMap::<String, String>::new();
     let mut execute = false;
     let mut preflight = false;
+    let mut stop_after_buffer_ready = false;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
+        if argument == "--stop-after-buffer-ready" {
+            if stop_after_buffer_ready {
+                return Err(Error::new(
+                    "--stop-after-buffer-ready may be supplied only once",
+                ));
+            }
+            stop_after_buffer_ready = true;
+            continue;
+        }
         if matches!(argument.as_str(), "--execute" | "--preflight") {
             let selected = if argument == "--execute" {
                 &mut execute
@@ -3346,6 +3365,11 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         return Err(Error::new(
             "devnet-upgrade-v1 requires exactly one of --preflight (read-only and key-free) or \
              --execute (the separately acknowledged mutation)",
+        ));
+    }
+    if stop_after_buffer_ready && !execute {
+        return Err(Error::new(
+            "--stop-after-buffer-ready requires --execute because Buffer upload is a devnet mutation",
         ));
     }
     let take = |label: &str| {
@@ -3404,6 +3428,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         exclusive_payer_window_acknowledgment: values.get(EXCLUSIVE_PAYER_ACK_FLAG).cloned(),
         execute,
         preflight,
+        stop_after_buffer_ready,
     })
 }
 
@@ -3591,6 +3616,7 @@ fn extension_shadow_args(args: &ExtensionArgsV1) -> UpgradeArgsV1 {
         exclusive_payer_window_acknowledgment: None,
         execute: args.execute,
         preflight: false,
+        stop_after_buffer_ready: false,
     }
 }
 
@@ -3625,6 +3651,19 @@ fn execute_with_runner(
             receipt,
             true,
         )?;
+        if args.stop_after_buffer_ready
+            && matches!(
+                receipt.phase,
+                ReceiptPhaseV1::MessagePrepared
+                    | ReceiptPhaseV1::SignedNotSubmitted
+                    | ReceiptPhaseV1::Submitted
+                    | ReceiptPhaseV1::Complete
+            )
+        {
+            return Err(Error::new(
+                "--stop-after-buffer-ready cannot reinterpret a receipt that already crossed the Loader Upgrade construction boundary",
+            ));
+        }
     } else if args.dump_path.exists() {
         return Err(Error::new(format!(
             "dump target {} already exists without this operation's receipt; refusing to \
@@ -4657,7 +4696,7 @@ fn continue_upgrade(
     candidate_live: &[u8],
     receipt: &mut UpgradeReceiptV1,
 ) -> Result<UpgradeReceiptV1> {
-    let query = LoaderActionQueryV1 {
+    let loader_upgrade_query = || LoaderActionQueryV1 {
         origin: &args.origin,
         program_id: args.program_id,
         programdata_id: args.programdata_id,
@@ -4806,6 +4845,10 @@ fn continue_upgrade(
                 }
             }
             ReceiptPhaseV1::BufferReady => {
+                if args.stop_after_buffer_ready {
+                    return Ok(receipt.clone());
+                }
+                let query = loader_upgrade_query();
                 let unsigned = runner.prepare_loader_action(&query)?;
                 authenticate_unsigned_loader_action(&query, &unsigned)?;
                 receipt.phase = ReceiptPhaseV1::MessagePrepared;
@@ -4816,6 +4859,7 @@ fn continue_upgrade(
                 write_receipt(&args.receipt_path, receipt)?;
             }
             ReceiptPhaseV1::MessagePrepared => {
+                let query = loader_upgrade_query();
                 let unsigned = upgrade_unsigned(receipt)?;
                 let signed = runner.sign_loader_action(&query, &unsigned)?;
                 authenticate_signed_loader_action(&query, &unsigned, &signed)?;
@@ -4826,6 +4870,7 @@ fn continue_upgrade(
                 write_receipt(&args.receipt_path, receipt)?;
             }
             ReceiptPhaseV1::SignedNotSubmitted => {
+                let query = loader_upgrade_query();
                 let unsigned = upgrade_unsigned(receipt)?;
                 let signed = upgrade_signed(receipt)?;
                 authenticate_signed_loader_action(&query, &unsigned, &signed)?;
@@ -8512,6 +8557,7 @@ mod tests {
         authority_signer: Keypair,
         payer_signer: Keypair,
         send_count: u64,
+        prepare_count: u64,
         sign_count: u64,
         buffer_writer_alive: bool,
         crash_after_buffer_lease: bool,
@@ -8564,6 +8610,7 @@ mod tests {
                 authority_signer: fixture.authority_signer.insecure_clone(),
                 payer_signer: fixture.payer_signer.insecure_clone(),
                 send_count: 0,
+                prepare_count: 0,
                 sign_count: 0,
                 buffer_writer_alive: false,
                 crash_after_buffer_lease: false,
@@ -8868,6 +8915,7 @@ mod tests {
             &mut self,
             query: &LoaderActionQueryV1<'_>,
         ) -> Result<UnsignedLoaderActionV1> {
+            self.prepare_count += 1;
             let mut blockhash_bytes = [44; 32];
             blockhash_bytes[0] = u8::try_from(self.finalized_height % 251).expect("height byte");
             let blockhash = Hash::new_from_array(blockhash_bytes);
@@ -9452,6 +9500,7 @@ mod tests {
                 exclusive_payer_window_acknowledgment: Some(format!("custody:{program}:{payer}")),
                 execute: true,
                 preflight: false,
+                stop_after_buffer_ready: false,
             };
             let carry_path = directory.0.join("carry-forward.json");
             fs::write(&carry_path, b"{}\n").expect("write carry placeholder");
@@ -11798,6 +11847,69 @@ mod tests {
     }
 
     #[test]
+    fn stage_only_stops_at_exact_buffer_and_later_upgrade_needs_a_new_execution() {
+        let mut fixture = Fixture::new();
+        fixture.args.stop_after_buffer_ready = true;
+        let mut runner = FakeRunner::new(&fixture);
+
+        let staged = execute_with_runner(&fixture.args, &mut runner)
+            .expect("exact Buffer stage completes without Loader Upgrade");
+        assert_eq!(staged.phase, ReceiptPhaseV1::BufferReady);
+        assert_eq!(staged.before.deployment_slot, 91);
+        assert!(staged.after.is_none());
+        assert!(staged.transaction_signature.is_none());
+        assert_eq!(
+            staged.buffer_ready_lamports,
+            Some(runner.buffer_rent_lamports)
+        );
+        assert_eq!(staged.buffer_upload_fee_lamports, Some(0));
+        assert!(staged.buffer_upload_transactions.is_some());
+        assert!(staged.buffer_upload_transactions_sha256.is_some());
+        assert_eq!(staged.raw_elf_sha256, digest(&fixture.raw_elf));
+        assert_eq!(
+            staged.retained_upgrade_authority,
+            fixture.authority.to_string()
+        );
+        assert_eq!(runner.prepare_count, 0);
+        assert_eq!(runner.sign_count, 0);
+        assert_eq!(runner.send_count, 0);
+        assert!(!runner.deployed);
+
+        let persisted = load_receipt(&fixture.args.receipt_path)
+            .expect("stage receipt read")
+            .expect("stage receipt exists");
+        assert_eq!(persisted, staged);
+
+        let mut resume_args = fixture.args.clone();
+        resume_args.stop_after_buffer_ready = false;
+        let mut resume = FakeRunner::new(&fixture);
+        resume.buffer_written = true;
+        let complete = execute_with_runner(&resume_args, &mut resume)
+            .expect("separately authorized execution resumes exact BufferReady receipt");
+        assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
+        assert_eq!(resume.prepare_count, 1);
+        assert_eq!(resume.sign_count, 1);
+        assert_eq!(resume.send_count, 1);
+        assert!(
+            resume
+                .calls
+                .iter()
+                .all(|call| { call.get(1).map(String::as_str) != Some("write-buffer") })
+        );
+
+        let mut forbidden = FakeRunner::new(&fixture);
+        forbidden.deployed = true;
+        let error = execute_with_runner(&fixture.args, &mut forbidden)
+            .expect_err("stage-only mode cannot reinterpret a crossed Upgrade boundary");
+        assert!(
+            error
+                .to_string()
+                .contains("already crossed the Loader Upgrade construction boundary")
+        );
+        assert!(forbidden.calls.is_empty());
+    }
+
+    #[test]
     fn poststate_requires_slot_advancement_and_never_replays() {
         let fixture = Fixture::new();
         let mut runner = FakeRunner::new(&fixture);
@@ -13039,6 +13151,17 @@ mod tests {
             loopback
                 .to_string()
                 .contains("given for the loopback origin")
+        );
+
+        let stop_without_execute = parse_args(vec![
+            "--preflight".into(),
+            "--stop-after-buffer-ready".into(),
+        ])
+        .expect_err("read-only preflight cannot request a Buffer mutation");
+        assert!(
+            stop_without_execute
+                .to_string()
+                .contains("requires --execute because Buffer upload is a devnet mutation")
         );
         drop(fixture);
     }
