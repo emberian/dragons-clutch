@@ -9786,10 +9786,12 @@ fn execute_funding_readiness_suffix_v1(
             ));
         }
         FundingReadinessPlanV1::ConsumedByFounding => {
-            return Err(Error::new(
-                "CreateFund finalized into a terminal Consumed readiness; the suffix should \
-                 have returned before this stage",
-            ));
+            completed.push(
+                "resolution funding readiness is terminal after the create stage: the atomic \
+                 founding consumed the staged readiness and the Market is Open"
+                    .into(),
+            );
+            return Ok(());
         }
     }
 
@@ -9883,10 +9885,12 @@ fn execute_funding_readiness_suffix_v1(
             ));
         }
         FundingReadinessPlanV1::ConsumedByFounding => {
-            return Err(Error::new(
-                "ActivateFund finalized into a terminal Consumed readiness; the suffix should \
-                 have returned before this stage",
-            ));
+            completed.push(
+                "resolution funding readiness is terminal after the activate stage: the atomic \
+                 founding consumed the staged readiness and the Market is Open"
+                    .into(),
+            );
+            return Ok(());
         }
     }
 
