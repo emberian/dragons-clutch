@@ -641,6 +641,7 @@ pub fn build_resolution_verify_fund_ready_v3(
     if snapshot.beneficiary.key.to_bytes() != market.rent_beneficiary.to_bytes()
         || snapshot.beneficiary.executable
     {
+        eprintln!("verify-fund-ready refused: beneficiary");
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let (verify_material, _, entries) = authenticate_founding_records(
@@ -671,6 +672,7 @@ pub fn build_resolution_verify_fund_ready_v3(
         false,
     )?;
     if active_entries != entries {
+        eprintln!("verify-fund-ready refused: entries {entries:?} != active {active_entries:?}");
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let role_request = funding_role_request(
@@ -2885,29 +2887,35 @@ fn authenticate_active_funding_ledger(
     rent: &solana_program::rent::Rent,
     allow_lamport_surplus: bool,
 ) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
+    let refuse = |conjunct: &str| {
+        eprintln!("active-funding-ledger refused: {conjunct}");
+        ResolutionCoreOperatorErrorV3::Funding
+    };
     if account.owner != resolution_program || account.executable {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(refuse("owner/executable"));
     }
-    let ledger = FundingLedgerV2::decode(&account.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    let ledger = FundingLedgerV2::decode(&account.data).map_err(|_| refuse("decode"))?;
     let entries = funding_entries_from_mask(ledger.selected_mask())?;
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| refuse("manifest binding"))?;
     for entry_index in entries {
         if authenticated
             .slot(entry_index)
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+            .map_err(|_| refuse("slot read"))?
             .status()
             != FundingLedgerStatusV2::Active
-            || manifest
-                .entry(entry_index)
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
-                .funding_quote()
-                .realm_collateral()
-                .is_some()
         {
-            return Err(ResolutionCoreOperatorErrorV3::Funding);
+            return Err(refuse("entry not Active"));
+        }
+        if manifest
+            .entry(entry_index)
+            .map_err(|_| refuse("manifest entry"))?
+            .funding_quote()
+            .realm_collateral()
+            .is_some()
+        {
+            return Err(refuse("realm-collateral quote"));
         }
     }
     authenticated
@@ -2916,7 +2924,7 @@ fn authenticate_active_funding_ledger(
             rent.minimum_balance(account.data.len()),
             allow_lamport_surplus,
         )
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| refuse("native custody arithmetic"))?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         resolution_program.to_bytes(),
         market.to_bytes(),
