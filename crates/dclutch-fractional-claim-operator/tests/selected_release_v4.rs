@@ -854,3 +854,67 @@ fn the_kernel_join_refuses_every_market_free_field_independently() {
         );
     }
 }
+
+/// The publication names every record a Registry must finalize, under schemas
+/// read off the artifacts rather than restated -- and NOT the exposure terms.
+///
+/// The absence is the load-bearing assertion. The terms bind the Market, so a
+/// founding that had to publish them could not be assembled before the Market
+/// existed. Every record here is market-free, which is what lets the whole
+/// publication be compiled ahead of the founding that selects it.
+#[test]
+fn the_publication_records_are_market_free_and_schema_faithful() {
+    let bytes = encoded_terms();
+    let release = fractional_selected_release_v4(input(&bytes)).unwrap();
+    let records = release.publication_records().unwrap();
+
+    // 2 shared + 7 per action.
+    assert_eq!(records.len(), 2 + FRACTIONAL_SELECTED_ACTION_COUNT_V4 * 7);
+    assert_eq!(records[0].label, "program-set");
+    assert_eq!(records[1].label, "selection-config");
+    assert_eq!(records[1].schema, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1);
+    assert_eq!(records[1].content_id(), release.selection_config_id);
+
+    // No record is finalized under the TERMS schema, and no record body is the
+    // terms bytes: the execution record is not part of the publication.
+    for record in &records {
+        assert_ne!(
+            record.schema, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            "the publication must not finalize anything as exposure terms"
+        );
+        assert_ne!(record.body, bytes.as_slice());
+    }
+
+    // Every descriptor record's content id is one the ProgramSet actually
+    // selects, so a record cannot be published for a descriptor this release
+    // does not name.
+    let descriptors: Vec<[u8; 32]> = records
+        .iter()
+        .filter(|record| record.label == "descriptor")
+        .map(|record| record.content_id())
+        .collect();
+    assert_eq!(descriptors.len(), FRACTIONAL_SELECTED_ACTION_COUNT_V4);
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        assert_eq!(*descriptor, release.publication.descriptors[index]);
+    }
+}
+
+/// The publication records do not move when only the Market moves -- the
+/// closure control extended to the bytes a founding actually publishes.
+#[test]
+fn the_publication_records_do_not_move_with_the_market() {
+    const OTHER_MARKET: [u8; 32] = [0xd7; 32];
+    let first_bytes = encoded_terms_for_market(MARKET);
+    let second_bytes = encoded_terms_for_market(OTHER_MARKET);
+    let first = fractional_selected_release_v4(input(&first_bytes)).unwrap();
+    let second = fractional_selected_release_v4(input(&second_bytes)).unwrap();
+
+    let left = first.publication_records().unwrap();
+    let right = second.publication_records().unwrap();
+    assert_eq!(left.len(), right.len());
+    for (a, b) in left.iter().zip(right.iter()) {
+        assert_eq!(a.label, b.label);
+        assert_eq!(a.schema, b.schema);
+        assert_eq!(a.body, b.body, "record {} moved with the Market", a.label);
+    }
+}

@@ -29,10 +29,11 @@ use alloc::{vec, vec::Vec};
 
 use dclutch_capability_program_contract::{
     set_v2::{
-        CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
-        SelectorWidthV2, encode_program_set_v2, encoded_program_set_bytes_v2,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
+        CapabilityProgramSetEntryV2, CapabilityProgramSetV2, SelectorWidthV2,
+        encode_program_set_v2, encoded_program_set_bytes_v2,
     },
-    v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
 use dclutch_claims_svm::{
     frame_spec_v1::{ClaimsFrameDataV1, SignedDeltaFrameSpecV3},
@@ -582,6 +583,123 @@ fn selection_config_bytes(
     )
     .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
     Ok(bytes)
+}
+
+/// One record a Registry must finalize for a published Fractional release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalPublicationRecordV1<'a> {
+    /// Stable operator-facing label.
+    pub label: &'static str,
+    /// Schema the record is finalized under.
+    pub schema: [u8; 32],
+    /// Exact semantic bytes.
+    pub body: &'a [u8],
+}
+
+impl FractionalPublicationRecordV1<'_> {
+    /// Content identity of the exact bytes.
+    #[must_use]
+    pub fn content_id(&self) -> [u8; 32] {
+        digest(self.body)
+    }
+}
+
+impl FractionalSelectedReleaseV4 {
+    /// Enumerate every record the Registry must hold for this release.
+    ///
+    /// Each record's schema is READ OFF the artifact that names it -- the
+    /// descriptor's own `ArtifactReferenceV4` schemas, the descriptor's own
+    /// `config_schema`, and the set entry's own descriptor schema. Nothing here
+    /// restates a schema constant, so a publication plan cannot finalize a
+    /// record under a schema this release does not actually select.
+    ///
+    /// Note what the config record IS after the split: the market-free
+    /// selection config, published under the schema the descriptor selects.
+    /// The exposure TERMS are deliberately absent -- they are the execution
+    /// record, they bind the Market, and nothing a founding publishes may
+    /// depend on the Market it is founding.
+    pub fn publication_records(
+        &self,
+    ) -> Result<Vec<FractionalPublicationRecordV1<'_>>, FractionalSelectedReleaseErrorV4> {
+        let set = CapabilityProgramSetV2::decode(&self.program_set)
+            .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+        let first = CapabilityProgramV4::decode(
+            &self
+                .bundles
+                .first()
+                .ok_or(FractionalSelectedReleaseErrorV4::Bundle)?
+                .descriptor,
+        )
+        .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+
+        let mut records = Vec::with_capacity(2 + FRACTIONAL_SELECTED_ACTION_COUNT_V4 * 7);
+        records.push(FractionalPublicationRecordV1 {
+            label: "program-set",
+            schema: CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            body: &self.program_set,
+        });
+        records.push(FractionalPublicationRecordV1 {
+            label: "selection-config",
+            schema: first.config_schema().to_bytes(),
+            body: &self.selection_config,
+        });
+
+        for (index, bundle) in self.bundles.iter().enumerate() {
+            let entry = set
+                .entry(
+                    u16::try_from(index)
+                        .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?,
+                )
+                .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
+            let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
+                .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
+            let artifacts = descriptor.artifacts();
+            for (label, schema, body) in [
+                (
+                    "descriptor",
+                    entry.descriptor().schema().to_bytes(),
+                    bundle.descriptor.as_slice(),
+                ),
+                (
+                    "account-profile",
+                    artifacts.account_profile.schema().to_bytes(),
+                    bundle.account_profile.as_slice(),
+                ),
+                (
+                    "lifecycle-policy",
+                    artifacts.lifecycle.schema().to_bytes(),
+                    bundle.lifecycle_policy.as_slice(),
+                ),
+                (
+                    "request-profile",
+                    artifacts.request_profile.schema().to_bytes(),
+                    bundle.request_profile.as_slice(),
+                ),
+                (
+                    "strategy",
+                    artifacts.strategy.schema().to_bytes(),
+                    bundle.strategy.as_slice(),
+                ),
+                (
+                    "transition",
+                    artifacts.transition.schema().to_bytes(),
+                    bundle.transition.as_slice(),
+                ),
+                (
+                    "effect",
+                    artifacts.effect.schema().to_bytes(),
+                    bundle.effect.as_slice(),
+                ),
+            ] {
+                records.push(FractionalPublicationRecordV1 {
+                    label,
+                    schema,
+                    body,
+                });
+            }
+        }
+        Ok(records)
+    }
 }
 
 fn program_set_entries(
