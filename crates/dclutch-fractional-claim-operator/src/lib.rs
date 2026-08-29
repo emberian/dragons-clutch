@@ -16,6 +16,7 @@ mod exposure_action_v2;
 mod hot_v2;
 mod records;
 mod token2022;
+mod topology_v3;
 
 use dclutch_fractional_claim_contract::{
     FractionalActionV1, FractionalArtifactBundleV1, FractionalFamilyRequestInputV1,
@@ -86,6 +87,10 @@ pub use token2022::{
     FractionalTokenEffectV1, build_fractional_physical_unsigned_v0_from_chain_v1,
     plan_fractional_lifecycle_rent_close_v2, plan_fractional_retirement_token_effects_v1,
     plan_fractional_token_effect_v1,
+};
+pub use topology_v3::{
+    FRACTIONAL_CHILD_ENVELOPE_BYTES_V3, FractionalFrameCensusV3, FractionalFrameKindV3,
+    TOKEN_2022_TRANSFER_CHECKED_BYTES, fractional_frame_census_v3,
 };
 
 /// Exact semantic coordinates obtained from authenticated chain state.

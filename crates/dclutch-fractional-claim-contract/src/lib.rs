@@ -11,8 +11,10 @@
 
 mod artifacts;
 mod hot_v2;
+mod physical_v3;
 mod request;
 mod request_v2;
+mod retirement_v3;
 mod root;
 
 pub use artifacts::{
@@ -27,6 +29,10 @@ pub use hot_v2::{
     FractionalHotClaimsEffectV2, FractionalHotErrorV2, FractionalHotRentCloseV2,
     FractionalHotTokenEffectV2, FractionalHotTokenKindV2, FractionalHotTokenPostV2,
     Result as FractionalHotResultV2,
+};
+pub use physical_v3::{
+    FractionalChildRouteV3, FractionalPhysicalErrorV3, FractionalPhysicalPlanV3,
+    FractionalSignerRoleV3, Result as FractionalPhysicalResultV3, plan_fractional_physical_v3,
 };
 pub use request::{
     FRACTIONAL_FAMILY_REQUEST_BYTES_V1, FRACTIONAL_FAMILY_REQUEST_MAGIC_V1,
@@ -49,6 +55,17 @@ pub use request_v2::{
     FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_ID_V2, FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_PREIMAGE_V2,
     FractionalExposureActionV2, FractionalExposureRequestErrorV2, FractionalExposureRequestInputV2,
     FractionalExposureRequestV2, NO_EXPOSURE_COORDINATE_V2, Result as ExposureRequestResult,
+};
+pub use retirement_v3::{
+    FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3, FRACTIONAL_RETIREMENT_CURSOR_MAGIC_V3,
+    FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_ID_V3, FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_PREIMAGE_V3,
+    FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3, FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3,
+    FRACTIONAL_RETIREMENT_REQUEST_SCHEMA_ID_V3, FRACTIONAL_RETIREMENT_REQUEST_SCHEMA_PREIMAGE_V3,
+    FractionalRetireCoordinateObservationV3, FractionalRetirementActionV3,
+    FractionalRetirementCursorInputV3, FractionalRetirementCursorV3, FractionalRetirementErrorV3,
+    FractionalRetirementFinishV3, FractionalRetirementRequestInputV3,
+    FractionalRetirementRequestV3, NO_RETIREMENT_COORDINATE_V3,
+    Result as FractionalRetirementResultV3,
 };
 pub use root::{
     FRACTIONAL_ROOT_BYTES_V1, FRACTIONAL_ROOT_MAGIC_V1, FRACTIONAL_ROOT_MARKET_OFFSET_V1,
