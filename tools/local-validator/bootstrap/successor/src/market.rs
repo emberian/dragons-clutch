@@ -9811,6 +9811,150 @@ fn execute_funding_readiness_suffix_v1(
     Ok(())
 }
 
+/// Pre-fund the five accounts founding allocates but never funds.
+///
+/// Nothing in the protocol funds these five. Core allocates the Market and the
+/// permit and Claims allocates its three accounts with `allocate` and `assign`
+/// only, never a transfer, so each must already hold its rent. The Market and
+/// the permit are checked for EXACT equality with their rent minima, and all
+/// three Claims balances are folded byte-exactly into the permit's committed
+/// Claims request, so this transaction is part of the founding's authenticated
+/// prestate and not a convenience. It is identical for the composed and split
+/// routes: both create the same five accounts, only in different transactions.
+fn prefund_founding_accounts_v1(
+    rpc: &mut Rpc,
+    outer: &FoundingOuterV1,
+    market: Pubkey,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<()> {
+    let aggregate_rent = rpc.minimum_balance(outer.aggregate_width)?;
+    let position_rent = rpc.minimum_balance(outer.position_width)?;
+    let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
+    let prefunding = [
+        (market, outer.market_rent),
+        (outer.permit, outer.permit_rent),
+        (outer.aggregate, aggregate_rent),
+        (outer.position, position_rent),
+        (outer.admission, admission_rent),
+    ];
+    let observed_prefunding = prefunding
+        .iter()
+        .map(|(address, _)| rpc.account(*address))
+        .collect::<Result<Vec<_>>>()?;
+    if observed_prefunding.iter().all(Option::is_none) {
+        transactions.push(
+            rpc.send(
+                "pre-fund the founding's five program-allocated accounts",
+                &prefunding
+                    .iter()
+                    .map(|(address, lamports)| transfer(&payer.pubkey(), address, *lamports))
+                    .collect::<Vec<_>>(),
+                payer,
+            )?,
+        );
+    } else if prefunding
+        .iter()
+        .zip(&observed_prefunding)
+        .all(|((_, expected), account)| {
+            account.as_ref().is_some_and(|account| {
+                account.owner == system_program::ID
+                    && !account.executable
+                    && account.data.is_empty()
+                    && account.lamports == *expected
+            })
+        })
+    {
+        eprintln!(
+            "campaign: exact founding pre-funding already finalized; resumed without a second debit"
+        );
+    } else {
+        return Err(Error::new(
+            "founding pre-funding is partial or differs from the five exact rent principals; never top up or overwrite it",
+        ));
+    }
+    authenticate_founding_prefunding_v1(rpc, outer, market)?;
+    Ok(())
+}
+
+/// Publish the founding's Realize, Claims, and substituted-Claims requests.
+///
+/// The Realize and Claims requests join the founding artifact and terminal Lock
+/// the campaign already published; a substituted request is a substituted
+/// address, so the outer's frame checks catch it. Each publication is verified
+/// against its pre-mutation derivation. Returns the substituted-Claims record
+/// address the hostile probe substitutes into the frame. Shared by both routes.
+#[allow(clippy::too_many_arguments)]
+fn publish_founding_request_records_v1(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    payer: &Keypair,
+    outer: &FoundingOuterV1,
+    expected_realize_record: PublishedRecord,
+    expected_claims_record: PublishedRecord,
+    expected_substituted_claims_record: PublishedRecord,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<Pubkey> {
+    let realize_record = publish_record(
+        rpc,
+        registry,
+        payer,
+        expected_realize_record.schema,
+        &outer.realize_raw,
+        None,
+        transactions,
+    )?;
+    require_published_record_matches_derivation_v1(
+        "projected-custody-realize",
+        expected_realize_record,
+        realize_record,
+    )?;
+    let claims_record = publish_record(
+        rpc,
+        registry,
+        payer,
+        expected_claims_record.schema,
+        &outer.claims_raw,
+        None,
+        transactions,
+    )?;
+    require_published_record_matches_derivation_v1(
+        "claims-founding-v5",
+        expected_claims_record,
+        claims_record,
+    )?;
+    let substituted_claims_record = publish_record(
+        rpc,
+        registry,
+        payer,
+        expected_substituted_claims_record.schema,
+        &outer.substituted_claims_raw,
+        None,
+        transactions,
+    )?;
+    require_published_record_matches_derivation_v1(
+        "claims-founding-v5-substituted-founder",
+        expected_substituted_claims_record,
+        substituted_claims_record,
+    )?;
+    Ok(substituted_claims_record.raw)
+}
+
+/// Whether this run drives the two-stage split founding.
+///
+/// A proof-run toggle read from the environment, deliberately confined to this
+/// module while the successor tree is under concurrent construction by other
+/// lanes. The durable home for the route selection is a `MarketRunInput` field;
+/// gating on the environment lands the split executor and its local proof now
+/// without adding a required field that would force every `MarketRunInput`
+/// literal in the tree — several mid-rewrite in other lanes — to change at once.
+fn founding_route_is_split_v1() -> bool {
+    matches!(
+        std::env::var("DCLUTCH_FOUNDING_ROUTE").as_deref(),
+        Ok("split")
+    )
+}
+
 /// Found the Market atomically on a real validator: `DCLTGMF3`.
 ///
 /// Five stages in one rollback domain against the prestate `DCLTPCB2` left.
@@ -9818,6 +9962,11 @@ fn execute_funding_readiness_suffix_v1(
 /// single transaction is the whole distance between a projected-Custody
 /// prestate and a live Market with a Claims aggregate, a founder Position, and
 /// a Hoard holding the collateral.
+///
+/// When [`founding_route_is_split_v1`] is set, founding runs as two
+/// transactions instead; this function delegates to
+/// [`execute_split_market_founding`] at the top, sharing the entire prestate
+/// prologue up to the founding submission itself.
 #[allow(clippy::too_many_arguments)]
 fn execute_generic_market_founding(
     rpc: &mut Rpc,
@@ -9838,6 +9987,26 @@ fn execute_generic_market_founding(
     completed: &mut Vec<String>,
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<()> {
+    if founding_route_is_split_v1() {
+        return execute_split_market_founding(
+            rpc,
+            plan,
+            input,
+            records,
+            coordinates,
+            product,
+            mint,
+            found31_market,
+            actors,
+            found_raw_account,
+            lock_raw_account,
+            claim_count,
+            payer,
+            transactions,
+            accounts,
+            completed,
+        );
+    }
     let registry = pubkey(&plan.registry.program_id)?;
     let core = pubkey(&plan.core.program_id)?;
     let claims_program = pubkey(&plan.claims.program_id)?;
@@ -9933,104 +10102,17 @@ fn execute_generic_market_founding(
         hex(&initial_founding_census.key_privilege_digest),
     );
 
-    // Nothing in the protocol funds these five. Core allocates the Market and
-    // the permit and Claims allocates its three accounts with `allocate` and
-    // `assign` only, never a transfer, so each must already hold its rent. The
-    // Market and the permit are checked for EXACT equality with their rent
-    // minima, and all three Claims balances are folded byte-exactly into the
-    // permit's committed Claims request, so this transaction is part of the
-    // founding's authenticated prestate and not a convenience.
-    let aggregate_rent = rpc.minimum_balance(outer.aggregate_width)?;
-    let position_rent = rpc.minimum_balance(outer.position_width)?;
-    let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
-    let prefunding = [
-        (coordinates.market, outer.market_rent),
-        (outer.permit, outer.permit_rent),
-        (outer.aggregate, aggregate_rent),
-        (outer.position, position_rent),
-        (outer.admission, admission_rent),
-    ];
-    let observed_prefunding = prefunding
-        .iter()
-        .map(|(address, _)| rpc.account(*address))
-        .collect::<Result<Vec<_>>>()?;
-    if observed_prefunding.iter().all(Option::is_none) {
-        transactions.push(
-            rpc.send(
-                "pre-fund the founding's five program-allocated accounts",
-                &prefunding
-                    .iter()
-                    .map(|(address, lamports)| transfer(&payer.pubkey(), address, *lamports))
-                    .collect::<Vec<_>>(),
-                payer,
-            )?,
-        );
-    } else if prefunding
-        .iter()
-        .zip(&observed_prefunding)
-        .all(|((_, expected), account)| {
-            account.as_ref().is_some_and(|account| {
-                account.owner == system_program::ID
-                    && !account.executable
-                    && account.data.is_empty()
-                    && account.lamports == *expected
-            })
-        })
-    {
-        eprintln!(
-            "campaign: exact DCLTGMF3 pre-funding already finalized; resumed without a second debit"
-        );
-    } else {
-        return Err(Error::new(
-            "DCLTGMF3 pre-funding is partial or differs from the five exact rent principals; never top up or overwrite it",
-        ));
-    }
-    authenticate_founding_prefunding_v1(rpc, &outer, coordinates.market)?;
+    prefund_founding_accounts_v1(rpc, &outer, coordinates.market, payer, transactions)?;
 
-    // The Realize and Claims requests join the founding artifact and terminal
-    // Lock this campaign already published. A substituted request is a
-    // substituted address, so the outer's frame checks catch it.
-    let realize_record = publish_record(
+    let substituted_claims_raw = publish_founding_request_records_v1(
         rpc,
         registry,
         payer,
-        expected_realize_record.schema,
-        &outer.realize_raw,
-        None,
-        transactions,
-    )?;
-    require_published_record_matches_derivation_v1(
-        "projected-custody-realize",
+        &outer,
         expected_realize_record,
-        realize_record,
-    )?;
-    let claims_record = publish_record(
-        rpc,
-        registry,
-        payer,
-        expected_claims_record.schema,
-        &outer.claims_raw,
-        None,
-        transactions,
-    )?;
-    require_published_record_matches_derivation_v1(
-        "claims-founding-v5",
         expected_claims_record,
-        claims_record,
-    )?;
-    let substituted_claims_record = publish_record(
-        rpc,
-        registry,
-        payer,
-        expected_substituted_claims_record.schema,
-        &outer.substituted_claims_raw,
-        None,
-        transactions,
-    )?;
-    require_published_record_matches_derivation_v1(
-        "claims-founding-v5-substituted-founder",
         expected_substituted_claims_record,
-        substituted_claims_record,
+        transactions,
     )?;
 
     // Recompile immediately before ALT publication. The exact instruction and
@@ -10111,7 +10193,7 @@ fn execute_generic_market_founding(
         .accounts
         .get_mut(3)
         .ok_or_else(|| Error::new("the founding frame omitted its Claims request"))?
-        .pubkey = substituted_claims_record.raw;
+        .pubkey = substituted_claims_raw;
     let rollback_recipient = crate::seed::fresh_probe_address();
 
     // The probe is EVIDENCE COLLECTION, not the protocol: the refusal it
@@ -10176,9 +10258,14 @@ fn execute_generic_market_founding(
         Some(recorder) => {
             let mut prestate_addresses = created.iter().map(|(_, key)| *key).collect::<Vec<_>>();
             prestate_addresses.extend([coordinates.source_vault, coordinates.projected_replay]);
+            // The one-shot permit is NOT here: the commit-last Open stage
+            // consumes it inside the same transaction and
+            // authenticate_open_market_poststate_v1 already requires its
+            // ABSENCE. The journal's completion capture reads every account
+            // listed here as required-present, so listing the permit refused
+            // every founding that succeeded - after the transaction landed.
             let completion_addresses = vec![
                 coordinates.market,
-                outer.permit,
                 outer.aggregate,
                 outer.position,
                 outer.admission,
@@ -10274,6 +10361,527 @@ fn execute_generic_market_founding(
     completed.push(
         "executed DCLTGMF3: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
     );
+    Ok(())
+}
+
+/// Found the Market in two transactions: `DCLTGFP1` then `DCLTGMO1`.
+///
+/// The prestate (`DCLTPCB2` and everything before it) is identical to the
+/// composed route; only the founding submission itself splits. Stage 1 commits
+/// the Market in its `Founding` phase, escrows the one-shot Core permit, and
+/// realizes the collateral into normal Custody — one rollback domain that
+/// closes the controller-funding checkpoint as it commits. Stage 2 is the
+/// permissionless commit-last Open: it consumes the permit and opens the
+/// Market, and every coordinate of that open is pinned by the escrowed permit,
+/// so nobody but the founding's own committed intent can steer it.
+///
+/// This run uses no durable submission journal: it is a local proof of the
+/// route, and the composed route's `None` submission path is the same shape.
+/// Durable-journal split submission is a follow-on.
+#[allow(clippy::too_many_arguments)]
+fn execute_split_market_founding(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    records: &MarketRecords,
+    coordinates: &FoundingCoordinates,
+    product: ProductContentId,
+    mint: Pubkey,
+    found31_market: Pubkey,
+    actors: FoundingActorsV1,
+    found_raw_account: Pubkey,
+    lock_raw_account: Pubkey,
+    claim_count: u32,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+    accounts: &mut BTreeMap<String, AccountEvidence>,
+    completed: &mut Vec<String>,
+) -> Result<()> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let claims_program = pubkey(&plan.claims.program_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+
+    authenticate_core_state_encoding_v1(rpc, found31_market)?;
+    let outer = derive_founding_outer_v1(
+        rpc,
+        plan,
+        input,
+        records,
+        coordinates,
+        product,
+        actors.founder,
+        actors.substituted_founder,
+        claim_count,
+    )?;
+    for (label, key, expected) in [
+        ("founding artifact", found_raw_account, &outer.found_raw),
+        ("terminal Lock request", lock_raw_account, &outer.lock_raw),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        if &account.data != expected {
+            return Err(Error::new(format!(
+                "the published {label} record is not the bytes the founding derived"
+            )));
+        }
+    }
+
+    // Admission before mutation: derive the still-vacant request coordinates and
+    // assemble both stage frames now, so a lock drift stops before any transfer
+    // or publication.
+    let expected_realize_record =
+        derive_raw_request_record_v1(registry, "projected-custody-realize", &outer.realize_raw)?;
+    let expected_claims_record =
+        derive_raw_request_record_v1(registry, "claims-founding-v5", &outer.claims_raw)?;
+    let expected_substituted_claims_record = derive_raw_request_record_v1(
+        registry,
+        "claims-founding-v5-substituted-founder",
+        &outer.substituted_claims_raw,
+    )?;
+    let prepared_stage1 = build_generic_found_and_permit_v3(
+        plan,
+        coordinates,
+        &outer,
+        records,
+        [
+            found_raw_account,
+            lock_raw_account,
+            expected_realize_record.raw,
+            expected_claims_record.raw,
+        ],
+        actors.founder,
+        mint,
+    )?;
+    let stage1_census =
+        authenticate_generic_found_and_permit_lock_census_v3(payer.pubkey(), &prepared_stage1)?;
+    let prepared_stage2 = build_generic_market_open_v1(
+        plan,
+        coordinates,
+        &outer,
+        found_raw_account,
+        expected_claims_record.raw,
+    )?;
+    authenticate_generic_market_open_frame_v1(payer.pubkey(), &prepared_stage2)?;
+    eprintln!(
+        "campaign: split founding admission — DCLTGFP1 {} complete keys ({} writable loaded), DCLTGMO1 {} accounts inline",
+        stage1_census.complete_keys,
+        stage1_census.loaded_writable,
+        prepared_stage2.instruction.accounts.len(),
+    );
+
+    // The stage-1 frame carries the four readonly raw requests first; index 3 is
+    // the Claims request the substituted-Claims hostile swaps. The stage-2 frame
+    // is two readonly raws then Core's Open window, so the permit — Open-window
+    // index 2 — is frame index 4.
+    const STAGE1_CLAIMS_RAW_FRAME_INDEX_V1: usize = 3;
+    const STAGE2_PERMIT_FRAME_INDEX_V1: usize = 2 + 2;
+
+    // Stage 2 and the stage-2 hostiles are inline v0 with no lookup table, so
+    // this finalized observation resolves no table entries; it is required by
+    // the v0 send signature but inert here.
+    let stage2_slot = rpc.finalized_slot()?;
+    let stage2_observation = Observation {
+        slot: stage2_slot,
+        unix_timestamp: rpc.block_time(stage2_slot)?,
+        finality: dclutch_versioned_message_operator::Finality::Finalized,
+    };
+
+    prefund_founding_accounts_v1(rpc, &outer, coordinates.market, payer, transactions)?;
+    let substituted_claims_raw = publish_founding_request_records_v1(
+        rpc,
+        registry,
+        payer,
+        &outer,
+        expected_realize_record,
+        expected_claims_record,
+        expected_substituted_claims_record,
+        transactions,
+    )?;
+
+    // The prefunded-but-unfounded prestate: every account stage 1 will allocate
+    // is still system-owned and empty, the projected-Custody prestate intact.
+    let created = [
+        ("founding_market", coordinates.market),
+        ("founding_permit", outer.permit),
+        ("claims_aggregate", outer.aggregate),
+        ("founder_position", outer.position),
+        ("claims_admission", outer.admission),
+    ];
+    let prestate_intact = |rpc: &mut Rpc, label: &str| -> Result<()> {
+        for (name, key) in created {
+            let account = rpc.required_account(key, name)?;
+            if account.owner != system_program::ID || !account.data.is_empty() {
+                return Err(Error::new(format!("{label} allocated the {name} account")));
+            }
+        }
+        Ok(())
+    };
+    prestate_intact(rpc, "the split founding prestate")?;
+
+    let (routing1, tables1) = publish_frozen_founding_routing_table_v1(
+        rpc,
+        payer,
+        "DCLTGFP1",
+        std::slice::from_ref(&prepared_stage1.instruction),
+        transactions,
+    )?;
+
+    // HOSTILE — stage interleaving: DCLTGMO1 (Open) before DCLTGFP1 (Found).
+    // The Market is still the prefunded, system-owned account, so the stage-2
+    // outer refuses at its own market-owner check before any CPI, and the
+    // prestate is proven untouched.
+    match rpc.send_v0_expected_failure(
+        "DCLTGMO1 refuses stage-2 Open before its stage-1 Found",
+        std::slice::from_ref(&prepared_stage2.instruction),
+        payer,
+        stage2_observation,
+        &[],
+    ) {
+        Ok(refused) => {
+            refused.refusing(0x4003)?;
+            prestate_intact(rpc, "the refused stage-interleaving Open")?;
+            completed.push(
+                "proved DCLTGMO1 refuses (0x4003) a stage-2 Open submitted before its stage-1 Found, prestate untouched".into(),
+            );
+        }
+        Err(error) if error.to_string().contains("dropped") => {
+            eprintln!("campaign: EVIDENCE GAP, recorded: the interleaving hostile was undeliverable ({error})");
+            completed.push("EVIDENCE GAP: the stage-interleaving hostile was undeliverable on this cluster".into());
+        }
+        Err(error) => return Err(error),
+    }
+
+    // HOSTILE — stage 1 refuses a substituted Claims request and rolls the
+    // whole Lock/Found/Realize/Claims domain back, exactly as the composed
+    // route's own substituted-Claims probe does.
+    let mut substituted = prepared_stage1.instruction.clone();
+    substituted
+        .accounts
+        .get_mut(STAGE1_CLAIMS_RAW_FRAME_INDEX_V1)
+        .ok_or_else(|| Error::new("the stage-1 frame omitted its Claims request"))?
+        .pubkey = substituted_claims_raw;
+    let rollback_recipient = crate::seed::fresh_probe_address();
+    match rpc.send_v0_on_founding_heap_expected_failure_with_signers(
+        "DCLTGFP1 refuses a substituted Claims request and rolls stage 1 back",
+        &[
+            transfer(&payer.pubkey(), &rollback_recipient, 1),
+            substituted,
+        ],
+        payer,
+        &[],
+        routing1,
+        &tables1,
+    ) {
+        Ok(rolled_back) => {
+            let fee_only = rolled_back.fee_only_balance_change;
+            if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
+                return Err(Error::new(format!(
+                    "refused stage 1 did not roll its whole transaction back to a fee-only debit: fee_only_balance_change={fee_only:?}",
+                )));
+            }
+            transactions.push(rolled_back);
+            prestate_intact(rpc, "the refused substituted-Claims stage 1")?;
+            completed.push(
+                "proved DCLTGFP1 refuses a substituted Claims request and rolls stage 1 back to a fee-only debit".into(),
+            );
+        }
+        Err(error) if error.to_string().contains("dropped") => {
+            eprintln!("campaign: EVIDENCE GAP, recorded: the stage-1 substituted-Claims hostile was undeliverable ({error})");
+            completed.push("EVIDENCE GAP: the stage-1 substituted-Claims hostile was undeliverable on this cluster".into());
+        }
+        Err(error) => return Err(error),
+    }
+
+    // Stage 1: the honest Lock/Found/Realize/Claims domain.
+    let stage1 = rpc.send_v0_on_founding_heap_with_signers(
+        "found and permit stage 1: Lock, Found, Realize, Claims; permit escrowed (DCLTGFP1)",
+        std::slice::from_ref(&prepared_stage1.instruction),
+        payer,
+        &[],
+        routing1,
+        &tables1,
+    )?;
+    let stage1_slot = stage1.slot;
+    transactions.push(stage1);
+    let poststate =
+        derive_founding_poststate_expectation_v1(plan, coordinates, actors.founder, claim_count)?;
+    authenticate_found_and_permit_poststate_v1(
+        rpc,
+        coordinates,
+        &poststate,
+        core,
+        claims_program,
+        custody,
+        token_program,
+        mint,
+    )?;
+    completed.push(
+        "executed DCLTGFP1: the Market is FOUNDING with its one-shot Core permit escrowed, the Claims aggregate/Position/admission live, the collateral realized into normal Custody, and the controller-funding checkpoint closed".into(),
+    );
+
+    // HOSTILE — wrong permit: a stage-2 Open naming a vacant address where the
+    // escrowed permit belongs. The market is Core-owned so the outer's join
+    // passes, and Core's own permit authenticator refuses the CPI; the Market
+    // stays FOUNDING and the real permit stays escrowed.
+    let wrong_permit = crate::seed::fresh_probe_address();
+    let mut wrong = prepared_stage2.instruction.clone();
+    wrong
+        .accounts
+        .get_mut(STAGE2_PERMIT_FRAME_INDEX_V1)
+        .ok_or_else(|| Error::new("the stage-2 frame omitted its permit"))?
+        .pubkey = wrong_permit;
+    match rpc.send_v0_expected_failure(
+        "DCLTGMO1 refuses a stage-2 Open naming the wrong permit",
+        std::slice::from_ref(&wrong),
+        payer,
+        stage2_observation,
+        &[],
+    ) {
+        Ok(refused) => {
+            refused.refusing(0x4004)?;
+            authenticate_found_and_permit_poststate_v1(
+                rpc,
+                coordinates,
+                &poststate,
+                core,
+                claims_program,
+                custody,
+                token_program,
+                mint,
+            )?;
+            completed.push(
+                "proved DCLTGMO1 refuses (0x4004, Core permit authenticator) a wrong-permit Open; the Market stays FOUNDING and the real permit stays escrowed".into(),
+            );
+        }
+        Err(error) if error.to_string().contains("dropped") => {
+            eprintln!("campaign: EVIDENCE GAP, recorded: the wrong-permit hostile was undeliverable ({error})");
+            completed.push("EVIDENCE GAP: the wrong-permit hostile was undeliverable on this cluster".into());
+        }
+        Err(error) => return Err(error),
+    }
+
+    // Stage 2: the honest permissionless commit-last Open. Twenty-three
+    // accounts fit an inline v0 packet, so it needs no lookup table and no
+    // extended heap.
+    let stage2 = rpc.send_v0(
+        "open the Market last, consuming the escrowed permit (DCLTGMO1)",
+        std::slice::from_ref(&prepared_stage2.instruction),
+        payer,
+        stage2_observation,
+        &[],
+    )?;
+    let open_slot = stage2.slot;
+    transactions.push(stage2);
+    authenticate_open_market_poststate_v1(
+        rpc,
+        coordinates,
+        &poststate,
+        core,
+        claims_program,
+        custody,
+        token_program,
+        mint,
+    )?;
+
+    // HOSTILE — permit replay: resend the exact stage-2 Open. The permit is
+    // consumed and the Market is Open, so Core refuses; the poststate is
+    // idempotent — the Market stays Open, the permit stays consumed.
+    match rpc.send_v0_expected_failure(
+        "DCLTGMO1 refuses a replay of a consumed permit",
+        std::slice::from_ref(&prepared_stage2.instruction),
+        payer,
+        stage2_observation,
+        &[],
+    ) {
+        Ok(refused) => {
+            refused.refusing(0x4004)?;
+            authenticate_open_market_poststate_v1(
+                rpc,
+                coordinates,
+                &poststate,
+                core,
+                claims_program,
+                custody,
+                token_program,
+                mint,
+            )?;
+            completed.push(
+                "proved DCLTGMO1 refuses (0x4004) a replay of a consumed permit; the Market stays Open and the permit stays consumed".into(),
+            );
+        }
+        Err(error) if error.to_string().contains("dropped") => {
+            eprintln!("campaign: EVIDENCE GAP, recorded: the permit-replay hostile was undeliverable ({error})");
+            completed.push("EVIDENCE GAP: the permit-replay hostile was undeliverable on this cluster".into());
+        }
+        Err(error) => return Err(error),
+    }
+
+    execute_funding_readiness_suffix_v1(
+        rpc,
+        plan,
+        records,
+        coordinates,
+        payer,
+        transactions,
+        accounts,
+        completed,
+        open_slot.max(stage1_slot),
+        &tables1.iter().map(|table| table.key).collect::<Vec<_>>(),
+        None,
+    )?;
+    for (label, key) in [
+        ("founding_market", coordinates.market),
+        ("claims_aggregate", outer.aggregate),
+        ("founder_position", outer.position),
+        ("claims_admission", outer.admission),
+        ("founding_hoard_vault_open", coordinates.hoard_vault),
+        (
+            "founding_normal_custody_replay",
+            coordinates.projected_replay,
+        ),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        accounts.insert(label.into(), account_evidence(key, &account));
+    }
+    completed.push(
+        "executed the two-stage founding: DCLTGFP1 escrowed the permit and DCLTGMO1 consumed it to open the Market last, economically atomic via the permit".into(),
+    );
+    Ok(())
+}
+
+/// Require the exact stage-1 poststate: Market founding, permit escrowed.
+///
+/// This is [`authenticate_open_market_poststate_v1`] with the Market and permit
+/// assertions inverted for the point between the two founding stages: the
+/// Market is committed in its `Founding` phase (not `Open`), and the one-shot
+/// Core permit is present and escrowed (not consumed). Everything else — the
+/// live Claims accounts, the Hoard holding the principal, the closed source
+/// compartment, the realized normal Custody replay, and the closed
+/// controller-funding checkpoint — is already in the state the composed route
+/// reaches, because stage 1 runs those legs identically.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_found_and_permit_poststate_v1(
+    rpc: &mut Rpc,
+    coordinates: &FoundingCoordinates,
+    expected: &FoundingPoststateExpectationV1,
+    core: Pubkey,
+    claims_program: Pubkey,
+    custody: Pubkey,
+    token_program: Pubkey,
+    mint: Pubkey,
+) -> Result<()> {
+    let market = rpc.required_account(coordinates.market, "stage-1 Market")?;
+    let state = CoreState::decode(&market.data)
+        .map_err(|error| Error::new(format!("stage-1 Market state: {error:?}")))?;
+    if market.owner != core
+        || market.data.len() != STATE_BYTES
+        || market.executable
+        || state.phase != Phase::Founding
+        || state.readiness != Readiness::Prepaid
+        || state.identity != coordinates.identity
+        || state.terminal_receipt.is_some()
+        || state.rent_beneficiary.to_bytes() != coordinates.credit.to_bytes()
+    {
+        return Err(Error::new(
+            "stage 1 did not commit the Market in the Founding phase its permit is escrowed against",
+        ));
+    }
+
+    // The one-shot permit is ESCROWED after stage 1: Core-owned, exact width,
+    // rent-exempt. This is the opposite of the Open poststate, which requires it
+    // consumed.
+    let permit = rpc.required_account(expected.permit, "stage-1 escrowed permit")?;
+    if permit.owner != core
+        || permit.data.len() != SERIES_FOUNDING_PERMIT_BYTES_V1
+        || permit.data.iter().all(|byte| *byte == 0)
+        || permit.lamports < rpc.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)?
+    {
+        return Err(Error::new(
+            "stage 1 did not escrow the one-shot Core permit stage 2 will consume",
+        ));
+    }
+
+    for (label, key, owner, width) in [
+        (
+            "Claims aggregate",
+            expected.aggregate,
+            claims_program,
+            expected.aggregate_width,
+        ),
+        (
+            "founder Position",
+            expected.position,
+            claims_program,
+            expected.position_width,
+        ),
+        (
+            "Claims admission",
+            expected.admission,
+            claims_program,
+            PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+        ),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        if account.owner != owner
+            || account.data.len() != width
+            || account.data.iter().all(|byte| *byte == 0)
+        {
+            return Err(Error::new(format!(
+                "{label} was not allocated, owned, and written by the stage-1 Claims founding"
+            )));
+        }
+    }
+
+    let hoard = rpc.required_account(coordinates.hoard_vault, "stage-1 Hoard")?;
+    let hoard_state = TokenAccount::parse(&hoard.data)
+        .map_err(|error| Error::new(format!("Hoard vault: {error:?}")))?;
+    if hoard.owner != token_program
+        || hoard_state.mint != mint.to_bytes()
+        || hoard_state.amount != expected.principal
+        || hoard_state.state != AccountState::Initialized
+    {
+        return Err(Error::new(
+            "stage 1 did not leave the Hoard holding exactly the founding principal",
+        ));
+    }
+
+    for (label, key) in [
+        ("founding source vault", coordinates.source_vault),
+        ("founding source replay", coordinates.source_replay),
+    ] {
+        if let Some(account) = rpc.account(key)?
+            && (account.owner != system_program::ID
+                || account.lamports != 0
+                || !account.data.is_empty())
+        {
+            return Err(Error::new(format!(
+                "{label} was not closed by the stage-1 Lock stage"
+            )));
+        }
+    }
+    let replay = rpc.required_account(coordinates.projected_replay, "normal Custody replay")?;
+    let normal = CustodyReplayV1::decode(&replay.data)
+        .map_err(|error| Error::new(format!("normal Custody replay: {error:?}")))?;
+    if replay.owner != custody
+        || replay.data.len() != CUSTODY_REPLAY_BYTES_V1
+        || normal.market != coordinates.market.to_bytes()
+        || normal.generation != coordinates.generation
+        || normal.open_vault_count != 1
+        || normal.next_revision != FOUNDING_NORMAL_REPLAY_REVISION_V1
+    {
+        return Err(Error::new(
+            "stage 1 did not realize the projected replay into the Market's normal Custody replay",
+        ));
+    }
+    if rpc
+        .account(coordinates.controller_funding_checkpoint)?
+        .is_some_and(|account| account.lamports != 0 || !account.data.is_empty())
+    {
+        return Err(Error::new(
+            "stage 1 finalized without consuming the controller funding checkpoint",
+        ));
+    }
     Ok(())
 }
 
