@@ -8886,6 +8886,7 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
             .map_err(|_| TradingSbfError::Transition)?,
         ClaimsRouteReceiptV3::FractionalAtomic(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::FractionalTerminalAtomic(value) => Vec::from(value.to_bytes()),
+        ClaimsRouteReceiptV3::FractionalRetirementCoordinate(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)

@@ -41,6 +41,7 @@ pub mod affine_batch_v2;
 pub mod custody_replay_v1;
 pub mod founding_v5;
 pub mod fractional_atomic_v3;
+mod fractional_retirement_v3;
 pub mod liability_basis_v2;
 pub mod market_closure_v1;
 mod product_runtime_v2;
@@ -242,6 +243,14 @@ pub fn process_instruction(
             accounts,
             instruction_data,
         );
+    }
+    if instruction_data
+        .get(..dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.len())
+        == Some(
+            dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.as_slice(),
+        )
+    {
+        return fractional_retirement_v3::process(program_id, accounts, instruction_data);
     }
     if instruction_data
         .get(..dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2.len())

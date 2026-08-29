@@ -5,10 +5,10 @@
 //! understate Solana's account-lock ceiling. Address lookup tables reduce wire
 //! bytes only; these counts remain the lock admission fact.
 
-use dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1;
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2,
-    FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3, FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
+    FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3, FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3,
+    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
 };
 
 /// One-byte Trading family envelope before the exact child request.
@@ -84,10 +84,10 @@ pub const fn fractional_frame_census_v3(kind: FractionalFrameKindV3) -> Fraction
             instruction_data_bytes: retirement,
             required_signatures: 1,
         },
-        // Claims ProtocolPositionClose owns 15 accounts; the outer route adds
-        // cursor, terms, Token program, selected Mint, root, and RentCredit.
+        // Exact production Claims frame: ProtocolPositionClose prefix followed
+        // by cursor, finalized terms/behavior pairs, selected Mint and Token.
         FractionalFrameKindV3::RetirementCoordinate => FractionalFrameCensusV3 {
-            unique_account_locks: PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1 as usize + 6,
+            unique_account_locks: FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3,
             instruction_data_bytes: retirement,
             required_signatures: 1,
         },

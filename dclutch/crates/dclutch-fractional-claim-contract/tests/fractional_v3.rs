@@ -8,10 +8,10 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_RETIREMENT_REQUEST_SCHEMA_PREIMAGE_V3, FractionalChildRouteV3,
     FractionalExposureActionV2, FractionalExposureRequestInputV2, FractionalExposureRequestV2,
     FractionalPhysicalErrorV3, FractionalRetireCoordinateObservationV3,
-    FractionalRetirementActionV3, FractionalRetirementCursorInputV3, FractionalRetirementCursorV3,
-    FractionalRetirementErrorV3, FractionalRetirementRequestInputV3, FractionalRetirementRequestV3,
-    FractionalSignerRoleV3, NO_EXPOSURE_COORDINATE_V2, NO_RETIREMENT_COORDINATE_V3,
-    plan_fractional_physical_v3,
+    FractionalRetirementActionV3, FractionalRetirementCoordinateReceiptV3,
+    FractionalRetirementCursorInputV3, FractionalRetirementCursorV3, FractionalRetirementErrorV3,
+    FractionalRetirementRequestInputV3, FractionalRetirementRequestV3, FractionalSignerRoleV3,
+    NO_EXPOSURE_COORDINATE_V2, NO_RETIREMENT_COORDINATE_V3, plan_fractional_physical_v3,
 };
 use dclutch_fractional_claim_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
@@ -297,6 +297,37 @@ fn ordered_retirement_roundtrips_advances_k_steps_and_finishes_fixed_width() {
         .unwrap();
     assert_eq!((finish.coordinate_count, finish.terminal_revision), (3, 12));
     assert_eq!(finish.cursor_rent_principal, 2_039_280);
+}
+
+#[test]
+fn coordinate_receipt_binds_parent_close_cursor_and_selected_mint() {
+    let request = retirement_request(FractionalRetirementActionV3::RetireCoordinate, 8, 0);
+    let receipt = FractionalRetirementCoordinateReceiptV3::new(
+        request, [31; 32], [32; 32], [33; 32], [34; 32], MINTS[0], 9,
+    )
+    .unwrap();
+    let encoded = receipt.to_bytes();
+    assert_eq!(
+        FractionalRetirementCoordinateReceiptV3::decode(&encoded),
+        Ok(receipt)
+    );
+    receipt.verify_for(request, [31; 32]).unwrap();
+    assert_eq!(receipt.shard_mint(), MINTS[0]);
+    assert_eq!(receipt.post_revision(), 9);
+
+    let mut hostile = encoded;
+    hostile[244] = 1;
+    assert_eq!(
+        FractionalRetirementCoordinateReceiptV3::decode(&hostile),
+        Err(FractionalRetirementErrorV3::InvalidEncoding)
+    );
+    assert_eq!(
+        receipt.verify_for(
+            retirement_request(FractionalRetirementActionV3::RetireCoordinate, 9, 0),
+            [31; 32],
+        ),
+        Err(FractionalRetirementErrorV3::InvalidTransition)
+    );
 }
 
 #[test]

@@ -29,7 +29,7 @@ dclutch-registry-svm = { path = "../../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../../crates/dclutch-release-set-contract" }
 dclutch-token-svm = { path = "../../../crates/dclutch-token-svm" }
 dclutch-trading-sbf = { path = "../../dclutch-trading-sbf", default-features = false, features = ["dealer-family", "series-family", "no-entrypoint"] }
-solana-account = "=4.3.2"
+solana-account = "=4.6.0"
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.5.0"
 solana-program-option = "=3.1.0"
