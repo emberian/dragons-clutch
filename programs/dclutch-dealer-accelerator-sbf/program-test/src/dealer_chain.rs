@@ -13,7 +13,6 @@
 use std::vec::Vec;
 
 use dclutch_capability_program_contract::hot_v3::HOT_ROOT_ACCOUNT_V3;
-use dclutch_direct_hot_program_test_support::chain::DirectHotInstallAccountV5;
 use dclutch_operator::{
     dealer_scenario_hot_v4::{
         DealerScenarioHotMetaErrorV4, DealerScenarioHotMetaReportV4, DealerScenarioHotMetaStateV4,
@@ -46,13 +45,28 @@ pub struct DealerScenarioChainInputV4<'a> {
     pub externally_installed_keys: &'a [Pubkey],
 }
 
+/// One Dealer-owned account this campaign installs.
+///
+/// It is deliberately local. Borrowing Direct's install type made a Dealer-only
+/// harness inherit Direct's whole dependency graph without sharing a semantic
+/// account constructor with it, which is a coupling that buys nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerScenarioInstallAccountV4 {
+    /// Exact account identity.
+    pub key: Pubkey,
+    /// Exact initial account state.
+    pub account: Account,
+    /// Whether a late-child refusal must preserve this account byte-for-byte.
+    pub snapshot_for_rollback: bool,
+}
+
 /// One canonical Dealer chain topology before any durable split.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DealerScenarioUnsplitChainTopologyV4 {
     /// Unsplit Hot instruction retained only for topology analysis.
     pub hot_instruction: Instruction,
     /// All distinct fixed, strategy, and packed runtime account bodies.
-    pub accounts: Vec<DirectHotInstallAccountV5>,
+    pub accounts: Vec<DealerScenarioInstallAccountV4>,
     /// Accounts installed externally by the release-waist harness.
     pub externally_installed_keys: Vec<Pubkey>,
     /// Mutable accounts whose state must roll back on any late refusal.
@@ -156,10 +170,10 @@ pub fn project_dealer_scenario_unsplit_chain_topology_v4(
 }
 
 fn install_observation(
-    accounts: &mut Vec<DirectHotInstallAccountV5>,
+    accounts: &mut Vec<DealerScenarioInstallAccountV4>,
     observed: &ObservedAccountMetaV3,
 ) -> Result<(), DealerScenarioChainErrorV4> {
-    let candidate = DirectHotInstallAccountV5 {
+    let candidate = DealerScenarioInstallAccountV4 {
         key: observed.account.key,
         account: Account {
             lamports: observed.account.lamports,

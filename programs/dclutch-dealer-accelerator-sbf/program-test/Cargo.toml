@@ -14,7 +14,6 @@ dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
 dclutch-dealer-codec = { path = "../../../crates/dclutch-dealer-codec" }
 dclutch-dealer-accelerator-test-caller-sbf = { path = "../test-programs/dealer-caller", features = ["no-entrypoint"] }
-dclutch-direct-hot-program-test-support = { path = "../../dclutch-trading-sbf/program-test/direct-hot" }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../../crates/dclutch-execution-strategy-contract" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
