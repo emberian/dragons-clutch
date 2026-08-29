@@ -93,7 +93,7 @@ const CLOCK: usize = 23;
 const RENT: usize = 24;
 const SYSTEM: usize = 25;
 
-const ACT_COMMON_ACCOUNT_COUNT: usize = 21;
+const ACT_COMMON_ACCOUNT_COUNT: usize = 20;
 const ACT_EFFECT_ACCOUNT_COUNT: usize = 4;
 const ACT_REPLAY: usize = 7;
 const ACT_CHECKPOINT: usize = 8;
@@ -106,9 +106,8 @@ const ACT_CUSTODY_AUTHORITY: usize = 14;
 const ACT_TOKEN_PROGRAM: usize = 15;
 const ACT_PAYER: usize = 16;
 const ACT_REFUND: usize = 17;
-const ACT_CLOCK: usize = 18;
-const ACT_RENT: usize = 19;
-const ACT_SYSTEM: usize = 20;
+const ACT_RENT: usize = 18;
+const ACT_SYSTEM: usize = 19;
 
 struct AuthenticatedEffectV1 {
     input: DealerScenarioCheckpointInputV1,
@@ -898,19 +897,10 @@ fn activate_batch(
     let trading = account(accounts, TRADING_PROGRAM)?;
     let checkpoint_account = account(accounts, ACT_CHECKPOINT)?;
     let first_checkpoint = read_checkpoint_facts(trading.key, checkpoint_account, 0)?;
-    if first_checkpoint.phase != DealerScenarioCheckpointPhaseV1::Reserved
-        || first_checkpoint.effect_count != effect_count
-        || first_checkpoint.reservation_count != effect_count
-        || first_checkpoint.rollback_count != 0
-    {
-        return Err(CustodySbfError::Replay.into());
-    }
+    require_committed_checkpoint(&first_checkpoint, effect_count)?;
     let checkpoint_key = checkpoint_account.key.to_bytes();
     let (batch, batch_prestate_digest) =
         read_batch(program_id, account(accounts, ACT_BATCH)?, checkpoint_key)?;
-    let slot = Clock::from_account_info(account(accounts, ACT_CLOCK)?)
-        .map_err(|_| CustodySbfError::AccountFrame)?
-        .slot;
     if batch.status != DealerScenarioReservationBatchStatusV1::Reserved
         || batch.effect_count != effect_count
         || batch.reserved_count != effect_count
@@ -924,7 +914,6 @@ fn activate_batch(
         || batch.refund_beneficiary != account(accounts, ACT_REFUND)?.key.to_bytes()
         || batch.expires_at != first_checkpoint.input.expires_at
         || batch.generation != first_checkpoint.input.generation
-        || slot > batch.expires_at
     {
         return Err(CustodySbfError::Replay.into());
     }
@@ -976,7 +965,6 @@ fn activate_batch(
     finish_activation(
         program_id,
         accounts,
-        slot,
         &first_checkpoint,
         batch,
         batch_prestate_digest,
@@ -990,7 +978,6 @@ fn activate_batch(
 fn finish_activation(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    slot: u64,
     checkpoint: &CheckpointFactsV1,
     batch: Box<DealerScenarioReservationBatchV1>,
     batch_prestate_digest: [u8; 32],
@@ -1006,7 +993,7 @@ fn finish_activation(
     let replay_poststate_digest = hash(&replay_bytes).to_bytes();
     let activated = Box::new(
         batch
-            .activate(slot, batch_prestate_digest)
+            .activate_committed(batch_prestate_digest)
             .map_err(|_| CustodySbfError::Replay)?,
     );
     let batch_poststate_digest = write_batch_value(account(accounts, ACT_BATCH)?, &activated)?;
@@ -1073,13 +1060,26 @@ fn require_activation_frame(
             return Err(CustodySbfError::AccountFrame.into());
         }
     }
-    if account(accounts, ACT_CLOCK)?.key != &sysvar::clock::ID
-        || account(accounts, ACT_RENT)?.key != &sysvar::rent::ID
+    if account(accounts, ACT_RENT)?.key != &sysvar::rent::ID
         || account(accounts, ACT_SYSTEM)?.key != &system_program::ID
         || account(accounts, REGISTRY)?.key == account(accounts, TRADING_PROGRAM)?.key
         || has_duplicate_keys(accounts)
     {
         return Err(CustodySbfError::AccountFrame.into());
+    }
+    Ok(())
+}
+
+fn require_committed_checkpoint(
+    checkpoint: &CheckpointFactsV1,
+    effect_count: u8,
+) -> Result<(), ProgramError> {
+    if checkpoint.phase != DealerScenarioCheckpointPhaseV1::Committed
+        || checkpoint.effect_count != effect_count
+        || checkpoint.reservation_count != effect_count
+        || checkpoint.rollback_count != 0
+    {
+        return Err(CustodySbfError::Replay.into());
     }
     Ok(())
 }
@@ -1197,7 +1197,7 @@ fn require_activation_effect_join(
         .ok_or(CustodySbfError::Replay)?;
     if checkpoint.input != first_checkpoint.input
         || checkpoint.digest != first_checkpoint.digest
-        || checkpoint.phase != DealerScenarioCheckpointPhaseV1::Reserved
+        || checkpoint.phase != DealerScenarioCheckpointPhaseV1::Committed
         || checkpoint.reservation_count != batch.effect_count
         || checkpoint.rollback_count != 0
         || checkpoint.reservation_receipt != receipt_digest
@@ -1877,5 +1877,36 @@ mod tests {
         assert_eq!(activation.destination, original.destination);
         assert_eq!(activation.amount, original.amount);
         assert!(activation.validate().is_ok());
+
+        let mut checkpoint = CheckpointFactsV1 {
+            input: DealerScenarioCheckpointInputV1 {
+                release_set: [1; 32],
+                market: [2; 32],
+                child_root: [3; 32],
+                obligation: [4; 32],
+                refund_beneficiary: [5; 32],
+                request_digest: [6; 32],
+                membership_manifest_digest: [7; 32],
+                root_prestate_digest: [8; 32],
+                claims_prestate_digest: [9; 32],
+                obligation_prestate_digest: [10; 32],
+                custody_prestate_digest: [11; 32],
+                generation: 1,
+                created_slot: 1,
+                expires_at: 2,
+            },
+            digest: [12; 32],
+            phase: DealerScenarioCheckpointPhaseV1::Reserved,
+            reservation_count: 2,
+            rollback_count: 0,
+            reservation_receipt: [13; 32],
+            effect_count: 2,
+            effects_digest: [14; 32],
+        };
+        assert!(require_committed_checkpoint(&checkpoint, 2).is_err());
+        checkpoint.phase = DealerScenarioCheckpointPhaseV1::Committed;
+        assert!(require_committed_checkpoint(&checkpoint, 2).is_ok());
+        checkpoint.rollback_count = 1;
+        assert!(require_committed_checkpoint(&checkpoint, 2).is_err());
     }
 }

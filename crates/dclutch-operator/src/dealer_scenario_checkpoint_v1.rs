@@ -224,8 +224,6 @@ pub struct DealerScenarioActivationAccountsV1 {
     pub payer: Pubkey,
     /// Immutable escrow-rent beneficiary.
     pub refund_beneficiary: Pubkey,
-    /// Clock sysvar.
-    pub clock: Pubkey,
     /// Rent sysvar.
     pub rent: Pubkey,
     /// System program.
@@ -1253,7 +1251,6 @@ pub fn build_dealer_scenario_activation_v1(
         AccountMeta::new_readonly(accounts.token_program, false),
         AccountMeta::new(accounts.payer, true),
         AccountMeta::new(accounts.refund_beneficiary, false),
-        AccountMeta::new_readonly(accounts.clock, false),
         AccountMeta::new_readonly(accounts.rent, false),
         AccountMeta::new_readonly(accounts.system_program, false),
     ];
@@ -1919,7 +1916,6 @@ mod tests {
             token_program: key(46),
             payer: key(47),
             refund_beneficiary: key(48),
-            clock: key(49),
             rent: key(50),
             system_program: key(51),
             effects,
@@ -1939,12 +1935,12 @@ mod tests {
             core::slice::from_ref(&table),
         )
         .expect("activation");
-        assert_eq!(packet.lock_census.unique_account_lock_count, 38);
-        assert_eq!(packet.wire_bytes, 287);
-        assert_eq!(packet.loaded_addresses, 36);
-        assert_eq!(packet.instruction.accounts.len(), 37);
-        assert_eq!(packet.instruction.accounts[23].pubkey, key(62));
-        assert!(packet.instruction.accounts[23].is_writable);
+        assert_eq!(packet.lock_census.unique_account_lock_count, 37);
+        assert_eq!(packet.wire_bytes, 285);
+        assert_eq!(packet.loaded_addresses, 35);
+        assert_eq!(packet.instruction.accounts.len(), 36);
+        assert_eq!(packet.instruction.accounts[22].pubkey, key(62));
+        assert!(packet.instruction.accounts[22].is_writable);
     }
 
     #[test]

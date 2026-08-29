@@ -648,10 +648,13 @@ impl DealerScenarioReservationBatchV1 {
         Ok(next)
     }
 
-    /// Mark one complete live batch activated.
-    pub fn activate(self, slot: u64, prestate_digest: [u8; 32]) -> Result<Self> {
+    /// Mark one complete committed batch activated.
+    ///
+    /// The Trading checkpoint, authenticated by the Custody adapter, is the
+    /// sole authorization. Completion remains valid after preparation expiry
+    /// so a crash cannot strand committed liabilities behind an elapsed slot.
+    pub fn activate_committed(self, prestate_digest: [u8; 32]) -> Result<Self> {
         if self.status != DealerScenarioReservationBatchStatusV1::Reserved
-            || slot > self.expires_at
             || prestate_digest == [0; 32]
         {
             return Err(Error::InvalidPhase);
@@ -1254,11 +1257,11 @@ mod tests {
         let full = first
             .append_reserve(11, 1, id(23), id(24), id(25))
             .expect("reserve one");
-        assert_eq!(full.activate(21, id(26)), Err(Error::InvalidPhase));
         assert_eq!(
-            full.activate(20, id(26)).map(|value| value.status),
+            full.activate_committed(id(26)).map(|value| value.status),
             Ok(DealerScenarioReservationBatchStatusV1::Activated)
         );
+        assert_eq!(full.activate_committed([0; 32]), Err(Error::InvalidPhase));
         assert_eq!(
             full.append_rollback(20, 1, id(26), id(25), id(27)),
             Err(Error::InvalidPhase)
