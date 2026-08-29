@@ -2256,7 +2256,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `tools/gauntlet/census/Cargo.toml` | 22 |
 | `tools/gauntlet/direct/producer/Cargo.toml` | 754 |
 | `tools/gauntlet/journey/Cargo.toml` | 362 |
-| `tools/gauntlet/relayed-vertical/Cargo.toml` | 362 |
+| `tools/gauntlet/relayed-vertical/Cargo.toml` | 405 |
 | `tools/local-validator/bootstrap/successor/Cargo.toml` | 405 |
 | `tools/relayer/Cargo.toml` | 229 |
 
