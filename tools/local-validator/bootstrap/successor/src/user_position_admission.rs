@@ -3939,6 +3939,19 @@ fn probe_expected_poststate(rpc: &mut Rpc, report: &ReportV1, floor: u64) -> Res
     match (&values[0], &values[1]) {
         (None, None) => Ok(false),
         (Some(position), Some(admission)) => {
+            // A prefunded pair - System-owned, data-empty, holding only the
+            // rent the separate prefund transfer paid - is the admitted
+            // route's own designed prestate, not an occupation: the founding
+            // pre-funds its allocated accounts the same way.
+            if position.owner == system_program::ID
+                && position.data.is_empty()
+                && !position.executable
+                && admission.owner == system_program::ID
+                && admission.data.is_empty()
+                && !admission.executable
+            {
+                return Ok(false);
+            }
             let exact = position.owner.to_string() == report.intent.expected_receipt_producer
                 && position.lamports == report.intent.position_rent_principal_lamports
                 && position.data == expected_position
