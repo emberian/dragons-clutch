@@ -270,6 +270,21 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
   not this prose. While in there: fix the naming collision — series/lifecycle.rs
   is about FUNDING, the protocol-wide term means the artifact; a name that
   misleads is the found_request_digest trap waiting for a third lane.
+  **RESOLVED (SER-POL, 2026-08-29).** b20256ee (rename: series/commit_plans.rs),
+  8f579821 (the Consume bank grows append-only so the Profile13 projects the
+  root header's own seven derivation fields — the only honest seed source),
+  4f4de38e (`lifecycle_policy_v5.rs`: root-only Authenticate plan, everything
+  derived, no lamport authorship), d5a24df2 (the Ticket claim is a PINNED
+  REFUSAL: `SeriesArtifactErrorV4::TicketAuthorship`, alias-resolving, own
+  hostile per claiming shape; the spec constant grew to five entries with the
+  verifier), b43062fc (`series_consume_selected_release_v4` + DCSRPB04
+  publication in the FRAC house shape; `authenticate_series_consume_artifacts_v4`
+  ACCEPTS a real assembled bundle for the first time, with the Prepare-only and
+  Ticket-claiming negative controls refused at their exact conjuncts). The
+  ShadowAot certificate identity remains the release's one typed deployment
+  parameter — `dclutch-series-shadow-sbf` builds fail-closed with no generated
+  release selected, so no local certificate exists to read; filling it is the
+  accelerator-staging work, not a release-compiler gap.
 - **RULING — Reaffirm disposition (ORCH, 2026-08-29 ~12:50 EDT): APPROVED AS
   DESIGNED, IMPLEMENTATION DEFERRED to a window when upgrade.rs is quiet.**
   CONV's investigation (board ~13:58 entry) governs: third
