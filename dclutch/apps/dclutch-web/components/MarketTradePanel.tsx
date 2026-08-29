@@ -674,7 +674,7 @@ export default function MarketTradePanel({
       <Anchor className="secondary-action" href="/trade">Advanced: full route workbench →</Anchor>
     </div>
     <p className="direct-status" aria-live="polite">{spineStatus}</p>
-    <p className="direct-status">This page can authenticate both participants, the checked Hot route, its frozen lookup table, and both replay nonces. If the connected wallet is the route payer, it can prepare and ask your wallet to sign the exact v0 packet. If an operator is the payer, it names that next actor instead. There is no submit button here, and a signed packet is never described as an executed trade. A Claims Position holds claim balances; it is never used as your collateral account. Browser data is an untrusted projection; the onchain programs remain authoritative.</p>
+    <p className="direct-status">Before anything is signed, this page re-reads both sides of the trade from the chain: who you would be trading with, the route itself, and the counters that stop the same trade being played twice. If your wallet is paying, it prepares the exact transaction and asks you to sign it; if an operator is paying, it names them instead. Signing sends nothing. Sending is a separate step you take, it happens once, and if you reload mid-flight this page picks up the transaction you already sent rather than sending a second one. Nothing is called a trade until the chain reports it finalized. The account that holds your claims is never your collateral account, and everything on this page is a copy — the programs on chain are what is true.</p>
     <p className="direct-status" aria-live="polite">{participantStatus}</p>
 
     {spine !== null && spine.status === 'refused' && <p className="market-refusal">Refused: {spine.reason}</p>}
@@ -738,7 +738,7 @@ export default function MarketTradePanel({
 
       <details className="trade-v3-bytes">
         <summary>Prepare the exact wallet handoff</summary>
-        <p className="direct-status">Paste the operator-published <code>dclutch-direct-hot-route-manifest-v3</code>. The reader hostile-decodes the bounded JSON, reacquires the 39 named accounts plus the frozen lookup table, authenticates its checked release and capability seal, and then rechecks both participants and both nonces after your detached intent signature.</p>
+        <p className="direct-status">Paste the route file the operator published for this market (a <code>dclutch-direct-hot-route-manifest-v3</code>). Nothing in it is taken on trust: this page reads every account it names back off the chain, checks the programs it points at are the ones this deployment runs, and re-checks both traders and both replay counters after you sign your intent.</p>
         {publishedRoute !== null && routeText === publishedRoute && <p className="direct-status">This build already carries the operator&apos;s published route for this market, so the field below is pre-filled. You can replace it with your own; either way the route is re-authenticated before anything is signed.</p>}
         <label><span>Checked Direct Hot route manifest · JSON</span><textarea rows={7} spellCheck={false} value={routeText} onChange={(event) => { setRouteText(event.target.value); setWalletPreparation({ kind: 'idle' }); }} /></label>
         <div className="direct-actions">

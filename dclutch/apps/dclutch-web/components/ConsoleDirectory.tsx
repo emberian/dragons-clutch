@@ -92,11 +92,12 @@ export default function ConsoleDirectory() {
       <div>
         <p className="eyebrow">The toolbox behind the product</p>
         <h1>Operator<br /><em>consoles.</em></h1>
-        <p>These are operator surfaces for people operating or building on the
-        protocol, not product pages. Each one states its own readiness boundary,
-        and chain-backed routes refuse by name when observed state disagrees.
-        A page being listed here does not mean its mutation route is live. If you are
-        here to browse or trade, start at <Anchor href="/markets">Markets</Anchor> instead.</p>
+        <p>These are tools for people running or building on the protocol, not
+        product pages. Each one says plainly what it can and cannot do, and when
+        the chain disagrees with what a page was asked to do, it says so by name
+        rather than failing quietly. A page being listed here does not mean it can
+        send a transaction. If you are here to look around or trade, start at{' '}
+        <Anchor href="/markets">Markets</Anchor> instead.</p>
         <p>Every file a console asks for has exactly one producer, and the
         console says which, right on the input. The answer key is the
         README&apos;s table <a href={docsHrefV1('readme.html', 'README.md')}>“The

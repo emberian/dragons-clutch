@@ -40,21 +40,20 @@ export default function SiteLanding() {
         <strong>On devnet — nothing for sale</strong>
         <p>dClutch runs on Solana&apos;s devnet, a public test network whose
         tokens are worthless by construction. The programs are deployed and
-        the first markets are being set up; you can watch it all happen live
-        below. There is no token, nothing to buy, and no value at risk
-        anywhere.</p>
+        the first markets are being set up. There is no token, nothing to buy,
+        and no value at risk anywhere.</p>
       </aside>
     </section>
 
     <section className="trade-v3-card">
-      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three counts, read finalized off the active deployment — never estimated, never cached from an earlier visit. A dash is an unread value, never a zero; a read zero is shown as the zero it is.</p></div></header>
+      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it; a zero means we read a zero.</p></div></header>
       {/* FE-CHART mount: LandingPulse reads the counts from the active
           deployment and feeds the presentational NumberStrip. */}
       <LandingPulse />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>The app</h2><p>It opens on the live devnet deployment and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are live; actions that still need an open market refuse and tell you what is missing.</p></div></header>
+      <header><span>01</span><div><h2>The app</h2><p>It opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed; anything that still needs an open market will tell you plainly that there is not one yet, instead of failing quietly.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/live">Launch story →</Anchor>
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>

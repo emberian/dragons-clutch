@@ -183,8 +183,8 @@ export default function MarketDiscoveryWorkspace() {
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">Markets on {deployment.label} · finalized reads only</p>
-        <h1>Every card is a read.<br /><em>Or it says REFUSED.</em></h1>
-        <p>This is the whole current-compatible market list of the {deployment.label} deployment, enumerated from the Core program itself — no index, no curation. The same scan separately discloses historical Market accounts this reader cannot decode. Each card lists exactly what finalized state justifies: phase, generation and immutable identities from the Market root; the per-claim supply vector from the Claims aggregate that actually holds it; the finalized Realm record behind the collateral mint; and the capability manifest the Market authenticated. There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.</p>
+        <h1>Every market on devnet.<br /><em>Read live, or not at all.</em></h1>
+        <p>This is the whole current-compatible market list of the {deployment.label} deployment, enumerated from the Core program itself — no index, no curation. Older markets this build cannot read are listed separately rather than hidden. Each card shows only what the chain actually says: what phase the market is in and who it commits to, how many claims exist and what is holding them, what it is collateralized in, and what the market is allowed to do. There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.</p>
       </div>
       <aside>
         <span>Provenance</span>

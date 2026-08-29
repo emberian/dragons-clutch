@@ -198,7 +198,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const liabilityProvenance = detail?.liabilityProvenance
     ?? Object.freeze({ kind: 'refused' as const, reason: 'No Claims aggregate has been read, because no Market has been read.' });
   const capabilityProvenance = detail?.capabilityProvenance
-    ?? Object.freeze({ kind: 'refused' as const, reason: 'No capability manifest has been authenticated, because no Market has been read.' });
+    ?? Object.freeze({ kind: 'refused' as const, reason: 'Nothing to show yet: no market has been read, so there is nothing to check.' });
 
   return <main className="product-shell trade-v3-shell">
     <Nav current="/markets" status={`${deployment.label} · finalized reads`} />
@@ -222,7 +222,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     <section className="trade-v3-card route-card">
       <header>
         <span>00</span>
-        <div><h2>The read</h2><p>The Core program that owns this account decides what its bytes mean; it and every other program here come from the active {deployment.label} deployment. The capability manifest is authenticated against the Registry program of the same deployment.</p></div>
+        <div><h2>The read</h2><p>The program that owns this account is what decides what its bytes mean, and it — like every other program named on this page — comes from the active {deployment.label} deployment. What this market is allowed to do is checked against that same deployment, not taken from the market&apos;s own word for it.</p></div>
         <div className="direct-actions"><button type="button" onClick={() => void read()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read this Market'}</button></div>
       </header>
       <p className="direct-status" aria-live="polite">{state.message}</p>

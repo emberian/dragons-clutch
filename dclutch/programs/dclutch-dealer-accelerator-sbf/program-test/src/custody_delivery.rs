@@ -123,7 +123,12 @@ pub struct DealerDeliveryInputV1 {
     /// Realm content identity, from `dealer_delivery_realm_v1`.
     pub realm: [u8; 32],
     /// Immutable Custody replay namespace for this Market.
+    ///
+    /// The scenario composer names the child root here, so the cursor a delivery
+    /// advances is the cursor the composed effects were planned against.
     pub context: [u8; 32],
+    /// PDA namespace of the Custody-owned source the reservation debited.
+    pub source_vault_context: [u8; 32],
     /// Market generation every layer restates.
     pub generation: u64,
     /// Reserved and committed Trading checkpoint.
@@ -246,7 +251,7 @@ pub fn stage_dealer_delivery_v1(input: DealerDeliveryInputV1) -> DealerDeliveryV
         &CustodyVaultSeedsV1::new(
             input.market.to_bytes(),
             input.release_set,
-            input.context,
+            input.source_vault_context,
             CompartmentV1::TradingPrincipal,
         )
         .as_slices(),
@@ -298,7 +303,7 @@ pub fn stage_dealer_delivery_v1(input: DealerDeliveryInputV1) -> DealerDeliveryV
         },
         source: source.to_bytes(),
         destination: destination.to_bytes(),
-        source_vault_context: input.context,
+        source_vault_context: input.source_vault_context,
         destination_vault_context: [0; 32],
         mint: DELIVERY_MINT.to_bytes(),
         token_program: LEGACY_TOKEN_PROGRAM_ID,

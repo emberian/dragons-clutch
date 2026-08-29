@@ -43,7 +43,7 @@ describe('Market discovery route', () => {
     expect(html).toContain('No volume · no odds · no probability · no yield');
     // Market-data vocabulary may appear only inside the sentences that refuse it.
     const disclaimers = [
-      'There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.',
+      'There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.',
       'Supplies come from the Claims aggregate, never from the root, in raw u64 atoms.',
       'No volume · no odds · no probability · no yield',
     ];
