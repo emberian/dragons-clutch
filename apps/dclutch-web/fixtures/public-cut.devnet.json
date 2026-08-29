@@ -1,0 +1,11 @@
+{
+  "schema": "dclutch-public-cut-v1",
+  "cluster": "devnet",
+  "market": null,
+  "activity": {
+    "found": null,
+    "trade": null,
+    "resolve": null,
+    "redeem": null
+  }
+}
