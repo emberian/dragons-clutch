@@ -148,6 +148,26 @@ const K: usize = OUTCOME_COUNT as usize;
 const WINNER: u32 = 1;
 /// [`WINNER`] as a coordinate index.
 const WINNERS: usize = WINNER as usize;
+/// The Product's own pre-disclosed failure cell.
+///
+/// Product Runtime V2 reserves the FINAL result coordinate for explicit
+/// failure, and `ResolutionCertificateV2::validate_terminal_product` enforces
+/// it from both directions: an ordinary success may not select this coordinate,
+/// and a `ResolutionFailure` must select exactly it. So the failure region is
+/// not a flag on a terminal -- it is a coordinate, and the holder who exits at
+/// failure terms is the holder standing on it.
+const FAILURE_SELECTOR: u32 = OUTCOME_COUNT - 1;
+/// [`FAILURE_SELECTOR`] as a coordinate index.
+const FAILURE_SELECTORS: usize = FAILURE_SELECTOR as usize;
+/// Lamports a funded failure walk pays the third party who finishes a market
+/// whose own relayer went silent.
+///
+/// A `ResolutionFailure` certificate whose `work_paid` is zero is refused by
+/// `validate_shape`, so the same fact that lets a holder exit at failure terms
+/// is the fact that records the walker being paid. The quantity is the one
+/// executed against the real Resolution ELF by the relayed campaign
+/// (`WALK_BOUNTY_LAMPORTS`, `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`).
+const FAILURE_WALK_BOUNTY_LAMPORTS: u64 = 250_000;
 /// Shard atoms backing one whole native claim.
 ///
 /// Coprime to every coefficient, which is what the campaign basis is FOR: a
@@ -199,7 +219,22 @@ const CUSTODY_CLAIMS: [u64; K] = [4, 7, 8];
 /// the campaign reads this coordinate: the aggregate's supply is derived from
 /// this vector by [`aggregate_claims`], the shard layer is bound to
 /// [`CUSTODY_CLAIMS`] alone, and every representation assertion is at [`WINNER`].
-const ACTOR_CLAIMS: [u64; K] = [1, 2, 0];
+///
+/// Coordinate [`FAILURE_SELECTOR`] is the Product's pre-disclosed FAILURE
+/// region, and the wallet holds claims there on purpose too. It used to hold
+/// zero, which is why no test could ask the question that matters when a market
+/// nobody resolved ends on its own terms: does the holder standing in the
+/// failure region actually get their collateral back? A wallet with nothing
+/// there cannot answer it, and an exit that pays zero is not an exit.
+///
+/// The quantity is one, not an arbitrary number: the settled coordinate's
+/// outstanding supply must be covered by the Hoard, and this vector is what
+/// makes `aggregate_claims()` equal [`INITIAL_HOARD_ATOMS`] at BOTH [`WINNER`]
+/// and [`FAILURE_SELECTOR`]. Choosing three instead was refused `0x5005`
+/// (`ClaimsSbfError::Economic`) with the whole certificate seam already
+/// authenticated -- a fully-subscribed coordinate is a protocol fact, not a
+/// fixture preference, and the campaign learned it by being told.
+const ACTOR_CLAIMS: [u64; K] = [1, 2, 1];
 const SHARD_DECIMALS: [u8; K] = [6, u8::MAX, 9];
 const RECEIPT_DECIMALS: u8 = 19;
 /// The cursor a freshly created Claims-role replay carries.
@@ -410,6 +445,14 @@ struct TerminalFixture {
 
 struct Fixture {
     actor: Keypair,
+    /// The coordinate this fixture's terminal committed to.
+    ///
+    /// [`WINNER`] under a provider-backed resolution, [`FAILURE_SELECTOR`] when
+    /// the Market ended on its own pre-disclosed failure terms. Every wallet
+    /// payout defaults its claim coordinate, its quantity and its host-side
+    /// Product evaluation to this, so a failure fixture settles at the failure
+    /// region without any test restating which coordinate that is.
+    terminal_winner: u32,
     release_set: [u8; 32],
     realm_id: [u8; 32],
     parent_context: [u8; 32],
@@ -836,6 +879,7 @@ fn core_market(
     product_record: [u8; 32],
     product_id: [u8; 32],
     terminal_receipt: Option<[u8; 32]>,
+    terminal_winner: u32,
 ) -> (Pubkey, Vec<u8>) {
     let mut identity = MarketIdentity {
         market_id: semantic_identity([1; 32]),
@@ -862,7 +906,7 @@ fn core_market(
         },
         readiness: Readiness::Consumed,
         terminal_winner: if terminal_receipt.is_some() {
-            WINNER
+            terminal_winner
         } else {
             0
         },
@@ -1611,11 +1655,73 @@ fn replay_admissible_from_creation(transfer: CustodyRequestV1, payer: Pubkey) {
         .expect("a created Claims-role replay admits the terminal transfer");
 }
 
-fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
-    fixture_with(terminal, ReceiptMintRoles::Both)
+/// Which terminal a fixture stages, if any.
+///
+/// This used to be a `bool`, which could only ever express the terminal a
+/// PROVIDER stood behind. A market can also end because nobody resolved it: a
+/// third party walks it past its own deadline, collects the pre-funded bounty,
+/// and Core admits a `ResolutionFailure` certificate at the Product's
+/// pre-disclosed failure region. Both are terminals a holder must be able to
+/// exit through, and only one of them had ever been staged anywhere.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TerminalV1 {
+    /// An open Market with no terminal at all.
+    None,
+    /// A provider-backed resolution at [`WINNER`].
+    Provider,
+    /// The market's own pre-disclosed failure terms at [`FAILURE_SELECTOR`].
+    Failure,
+    /// A deliberately mismatched terminal, for the hostiles that pin the seam
+    /// between which coordinate Core commits and which kind Resolution wrote.
+    Mismatched {
+        /// The coordinate Core commits as the winner.
+        winner: u32,
+        /// The certificate kind Resolution wrote for it.
+        kind: ResolutionCertificateKindV2,
+    },
 }
 
-fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest, Fixture) {
+impl TerminalV1 {
+    /// Whether the Market carries a terminal receipt at all.
+    const fn resolved(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// The coordinate Core commits as the winner.
+    ///
+    /// A failure terminal is not a flag on an ordinary one: the failure region
+    /// is a COORDINATE, and `validate_terminal_product` admits a
+    /// `ResolutionFailure` at exactly the Product's final one and nowhere else.
+    const fn winner(self) -> u32 {
+        match self {
+            Self::Failure => FAILURE_SELECTOR,
+            Self::None | Self::Provider => WINNER,
+            Self::Mismatched { winner, .. } => winner,
+        }
+    }
+
+    /// The exact Lean-owned certificate kind Resolution wrote.
+    const fn certificate_kind(self) -> ResolutionCertificateKindV2 {
+        match self {
+            Self::Failure => ResolutionCertificateKindV2::ResolutionFailure,
+            Self::None | Self::Provider => ResolutionCertificateKindV2::ResolutionSuccess,
+            Self::Mismatched { kind, .. } => kind,
+        }
+    }
+}
+
+fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
+    fixture_with(
+        if terminal {
+            TerminalV1::Provider
+        } else {
+            TerminalV1::None
+        },
+        ReceiptMintRoles::Both,
+    )
+}
+
+fn fixture_with(terminal: TerminalV1, receipt_roles: ReceiptMintRoles) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1660,7 +1766,7 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         add_upgradeable_program(&mut test, name, program, elf);
     }
 
-    let actor = Keypair::new_from_array(if terminal { [0x72; 32] } else { [0x71; 32] });
+    let actor = Keypair::new_from_array(if terminal.resolved() { [0x72; 32] } else { [0x71; 32] });
     // The actor PREPAYS the Claims-role Custody replay in the terminal fixture,
     // so it needs the replay's rent on top of its own rent exemption. Sized from
     // the replay width rather than a round number: a fixture constant chosen to
@@ -1685,7 +1791,8 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
     .0;
     add_account(&mut test, activation_cache, REGISTRY_PROGRAM_ID, cache_data);
 
-    let collateral_mint = Pubkey::new_from_array(if terminal { [0x74; 32] } else { [0x73; 32] });
+    let collateral_mint =
+        Pubkey::new_from_array(if terminal.resolved() { [0x74; 32] } else { [0x73; 32] });
     let adapter = PRODUCTION_ADAPTER_RELEASES
         .get(1)
         .copied()
@@ -1703,13 +1810,16 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         add_finalized_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, &realm_bytes);
 
     let product_claims = add_product_claims(&mut test);
-    let terminal_certificate = terminal.then(|| Pubkey::new_from_array([0x86; 32]));
+    let terminal_certificate = terminal
+        .resolved()
+        .then(|| Pubkey::new_from_array([0x86; 32]));
     let (market, core_data) = core_market(
         release_set,
         realm_id,
         product_claims.product_digest,
         product_claims.product_id,
         terminal_certificate.map(|certificate| certificate.to_bytes()),
+        terminal.winner(),
     );
     add_account(&mut test, market, CORE_PROGRAM_ID, core_data);
     add_account(
@@ -1719,24 +1829,35 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         Vec::new(),
     );
     if let Some(certificate) = terminal_certificate {
+        // Nothing that differs between the two kinds is a choice this campaign
+        // made. `validate_shape` forces every one of them: a provider-backed
+        // success must carry a route, provider evidence and a result; the
+        // market's own failure terms must carry NONE of those, must carry the
+        // funding allocation the walk consumed, and must carry nonzero work
+        // paid -- the bounty a third party collected for finishing a market its
+        // relayer abandoned. `to_bytes` refuses any other combination.
+        let failed = matches!(
+            terminal.certificate_kind(),
+            ResolutionCertificateKindV2::ResolutionFailure
+        );
         let bytes = ResolutionCertificateV2 {
-            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            kind: terminal.certificate_kind(),
             market: market.to_bytes(),
-            route: [0x87; 32],
+            route: if failed { [0; 32] } else { [0x87; 32] },
             source_material: [0x63; 32],
             product_record_digest: product_claims.product_digest,
-            provider_evidence: [0x88; 32],
-            funding_allocation: [0; 32],
+            provider_evidence: if failed { [0; 32] } else { [0x88; 32] },
+            funding_allocation: if failed { [0x63; 32] } else { [0; 32] },
             receipt_account: certificate.to_bytes(),
             generation: GENERATION,
             attempt_index: 0,
             schedule_index: 0,
-            selector: WINNER,
-            work_paid: 0,
+            selector: terminal.winner(),
+            work_paid: if failed { FAILURE_WALK_BOUNTY_LAMPORTS } else { 0 },
             funding_remaining: 0,
-            result_numerator: 1,
-            result_denominator: 1,
-            observed_at: 1,
+            result_numerator: i128::from(!failed),
+            result_denominator: u64::from(!failed),
+            observed_at: u64::from(!failed),
         }
         .to_bytes()
         .expect("canonical Resolution certificate");
@@ -1752,8 +1873,10 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         &CLAIMS_PROGRAM_ID,
     )
     .0;
-    let receipt_mint = Pubkey::new_from_array(if terminal { [0x76; 32] } else { [0x75; 32] });
-    let actor_receipt = Pubkey::new_from_array(if terminal { [0x78; 32] } else { [0x77; 32] });
+    let receipt_mint =
+        Pubkey::new_from_array(if terminal.resolved() { [0x76; 32] } else { [0x75; 32] });
+    let actor_receipt =
+        Pubkey::new_from_array(if terminal.resolved() { [0x78; 32] } else { [0x77; 32] });
     // THE DESCRIPTOR IS DERIVED, not written. `structured_lowering::lower`
     // builds one canonical composition (graph, translation, composition
     // descriptor), the exposure record the chain will hold, the shard layer and
@@ -2047,6 +2170,7 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         semantic_basis_id: product_claims.basis_id,
         linked_basis_digest: product_claims.linked_basis_digest,
         graph_digest,
+        terminal_winner: terminal.winner(),
         terminal_record_digest: terminal_certificate.map(|certificate| certificate.to_bytes()),
         result_domain_digest: product_claims.result_domain_id,
         linked_basis_bytes: product_claims.linked_basis_bytes.clone(),
@@ -2060,7 +2184,7 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
     };
 
     let mut fixture = fixture_stub;
-    if terminal {
+    if terminal.resolved() {
         let recipient = Pubkey::new_from_array([0x85; 32]);
         let terminal_request = request_bytes_from(
             RepresentationActionV2::RedeemTerminal,
@@ -2080,6 +2204,13 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
             actor_shards(),
             structured_shards(),
             fixture.assets,
+            // The Rational SHARD redemption is a different route from the
+            // wallet payout and this campaign never drives it against a failure
+            // terminal, so its precompute stays at `WINNER`. What it yields --
+            // the Hoard, the Claims-role replay and the Custody authority -- is
+            // derived from the Custody namespace and is winner-independent; the
+            // one output that is not, the shard route's own caller PDA, is
+            // unused by a wallet payout, which derives its whole frame itself.
             WINNER,
         );
         let (custody_request, custody_caller, custody_replay, hoard, custody_authority) =
@@ -3666,7 +3797,7 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
 /// it is finally only a hostile.
 #[tokio::test]
 async fn a_receipt_mint_missing_its_burn_role_refuses_at_the_first_issue() {
-    let (test, fixture) = fixture_with(false, ReceiptMintRoles::MintAuthorityOnly);
+    let (test, fixture) = fixture_with(TerminalV1::None, ReceiptMintRoles::MintAuthorityOnly);
     let mut context = test.start_with_context().await;
     let issue = wrapper_instruction(
         &fixture,
@@ -4730,11 +4861,11 @@ fn wallet_payout_request(
             .unwrap_or(CUSTODY_EXPECTED_REVISION),
         quantity: overrides.quantity.unwrap_or(
             ACTOR_CLAIMS
-                .get(WINNERS)
+                .get(usize::try_from(fixture.terminal_winner).expect("winner index"))
                 .copied()
-                .expect("actor winner claims"),
+                .expect("actor claims at the terminal coordinate"),
         ),
-        claim_index: overrides.claim_index.unwrap_or(WINNER),
+        claim_index: overrides.claim_index.unwrap_or(fixture.terminal_winner),
         transfer_index: 0,
     })
     .expect("canonical wallet payout request")
@@ -4795,7 +4926,7 @@ fn wallet_payout_plan(
             owner: input.owner,
             request_id: hash(request_bytes).to_bytes(),
             caller_role: input.caller_role,
-            terminal: TerminalScenarioV3::Categorical(WINNER),
+            terminal: TerminalScenarioV3::Categorical(fixture.terminal_winner),
             claim_index: input.claim_index,
             quantity: input.quantity,
             expected_generation: input.generation,
@@ -5287,6 +5418,205 @@ async fn a_wallet_held_position_is_paid_from_the_resolved_markets_hoard() {
         assert_account_content_eq(
             after.shard_mints.get(index).expect("shard Mint"),
             before.shard_mints.get(index).expect("pre shard Mint"),
+        );
+    }
+}
+
+/// A WALLET EXITS A MARKET NOBODY RESOLVED, at the terms disclosed up front.
+///
+/// This is the far end of the funded failure walk, reached by the one party the
+/// walk is for. The relayed campaign proves the first half against the real
+/// Resolution and Core ELFs -- a source goes silent, a wallet that is nobody
+/// walks the market past its own deadline and is paid a fixed bounty, and Core
+/// admits the resulting `ResolutionFailure` certificate so the Market ends
+/// Terminal at the Product's pre-disclosed failure region
+/// (`crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs` and
+/// `resolution_core_v3_lifecycle.rs`'s
+/// `a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms`). What
+/// had never executed anywhere is the half a person actually cares about:
+/// taking the collateral home afterwards. Every terminal settlement in this
+/// tree, in every campaign, settled a certificate a PROVIDER stood behind.
+///
+/// So this is not a variant of the payout above. It is the first time a wallet
+/// has moved a collateral atom on the authority of a market's own failure, and
+/// there is no caller program anywhere between the person and their collateral:
+/// the actor signs for itself under execution role `Claims`, and the real
+/// Claims ELF invokes the real Custody program, which invokes real Token-2022.
+#[tokio::test]
+async fn a_wallet_held_position_exits_at_failure_terms_when_nobody_resolved_the_market() {
+    let (test, fixture) = fixture_with(TerminalV1::Failure, ReceiptMintRoles::Both);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: failure-terms exit",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+    let paid = ACTOR_CLAIMS[FAILURE_SELECTORS];
+    // Guarded, because an exit that pays nothing is not an exit and this test
+    // would still be green if the failure region were ever re-zeroed.
+    assert!(
+        paid > 0,
+        "the wallet must hold claims in the failure region for this to mean anything"
+    );
+    assert_eq!(
+        lbv2_position_quantity(&before.actor_position.data, FAILURE_SELECTOR),
+        paid,
+        "the wallet's own claims in the pre-disclosed failure region"
+    );
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims rational-representation-v2: a wallet exits at failure terms",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("failure-terms exit refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(
+        result.accepted,
+        "a holder must be able to exit on a market's own failure terms"
+    );
+    assert!(
+        result.wire_bytes <= PACKET_LIMIT,
+        "the v0 shape must fit a packet once the table carries the frame: {} bytes",
+        result.wire_bytes
+    );
+
+    let after = snapshot(&mut context, &fixture).await;
+    // Collateral is conserved to the atom: what left the Hoard arrived at the
+    // holder, and the pair sums to exactly what it opened with.
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard")),
+        INITIAL_HOARD_ATOMS - paid
+    );
+    assert_eq!(
+        token_amount(after.recipient.as_ref().expect("recipient")),
+        INITIAL_RECIPIENT_ATOMS + paid
+    );
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard"))
+            + token_amount(after.recipient.as_ref().expect("recipient")),
+        INITIAL_HOARD_ATOMS + INITIAL_RECIPIENT_ATOMS,
+        "no collateral was created or destroyed by the exit"
+    );
+    // Claims: the failure region is burned out of the wallet and out of the
+    // aggregate's outstanding supply, and nothing else moves.
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, FAILURE_SELECTOR),
+        0
+    );
+    assert_eq!(
+        lbv2_market_supply(&after.aggregate.data, FAILURE_SELECTOR),
+        aggregate_claims()[FAILURE_SELECTORS] - paid
+    );
+    for index in 0..K {
+        if index == FAILURE_SELECTORS {
+            continue;
+        }
+        let outcome = u32::try_from(index).expect("outcome index");
+        assert_eq!(
+            lbv2_market_supply(&after.aggregate.data, outcome),
+            lbv2_market_supply(&before.aggregate.data, outcome),
+            "an exit at failure terms touches exactly the coordinate it debits"
+        );
+    }
+    assert_eq!(lbv2_revision(&after.aggregate.data), 1);
+    assert_eq!(lbv2_revision(&after.actor_position.data), 1);
+    assert_eq!(
+        custody_replay_revision(after.custody_replay.as_ref().expect("Claims-role replay")),
+        CUSTODY_EXPECTED_REVISION + 1,
+        "the collateral moved under a replay-protected order, advanced exactly once"
+    );
+    // The representation layer is untouched: this exit went nowhere near the
+    // shard Mints or the Claims capability Positions.
+    for index in 0..K {
+        assert_account_content_eq(
+            after.positions.get(index).expect("custody Position"),
+            before.positions.get(index).expect("pre custody Position"),
+        );
+        assert_account_content_eq(
+            after.shard_mints.get(index).expect("shard Mint"),
+            before.shard_mints.get(index).expect("pre shard Mint"),
+        );
+    }
+}
+
+/// Neither kind may occupy the other's coordinate, and nothing moves when it tries.
+///
+/// `validate_terminal_product` reserves the Product's FINAL coordinate for
+/// explicit failure and admits an ordinary success strictly below it. Both
+/// halves of that are pinned here, and each hostile is one field away from a
+/// case that COMMITS:
+///
+/// * a provider-backed success selecting the failure region is the exit above
+///   with the certificate kind flipped;
+/// * failure terms claimed for an ordinary coordinate is
+///   `a_wallet_held_position_is_paid_from_the_resolved_markets_hoard` with the
+///   certificate kind flipped -- one byte of the whole 640-byte request and
+///   36-account frame.
+///
+/// Those two committing tests are this one's negative controls, which is what
+/// makes these refusals evidence rather than decoration: the refusal happens
+/// inside the Claims ELF at the certificate seam, after the Custody
+/// composition, the Realm and the certificate account have all authenticated.
+#[tokio::test]
+async fn neither_terminal_kind_may_occupy_the_others_coordinate() {
+    for (terminal, label) in [
+        (
+            TerminalV1::Mismatched {
+                winner: FAILURE_SELECTOR,
+                kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            },
+            "a provider success may not occupy the pre-disclosed failure cell",
+        ),
+        (
+            TerminalV1::Mismatched {
+                winner: WINNER,
+                kind: ResolutionCertificateKindV2::ResolutionFailure,
+            },
+            "failure terms may not be claimed for an ordinary coordinate",
+        ),
+    ] {
+        let (test, fixture) = fixture_with(terminal, ReceiptMintRoles::Both);
+        let mut context = test.start_with_context().await;
+        create_claims_custody_replay(&mut context, &fixture).await;
+        let (table, addresses) =
+            wallet_payout_lookup_table(&mut context, &fixture, label).await;
+        let before = snapshot(&mut context, &fixture).await;
+
+        let result = submit_wallet_payout(
+            &mut context,
+            &fixture,
+            table,
+            &addresses,
+            WalletPayoutOverrides::default(),
+            label,
+        )
+        .await;
+        assert_refused_with(&result, ClaimsSbfError::Identity as u32, label);
+
+        let after = snapshot(&mut context, &fixture).await;
+        assert_account_content_eq(
+            after.hoard.as_ref().expect("Hoard"),
+            before.hoard.as_ref().expect("pre Hoard"),
+        );
+        assert_account_content_eq(
+            after.recipient.as_ref().expect("recipient"),
+            before.recipient.as_ref().expect("pre recipient"),
+        );
+        assert_account_content_eq(&after.actor_position, &before.actor_position);
+        assert_account_content_eq(&after.aggregate, &before.aggregate);
+        assert_eq!(
+            custody_replay_revision(after.custody_replay.as_ref().expect("Claims-role replay")),
+            CUSTODY_EXPECTED_REVISION,
+            "{label}: a refused settlement fires no Custody CPI"
         );
     }
 }
