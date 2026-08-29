@@ -346,6 +346,11 @@ pub fn token_account_amount(bytes: &[u8]) -> u64 {
     SplAccount::unpack(bytes).expect("canonical token account").amount
 }
 
+/// Read the issued supply out of a staged or observed Mint.
+pub fn mint_total_supply(bytes: &[u8]) -> u64 {
+    SplMint::unpack(bytes).expect("canonical mint").supply
+}
+
 /// Read the owner out of a staged or observed token account.
 pub fn token_account_owner(bytes: &[u8]) -> Pubkey {
     SplAccount::unpack(bytes).expect("canonical token account").owner
@@ -369,6 +374,15 @@ fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
     )
     .expect("canonical mint packs");
     output
+}
+
+/// The exact canonical body of one initialized token account.
+///
+/// Public because a hostile has to be able to stage a *third* distinct account
+/// of the same kind: a substitution the frame answers with a key comparison is
+/// not the substitution it claims to be.
+pub fn dealer_delivery_token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
+    token_account_bytes(mint, owner, amount)
 }
 
 /// The exact canonical body of one initialized token account.

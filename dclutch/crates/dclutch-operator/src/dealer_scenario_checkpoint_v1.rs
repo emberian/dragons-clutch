@@ -194,6 +194,12 @@ pub struct DealerScenarioActivationEffectAccountsV1 {
     pub destination: Pubkey,
 }
 
+/// The Clock sysvar, which Custody pins by identity.
+pub const CLOCK_SYSVAR_ID_V1: Pubkey = solana_program::sysvar::clock::ID;
+
+/// The Rent sysvar, which Custody pins by identity.
+pub const RENT_SYSVAR_ID_V1: Pubkey = solana_program::sysvar::rent::ID;
+
 /// The System program, whose address is thirty-two zero bytes.
 ///
 /// It is named here because that address is also `Pubkey::default()`, so a
@@ -1171,6 +1177,18 @@ pub fn build_dealer_scenario_reservation_bundle_v1(
 ) -> Result<DealerScenarioReservationBundlePacketV1, DealerScenarioCheckpointOperatorErrorV1> {
     let producer_data = encode_dealer_scenario_reservation_instruction_v1(action, effect_ordinal)
         .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    // Custody pins all three of these by identity and refuses the frame
+    // otherwise, so a builder that lets a caller name its own Clock, Rent or
+    // System program builds a packet the chain can only reject. The System
+    // program is the one that hid: its address is thirty-two zero bytes, so a
+    // fixture naming a made-up non-zero address looks more plausible than the
+    // real value and no test noticed.
+    if accounts.clock != CLOCK_SYSVAR_ID_V1
+        || accounts.rent != RENT_SYSVAR_ID_V1
+        || accounts.system_program != SYSTEM_PROGRAM_ID_V1
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
     let producer = Instruction {
         program_id: accounts.custody_program,
         accounts: vec![
@@ -2449,9 +2467,12 @@ mod tests {
             token_program: key(51),
             payer: key(52),
             refund_beneficiary: key(53),
-            clock: key(54),
-            rent: key(55),
-            system_program: key(56),
+            // Custody pins all three by identity. The fixture used to name
+            // made-up addresses for them and the builder never noticed, so it
+            // was asserting the shape of a packet the chain would reject.
+            clock: CLOCK_SYSVAR_ID_V1,
+            rent: RENT_SYSVAR_ID_V1,
+            system_program: SYSTEM_PROGRAM_ID_V1,
             custody_programdata: key(57),
         };
         let reserve = build_dealer_scenario_reservation_bundle_v1(
