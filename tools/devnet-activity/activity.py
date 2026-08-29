@@ -1342,6 +1342,36 @@ class Rpc:
             raise Refusal("getLatestBlockhash returned another finalized boundary")
         return slot, blockhash, last_valid
 
+    def fee_for_message(self, message_base64: str) -> tuple[int, int]:
+        message_text = text(message_base64, "fee-quoted transaction message", 4096)
+        try:
+            message = base64.b64decode(message_text, validate=True)
+        except ValueError as error:
+            raise Refusal("fee-quoted transaction message is not canonical base64") from error
+        if not message or base64.b64encode(message).decode() != message_text:
+            raise Refusal("fee-quoted transaction message is empty or noncanonical")
+        result = exact_object(
+            self.call(
+                "getFeeForMessage",
+                [message_text, {"commitment": "finalized"}],
+            ),
+            "getFeeForMessage result",
+        )
+        context = exact_object(result.get("context"), "getFeeForMessage context")
+        slot = context.get("slot")
+        fee = result.get("value")
+        if (
+            not isinstance(slot, int)
+            or isinstance(slot, bool)
+            or slot < 0
+            or not isinstance(fee, int)
+            or isinstance(fee, bool)
+            or fee < 0
+            or fee > 2**64 - 1
+        ):
+            raise Refusal("getFeeForMessage returned another finalized fee shape")
+        return slot, fee
+
     def send_transaction(self, packet_base64: str) -> str:
         return signature_text(
             self.call(
@@ -1590,6 +1620,8 @@ def v3_bounded_live_authorization(
     )
     if planned_transfer > max_post_transfer:
         raise Refusal("post-init funding plan exceeds its authorization transfer cap")
+    if planned_transfer + max_post_fee > max_spend:
+        raise Refusal("post-init funding plan and fee cap exceed maxSpendLamports")
     if max_spend > manifest.campaign.initial_funding_lamports:
         raise Refusal("v3 maxSpendLamports exceeds the disposable payer bankroll")
     initial_closure = digest_text(
@@ -2314,6 +2346,8 @@ def new_post_init_funding_journal(
         "packetBase64": None,
         "packetSha256": None,
         "expectedSignature": None,
+        "feeQuoteSlot": None,
+        "quotedFeeLamports": None,
         "dispatchAttemptedAt": None,
         "preparedStateSha256": None,
         "submittedAt": None,
@@ -2394,6 +2428,36 @@ def prepare_post_init_funding_journal(
     return prepared
 
 
+def quote_post_init_funding_fee(
+    journal: Mapping[str, Any], slot: int, fee_lamports: int
+) -> dict[str, Any]:
+    if (
+        journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA
+        or journal.get("phase") != "Prepared"
+        or journal.get("feeQuoteSlot") is not None
+        or journal.get("quotedFeeLamports") is not None
+    ):
+        raise Refusal("only one unquoted Prepared post-init journal may record a fee")
+    if (
+        not isinstance(slot, int)
+        or isinstance(slot, bool)
+        or slot < 0
+        or not isinstance(fee_lamports, int)
+        or isinstance(fee_lamports, bool)
+        or fee_lamports < 0
+        or fee_lamports > 2**64 - 1
+    ):
+        raise Refusal("post-init fee quote has another finalized shape")
+    quoted = dict(journal)
+    quoted.update(
+        {
+            "feeQuoteSlot": str(slot),
+            "quotedFeeLamports": str(fee_lamports),
+        }
+    )
+    return quoted
+
+
 def dispatching_post_init_funding_journal(journal: Mapping[str, Any]) -> dict[str, Any]:
     if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") != "Prepared":
         raise Refusal("only an exact Prepared post-init journal may enter Dispatching")
@@ -2407,6 +2471,8 @@ def dispatching_post_init_funding_journal(journal: Mapping[str, Any]) -> dict[st
         raise Refusal("prepared post-init packet is not base64") from error
     if sha256_bytes(packet) != journal.get("packetSha256"):
         raise Refusal("prepared post-init packet digest changed")
+    decimal(journal.get("feeQuoteSlot"), "prepared post-init fee quote slot")
+    decimal(journal.get("quotedFeeLamports"), "prepared post-init fee quote")
     dispatching = dict(journal)
     dispatching.update(
         {
@@ -2452,6 +2518,8 @@ def finalize_post_init_funding_journal(
     if journal.get("phase") == "Submitted" and journal.get("signature") != signature:
         raise Refusal("Submitted post-init journal substitutes its signature")
     finalized = verify_funding_transaction(transaction, journal, signature)
+    if finalized.get("feeLamports") != journal.get("quotedFeeLamports"):
+        raise Refusal("post-init finalized fee differs from its pre-dispatch quote")
     finalized["phase"] = "Finalized"
     finalized["signature"] = signature
     return finalized
@@ -2811,6 +2879,8 @@ def run_post_init_funding(
     initial_funding_closure_sha256: str,
     *,
     poll_only: bool,
+    max_transfer_lamports: int | None = None,
+    max_fee_lamports: int | None = None,
 ) -> str:
     if manifest.campaign is None:
         return "not-applicable"
@@ -2823,6 +2893,11 @@ def run_post_init_funding(
     payer_address = pubkey_text(
         public_wallets[payer_ref].get("address"), "post-init campaign payer"
     )
+    planned_transfer = sum(
+        spec.transfer_lamports for spec in manifest.campaign.post_init_funding
+    )
+    if max_transfer_lamports is not None and planned_transfer > max_transfer_lamports:
+        raise Refusal("post-init funding plan exceeds its live transfer cap")
     payer_keypair = None
     if not poll_only:
         if solana is None:
@@ -2832,6 +2907,8 @@ def run_post_init_funding(
             "campaign payer keypair",
         )
     pending = False
+    finalized_transfer = 0
+    finalized_fee = 0
     for spec in manifest.campaign.post_init_funding:
         wallet_address = pubkey_text(
             public_wallets[spec.wallet_ref].get("address"),
@@ -2882,6 +2959,26 @@ def run_post_init_funding(
         if phase == "Prepared":
             if poll_only or not prepared_now:
                 return "post-init-prepared-no-dispatch-marker"
+            fee_slot, fee_lamports = rpc.fee_for_message(
+                text(journal.get("messageBase64"), "post-init message", 4096)
+            )
+            quoted = quote_post_init_funding_fee(
+                journal, fee_slot, fee_lamports
+            )
+            atomic_write_json(path, quoted)
+            journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
+            if (
+                decimal(journal.get("feeQuoteSlot"), "post-init fee quote slot")
+                != fee_slot
+                or decimal(journal.get("quotedFeeLamports"), "post-init fee quote")
+                != fee_lamports
+            ):
+                raise Refusal("post-init funding changed its finalized fee quote")
+            if (
+                max_fee_lamports is not None
+                and finalized_fee + fee_lamports > max_fee_lamports
+            ):
+                raise Refusal("post-init funding fee quote exceeds its live fee cap")
             dispatching = dispatching_post_init_funding_journal(journal)
             atomic_write_json(path, dispatching)
             journal = authenticated_state(path, f"post-init funding {spec.journal_id}")
@@ -2933,6 +3030,22 @@ def run_post_init_funding(
                     raise Refusal(f"post-init funding {spec.journal_id} changed {key}")
             if decimal(journal.get("walletPreLamports"), "post-init wallet prebalance") != 0:
                 raise Refusal(f"post-init funding {spec.journal_id} target was not vacant")
+            finalized_transfer += decimal(
+                journal.get("transferLamports"),
+                f"post-init funding {spec.journal_id} finalized transfer",
+                positive=True,
+            )
+            finalized_fee += decimal(
+                journal.get("feeLamports"),
+                f"post-init funding {spec.journal_id} finalized fee",
+            )
+            if (
+                max_transfer_lamports is not None
+                and finalized_transfer > max_transfer_lamports
+            ):
+                raise Refusal("finalized post-init transfer exceeds its live cap")
+            if max_fee_lamports is not None and finalized_fee > max_fee_lamports:
+                raise Refusal("finalized post-init fee exceeds its live cap")
     if pending:
         return "post-init-pending"
     initial_closure = authenticate_funding_closure(
@@ -3553,6 +3666,23 @@ def run_activity(
     poll_only: bool,
 ) -> str:
     binaries = caller_binaries(dclutch_bin, successor_bin)
+    max_post_init_transfer: int | None = None
+    max_post_init_fee: int | None = None
+    if manifest.campaign is not None and manifest.scenario.cluster_target == "devnet":
+        if live_authorization is None:
+            raise Refusal("Activity-v3 devnet run requires its exact live authorization")
+        (
+            _,
+            _,
+            _,
+            _,
+            max_post_init_transfer,
+            max_post_init_fee,
+            _,
+            _,
+        ) = v3_bounded_live_authorization(
+            live_authorization, manifest, allow_expired=poll_only
+        )
     initial_phases = activity_journal_phases(manifest, work) if poll_only else {}
     submitted_ids = {adapter_id for adapter_id, phase in initial_phases.items() if phase in {"dispatching", "finalized"}}
     initial_funding_phases = funding_journal_phases(manifest, work) if poll_only else {}
@@ -3641,6 +3771,8 @@ def run_activity(
             authorization_sha256,
             initial_closure_sha256,
             poll_only=poll_only,
+            max_transfer_lamports=max_post_init_transfer,
+            max_fee_lamports=max_post_init_fee,
         )
         if post_init_status != "post-init-complete":
             return post_init_status
@@ -3683,6 +3815,8 @@ def run_activity(
                     authorization_sha256,
                     initial_closure_sha256,
                     poll_only=False,
+                    max_transfer_lamports=max_post_init_transfer,
+                    max_fee_lamports=max_post_init_fee,
                 )
                 if post_init_status != "post-init-complete":
                     return post_init_status

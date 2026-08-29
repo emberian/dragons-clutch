@@ -540,6 +540,8 @@ def rpc_server(state: RpcState):
                         "lastValidBlockHeight": 1234,
                     },
                 }
+            elif method == "getFeeForMessage":
+                result = {"context": {"slot": 104}, "value": 5_000}
             elif method == "sendTransaction":
                 result = state.sent_signature
             elif method == "getTransaction":
@@ -728,7 +730,10 @@ class ActivityTests(unittest.TestCase):
         with self.assertRaisesRegex(activity.Refusal, "Dispatching"):
             activity.submitted_post_init_funding_journal(prepared, signature)
 
-        dispatching = activity.dispatching_post_init_funding_journal(prepared)
+        quoted = activity.quote_post_init_funding_fee(prepared, 104, 5_000)
+        activity.atomic_write_json(path, quoted)
+        quoted = activity.authenticated_state(path, "quoted post-init")
+        dispatching = activity.dispatching_post_init_funding_journal(quoted)
         activity.atomic_write_json(path, dispatching)
         dispatching = activity.authenticated_state(path, "dispatching post-init")
         with self.assertRaisesRegex(activity.Refusal, "another packet"):
@@ -750,6 +755,13 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(finalized["phase"], "Finalized")
         self.assertEqual(finalized["signature"], signature)
         self.assertEqual(finalized["feeLamports"], "5000")
+        substituted_fee = funding_transaction(
+            fee=5_001,
+            amount=spec.transfer_lamports,
+            memo=submitted["memo"],
+        )
+        with self.assertRaisesRegex(activity.Refusal, "pre-dispatch quote"):
+            activity.finalize_post_init_funding_journal(submitted, substituted_fee)
         activity.atomic_write_json(path, finalized)
         post_closure = activity.write_post_init_funding_closure(
             manifest,
@@ -857,6 +869,37 @@ class ActivityTests(unittest.TestCase):
                 return expected_signature
 
             rpc = activity.Rpc(rpc_url)
+            with (
+                mock.patch.object(rpc, "fee_for_message", return_value=(104, 5_001)),
+                mock.patch.object(
+                    rpc, "send_transaction", side_effect=send_and_install
+                ) as refused_send,
+            ):
+                with self.assertRaisesRegex(activity.Refusal, "fee quote exceeds"):
+                    activity.run_post_init_funding(
+                        manifest,
+                        self.work,
+                        solana,
+                        private_wallets,
+                        public_wallets,
+                        rpc,
+                        None,
+                        initial_closure_sha256,
+                        poll_only=False,
+                        max_transfer_lamports=10_000,
+                        max_fee_lamports=5_000,
+                    )
+                refused_send.assert_not_called()
+            refused = activity.authenticated_state(
+                activity.post_init_funding_journal_path(self.work, "fund-alice"),
+                "over-cap post-init",
+            )
+            self.assertEqual(refused["phase"], "Prepared")
+            self.assertEqual(refused["quotedFeeLamports"], "5001")
+            activity.post_init_funding_journal_path(
+                self.work, "fund-alice"
+            ).unlink()
+
             with mock.patch.object(rpc, "send_transaction", side_effect=send_and_install):
                 status = activity.run_post_init_funding(
                     manifest,
@@ -868,6 +911,8 @@ class ActivityTests(unittest.TestCase):
                     None,
                     initial_closure_sha256,
                     poll_only=False,
+                    max_transfer_lamports=10_000,
+                    max_fee_lamports=5_000,
                 )
         self.assertEqual(status, "post-init-complete")
         self.assertEqual(initial_closure["totalTransferLamports"], "100000")
@@ -1143,6 +1188,25 @@ class ActivityTests(unittest.TestCase):
         write_json(path, value)
         with self.assertRaisesRegex(activity.Refusal, "changed the post-init funding plan"):
             activity.v3_bounded_live_authorization(path, devnet)
+
+        value["postInitFundingPlanSha256"] = activity.post_init_funding_plan_sha256(
+            devnet
+        )
+        value["maxSpendLamports"] = "14999"
+        write_json(path, value)
+        with self.assertRaisesRegex(activity.Refusal, "fee cap exceed"):
+            activity.v3_bounded_live_authorization(path, devnet)
+        with self.assertRaisesRegex(activity.Refusal, "fee cap exceed"):
+            activity.run_activity(
+                devnet,
+                self.work,
+                self.root / "absent-dclutch",
+                self.root / "absent-successor",
+                self.keygen,
+                path,
+                self.root / "absent-solana",
+                poll_only=False,
+            )
 
     def test_reconciled_wallet_debit_is_exact_and_bounded(self) -> None:
         value = {
