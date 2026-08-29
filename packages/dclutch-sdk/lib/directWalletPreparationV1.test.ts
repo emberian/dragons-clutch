@@ -17,7 +17,10 @@ import {
   type DirectInlineHotRouteV3,
   type SignedDirectIntentV3,
 } from './directInlineV3';
-import { inspectDirectMakerNonceV1 } from './directMakerReplay';
+import {
+  deriveDirectMakerReplayAddressV1,
+  inspectDirectMakerNoncePairV1,
+} from './directMakerReplay';
 import { type DirectParticipantReadinessV1 } from './directParticipant';
 import { planDirectCrossingV1 } from './directTicket';
 import {
@@ -40,6 +43,14 @@ const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 function key(seed: number): string {
   return new PublicKey(new Uint8Array(32).fill(seed)).toBase58();
 }
+
+const SELLER = key(2);
+const SELLER_COLLATERAL = key(3);
+const WALLET = key(4);
+const TAKER_COLLATERAL = key(5);
+const AGGREGATE = key(60);
+const SELLER_POSITION = key(61);
+const TAKER_POSITION = key(62);
 
 function account(address: string, isWritable = false, executable = false, isSigner = false): DirectHotAccountMetaV3 {
   return Object.freeze({ address, isSigner, isWritable, executable });
@@ -86,10 +97,21 @@ function route(payer: string): DirectInlineHotRouteV3 {
   const executable = new Set([4, 5, 16, 17, 19, 21, 33, 38]);
   const runtimeAccounts = Object.freeze(Array.from(
     { length: DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3 },
-    (_, index) => account(
-      index === 1 ? payer : runtimeFixed.has(index) ? fixed[runtimeFixed.get(index)!]!.address : key(100 + index),
+    (_, index) => {
+      const joined = new Map<number, string>([
+        [0, deriveDirectMakerReplayAddressV1(key(12), market, 19n, SELLER).address],
+        [3, deriveDirectMakerReplayAddressV1(key(12), market, 19n, WALLET).address],
+        [7, AGGREGATE],
+        [23, SELLER_POSITION],
+        [24, TAKER_POSITION],
+        [30, TAKER_COLLATERAL],
+        [31, SELLER_COLLATERAL],
+      ]);
+      return account(
+      index === 1 ? payer : joined.get(index) ?? (runtimeFixed.has(index) ? fixed[runtimeFixed.get(index)!]!.address : key(100 + index)),
       writable.has(index), executable.has(index), index === 1,
-    ),
+      );
+    },
   ));
   const projected = projectDirectInlineSealedExecutionRouteV3(Object.freeze({
     payer,
@@ -148,16 +170,17 @@ function routeInspection(candidate: DirectInlineHotRouteV3): DirectHotRouteInspe
   });
 }
 
-async function nonce(candidate: DirectInlineHotRouteV3, maker: string) {
-  return inspectDirectMakerNonceV1({
+async function noncePair(candidate: DirectInlineHotRouteV3, seller = SELLER, taker = WALLET) {
+  return inspectDirectMakerNoncePairV1({
     finalizedSlot: async () => '1002',
-    accountInfo: async () => Object.freeze({ slot: '1002', account: null }),
-  }, {
-    tradingProgram: candidate.tradingProgram,
-    market: candidate.market,
-    generation: candidate.generation,
-    maker,
-  });
+    multipleAccounts: async (addresses) => Object.freeze({
+      slot: '1002',
+      accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account: null }))),
+    }),
+  }, [
+    { tradingProgram: candidate.tradingProgram, market: candidate.market, generation: candidate.generation, maker: seller },
+    { tradingProgram: candidate.tradingProgram, market: candidate.market, generation: candidate.generation, maker: taker },
+  ]);
 }
 
 function participant(
@@ -174,8 +197,8 @@ function participant(
     generation: candidate.generation,
     owner,
     coordinates: Object.freeze({
-      aggregate: key(60),
-      position: key(side === 'seller' ? 61 : 62),
+      aggregate: AGGREGATE,
+      position: side === 'seller' ? SELLER_POSITION : TAKER_POSITION,
       admission: key(side === 'seller' ? 63 : 64),
       collateral,
       custodyAuthority: key(65),
@@ -192,11 +215,12 @@ function participant(
 }
 
 async function fixture(payer: 'wallet' | 'operator' = 'wallet'): Promise<DirectWalletPreparationInputV1> {
-  const wallet = key(4);
-  const seller = key(2);
+  const wallet = WALLET;
+  const seller = SELLER;
   const candidate = route(payer === 'wallet' ? wallet : key(91));
-  const sellerReplay = await nonce(candidate, seller);
-  const takerReplay = await nonce(candidate, wallet);
+  const replayPair = await noncePair(candidate);
+  const sellerReplay = replayPair[0];
+  const takerReplay = replayPair[1];
   const signedSeller: SignedDirectIntentV3 = Object.freeze({
     maker: seller,
     signature: new Uint8Array(64).fill(11),
@@ -212,7 +236,7 @@ async function fixture(payer: 'wallet' | 'operator' = 'wallet'): Promise<DirectW
       maximumFill: 2_000n,
       limitPrice: 500_000n,
       feeBasisPoints: candidate.feeBasisPoints,
-      collateralAccount: key(3),
+      collateralAccount: SELLER_COLLATERAL,
     }),
   });
   const crossingPlan = planDirectCrossingV1({
@@ -220,7 +244,7 @@ async function fixture(payer: 'wallet' | 'operator' = 'wallet'): Promise<DirectW
     ticket: signedSeller,
     takerAddress: wallet,
     takerReplay,
-    takerCollateralAccount: key(5),
+    takerCollateralAccount: TAKER_COLLATERAL,
     desiredFill: 2_000n,
     clockSlot: 1_002n,
   });
@@ -237,18 +261,16 @@ async function fixture(payer: 'wallet' | 'operator' = 'wallet'): Promise<DirectW
     routeInspection: routeInspection(candidate),
     ticketInspection: signedSeller,
     crossingPlan,
-    sellerParticipant: participant(candidate, seller, key(3), 'seller'),
-    takerParticipant: participant(candidate, wallet, key(5), 'taker'),
-    sellerNonce: sellerReplay,
-    takerNonce: takerReplay,
+    sellerParticipant: participant(candidate, seller, SELLER_COLLATERAL, 'seller'),
+    takerParticipant: participant(candidate, wallet, TAKER_COLLATERAL, 'taker'),
+    noncePair: replayPair,
     signedSeller,
     signedTaker,
     context: Object.freeze({
       route: chain,
       sellerParticipant: chain,
       takerParticipant: chain,
-      sellerNonce: chain,
-      takerNonce: chain,
+      noncePair: chain,
       planning: Object.freeze({ ...chain, connectedWallet: wallet }),
       current: Object.freeze({
         ...chain,
@@ -270,7 +292,7 @@ describe('Direct wallet preparation V1', () => {
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(Object.isFrozen(prepared.binding)).toBe(true);
     expect(prepared.binding.routeObservedSlot).toBe('1000');
-    expect(prepared.binding.seller.nonceAddress).toBe(input.sellerNonce.address);
+    expect(prepared.binding.seller.nonceAddress).toBe(input.noncePair[0].address);
     expect(prepared.binding.taker.participantObservedSlot).toBe('1002');
     if (prepared.status !== 'wallet-preparable') throw new Error('unreachable test branch');
     expect(prepared.transactionPlan.requiredSigners).toEqual([input.context.current.connectedWallet]);
@@ -302,7 +324,7 @@ describe('Direct wallet preparation V1', () => {
       ...input,
       context: {
         ...input.context,
-        takerNonce: { ...input.context.takerNonce, rpcEndpoint: 'https://other-rpc.example.test/' },
+        noncePair: { ...input.context.noncePair, rpcEndpoint: 'https://other-rpc.example.test/' },
       },
     })).toThrow(/another RPC endpoint/);
     expect(() => prepareDirectWalletTransactionV1({
@@ -336,8 +358,8 @@ describe('Direct wallet preparation V1', () => {
       crossingPlan: Object.freeze({ ...input.crossingPlan, ticket: replayedSeller }),
     })).toThrow(/stale, future, or already consumed/);
 
-    const anotherMakerNonce = await nonce(input.routeInspection.route, key(8));
-    expect(() => prepareDirectWalletTransactionV1({ ...input, sellerNonce: anotherMakerNonce })).toThrow(/another Trading program, Market, generation, or maker/);
+    const anotherMakerPair = await noncePair(input.routeInspection.route, key(8), WALLET);
+    expect(() => prepareDirectWalletTransactionV1({ ...input, noncePair: anotherMakerPair })).toThrow(/another Trading program, Market, generation, or maker/);
   });
 
   it('refuses exact route joins and an expired blockhash before wallet compilation', async () => {
@@ -351,5 +373,14 @@ describe('Direct wallet preparation V1', () => {
       ...input,
       context: { ...input.context, current: { ...input.context.current, blockHeight: 2_001n } },
     })).toThrow(/blockhash expired/);
+    const substitutedRuntime = [...input.routeInspection.route.runtimeAccounts];
+    substitutedRuntime[23] = account(key(210), true);
+    expect(() => prepareDirectWalletTransactionV1({
+      ...input,
+      routeInspection: Object.freeze({
+        ...input.routeInspection,
+        route: Object.freeze({ ...input.routeInspection.route, runtimeAccounts: Object.freeze(substitutedRuntime) }),
+      }),
+    })).toThrow(/substitutes the seller Position coordinate/);
   });
 });

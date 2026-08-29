@@ -26,6 +26,7 @@ const DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1 = 144;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
 const authenticatedDirectMakerNonceV1: unique symbol = Symbol('authenticated Direct maker nonce V1');
+const authenticatedDirectMakerNoncePairV1: unique symbol = Symbol('authenticated Direct maker nonce pair V1');
 
 export type AuthenticatedDirectMakerNonceV1 = Readonly<{
   address: string;
@@ -45,6 +46,11 @@ export type DirectMakerNonceRequestV1 = Readonly<{
   generation: bigint;
   maker: string;
 }>;
+
+export type AuthenticatedDirectMakerNoncePairV1 = readonly [
+  AuthenticatedDirectMakerNonceV1,
+  AuthenticatedDirectMakerNonceV1,
+] & Readonly<{ [authenticatedDirectMakerNoncePairV1]: true }>;
 
 function canonicalKey(value: string, field: string): PublicKey {
   const key = new PublicKey(value);
@@ -233,7 +239,7 @@ export async function inspectDirectMakerNonceV1(
 export async function inspectDirectMakerNoncePairV1(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
   requests: readonly [DirectMakerNonceRequestV1, DirectMakerNonceRequestV1],
-): Promise<readonly [AuthenticatedDirectMakerNonceV1, AuthenticatedDirectMakerNonceV1]> {
+): Promise<AuthenticatedDirectMakerNoncePairV1> {
   const first = requests[0];
   const second = requests[1];
   if (first.tradingProgram !== second.tradingProgram
@@ -279,10 +285,30 @@ export async function inspectDirectMakerNoncePairV1(
       observedSlot: observation.slot,
     },
   ));
-  return Object.freeze(decoded) as unknown as readonly [
-    AuthenticatedDirectMakerNonceV1,
-    AuthenticatedDirectMakerNonceV1,
-  ];
+  const pair = decoded as unknown as AuthenticatedDirectMakerNoncePairV1;
+  Object.defineProperty(pair, authenticatedDirectMakerNoncePairV1, { value: true, enumerable: false });
+  return Object.freeze(pair);
+}
+
+/** Refuse a caller-assembled tuple and return only one same-snapshot nonce pair. */
+export function requireAuthenticatedDirectMakerNoncePairV1(
+  pair: AuthenticatedDirectMakerNoncePairV1,
+): readonly [AuthenticatedDirectMakerNonceV1, AuthenticatedDirectMakerNonceV1] {
+  if (pair === null || !Array.isArray(pair)
+      || pair.length !== 2 || pair[authenticatedDirectMakerNoncePairV1] !== true) {
+    throw new Error('maker nonce pair was not acquired from the authenticated pair reader');
+  }
+  const first = pair[0];
+  const second = pair[1];
+  if (first.observedSlot !== second.observedSlot
+      || first.tradingProgram !== second.tradingProgram
+      || first.market !== second.market
+      || first.generation !== second.generation
+      || first.maker === second.maker
+      || first.address === second.address) {
+    throw new Error('authenticated maker nonce pair does not share one exact distinct-maker snapshot');
+  }
+  return pair;
 }
 
 /** Runtime-check an opaque chain observation and bind it to one crossing. */

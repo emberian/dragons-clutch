@@ -10,7 +10,9 @@ import {
   type SignedDirectIntentV3,
 } from './directInlineV3';
 import {
+  requireAuthenticatedDirectMakerNoncePairV1,
   requireAuthenticatedDirectMakerNonceV1,
+  type AuthenticatedDirectMakerNoncePairV1,
   type AuthenticatedDirectMakerNonceV1,
 } from './directMakerReplay';
 import {
@@ -35,8 +37,7 @@ export type DirectWalletPreparationContextV1 = Readonly<{
   route: DirectWalletChainContextV1;
   sellerParticipant: DirectWalletChainContextV1;
   takerParticipant: DirectWalletChainContextV1;
-  sellerNonce: DirectWalletChainContextV1;
-  takerNonce: DirectWalletChainContextV1;
+  noncePair: DirectWalletChainContextV1;
   planning: DirectWalletChainContextV1 & Readonly<{ connectedWallet: string }>;
   current: DirectWalletChainContextV1 & Readonly<{
     connectedWallet: string;
@@ -100,8 +101,7 @@ export type DirectWalletPreparationInputV1 = Readonly<{
   crossingPlan: DirectCrossingPlanV1;
   sellerParticipant: DirectParticipantReadinessV1;
   takerParticipant: DirectParticipantReadinessV1;
-  sellerNonce: AuthenticatedDirectMakerNonceV1;
-  takerNonce: AuthenticatedDirectMakerNonceV1;
+  noncePair: AuthenticatedDirectMakerNoncePairV1;
   signedSeller: SignedDirectIntentV3;
   signedTaker: SignedDirectIntentV3;
   context: DirectWalletPreparationContextV1;
@@ -212,6 +212,21 @@ function participantBinding(
   });
 }
 
+const DIRECT_RUNTIME_SELLER_REPLAY_V1 = 0;
+const DIRECT_RUNTIME_BUYER_REPLAY_V1 = 3;
+const DIRECT_RUNTIME_CLAIMS_AGGREGATE_V1 = 7;
+const DIRECT_RUNTIME_SELLER_POSITION_V1 = 23;
+const DIRECT_RUNTIME_BUYER_POSITION_V1 = 24;
+const DIRECT_RUNTIME_BUYER_COLLATERAL_V1 = 30;
+const DIRECT_RUNTIME_SELLER_COLLATERAL_V1 = 31;
+
+function requireRuntimeJoin(route: DirectHotRouteInspectionV3['route'], index: number, expected: string, field: string): void {
+  const account = route.runtimeAccounts[index];
+  if (account === undefined || account.address !== expected) {
+    throw new Error(`authenticated Direct runtime substitutes the ${field} coordinate`);
+  }
+}
+
 /**
  * Bind already-authenticated Direct observations to the wallet that is still
  * connected, then compile only when that wallet is the route's exact payer.
@@ -247,8 +262,7 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
     ['route', context.route],
     ['seller participant', context.sellerParticipant],
     ['taker participant', context.takerParticipant],
-    ['seller nonce', context.sellerNonce],
-    ['taker nonce', context.takerNonce],
+    ['maker nonce pair', context.noncePair],
     ['planning', context.planning],
   ];
   for (const [field, candidate] of chainContexts) {
@@ -345,13 +359,16 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
   }
   admitDirectParticipantCrossingV1(takerParticipant, crossingPlan);
 
-  const sellerNonce = requireAuthenticatedDirectMakerNonceV1(input.sellerNonce, {
+  const noncePair = requireAuthenticatedDirectMakerNoncePairV1(input.noncePair);
+  const sellerNonceObservation = noncePair[0];
+  const takerNonceObservation = noncePair[1];
+  const sellerNonce = requireAuthenticatedDirectMakerNonceV1(sellerNonceObservation, {
     tradingProgram: route.tradingProgram,
     market: route.market,
     generation: route.generation,
     maker: input.signedSeller.maker,
   });
-  const takerNonce = requireAuthenticatedDirectMakerNonceV1(input.takerNonce, {
+  const takerNonce = requireAuthenticatedDirectMakerNonceV1(takerNonceObservation, {
     tradingProgram: route.tradingProgram,
     market: route.market,
     generation: route.generation,
@@ -360,14 +377,20 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
   if (sellerNonce !== sellerIntent.nonce || takerNonce !== buyerIntent.nonce) {
     throw new Error('signed intent nonce is stale, future, or already consumed relative to finalized replay state');
   }
-  if (input.sellerNonce.address === input.takerNonce.address) throw new Error('seller and taker replay coordinates alias');
-  for (const [field, observation] of [['seller', input.sellerNonce], ['taker', input.takerNonce]] as const) {
+  for (const [field, observation] of [['seller', sellerNonceObservation], ['taker', takerNonceObservation]] as const) {
     canonicalKey(observation.address, `${field} replay address`);
     const nonceSlot = exactSlotText(observation.observedSlot, `${field} nonce observation slot`);
     if (nonceSlot < routeSlot || nonceSlot > currentSlot) {
       throw new Error(`${field} nonce observation is outside the route-to-current finalized slot interval`);
     }
   }
+  requireRuntimeJoin(route, DIRECT_RUNTIME_SELLER_REPLAY_V1, sellerNonceObservation.address, 'seller replay');
+  requireRuntimeJoin(route, DIRECT_RUNTIME_BUYER_REPLAY_V1, takerNonceObservation.address, 'buyer replay');
+  requireRuntimeJoin(route, DIRECT_RUNTIME_CLAIMS_AGGREGATE_V1, sellerParticipant.coordinates.aggregate, 'Claims aggregate');
+  requireRuntimeJoin(route, DIRECT_RUNTIME_SELLER_POSITION_V1, sellerParticipant.coordinates.position, 'seller Position');
+  requireRuntimeJoin(route, DIRECT_RUNTIME_BUYER_POSITION_V1, takerParticipant.coordinates.position, 'buyer Position');
+  requireRuntimeJoin(route, DIRECT_RUNTIME_BUYER_COLLATERAL_V1, takerParticipant.coordinates.collateral, 'buyer collateral');
+  requireRuntimeJoin(route, DIRECT_RUNTIME_SELLER_COLLATERAL_V1, sellerParticipant.coordinates.collateral, 'seller collateral');
 
   const preview = previewDirectInlineV3(
     route, input.signedSeller, input.signedTaker,
@@ -401,8 +424,8 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
     lastValidBlockHeight: route.lastValidBlockHeight,
     currentFinalizedSlot: currentSlot,
     currentBlockHeight,
-    seller: participantBinding(sellerParticipant, input.sellerNonce),
-    taker: participantBinding(takerParticipant, input.takerNonce),
+    seller: participantBinding(sellerParticipant, sellerNonceObservation),
+    taker: participantBinding(takerParticipant, takerNonceObservation),
   });
 
   if (route.payer !== connectedWallet) {

@@ -8,6 +8,7 @@ import {
   deriveDirectMakerReplayAddressV1,
   inspectDirectMakerNoncePairV1,
   inspectDirectMakerNonceV1,
+  requireAuthenticatedDirectMakerNoncePairV1,
   requireAuthenticatedDirectMakerNonceV1,
 } from './directMakerReplay';
 
@@ -129,6 +130,9 @@ describe('the Direct maker replay nonce reader', () => {
     expect(observed.map((entry) => [entry.maker, entry.nextNonce, entry.observedSlot])).toEqual([
       [MAKER, 9n, '501'], [MAKER_TWO, 9n, '501'],
     ]);
+    expect(requireAuthenticatedDirectMakerNoncePairV1(observed)).toBe(observed);
+    expect(() => requireAuthenticatedDirectMakerNoncePairV1([...observed] as unknown as typeof observed))
+      .toThrow('not acquired from the authenticated pair reader');
   });
 
   it('refuses a mixed route, same-maker replay, reordered RPC result, and slot regression', async () => {
