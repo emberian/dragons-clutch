@@ -81,7 +81,7 @@ output += `export const CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1 = ${scalar('claim
 for (const name of [
   'CUSTODY_CALLER_AUTHORITY', 'CORE_MARKET', 'ACTIVATION_CACHE', 'REGISTRY_PROGRAM', 'CLAIMS_PROGRAM',
   'CLAIMS_PROGRAMDATA', 'REALM', 'REALM_STAGING', 'CUSTODY_REPLAY', 'PAYER', 'SYSTEM_PROGRAM',
-  'RENT_SYSVAR', 'CUSTODY_PROGRAM', 'AGGREGATE',
+  'RENT_SYSVAR', 'RENT_REFUND', 'CUSTODY_PROGRAM', 'AGGREGATE',
 ]) output += `export const REPLAY_ACCOUNT_${name}_V1 = ${scalar('claimsRoute', name)} as const;\n`;
 output += `export const CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 = ${scalar('custodyFrame', 'INITIALIZE_REPLAY_ACCOUNT_COUNT_V1')} as const;\n`;
 

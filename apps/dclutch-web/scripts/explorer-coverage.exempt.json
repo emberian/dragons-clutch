@@ -1,7 +1,12 @@
 {
   "note": "Findings the explorer does not render, each with the reason. An entry here is a decision, not an oversight: the coverage gate fails on any finding that is neither rendered nor listed. Remove an entry when the finding is fixed, never to quiet the gate.",
   "records": {},
-  "instructions": {},
+  "instructions": {
+    "DCFREQ02": "Fractional atomic exposure has a route-census magic but no generated browser request-layout module. The explorer names the raw route from the census and does not invent field offsets; render it only when Fractional's owning ABI generator emits that layout.",
+    "DCFRRQ03": "Fractional retirement has a route-census magic but no generated browser request-layout module. The explorer preserves the census attribution and intentionally refuses to decode an unauthored body until Fractional publishes its generated ABI.",
+    "DCLCRH01": "The Core/Custody retirement replay handoff is selected by this shared magic, but neither owner emits a browser request-layout authority. The explorer can identify both routes from the census and must not manufacture a body decoder.",
+    "DCLTCRQ1": "The Claims/Core retirement checkpoint handoff is selected by this shared magic, but its request layout has no generated browser authority. The explorer carries the route identity from the census and leaves the bytes opaque rather than mirroring offsets."
+  },
   "magiclessLayouts": {
     "principalCapacityV1.ts": "Emits the full ManipulationFloorV1 layout — width, schema version, and eight field offsets including MANIPULATION_FLOOR_V1_MAGIC_OFFSET — without emitting the magic VALUE that offset points at. The browser can therefore read the record and cannot recognize one, so this explorer will not decode it: doing so would mean identifying the record by a magic nobody emitted. Not this lane's module (landed 2026-08-27 alongside abi:principal-capacity). The fix is one line in scripts/generate-principal-capacity.mjs, and this entry comes out with it."
   }
