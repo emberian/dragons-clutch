@@ -3211,3 +3211,92 @@ async fn a_committed_checkpoint_refuses_a_replayed_commit() {
         "a refused replay must not move the Claims Positions a second time"
     );
 }
+
+
+/// Reach a reserved checkpoint and hand back the bank a commit would use.
+async fn reserved_commit_bank(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+) -> DealerScenarioCommitAccountsV1 {
+    let (reservation, receipt_address, _) = reserved_with_commit_inputs(context, scenario).await;
+    let payer = context.payer.pubkey();
+    commit_bank(scenario, payer, receipt_address, &reservation)
+}
+
+#[tokio::test]
+async fn a_commit_refuses_a_caller_authority_from_another_request() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let mut bank = reserved_commit_bank(&mut context, &scenario).await;
+    let reserved = checkpoint_body(&mut context, &scenario).await;
+
+    // A real Trading PDA, derived through the real seed constructor, differing
+    // only in the claims-packet digest it commits to. A random key would have
+    // been refused for not being a program address at all; this one is a
+    // perfectly good authority for a request that is not this one.
+    let request = DealerScenarioTradeRequestV3::decode(&scenario.request_bytes)
+        .expect("canonical request decodes");
+    let plan = SignedDeltaPlanV3::decode(request.claims_packet()).expect("claims plan decodes");
+    let mut foreign_packet = request.claims_packet().to_vec();
+    *foreign_packet.last_mut().expect("packet is not empty") ^= 0xff;
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(plan.release_set()).expect("release set"),
+        plan.market(),
+        ExecutionRoleV1::Trading,
+        plan.request_id(),
+        hash(&foreign_packet).to_bytes(),
+    )
+    .expect("caller authority seeds");
+    let foreign = Pubkey::find_program_address(&seeds.as_slices(), &TRADING).0;
+    *bank
+        .claims_accounts
+        .first_mut()
+        .expect("caller authority coordinate") = AccountMeta::new_readonly(foreign, false);
+
+    let processed = submit_commit(&mut context, &scenario, bank).await;
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_RELEASE),
+        "an authority bound to another request must refuse; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        reserved,
+        "a refused commit must not advance the checkpoint"
+    );
+}
+
+#[tokio::test]
+async fn a_commit_refuses_a_claims_position_table_out_of_canonical_order() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let mut bank = reserved_commit_bank(&mut context, &scenario).await;
+    let reserved = checkpoint_body(&mut context, &scenario).await;
+    let dealer_before =
+        position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await;
+
+    // Both Positions are the real ones this request names, with their real
+    // bodies and privileges. Only the order changes. Claims recomputes the
+    // table sorted by owner, so the frame it is handed must already be in that
+    // order and cannot be permuted by a caller.
+    let count = bank.claims_accounts.len();
+    bank.claims_accounts.swap(count - 2, count - 1);
+
+    let processed = submit_commit(&mut context, &scenario, bank).await;
+    assert!(
+        processed.result.is_err(),
+        "a permuted Position table must fail closed; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        reserved,
+        "a refused commit must not advance the checkpoint"
+    );
+    assert_eq!(
+        position_balances(&mut context, &scenario, scenario.fixture.actor_position.account).await,
+        dealer_before,
+        "a refused commit must not move the Claims Positions"
+    );
+}
