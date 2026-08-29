@@ -19,12 +19,17 @@ def command(ident, mutation=False):
     return {"id": ident, "mutation": mutation, "argv": argv}
 
 
-def fixture():
-    commands = [command(ident, ident not in {"candidate", "reconcile"}) for ident in flight.REQUIRED]
+def fixture(strategy="batched"):
+    if strategy == "batched":
+        ids = ("candidate", *(f"buffer:{role}" for role in flight.ROLES),
+               *(f"upgrade:{role}" for role in flight.ROLES), *flight.REQUIRED[11:])
+    else:
+        ids = flight.REQUIRED
+    commands = [command(ident, ident not in {"candidate", "reconcile"}) for ident in ids]
     for row in commands:
         if row["id"].startswith("buffer:"):
             row["argv"].append("--stop-after-buffer-ready")
-    return {"schema": flight.SCHEMA, "target": {"cluster": "devnet", "genesis": flight.DEVNET_GENESIS}, "commands": commands}
+    return {"schema": flight.SCHEMA, "target": {"cluster": "devnet", "genesis": flight.DEVNET_GENESIS}, "bufferStrategy": strategy, "commands": commands}
 
 
 class Result:
@@ -69,6 +74,25 @@ class FlightTests(unittest.TestCase):
         document = fixture()
         document["commands"][1]["argv"].remove("--stop-after-buffer-ready")
         with self.assertRaisesRegex(flight.FlightError, "buffer:custody"):
+            flight.validate_flight(document)
+
+    def test_extension_is_immediately_before_its_role_buffer(self):
+        document = fixture("interleaved")
+        extension = command("extend:resolution", True)
+        document["commands"].insert(3, extension)
+        flight.validate_flight(document)
+        document["commands"].pop(3)
+        document["commands"].insert(1, extension)
+        with self.assertRaisesRegex(flight.FlightError, "interleaved"):
+            flight.validate_flight(document)
+
+    def test_batched_extensions_precede_all_buffers(self):
+        document = fixture()
+        document["commands"].insert(1, command("extend:resolution", True))
+        flight.validate_flight(document)
+        extension = document["commands"].pop(1)
+        document["commands"].insert(3, extension)
+        with self.assertRaisesRegex(flight.FlightError, "batched"):
             flight.validate_flight(document)
 
 

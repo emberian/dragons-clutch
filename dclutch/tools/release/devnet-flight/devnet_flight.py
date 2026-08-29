@@ -26,8 +26,11 @@ JOURNAL_SCHEMA = "dclutch-devnet-flight-journal-v1"
 ROLES = ("custody", "resolution", "claims", "trading", "core")
 REQUIRED = (
     "candidate",
-    "buffer:custody", "buffer:resolution", "buffer:claims", "buffer:trading", "buffer:core",
-    "upgrade:custody", "upgrade:resolution", "upgrade:claims", "upgrade:trading", "upgrade:core",
+    "buffer:custody", "upgrade:custody",
+    "buffer:resolution", "upgrade:resolution",
+    "buffer:claims", "upgrade:claims",
+    "buffer:trading", "upgrade:trading",
+    "buffer:core", "upgrade:core",
     "sponsored-market-open", "participant-lifecycle", "direct-lifecycle", "terminal-lifecycle",
     "finite-activity", "reconcile", "site-refresh", "wrapper-pages-checkpoint",
 )
@@ -84,7 +87,7 @@ def command_name(argv: list[str]) -> str:
 
 
 def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    expected = {"schema", "target", "commands"}
+    expected = {"schema", "target", "bufferStrategy", "commands"}
     unknown = set(flight) - expected
     if unknown or set(flight) != expected:
         raise FlightError("flight has exactly schema, target, and commands")
@@ -93,6 +96,9 @@ def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     target = flight["target"]
     if target != {"cluster": "devnet", "genesis": DEVNET_GENESIS}:
         raise FlightError("flight target must be the exact acknowledged devnet genesis")
+    buffer_strategy = flight["bufferStrategy"]
+    if buffer_strategy not in {"batched", "interleaved"}:
+        raise FlightError("bufferStrategy must be batched or interleaved")
     commands = flight["commands"]
     if not isinstance(commands, list):
         raise FlightError("commands must be an array")
@@ -116,13 +122,19 @@ def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     if extra:
         raise FlightError("unknown command ids: " + ", ".join(sorted(extra)))
     order = [item["id"] for item in parsed]
-    required_order = [item for item in REQUIRED]
-    filtered = [item for item in order if item in REQUIRED]
-    if filtered != required_order:
-        raise FlightError("required commands must retain the canonical flight order")
-    extension_positions = [index for index, item in enumerate(order) if item.startswith("extend:")]
-    if extension_positions and (min(extension_positions) < order.index("candidate") or max(extension_positions) > order.index("buffer:custody")):
-        raise FlightError("optional extension commands belong after candidate and before buffer staging")
+    expected_order = ["candidate"]
+    if buffer_strategy == "batched":
+        expected_order.extend(f"extend:{role}" for role in ROLES if f"extend:{role}" in seen)
+        expected_order.extend(f"buffer:{role}" for role in ROLES)
+        expected_order.extend(f"upgrade:{role}" for role in ROLES)
+    else:
+        for role in ROLES:
+            if f"extend:{role}" in seen:
+                expected_order.append(f"extend:{role}")
+            expected_order.extend((f"buffer:{role}", f"upgrade:{role}"))
+    expected_order.extend(REQUIRED[11:])
+    if order != expected_order:
+        raise FlightError(f"commands do not match declared {buffer_strategy} bufferStrategy order")
     for item in parsed:
         ident, argv = item["id"], item["argv"]
         if ident.startswith("buffer:") and "--stop-after-buffer-ready" not in argv:

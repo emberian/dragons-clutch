@@ -6,12 +6,14 @@ does not read keys, perform RPC, construct transactions, calculate extension
 sizes, or interpret any protocol evidence. Those remain owned by the supplied
 commands.
 
-The flight file is strict JSON with an exact devnet target and one argv array
-per phase. Arrays are passed directly to `subprocess.run(..., shell=False)`.
-The required IDs, in order, are:
+The flight file is strict JSON with an exact devnet target, a required
+`bufferStrategy` of `batched` or `interleaved`, and one argv array per phase.
+Arrays are passed directly to `subprocess.run(..., shell=False)`. This release
+uses `batched`; its required IDs, in order, are:
 
 ```text
 candidate
+[extend:custody] [extend:resolution] [extend:claims] [extend:trading] [extend:core]
 buffer:custody buffer:resolution buffer:claims buffer:trading buffer:core
 upgrade:custody upgrade:resolution upgrade:claims upgrade:trading upgrade:core
 sponsored-market-open participant-lifecycle direct-lifecycle terminal-lifecycle
@@ -19,13 +21,15 @@ finite-activity reconcile site-refresh wrapper-pages-checkpoint
 ```
 
 Optional `extend:custody`, `extend:resolution`, `extend:claims`,
-`extend:trading`, or `extend:core` entries belong after `candidate` and before
-the buffer stage. Include one only when the existing checked baseline and
-candidate command determine the ProgramData needs `devnet-upgrade-extend-v1`.
-The driver neither repeats that arithmetic nor decides whether an extension is
-needed. Each buffer argv must use the existing
+`extend:trading`, or `extend:core` occur in role order after `candidate` for a
+batched flight. Include one only when the existing checked baseline and candidate
+command determine the ProgramData needs `devnet-upgrade-extend-v1`. The driver
+neither repeats that arithmetic nor decides whether an extension is needed. Each buffer argv must use the existing
 `--stop-after-buffer-ready` boundary; its paired Upgrade argv resumes without
-that flag. The five Upgrade entries are canonical Custody-to-Core order.
+that flag. Batched staging accepts the selected peak transient Buffer rent. For
+the available lower-capital `interleaved` strategy, each optional extension is
+instead immediately followed by its role's Buffer and Upgrade, before the next
+role begins; the Upgrade refunds and clears that Buffer.
 
 Plan mode is entirely local and key-free; it parses the flight and prints only
 argv SHA-256 values:
