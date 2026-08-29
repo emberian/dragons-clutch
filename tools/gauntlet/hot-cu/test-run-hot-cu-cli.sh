@@ -45,6 +45,17 @@ expect_refusal "checked gate requires its out-of-band digest" \
     "are one required pair" \
     "$RUNNER" --work "$SCRATCH/work-gate-pair" --checked-gate "$SCRATCH/gate.json"
 
+expect_refusal "mixed projection requires its out-of-band digest" \
+    "are one required pair" \
+    "$RUNNER" --work "$SCRATCH/work-mixed-pair" \
+        --mixed-gate-selection "$SCRATCH/selection.json"
+
+expect_refusal "mixed projection requires its checked gate" \
+    "requires --checked-gate + --checked-gate-sha256" \
+    "$RUNNER" --work "$SCRATCH/work-mixed-gate" \
+        --mixed-gate-selection "$SCRATCH/selection.json" \
+        --mixed-gate-selection-sha256 "$(printf '0%.0s' $(seq 1 64))"
+
 # These are deliberately literal source seams, not this test script's values.
 # shellcheck disable=SC2016
 if grep -Fq 'cargo build-sbf --manifest-path "$1" --sbf-out-dir "$ELF_DIR" -- --locked --offline' "$RUNNER" \
