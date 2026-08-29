@@ -39,6 +39,7 @@ dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
+dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
@@ -48,6 +49,7 @@ dclutch-release-tool = { path = "../dclutch-release-tool" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-v3-kernel = { path = "../dclutch-series-v3-kernel" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 dclutch-user-position-admission-contract = { path = "../dclutch-user-position-admission-contract" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
 dclutch-trading-sbf = { path = "../../programs/dclutch-trading-sbf", default-features = false, features = ["dealer-family", "no-entrypoint", "series-family"] }
