@@ -3901,6 +3901,7 @@ fn found_snapshot_keys(
         pubkey(&plan.core.program_id)?,
         pubkey(&plan.core.programdata_id)?,
         pubkey(&plan.registry.program_id)?,
+        sysvar::rent::ID,
         system_program::ID,
         pubkey(&plan.infrastructure_profile.address)?,
         registry_artifact.0,
@@ -3910,14 +3911,23 @@ fn found_snapshot_keys(
         rent_artifact.1,
         pubkey(&plan.rent_credit.programdata_id)?,
     ];
+    authenticate_found_snapshot_coordinates_v3(&keys, records.manifest.raw)?;
+    Ok(keys)
+}
+
+fn authenticate_found_snapshot_coordinates_v3(
+    keys: &[Pubkey],
+    capability_manifest_raw: Pubkey,
+) -> Result<()> {
     if keys.len() != FOUND_ACCOUNT_COUNT_V3
-        || keys.get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3) != Some(&records.manifest.raw)
+        || keys.get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3) != Some(&capability_manifest_raw)
+        || keys.get(FOUND_RENT_SYSVAR_INDEX_V3) != Some(&sysvar::rent::ID)
     {
         return Err(Error::new(
             "ordinary Found37 capability-manifest coordinate drifted",
         ));
     }
-    Ok(keys)
+    Ok(())
 }
 
 /// Complete ordinary ProjectFound V2 graph with runtime Rent supplied by Core.
@@ -10613,6 +10623,26 @@ fn pyth_market_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_found_snapshot_pins_manifest_and_runtime_rent_coordinates() {
+        let manifest = Pubkey::new_unique();
+        let mut keys = (0..FOUND_ACCOUNT_COUNT_V3)
+            .map(|_| Pubkey::new_unique())
+            .collect::<Vec<_>>();
+        keys[FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3] = manifest;
+        keys[FOUND_RENT_SYSVAR_INDEX_V3] = sysvar::rent::ID;
+        authenticate_found_snapshot_coordinates_v3(&keys, manifest)
+            .expect("canonical Found37 coordinates");
+
+        let mut wrong_rent = keys.clone();
+        wrong_rent[FOUND_RENT_SYSVAR_INDEX_V3] = Pubkey::new_unique();
+        assert!(authenticate_found_snapshot_coordinates_v3(&wrong_rent, manifest).is_err());
+
+        let mut missing_rent = keys;
+        missing_rent.remove(FOUND_RENT_SYSVAR_INDEX_V3);
+        assert!(authenticate_found_snapshot_coordinates_v3(&missing_rent, manifest).is_err());
+    }
 
     fn sponsored_price_update_for_test() -> Vec<u8> {
         let release = dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
