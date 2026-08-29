@@ -978,6 +978,40 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
     let found_start = PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1
         .checked_sub(PRE_MARKET_PROJECT_FOUND_ACCOUNT_COUNT_V1)
         .expect("initializer prefix width");
+    let mut source_aliased_accounts = initializer.instruction.accounts.clone();
+    source_aliased_accounts[0].is_signer = false;
+    source_aliased_accounts[found_start].pubkey = source_aliased_accounts[5].pubkey;
+    let source_aliased_instruction = Instruction {
+        program_id: TRADING_CALLER_PROGRAM_ID,
+        accounts: source_aliased_accounts,
+        data: initializer.instruction.data.clone(),
+    };
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("funding-source hostile blockhash");
+    let source_aliased_transaction = Transaction::new_signed_with_payer(
+        &[source_aliased_instruction],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let source_aliased = context
+        .banks_client
+        .process_transaction_with_metadata(source_aliased_transaction)
+        .await
+        .expect("funding-source hostile Banks RPC");
+    assert!(
+        source_aliased.result.is_err(),
+        "Resolution refuses a funding source aliased into ProjectFound36"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.ledger).await,
+        None,
+        "the refused funding-source alias leaves the Resolution ledger vacant"
+    );
+
     let mut aliased_accounts = initializer.instruction.accounts.clone();
     aliased_accounts[0].is_signer = false;
     aliased_accounts[found_start + 4].pubkey = aliased_accounts[found_start + 5].pubkey;
