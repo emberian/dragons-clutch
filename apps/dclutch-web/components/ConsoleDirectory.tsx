@@ -56,7 +56,7 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/resolution',
     name: 'Resolution',
     blurb:
-      'The read-only lifecycle readiness map opened at resolution: what a market needs before its oracle answer can be accepted, and where the selected market stands.',
+      'A read-only view of what a market still needs before its oracle answer can be accepted, and how far along the one you point it at has got. Resolution is not open yet.',
   },
   {
     href: '/general',

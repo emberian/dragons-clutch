@@ -7,7 +7,7 @@ describe('market lifecycle workbench', () => {
   it('renders creation as unavailable until exact chain authority is selected', () => {
     const html = renderToStaticMarkup(<MarketWorkbench />);
     expect(html).toContain('Lifecycle readiness');
-    expect(html).toContain('read-only lifecycle readiness map');
+    expect(html).toContain('read-only map of where a market has got to');
     expect(html).toContain('does not create, trade, resolve, or redeem');
     expect(html).toContain('Author &amp; fund');
     expect(html).toContain('Compile runtime-width Product result domain');
