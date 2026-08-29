@@ -235,6 +235,48 @@ sites, and the program-test's own rent computation
 the lifecycle campaign re-run against the real v11 ELF to be worth anything —
 which is precisely the join that has never been tested.
 
+**Blast radius, scoped — and it does not reach founding.** Extensions are
+init-time-only, so a mint written 202-byte is broken permanently and no upgrade
+repairs it. That makes "which mints" the load-bearing question, and the answer is
+narrow:
+
+- `initialize_closeable_mint` creates **exactly two families** — the receipt mint
+  (`rational_lifecycle_v2.rs:671-683`) and the shard mints (`:715-731`), both
+  Claims PDAs, both reachable only through `claims/lib.rs:349 →
+  rational_lifecycle_v2::process`. **The collateral mint is not among them.**
+- **The flagship founding ladder never goes there.** No reference to
+  `rational_lifecycle`, `ActivateReceipt` or `activate_coordinate` exists anywhere
+  under `tools/local-validator/bootstrap/successor/src/`, `tools/devnet-activity/`
+  or `tools/release/`. Its collateral mint is an ordinary externally-keyed
+  Token-2022 mint from the bootstrap forge (`market.rs:2129`), governed by
+  `CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer()`
+  (`market.rs:3036`) whose storage policy is
+  `ExtensionStoragePolicy::ExactBaseWidthsOnly` (`token-svm/release.rs:198`) —
+  zero extensions by declaration. The fresh mint each staged attempt creates
+  cannot be written broken.
+- **The Direct family does not need the extension.** It creates no mint (no
+  `initialize_mint`/`initialize_mint2` anywhere in `src/direct/` or
+  `direct_token_setup_v1.rs`) and burns nothing — a burn sweep across the whole
+  Direct family and `dclutch-direct-codec` returns one hit,
+  `successor.rs:1966`, and it is prose about Sell records burning "one complete
+  set", not a token instruction. Direct authenticates collateral through the same
+  zero-extension profile (`direct_token_setup_v1.rs:520-545`) and moves value by
+  transfer.
+
+So the defect is confined to the rational/structured **representation** family.
+No permanent debt has been minted yet, because nothing under `tools/` drives that
+route — it accrues the first time a campaign does.
+
+**The fix is smaller than first stated, and the correction matters.** The
+representation readers need no change at all:
+`behavior_profile_v2::check_mint` **already** demands both TLVs, so a 238-byte
+writer agrees with them immediately — that half is forward-compatible, not
+breaking. The real coupling is only the lifecycle's *own* post-create reader,
+`closeable_mint::check_mint`, which requires exactly 202
+(`closeable_mint.rs:62`) and is called at `rational_lifecycle_v2.rs:683`, `:758`,
+`:773` and `:801`. Writer plus `closeable_mint.rs` plus the two rent principals
+move together; nothing else does.
+
 **Closing gate for whoever takes it.** One test in the existing
 `rational-lifecycle` program-test feeding the post-`ActivateReceipt` mint bytes to
 `Token2022BehaviorProfileV2::check_mint`. That campaign already loads and
