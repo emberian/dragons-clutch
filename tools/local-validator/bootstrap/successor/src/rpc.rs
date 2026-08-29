@@ -1127,6 +1127,64 @@ impl Rpc {
         Ok(())
     }
 
+    /// Submit one persisted v0 packet that is EXPECTED to fail on chain.
+    ///
+    /// A hostile is only evidence if it reaches consensus. With preflight on,
+    /// the RPC simulates the transaction and rejects it before it is ever a
+    /// block entry, which proves what a simulator thinks rather than what the
+    /// chain did. This skips preflight so the refusal is committed, paid for,
+    /// and readable in finalized history like any other outcome.
+    pub(crate) fn submit_signed_v0_packet_expecting_failure(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, true)?;
+        if observed.to_string() != packet.signature {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Poll one persisted v0 signature that is expected to have failed.
+    ///
+    /// Returns the finalized evidence with its error intact. A transaction
+    /// that SUCCEEDED here is itself a refusal: a hostile that landed is the
+    /// loudest possible failure of the property it was meant to defend.
+    pub(crate) fn confirm_signed_v0_packet_expecting_failure(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<TransactionEvidence> {
+        let signature =
+            Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        for _ in 0..FINALIZED_POLL_ATTEMPTS {
+            if let Some(finalized) = self.finalized_signed_packet(label, signature, true)? {
+                return Ok(finalized.evidence);
+            }
+            let height = self.block_height()?;
+            if height > packet.last_valid_block_height {
+                return Err(Error::new(format!(
+                    "{label}: hostile signature {signature} expired at block height {height} \
+                     without a finalized status"
+                )));
+            }
+            thread::sleep(Duration::from_millis(400));
+        }
+        Err(Error::new(format!(
+            "{label}: hostile signature {signature} did not reach finalized history"
+        )))
+    }
+
     /// Poll one submitted, persisted signature through finalized history.
     ///
     /// This is deliberately poll-only. It neither sends the packet nor

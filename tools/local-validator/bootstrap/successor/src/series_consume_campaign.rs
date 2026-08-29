@@ -142,6 +142,7 @@ struct ArgumentsV1 {
     payer: PathBuf,
     journal: PathBuf,
     execute: bool,
+    expect_refusal: Option<u32>,
 }
 
 /// Submit one emitted `series_consume` campaign against a local validator.
@@ -208,6 +209,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     // proof that this campaign already did its work.
     if let Some(previous) = read_journal_v1(&parsed.journal)?
         && previous.phase == SeriesConsumePhaseV1::Finalized
+        && parsed.expect_refusal.is_none()
     {
         if previous.instruction_data_sha256 != journal.instruction_data_sha256 {
             return Err(Error::new(
@@ -257,7 +259,10 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let market_before = observed
         .first()
         .ok_or_else(|| Error::new("preflight lost the Market"))?;
-    if !market_before.data.iter().all(|byte| *byte == 0) {
+    // A hostile deliberately runs against a Market that is ALREADY written --
+    // that is the whole point of the double-consume -- so the vacant-Market
+    // precondition is a happy-path check, not a universal one.
+    if parsed.expect_refusal.is_none() && !market_before.data.iter().all(|byte| *byte == 0) {
         return Err(Error::new(format!(
             "the Market {market} is already written on this cluster; series_consume IS the Found \
              and needs a vacant Market, so start a fresh ledger with --reset"
@@ -305,6 +310,55 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     journal.expected_signature = Some(packet.signature.clone());
     journal.last_valid_block_height = Some(packet.last_valid_block_height);
     write_json_atomic_v1(&parsed.journal, &journal)?;
+
+    if let Some(code) = parsed.expect_refusal {
+        rpc.submit_signed_v0_packet_expecting_failure(
+            &label,
+            std::slice::from_ref(&instruction),
+            payer.pubkey(),
+            &table_observed,
+            &packet,
+        )?;
+        journal.phase = SeriesConsumePhaseV1::Submitted;
+        write_json_atomic_v1(&parsed.journal, &journal)?;
+        let refused = rpc.confirm_signed_v0_packet_expecting_failure(
+            &label,
+            std::slice::from_ref(&instruction),
+            payer.pubkey(),
+            &table_observed,
+            &packet,
+        )?;
+        let rendered = refused
+            .error
+            .as_ref()
+            .map(|value| value.to_string())
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "{label}: the hostile transaction SUCCEEDED; the property it defends is broken"
+                ))
+            })?;
+        // The RPC layer carries the error as JSON, not as a Rust `Debug`
+        // rendering, so the shape is `{"Custom":12293}`. The closing brace is
+        // part of the token on purpose: `"Custom":3` is a prefix of
+        // `"Custom":30`, and a hostile that accepts the wrong refusal is worse
+        // than no hostile at all.
+        let token = format!("{{\"Custom\":{code}}}");
+        if !rendered.contains(&token) {
+            return Err(Error::new(format!(
+                "{label}: expected refusal {token}, got {rendered}"
+            )));
+        }
+        journal.phase = SeriesConsumePhaseV1::Finalized;
+        journal.finalized_slot = Some(refused.slot);
+        journal.compute_units_consumed = refused.compute_units_consumed;
+        write_json_atomic_v1(&parsed.journal, &journal)?;
+        println!(
+            "series_consume HOSTILE refused as required: signature {} committed in slot {} and \
+             failed with {token}. The refusal is in finalized history, not a simulation.",
+            packet.signature, refused.slot
+        );
+        return Ok(());
+    }
 
     rpc.submit_signed_v0_packet(
         &label,
@@ -387,6 +441,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
     let mut payer = None;
     let mut journal = None;
+    let mut expect_refusal = None;
     let mut execute = false;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
@@ -402,6 +457,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--rpc-url" => &mut rpc_url,
             "--payer-keypair" => &mut payer,
             "--journal" => &mut journal,
+            "--expect-refusal" => &mut expect_refusal,
             _ => return Err(Error::new(format!("unknown argument: {argument}"))),
         };
         if slot.replace(value).is_some() {
@@ -423,6 +479,14 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--journal",
         )?,
         execute,
+        expect_refusal: match expect_refusal {
+            None => None,
+            Some(value) => Some(
+                value
+                    .parse::<u32>()
+                    .map_err(|error| Error::new(format!("--expect-refusal: {error}")))?,
+            ),
+        },
     })
 }
 
