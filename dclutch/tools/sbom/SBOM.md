@@ -3,30 +3,31 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify` (also wired into `tools/gauntlet` — see `tools/sbom/README.md`).
 
-**50 manifests, 1871 unique dependency rows (1045 cargo, 826 npm), 67 flagged for human review.**
+**51 manifests, 2055 unique dependency rows (1229 cargo, 826 npm), 69 flagged for human review.**
 
 ## Counts by license
 
 | License | Rows |
 |---|---|
-| `MIT` | 742 |
-| `Apache-2.0` | 400 |
-| `MIT OR Apache-2.0` | 301 |
-| `AGPL-3.0-or-later` | 142 |
-| `MIT/Apache-2.0` | 55 |
-| `Apache-2.0 OR MIT` | 40 |
-| `MPL-2.0` | 28 |
-| `ISC` | 21 |
+| `MIT` | 765 |
+| `Apache-2.0` | 498 |
+| `MIT OR Apache-2.0` | 333 |
+| `AGPL-3.0-or-later` | 143 |
+| `MIT/Apache-2.0` | 67 |
+| `Apache-2.0 OR MIT` | 48 |
+| `MPL-2.0` | 30 |
+| `ISC` | 22 |
 | `LGPL-3.0-or-later` | 20 |
 | `Unicode-3.0` | 18 |
 | `BSD-3-Clause` | 16 |
 | `BSD-2-Clause` | 13 |
+| `Apache-2.0 OR ISC OR MIT` | 7 |
 | `Unlicense OR MIT` | 7 |
 | `Apache-2.0 AND LGPL-3.0-or-later` | 6 |
 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | 6 |
 | `Zlib OR Apache-2.0 OR MIT` | 5 |
 | `0BSD` | 3 |
-| `Apache-2.0 OR ISC OR MIT` | 3 |
+| `Apache-2.0/MIT` | 3 |
 | `MPL-2.0+` | 3 |
 | `Zlib` | 3 |
 | `Apache-2.0 / MIT` | 2 |
@@ -38,12 +39,12 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 2 |
 | `MIT OR Apache-2.0 OR Zlib` | 2 |
 | `Unlicense/MIT` | 2 |
+| `(Apache-2.0 OR MIT) AND BSD-3-Clause` | 1 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
 | `(Unlicense OR Apache-2.0)` | 1 |
 | `0BSD OR MIT OR Apache-2.0` | 1 |
 | `Apache-2.0 AND ISC` | 1 |
 | `Apache-2.0 OR BSL-1.0` | 1 |
-| `Apache-2.0/MIT` | 1 |
 | `BSD-3-Clause AND MIT` | 1 |
 | `BSD-3-Clause/MIT` | 1 |
 | `BlueOak-1.0.0` | 1 |
@@ -74,6 +75,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | cargo | `r-efi` | 6.0.0 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
 | cargo | `solana-config-interface` | 2.0.0 | `LicenseRef-file:LICENSE:sha256=a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9` | license-file-only: SPDX identity unresolved, needs human eyes |
 | cargo | `webpki-root-certs` | 1.0.9 | `CDLA-Permissive-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
+| cargo | `webpki-roots` | 0.24.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
+| cargo | `webpki-roots` | 0.25.4 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
 | cargo | `webpki-roots` | 1.0.9 | `CDLA-Permissive-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
 | npm | `@img/sharp-libvips-darwin-arm64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
 | npm | `@img/sharp-libvips-darwin-arm64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
@@ -207,11 +210,16 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `arrayref` | 0.3.9 | `BSD-2-Clause` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `arrayvec` | 0.7.8 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ascii` | 0.9.3 | `Apache-2.0 / MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `asn1-rs` | 0.5.2 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `asn1-rs` | 0.7.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `asn1-rs-derive` | 0.4.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `asn1-rs-derive` | 0.6.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `asn1-rs-impl` | 0.1.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `asn1-rs-impl` | 0.2.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `assert_matches` | 1.5.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `async-channel` | 1.9.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `async-compression` | 0.4.43 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `async-lock` | 3.4.2 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `async-trait` | 0.1.92 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `atomic-waker` | 1.1.2 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `autocfg` | 1.5.1 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -228,7 +236,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `aya-ebpf-macros` | 0.2.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `aya-obj` | 0.3.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `base16ct` | 0.2.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `base64` | 0.12.3 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `base64` | 0.13.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `base64` | 0.21.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `base64` | 0.22.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `base64ct` | 1.8.3 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `bincode` | 1.3.3 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -242,8 +252,12 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `block-buffer` | 0.9.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `blst` | 0.3.17 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `blstrs` | 0.7.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `borsh` | 0.10.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `borsh` | 1.8.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `borsh-derive` | 0.10.4 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `borsh-derive` | 1.8.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `borsh-derive-internal` | 0.10.4 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `borsh-schema-derive-internal` | 0.10.4 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `brotli` | 8.0.4 | `BSD-3-Clause AND MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `brotli-decompressor` | 5.0.3 | `BSD-3-Clause/MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `bs58` | 0.5.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -278,9 +292,14 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `combine` | 4.6.8 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `compression-codecs` | 0.4.38 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `compression-core` | 0.4.32 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `concurrent-queue` | 2.5.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `console` | 0.15.11 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `console_error_panic_hook` | 0.1.7 | `Apache-2.0/MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `console_log` | 0.2.2 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `const-oid` | 0.9.6 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `constant_time_eq` | 0.4.2 | `CC0-1.0 OR MIT-0 OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `core-foundation` | 0.10.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `core-foundation` | 0.9.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `core-foundation-sys` | 0.8.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `cpufeatures` | 0.2.17 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `cpufeatures` | 0.3.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -292,6 +311,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `crossbeam-utils` | 0.8.22 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `crunchy` | 0.2.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `crypto-bigint` | 0.5.5 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `crypto-common` | 0.1.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `crypto-common` | 0.1.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `crypto-common` | 0.2.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `crypto-mac` | 0.8.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -350,6 +370,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-fractional-claim-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claim-kernel` | declared |
 | `dclutch-fractional-claim-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claim-operator` | declared |
 | `dclutch-fractional-claims-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claims-kernel` | declared |
+| `dclutch-fractional-exterior` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/fractional-exterior` | declared |
 | `dclutch-fractional-signed-delta-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/fractional-signed-delta` | inherited-default (publish=false, undeclared) |
 | `dclutch-fractional-signed-delta-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-gauntlet-direct-campaign` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/direct/producer` | declared |
@@ -450,6 +471,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `defmt-parser` | 1.0.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `der` | 0.7.10 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `der-parser` | 10.0.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `der-parser` | 8.2.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `deranged` | 0.5.8 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `derivation-path` | 0.2.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `derivative` | 2.2.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -457,6 +479,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `digest` | 0.11.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `digest` | 0.9.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `displaydoc` | 0.2.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `dlopen2` | 0.5.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `dlopen2_derive` | 0.3.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `downcast` | 0.11.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `eager` | 0.1.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ecdsa` | 0.16.9 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -464,11 +488,15 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `ed25519` | 2.2.3 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ed25519-dalek` | 1.0.1 | `BSD-3-Clause` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ed25519-dalek` | 2.2.0 | `BSD-3-Clause` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `ed25519-dalek-bip32` | 0.2.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ed25519-dalek-bip32` | 0.3.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `educe` | 0.4.23 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `educe` | 0.6.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `either` | 1.18.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `elliptic-curve` | 0.13.8 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `encode_unicode` | 1.0.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `encoding_rs` | 0.8.35 | `(Apache-2.0 OR MIT) AND BSD-3-Clause` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `enum-iterator` | 1.5.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `enum-iterator` | 2.3.0 | `0BSD` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `enum-iterator-derive` | 1.5.0 | `0BSD` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `enum-ordinalize` | 3.1.15 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -478,6 +506,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `env_logger` | 0.11.11 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `equivalent` | 1.0.2 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `errno` | 0.3.14 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `event-listener` | 2.5.3 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `event-listener` | 5.4.2 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `event-listener-strategy` | 0.5.4 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `fast-math` | 0.1.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `fastbloom` | 0.17.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `fastrand` | 2.5.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -487,7 +518,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `filetime` | 0.2.29 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `find-msvc-tools` | 0.1.11 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `five8` | 1.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `five8_const` | 0.1.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `five8_const` | 1.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `five8_core` | 0.1.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `five8_core` | 1.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `flate2` | 1.1.10 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `fnv` | 1.0.7 | `Apache-2.0 / MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -506,15 +539,21 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `futures-macro` | 0.3.34 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `futures-sink` | 0.3.34 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `futures-task` | 0.3.34 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `futures-timer` | 3.0.4 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `futures-util` | 0.3.34 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `generic-array` | 0.14.7 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `generic-array` | 0.14.9 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `gethostname` | 0.2.3 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `gethostname` | 1.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `getrandom` | 0.1.16 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `getrandom` | 0.2.17 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `getrandom` | 0.3.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `getrandom` | 0.4.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `glob` | 0.3.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `governor` | 0.6.3 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `group` | 0.13.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `h2` | 0.3.27 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `hash32` | 0.2.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hash32` | 0.3.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hashbrown` | 0.13.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hashbrown` | 0.14.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -528,14 +567,19 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `hmac` | 0.12.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hmac` | 0.8.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hmac-drbg` | 0.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `http` | 0.2.12 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `http` | 1.5.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `http-body` | 0.4.6 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `http-body` | 1.1.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `http-body-util` | 0.1.5 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `httparse` | 1.10.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `httpdate` | 1.0.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `humantime` | 2.4.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hybrid-array` | 0.4.14 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `hyper` | 0.14.32 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hyper` | 1.11.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hyper` | 1.11.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `hyper-rustls` | 0.24.2 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hyper-rustls` | 0.27.9 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hyper-util` | 0.1.20 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `iana-time-zone` | 0.1.65 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -557,6 +601,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `include_dir_macros` | 0.7.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `indexmap` | 2.14.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `indexmap` | 2.14.1 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `indicatif` | 0.17.11 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `inout` | 0.1.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `io-uring` | 0.7.14 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ipnet` | 2.12.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -582,9 +627,13 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `libbz2-rs-sys` | 0.2.5 | `bzip2-1.0.6` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `libc` | 0.2.189 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `libm` | 0.2.16 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `libsecp256k1` | 0.6.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `libsecp256k1` | 0.7.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `libsecp256k1-core` | 0.2.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `libsecp256k1-core` | 0.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `libsecp256k1-gen-ecmult` | 0.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `libsecp256k1-gen-ecmult` | 0.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `libsecp256k1-gen-genmult` | 0.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `libsecp256k1-gen-genmult` | 0.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `light-poseidon` | 0.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `light-poseidon` | 0.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -601,6 +650,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `memmap2` | 0.9.11 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `memoffset` | 0.9.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `merlin` | 3.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `mime` | 0.3.17 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `mime_guess` | 2.0.5 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `minimal-lexical` | 0.2.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `miniz_oxide` | 0.9.1 | `MIT OR Zlib OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `mio` | 1.2.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -610,8 +661,11 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `mockall_derive` | 0.15.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `modular-bitfield` | 0.13.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `modular-bitfield-impl` | 0.13.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `nix` | 0.29.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `nix` | 0.31.3 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `no-std-compat` | 0.4.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `nom` | 7.1.3 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `nonzero_ext` | 0.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `num` | 0.2.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `num-bigint` | 0.2.6 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `num-bigint` | 0.4.8 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -626,7 +680,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `num_cpus` | 1.17.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `num_enum` | 0.7.6 | `BSD-3-Clause OR MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `num_enum_derive` | 0.7.6 | `BSD-3-Clause OR MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `number_prefix` | 0.4.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `object` | 0.39.1 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `oid-registry` | 0.6.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `oid-registry` | 0.8.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `once_cell` | 1.21.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `once_cell_polyfill` | 1.70.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -638,6 +694,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `openssl-sys` | 0.9.117 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `opentelemetry` | 0.17.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `pairing` | 0.23.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `parking` | 2.2.1 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `parking_lot` | 0.12.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `parking_lot_core` | 0.9.12 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `paste` | 1.0.15 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -649,6 +706,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `pin-project` | 1.1.13 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `pin-project-internal` | 1.1.13 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `pin-project-lite` | 0.2.17 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `pin-utils` | 0.1.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `pkcs8` | 0.10.2 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `pkg-config` | 0.3.34 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `polyval` | 0.6.2 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -660,6 +718,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `predicates` | 3.1.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `predicates-core` | 1.0.10 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `predicates-tree` | 1.0.13 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `proc-macro-crate` | 0.1.5 | `Apache-2.0/MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `proc-macro-crate` | 3.5.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `proc-macro-error-attr2` | 2.0.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `proc-macro-error2` | 2.0.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -667,6 +726,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `proc-macro2-diagnostics` | 0.10.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `qstring` | 0.7.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `qualifier_attr` | 0.2.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `quanta` | 0.12.6 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `quinn` | 0.11.11 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `quinn-proto` | 0.11.17 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `quinn-udp` | 0.5.15 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -689,13 +749,16 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `rand_pcg` | 0.10.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand_xorshift` | 0.3.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand_xoshiro` | 0.7.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `raw-cpuid` | 11.6.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rayon` | 1.12.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rayon-core` | 1.13.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `redox_syscall` | 0.5.18 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `regex` | 1.13.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `regex-automata` | 0.4.18 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `regex-syntax` | 0.8.11 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `reqwest` | 0.11.27 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `reqwest` | 0.12.28 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `reqwest-middleware` | 0.2.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `reqwest-middleware` | 0.4.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rfc6979` | 0.4.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ring` | 0.17.14 | `Apache-2.0 AND ISC` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -704,11 +767,14 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `rustc_version` | 0.4.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rusticata-macros` | 4.1.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustix` | 1.1.4 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `rustls` | 0.21.12 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustls` | 0.23.43 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustls-native-certs` | 0.8.4 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `rustls-pemfile` | 1.0.4 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustls-pki-types` | 1.15.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustls-platform-verifier` | 0.7.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustls-platform-verifier-android` | 0.1.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `rustls-webpki` | 0.101.7 | `ISC` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustls-webpki` | 0.103.15 | `ISC` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rustversion` | 1.0.23 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ryu` | 1.0.23 | `Apache-2.0 OR BSL-1.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -716,6 +782,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `same-file` | 1.0.6 | `Unlicense/MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `schannel` | 0.1.29 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `scopeguard` | 1.2.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `scroll` | 0.11.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `sct` | 0.7.1 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `sec1` | 0.7.3 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `security-framework` | 3.7.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `security-framework-sys` | 2.17.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -735,6 +803,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `serde_urlencoded` | 0.7.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `serde_with` | 3.22.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `serde_with_macros` | 3.22.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `sha1` | 0.10.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `sha2` | 0.10.9 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `sha2` | 0.11.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `sha2` | 0.9.9 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -753,14 +822,19 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `siphasher` | 1.0.3 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `slab` | 0.4.12 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `smallvec` | 1.15.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `socket2` | 0.5.10 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `socket2` | 0.6.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-account` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account` | 3.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account` | 4.3.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account` | 4.6.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-account-decoder` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account-decoder` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account-decoder` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-account-decoder-client-types` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account-decoder-client-types` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account-decoder-client-types` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-account-info` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-account-info` | 3.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-accounts-db` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-accounts-db` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -769,6 +843,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-address` | 2.7.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-address-lookup-table-interface` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-address-lookup-table-interface` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-atomic-u64` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-atomic-u64` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-banks-client` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-banks-client` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -778,12 +853,15 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-banks-server` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-big-mod-exp` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-big-mod-exp` | 4.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-bincode` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-bincode` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-blake3-hasher` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-bls-signatures` | 3.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-bls-signatures` | 3.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-bls12-381-syscall` | 0.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-bn254` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-bn254` | 3.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-borsh` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-borsh` | 3.0.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-bpf-loader-program` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-bpf-loader-program` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -793,13 +871,16 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-builtins` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-builtins-default-costs` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-builtins-default-costs` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-client` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-client-traits` | 4.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-client-traits` | 4.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-clock` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-clock` | 3.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-clock` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-cluster-type` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-cluster-type` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-commitment-config` | 3.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-compute-budget` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-compute-budget` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-compute-budget` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-compute-budget-instruction` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -809,13 +890,20 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-compute-budget-program` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-compute-budget-program` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-config-interface` | 2.0.0 | `LicenseRef-file:LICENSE:sha256=a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9` | `registry+https://github.com/rust-lang/crates.io-index` | license_file |
+| `solana-config-program` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-connection-cache` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-cost-model` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-cost-model` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-cpi` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-cpi` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-curve25519` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-curve25519` | 4.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-decode-error` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-define-syscall` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-define-syscall` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-define-syscall` | 4.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-define-syscall` | 5.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-derivation-path` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-derivation-path` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-ed25519` | 0.2.4 | `BSD-3-Clause` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-ed25519-program` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -825,13 +913,16 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-epoch-rewards` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-epoch-rewards` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-epoch-rewards-hasher` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-epoch-schedule` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-epoch-schedule` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-epoch-schedule` | 3.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-epoch-stake` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-example-mocks` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-feature-gate-interface` | 4.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-feature-set` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-fee` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-fee` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-fee-calculator` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-fee-calculator` | 3.2.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-fee-calculator` | 3.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-fee-structure` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -841,13 +932,17 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-get-sysvar` | 1.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-hard-forks` | 3.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-hard-forks` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-hash` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-hash` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-hash` | 4.5.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-hash` | 4.6.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-hash-512` | 1.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-hash-512` | 1.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-inflation` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-inflation` | 3.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-inflation` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-inline-spl` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-instruction` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-instruction` | 3.4.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-instruction` | 3.5.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-instruction-error` | 2.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -856,6 +951,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-instructions-sysvar` | 4.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-keccak-hasher` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-keypair` | 3.1.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-last-restart-slot` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-last-restart-slot` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-last-restart-slot` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-lattice-hash` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -866,6 +962,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-loader-v3-interface` | 6.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-loader-v3-interface` | 7.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-loader-v4-interface` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-log-collector` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-measure` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-measure` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-measure` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-merkle-tree` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -873,10 +971,14 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-message` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-message` | 4.4.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-message` | 4.5.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-metrics` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-metrics` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-metrics` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-msg` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-msg` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-native-token` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-native-token` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-net-utils` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-net-utils` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-net-utils` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-nohash-hasher` | 0.2.1 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -887,54 +989,76 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-nullable` | 1.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-offchain-message` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-offchain-message` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-packet` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-packet` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-packet` | 4.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-packet` | 4.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-perf` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-perf` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-perf` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-poh-config` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-poseidon` | 4.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-precompile-error` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-precompile-error` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-presigner` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-program` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-binaries` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-binaries` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-program-entrypoint` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-entrypoint` | 3.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-program-error` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-error` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-program-memory` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-memory` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-program-option` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-option` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-program-pack` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-pack` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-program-runtime` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-runtime` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-runtime` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-test` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-program-test` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-pubkey` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-pubkey` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-pubkey` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-pubkey` | 4.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-pubsub-client` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-quic-client` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-rayon-threadlimit` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rayon-threadlimit` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rayon-threadlimit` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-rent` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rent` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rent` | 4.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rent` | 4.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-reward-info` | 6.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-reward-info` | 6.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-rpc-client` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rpc-client` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rpc-client` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-rpc-client-api` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rpc-client-api` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rpc-client-api` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-rpc-client-nonce-utils` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rpc-client-types` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-rpc-client-types` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-runtime` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-runtime` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-runtime-transaction` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-runtime-transaction` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-sanitize` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sanitize` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sbpf` | 0.21.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sbpf` | 0.23.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-sdk` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sdk` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sdk-ids` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-sdk-macro` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sdk-macro` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-secp256k1-program` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-secp256k1-recover` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-secp256k1-recover` | 3.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-secp256r1-program` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-security-txt` | 1.1.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -943,26 +1067,35 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-send-transaction-service` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-send-transaction-service` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-serde` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-serde-varint` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-serde-varint` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-serialize-utils` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-serialize-utils` | 3.1.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-sha256-hasher` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sha256-hasher` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sha512-hasher` | 1.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-short-vec` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-short-vec` | 3.2.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-short-vec` | 3.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-shred-version` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-signature` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-signature` | 3.4.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-signature` | 3.5.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-signer` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-signer-store` | 0.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-slot-hashes` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-slot-hashes` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-slot-hashes` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-slot-history` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-slot-history` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-slot-history` | 3.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-stable-layout` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-stable-layout` | 3.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-stake-history` | 1.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-stake-history` | 1.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-stake-interface` | 4.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-stake-interface` | 4.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-streamer` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-streamer` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-streamer` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-svm` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -994,9 +1127,12 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-sysvar` | 4.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sysvar` | 4.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-sysvar-id` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-thin-client` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-time-utils` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-timings` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-tls-utils` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-tls-utils` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-tpu-client` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-tpu-client-next` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-tpu-client-next` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction` | 3.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1004,19 +1140,27 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-transaction` | 4.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction-context` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction-context` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-transaction-error` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction-error` | 3.3.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction-error` | 3.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-transaction-metrics-tracker` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction-status` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-transaction-status-client-types` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction-status-client-types` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-transaction-status-client-types` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-type-overrides` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-udp-client` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-unified-scheduler-logic` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-unified-scheduler-logic` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-version` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-version` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-version` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-vote` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-vote` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-vote` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-vote-interface` | 6.0.3 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-vote-interface` | 6.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-vote-program` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-vote-program` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-vote-program` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-wincode-varint` | 1.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1031,26 +1175,41 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `solana-zk-sdk-pod` | 0.1.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-zk-token-proof-program` | 4.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `solana-zk-token-proof-program` | 4.3.0-beta.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana-zk-token-sdk` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `solana_rbpf` | 0.8.5 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spinning_top` | 0.3.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spki` | 0.7.3 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-associated-token-account-interface` | 2.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-discriminator` | 0.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-discriminator` | 0.5.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-discriminator-derive` | 0.2.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-discriminator-syn` | 0.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-elgamal-registry-interface` | 0.2.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-generic-token` | 2.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-memo` | 5.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-memo-interface` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-pod` | 0.3.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-pod` | 0.7.3 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-program-error` | 0.5.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-program-error` | 0.8.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-program-error-derive` | 0.4.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-program-error-derive` | 0.6.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-tlv-account-resolution` | 0.11.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-tlv-account-resolution` | 0.7.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-token` | 6.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-token-2022` | 11.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-token-2022` | 4.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-token-2022-interface` | 3.1.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-token-confidential-transfer-ciphertext-arithmetic` | 0.5.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-token-confidential-transfer-proof-extraction` | 0.6.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-token-group-interface` | 0.3.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-token-group-interface` | 0.7.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-token-interface` | 3.0.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-token-metadata-interface` | 0.4.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-token-metadata-interface` | 1.0.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-transfer-hook-interface` | 0.7.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-transfer-hook-interface` | 2.1.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `spl-type-length-value` | 0.5.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `spl-type-length-value` | 0.9.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `stable_deref_trait` | 1.2.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `static_assertions` | 1.1.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1062,12 +1221,17 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `syn` | 1.0.109 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `syn` | 2.0.119 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `syn` | 3.0.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `sync_wrapper` | 0.1.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `sync_wrapper` | 1.0.2 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `synstructure` | 0.12.6 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `synstructure` | 0.13.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `system-configuration` | 0.5.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `system-configuration-sys` | 0.5.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tap` | 1.0.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tar` | 0.4.46 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tarpc` | 0.29.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tarpc-plugins` | 0.12.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `task-local-extensions` | 0.1.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tempfile` | 3.27.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `termtree` | 0.5.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `thiserror` | 1.0.69 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1084,10 +1248,14 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `tinyvec_macros` | 0.1.1 | `MIT OR Apache-2.0 OR Zlib` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tokio` | 1.53.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tokio-macros` | 2.7.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `tokio-rustls` | 0.24.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tokio-rustls` | 0.26.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tokio-serde` | 0.8.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `tokio-stream` | 0.1.19 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `tokio-tungstenite` | 0.20.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tokio-util` | 0.6.10 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tokio-util` | 0.7.19 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `toml` | 0.5.11 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `toml` | 0.8.23 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `toml_datetime` | 0.6.11 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `toml_datetime` | 1.1.1+spec-1.1.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1105,14 +1273,19 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `tracing-opentelemetry` | 0.17.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `tracing-subscriber` | 0.3.23 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `try-lock` | 0.2.5 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `tungstenite` | 0.20.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `typenum` | 1.20.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `unicase` | 2.9.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `unicode-ident` | 1.0.24 | `(MIT OR Apache-2.0) AND Unicode-3.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `unicode-width` | 0.2.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `unicode-xid` | 0.2.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `universal-hash` | 0.5.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `unreachable` | 1.0.0 | `MIT / Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `untrusted` | 0.9.0 | `ISC` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `unwrap_none` | 0.1.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `uriparse` | 0.6.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `url` | 2.5.8 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `utf-8` | 0.7.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `utf8_iter` | 1.0.4 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `utf8parse` | 0.2.2 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `valuable` | 0.1.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1132,6 +1305,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `web-sys` | 0.3.104 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `web-time` | 1.1.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `webpki-root-certs` | 1.0.9 | `CDLA-Permissive-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `webpki-roots` | 0.24.0 | `MPL-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `webpki-roots` | 0.25.4 | `MPL-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `webpki-roots` | 1.0.9 | `CDLA-Permissive-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `which` | 8.0.6 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `wide` | 0.7.33 | `Zlib OR Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1149,22 +1324,34 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `windows-link` | 0.2.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows-result` | 0.4.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows-strings` | 0.5.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows-sys` | 0.48.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows-sys` | 0.52.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows-sys` | 0.59.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows-sys` | 0.61.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows-targets` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows-targets` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows_aarch64_gnullvm` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_aarch64_gnullvm` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows_aarch64_msvc` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_aarch64_msvc` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows_i686_gnu` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_i686_gnu` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_i686_gnullvm` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows_i686_msvc` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_i686_msvc` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows_x86_64_gnu` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_x86_64_gnu` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows_x86_64_gnullvm` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_x86_64_gnullvm` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `windows_x86_64_msvc` | 0.48.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `windows_x86_64_msvc` | 0.52.6 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `winnow` | 0.7.15 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `winnow` | 1.0.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `winreg` | 0.50.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `wit-bindgen` | 0.57.1 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `writeable` | 0.6.4 | `Unicode-3.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `wyz` | 0.5.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `x509-parser` | 0.14.0 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `x509-parser` | 0.18.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `xattr` | 1.6.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `yoke` | 0.8.3 | `Unicode-3.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -2031,7 +2218,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `packages/dclutch-cli/package.json` | 299 |
 | `packages/dclutch-sdk/package.json` | 270 |
 | `programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml` | 772 |
-| `programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml` | 782 |
+| `programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml` | 790 |
 | `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml` | 783 |
 | `programs/dclutch-claims-sbf/program-test/protocol-position/Cargo.toml` | 790 |
 | `programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml` | 790 |
@@ -2046,7 +2233,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller/Cargo.toml` | 173 |
 | `programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml` | 175 |
 | `programs/dclutch-custody-sbf/test-programs/caller/Cargo.toml` | 165 |
-| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 802 |
+| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 807 |
 | `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml` | 201 |
 | `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 771 |
 | `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 803 |
@@ -2065,6 +2252,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-trading-sbf/test-programs/dealer-wave/Cargo.toml` | 161 |
 | `tools/devnet-scenarios/Cargo.toml` | 63 |
 | `tools/direct-translation-validator/Cargo.toml` | 42 |
+| `tools/fractional-exterior/Cargo.toml` | 650 |
 | `tools/gauntlet/census/Cargo.toml` | 22 |
 | `tools/gauntlet/direct/producer/Cargo.toml` | 754 |
 | `tools/gauntlet/journey/Cargo.toml` | 362 |
@@ -2095,6 +2283,10 @@ Each of these sits next to a manifest with no `[workspace]` table of its own; ca
 ## Notices
 
 This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `dragons-clutch` repository, and every crate's `Cargo.toml`); this page is the mechanical notice aggregation the Pages artifact republishes (`tools/genref/render-site.mjs`), not a legal opinion. It lists, once each, every distinct third-party license identified in the full closure (`tools/sbom/SBOM.md`), and which dependencies carry it.
+
+### `(Apache-2.0 OR MIT) AND BSD-3-Clause`
+
+- encoding_rs 0.8.35 (cargo)
 
 ### `(MIT OR Apache-2.0) AND Unicode-3.0`
 
@@ -2195,7 +2387,10 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - baseline-browser-mapping 2.11.19 (npm)
 - blst 0.3.17 (cargo)
 - borsh 0.7.0 (npm)
+- borsh-derive 0.10.4 (cargo)
 - borsh-derive 1.8.1 (cargo)
+- borsh-derive-internal 0.10.4 (cargo)
+- borsh-schema-derive-internal 0.10.4 (cargo)
 - detect-libc 2.1.2 (npm)
 - doctrine 2.1.0 (npm)
 - eslint-visitor-keys 3.4.3 (npm)
@@ -2203,25 +2398,35 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - eslint-visitor-keys 5.0.1 (npm)
 - expect-type 1.4.0 (npm)
 - fragile 2.1.0 (cargo)
+- gethostname 0.2.3 (cargo)
 - gethostname 1.1.0 (cargo)
 - hmac-drbg 0.3.0 (cargo)
+- libsecp256k1 0.6.0 (cargo)
 - libsecp256k1 0.7.2 (cargo)
+- libsecp256k1-core 0.2.2 (cargo)
 - libsecp256k1-core 0.3.0 (cargo)
+- libsecp256k1-gen-ecmult 0.2.1 (cargo)
 - libsecp256k1-gen-ecmult 0.3.0 (cargo)
+- libsecp256k1-gen-genmult 0.2.1 (cargo)
 - libsecp256k1-gen-genmult 0.3.0 (cargo)
 - light-poseidon 0.2.0 (cargo)
 - light-poseidon 0.4.0 (cargo)
+- nonzero_ext 0.3.0 (cargo)
 - openssl 0.10.81 (cargo)
 - opentelemetry 0.17.0 (cargo)
 - sharp 0.35.2 (npm)
 - sharp 0.35.4 (npm)
+- solana-account 2.1.0 (cargo)
 - solana-account 3.4.0 (cargo)
 - solana-account 4.3.2 (cargo)
 - solana-account 4.6.0 (cargo)
+- solana-account-decoder 2.1.0 (cargo)
 - solana-account-decoder 4.2.1 (cargo)
 - solana-account-decoder 4.3.0-beta.2 (cargo)
+- solana-account-decoder-client-types 2.1.0 (cargo)
 - solana-account-decoder-client-types 4.2.1 (cargo)
 - solana-account-decoder-client-types 4.3.0-beta.2 (cargo)
+- solana-account-info 2.1.0 (cargo)
 - solana-account-info 3.1.1 (cargo)
 - solana-accounts-db 4.2.1 (cargo)
 - solana-accounts-db 4.3.0-beta.2 (cargo)
@@ -2230,6 +2435,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-address 2.7.0 (cargo)
 - solana-address-lookup-table-interface 3.1.0 (cargo)
 - solana-address-lookup-table-interface 3.2.0 (cargo)
+- solana-atomic-u64 2.1.0 (cargo)
 - solana-atomic-u64 3.0.1 (cargo)
 - solana-banks-client 4.2.1 (cargo)
 - solana-banks-client 4.3.0-beta.2 (cargo)
@@ -2239,12 +2445,15 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-banks-server 4.3.0-beta.2 (cargo)
 - solana-big-mod-exp 3.0.0 (cargo)
 - solana-big-mod-exp 4.0.0 (cargo)
+- solana-bincode 2.1.0 (cargo)
 - solana-bincode 3.1.0 (cargo)
 - solana-blake3-hasher 3.1.0 (cargo)
 - solana-bls-signatures 3.3.0 (cargo)
 - solana-bls-signatures 3.4.0 (cargo)
 - solana-bls12-381-syscall 0.1.1 (cargo)
+- solana-bn254 2.1.0 (cargo)
 - solana-bn254 3.2.1 (cargo)
+- solana-borsh 2.1.0 (cargo)
 - solana-borsh 3.0.2 (cargo)
 - solana-bpf-loader-program 4.2.1 (cargo)
 - solana-bpf-loader-program 4.3.0-beta.2 (cargo)
@@ -2254,13 +2463,16 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-builtins 4.3.0-beta.2 (cargo)
 - solana-builtins-default-costs 4.2.1 (cargo)
 - solana-builtins-default-costs 4.3.0-beta.2 (cargo)
+- solana-client 2.1.0 (cargo)
 - solana-client-traits 4.0.0 (cargo)
 - solana-client-traits 4.1.0 (cargo)
+- solana-clock 2.1.0 (cargo)
 - solana-clock 3.1.1 (cargo)
 - solana-clock 3.2.0 (cargo)
 - solana-cluster-type 3.1.0 (cargo)
 - solana-cluster-type 3.2.0 (cargo)
 - solana-commitment-config 3.1.1 (cargo)
+- solana-compute-budget 2.1.0 (cargo)
 - solana-compute-budget 4.2.1 (cargo)
 - solana-compute-budget 4.3.0-beta.2 (cargo)
 - solana-compute-budget-instruction 4.2.1 (cargo)
@@ -2269,13 +2481,20 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-compute-budget-interface 3.1.0 (cargo)
 - solana-compute-budget-program 4.2.1 (cargo)
 - solana-compute-budget-program 4.3.0-beta.2 (cargo)
+- solana-config-program 2.1.0 (cargo)
+- solana-connection-cache 2.1.0 (cargo)
 - solana-cost-model 4.2.1 (cargo)
 - solana-cost-model 4.3.0-beta.2 (cargo)
+- solana-cpi 2.1.0 (cargo)
 - solana-cpi 3.1.0 (cargo)
+- solana-curve25519 2.1.0 (cargo)
 - solana-curve25519 4.0.1 (cargo)
+- solana-decode-error 2.1.0 (cargo)
+- solana-define-syscall 2.1.0 (cargo)
 - solana-define-syscall 3.0.0 (cargo)
 - solana-define-syscall 4.0.1 (cargo)
 - solana-define-syscall 5.2.0 (cargo)
+- solana-derivation-path 2.1.0 (cargo)
 - solana-derivation-path 3.0.0 (cargo)
 - solana-ed25519-program 3.0.0 (cargo)
 - solana-entry 4.2.1 (cargo)
@@ -2284,13 +2503,16 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-epoch-rewards 3.1.0 (cargo)
 - solana-epoch-rewards 3.2.0 (cargo)
 - solana-epoch-rewards-hasher 3.1.0 (cargo)
+- solana-epoch-schedule 2.1.0 (cargo)
 - solana-epoch-schedule 3.2.0 (cargo)
 - solana-epoch-schedule 3.3.0 (cargo)
 - solana-epoch-stake 3.0.1 (cargo)
 - solana-example-mocks 3.0.0 (cargo)
 - solana-feature-gate-interface 4.0.0 (cargo)
+- solana-feature-set 2.1.0 (cargo)
 - solana-fee 4.2.1 (cargo)
 - solana-fee 4.3.0-beta.2 (cargo)
+- solana-fee-calculator 2.1.0 (cargo)
 - solana-fee-calculator 3.2.2 (cargo)
 - solana-fee-calculator 3.3.0 (cargo)
 - solana-fee-structure 3.0.0 (cargo)
@@ -2300,13 +2522,17 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-get-sysvar 1.0.0 (cargo)
 - solana-hard-forks 3.1.1 (cargo)
 - solana-hard-forks 3.2.0 (cargo)
+- solana-hash 2.1.0 (cargo)
 - solana-hash 3.1.0 (cargo)
 - solana-hash 4.5.0 (cargo)
 - solana-hash 4.6.0 (cargo)
 - solana-hash-512 1.1.0 (cargo)
 - solana-hash-512 1.2.0 (cargo)
+- solana-inflation 2.1.0 (cargo)
 - solana-inflation 3.1.1 (cargo)
 - solana-inflation 3.2.0 (cargo)
+- solana-inline-spl 2.1.0 (cargo)
+- solana-instruction 2.1.0 (cargo)
 - solana-instruction 3.4.1 (cargo)
 - solana-instruction 3.5.0 (cargo)
 - solana-instruction-error 2.4.0 (cargo)
@@ -2315,6 +2541,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-instructions-sysvar 4.0.0 (cargo)
 - solana-keccak-hasher 3.1.0 (cargo)
 - solana-keypair 3.1.2 (cargo)
+- solana-last-restart-slot 2.1.0 (cargo)
 - solana-last-restart-slot 3.1.0 (cargo)
 - solana-last-restart-slot 3.2.0 (cargo)
 - solana-lattice-hash 4.2.1 (cargo)
@@ -2325,6 +2552,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-loader-v3-interface 6.1.0 (cargo)
 - solana-loader-v3-interface 7.0.0 (cargo)
 - solana-loader-v4-interface 3.1.0 (cargo)
+- solana-log-collector 2.1.0 (cargo)
+- solana-measure 2.1.0 (cargo)
 - solana-measure 4.2.1 (cargo)
 - solana-measure 4.3.0-beta.2 (cargo)
 - solana-merkle-tree 4.2.1 (cargo)
@@ -2332,10 +2561,14 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-message 3.1.0 (cargo)
 - solana-message 4.4.1 (cargo)
 - solana-message 4.5.0 (cargo)
+- solana-metrics 2.1.0 (cargo)
 - solana-metrics 4.2.1 (cargo)
 - solana-metrics 4.3.0-beta.2 (cargo)
+- solana-msg 2.1.0 (cargo)
 - solana-msg 3.1.0 (cargo)
+- solana-native-token 2.1.0 (cargo)
 - solana-native-token 3.0.0 (cargo)
+- solana-net-utils 2.1.0 (cargo)
 - solana-net-utils 4.2.1 (cargo)
 - solana-net-utils 4.3.0-beta.2 (cargo)
 - solana-nonce 3.2.1 (cargo)
@@ -2345,54 +2578,76 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-nullable 1.3.0 (cargo)
 - solana-offchain-message 3.0.0 (cargo)
 - solana-offchain-message 3.0.1 (cargo)
+- solana-packet 2.1.0 (cargo)
 - solana-packet 3.0.0 (cargo)
 - solana-packet 4.2.0 (cargo)
 - solana-packet 4.3.0 (cargo)
+- solana-perf 2.1.0 (cargo)
 - solana-perf 4.2.1 (cargo)
 - solana-perf 4.3.0-beta.2 (cargo)
 - solana-poh-config 3.1.0 (cargo)
 - solana-poseidon 4.0.0 (cargo)
+- solana-precompile-error 2.1.0 (cargo)
 - solana-precompile-error 3.0.0 (cargo)
 - solana-presigner 3.0.0 (cargo)
+- solana-program 2.1.0 (cargo)
 - solana-program 3.0.0 (cargo)
 - solana-program-binaries 4.2.1 (cargo)
 - solana-program-binaries 4.3.0-beta.2 (cargo)
+- solana-program-entrypoint 2.1.0 (cargo)
 - solana-program-entrypoint 3.1.1 (cargo)
+- solana-program-error 2.1.0 (cargo)
 - solana-program-error 3.0.1 (cargo)
+- solana-program-memory 2.1.0 (cargo)
 - solana-program-memory 3.1.0 (cargo)
+- solana-program-option 2.1.0 (cargo)
 - solana-program-option 3.1.0 (cargo)
+- solana-program-pack 2.1.0 (cargo)
 - solana-program-pack 3.1.0 (cargo)
+- solana-program-runtime 2.1.0 (cargo)
 - solana-program-runtime 4.2.1 (cargo)
 - solana-program-runtime 4.3.0-beta.2 (cargo)
 - solana-program-test 4.2.1 (cargo)
 - solana-program-test 4.3.0-beta.2 (cargo)
+- solana-pubkey 2.1.0 (cargo)
 - solana-pubkey 3.0.0 (cargo)
 - solana-pubkey 4.2.1 (cargo)
 - solana-pubkey 4.3.0 (cargo)
+- solana-pubsub-client 2.1.0 (cargo)
+- solana-quic-client 2.1.0 (cargo)
+- solana-rayon-threadlimit 2.1.0 (cargo)
 - solana-rayon-threadlimit 4.2.1 (cargo)
 - solana-rayon-threadlimit 4.3.0-beta.2 (cargo)
+- solana-rent 2.1.0 (cargo)
 - solana-rent 3.1.0 (cargo)
 - solana-rent 4.3.0 (cargo)
 - solana-rent 4.4.0 (cargo)
 - solana-reward-info 6.2.0 (cargo)
 - solana-reward-info 6.3.0 (cargo)
+- solana-rpc-client 2.1.0 (cargo)
 - solana-rpc-client 4.2.1 (cargo)
 - solana-rpc-client 4.3.0-beta.2 (cargo)
+- solana-rpc-client-api 2.1.0 (cargo)
 - solana-rpc-client-api 4.2.1 (cargo)
 - solana-rpc-client-api 4.3.0-beta.2 (cargo)
+- solana-rpc-client-nonce-utils 2.1.0 (cargo)
 - solana-rpc-client-types 4.2.1 (cargo)
 - solana-rpc-client-types 4.3.0-beta.2 (cargo)
 - solana-runtime 4.2.1 (cargo)
 - solana-runtime 4.3.0-beta.2 (cargo)
 - solana-runtime-transaction 4.2.1 (cargo)
 - solana-runtime-transaction 4.3.0-beta.2 (cargo)
+- solana-sanitize 2.1.0 (cargo)
 - solana-sanitize 3.0.1 (cargo)
 - solana-sbpf 0.21.1 (cargo)
 - solana-sbpf 0.23.0 (cargo)
+- solana-sdk 2.1.0 (cargo)
 - solana-sdk 3.0.0 (cargo)
 - solana-sdk-ids 3.1.0 (cargo)
+- solana-sdk-macro 2.1.0 (cargo)
 - solana-sdk-macro 3.0.1 (cargo)
 - solana-secp256k1-program 3.0.1 (cargo)
+- solana-secp256k1-recover 2.1.0 (cargo)
 - solana-secp256k1-recover 3.3.0 (cargo)
 - solana-secp256r1-program 3.0.0 (cargo)
 - solana-seed-derivable 3.0.0 (cargo)
@@ -2400,26 +2655,35 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-send-transaction-service 4.2.1 (cargo)
 - solana-send-transaction-service 4.3.0-beta.2 (cargo)
 - solana-serde 3.0.0 (cargo)
+- solana-serde-varint 2.1.0 (cargo)
 - solana-serde-varint 3.0.1 (cargo)
+- solana-serialize-utils 2.1.0 (cargo)
 - solana-serialize-utils 3.1.2 (cargo)
+- solana-sha256-hasher 2.1.0 (cargo)
 - solana-sha256-hasher 3.1.0 (cargo)
 - solana-sha512-hasher 1.0.1 (cargo)
+- solana-short-vec 2.1.0 (cargo)
 - solana-short-vec 3.2.2 (cargo)
 - solana-short-vec 3.3.0 (cargo)
 - solana-shred-version 3.0.1 (cargo)
+- solana-signature 2.1.0 (cargo)
 - solana-signature 3.4.1 (cargo)
 - solana-signature 3.5.2 (cargo)
 - solana-signer 3.0.1 (cargo)
 - solana-signer-store 0.1.0 (cargo)
+- solana-slot-hashes 2.1.0 (cargo)
 - solana-slot-hashes 3.1.0 (cargo)
 - solana-slot-hashes 3.2.0 (cargo)
+- solana-slot-history 2.1.0 (cargo)
 - solana-slot-history 3.1.0 (cargo)
 - solana-slot-history 3.2.0 (cargo)
+- solana-stable-layout 2.1.0 (cargo)
 - solana-stable-layout 3.0.1 (cargo)
 - solana-stake-history 1.0.0 (cargo)
 - solana-stake-history 1.1.0 (cargo)
 - solana-stake-interface 4.3.0 (cargo)
 - solana-stake-interface 4.4.0 (cargo)
+- solana-streamer 2.1.0 (cargo)
 - solana-streamer 4.2.1 (cargo)
 - solana-streamer 4.3.0-beta.2 (cargo)
 - solana-svm 4.2.1 (cargo)
@@ -2451,9 +2715,12 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-sysvar 4.1.0 (cargo)
 - solana-sysvar 4.3.0 (cargo)
 - solana-sysvar-id 3.1.0 (cargo)
+- solana-thin-client 2.1.0 (cargo)
 - solana-time-utils 3.0.0 (cargo)
+- solana-timings 2.1.0 (cargo)
 - solana-tls-utils 4.2.1 (cargo)
 - solana-tls-utils 4.3.0-beta.2 (cargo)
+- solana-tpu-client 2.1.0 (cargo)
 - solana-tpu-client-next 4.2.1 (cargo)
 - solana-tpu-client-next 4.3.0-beta.2 (cargo)
 - solana-transaction 3.1.0 (cargo)
@@ -2461,19 +2728,27 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-transaction 4.2.0 (cargo)
 - solana-transaction-context 4.2.1 (cargo)
 - solana-transaction-context 4.3.0-beta.2 (cargo)
+- solana-transaction-error 2.1.0 (cargo)
 - solana-transaction-error 3.3.2 (cargo)
 - solana-transaction-error 3.4.0 (cargo)
+- solana-transaction-metrics-tracker 2.1.0 (cargo)
 - solana-transaction-status 4.3.0-beta.2 (cargo)
+- solana-transaction-status-client-types 2.1.0 (cargo)
 - solana-transaction-status-client-types 4.2.1 (cargo)
 - solana-transaction-status-client-types 4.3.0-beta.2 (cargo)
+- solana-type-overrides 2.1.0 (cargo)
+- solana-udp-client 2.1.0 (cargo)
 - solana-unified-scheduler-logic 4.2.1 (cargo)
 - solana-unified-scheduler-logic 4.3.0-beta.2 (cargo)
+- solana-version 2.1.0 (cargo)
 - solana-version 4.2.1 (cargo)
 - solana-version 4.3.0-beta.2 (cargo)
+- solana-vote 2.1.0 (cargo)
 - solana-vote 4.2.1 (cargo)
 - solana-vote 4.3.0-beta.2 (cargo)
 - solana-vote-interface 6.0.3 (cargo)
 - solana-vote-interface 6.1.0 (cargo)
+- solana-vote-program 2.1.0 (cargo)
 - solana-vote-program 4.2.1 (cargo)
 - solana-vote-program 4.3.0-beta.2 (cargo)
 - solana-wincode-varint 1.0.0 (cargo)
@@ -2488,26 +2763,41 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - solana-zk-sdk-pod 0.1.2 (cargo)
 - solana-zk-token-proof-program 4.2.1 (cargo)
 - solana-zk-token-proof-program 4.3.0-beta.2 (cargo)
+- solana-zk-token-sdk 2.1.0 (cargo)
+- solana_rbpf 0.8.5 (cargo)
 - spl-associated-token-account-interface 2.0.0 (cargo)
+- spl-discriminator 0.3.0 (cargo)
 - spl-discriminator 0.5.2 (cargo)
 - spl-discriminator-derive 0.2.0 (cargo)
 - spl-discriminator-syn 0.2.1 (cargo)
 - spl-elgamal-registry-interface 0.2.1 (cargo)
 - spl-generic-token 2.0.1 (cargo)
+- spl-memo 5.0.0 (cargo)
 - spl-memo-interface 2.1.0 (cargo)
+- spl-pod 0.3.1 (cargo)
 - spl-pod 0.7.3 (cargo)
+- spl-program-error 0.5.0 (cargo)
 - spl-program-error 0.8.0 (cargo)
+- spl-program-error-derive 0.4.1 (cargo)
 - spl-program-error-derive 0.6.0 (cargo)
 - spl-tlv-account-resolution 0.11.1 (cargo)
+- spl-tlv-account-resolution 0.7.0 (cargo)
+- spl-token 6.0.0 (cargo)
 - spl-token-2022 11.0.0 (cargo)
+- spl-token-2022 4.0.0 (cargo)
 - spl-token-2022-interface 3.1.1 (cargo)
 - spl-token-confidential-transfer-ciphertext-arithmetic 0.5.1 (cargo)
 - spl-token-confidential-transfer-proof-extraction 0.6.1 (cargo)
+- spl-token-group-interface 0.3.0 (cargo)
 - spl-token-group-interface 0.7.2 (cargo)
 - spl-token-interface 3.0.0 (cargo)
+- spl-token-metadata-interface 0.4.0 (cargo)
 - spl-token-metadata-interface 1.0.1 (cargo)
+- spl-transfer-hook-interface 0.7.0 (cargo)
 - spl-transfer-hook-interface 2.1.0 (cargo)
+- spl-type-length-value 0.5.0 (cargo)
 - spl-type-length-value 0.9.1 (cargo)
+- sync_wrapper 0.1.2 (cargo)
 - sync_wrapper 1.0.2 (cargo)
 - typescript 5.9.3 (npm)
 - web-vitals 4.2.4 (npm)
@@ -2546,17 +2836,24 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 ### `Apache-2.0 OR ISC OR MIT`
 
+- hyper-rustls 0.24.2 (cargo)
 - hyper-rustls 0.27.9 (cargo)
+- rustls 0.21.12 (cargo)
 - rustls 0.23.43 (cargo)
 - rustls-native-certs 0.8.4 (cargo)
+- rustls-pemfile 1.0.4 (cargo)
+- sct 0.7.1 (cargo)
 
 ### `Apache-2.0 OR MIT`
 
+- async-channel 1.9.0 (cargo)
+- async-lock 3.4.2 (cargo)
 - atomic-waker 1.1.2 (cargo)
 - autocfg 1.5.1 (cargo)
 - base16ct 0.2.0 (cargo)
 - base64ct 1.8.3 (cargo)
 - cmov 0.5.4 (cargo)
+- concurrent-queue 2.5.0 (cargo)
 - const-oid 0.9.6 (cargo)
 - crypto-bigint 0.5.5 (cargo)
 - ctutils 0.4.2 (cargo)
@@ -2565,7 +2862,11 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - ed25519 1.5.3 (cargo)
 - ed25519 2.2.3 (cargo)
 - elliptic-curve 0.13.8 (cargo)
+- encode_unicode 1.0.0 (cargo)
 - equivalent 1.0.2 (cargo)
+- event-listener 2.5.3 (cargo)
+- event-listener 5.4.2 (cargo)
+- event-listener-strategy 0.5.4 (cargo)
 - fastrand 2.5.0 (cargo)
 - idna_adapter 1.2.2 (cargo)
 - indexmap 2.14.0 (cargo)
@@ -2573,6 +2874,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - k256 0.13.4 (cargo)
 - keccak 0.1.6 (cargo)
 - object 0.39.1 (cargo)
+- parking 2.2.1 (cargo)
 - pin-project 1.1.13 (cargo)
 - pin-project-internal 1.1.13 (cargo)
 - pin-project-lite 0.2.17 (cargo)
@@ -2604,6 +2906,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 ### `Apache-2.0/MIT`
 
+- console_error_panic_hook 0.1.7 (cargo)
+- proc-macro-crate 0.1.5 (cargo)
 - seqlock 0.2.0 (cargo)
 
 ### `BSD-2-Clause`
@@ -2701,6 +3005,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - minimatch 3.1.5 (npm)
 - minimatch 9.0.9 (npm)
 - picocolors 1.1.1 (npm)
+- rustls-webpki 0.101.7 (cargo)
 - rustls-webpki 0.103.15 (cargo)
 - semver 6.3.1 (npm)
 - semver 7.8.5 (npm)
@@ -3096,6 +3401,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - commander 14.0.3 (npm)
 - commander 2.20.3 (npm)
 - concat-map 0.0.1 (npm)
+- console 0.15.11 (cargo)
 - convert-source-map 2.0.0 (npm)
 - cookie 1.1.1 (npm)
 - cross-spawn 7.0.6 (npm)
@@ -3119,6 +3425,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - define-data-property 1.1.4 (npm)
 - define-properties 1.2.1 (npm)
 - delay 5.0.0 (npm)
+- dlopen2 0.5.0 (cargo)
+- dlopen2_derive 0.3.0 (cargo)
 - downcast 0.11.0 (cargo)
 - dunder-proto 1.0.1 (npm)
 - eager 0.1.0 (cargo)
@@ -3127,6 +3435,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - emoji-regex 9.2.2 (npm)
 - emoji-regex-xs 2.0.1 (npm)
 - enhanced-resolve 5.24.5 (npm)
+- enum-iterator 1.5.0 (cargo)
 - enum-ordinalize 3.1.15 (cargo)
 - enum-ordinalize 4.4.2 (cargo)
 - enum-ordinalize-derive 4.4.2 (cargo)
@@ -3174,7 +3483,9 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - fill-range 7.1.1 (npm)
 - find-up 5.0.0 (npm)
 - five8 1.0.0 (cargo)
+- five8_const 0.1.4 (cargo)
 - five8_const 1.0.0 (cargo)
+- five8_core 0.1.2 (cargo)
 - five8_core 1.0.0 (cargo)
 - flat-cache 4.0.1 (npm)
 - for-each 0.3.5 (npm)
@@ -3185,6 +3496,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - funty 2.0.0 (cargo)
 - generator-function 2.0.1 (npm)
 - generic-array 0.14.7 (cargo)
+- generic-array 0.14.9 (cargo)
 - gensync 1.0.0-beta.2 (npm)
 - get-intrinsic 1.3.0 (npm)
 - get-proto 1.0.1 (npm)
@@ -3194,7 +3506,9 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - globals 16.4.0 (npm)
 - globalthis 1.0.4 (npm)
 - gopd 1.2.0 (npm)
+- governor 0.6.3 (cargo)
 - graphemer 1.4.0 (npm)
+- h2 0.3.27 (cargo)
 - has-bigints 1.1.0 (npm)
 - has-flag 4.0.0 (npm)
 - has-property-descriptors 1.0.2 (npm)
@@ -3205,9 +3519,11 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - hermes-estree 0.25.1 (npm)
 - hermes-parser 0.25.1 (npm)
 - hex-rgb 4.3.0 (npm)
+- http-body 0.4.6 (cargo)
 - http-body 1.1.0 (cargo)
 - http-body-util 0.1.5 (cargo)
 - humanize-ms 1.2.1 (npm)
+- hyper 0.14.32 (cargo)
 - hyper 1.11.0 (cargo)
 - hyper 1.11.1 (cargo)
 - hyper-util 0.1.20 (cargo)
@@ -3217,6 +3533,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - imurmurhash 0.1.4 (npm)
 - include_dir 0.7.4 (cargo)
 - include_dir_macros 0.7.4 (cargo)
+- indicatif 0.17.11 (cargo)
 - internal-slot 1.1.0 (npm)
 - ipaddr.js 2.5.0 (npm)
 - is-array-buffer 3.0.5 (npm)
@@ -3285,6 +3602,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - merlin 3.0.0 (cargo)
 - micromatch 4.0.8 (npm)
 - mime-db 1.54.0 (npm)
+- mime_guess 2.0.5 (cargo)
 - miniflare 5.20260826.0-alpha (npm)
 - minimist 1.2.8 (npm)
 - minimizer-webpack-plugin 5.6.1 (npm)
@@ -3295,12 +3613,15 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - natural-compare 1.4.0 (npm)
 - neo-async 2.6.2 (npm)
 - next 16.3.3 (npm)
+- nix 0.29.0 (cargo)
 - nix 0.31.3 (cargo)
+- no-std-compat 0.4.1 (cargo)
 - node-exports-info 1.6.2 (npm)
 - node-fetch 2.7.0 (npm)
 - node-gyp-build 4.8.4 (npm)
 - node-releases 2.0.53 (npm)
 - nom 7.1.3 (cargo)
+- number_prefix 0.4.0 (cargo)
 - object-assign 4.1.1 (npm)
 - object-inspect 1.13.4 (npm)
 - object-keys 1.1.1 (npm)
@@ -3334,8 +3655,10 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - prop-types 15.8.1 (npm)
 - punycode 2.3.1 (npm)
 - qstring 0.7.2 (cargo)
+- quanta 0.12.6 (cargo)
 - queue-microtask 1.2.3 (npm)
 - radium 0.7.0 (cargo)
+- raw-cpuid 11.6.0 (cargo)
 - react 19.2.8 (npm)
 - react-dom 19.2.8 (npm)
 - react-is 16.13.1 (npm)
@@ -3358,6 +3681,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - schannel 0.1.29 (cargo)
 - scheduler 0.27.0 (npm)
 - schema-utils 4.3.3 (npm)
+- scroll 0.11.0 (cargo)
 - set-function-length 1.2.2 (npm)
 - set-function-name 2.0.2 (npm)
 - set-proto 1.0.0 (npm)
@@ -3396,6 +3720,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - supports-color 7.2.0 (npm)
 - supports-color 8.1.1 (npm)
 - supports-preserve-symlinks-flag 1.0.0 (npm)
+- synstructure 0.12.6 (cargo)
 - synstructure 0.13.2 (cargo)
 - tailwindcss 4.2.1 (npm)
 - tap 1.0.1 (cargo)
@@ -3411,6 +3736,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - to-regex-range 5.0.1 (npm)
 - tokio 1.53.1 (cargo)
 - tokio-macros 2.7.2 (cargo)
+- tokio-stream 0.1.19 (cargo)
+- tokio-tungstenite 0.20.1 (cargo)
 - tokio-util 0.6.10 (cargo)
 - tokio-util 0.7.19 (cargo)
 - tower 0.5.3 (cargo)
@@ -3471,6 +3798,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - why-is-node-running 2.3.0 (npm)
 - winnow 0.7.15 (cargo)
 - winnow 1.0.4 (cargo)
+- winreg 0.50.0 (cargo)
 - word-wrap 1.2.5 (npm)
 - ws 7.5.13 (npm)
 - ws 8.21.0 (npm)
@@ -3532,11 +3860,13 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - aya-ebpf-macros 0.1.2 (cargo)
 - aya-ebpf-macros 0.2.0 (cargo)
 - aya-obj 0.3.0 (cargo)
+- base64 0.21.7 (cargo)
 - base64 0.22.1 (cargo)
 - bitflags 2.13.1 (cargo)
 - block-buffer 0.10.4 (cargo)
 - block-buffer 0.12.1 (cargo)
 - block-buffer 0.9.0 (cargo)
+- borsh 0.10.4 (cargo)
 - borsh 1.8.1 (cargo)
 - bumpalo 3.20.3 (cargo)
 - bzip2 0.6.1 (cargo)
@@ -3556,6 +3886,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - compression-codecs 0.4.38 (cargo)
 - compression-core 0.4.32 (cargo)
 - core-foundation 0.10.1 (cargo)
+- core-foundation 0.9.4 (cargo)
 - core-foundation-sys 0.8.7 (cargo)
 - cpufeatures 0.2.17 (cargo)
 - cpufeatures 0.3.1 (cargo)
@@ -3565,6 +3896,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - crossbeam-epoch 0.9.20 (cargo)
 - crossbeam-queue 0.3.13 (cargo)
 - crossbeam-utils 0.8.22 (cargo)
+- crypto-common 0.1.6 (cargo)
 - crypto-common 0.1.7 (cargo)
 - crypto-common 0.2.2 (cargo)
 - crypto-mac 0.8.0 (cargo)
@@ -3579,6 +3911,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - digest 0.11.3 (cargo)
 - digest 0.9.0 (cargo)
 - displaydoc 0.2.7 (cargo)
+- ed25519-dalek-bip32 0.2.0 (cargo)
 - ed25519-dalek-bip32 0.3.0 (cargo)
 - either 1.18.0 (cargo)
 - env_filter 2.0.0 (cargo)
@@ -3602,6 +3935,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - getrandom 0.3.4 (cargo)
 - getrandom 0.4.3 (cargo)
 - glob 0.3.4 (cargo)
+- hash32 0.2.1 (cargo)
 - hash32 0.3.1 (cargo)
 - hashbrown 0.13.2 (cargo)
 - hashbrown 0.14.5 (cargo)
@@ -3613,8 +3947,10 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - hkdf 0.12.4 (cargo)
 - hmac 0.12.1 (cargo)
 - hmac 0.8.1 (cargo)
+- http 0.2.12 (cargo)
 - http 1.5.0 (cargo)
 - httparse 1.10.1 (cargo)
+- httpdate 1.0.3 (cargo)
 - humantime 2.4.0 (cargo)
 - hybrid-array 0.4.14 (cargo)
 - iana-time-zone 0.1.65 (cargo)
@@ -3640,6 +3976,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - log 0.4.34 (cargo)
 - memmap2 0.5.10 (cargo)
 - memmap2 0.9.11 (cargo)
+- mime 0.3.17 (cargo)
 - mockall 0.14.0 (cargo)
 - mockall 0.15.0 (cargo)
 - mockall_derive 0.14.0 (cargo)
@@ -3666,6 +4003,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - pbkdf2 0.11.0 (cargo)
 - percent-encoding 2.3.2 (cargo)
 - percentage 0.1.0 (cargo)
+- pin-utils 0.1.0 (cargo)
 - pkg-config 0.3.34 (cargo)
 - powerfmt 0.2.0 (cargo)
 - ppv-lite86 0.2.21 (cargo)
@@ -3700,7 +4038,9 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - regex 1.13.1 (cargo)
 - regex-automata 0.4.18 (cargo)
 - regex-syntax 0.8.11 (cargo)
+- reqwest 0.11.27 (cargo)
 - reqwest 0.12.28 (cargo)
+- reqwest-middleware 0.2.5 (cargo)
 - reqwest-middleware 0.4.2 (cargo)
 - rustc_version 0.4.1 (cargo)
 - rustls-pki-types 1.15.1 (cargo)
@@ -3724,6 +4064,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - serde_spanned 0.6.9 (cargo)
 - serde_with 3.22.0 (cargo)
 - serde_with_macros 3.22.0 (cargo)
+- sha1 0.10.7 (cargo)
 - sha2 0.10.9 (cargo)
 - sha2 0.11.0 (cargo)
 - sha2 0.9.9 (cargo)
@@ -3734,6 +4075,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - signal-hook-registry 1.4.8 (cargo)
 - simdutf8 0.1.5 (cargo)
 - smallvec 1.15.2 (cargo)
+- socket2 0.5.10 (cargo)
 - socket2 0.6.5 (cargo)
 - solana-security-txt 1.1.3 (cargo)
 - stable_deref_trait 1.2.1 (cargo)
@@ -3741,7 +4083,10 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - syn 1.0.109 (cargo)
 - syn 2.0.119 (cargo)
 - syn 3.0.4 (cargo)
+- system-configuration 0.5.1 (cargo)
+- system-configuration-sys 0.5.0 (cargo)
 - tar 0.4.46 (cargo)
+- task-local-extensions 0.1.4 (cargo)
 - tempfile 3.27.0 (cargo)
 - thiserror 1.0.69 (cargo)
 - thiserror 2.0.20 (cargo)
@@ -3760,9 +4105,14 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - toml_edit 0.25.13+spec-1.1.0 (cargo)
 - toml_parser 1.1.3+spec-1.1.0 (cargo)
 - toml_write 0.1.2 (cargo)
+- tungstenite 0.20.1 (cargo)
 - typenum 1.20.1 (cargo)
+- unicase 2.9.0 (cargo)
+- unicode-width 0.2.2 (cargo)
+- unicode-xid 0.2.6 (cargo)
 - universal-hash 0.5.1 (cargo)
 - url 2.5.8 (cargo)
+- utf-8 0.7.6 (cargo)
 - wasm-bindgen 0.2.127 (cargo)
 - wasm-bindgen-futures 0.4.77 (cargo)
 - wasm-bindgen-macro 0.2.127 (cargo)
@@ -3776,16 +4126,26 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - windows-link 0.2.1 (cargo)
 - windows-result 0.4.1 (cargo)
 - windows-strings 0.5.1 (cargo)
+- windows-sys 0.48.0 (cargo)
 - windows-sys 0.52.0 (cargo)
+- windows-sys 0.59.0 (cargo)
 - windows-sys 0.61.2 (cargo)
+- windows-targets 0.48.5 (cargo)
 - windows-targets 0.52.6 (cargo)
+- windows_aarch64_gnullvm 0.48.5 (cargo)
 - windows_aarch64_gnullvm 0.52.6 (cargo)
+- windows_aarch64_msvc 0.48.5 (cargo)
 - windows_aarch64_msvc 0.52.6 (cargo)
+- windows_i686_gnu 0.48.5 (cargo)
 - windows_i686_gnu 0.52.6 (cargo)
 - windows_i686_gnullvm 0.52.6 (cargo)
+- windows_i686_msvc 0.48.5 (cargo)
 - windows_i686_msvc 0.52.6 (cargo)
+- windows_x86_64_gnu 0.48.5 (cargo)
 - windows_x86_64_gnu 0.52.6 (cargo)
+- windows_x86_64_gnullvm 0.48.5 (cargo)
 - windows_x86_64_gnullvm 0.52.6 (cargo)
+- windows_x86_64_msvc 0.48.5 (cargo)
 - windows_x86_64_msvc 0.52.6 (cargo)
 - wrangler 4.127.0 (npm)
 - x509-parser 0.18.1 (cargo)
@@ -3822,8 +4182,12 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - ark-serialize-derive 0.4.2 (cargo)
 - ark-std 0.4.0 (cargo)
 - ark-std 0.5.0 (cargo)
+- asn1-rs 0.5.2 (cargo)
+- asn1-rs-derive 0.4.0 (cargo)
+- asn1-rs-impl 0.1.0 (cargo)
 - asn1-rs-impl 0.2.0 (cargo)
 - assert_matches 1.5.0 (cargo)
+- base64 0.12.3 (cargo)
 - base64 0.13.1 (cargo)
 - bitflags 1.3.2 (cargo)
 - blstrs 0.7.1 (cargo)
@@ -3831,7 +4195,9 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - bv 0.11.1 (cargo)
 - caps 0.5.6 (cargo)
 - chrono-humanize 0.2.3 (cargo)
+- console_log 0.2.2 (cargo)
 - curve25519-dalek-derive 0.1.1 (cargo)
+- der-parser 8.2.0 (cargo)
 - derivative 2.2.0 (cargo)
 - fast-math 0.1.1 (cargo)
 - feature-probe 0.1.1 (cargo)
@@ -3839,6 +4205,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - filetime 0.2.29 (cargo)
 - foreign-types 0.3.2 (cargo)
 - foreign-types-shared 0.1.1 (cargo)
+- futures-timer 3.0.4 (cargo)
 - group 0.13.0 (cargo)
 - histogram 0.6.9 (cargo)
 - ident_case 1.0.1 (cargo)
@@ -3849,6 +4216,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - num-bigint 0.2.6 (cargo)
 - num-complex 0.2.4 (cargo)
 - num-rational 0.2.4 (cargo)
+- oid-registry 0.6.1 (cargo)
 - openssl-macros 0.1.1 (cargo)
 - openssl-src 300.6.1+3.6.3 (cargo)
 - pairing 0.23.0 (cargo)
@@ -3859,13 +4227,17 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - serde_urlencoded 0.7.1 (cargo)
 - siphasher 0.3.11 (cargo)
 - siphasher 1.0.3 (cargo)
+- spinning_top 0.3.0 (cargo)
 - symlink 0.1.0 (cargo)
 - threadpool 1.8.1 (cargo)
+- tokio-rustls 0.24.1 (cargo)
+- toml 0.5.11 (cargo)
 - vcpkg 0.2.15 (cargo)
 - version_check 0.9.5 (cargo)
 - winapi 0.3.9 (cargo)
 - winapi-i686-pc-windows-gnu 0.4.0 (cargo)
 - winapi-x86_64-pc-windows-gnu 0.4.0 (cargo)
+- x509-parser 0.14.0 (cargo)
 - zstd-sys 2.0.16+zstd.1.5.7 (cargo)
 
 ### `MPL-2.0`
@@ -3898,6 +4270,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - lightningcss-win32-x64-msvc 1.31.1 (npm)
 - lightningcss-win32-x64-msvc 1.33.0 (npm)
 - satori 0.16.0 (npm)
+- webpki-roots 0.24.0 (cargo)
+- webpki-roots 0.25.4 (cargo)
 
 ### `MPL-2.0+`
 
