@@ -126,6 +126,17 @@ SYSTEM_PROGRAM_ADDRESS = "11111111111111111111111111111111"
 DEVELOPMENT_FEE_RECIPIENT_ROLE = "founding-source-funder"
 PARTICIPANT_ROLE = "participant"
 PARTICIPANT_FIXTURE_SOURCE_ROLE = "direct-buyer"
+CAMPAIGN_ADMINISTRATION_KEY_ROLES = (VALIDATOR_MINT_ROLE,)
+CAMPAIGN_FOUNDING_KEY_ROLES = (
+    CAMPAIGN_PAYER_ROLE,
+    "collateral-mint",
+    "collateral-wallet",
+    "founding-beneficiary",
+    "founding-projection-witness",
+    "founding-source-funder",
+    PARTICIPANT_ROLE,
+    PARTICIPANT_FIXTURE_SOURCE_ROLE,
+)
 FOUNDING_SUCCESS_MUTATIONS = (
     "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
     "stage projected custody against prepared controller funding (DCLTPCB2)",
@@ -2706,9 +2717,16 @@ def key_flags(
         raise Refusal("campaign keypair projection is not one frozen mode")
     flags: list[str] = []
     campaign_keypairs = report.get(projection)
-    if not isinstance(campaign_keypairs, dict) or not campaign_keypairs:
+    expected_roles = (
+        CAMPAIGN_ADMINISTRATION_KEY_ROLES
+        if projection == "campaign_administration_keypairs"
+        else CAMPAIGN_FOUNDING_KEY_ROLES
+    )
+    if not isinstance(campaign_keypairs, dict) or set(campaign_keypairs) != set(
+        expected_roles
+    ):
         raise Refusal(
-            f"local mutable preparation omitted its Rust-owned {projection} projection"
+            f"local mutable preparation changed its exact Rust-owned {projection} projection"
         )
     for role, path in sorted(campaign_keypairs.items()):
         if not isinstance(role, str) or not role or not isinstance(path, str) or not path:

@@ -116,17 +116,16 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 "core-upgrade-authority": "/owned/core.json",
             },
             "campaign_founding_keypairs": {
-                "campaign-payer": "/owned/payer.json",
-                "collateral-mint": "/owned/mint.json",
+                role: f"/owned/{role}.json"
+                for role in MODULE.CAMPAIGN_FOUNDING_KEY_ROLES
             },
         }
         self.assertEqual(
             MODULE.key_flags(report),
             [
-                "--keypair-campaign-payer",
-                "/owned/payer.json",
-                "--keypair-collateral-mint",
-                "/owned/mint.json",
+                item
+                for role in sorted(MODULE.CAMPAIGN_FOUNDING_KEY_ROLES)
+                for item in (f"--keypair-{role}", f"/owned/{role}.json")
             ],
         )
         self.assertEqual(
@@ -137,6 +136,17 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             MODULE.key_flags({"campaign_keypairs": {"wrong": "/wrong"}})
         with self.assertRaisesRegex(MODULE.Refusal, "frozen mode"):
             MODULE.key_flags(report, "campaign_keypairs")
+        with self.assertRaisesRegex(MODULE.Refusal, "exact Rust-owned"):
+            MODULE.key_flags(
+                {
+                    **report,
+                    "campaign_founding_keypairs": {
+                        role: path
+                        for role, path in report["campaign_founding_keypairs"].items()
+                        if role != MODULE.PARTICIPANT_ROLE
+                    },
+                }
+            )
 
     def test_campaign_public_identities_are_exact_distinct_and_key_free(self) -> None:
         founder = base58(bytes([7]) * 32)
@@ -170,8 +180,8 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 "core-upgrade-authority": "/owned/core.json",
             },
             "campaign_founding_keypairs": {
-                "campaign-payer": "/owned/payer.json",
-                "collateral-mint": "/owned/mint.json",
+                role: f"/owned/{role}.json"
+                for role in MODULE.CAMPAIGN_FOUNDING_KEY_ROLES
             },
             "campaign_public_identities": {
                 "founding-founder": founder,
