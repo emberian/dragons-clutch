@@ -16,7 +16,9 @@ usage() { printf '%s\n' \
   '  --participants N             default 2' \
   '  --wallet-lamports N          exact SOL funding target per participant (default 20000000)' \
   '  --collateral-mint ADDRESS --collateral-source ACCOUNT --token-atoms N' \
-  '  --session FILE --market ADDRESS --trades TSV   rows: seller buyer route outcome fill price' \
+  '  --session FILE --market ADDRESS              used for reconciliation and terminal payout only' \
+  '  Direct participation is not dispatched here: use the accepted progressive' \
+  '  devnet-user-position-admission-v1 and devnet-direct-trade-v1 callers.' \
   '  --replay --payout-input-dir DIR' \
   '                              one explicit Rust-projected wallet-N.json per participant' \
   '  --payout-plan FILE --payout-evidence FILE' \
@@ -85,19 +87,7 @@ if [ "$TOKEN_ATOMS" -gt 0 ]; then
   done
 fi
 
-if [ -n "$TRADES" ]; then
-  [ -n "$SESSION" ] && [ -n "$MARKET" ] && [ -r "$TRADES" ] || die "--trades requires readable plan plus --session and --market"
-  index=0; while IFS=$'\t' read -r seller buyer route outcome fill price; do
-    [ -z "${seller:-}" ] && continue; index=$((index+1)); marker="$STATE/trades/$index.signature"
-    [ -n "$buyer" ] && [ -n "$route" ] && [ -n "$outcome" ] && [ -n "$fill" ] && [ -n "$price" ] || die "trade row $index needs six tab-separated fields"
-    seller_key="$(key "$seller")"; buyer_key="$(key "$buyer")"; seller_token="$(token "$seller")"; buyer_token="$(token "$buyer")"
-    [ -f "$seller_key" ] && [ -f "$buyer_key" ] && [ -n "$seller_token" ] && [ -n "$buyer_token" ] || die "trade row $index names a non-campaign participant or missing collateral account"
-    if [ -f "$marker" ]; then solana confirm --url "$URL" "$(cat "$marker")" >/dev/null || die "recorded trade $index is not confirmed; inspect before retrying"; continue; fi
-    require_execute "trade row $index"; log="$STATE/logs/trade-$index.log"; set +e
-    dclutch --rpc "$URL" --session "$SESSION" sell --route "$route" --outcome "$outcome" --fill "$fill" --price "$price" --collateral "$seller_token" --keypair "$seller_key" --counter-keypair "$buyer_key" --counter-collateral "$buyer_token" --payer "$PAYER" 2>&1 | tee "$log"; status=${PIPESTATUS[0]}; set -e
-    signature="$(awk '/^submitted / {print $2; exit}' "$log")"; [ -z "$signature" ] || { printf '%s\n' "$signature" > "$marker"; chmod 600 "$marker"; }; [ "$status" -eq 0 ] || die "trade row $index did not confirm; log: $log"
-  done < "$TRADES"
-fi
+[ -z "$TRADES" ] || die "--trades is retired: dclutch buy/sell is intentionally disabled. Use a finalized devnet-user-position-admission-v1 report to produce an exact private session, then advance devnet-direct-trade-v1 one durable action at a time."
 if [ "$REPLAY" = true ]; then
   [ -n "$SESSION" ] && [ -n "$MARKET" ] || die "--replay requires --session and --market"
   if [ -n "$PAYOUT_INPUT_DIR" ]; then

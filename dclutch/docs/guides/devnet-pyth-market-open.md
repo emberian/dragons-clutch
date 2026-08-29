@@ -10,16 +10,43 @@ This guide prepares and preflights an Open Market. It does not authorize a
 devnet write, signing, funding, deployment, or publication. Add `--execute`
 only under a separate authorization after checking the produced report.
 
-## Inputs
+## Stage the executable bundle
 
-The external campaign requires absolute paths to a current checked `PLAN`, a
-funded `core-upgrade-authority` keypair, and the six other named campaign
-keypairs: collateral mint/wallet, founding beneficiary/founder, projection
-witness, and source funder. It reads only those explicit paths; it never finds
-or reads a default wallet.
+Use the staging wrapper rather than hand-assembling a Market input. It calls the
+production `devnet-sponsored-market` compiler and writes an execute-only wrapper
+for the production `campaign --founding-only` caller. Staging performs bounded
+public RPC reads but never opens a key file or submits a transaction.
 
-The market compiler also requires an explicit Direct fee policy and recipient.
-These are immutable market facts, not command defaults.
+```sh
+tools/release/stage-devnet-sponsored-market-open.sh \
+  --work /absolute/new-market-open-dir \
+  --plan /absolute/checked-devnet-plan.json \
+  --registry-program-id "$REGISTRY_PROGRAM" \
+  --direct-fee-recipient "$DIRECT_FEE_RECIPIENT" \
+  --window-start "$(date +%s)"
+```
+
+The wrapper fixes Direct at **50 basis points per side** and compiles the
+four-outcome flagship SOL/USD range product with cuts `12000,18000`. The checked
+plan is the source of the permanent Registry, Core, Claims, Trading, Resolution,
+Custody, and Rent-Credit program pins; no ID is copied into the staging tool.
+
+The resulting directory contains `market.json`, the 134-byte sponsored
+`sol-usd.price-update-v2`, `market-open-staging.json`, and an
+`open-market.execute.sh` command which remains inert until separately
+authorized. The canonical post-open address capture is its
+`campaign-open.json` evidence: its account map, founding custody context,
+selected Direct manifest entry, and finalized founding transaction receipts are
+the caller artifacts for Direct and terminal stages.
+
+## Remaining execution inputs
+
+The execute wrapper requires only explicit inputs: six keypair paths
+(`campaign-payer`, `collateral-mint`, `collateral-wallet`, `founding-beneficiary`,
+`founding-projection-witness`, and `founding-source-funder`), two distinct public
+identities (`founding-founder` and `substituted-founder`), and a separate
+`DCLUTCH_AUTHORIZE_MARKET_OPEN=YES` authorization. It never falls back to a
+default wallet.
 
 ## Read-only preparation
 
@@ -37,7 +64,7 @@ tools/release/devnet-price-update.sh --url "$RPC" --out "$WORK/sol-usd.update"
 cargo run --manifest-path "$BOOT/Cargo.toml" -- devnet-sponsored-market \
   --registry-program-id "$REGISTRY_PROGRAM" --plan "$PLAN" \
   --rpc-url "$RPC" --i-mean-devnet "$GENESIS" \
-  --direct-fee-basis-points "$DIRECT_FEE_BPS" \
+  --direct-fee-basis-points 50 \
   --direct-fee-recipient "$DIRECT_FEE_RECIPIENT" \
   --price-update "$WORK/sol-usd.update" --window-start "$(date +%s)" \
   > "$WORK/sponsored-market.json"

@@ -4,11 +4,12 @@ import { describe, expect, it } from 'vitest';
 import LaunchStory from './LaunchStory';
 
 describe('launch story', () => {
-  it('is a reader-facing route into the real devnet app', () => {
+  it('keeps the public cut honest until its checked Market manifest is updated', () => {
     const html = renderToStaticMarkup(<LaunchStory />);
     expect(html).toContain('Markets that');
     expect(html).toContain('resolve <em>in public.</em>');
-    expect(html).toContain('These are real devnet transactions, not a replay rendered from fixtures.');
+    expect(html).toContain('No public market is named yet.');
+    expect(html).toContain('no lifecycle activity is invented');
     expect(html).toContain('href="/markets"');
     expect(html).toContain('href="/explorer"');
     expect(html).toContain('href="/activity"');
