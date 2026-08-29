@@ -734,7 +734,12 @@ fn scenario() -> Scenario {
         release_set: waist.release_set_id,
         market: fixture.core_market,
         realm: realm.digest,
-        context: SCENARIO_CUSTODY_CONTEXT,
+        // The composer names the child root as both the Custody replay namespace
+        // and the trading-principal vault context, so the delivery debits the
+        // very vault the scenario's own collateral frame carries and advances
+        // the very cursor its effects were planned against.
+        context: child,
+        source_vault_context: child,
         generation: SCENARIO_GENERATION,
         checkpoint,
         request_digest,
@@ -776,8 +781,11 @@ fn scenario() -> Scenario {
             realm: realm.digest,
             child_root: child,
             obligation_account: obligation.to_bytes(),
-            mint: [0xb7; 32],
-            token_program: [0xb8; 32],
+            // The census names the collateral pair the executed delivery moves.
+            // A scenario naming two different mints is the shape that hides a
+            // defect, even where nothing executed joins the two.
+            mint: delivery.mint.to_bytes(),
+            token_program: delivery.token_program.to_bytes(),
             parent_request_digest: request_digest,
             generation: SCENARIO_GENERATION,
             custody_replay_revision: 7,
