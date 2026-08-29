@@ -372,6 +372,15 @@ fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
 }
 
 /// The exact canonical body of one initialized token account.
+///
+/// Public because a hostile has to be able to stage a *third* distinct account
+/// of the same kind: a substitution the frame answers with a key comparison is
+/// not the substitution it claims to be.
+pub fn dealer_delivery_token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
+    token_account_bytes(mint, owner, amount)
+}
+
+/// The exact canonical body of one initialized token account.
 fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
     let mut output = vec![0_u8; SplAccount::LEN];
     SplAccount::pack(

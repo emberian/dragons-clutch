@@ -38,8 +38,9 @@ use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
 use dclutch_dealer_accelerator_program_test::custody_delivery::{
-    DealerDeliveryInputV1, DealerDeliveryRealmV1, DealerDeliveryV1, dealer_delivery_realm_v1,
-    stage_dealer_delivery_v1, token_account_amount,
+    DealerDeliveryInputV1, DealerDeliveryRealmV1, DealerDeliveryV1,
+    dealer_delivery_realm_v1, dealer_delivery_token_account_bytes, stage_dealer_delivery_v1,
+    token_account_amount,
 };
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
@@ -177,6 +178,10 @@ const TRADING_TRANSITION: u32 = 0x4004;
 const TRADING_COMMIT: u32 = 0x4005;
 /// The refusal Trading raises when the release waist does not authenticate.
 const TRADING_RELEASE: u32 = 0x4001;
+/// Custody's refusal when a replay PDA, owner, bytes or revision does not join.
+const CUSTODY_REPLAY: u32 = 0x6005;
+/// Custody's refusal when a vault PDA, token state or authority policy refuses.
+const CUSTODY_TOKEN_STATE: u32 = 0x6006;
 /// The Claims SignedDelta route's refusal when the aggregate state does not join.
 const CLAIMS_SIGNED_DELTA_STATE: u32 = 0x5204;
 
@@ -3724,4 +3729,234 @@ async fn a_replayed_delivery_refuses_and_the_collateral_does_not_move_twice() {
         None,
         "the escrow stays closed"
     );
+}
+
+/// One Custody-owned body from the staged reservation evidence.
+fn staged_body(reservation: &ReservationEvidence, key: Pubkey) -> Vec<u8> {
+    reservation
+        .installed
+        .iter()
+        .find(|(installed, _)| *installed == key)
+        .map(|(_, body)| body.clone())
+        .expect("the reservation staged this body")
+}
+
+/// Re-seal the locked batch around a lie, through its own codec.
+///
+/// A hostile that edits a body and leaves the digests that commit to it alone is
+/// answered by the shallower digest check and never reaches the check it claims
+/// to be about. Every case below re-seals, so the case is the case it names.
+fn resealed_batch(
+    reservation: &ReservationEvidence,
+    edit: impl FnOnce(&mut DealerScenarioReservationBatchV1),
+) -> Vec<u8> {
+    let mut batch = DealerScenarioReservationBatchV1::decode(&staged_body(
+        reservation,
+        reservation.batch,
+    ))
+    .expect("canonical batch");
+    edit(&mut batch);
+    batch.encode().expect("the batch re-encodes").to_vec()
+}
+
+/// Re-seal the reservation state around a lie, through its own codec.
+fn resealed_state(
+    reservation: &ReservationEvidence,
+    edit: impl FnOnce(&mut DealerScenarioReservationStateV1),
+) -> Vec<u8> {
+    let mut state = DealerScenarioReservationStateV1::decode(&staged_body(
+        reservation,
+        reservation.reservation_state,
+    ))
+    .expect("canonical reservation state");
+    edit(&mut state);
+    state.encode().expect("the state re-encodes").to_vec()
+}
+
+/// Overwrite one Custody-owned account with an exact body.
+fn restage(context: &mut ProgramTestContext, custody: Pubkey, key: Pubkey, body: Vec<u8>) {
+    context.set_account(&key, &AccountSharedData::from(data_account(custody, body)));
+}
+
+#[tokio::test]
+async fn a_replay_cursor_at_the_wrong_revision_refuses_inside_the_delivery() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let reservation = committed_with_delivery_inputs(&mut context, &scenario).await;
+    let delivery = &scenario.delivery;
+    let custody = scenario.waist.custody_program;
+
+    // The lie: the cursor stands one revision ahead of what the effect's own
+    // request expects. Sealed: the batch's pinned replay prestate digest is
+    // recomputed over the tampered cursor, so the batch check that would
+    // otherwise answer this case passes, and the refusal has to come from
+    // CustodyReplayV1::advance comparing the revision to the request itself.
+    let mut cursor = CustodyReplayV1::decode(&delivery.replay_bytes).expect("canonical cursor");
+    cursor.next_revision = DELIVERY_REPLAY_REVISION
+        .checked_add(1)
+        .expect("advanced revision");
+    let cursor_bytes = cursor.to_bytes().expect("the cursor re-encodes").to_vec();
+    assert_ne!(
+        cursor_bytes, delivery.replay_bytes,
+        "the lie must actually change the cursor"
+    );
+    restage(&mut context, custody, delivery.replay, cursor_bytes.clone());
+
+    // Control, so the seal below is demonstrably load-bearing rather than
+    // decorative: with the cursor changed and the batch's digest left alone, the
+    // batch answers the case and the token program is never invoked. This is the
+    // shallow version of this hostile, and it is worthless.
+    let payer = context.payer.pubkey();
+    let unsealed =
+        submit_activation(&mut context, activation_bank(&scenario, &reservation, payer)).await;
+    assert!(unsealed.result.is_err(), "the unsealed lie also refuses");
+    assert!(
+        !invoked_programs(&unsealed).contains(&delivery.token_program),
+        "the unsealed lie is answered by the batch, before any collateral moves"
+    );
+
+    restage(
+        &mut context,
+        custody,
+        reservation.batch,
+        resealed_batch(&reservation, |batch| {
+            batch.replay_prestate_digest = hash(&cursor_bytes).to_bytes();
+        }),
+    );
+
+    let destination_before = account_body(&mut context, delivery.destination)
+        .await
+        .expect("the destination exists");
+    let processed =
+        submit_activation(&mut context, activation_bank(&scenario, &reservation, payer)).await;
+    assert!(
+        processed.result.is_err(),
+        "a cursor at the wrong revision must fail closed; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        custom_code(&processed.result.clone().map(|_| ())),
+        Some(CUSTODY_REPLAY),
+        "the refusal is a replay refusal"
+    );
+    // Depth, not just refusal: the token program actually ran. Every shallower
+    // gate -- the batch's replay prestate digest, the activation identities, the
+    // effect join, the reservation's own coordinates -- sits before the
+    // transfer, so a case answered by any of them could never have reached it.
+    // Only `advance` refuses after the collateral has already moved.
+    assert!(
+        invoked_programs(&processed).contains(&scenario.delivery.token_program),
+        "the case must reach past the transfer to be about the cursor at all"
+    );
+    // The transfer happens before the cursor advances, so this refusal unwinds a
+    // token movement the runtime had already made. Nothing survives it.
+    assert_eq!(
+        account_body(&mut context, delivery.destination).await,
+        Some(destination_before),
+        "a refused delivery must not credit the destination"
+    );
+    assert!(
+        account_body(&mut context, delivery.escrow).await.is_some(),
+        "a refused delivery must not close the escrow"
+    );
+    assert_eq!(
+        account_body(&mut context, delivery.replay).await,
+        Some(cursor_bytes),
+        "a refused delivery leaves the cursor exactly as it found it"
+    );
+}
+
+#[tokio::test]
+async fn a_substituted_destination_refuses_on_the_owner_the_request_names() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let reservation = committed_with_delivery_inputs(&mut context, &scenario).await;
+    let delivery = &scenario.delivery;
+    let custody = scenario.waist.custody_program;
+
+    // A third distinct identity, per the craft note: a substitution the frame
+    // answers with a key comparison is not a substitution of anything. This is a
+    // real token account, of the Realm's own Mint, at the destination's exact
+    // balance -- differing only in who owns it.
+    let intruder_owner = Pubkey::new_from_array([0xe9; 32]);
+    let intruder = Pubkey::new_from_array([0xea; 32]);
+    let intruder_bytes = dealer_delivery_token_account_bytes(
+        delivery.mint,
+        intruder_owner,
+        DELIVERY_DESTINATION_BEFORE,
+    );
+    context.set_account(
+        &intruder,
+        &AccountSharedData::from(data_account(delivery.token_program, intruder_bytes.clone())),
+    );
+    // Sealed: the reservation names the intruder and commits to its prestate, so
+    // neither the reservation's key comparison nor its destination prestate
+    // digest can answer this case. What is left is the only thing that should
+    // refuse it -- the external destination owner the request itself names.
+    restage(
+        &mut context,
+        custody,
+        reservation.reservation_state,
+        resealed_state(&reservation, |state| {
+            state.destination = intruder.to_bytes();
+            state.destination_prestate_digest = hash(&intruder_bytes).to_bytes();
+        }),
+    );
+
+    let payer = context.payer.pubkey();
+    let mut bank = activation_bank(&scenario, &reservation, payer);
+    bank.effects
+        .get_mut(0)
+        .expect("the zeroth effect")
+        .destination = intruder;
+    let processed = submit_activation(&mut context, bank).await;
+    assert!(
+        processed.result.is_err(),
+        "a destination the request does not name must fail closed; observed {:?}",
+        processed.result
+    );
+    // Depth: every reservation-join refusal is coded Replay, so a token-state
+    // refusal proves the case cleared them all and was answered by the external
+    // destination owner the request itself names.
+    assert_eq!(
+        custom_code(&processed.result.clone().map(|_| ())),
+        Some(CUSTODY_TOKEN_STATE),
+        "the refusal is the token-state gate, not a shallower reservation join"
+    );
+    assert_eq!(
+        account_body(&mut context, intruder).await,
+        Some(intruder_bytes),
+        "a refused delivery must not credit the substituted account"
+    );
+    assert_eq!(
+        token_account_amount(
+            &account_body(&mut context, delivery.destination)
+                .await
+                .expect("the real destination survives")
+        ),
+        DELIVERY_DESTINATION_BEFORE,
+        "nor the real one"
+    );
+    assert!(
+        account_body(&mut context, delivery.escrow).await.is_some(),
+        "and the escrow stays locked"
+    );
+}
+
+/// Every program the runtime actually invoked, read out of the transaction log.
+fn invoked_programs(
+    processed: &solana_program_test::BanksTransactionResultWithMetadata,
+) -> Vec<Pubkey> {
+    processed
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.log_messages.clone())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|line| {
+            line.strip_prefix("Program ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|key| key.parse::<Pubkey>().ok())
+        })
+        .collect()
 }
