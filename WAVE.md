@@ -270,6 +270,22 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
   not this prose. While in there: fix the naming collision — series/lifecycle.rs
   is about FUNDING, the protocol-wide term means the artifact; a name that
   misleads is the found_request_digest trap waiting for a third lane.
+- **RULING — Reaffirm disposition (ORCH, 2026-08-29 ~12:50 EDT): APPROVED AS
+  DESIGNED, IMPLEMENTATION DEFERRED to a window when upgrade.rs is quiet.**
+  CONV's investigation (board ~13:58 entry) governs: third
+  `CheckedDeploymentDispositionV1::Reaffirm` variant, gated on the gate's
+  already-authenticated carry-forward closure (upgrade.rs:6101-6122: disposition
+  carry-forward AND cohort base AND requires_new_artifact false AND
+  changed_inputs empty AND base==candidate digest) as its receipt; journal
+  schema v3→v4 explicitly; the NINE ordinal `index < 2` sites become one named
+  predicate FIRST as a standalone commit. Rationale: the current refusal forces
+  a downgrade-bounce — two real Loader mutations on live programs to satisfy
+  bookkeeping — which is strictly worse for safety than accepting the closure.
+  Conditions: hostiles are REWRITTEN TO PIN THE NEW BOUNDARY, one per closure
+  leg (wrong disposition string / non-base cohort / nonempty changed_inputs /
+  digest mismatch → each REFUSED with pinned code); the old blanket-refusal
+  hostiles are replaced, not deleted-and-forgotten. Ember veto window open —
+  recorded here precisely so it can be overruled before implementation.
 - **LINGER₂ Sonnet batch — DONE.** Satellites folded (root `exclude` is now
   empty; nested program-test harness workspaces stay per 5c663da precedent);
   both skeleton dirs deleted; `dealer_chain` warnings cleared (21df8e5).
