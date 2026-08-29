@@ -1,47 +1,39 @@
-//! The Fractional consumer of the capability-neutral selection seam — built
-//! to the exact wall that stops it, with the wall named rather than worked
-//! around.
+//! The Fractional consumer of the capability-neutral selection seam.
 //!
-//! `fractional_selected_closure_v1` really compiles a complete Fractional
-//! selected-capability closure — program set, selected descriptor, config,
-//! publication — through `fractional_selected_release_v4`, exactly as a
-//! founding driver would consume it. It is correct, and it is exactly as
-//! callable as the shipped contracts allow: only for a Market that already
-//! exists.
+//! `fractional_selected_closure_v1` compiles a complete Fractional
+//! selected-capability closure — program set, selected descriptor, the
+//! market-free selection config, the execution terms, and the publication —
+//! through `fractional_selected_release_v4`, exactly as a founding driver
+//! consumes it.
 //!
-//! THE WALL (board finding 2026-08-29, every link chain-enforced): a founded
-//! Market can never select this closure, because
+//! THE WALL THIS MODULE WAS BUILT AGAINST, AND HOW IT CAME DOWN
 //!
-//!   1. the Market PDA derives from `MarketIdentity` seeds that include the
-//!      capability-manifest digest (`derive_founding_targets_inner`,
-//!      `market.rs`);
-//!   2. the manifest entry must name the selection config —
-//!      `require_entry_identity`, `dclutch-trading-sbf/src/dispatch.rs:448`,
-//!      reached from the real activation route (`outer.rs:328-403`);
-//!   3. Fractional's config IS the exposure terms — the descriptor pins
-//!      `config_schema = FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2`
-//!      (`artifacts_v4.rs:241`), and Claims pins
-//!      `header.selection().config() == request.input().terms` on chain
-//!      (`fractional_atomic_v3.rs:224`);
-//!   4. the terms bind the Market PDA — `bind_terms` refuses
-//!      `input.market != terms.market()` (`request_v2.rs`), Claims pins
-//!      `request.market == LBV2.logical_market` (`fractional_atomic_v3.rs:651`),
-//!      and Claims founding pins `logical_market == core.identity.market_id`
-//!      (`founding_v5.rs:775,929`).
+//! Until the config split this file documented an unsatisfiable-by-
+//! construction founding (board finding 2026-08-29): the Market PDA derives
+//! from `MarketIdentity` seeds including the capability-manifest digest; the
+//! manifest entry must name the selection config; Fractional's config WAS the
+//! exposure terms; and the terms bind the Market PDA. So
+//! `manifest ⊃ config_id = SHA-256(terms) ⊃ terms.market =
+//! PDA(seeds ⊇ SHA-256(manifest))` — a SHA-256 fixed point no author can
+//! construct.
 //!
-//! So manifest ⊃ config_id = SHA-256(terms) ⊃ terms.market =
-//! PDA(seeds ⊇ SHA-256(manifest)): a SHA-256 fixed point no author can
-//! construct. `a_fractional_selection_cannot_precede_the_market_it_binds`
-//! below is that statement as an executable test rather than prose. Founding
-//! wiring lands only with the config-split ruling (a market-free
-//! `FractionalSelectionConfigV1` as the manifest-named config, the terms
-//! joined to it at runtime).
+//! The split (ORCH ruling 13:15, amended by the second-hop finding) removes
+//! the third link and only the third link: the manifest-named config is now a
+//! market-free `FractionalSelectionConfigV1` (denominator, both widths, Token
+//! program, graph), and the terms stay the execution record, joined to the
+//! config at runtime by `join_fractional_selection_config_v1` and to the
+//! Market by the binds that already existed.
+//!
+//! `a_fractional_selection_now_precedes_the_market_it_binds` below is the
+//! INVERSION of the old divergence test, kept deliberately in the same shape
+//! so the two can be read against each other: the old one proved the
+//! iteration diverges, this one proves the manifest does not move at all.
 
 use sha2::{Digest as _, Sha256};
 
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsV2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
 };
 use dclutch_fractional_claim_operator::{
     FractionalFrameWidthsV4, FractionalSelectedReleaseInputV4, fractional_selected_release_v4,
@@ -49,15 +41,17 @@ use dclutch_fractional_claim_operator::{
 
 use crate::{Error, Result};
 
-/// The named refusal any founding wiring must surface until the config split
-/// lands. One author for the sentence, so it cannot drift between callers.
+/// The two record schemas one Fractional closure publishes, named once.
+///
+/// The ORDER matters to a reader and not to the machine: the selection config
+/// is the record the MANIFEST names, and the terms are the record EXECUTION
+/// uses. Conflating them is the defect the config split removed.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const FRACTIONAL_FOUNDING_SELECTION_WALL_V1: &str =
-    "a Fractional capability cannot be selected by a founded Market: its config is the exposure \
-     terms, the terms bind the Market PDA, and the Market PDA derives from the manifest that \
-     must name the config — a SHA-256 fixed point no author can construct. Founding with \
-     Fractional selected waits on the config-split ruling (market-free selection config in the \
-     manifest; terms joined to it at runtime).";
+pub(crate) const FRACTIONAL_SELECTION_CONFIG_RECORD_LABEL_V1: &str =
+    "fractional_selection_config_record";
+/// Label for the execution terms record.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const FRACTIONAL_TERMS_RECORD_LABEL_V1: &str = "fractional_terms_record";
 
 /// One compiled Fractional closure in the byte shape the neutral seam and the
 /// record publisher consume.
@@ -68,9 +62,19 @@ pub(crate) struct FractionalSelectedClosureBytesV1 {
     /// The Wrap-action descriptor; all four bundles agree on every
     /// entry-authored coordinate, so any member may stand for the set.
     pub(crate) selected_descriptor: Vec<u8>,
-    /// The exact terms bytes — the shipped contract's config record.
+    /// The market-free selection config — the record the MANIFEST names.
+    ///
+    /// This is what the seam hashes into `entry.config_id`, and it is
+    /// derivable before the Market address exists.
     pub(crate) config: Vec<u8>,
-    /// The 480-byte canonical Market-bindable publication.
+    /// Schema the selection config is finalized under.
+    pub(crate) config_schema: [u8; 32],
+    /// The exact exposure terms — the EXECUTION record, joined to the config
+    /// at runtime. It binds the Market and is deliberately not the config.
+    pub(crate) terms: Vec<u8>,
+    /// Schema the terms record is finalized under.
+    pub(crate) terms_schema: [u8; 32],
+    /// The canonical Market-bindable publication.
     pub(crate) publication: Vec<u8>,
     /// SHA-256 of the publication bytes.
     pub(crate) publication_id: [u8; 32],
@@ -81,8 +85,9 @@ pub(crate) struct FractionalSelectedClosureBytesV1 {
 ///
 /// Frames, descriptors, program set, and publication are all derived by the
 /// family's own release compiler and hostile-revalidated there; this function
-/// restates nothing. It works only for terms that already name their Market —
-/// which is the wall documented above, not a limitation of this function.
+/// restates nothing. The terms still name a Market — they are the execution
+/// record — but nothing the MANIFEST names does, which is what makes the
+/// founding reachable.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn fractional_selected_closure_v1(
     terms_bytes: &[u8],
@@ -118,7 +123,10 @@ pub(crate) fn fractional_selected_closure_v1(
     Ok(FractionalSelectedClosureBytesV1 {
         program_set: release.program_set,
         selected_descriptor,
-        config: terms_bytes.to_vec(),
+        config: release.selection_config,
+        config_schema: FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
+        terms: terms_bytes.to_vec(),
+        terms_schema: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
         publication: release.publication.to_bytes().to_vec(),
         publication_id: release.publication.publication_id(),
     })
@@ -178,8 +186,6 @@ mod tests {
             product_record: 300,
             result_domain_record: 120,
             portfolio_record: 160,
-            selected_config: fractional_exposure_terms_bytes_v2(REPRESENTATION_WIDTH)
-                .expect("terms width") as u32,
             core_market: 512,
             activation_cache: 256,
             rent_credit: 128,
@@ -273,55 +279,92 @@ mod tests {
         merge_selected_manifest_v1(&base, entry).expect("merged manifest").0
     }
 
-    /// The fixed point, executed: for any terms an author binds to a candidate
-    /// market, the manifest that names them derives a DIFFERENT market, and
-    /// re-authoring the terms for that market moves the market again. The
-    /// iteration diverges instead of closing — a founded Market can never
-    /// satisfy `entry.config_id == SHA-256(terms(its own PDA))`.
+    /// THE INVERSION. The old form of this test proved the iteration
+    /// diverges; this one proves there is no iteration to run.
+    ///
+    /// It is deliberately the same experiment: author terms for one candidate
+    /// Market, build the manifest a founding would publish, derive the Market
+    /// that manifest determines. Before the split the derived Market differed
+    /// from the candidate, re-authoring moved the manifest, and the sequence
+    /// diverged forever. After the split the manifest is IDENTICAL for two
+    /// unrelated candidate Markets — so it determines exactly one Market, and
+    /// terms re-authored for that Market leave the manifest untouched. The
+    /// fixed point closes on the first step instead of running away.
+    ///
+    /// This is the property a founding needs, stated as the thing that used to
+    /// be impossible.
     #[test]
-    fn a_fractional_selection_cannot_precede_the_market_it_binds() {
+    fn a_fractional_selection_now_precedes_the_market_it_binds() {
         let candidate = [0x77; 32];
+        let unrelated = [0x19; 32];
+        assert_ne!(candidate, unrelated);
+
+        // Terms for two different Markets really are different bytes...
+        assert_ne!(terms_bytes_for(candidate), terms_bytes_for(unrelated));
+
+        // ...and yet they publish the SAME manifest. That is the whole split.
         let manifest_0 = manifest_for_market(candidate);
+        let manifest_unrelated = manifest_for_market(unrelated);
+        assert_eq!(
+            manifest_0, manifest_unrelated,
+            "the manifest must not move when only the terms' Market moves"
+        );
+
+        // So the manifest determines one Market...
         let market_1 = market_for_manifest(&manifest_0);
-        assert_ne!(
-            market_1, candidate,
-            "the manifest naming terms for the candidate derives another market"
-        );
-
-        // Re-author honestly for the market the first manifest derives…
+        // ...and authoring the terms honestly FOR that Market reproduces the
+        // very same manifest. The iteration has a fixed point and this is it.
         let manifest_1 = manifest_for_market(market_1);
-        assert_ne!(
+        assert_eq!(
             manifest_1, manifest_0,
-            "moving the terms market moves the config identity and the manifest"
+            "terms authored for the derived Market must reproduce the manifest"
         );
-        // …and the manifest carrying THOSE terms derives yet another market.
-        let market_2 = market_for_manifest(&manifest_1);
-        assert_ne!(
-            market_2, market_1,
-            "the iteration diverges: no manifest can name terms bound to the market it derives"
+        assert_eq!(
+            market_for_manifest(&manifest_1),
+            market_1,
+            "the fixed point is closed: this manifest and this Market agree"
         );
-
-        // The wall has one named sentence for any wiring that reaches it.
-        assert!(FRACTIONAL_FOUNDING_SELECTION_WALL_V1.contains("fixed point"));
     }
 
-    /// Control: for a market that already exists (any named identity), the
-    /// closure compiles whole — the wall is founding-specific, not a defect in
-    /// the release compiler or the seam.
+    /// The manifest-named config is the selection config, and the terms are
+    /// NOT it — the two halves of the split, checked at the seam boundary the
+    /// founding actually uses.
     #[test]
-    fn the_closure_compiles_whole_for_a_market_that_already_exists() {
-        let closure = fractional_selected_closure_v1(
-            &terms_bytes_for([0x77; 32]),
-            [0x50; 32],
-            widths(),
-        )
-        .expect("closure");
-        assert_eq!(closure.publication.len(), 480);
+    fn the_manifest_entry_names_the_selection_config_and_never_the_terms() {
+        let closure =
+            fractional_selected_closure_v1(&terms_bytes_for([0x77; 32]), [0x50; 32], widths())
+                .expect("closure");
+        assert_eq!(closure.config_schema, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1);
+        assert_eq!(closure.terms_schema, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2);
+        assert_ne!(closure.config, closure.terms);
+
+        let entry = selected_manifest_entry_v1(SelectedCapabilityClosureV1 {
+            program_set: &closure.program_set,
+            selected_descriptor: &closure.selected_descriptor,
+            config: &closure.config,
+            activation_deadline_slot: u64::MAX,
+            root_rent_minimum_lamports: 1_000_000,
+        })
+        .expect("seam entry");
+
+        let config_digest: [u8; 32] = Sha256::digest(&closure.config).into();
+        let terms_digest: [u8; 32] = Sha256::digest(&closure.terms).into();
+        assert_eq!(entry.config_id().to_bytes(), config_digest);
+        assert_ne!(entry.config_id().to_bytes(), terms_digest);
+    }
+
+    /// Control: the closure still compiles whole and the seam still consumes
+    /// it with no Fractional-shaped special case.
+    #[test]
+    fn the_closure_compiles_whole_and_the_seam_consumes_it() {
+        let closure =
+            fractional_selected_closure_v1(&terms_bytes_for([0x77; 32]), [0x50; 32], widths())
+                .expect("closure");
+        assert_eq!(closure.publication.len(), 512);
         assert_eq!(
             closure.publication_id,
             <[u8; 32]>::from(Sha256::digest(&closure.publication))
         );
-        // The seam consumes it without a Fractional-shaped special case.
         selected_manifest_entry_v1(SelectedCapabilityClosureV1 {
             program_set: &closure.program_set,
             selected_descriptor: &closure.selected_descriptor,

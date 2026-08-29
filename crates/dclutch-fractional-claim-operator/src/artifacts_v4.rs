@@ -68,7 +68,7 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_ROOT_SCHEMA_ID_V1, FRACTIONAL_ROOT_TERMS_OFFSET_V1,
     FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3, FractionalExposureActionV2,
 };
-use dclutch_fractional_claim_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2;
+use dclutch_fractional_claim_kernel::FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1;
 use dclutch_request_profile_contract::{
     HEADER_BYTES as REQUEST_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
     RequestProfileV1,
@@ -238,7 +238,7 @@ pub fn build_fractional_selected_bundle_v4(
     let lifecycle_id = digest(&lifecycle_policy);
     let descriptor_value = CapabilityProgramV4::new(
         content(FRACTIONAL_CAPABILITY_KIND_ID_V1)?,
-        content(FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2)?,
+        content(FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1)?,
         content(FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_ID_V2)?,
         content(FRACTIONAL_ROOT_SCHEMA_ID_V1)?,
         content(lifecycle_id)?,
@@ -315,7 +315,7 @@ pub fn validate_fractional_selected_bundle_v4(
         .checked_add(claims_accounts)
         .ok_or(FractionalSelectedArtifactErrorV4::InvalidInput)?;
     if descriptor.kind().to_bytes() != FRACTIONAL_CAPABILITY_KIND_ID_V1
-        || descriptor.config_schema().to_bytes() != FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2
+        || descriptor.config_schema().to_bytes() != FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1
         || descriptor.request_schema().to_bytes() != FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_ID_V2
         || descriptor.root_schema().to_bytes() != FRACTIONAL_ROOT_SCHEMA_ID_V1
         || descriptor.capacity_profile().to_bytes() != capacity_profile

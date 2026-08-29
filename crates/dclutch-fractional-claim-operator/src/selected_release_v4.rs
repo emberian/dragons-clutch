@@ -64,7 +64,11 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_TERMINAL_TERMS_STAGING_V3, FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3,
     FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalExposureActionV2,
 };
-use dclutch_fractional_claim_kernel::FractionalExposureTermsV2;
+use dclutch_fractional_claim_kernel::{
+    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FractionalExposureTermsV2, FractionalSelectionConfigV1,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
+    join_fractional_selection_config_v1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -129,12 +133,28 @@ pub const FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4: u32 = 64;
 /// Canonical publication magic.
 pub const FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4: [u8; 8] = *b"DCFRPB04";
 /// Exact canonical publication width.
-pub const FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4: usize = 480;
+pub const FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4: usize = 512;
 
-const PUBLICATION_VERSION: u16 = 4;
+/// Publication layout version.
+///
+/// Bumped from 4 to 5 by the config split: the publication gained a fifteenth
+/// identity (the market-free selection config the manifest entry now names).
+/// The magic still names the family; the version names the layout, which is
+/// exactly the distinction the version field exists for. This is a
+/// PRE-RELEASE wire change -- no Fractional descriptor exists in any published
+/// release set on any chain -- and not a migration.
+const PUBLICATION_VERSION: u16 = 5;
 const IDENTITY_START: usize = 16;
-const IDENTITY_COUNT: usize = 14;
+const IDENTITY_COUNT: usize = 15;
 const SCALAR_START: usize = IDENTITY_START + IDENTITY_COUNT * 32;
+
+/// Exact selection-config record width as a frame width.
+///
+/// Welded to the kernel's constant at compile time rather than restated: if
+/// the selection config ever widens, this fails to build instead of silently
+/// compiling a release whose config slot expects the old width.
+const SELECTION_CONFIG_BYTES: u32 = 128;
+const _: () = assert!(FRACTIONAL_SELECTION_CONFIG_BYTES_V1 == 128);
 
 /// Byte widths a release selects but the Claims frame contract cannot supply.
 ///
@@ -151,8 +171,6 @@ pub struct FractionalFrameWidthsV4 {
     pub result_domain_record: u32,
     /// Finalized Product portfolio Record.
     pub portfolio_record: u32,
-    /// Independently authenticated Fractional terms Record checked prefix.
-    pub selected_config: u32,
     /// Canonical Core Market state.
     pub core_market: u32,
     /// Current Registry activation cache.
@@ -168,7 +186,6 @@ impl FractionalFrameWidthsV4 {
             self.product_record,
             self.result_domain_record,
             self.portfolio_record,
-            self.selected_config,
             self.core_market,
             self.activation_cache,
             self.rent_credit,
@@ -182,7 +199,12 @@ impl FractionalFrameWidthsV4 {
 
     fn profile(self) -> FractionalSelectedProfileInputV4 {
         FractionalSelectedProfileInputV4 {
-            selected_config_bytes: self.selected_config,
+            // DERIVED, never supplied. The manifest-named config is the
+            // market-free selection config, whose width is a constant this
+            // release compiler knows. Taking it as a caller argument would let
+            // a release pair its config slot with a width no selection config
+            // can ever have -- the same trap the frame specs already refuse.
+            selected_config_bytes: SELECTION_CONFIG_BYTES,
             product_record_bytes: self.product_record,
             portfolio_record_bytes: self.portfolio_record,
             linked_basis_bytes: self.linked_basis_record,
@@ -213,7 +235,17 @@ pub struct FractionalSelectedPublicationV4 {
     /// Product-owned ResultDomain digest.
     pub result_domain: [u8; 32],
     /// Exact Fractional exposure terms digest.
+    ///
+    /// The EXECUTION record. Not the identity the manifest entry names -- see
+    /// [`Self::selection_config`]. It binds the Core Market, so an entry
+    /// naming it would be the fixed point the split exists to remove.
     pub terms: [u8; 32],
+    /// Exact market-free selection config digest.
+    ///
+    /// THIS is the identity a capability manifest entry carries as its
+    /// `config_id`. It is derivable before the Market address exists, which is
+    /// the whole property that makes a Fractional-selected market foundable.
+    pub selection_config: [u8; 32],
     /// Finalized TokenBehaviorV2 selection digest.
     pub token_behavior: [u8; 32],
     /// Finalized composition exposure digest.
@@ -266,6 +298,7 @@ impl FractionalSelectedPublicationV4 {
             self.product_record,
             self.result_domain,
             self.terms,
+            self.selection_config,
             self.token_behavior,
             self.exposure,
             self.token_program,
@@ -288,6 +321,15 @@ pub struct FractionalSelectedReleaseV4 {
     pub program_set: Vec<u8>,
     /// SHA-256 identity of `program_set`.
     pub program_set_id: [u8; 32],
+    /// Exact market-free selection config record bytes.
+    ///
+    /// These are the bytes a Registry finalizes under
+    /// `FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1` and the bytes the selection
+    /// seam hashes into the manifest entry's config identity. They contain no
+    /// Market and nothing derived from one.
+    pub selection_config: Vec<u8>,
+    /// SHA-256 identity of `selection_config`.
+    pub selection_config_id: [u8; 32],
     /// Canonical Market-bindable publication.
     pub publication: FractionalSelectedPublicationV4,
 }
@@ -310,6 +352,12 @@ pub enum FractionalSelectedReleaseErrorV4 {
     Bundle,
     /// ProgramSetV2 encoding, decoding, or selection refused.
     ProgramSet,
+    /// The market-free selection config did not encode, decode, or join.
+    ///
+    /// A join failure here means the release's own config and terms describe
+    /// different instruments -- caught at compile time rather than left for
+    /// the chain to discover at execution.
+    SelectionConfig,
     /// Publication identities or scalars were not exact.
     Publication,
 }
@@ -382,12 +430,15 @@ pub fn fractional_selected_release_v4(
     )
     .map_err(|_| FractionalSelectedReleaseErrorV4::ProgramSet)?;
     let program_set_id = digest(&program_set);
+    let selection_config = selection_config_bytes(input.terms)?;
+    let selection_config_id = digest(&selection_config);
     let publication = FractionalSelectedPublicationV4 {
         release_set: input.terms.release_set(),
         market: input.terms.market(),
         product_record: input.terms.product_record(),
         result_domain: input.terms.result_domain(),
         terms: input.terms.terms_id(),
+        selection_config: selection_config_id,
         token_behavior: input.terms.token_behavior(),
         exposure: input.terms.exposure_id(),
         token_program: input.terms.token_program(),
@@ -402,6 +453,8 @@ pub fn fractional_selected_release_v4(
         bundles,
         program_set,
         program_set_id,
+        selection_config,
+        selection_config_id,
         publication,
     };
     validate_fractional_selected_release_v4(&release, input)?;
@@ -476,12 +529,27 @@ pub fn validate_fractional_selected_release_v4(
             return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
         }
     }
+    // Recompile the selection config from the same authenticated terms and
+    // re-run the runtime join against it, so a substituted config refuses here
+    // exactly as it would on chain. The join is the KERNEL's -- this compiler
+    // does not restate which fields are market-free.
+    let expected_selection_config = selection_config_bytes(input.terms)?;
+    if release.selection_config != expected_selection_config
+        || release.selection_config_id != digest(&release.selection_config)
+    {
+        return Err(FractionalSelectedReleaseErrorV4::SelectionConfig);
+    }
+    let decoded = FractionalSelectionConfigV1::decode(&release.selection_config)
+        .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
+    join_fractional_selection_config_v1(decoded, input.terms)
+        .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
     let expected_publication = FractionalSelectedPublicationV4 {
         release_set: input.terms.release_set(),
         market: input.terms.market(),
         product_record: input.terms.product_record(),
         result_domain: input.terms.result_domain(),
         terms: input.terms.terms_id(),
+        selection_config: release.selection_config_id,
         token_behavior: input.terms.token_behavior(),
         exposure: input.terms.exposure_id(),
         token_program: input.terms.token_program(),
@@ -496,6 +564,24 @@ pub fn validate_fractional_selected_release_v4(
         return Err(FractionalSelectedReleaseErrorV4::Publication);
     }
     Ok(())
+}
+
+/// Encode the market-free selection config the manifest entry will name.
+///
+/// The projection is the kernel's single author of "which fields are
+/// market-free"; this function only encodes what that projection returns. No
+/// Market coordinate is reachable from here, which is what makes the resulting
+/// identity constructible before the Market address exists.
+fn selection_config_bytes(
+    terms: FractionalExposureTermsV2<'_>,
+) -> Result<Vec<u8>, FractionalSelectedReleaseErrorV4> {
+    let mut bytes = vec![0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut bytes,
+    )
+    .map_err(|_| FractionalSelectedReleaseErrorV4::SelectionConfig)?;
+    Ok(bytes)
 }
 
 fn program_set_entries(

@@ -3,7 +3,10 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
-use dclutch_capability_program_contract::set_v2::{CapabilityProgramSetV2, SelectorWidthV2};
+use dclutch_capability_program_contract::{
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v4::CapabilityProgramV4,
+};
 use dclutch_claims_svm::{
     frame_spec_v1::SignedDeltaFrameSpecV3,
     terminal_settlement_v3::{
@@ -26,9 +29,13 @@ use dclutch_fractional_claim_contract::{
     FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, FractionalExposureActionV2,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
-    fractional_exposure_terms_bytes_v2,
+    Error as KernelError, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
+    FRACTIONAL_SELECTION_CONFIG_SCHEMA_PREIMAGE_V1, FractionalExposureTermsAdmissionV2,
+    FractionalExposureTermsInputV2, FractionalExposureTermsV2, FractionalSelectionConfigInputV1,
+    FractionalSelectionConfigV1, encode_fractional_exposure_terms_v2,
+    encode_fractional_selection_config_v1, fractional_exposure_terms_bytes_v2,
+    fractional_selection_config_from_terms_v1, join_fractional_selection_config_v1,
 };
 use dclutch_fractional_claim_operator::{
     FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4, FRACTIONAL_SELECTED_ACTION_COUNT_V4,
@@ -44,30 +51,74 @@ const RELEASE: [u8; 32] = [1; 32];
 const MARKET: [u8; 32] = [2; 32];
 const PRODUCT: [u8; 32] = [3; 32];
 const DOMAIN: [u8; 32] = [4; 32];
-const TERMS: [u8; 32] = [5; 32];
 const TOKEN_BEHAVIOR: [u8; 32] = [6; 32];
-const EXPOSURE: [u8; 32] = [7; 32];
+/// Exposure identity, market-derived the way the chain derives it.
+///
+/// NOT a constant, and the reason is the finding this fixture exists to keep
+/// honest. `exposure_id` is the content id of a `CompositionExposureBundleV3`,
+/// and that record carries the Market at byte 16
+/// (`COMPOSITION_EXPOSURE_MARKET_OFFSET_V3`), pinned equal to `terms.market()`
+/// by `check_fractional_exposure_bundle_v2`. So on a real chain the exposure
+/// identity MOVES when the Market moves.
+///
+/// A fixture that held it constant made the two-market closure control below
+/// pass while the config still named a market-derived leaf -- a byte-identity
+/// control is only as strong as the set of things it lets vary, and holding a
+/// market-derived leaf fixed is exactly how one goes quietly vacuous. Modelling
+/// the derivation is what makes the control able to fail.
+fn exposure_id_for_market(market: [u8; 32]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"fixture/composition-exposure-bundle-v3");
+    hasher.update(market);
+    hasher.update(GRAPH);
+    hasher.finalize().into()
+}
+
+/// Stable source graph identity -- genuinely market-free.
+const GRAPH: [u8; 32] = [34; 32];
 const CAPACITY: [u8; 32] = [12; 32];
 const MINTS: [[u8; 32]; 3] = [[21; 32], [22; 32], [23; 32]];
 const PRODUCT_WIDTH: u32 = 258;
 const DENOMINATOR: u64 = 10;
 
+/// Terms identity, computed the way the chain computes it.
+///
+/// This was a fixture constant until the config split needed two terms records
+/// that differ only in their Market. A hardcoded id made two genuinely
+/// different terms records share one identity -- harmless for the tests that
+/// existed, but it is also exactly the shape of a false green, and the
+/// admission's own contract says `recomputed_terms_digest` is SHA-256 over the
+/// exact terms bytes. Deriving it makes the fixture tell the truth.
+fn terms_id_of(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(bytes).into()
+}
+
 fn encoded_terms() -> Vec<u8> {
+    encoded_terms_for_market(MARKET)
+}
+
+/// The same terms in every field except the Market it binds.
+///
+/// The two-market closure control's whole force comes from this being the
+/// ONLY difference between its two inputs.
+fn encoded_terms_for_market(market: [u8; 32]) -> Vec<u8> {
     let width = fractional_exposure_terms_bytes_v2(MINTS.len()).unwrap();
     let mut scratch = vec![0; width];
     let mut output = vec![0; width];
     encode_fractional_exposure_terms_v2(
         FractionalExposureTermsInputV2 {
-            market: MARKET,
+            market,
             product_record: PRODUCT,
             result_domain: DOMAIN,
             release_set: RELEASE,
             token_program: TOKEN_2022_PROGRAM_ID,
             token_behavior: TOKEN_BEHAVIOR,
-            exposure_id: EXPOSURE,
+            exposure_id: exposure_id_for_market(market),
             product_basis: [32; 32],
             representation_basis: [33; 32],
-            graph_id: [34; 32],
+            graph_id: GRAPH,
             product_width: PRODUCT_WIDTH,
             denominator: DENOMINATOR,
             shard_mints: &MINTS,
@@ -85,10 +136,10 @@ fn terms(bytes: &[u8]) -> FractionalExposureTermsV2<'_> {
         FractionalExposureTermsAdmissionV2 {
             selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
             finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
-            selected_terms_id: TERMS,
-            finalized_terms_id: TERMS,
-            recomputed_terms_digest: TERMS,
-            finalized_terms_digest: TERMS,
+            selected_terms_id: terms_id_of(bytes),
+            finalized_terms_id: terms_id_of(bytes),
+            recomputed_terms_digest: terms_id_of(bytes),
+            finalized_terms_digest: terms_id_of(bytes),
             record_authenticated: true,
         },
     )
@@ -101,7 +152,6 @@ fn widths() -> FractionalFrameWidthsV4 {
         product_record: 128,
         result_domain_record: 112,
         portfolio_record: 104,
-        selected_config: 64,
         core_market: 256,
         activation_cache: 320,
         rent_credit: 48,
@@ -173,9 +223,9 @@ fn the_four_executable_actions_publish_one_action_selected_program_set() {
     assert_eq!(publication.market, MARKET);
     assert_eq!(publication.product_record, PRODUCT);
     assert_eq!(publication.result_domain, DOMAIN);
-    assert_eq!(publication.terms, TERMS);
+    assert_eq!(publication.terms, terms_id_of(&bytes));
     assert_eq!(publication.token_behavior, TOKEN_BEHAVIOR);
-    assert_eq!(publication.exposure, EXPOSURE);
+    assert_eq!(publication.exposure, exposure_id_for_market(MARKET));
     assert_eq!(publication.token_program, TOKEN_2022_PROGRAM_ID);
     assert_eq!(publication.capacity_profile, CAPACITY);
     assert_eq!(publication.program_set_id, release.program_set_id);
@@ -316,7 +366,7 @@ fn the_derived_frames_are_the_frames_the_claims_child_actually_demands() {
                 release_set: RELEASE,
                 token_program: TOKEN_2022_PROGRAM_ID,
                 token_behavior: TOKEN_BEHAVIOR,
-                exposure_id: EXPOSURE,
+                exposure_id: exposure_id_for_market(MARKET),
                 product_basis: [32; 32],
                 representation_basis: [33; 32],
                 graph_id: [34; 32],
@@ -392,7 +442,7 @@ fn unsupported_actions_zero_widths_and_unusable_terms_refuse_before_compiling() 
                 release_set: RELEASE,
                 token_program: TOKEN_2022_PROGRAM_ID,
                 token_behavior: TOKEN_BEHAVIOR,
-                exposure_id: EXPOSURE,
+                exposure_id: exposure_id_for_market(MARKET),
                 product_basis: [32; 32],
                 representation_basis: [33; 32],
                 graph_id: [34; 32],
@@ -504,10 +554,10 @@ fn a_representation_wider_than_a_terminal_settlement_is_refused_at_publication()
             release_set: RELEASE,
             token_program: TOKEN_2022_PROGRAM_ID,
             token_behavior: TOKEN_BEHAVIOR,
-            exposure_id: EXPOSURE,
+            exposure_id: exposure_id_for_market(MARKET),
             product_basis: [32; 32],
             representation_basis: [33; 32],
-            graph_id: [34; 32],
+            graph_id: GRAPH,
             product_width: PRODUCT_WIDTH,
             denominator: DENOMINATOR,
             shard_mints: &mints,
@@ -541,10 +591,10 @@ fn a_representation_wider_than_a_terminal_settlement_is_refused_at_publication()
             release_set: RELEASE,
             token_program: TOKEN_2022_PROGRAM_ID,
             token_behavior: TOKEN_BEHAVIOR,
-            exposure_id: EXPOSURE,
+            exposure_id: exposure_id_for_market(MARKET),
             product_basis: [32; 32],
             representation_basis: [33; 32],
-            graph_id: [34; 32],
+            graph_id: GRAPH,
             product_width: PRODUCT_WIDTH,
             denominator: DENOMINATOR,
             shard_mints: at_bound,
@@ -563,4 +613,244 @@ fn a_representation_wider_than_a_terminal_settlement_is_refused_at_publication()
         release.publication.representation_width,
         FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4
     );
+}
+
+/// A Market address must not reach ANY coordinate a capability manifest entry
+/// carries — the complete closure, not just the config.
+///
+/// This is the executable form of the seam invariant, and it is deliberately
+/// stated over the FULL closure rather than over the config alone. A
+/// config-only check false-passes Rational, whose trap was in its RELEASE_ID
+/// (a compact effect baking per-Market custody-owner PDAs into descriptor
+/// bytes), so a Fractional control that only looked at the config would prove
+/// nothing about the property that actually matters.
+///
+/// The seam (`selected_capability.rs::selected_manifest_entry_v1`) authors an
+/// entry from exactly six identity coordinates. All six are asserted here:
+///
+/// | coordinate | source |
+/// |---|---|
+/// | `kind_id` | selected descriptor |
+/// | `capacity_profile` | selected descriptor |
+/// | `root_schema` | selected descriptor |
+/// | `derivation_policy` | selected descriptor |
+/// | `release_id` | `SHA-256(program_set)` |
+/// | `config_id` | `SHA-256(selection config)` |
+///
+/// Two releases are compiled from terms differing in the Market and NOTHING
+/// else. Every one of the six must be byte-identical, and so must every
+/// artifact body underneath them — a descriptor that moved would move the
+/// program set, and a program set that moved would move the release identity.
+///
+/// The final assertion is the anti-vacuity guard and is not decoration: the
+/// two publications MUST differ, because they name their (different) Markets.
+/// Without it this test would still pass if both halves had been compiled from
+/// the same terms, which is exactly how a byte-identity control goes quietly
+/// vacuous.
+#[test]
+fn no_manifest_entry_coordinate_moves_when_only_the_market_moves() {
+    const OTHER_MARKET: [u8; 32] = [0xd7; 32];
+    assert_ne!(MARKET, OTHER_MARKET);
+
+    let first_bytes = encoded_terms_for_market(MARKET);
+    let second_bytes = encoded_terms_for_market(OTHER_MARKET);
+    assert_ne!(
+        first_bytes, second_bytes,
+        "the two fixtures must really differ, or the control proves nothing"
+    );
+
+    let first = fractional_selected_release_v4(input(&first_bytes)).unwrap();
+    let second = fractional_selected_release_v4(input(&second_bytes)).unwrap();
+
+    // config_id — the coordinate the split exists to free.
+    assert_eq!(
+        first.selection_config, second.selection_config,
+        "the manifest-named config must be market-free"
+    );
+    assert_eq!(first.selection_config_id, second.selection_config_id);
+
+    // release_id, and every artifact byte underneath it.
+    assert_eq!(
+        first.program_set, second.program_set,
+        "the ProgramSetV2 bytes must be market-free"
+    );
+    assert_eq!(first.program_set_id, second.program_set_id);
+    assert_eq!(
+        first.bundles, second.bundles,
+        "every compiled artifact body must be market-free"
+    );
+
+    // The four coordinates the seam reads off the selected descriptor, read
+    // the same way the seam reads them rather than assumed from the bundle
+    // equality above.
+    for index in 0..FRACTIONAL_SELECTED_ACTION_COUNT_V4 {
+        let left = CapabilityProgramV4::decode(&first.bundles[index].descriptor).unwrap();
+        let right = CapabilityProgramV4::decode(&second.bundles[index].descriptor).unwrap();
+        assert_eq!(left.kind(), right.kind());
+        assert_eq!(left.capacity_profile(), right.capacity_profile());
+        assert_eq!(left.root_schema(), right.root_schema());
+        assert_eq!(left.derivation_policy(), right.derivation_policy());
+        assert_eq!(
+            left.config_schema().to_bytes(),
+            FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
+            "the descriptor must name the market-free selection config, not the terms"
+        );
+    }
+
+    // ANTI-VACUITY: the two releases really were compiled for different
+    // Markets. The publication is not a manifest coordinate, so it is free to
+    // carry the Market — and here it is what proves the inputs differed.
+    assert_ne!(first.publication, second.publication);
+    assert_eq!(first.publication.market, MARKET);
+    assert_eq!(second.publication.market, OTHER_MARKET);
+    assert_ne!(
+        first.publication.terms, second.publication.terms,
+        "the execution terms still bind the Market, which is why they cannot be the config"
+    );
+}
+
+/// The manifest-named config carries no Market and nothing derived from one.
+///
+/// Byte-identity across two Markets (above) shows the Market does not reach
+/// the config. This shows the stronger thing directly: neither Market's bytes
+/// appear anywhere in the config record at all, so the config is not merely
+/// insensitive to the Market — it does not contain it.
+#[test]
+fn the_selection_config_contains_no_market_bytes() {
+    const OTHER_MARKET: [u8; 32] = [0xd7; 32];
+    let bytes = encoded_terms_for_market(MARKET);
+    let release = fractional_selected_release_v4(input(&bytes)).unwrap();
+
+    assert_eq!(
+        release.selection_config.len(),
+        FRACTIONAL_SELECTION_CONFIG_BYTES_V1
+    );
+    for market in [MARKET, OTHER_MARKET] {
+        assert!(
+            !release
+                .selection_config
+                .windows(32)
+                .any(|window| window == market),
+            "a Market address must not appear in the selection config"
+        );
+    }
+
+    // And it does carry exactly the market-free facts the ruling named.
+    let config = FractionalSelectionConfigV1::decode(&release.selection_config).unwrap();
+    assert_eq!(config.denominator(), DENOMINATOR);
+    assert_eq!(config.product_width(), PRODUCT_WIDTH);
+    assert_eq!(config.representation_width(), u32::try_from(MINTS.len()).unwrap());
+    assert_eq!(config.token_program().unwrap(), TOKEN_2022_PROGRAM_ID);
+    assert_eq!(config.graph_id().unwrap(), GRAPH);
+}
+
+/// The schema identity is recomputed, never trusted as a pasted constant.
+#[test]
+fn the_selection_config_schema_id_is_the_digest_of_its_own_preimage() {
+    use sha2::{Digest, Sha256};
+    let recomputed: [u8; 32] =
+        Sha256::digest(FRACTIONAL_SELECTION_CONFIG_SCHEMA_PREIMAGE_V1).into();
+    assert_eq!(recomputed, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1);
+    assert_ne!(
+        FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1,
+        FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2
+    );
+}
+
+/// A release whose config disagrees with its terms on a market-free field
+/// refuses with the pinned code, at compile time.
+#[test]
+fn a_config_disagreeing_with_its_terms_refuses_with_the_pinned_code() {
+    let bytes = encoded_terms();
+    let mut release = fractional_selected_release_v4(input(&bytes)).unwrap();
+    let honest = release.selection_config.clone();
+
+    // A config built for a DIFFERENT instrument: same shape, other denominator.
+    let mut foreign = vec![0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        FractionalSelectionConfigInputV1 {
+            token_program: TOKEN_2022_PROGRAM_ID,
+            graph_id: GRAPH,
+            product_width: PRODUCT_WIDTH,
+            representation_width: u32::try_from(MINTS.len()).unwrap(),
+            denominator: DENOMINATOR + 1,
+        },
+        &mut foreign,
+    )
+    .unwrap();
+    assert_ne!(foreign, honest);
+
+    use sha2::{Digest as _, Sha256};
+    release.selection_config = foreign;
+    release.selection_config_id = Sha256::digest(&release.selection_config).into();
+    assert_eq!(
+        validate_fractional_selected_release_v4(&release, input(&bytes)),
+        Err(FractionalSelectedReleaseErrorV4::SelectionConfig),
+        "a substituted config must refuse with the pinned selection-config code"
+    );
+}
+
+/// The kernel join refuses each market-free field independently, with one
+/// pinned code — so a single field being checked cannot mask the rest.
+#[test]
+fn the_kernel_join_refuses_every_market_free_field_independently() {
+    let bytes = encoded_terms();
+    let terms_value = terms(&bytes);
+    let honest = fractional_selection_config_from_terms_v1(terms_value);
+
+    let mut buffer = vec![0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(honest, &mut buffer).unwrap();
+    join_fractional_selection_config_v1(
+        FractionalSelectionConfigV1::decode(&buffer).unwrap(),
+        terms_value,
+    )
+    .expect("the honest projection must join");
+
+    let mutations: [(&str, FractionalSelectionConfigInputV1); 5] = [
+        (
+            "token_program",
+            FractionalSelectionConfigInputV1 {
+                token_program: [0x77; 32],
+                ..honest
+            },
+        ),
+        (
+            "graph_id",
+            FractionalSelectionConfigInputV1 {
+                graph_id: [0x79; 32],
+                ..honest
+            },
+        ),
+        (
+            "product_width",
+            FractionalSelectionConfigInputV1 {
+                product_width: honest.product_width - 1,
+                ..honest
+            },
+        ),
+        (
+            "representation_width",
+            FractionalSelectionConfigInputV1 {
+                representation_width: honest.representation_width + 1,
+                ..honest
+            },
+        ),
+        (
+            "denominator",
+            FractionalSelectionConfigInputV1 {
+                denominator: honest.denominator + 1,
+                ..honest
+            },
+        ),
+    ];
+    for (field, mutated) in mutations {
+        let mut hostile = vec![0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+        encode_fractional_selection_config_v1(mutated, &mut hostile).unwrap();
+        let decoded = FractionalSelectionConfigV1::decode(&hostile).unwrap();
+        assert_eq!(
+            join_fractional_selection_config_v1(decoded, terms_value),
+            Err(KernelError::SelectionConfigMismatch),
+            "a config disagreeing on {field} must refuse with the pinned join code"
+        );
+    }
 }
