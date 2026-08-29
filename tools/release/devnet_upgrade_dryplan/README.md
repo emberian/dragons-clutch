@@ -149,7 +149,7 @@ initialize the profile, and activate Core, Claims, Trading, Resolution, and
 Custody one transaction at a time.
 
 Before opening a market, rerun the founding frame and packet census over the
-actual candidate. Preflight and run the current `DCLTGMF2`/`DCLTPCB2` route,
+actual candidate. Preflight and run the current `DCLTGMF3`/`DCLTPCB2` route,
 then run the bounded multiwallet activity harness, reconcile finalized
 activity, update the site manifest, trigger the manual Pages workflow, and
 perform cold-browser acceptance against finalized devnet.

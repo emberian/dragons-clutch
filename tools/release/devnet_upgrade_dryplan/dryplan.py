@@ -615,7 +615,7 @@ def template() -> dict[str, Any]:
             "initialize-infrastructure-and-release-profile",
             *[f"activate-{role}" for role in ACTIVATION_ROLES],
             "rerun-founding-frame-and-packet-census",
-            "preflight-dcltgmf2-and-dcltpcb2",
+            "preflight-dcltgmf3-and-dcltpcb2",
             "create-found-and-open-devnet-market",
             "run-bounded-multiwallet-devnet-activity",
             "reconcile-finalized-activity-and-wallet-ledgers",
