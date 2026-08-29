@@ -4176,7 +4176,7 @@ mod tests {
                 "recoveredFinalizedFounding": false,
                 "transactions": [],
                 "market": {
-                    "completed": ["DCLTGMF2 finalized"],
+                    "completed": ["DCLTGMF3 finalized"],
                     "accounts": {
                         "founding_market": {
                             "address": Pubkey::new_unique().to_string(),

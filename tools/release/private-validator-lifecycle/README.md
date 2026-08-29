@@ -40,7 +40,7 @@ At terminal convergence, each of exactly twenty named seeds will:
    using the disposable `core-upgrade-authority` as its genesis-funded mint;
 5. proves the protocol-created collateral mint, collateral wallet, and founding
    source token account are vacant before the campaign creates them;
-6. executes DCLTGMF2 founding, participant admission, Direct, the eight-action
+6. executes DCLTGMF3 founding, participant admission, Direct, the eight-action
    Router/Receiver/treasury/VAA prerequisite sequence, Resolution, payout, and
    retirement through the accepted successor exterior callers;
 7. derives the six public activity stages and the distinct eight-stage private

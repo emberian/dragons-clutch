@@ -307,7 +307,7 @@ def v3_manifest_value(
                     "schema": activity.CAMPAIGN_REPORT_SCHEMA,
                     "signaturePointers": [],
                     "transactionListPointer": "/execution/transactions",
-                    "requiredTransactionLabels": ["DCLTCFQ1", "DCLTPCB2", "DCLTGMF2"],
+                    "requiredTransactionLabels": ["DCLTCFQ1", "DCLTPCB2", "DCLTGMF3"],
                     "requiredValues": {},
                 },
             },
@@ -405,7 +405,7 @@ def v3_devnet_manifest_value(
     founding["completion"]["requiredTransactionLabels"] = [
         "DCLTCFQ1",
         "DCLTPCB2",
-        "DCLTGMF2",
+        "DCLTGMF3",
         "core-funding-create-v1",
         "resolution-funding-activate-v1",
         "core-funding-accept-v1",
@@ -2049,7 +2049,7 @@ class ActivityTests(unittest.TestCase):
                 schema=activity.CAMPAIGN_REPORT_SCHEMA,
                 signature_pointers=(),
                 transaction_list_pointer="/execution/transactions",
-                required_transaction_labels=("DCLTCFQ1", "DCLTPCB2", "DCLTGMF2"),
+                required_transaction_labels=("DCLTCFQ1", "DCLTPCB2", "DCLTGMF3"),
                 required_values={},
             ),
         )

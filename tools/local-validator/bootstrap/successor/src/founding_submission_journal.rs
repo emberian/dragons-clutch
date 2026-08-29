@@ -21,17 +21,17 @@ use crate::{
     model::AccountEvidence,
 };
 
-pub(crate) const FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V1: &str =
-    "dclutch-public-founding-submission-journal-v1";
-pub(crate) const FOUNDING_PRE_SEND_PROJECTION_SCHEMA_V1: &str =
-    "dclutch-public-founding-pre-send-projection-v1";
+pub(crate) const FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V2: &str =
+    "dclutch-public-founding-submission-journal-v2";
+pub(crate) const FOUNDING_PRE_SEND_PROJECTION_SCHEMA_V2: &str =
+    "dclutch-public-founding-pre-send-projection-v2";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum FoundingSubmissionOperationV1 {
     Dcltcfq1,
     Dcltpcb2,
-    Dcltgmf2,
+    Dcltgmf3,
     CoreFundingCreateV1,
     ResolutionFundingActivateV1,
     CoreFundingAcceptV1,
@@ -41,7 +41,7 @@ impl FoundingSubmissionOperationV1 {
     pub(crate) const ORDER: [Self; 6] = [
         Self::Dcltcfq1,
         Self::Dcltpcb2,
-        Self::Dcltgmf2,
+        Self::Dcltgmf3,
         Self::CoreFundingCreateV1,
         Self::ResolutionFundingActivateV1,
         Self::CoreFundingAcceptV1,
@@ -51,7 +51,7 @@ impl FoundingSubmissionOperationV1 {
         match self {
             Self::Dcltcfq1 => "DCLTCFQ1",
             Self::Dcltpcb2 => "DCLTPCB2",
-            Self::Dcltgmf2 => "DCLTGMF2",
+            Self::Dcltgmf3 => "DCLTGMF3",
             Self::CoreFundingCreateV1 => "core-funding-create-v1",
             Self::ResolutionFundingActivateV1 => "resolution-funding-activate-v1",
             Self::CoreFundingAcceptV1 => "core-funding-accept-v1",
@@ -61,7 +61,8 @@ impl FoundingSubmissionOperationV1 {
     pub(crate) const fn exact_unique_accounts(self) -> usize {
         match self {
             Self::Dcltcfq1 => 49,
-            Self::Dcltpcb2 | Self::Dcltgmf2 => 60,
+            Self::Dcltpcb2 => 60,
+            Self::Dcltgmf3 => 58,
             // Canonical V7 frames are pairwise distinct and carry their own
             // program key as a frame account. The bounded inline v0 packet
             // adds exactly the disposable payer and ComputeBudget program.
@@ -73,7 +74,7 @@ impl FoundingSubmissionOperationV1 {
     pub(crate) const fn exact_required_signatures(self) -> usize {
         match self {
             Self::Dcltcfq1 | Self::Dcltpcb2 => 2,
-            Self::Dcltgmf2
+            Self::Dcltgmf3
             | Self::CoreFundingCreateV1
             | Self::ResolutionFundingActivateV1
             | Self::CoreFundingAcceptV1 => 1,
@@ -311,7 +312,7 @@ pub(crate) fn plan_founding_submission_v1(
         return Err(refusal("founding planned packet exceeds 1,232 bytes"));
     }
     let mut journal = FoundingSubmissionJournalV1 {
-        schema: FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V1.into(),
+        schema: FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V2.into(),
         cluster: binding.cluster.clone(),
         genesis_hash: binding.genesis_hash.clone(),
         evidence_path: binding.evidence_path.clone(),
@@ -535,7 +536,7 @@ pub(crate) fn founding_pre_send_projection_v1(
         ));
     }
     Ok(FoundingPreSendProjectionV1 {
-        schema: FOUNDING_PRE_SEND_PROJECTION_SCHEMA_V1.into(),
+        schema: FOUNDING_PRE_SEND_PROJECTION_SCHEMA_V2.into(),
         evidence_path: journal.evidence_path.clone(),
         operation: journal.operation,
         phase: journal.phase,
@@ -599,7 +600,7 @@ pub(crate) fn authenticate_founding_submission_v1(
     journal: &FoundingSubmissionJournalV1,
 ) -> Result<()> {
     authenticate_binding_v1(binding)?;
-    if journal.schema != FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V1
+    if journal.schema != FOUNDING_SUBMISSION_JOURNAL_SCHEMA_V2
         || journal.cluster != binding.cluster
         || journal.genesis_hash != binding.genesis_hash
         || journal.evidence_path != binding.evidence_path
@@ -1202,7 +1203,7 @@ mod tests {
         for operation in [
             FoundingSubmissionOperationV1::Dcltcfq1,
             FoundingSubmissionOperationV1::Dcltpcb2,
-            FoundingSubmissionOperationV1::Dcltgmf2,
+            FoundingSubmissionOperationV1::Dcltgmf3,
             FoundingSubmissionOperationV1::CoreFundingCreateV1,
             FoundingSubmissionOperationV1::ResolutionFundingActivateV1,
             FoundingSubmissionOperationV1::CoreFundingAcceptV1,
@@ -1214,7 +1215,7 @@ mod tests {
                 | FoundingSubmissionOperationV1::Dcltpcb2 => {
                     vec![&payer, &beneficiary]
                 }
-                FoundingSubmissionOperationV1::Dcltgmf2
+                FoundingSubmissionOperationV1::Dcltgmf3
                 | FoundingSubmissionOperationV1::CoreFundingCreateV1
                 | FoundingSubmissionOperationV1::ResolutionFundingActivateV1
                 | FoundingSubmissionOperationV1::CoreFundingAcceptV1 => vec![&payer],
@@ -1244,7 +1245,7 @@ mod tests {
                 visit_founding_pre_send_boundary_v1(&binding, &dispatching, &mut |_| Ok(()))
                     .expect("pre-send hook");
             assert_eq!(killed_projection.as_ref(), Some(&projection));
-            assert_eq!(projection.schema, FOUNDING_PRE_SEND_PROJECTION_SCHEMA_V1);
+            assert_eq!(projection.schema, FOUNDING_PRE_SEND_PROJECTION_SCHEMA_V2);
             assert_eq!(projection.evidence_path, binding.evidence_path);
             assert_eq!(projection.phase, FoundingSubmissionPhaseV1::Dispatching);
             assert_eq!(projection.intent_sha256, prepared.intent_sha256);
@@ -1349,7 +1350,7 @@ mod tests {
     #[test]
     fn expired_or_ambiguous_packets_have_no_blind_resign_transition() {
         let payer = Keypair::new();
-        let (binding, prepared) = prepared(&[&payer], FoundingSubmissionOperationV1::Dcltgmf2);
+        let (binding, prepared) = prepared(&[&payer], FoundingSubmissionOperationV1::Dcltgmf3);
         assert_eq!(
             founding_submission_recovery_v1(&binding, &prepared).expect("prepared recovery"),
             FoundingSubmissionRecoveryV1::BeginDispatch
@@ -1423,7 +1424,7 @@ mod tests {
         let wrong = plan_founding_submission_v1(
             &binding,
             FoundingSubmissionPlanV1 {
-                operation: FoundingSubmissionOperationV1::Dcltgmf2,
+                operation: FoundingSubmissionOperationV1::Dcltgmf3,
                 message: message(
                     &[payer.pubkey(), Pubkey::new_unique()],
                     FoundingSubmissionOperationV1::Dcltpcb2,

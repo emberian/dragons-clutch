@@ -4066,7 +4066,7 @@ fn evidence_coordinates(evidence: &Value) -> Result<CoordinatesV1> {
     let rent_credit = evidence_address(evidence, "founding_lifecycle_rent_credit")?;
     if rent_credit == evidence_address(evidence, "lifecycle_rent_credit")? {
         return Err(Error::new(
-            "campaign aliased the DCLTGMF2 founding rent credit to the earlier Found37 generation",
+            "campaign aliased the DCLTGMF3 founding rent credit to the earlier Found37 generation",
         ));
     }
     Ok(CoordinatesV1 {
@@ -6118,7 +6118,7 @@ mod tests {
         });
         assert_eq!(
             evidence_coordinates(&evidence)
-                .expect("DCLTGMF2 coordinates")
+                .expect("DCLTGMF3 coordinates")
                 .rent_credit,
             founding_credit
         );
