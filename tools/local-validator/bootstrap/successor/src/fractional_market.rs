@@ -39,6 +39,17 @@ use dclutch_fractional_claim_operator::{
     FractionalFrameWidthsV4, FractionalSelectedReleaseInputV4, fractional_selected_release_v4,
 };
 
+/// One record the Registry must finalize for this closure, in driver bytes.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct FractionalClosureRecordV1 {
+    /// Stable label from the release compiler.
+    pub(crate) label: &'static str,
+    /// Schema read off the artifact that names it.
+    pub(crate) schema: [u8; 32],
+    /// Exact semantic bytes.
+    pub(crate) body: Vec<u8>,
+}
+
 use crate::{Error, Result};
 
 /// The two record schemas one Fractional closure publishes, named once.
@@ -78,6 +89,11 @@ pub(crate) struct FractionalSelectedClosureBytesV1 {
     pub(crate) publication: Vec<u8>,
     /// SHA-256 of the publication bytes.
     pub(crate) publication_id: [u8; 32],
+    /// Every record the Registry must finalize for this release.
+    ///
+    /// Market-free by construction: the ProgramSet, the selection config, and
+    /// seven artifacts per action. The exposure terms are NOT here.
+    pub(crate) records: Vec<FractionalClosureRecordV1>,
 }
 
 /// Compile one complete Fractional selected-capability closure from exact
@@ -120,7 +136,18 @@ pub(crate) fn fractional_selected_closure_v1(
         .ok_or_else(|| Error::new("Fractional release carried no bundles"))?
         .descriptor
         .to_vec();
+    let records = release
+        .publication_records()
+        .map_err(|error| Error::new(format!("Fractional publication records: {error:?}")))?
+        .into_iter()
+        .map(|record| FractionalClosureRecordV1 {
+            label: record.label,
+            schema: record.schema,
+            body: record.body.to_vec(),
+        })
+        .collect::<Vec<_>>();
     Ok(FractionalSelectedClosureBytesV1 {
+        records,
         program_set: release.program_set,
         selected_descriptor,
         config: release.selection_config,
@@ -130,6 +157,45 @@ pub(crate) fn fractional_selected_closure_v1(
         publication: release.publication.to_bytes().to_vec(),
         publication_id: release.publication.publication_id(),
     })
+}
+
+/// Build the family-neutral selected-capability payload one closure determines.
+///
+/// The exact twin of `general_selected_payload_v1` and its Rational sibling:
+/// the seam derives the manifest entry from these bytes and this function
+/// restates nothing. Labels take the positional-prefix `_record` scheme the
+/// founding checkpoint's record-graph census requires.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn fractional_selected_payload_v1(
+    closure: &FractionalSelectedClosureBytesV1,
+    activation_deadline_slot: u64,
+    root_rent_minimum_lamports: u64,
+) -> crate::model::SelectedCapabilityV1 {
+    crate::model::SelectedCapabilityV1 {
+        family: "fractional".into(),
+        program_set_hex: crate::plan::hex(&closure.program_set),
+        selected_descriptor_hex: crate::plan::hex(&closure.selected_descriptor),
+        // The market-free selection config -- NOT the terms. This single line
+        // is the whole config split as the seam sees it.
+        config_hex: crate::plan::hex(&closure.config),
+        publication_hex: crate::plan::hex(&closure.publication),
+        records: closure
+            .records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| crate::model::SelectedCapabilityRecordV1 {
+                label: format!(
+                    "fractional_{index:02}_{}_record",
+                    record.label.replace('-', "_")
+                ),
+                schema_hex: crate::plan::hex(&record.schema),
+                body_hex: crate::plan::hex(&record.body),
+            })
+            .collect(),
+        activation_deadline_slot,
+        root_rent_minimum_lamports,
+        selected_manifest_entry_index: 0,
+    }
 }
 
 #[cfg(test)]
@@ -351,6 +417,63 @@ mod tests {
         let terms_digest: [u8; 32] = Sha256::digest(&closure.terms).into();
         assert_eq!(entry.config_id().to_bytes(), config_digest);
         assert_ne!(entry.config_id().to_bytes(), terms_digest);
+    }
+
+    /// The founding payload the driver would attach: every record market-free,
+    /// labels in the census scheme, and the entry the seam derives from it
+    /// naming the SELECTION CONFIG.
+    ///
+    /// This is the last piece between Fractional and a founding attempt, so it
+    /// is checked as a payload rather than as bytes: labels unique and
+    /// `_record`-suffixed (the founding checkpoint's record-graph census
+    /// requires it), no record carrying the terms, and the payload validating
+    /// through the seam's own input validator once attached.
+    #[test]
+    fn the_founding_payload_is_market_free_and_the_seam_validates_it() {
+        let market = [0x77; 32];
+        let terms = terms_bytes_for(market);
+        let closure =
+            fractional_selected_closure_v1(&terms, [0x50; 32], widths()).expect("closure");
+        let payload = fractional_selected_payload_v1(&closure, u64::MAX, 1_000_000);
+
+        assert_eq!(payload.family, "fractional");
+        assert_eq!(payload.records.len(), 30);
+        let mut labels = std::collections::BTreeSet::new();
+        for record in &payload.records {
+            assert!(record.label.ends_with("_record"), "{}", record.label);
+            assert!(labels.insert(record.label.clone()), "{}", record.label);
+            assert!(!record.body_hex.is_empty());
+        }
+        // The execution terms are not published by a founding.
+        let terms_hex = crate::plan::hex(&terms);
+        assert!(payload.records.iter().all(|r| r.body_hex != terms_hex));
+
+        // The seam derives the entry, and it names the selection config.
+        let entry = crate::selected_capability::payload_manifest_entry_v1(&payload)
+            .expect("seam entry from payload");
+        assert_eq!(
+            entry.config_id().to_bytes(),
+            <[u8; 32]>::from(Sha256::digest(&closure.config))
+        );
+        assert_ne!(
+            entry.config_id().to_bytes(),
+            <[u8; 32]>::from(Sha256::digest(&closure.terms))
+        );
+
+        // Nothing in the payload moves when only the Market moves.
+        let other = fractional_selected_closure_v1(&terms_bytes_for([0x19; 32]), [0x50; 32], widths())
+            .expect("closure");
+        let other_payload = fractional_selected_payload_v1(&other, u64::MAX, 1_000_000);
+        assert_eq!(payload.program_set_hex, other_payload.program_set_hex);
+        assert_eq!(payload.config_hex, other_payload.config_hex);
+        assert_eq!(
+            payload.selected_descriptor_hex,
+            other_payload.selected_descriptor_hex
+        );
+        for (a, b) in payload.records.iter().zip(other_payload.records.iter()) {
+            assert_eq!(a.label, b.label);
+            assert_eq!(a.body_hex, b.body_hex, "record {} moved", a.label);
+        }
     }
 
     /// Control: the closure still compiles whole and the seam still consumes
