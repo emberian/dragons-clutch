@@ -9,7 +9,9 @@ extern crate std;
 
 use dclutch_capability_contract::CapabilityManifestV1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::DeploymentObservationV1;
+use dclutch_registry_contract::{
+    ArtifactReleaseV1, DeploymentObservationV1, slot_pinned_release_elf_digest_v1,
+};
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_source_contract::{RecoveryPolicyV2, SourceMaterialV3};
 use solana_program::{
@@ -751,6 +753,69 @@ pub(crate) fn deployment_observation(
         bpf_loader_upgradeable::ID.to_bytes(),
         view.deployment_slot(),
         hash(view.elf()).to_bytes(),
+        view.upgrade_authority(),
+    )
+    .map_err(|_| ResolutionError::ResolutionDeployment.into())
+}
+
+/// Observe one Loader V3 deployment through decision 0012's admitted slot pin.
+///
+/// Registry activation already authenticated and persisted the full ELF
+/// digest. Loader V3 changes the ProgramData deployment slot whenever an
+/// upgrade changes those bytes, so equality with the activated release's slot
+/// proves that admitted digest is still current. This recurring-use path still
+/// parses the actual Program and ProgramData accounts and binds their exact
+/// identity, owner, executable disposition, Program→ProgramData link, slot,
+/// and upgrade authority; it merely avoids re-hashing two large immutable ELF
+/// tails during controller cleanup.
+pub(crate) fn slot_pinned_deployment_observation(
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    release: ArtifactReleaseV1,
+) -> Result<DeploymentObservationV1, ProgramError> {
+    if program.owner != &bpf_loader_upgradeable::ID
+        || programdata.owner != &bpf_loader_upgradeable::ID
+        || !program.executable
+        || programdata.executable
+        || program.key.to_bytes() != release.program().to_bytes()
+        || programdata.key.to_bytes() != release.programdata()
+    {
+        return Err(ResolutionError::ResolutionDeployment.into());
+    }
+    let program_bytes = program
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    let program_view =
+        ProgramV3View::parse(&program_bytes).map_err(|_| ResolutionError::ResolutionDeployment)?;
+    let expected_derived =
+        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if program_view.programdata_key() != release.programdata()
+        || programdata.key != &expected_derived
+    {
+        return Err(ResolutionError::ResolutionDeployment.into());
+    }
+    let programdata_bytes = programdata
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    let view = ProgramDataV3View::parse(&programdata_bytes)
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    let elf_digest = slot_pinned_release_elf_digest_v1(
+        release,
+        view.upgrade_authority(),
+        view.deployment_slot(),
+    )
+    .map_err(|error| pinned_deployment_refusal(error))?;
+    DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        program_view.programdata_key(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        view.deployment_slot(),
+        elf_digest,
         view.upgrade_authority(),
     )
     .map_err(|_| ResolutionError::ResolutionDeployment.into())
