@@ -3653,6 +3653,17 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
 /// adapter up front, not discovered at unwrap time. §3b's cost is real —
 /// founding must configure both roles — but its consequence is a founding that
 /// can never issue, not a representation that can never be unwound.
+///
+/// A correction this test earned the hard way, recorded because the inference
+/// drawn from it was wrong. The 202 bytes below were not a hypothetical
+/// under-configured founding: until the writer was fixed they were EXACTLY what
+/// `rational_lifecycle_v2::initialize_closeable_mint` allocated and
+/// initialized, which makes this an executable proof that the founding path the
+/// protocol shipped could never issue — filed here as reassurance, because the
+/// two campaigns are disjoint and nothing ever handed one route's output to the
+/// other's reader. The lifecycle now writes both roles at 238 bytes and its own
+/// campaign asserts that against this very reader. So this stays a hostile, and
+/// it is finally only a hostile.
 #[tokio::test]
 async fn a_receipt_mint_missing_its_burn_role_refuses_at_the_first_issue() {
     let (test, fixture) = fixture_with(false, ReceiptMintRoles::MintAuthorityOnly);
