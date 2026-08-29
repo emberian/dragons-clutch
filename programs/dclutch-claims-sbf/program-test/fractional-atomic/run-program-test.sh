@@ -14,6 +14,8 @@ cd "$repo_root"
 cargo build-sbf --manifest-path programs/dclutch-claims-sbf/Cargo.toml --sbf-out-dir "$sbf_out"
 cargo build-sbf --manifest-path programs/dclutch-registry-sbf/Cargo.toml --sbf-out-dir "$sbf_out"
 cargo build-sbf --manifest-path programs/dclutch-core-sbf/Cargo.toml --sbf-out-dir "$sbf_out"
+# The terminal campaign composes the real Custody program.
+cargo build-sbf --manifest-path programs/dclutch-custody-sbf/Cargo.toml --sbf-out-dir "$sbf_out"
 cargo build-sbf \
   --manifest-path programs/dclutch-claims-sbf/test-programs/fractional-atomic-caller/Cargo.toml \
   --sbf-out-dir "$sbf_out"
