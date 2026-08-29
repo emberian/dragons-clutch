@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import LandingPulse, { emptyCurrentMarketPulseV1 } from './LandingPulse';
+import LandingPulse, { emptyCurrentMarketPulseV1, partiallyReadPulseV1 } from './LandingPulse';
 
 describe('LandingPulse', () => {
   it('renders every count as unread while nothing has been read, never as zero', () => {
@@ -36,5 +36,36 @@ describe('LandingPulse', () => {
     expect(state.provenance).toContain('not counted above');
     expect(state.provenance).not.toContain('owns no Market');
     expect(state.provenance).not.toContain('DCLTCOR2');
+  });
+});
+
+describe('a scan that answered and a join that did not', () => {
+  const enumeration = Object.freeze({
+    mode: 'program-scan' as const,
+    note: 'test scan',
+    scanSlot: '489905402',
+    addresses: Object.freeze(['36CHzLdAujpE8c23ThGiKLNJLVndC2R5ogit1HHNFXFQ']),
+    scannedAccounts: 16,
+    incompatibleMarketAccounts: Object.freeze([]),
+  });
+
+  it('keeps the count it actually read instead of blanking the whole strip', () => {
+    // The scan is one request; the join is roughly four per market. Against a
+    // throttling public endpoint the second can fail after the first answered,
+    // and the front page is the worst place to throw away a number we hold.
+    const state = partiallyReadPulseV1('Devnet', enumeration, 'the endpoint is rate-limiting this browser (HTTP 429).');
+    expect(state.stats[0]).toMatchObject({ label: 'Current markets listed', value: '1' });
+    expect(state.provenance).toContain('holds 1 market');
+    expect(state.provenance).toContain('Reading inside them did not finish');
+    expect(state.provenance).toContain('rate-limiting');
+  });
+
+  it('leaves the two it did not read as dashes, never as zeroes', () => {
+    // A zero here would be a claim about collateral and resolutions that no
+    // read supports. The page's own rule: a dash means we could not read it.
+    const state = partiallyReadPulseV1('Devnet', enumeration, 'network down');
+    expect(state.stats[1].value).toBeNull();
+    expect(state.stats[2].value).toBeNull();
+    expect(state.stats[1].detail).toBe('not read this time');
   });
 });

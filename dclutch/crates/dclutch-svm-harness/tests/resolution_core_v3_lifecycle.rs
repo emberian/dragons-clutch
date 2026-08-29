@@ -88,7 +88,8 @@ use dclutch_source_contract::{
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2,
+    SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionRouteV1,
+    SourceResolutionStateV2,
     SourceSpecV1, StatisticKind, StatisticSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind,
     WindowSpecV1,
 };
@@ -120,6 +121,10 @@ const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x75; 32]);
 const GENERATION: u64 = 7;
 const TERMINAL_SEQUENCE: u64 = 1;
 const TERMINAL_TIME: i64 = 1_787_431_680;
+/// A wall clock strictly past the market's own primary deadline
+/// (`window.end + max_age`), which is the only time a deadline walk exists at.
+/// `exhaust_after_primary_deadline` refuses at or before it.
+const FAILURE_TIME: i64 = TERMINAL_TIME + 20;
 const BOUNTY: u64 = 7;
 
 struct Elves {
@@ -571,24 +576,48 @@ enum MarketPrestateV1 {
     /// and a minted certificate — the prestate of terminal admission and
     /// retirement.
     Terminal,
+    /// The same terminal shape, reached the other way: a market founded with
+    /// NO recovery policy whose primary deadline passed with no answer, so the
+    /// Source walked `Primary → Exhausted → FailureCommitted` and the
+    /// certificate it minted is a `ResolutionFailure` at the Product's own
+    /// pre-disclosed failure region, with no route and no provider evidence
+    /// behind it.
+    ///
+    /// This is the prestate a funded deadline walk leaves. The no-recovery
+    /// material is not a simplification: `exhaust_after_primary_deadline`
+    /// refuses a market that still has recovery attempts owed to it, so a
+    /// deadline walk only exists on this shape.
+    TerminalFailure,
 }
 
 impl MarketPrestateV1 {
     /// Whether the Market account starts `Open + Consumed` rather than
     /// `Founding + Prepaid`.
     const fn open(self) -> bool {
-        matches!(self, Self::AtomicallyFounded | Self::Terminal)
+        matches!(
+            self,
+            Self::AtomicallyFounded | Self::Terminal | Self::TerminalFailure
+        )
     }
 
     /// Whether the Source state, its subset ledger and the terminal certificate
     /// are seeded as already-terminal rather than left to be created.
     const fn preload_terminal(self) -> bool {
-        matches!(self, Self::Terminal)
+        matches!(self, Self::Terminal | Self::TerminalFailure)
+    }
+
+    /// Whether that terminal was reached by a deadline walk rather than by a
+    /// provider. This flips the material's recovery policy, the Source
+    /// transition, the certificate kind and the certificate PDA's kind tag
+    /// together, because they are one fact about one market.
+    const fn failure_terms(self) -> bool {
+        matches!(self, Self::TerminalFailure)
     }
 }
 
 fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let preload_terminal = prestate.preload_terminal();
+    let failure_terms = prestate.failure_terms();
     let elves = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -828,7 +857,15 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         source_id(source_spec_id),
         source_id(window_id),
         source_id(statistic_id),
-        Some(source_id(recovery_policy_id)),
+        // A funded deadline walk only exists where nothing else is owed: with a
+        // recovery policy still unspent, `exhaust_after_primary_deadline`
+        // refuses, because a market that has attempts left has not run out of
+        // ways to be answered honestly.
+        if failure_terms {
+            None
+        } else {
+            Some(source_id(recovery_policy_id))
+        },
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
     let material_bytes = material_value.to_bytes();
@@ -1030,11 +1067,15 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
             rent_epoch: 0,
         },
     );
+    // Success and failure are different ADDRESSES for one Source at one
+    // sequence, so a walked market's certificate can never occupy the seat a
+    // provider-resolved one would have taken.
+    let terminal_kind_tag: u8 = if failure_terms { 4 } else { 1 };
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
             source.as_ref(),
-            &[1],
+            &[terminal_kind_tag],
             &TERMINAL_SEQUENCE.to_le_bytes(),
         ],
         &RESOLUTION_PROGRAM_ID,
@@ -1053,43 +1094,97 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         .expect("fresh Source")
         .state();
         let result_domain = ResultDomainV2::decode(&domain_bytes).expect("ResultDomain view");
-        let decision = source_value
-            .resolve_primary_from_authenticated_domain(
-                source_id(material_id),
-                material_value,
-                source_id(product_record_id),
-                result_domain,
-                source_id([0xb3; 32]),
-                -1,
-                1,
-                GENERATION,
-                TERMINAL_TIME,
-                TERMINAL_SEQUENCE,
-            )
-            .expect("provider-authenticated terminal Source projection");
-        assert_eq!(decision.selector(), 0);
+        let decision = if failure_terms {
+            // The funded deadline walk's own transition, host-side. Nothing
+            // about a provider is an input -- no record, no observation, no
+            // evidence id -- because this is exactly the world where everyone
+            // responsible stopped answering. Neither leg can be conjured
+            // early: `exhaust_after_primary_deadline` refuses at or before the
+            // market's own deadline, and `commit_failure_from_authenticated_domain`
+            // refuses anywhere but Exhausted.
+            source_value
+                .exhaust_after_primary_deadline(
+                    source_id(material_id),
+                    material_value,
+                    source_id(window_id),
+                    window_value,
+                    GENERATION,
+                    FAILURE_TIME,
+                )
+                .expect("a primary deadline reached with no answer exhausts the Source");
+            let decision = source_value
+                .commit_failure_from_authenticated_domain(
+                    source_id(material_id),
+                    material_value,
+                    source_id(product_record_id),
+                    result_domain,
+                    GENERATION,
+                    FAILURE_TIME,
+                    TERMINAL_SEQUENCE,
+                )
+                .expect("the exhausted Source commits its pre-disclosed failure terms");
+            assert_eq!(
+                decision.selector(),
+                result_domain.failure_selector(),
+                "the walk selects the Product's own explicit failure region, never a chosen value"
+            );
+            decision
+        } else {
+            let decision = source_value
+                .resolve_primary_from_authenticated_domain(
+                    source_id(material_id),
+                    material_value,
+                    source_id(product_record_id),
+                    result_domain,
+                    source_id([0xb3; 32]),
+                    -1,
+                    1,
+                    GENERATION,
+                    TERMINAL_TIME,
+                    TERMINAL_SEQUENCE,
+                )
+                .expect("provider-authenticated terminal Source projection");
+            assert_eq!(decision.selector(), 0);
+            decision
+        };
         test.add_account(
             source,
             protocol_account(RESOLUTION_PROGRAM_ID, source_value.to_bytes().to_vec()),
         );
+        // Every field that differs is FORCED by `validate_shape`'s
+        // ResolutionFailure arm, not chosen for convenience: no route and no
+        // provider evidence (nobody stood behind this terminal), a nonzero
+        // funding_allocation naming the market's own Source material (what
+        // makes the explicit-failure compartment identifiable at all), a
+        // nonzero work_paid (a walk that could not be paid for could not have
+        // encoded its own certificate either), and a zero result and
+        // observed_at (there was no observation to record).
         let certificate_value = ResolutionCertificateV2 {
-            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            kind: if failure_terms {
+                ResolutionCertificateKindV2::ResolutionFailure
+            } else {
+                ResolutionCertificateKindV2::ResolutionSuccess
+            },
             market: market.to_bytes(),
-            route: [0xb4; 32],
+            route: if failure_terms { [0; 32] } else { [0xb4; 32] },
             source_material: material_id,
             product_record_digest: product_record_id,
-            provider_evidence: [0xb3; 32],
-            funding_allocation: [0; 32],
+            provider_evidence: if failure_terms { [0; 32] } else { [0xb3; 32] },
+            funding_allocation: if failure_terms { material_id } else { [0; 32] },
             receipt_account: certificate.to_bytes(),
             generation: GENERATION,
             attempt_index: 0,
             schedule_index: 0,
             selector: decision.selector(),
-            work_paid: 0,
+            work_paid: if failure_terms { BOUNTY } else { 0 },
             funding_remaining: 0,
-            result_numerator: -1,
-            result_denominator: 1,
-            observed_at: u64::try_from(TERMINAL_TIME).expect("positive terminal time"),
+            result_numerator: if failure_terms { 0 } else { -1 },
+            result_denominator: if failure_terms { 0 } else { 1 },
+            observed_at: if failure_terms {
+                0
+            } else {
+                u64::try_from(TERMINAL_TIME).expect("positive terminal time")
+            },
         };
         test.add_account(
             certificate,
@@ -2344,6 +2439,91 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     )
     .expect("Source closure receipt");
     assert_exhaustive_closure_receipt(closure, &close);
+}
+
+#[tokio::test]
+async fn a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms() {
+    // The other half of the funded failure walk, and the half nothing in this
+    // tree had executed.
+    //
+    // `CommitDeadlineFailure` pays the walker and writes a `ResolutionFailure`
+    // certificate, but it leaves the Market READONLY in its own frame. The
+    // Market becoming terminal is this separate no-CPI Core route. Core's
+    // failure arm is first-class rather than a fallback --
+    // `build_resolution_admit_terminal_v3` derives the receipt kind, the
+    // certificate kind and the PDA kind tag from the Source phase, and
+    // `admit_terminal` has no branch on kind at all -- but until this test
+    // every executed `AdmitTerminal` in the tree admitted a certificate a
+    // provider stood behind, so the failure arm had never once been driven
+    // against a real Core ELF.
+    //
+    // This is what a holder's exit at failure terms waits on: `terminal_winner`
+    // has to be the Product's own failure region before any Claims redemption
+    // can select it.
+    let mut fixture = fixture(MarketPrestateV1::TerminalFailure);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.unix_timestamp = FAILURE_TIME + 1;
+    context.set_sysvar(&clock);
+
+    let before = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(before.phase, Phase::Open);
+    assert_eq!(before.terminal_receipt, None);
+
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived AdmitTerminal from a FailureCommitted Source");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("a walked market's failure certificate terminalizes its Market");
+
+    let admitted = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(admitted.phase, Phase::Terminal);
+    assert_eq!(
+        admitted.terminal_receipt.map(|value| value.to_bytes()),
+        Some(fixture.certificate.to_bytes()),
+        "the Market commits to the failure certificate's own address, which is a different \
+         address from the one a provider-resolved terminal would have written"
+    );
+
+    let source = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("Source")
+            .data,
+    )
+    .expect("Source state");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::FailureCommitted);
+    let terminal = source
+        .terminal_projection()
+        .expect("a FailureCommitted Source projects its terminal");
+    assert_eq!(terminal.route(), SourceResolutionRouteV1::Failure);
+    assert_eq!(
+        admitted.terminal_winner,
+        terminal.selector(),
+        "the winner Core commits is the selector the Source's own failure decision carried, not \
+         a value this route chose"
+    );
 }
 
 #[tokio::test]

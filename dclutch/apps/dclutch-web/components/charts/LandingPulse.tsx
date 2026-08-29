@@ -42,6 +42,37 @@ function incompatibleDisclosure(enumeration: ProgramScanEnumerationV1): string {
     : `The same scan found ${count} older market${count === 1 ? '' : 's'} in a layout this page cannot read, so ${count === 1 ? 'it is' : 'they are'} not counted above.`;
 }
 
+/**
+ * What the strip shows when the scan succeeded and the join did not.
+ *
+ * The scan is one request; the join is roughly four per market, and against a
+ * throttling public endpoint the second can fail while the first has already
+ * answered. Blanking all three counts then throws away a number we hold --
+ * and on the front page, where a refusal is the first thing anyone reads.
+ *
+ * So the count stands on the scan that produced it, and the two that genuinely
+ * were not read stay dashes. That is the page's own rule: a dash means we
+ * could not read it.
+ */
+export function partiallyReadPulseV1(
+  deploymentLabel: string,
+  enumeration: ProgramScanEnumerationV1,
+  reason: string,
+): PulseState {
+  return Object.freeze({
+    stats: Object.freeze([
+      Object.freeze({
+        label: 'Current markets listed',
+        value: String(enumeration.addresses.length),
+        detail: 'markets on this deployment, whatever stage they are at',
+      }),
+      Object.freeze({ label: 'Collateral in listed markets', value: null, detail: 'not read this time' }),
+      Object.freeze({ label: 'Resolutions in listed markets', value: null, detail: 'not read this time' }),
+    ]),
+    provenance: `Read live from ${deploymentLabel} at slot ${enumeration.scanSlot}: the deployment holds ${enumeration.addresses.length} market${enumeration.addresses.length === 1 ? '' : 's'}. Reading inside them did not finish — ${reason}`,
+  });
+}
+
 /** The truthful zero-current state, kept pure so the legacy-account case is pinned by tests. */
 export function emptyCurrentMarketPulseV1(deploymentLabel: string, enumeration: ProgramScanEnumerationV1): PulseState {
   return Object.freeze({
@@ -66,6 +97,7 @@ export default function LandingPulse() {
     const settle = (next: PulseState) => { if (!cancelled) setState(next); };
     (async () => {
       settle({ stats: UNREAD, provenance: `Reading live from ${deployment.label}…` });
+      let scanned: ProgramScanEnumerationV1 | null = null;
       try {
         const client = new SolanaRpcClient(deployment.endpoint);
         const enumeration = await enumerateCoreMarketAddressesV1(client, deployment.programs.core);
@@ -77,6 +109,7 @@ export default function LandingPulse() {
           settle(emptyCurrentMarketPulseV1(deployment.label, enumeration));
           return;
         }
+        scanned = enumeration;
         const discovery = await inspectMarketDiscoveryV1(client, {
           coreProgramId: deployment.programs.core,
           registryProgramId: deployment.programs.registry,
@@ -120,7 +153,9 @@ export default function LandingPulse() {
           provenance: `Read live from ${deployment.label} at slot ${discovery.floorSlot}, straight from the deployment's own programs. ${incompatibleDisclosure(enumeration)}`,
         });
       } catch (error) {
-        settle({ stats: UNREAD, provenance: `Refused: ${error instanceof Error ? error.message : 'the read failed without a usable reason'}` });
+        const reason = error instanceof Error ? error.message : 'the read failed without a usable reason';
+        if (scanned !== null) { settle(partiallyReadPulseV1(deployment.label, scanned, reason)); return; }
+        settle({ stats: UNREAD, provenance: `Refused: ${reason}` });
       }
     })();
     return () => { cancelled = true; };
