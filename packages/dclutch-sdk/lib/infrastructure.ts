@@ -14,6 +14,7 @@ import {
   decodeArtifactReleaseV1,
   decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
+  REGISTRY_ACTIVATION_PDA_SEED_V1,
   requireSlotPinnedReleaseV1,
   type ArtifactReleaseV1,
   type CheckedMultiprogramV1,
@@ -45,7 +46,6 @@ const CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET = CHECKED_INFRASTRUCTURE_PROFILE
 const CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET = CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET + 32;
 const CHECKED_INFRASTRUCTURE_LEAF_BYTES = ARTIFACT_RELEASE_BYTES + 32;
 const CHECKED_INFRASTRUCTURE_RENT_OFFSET = CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES;
-const ACTIVATION_PDA_DOMAIN = new TextEncoder().encode('dclutch:release-activation:v1');
 
 export type InfrastructureBindingV1 = Readonly<{
   program: string;
@@ -211,7 +211,7 @@ export async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram
   const releaseSetIdentity = slice(bytes, 16, 32);
   requireNonzero(releaseSetIdentity, 'activation release-set identity');
   const expected = PublicKey.findProgramAddressSync(
-    [ACTIVATION_PDA_DOMAIN, releaseSetIdentity],
+    [REGISTRY_ACTIVATION_PDA_SEED_V1, releaseSetIdentity],
     publicKey(registryProgram, 'Registry program'),
   )[0].toBase58();
   if (expected !== address) throw new Error('activation cache is not the release-derived Registry PDA');

@@ -21,6 +21,7 @@ import {
   decodeArtifactReleaseV1,
   decodeExecutionReleaseSetV1,
   requireSlotPinnedReleaseV1,
+  REGISTRY_ACTIVATION_PDA_SEED_V1,
   type ArtifactReleaseV1,
   type RegistryRole,
 } from './releaseRegistry';
@@ -222,7 +223,7 @@ async function exactActivationCache(
   const releaseIdentity = slice(bytes, 16, 32);
   requireNonzero(releaseIdentity, 'release activation identity');
   const expectedCache = PublicKey.findProgramAddressSync(
-    [new TextEncoder().encode('dclutch:release-activation:v1'), releaseIdentity],
+    [REGISTRY_ACTIVATION_PDA_SEED_V1, releaseIdentity],
     new PublicKey(registryProgram),
   )[0].toBase58();
   if (expectedCache !== cacheAddress) throw new Error('release activation cache is not the release-derived Registry PDA');

@@ -49,7 +49,15 @@ export const SYSVAR_OWNER_ID = 'Sysvar1111111111111111111111111111111111111';
 
 const RAW_RECORD_SEED = new TextEncoder().encode('dclutch-raw-record-v1');
 const STAGING_RECORD_SEED = new TextEncoder().encode('dclutch-record-stage-v1');
-const ACTIVATION_SEED = new TextEncoder().encode('dclutch:release-activation:v1');
+/// The Registry's activation-cache PDA seed domain, and the only copy of it.
+///
+/// Three modules derived this address from three independently written copies
+/// of the same string until 2026-08-29. A seed domain is a consensus
+/// coordinate: two copies that disagree by one byte derive two different PDAs
+/// and one of them silently stops finding the account it is authenticating.
+export const REGISTRY_ACTIVATION_PDA_SEED_V1 = new TextEncoder().encode('dclutch:release-activation:v1');
+
+const ACTIVATION_SEED = REGISTRY_ACTIVATION_PDA_SEED_V1;
 export const EXECUTION_RELEASE_SET_SCHEMA_ID_V1 = Uint8Array.from([
   0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
   0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58,
@@ -449,7 +457,7 @@ function expectedCacheBytes(evidence: CheckedMultiprogramV1): Uint8Array {
   const view = new DataView(output.buffer); view.setUint16(8, 1, true); view.setUint16(10, 1, true);
   output.set(Uint8Array.from(evidence.releaseSet.id.match(/../g) ?? [], (value) => Number.parseInt(value, 16)), 16);
   REGISTRY_ROLES.forEach((role, index) => {
-    const offset = 48 + index * 248; output.set(Uint8Array.from(evidence.releaseSet.roles[role].artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)), offset); output.set(evidence.artifacts[role].bytes, offset + 32);
+    const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES; output.set(Uint8Array.from(evidence.releaseSet.roles[role].artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)), offset); output.set(evidence.artifacts[role].bytes, offset + 32);
   });
   return output;
 }
@@ -483,7 +491,7 @@ function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: st
   const registry = key(registryProgram, 'Registry program'); const derived = PublicKey.findProgramAddressSync([ACTIVATION_SEED, slice(bytes, 16, 32)], registry)[0].toBase58();
   if (derived !== cacheAddress) throw new Error('activation cache is not the release-derived Registry PDA');
   const artifacts: ArtifactReleaseV1[] = []; const artifactIds: string[] = [];
-  for (let index = 0; index < REGISTRY_ROLES.length; index += 1) { const offset = 48 + index * 248; const id = slice(bytes, offset, 32); requireNonzero(id, 'cached artifact release identity'); const artifact = decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)); artifacts.push(artifact); artifactIds.push(hex(id)); }
+  for (let index = 0; index < REGISTRY_ROLES.length; index += 1) { const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES; const id = slice(bytes, offset, 32); requireNonzero(id, 'cached artifact release identity'); const artifact = decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)); artifacts.push(artifact); artifactIds.push(hex(id)); }
   // The Core role's program is deliberately NOT compared to the Registry
   // program. `initialize_activation_cache_v1` in `dclutch-registry-contract`
   // states the boundary: "Registry identity is an account-ownership boundary,
