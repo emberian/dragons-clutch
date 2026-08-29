@@ -15,7 +15,8 @@ use dclutch_custody_contract::{
     normal_replay_from_realization_v1,
 };
 use dclutch_market_core_codec::{
-    Action, CoreState, Identity, ProjectFoundReceiptV2, ProjectFoundRequestV2, Request, STATE_BYTES,
+    Action, CoreState, Identity, PROJECT_FOUND_ACCOUNT_COUNT_V2, ProjectFoundReceiptV2,
+    ProjectFoundRequestV2, Request, STATE_BYTES,
 };
 use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
@@ -437,7 +438,7 @@ fn initialize(
         return Err(CustodySbfError::AccountFrame.into());
     }
     let found_accounts = accounts
-        .get(INITIALIZE_FOUND_START..INITIALIZE_FOUND_START + 37)
+        .get(INITIALIZE_FOUND_START..INITIALIZE_FOUND_START + PROJECT_FOUND_ACCOUNT_COUNT_V2)
         .ok_or(CustodySbfError::AccountFrame)?;
     if found_accounts
         .get(1)
@@ -2166,7 +2167,10 @@ mod tests {
 
     #[test]
     fn every_projected_operation_has_one_exact_frame_width() {
-        assert_eq!(INITIALIZE_ACCOUNTS, INITIALIZE_FOUND_START + 37);
+        assert_eq!(
+            INITIALIZE_ACCOUNTS,
+            INITIALIZE_FOUND_START + PROJECT_FOUND_ACCOUNT_COUNT_V2
+        );
         assert_eq!(OPEN_ACCOUNTS, 15);
         assert_eq!(LOCK_ACCOUNTS, 14);
         assert_eq!(REFUND_ACCOUNTS, 14);

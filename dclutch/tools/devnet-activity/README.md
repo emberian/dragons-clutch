@@ -19,6 +19,16 @@ callers and exact completion receipts exist. A real PRIVATE proof also needs a
 separately generated canonical owned-loopback scenario; the harness does not
 rewrite a devnet fixture to create one.
 
+The committed public Direct and terminal-sequence callers are progressive:
+each invocation advances exactly one durable action and a later invocation
+reauthenticates the child journal before continuing. The harness adapter ABI is
+currently one-shot: after one child invocation it only polls terminal
+completion. Offline `validate` and the pre-wallet caller probe therefore refuse
+`devnet-direct-trade-v1` and `devnet-terminal-sequence-v1` as activity adapters.
+They remain valid standalone callers; admitting them here requires a distinct
+progressive-adapter journal and recovery contract, not a manifest spelling
+change.
+
 ## Safety properties
 
 - `solana-keygen` creates mode-`0600` disposable key files. The harness never

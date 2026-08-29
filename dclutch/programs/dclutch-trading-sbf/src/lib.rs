@@ -364,8 +364,8 @@ pub fn process_instruction(
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    if generic_market_founding_v1::is_generic_market_founding_v2(instruction_data) {
-        return generic_market_founding_v1::process_generic_market_founding_v2(
+    if generic_market_founding_v1::is_generic_market_founding_v3(instruction_data) {
+        return generic_market_founding_v1::process_generic_market_founding_v3(
             program_id,
             accounts,
             instruction_data,

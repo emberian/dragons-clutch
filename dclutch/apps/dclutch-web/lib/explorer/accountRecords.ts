@@ -361,8 +361,8 @@ import {
   GENERIC_FOUNDING_REQUEST_TAIL_RESERVED_OFFSET_V1,
   GENERIC_FOUNDING_REQUEST_VERSION_OFFSET_V1,
   GENERIC_FOUNDING_STAGES_V1,
-  GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2,
-  GENERIC_MARKET_FOUNDING_MAGIC_V2,
+  GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3,
+  GENERIC_MARKET_FOUNDING_MAGIC_V3,
 } from '../generated/genericFoundingV1';
 import {
   ADMISSION_MAGIC_BYTES_V2,
@@ -1596,13 +1596,19 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
 
   // --------------------------------------------------------- Generic founding
   {
-    magic: GENERIC_MARKET_FOUNDING_MAGIC_V2,
+    magic: GENERIC_MARKET_FOUNDING_MAGIC_V3,
     name: 'Generic market founding',
     family: 'Trading',
-    summary: 'The whole-founding outer instruction. Its data is the magic and nothing else.',
-    width: { kind: 'fixed', bytes: GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2 },
-    fields: [],
-    note: 'genericFoundingV1.ts says it plainly: "the outer carries no other bytes". There is nothing after the magic to decode; the whole request travels in four readonly accounts.',
+    summary: 'The whole-founding outer instruction. Its data is the magic followed by five caller-authority bumps.',
+    width: { kind: 'fixed', bytes: GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3 },
+    fields: [
+      field('Lock caller bump', 8, 'u8'),
+      field('Found caller bump', 9, 'u8'),
+      field('Realize caller bump', 10, 'u8'),
+      field('Claims caller bump', 11, 'u8'),
+      field('Open caller bump', 12, 'u8'),
+    ],
+    note: 'The bumps are invocation evidence: each child repeats the canonical derivation before honoring the outer PDA signature. The economic request bodies still travel in four readonly accounts.',
   },
   {
     magic: GENERIC_FOUNDING_REQUEST_MAGIC_V1,

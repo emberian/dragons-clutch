@@ -6,7 +6,7 @@
 //!
 //! The program owns no protocol state. It derives the release-set-bound
 //! Trading caller authority from the production request, invokes Resolution
-//! with the exact 44-account frame, and passes through only a well-shaped
+//! with the exact 43-account frame, and passes through only a well-shaped
 //! Resolution return receipt.
 
 extern crate alloc;
@@ -31,7 +31,7 @@ use solana_program::{
 };
 
 /// Exact production initializer frame forwarded by this caller.
-pub const TEST_PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1: usize = 44;
+pub const TEST_PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1: usize = 43;
 /// Exact production expiry-close frame forwarded by this caller.
 pub const TEST_PRE_MARKET_FUNDING_ABORT_ACCOUNT_COUNT_V1: usize = 16;
 

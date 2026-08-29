@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -37,6 +38,7 @@ def required_paths() -> set[str]:
         f"{preflight.SUCCESSOR}/aggregate_retirement_exterior.rs",
         "crates/dclutch-operator/src/wallet_terminal_payout_v3.rs",
     }
+    paths.update(preflight.modeled_source_paths())
     return {path for path in paths if path is not None}
 
 
@@ -49,9 +51,22 @@ class OfflinePreflightTests(unittest.TestCase):
             target = self.repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+        self.git("init", "-q")
+        self.git("config", "user.name", "offline-preflight-test")
+        self.git("config", "user.email", "offline-preflight-test@invalid")
+        self.git("add", "--all")
+        self.git("commit", "-q", "-m", "fixture")
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def git(self, *arguments: str) -> None:
+        subprocess.run(
+            ["git", *arguments],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+        )
 
     def mutate(self, relative: str, old: str, new: str, *, all_matches: bool = False) -> None:
         path = self.repo / relative
@@ -59,6 +74,8 @@ class OfflinePreflightTests(unittest.TestCase):
         self.assertIn(old, source, f"test fixture no longer contains {old!r}")
         changed = source.replace(old, new) if all_matches else source.replace(old, new, 1)
         path.write_text(changed)
+        self.git("add", relative)
+        self.git("commit", "-q", "-m", f"hostile {Path(relative).name}")
 
     def assert_refuses(self, pattern: str, through: str = "full-probe") -> None:
         with self.assertRaisesRegex(preflight.Refusal, pattern):
@@ -76,6 +93,16 @@ class OfflinePreflightTests(unittest.TestCase):
         self.assertEqual(report["transaction_geometry"]["direct_hot"], {
             "static": 4, "loaded": 57, "unique": 61, "wire_bytes": 1_159, "poststates": 10,
         })
+        self.assertFalse(report["recovery_exposure"]["happy_path_stage"])
+        self.assertEqual(report["recovery_exposure"]["operations"], [
+            "source-abort-custody-v1",
+            "source-abort-controller-first-v1",
+            "source-abort-controller-terminal-v1",
+        ])
+        self.assertTrue(report["economic_owner"]["private"]["terminal_liabilities_zero"])
+        self.assertTrue(report["economic_owner"]["activity_v3"]["terminal_liabilities_zero"])
+        self.assertEqual(len(report["repository"]["head"]), 40)
+        self.assertEqual(len(report["repository"]["tree"]), 40)
         self.assertFalse(report["validator_started"])
         self.assertFalse(report["rpc_used"])
         self.assertFalse(report["keys_read"])
@@ -113,6 +140,22 @@ class OfflinePreflightTests(unittest.TestCase):
         )
         self.assert_refuses("literal patch-marker prefix")
 
+    def test_source_abort_dispatch_help_and_three_row_vocabulary_are_reachable(self) -> None:
+        self.mutate(
+            preflight.MAIN,
+            "source_abort_exterior::COMMAND_V1",
+            "source_abort_exterior::HIDDEN_COMMAND_V1",
+        )
+        self.assert_refuses("source-abort-v1 is absent from the successor dispatch")
+
+    def test_source_abort_operation_omission_refuses(self) -> None:
+        self.mutate(
+            f"{preflight.SUCCESSOR}/market.rs",
+            'Self::ControllerTerminal => "source-abort-controller-terminal-v1"',
+            'Self::ControllerTerminal => "source-abort-controller-hidden-v1"',
+        )
+        self.assert_refuses("SourceAbort semantic owner")
+
     def test_runner_owner_schema_drift_refuses(self) -> None:
         self.mutate(
             preflight.RUNNER,
@@ -120,6 +163,46 @@ class OfflinePreflightTests(unittest.TestCase):
             'DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v9"',
         )
         self.assert_refuses("DIRECT_FINALIZED_SCHEMA differs from semantic owner")
+
+    def test_private_activity_old_retirement_consumer_refuses(self) -> None:
+        self.mutate(
+            f"{preflight.SUCCESSOR}/private_activity.rs",
+            "authenticate_aggregate_retirement_conservation_receipt_v1",
+            "authenticate_terminal_sequence_singleton_v1",
+            all_matches=True,
+        )
+        self.assert_refuses("private activity projection")
+
+    def test_private_economic_fixture_runner_join_refuses_quantity_drift(self) -> None:
+        self.mutate(
+            preflight.PRIVATE_ECONOMIC_FIXTURE,
+            '"quantityAtoms": "100000000"',
+            '"quantityAtoms": "99999999"',
+        )
+        self.assert_refuses("PRIVATE runner constants differ from the economic semantic owner")
+
+    def test_activity_v3_nonmutating_authority_refuses(self) -> None:
+        self.mutate(
+            preflight.ACTIVITY_V3_ECONOMIC_FIXTURE,
+            '"allLifecycleMutationsExpected": true',
+            '"allLifecycleMutationsExpected": false',
+        )
+        self.assert_refuses("economic semantic owner refused")
+
+    def test_dirty_repository_refuses_before_source_model(self) -> None:
+        path = self.repo / preflight.RUNNER
+        path.write_text(path.read_text() + "\n")
+        with self.assertRaisesRegex(preflight.Refusal, "repository is not clean"):
+            preflight.run_preflight(self.repo, "full-probe")
+
+    def test_mid_run_source_substitution_refuses(self) -> None:
+        path = self.repo / f"{preflight.SUCCESSOR}/direct_trade.rs"
+
+        def substitute() -> None:
+            path.write_text(path.read_text().replace("wire_bytes != 1_159", "wire_bytes != 1_158", 1))
+
+        with self.assertRaisesRegex(preflight.Refusal, "repository is not clean|changed during"):
+            preflight.run_preflight(self.repo, "full-probe", _stability_hook=substitute)
 
     def test_zero_or_changed_fixture_supply_refuses(self) -> None:
         self.mutate(
@@ -228,11 +311,13 @@ class OfflinePreflightTests(unittest.TestCase):
 
     def test_output_is_create_new_and_no_clobber(self) -> None:
         report = preflight.run_preflight(self.repo, "participant")
-        output = self.repo / "preflight.json"
-        preflight.write_new(output, report)
+        output = self.repo.parent / f"{self.repo.name}-preflight.json"
+        output.unlink(missing_ok=True)
+        self.addCleanup(output.unlink, missing_ok=True)
+        preflight.write_new(output, report, self.repo)
         self.assertEqual(json.loads(output.read_text())["model_sha256"], report["model_sha256"])
         with self.assertRaisesRegex(preflight.Refusal, "absent path"):
-            preflight.write_new(output, report)
+            preflight.write_new(output, report, self.repo)
 
 
 if __name__ == "__main__":

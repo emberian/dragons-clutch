@@ -5,15 +5,24 @@ model:
 
 ```sh
 python3 tools/release/private-validator-lifecycle/preflight.py \
-  --repo /absolute/clean/dclutch --through full-probe
+  --repo /absolute/clean/dclutch --through full-probe \
+  --output /absolute/path/outside/dclutch/PREFLIGHT.json
 ```
 
 It joins the runner to every required Rust dispatch and accepted help function,
 schema handoff, signer-role projection, fixture/supply invariant, current
 generic-founding lock census, Direct message geometry, Pyth/Resolution order,
-zero-payout burn, and terminal handoff. It performs no build, RPC, key read, or
-validator action. The detailed derivation is in
+zero-payout burn, and terminal handoff. It executes the tracked exact-integer
+economic semantic owner against both canonical fixtures and admits SourceAbort
+only as a separate three-mutation recovery surface, never as a happy-path
+stage. It performs no build, RPC, key read, or validator action. The detailed derivation is in
 `docs/evidence/PRIVATE_LIFECYCLE_OFFLINE_EXECUTION_MODEL_2026_08_28.md`.
+
+Acceptance requires a clean committed Git root. The gate binds full HEAD and
+tree object IDs plus every modeled source digest before work, rechecks source
+bytes and Git identity after work, and rechecks them again before writing a
+create-new report outside the repository. Dirty, untracked, uncommitted,
+mid-run, and output-induced source substitutions refuse.
 
 `run.py` is the release-level localhost supervisor for one exact checked
 dClutch source commit. It is not devnet evidence and it never accepts a
@@ -40,7 +49,7 @@ At terminal convergence, each of exactly twenty named seeds will:
    using the disposable `core-upgrade-authority` as its genesis-funded mint;
 5. proves the protocol-created collateral mint, collateral wallet, and founding
    source token account are vacant before the campaign creates them;
-6. executes DCLTGMF2 founding, participant admission, Direct, the eight-action
+6. executes DCLTGMF3 founding, participant admission, Direct, the eight-action
    Router/Receiver/treasury/VAA prerequisite sequence, Resolution, payout, and
    retirement through the accepted successor exterior callers;
 7. derives the six public activity stages and the distinct eight-stage private

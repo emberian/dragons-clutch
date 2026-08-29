@@ -7,6 +7,11 @@ import {
   type DirectHotRouteInspectionV3,
   type DirectHotRouteManifestV3,
 } from './directHotChain';
+import {
+  DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3,
+  DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3,
+  DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3,
+} from './directInlineV3';
 import { HOT_FIXED_ACCOUNT_COUNT_V3, HOT_ROOT_ACCOUNT_V3 } from './generated/directInlineV3';
 import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from './infrastructure';
 import { type SolanaRpcClient } from './rpc';
@@ -306,6 +311,15 @@ function identity(value: unknown, field: string): string {
   return value;
 }
 
+function decimalU64(value: unknown, field: string): bigint {
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(value)) {
+    throw new Error(`${field} must be canonical decimal u64 text`);
+  }
+  const decoded = BigInt(value);
+  if (decoded <= 0n || decoded > 0xffff_ffff_ffff_ffffn) throw new Error(`${field} is outside positive u64`);
+  return decoded;
+}
+
 function coordinate(value: unknown, field: string): DirectHotRouteCoordinateV3 {
   const row = object(value, field);
   exactKeys(row, ['address', 'isSigner', 'isWritable'], field);
@@ -364,22 +378,41 @@ function decodeBase64(value: unknown, field: string, exactBytes: number): Uint8A
   return bytes;
 }
 
-function requireNoAliases(
+function requireCanonicalNamedShape(
   payer: string,
   fixed: ReadonlyArray<DirectHotRouteCoordinateV3>,
   runtime: ReadonlyArray<DirectHotRouteCoordinateV3>,
   lookups: ReadonlyArray<string>,
 ): void {
-  const seen = new Map<string, string>();
-  const admit = (value: string, field: string): void => {
-    const prior = seen.get(value);
-    if (prior !== undefined) throw new Error(`${field} aliases ${prior} at ${value}`);
-    seen.set(value, field);
-  };
-  admit(payer, 'payer');
-  fixed.forEach((entry, index) => admit(entry.address, `fixed account ${index}`));
-  runtime.forEach((entry, index) => admit(entry.address, `runtime account ${index}`));
-  lookups.forEach((entry, index) => admit(entry, `lookup table ${index}`));
+  if (runtime.length !== DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3
+      || new Set(runtime.map((entry) => entry.address)).size !== runtime.length) {
+    throw new Error(`runtimeAccounts must be the duplicate-free current ${DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3}-account physical tail`);
+  }
+  if (new Set(fixed.map((entry) => entry.address)).size !== fixed.length) {
+    throw new Error('fixedAccounts must retain the 39 distinct named pre-seal roles');
+  }
+  const payerMeta = runtime[1];
+  if (payerMeta?.address !== payer || payerMeta.isSigner !== true || payerMeta.isWritable !== true
+      || runtime.some((entry, index) => index !== 1 && entry.address === payer)) {
+    throw new Error('route payer must be runtimeAccounts[1], writable, and the sole runtime signer alias');
+  }
+  if (fixed.some((entry) => entry.address === payer)) throw new Error('route payer aliases a fixed Hot role');
+  const expectedCrossAliases = new Map<number, number>(DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3);
+  for (const [runtimeIndex, entry] of runtime.entries()) {
+    const fixedIndex = fixed.findIndex((candidate) => candidate.address === entry.address);
+    const expected = expectedCrossAliases.get(runtimeIndex);
+    if ((expected === undefined ? fixedIndex !== -1 : fixedIndex !== expected)
+        || entry.isSigner !== (runtimeIndex === 1)
+        || entry.isWritable !== DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3.includes(runtimeIndex as never)) {
+      throw new Error(`runtime account ${runtimeIndex} has a noncanonical named fixed-account join`);
+    }
+  }
+  const allInstruction = [...fixed, ...runtime];
+  for (const [index, lookup] of lookups.entries()) {
+    if (lookup === payer || allInstruction.some((entry) => entry.address === lookup)) {
+      throw new Error(`lookup table ${index} aliases the payer or one Hot instruction account`);
+    }
+  }
 }
 
 async function parseUntrustedManifestV3(source: string | Uint8Array): Promise<DirectHotRouteManifestV3> {
@@ -391,6 +424,7 @@ async function parseUntrustedManifestV3(source: string | Uint8Array): Promise<Di
     'strategyAccounts',
     'runtimeAccounts',
     'lookupTables',
+    'lookupTableCreationSlot',
     'checkedInfrastructure',
     'checkedInfrastructureSha256',
   ], 'Direct Hot route manifest');
@@ -401,11 +435,12 @@ async function parseUntrustedManifestV3(source: string | Uint8Array): Promise<Di
   const fixedAccounts = Object.freeze(array(input.fixedAccounts, 'fixedAccounts', HOT_FIXED_ACCOUNT_COUNT_V3)
     .map((entry, index) => fixedCoordinate(entry, index)));
   array(input.strategyAccounts, 'strategyAccounts', 0);
-  const runtimeAccounts = Object.freeze(array(input.runtimeAccounts, 'runtimeAccounts', 0, DIRECT_HOT_ROUTE_MANIFEST_MAX_ARRAY_V3)
+  const runtimeAccounts = Object.freeze(array(input.runtimeAccounts, 'runtimeAccounts', DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3)
     .map((entry, index) => coordinate(entry, `runtime account ${index}`)));
   const lookupTables = Object.freeze(array(input.lookupTables, 'lookupTables', 1)
     .map((entry, index) => address(entry, `lookup table ${index}`)));
-  requireNoAliases(payer, fixedAccounts, runtimeAccounts, lookupTables);
+  const lookupTableCreationSlot = decimalU64(input.lookupTableCreationSlot, 'lookup table creation slot');
+  requireCanonicalNamedShape(payer, fixedAccounts, runtimeAccounts, lookupTables);
   const checkedInfrastructure = decodeBase64(
     input.checkedInfrastructure,
     'checked infrastructure',
@@ -422,6 +457,7 @@ async function parseUntrustedManifestV3(source: string | Uint8Array): Promise<Di
     strategyAccounts: Object.freeze([]),
     runtimeAccounts,
     lookupTables,
+    lookupTableCreationSlot,
     checkedInfrastructure,
   });
 }

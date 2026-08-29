@@ -70,6 +70,7 @@ use crate::{
 const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v6";
 const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v1";
 const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
+const LINK_PROVENANCE_SCHEMA: &str = "dclutch-sbf-link-provenance-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
 const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v3";
 const SET_JOURNAL_SCHEMA: &str = "dclutch-devnet-deployment-set-journal-v2";
@@ -424,12 +425,47 @@ struct CheckedGateLinkV1 {
     frame_build_log: GateFileV1,
     frame_compile_marker: String,
     frame_report: GateFileV1,
+    artifact_provenance: GateFileV1,
     frame_count: u64,
     frame_bound_bytes: u64,
     frames_at_or_over_bound: u64,
     deepest_frame_bytes: u64,
     elf: Option<GateFileV1>,
     checked_manifest: Option<GateFileV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LinkPlainBuildProvenanceV1 {
+    invocation: String,
+    log: GateFileV1,
+    compile_marker: String,
+    sbf_diagnostics_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LinkFrameProvenanceV1 {
+    invocation: String,
+    build_log: GateFileV1,
+    compile_marker: String,
+    object: GateFileV1,
+    report: GateFileV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SbfLinkProvenanceV1 {
+    schema: String,
+    label: String,
+    package: String,
+    artifact_stem: Option<String>,
+    source_revision: String,
+    source_tree_sha256: String,
+    build_run_id: String,
+    plain_build: LinkPlainBuildProvenanceV1,
+    shipped_elf: Option<GateFileV1>,
+    frame_measurement: LinkFrameProvenanceV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -5448,11 +5484,22 @@ fn validate_checked_release_gate_selection(
                 link.label
             )));
         }
+        let provenance_bytes = verify_gate_file(
+            &root,
+            &link.artifact_provenance,
+            &format!("{} artifact provenance", link.label),
+        )?
+        .1;
+        let provenance = validate_link_provenance(&root, &gate, link, &provenance_bytes)?;
         let build_log =
             verify_gate_file(&root, &link.build_log, &format!("{} build log", link.label))?.1;
         validate_compile_log(
             &build_log,
             &format!("dclutch-sbf-build-run-v1={}", gate.build_run_id),
+            &format!(
+                "dclutch-sbf-build-invocation-v1={}",
+                provenance.plain_build.invocation
+            ),
             &link.package,
             &link.compile_marker,
             &format!("{} build log", link.label),
@@ -5466,6 +5513,10 @@ fn validate_checked_release_gate_selection(
         validate_compile_log(
             &frame_build_log,
             &format!("dclutch-sbf-frame-run-v1={}", gate.build_run_id),
+            &format!(
+                "dclutch-sbf-frame-invocation-v1={}",
+                provenance.frame_measurement.invocation
+            ),
             &link.package,
             &link.frame_compile_marker,
             &format!("{} frame build log", link.label),
@@ -5476,7 +5527,7 @@ fn validate_checked_release_gate_selection(
             &format!("{} frame report", link.label),
         )?
         .1;
-        validate_frame_report(link, &frame_report)?;
+        validate_frame_report(&gate, link, &frame_report)?;
         if let Some(manifest) = &link.checked_manifest {
             let (canonical, bytes) =
                 verify_gate_file(&root, manifest, &format!("{} checked manifest", link.label))?;
@@ -5583,15 +5634,20 @@ fn verify_gate_file(root: &Path, evidence: &GateFileV1, label: &str) -> Result<(
 fn validate_compile_log(
     bytes: &[u8],
     expected_header: &str,
+    expected_invocation: &str,
     package: &str,
     marker: &str,
     label: &str,
 ) -> Result<()> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| Error::new(format!("{label} is not UTF-8")))?;
-    if !text.ends_with('\n') || text.lines().next() != Some(expected_header) {
+    let mut lines = text.lines();
+    if !text.ends_with('\n')
+        || lines.next() != Some(expected_header)
+        || lines.next() != Some(expected_invocation)
+    {
         return Err(Error::new(format!(
-            "{label} is missing the exact current-run freshness marker"
+            "{label} is missing the exact current-run freshness/invocation markers"
         )));
     }
     let trimmed = marker.trim_start();
@@ -5607,14 +5663,121 @@ fn validate_compile_log(
     Ok(())
 }
 
-fn validate_frame_report(link: &CheckedGateLinkV1, bytes: &[u8]) -> Result<()> {
+fn validate_link_provenance(
+    root: &Path,
+    gate: &CheckedUpgradeGateV1,
+    link: &CheckedGateLinkV1,
+    bytes: &[u8],
+) -> Result<SbfLinkProvenanceV1> {
+    if link.artifact_provenance.canonical_path != format!("provenance/{}.json", link.label) {
+        return Err(Error::new(format!(
+            "{} artifact provenance is not at its canonical named-link path",
+            link.label
+        )));
+    }
+    let provenance: SbfLinkProvenanceV1 = serde_json::from_slice(bytes).map_err(|error| {
+        Error::new(format!(
+            "{} artifact provenance is not canonical v1 JSON: {error}",
+            link.label
+        ))
+    })?;
+    if provenance.schema != LINK_PROVENANCE_SCHEMA
+        || provenance.label != link.label
+        || provenance.package != link.package
+        || provenance.source_revision != gate.source_revision
+        || provenance.source_tree_sha256 != gate.source_tree_sha256
+        || provenance.build_run_id != gate.build_run_id
+        || provenance.plain_build.log != link.build_log
+        || provenance.plain_build.compile_marker != link.compile_marker
+        || provenance.plain_build.sbf_diagnostics_count != link.sbf_diagnostics_count
+        || provenance.frame_measurement.build_log != link.frame_build_log
+        || provenance.frame_measurement.compile_marker != link.frame_compile_marker
+        || provenance.frame_measurement.report != link.frame_report
+        || provenance.shipped_elf != link.elf
+    {
+        return Err(Error::new(format!(
+            "{} artifact provenance differs from its named link/source/build/frame/ELF",
+            link.label
+        )));
+    }
+    if provenance.plain_build.invocation.is_empty()
+        || provenance.frame_measurement.invocation.is_empty()
+        || provenance
+            .plain_build
+            .invocation
+            .bytes()
+            .any(|byte| matches!(byte, b'\n' | b'\r'))
+        || provenance
+            .frame_measurement
+            .invocation
+            .bytes()
+            .any(|byte| matches!(byte, b'\n' | b'\r'))
+    {
+        return Err(Error::new(format!(
+            "{} artifact provenance has an empty or multiline invocation",
+            link.label
+        )));
+    }
+    match (&provenance.artifact_stem, &link.elf) {
+        (Some(stem), Some(_))
+            if !stem.is_empty()
+                && stem.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                }) => {}
+        (None, None) => {}
+        _ => {
+            return Err(Error::new(format!(
+                "{} artifact provenance has the wrong shipped/frame-only shape",
+                link.label
+            )));
+        }
+    }
+    let object = verify_gate_file(
+        root,
+        &provenance.frame_measurement.object,
+        &format!("{} frame measurement object", link.label),
+    )?
+    .1;
+    if object.is_empty() {
+        return Err(Error::new(format!(
+            "{} frame measurement object is empty",
+            link.label
+        )));
+    }
+    let report = verify_gate_file(
+        root,
+        &provenance.frame_measurement.report,
+        &format!("{} provenance frame report", link.label),
+    )?
+    .1;
+    let report_object_digest = std::str::from_utf8(&report)
+        .ok()
+        .and_then(|text| text.lines().nth(9))
+        .and_then(|line| line.strip_prefix("object_sha256="));
+    if report_object_digest != Some(provenance.frame_measurement.object.sha256.as_str()) {
+        return Err(Error::new(format!(
+            "{} frame report does not bind its exact measurement object",
+            link.label
+        )));
+    }
+    Ok(provenance)
+}
+
+fn validate_frame_report(
+    gate: &CheckedUpgradeGateV1,
+    link: &CheckedGateLinkV1,
+    bytes: &[u8],
+) -> Result<()> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| Error::new(format!("{} frame report is not UTF-8", link.label)))?;
     let expected = format!(
-        "dclutch-sbf-frame-report-v1\nlabel={}\npackage={}\nframe_count={}\n\
+        "dclutch-sbf-frame-report-v1\nlabel={}\npackage={}\nsource_tree_sha256={}\n\
+         build_run_id={}\nframe_count={}\n\
          frame_bound_bytes={}\nframes_at_or_over_bound={}\ndeepest_frame_bytes={}\n",
         link.label,
         link.package,
+        gate.source_tree_sha256,
+        gate.build_run_id,
         link.frame_count,
         link.frame_bound_bytes,
         link.frames_at_or_over_bound,
@@ -5628,7 +5791,7 @@ fn validate_frame_report(link: &CheckedGateLinkV1, bytes: &[u8]) -> Result<()> {
     }
     let object_digest = text
         .lines()
-        .nth(7)
+        .nth(9)
         .and_then(|line| line.strip_prefix("object_sha256="))
         .ok_or_else(|| {
             Error::new(format!(
@@ -5640,7 +5803,7 @@ fn validate_frame_report(link: &CheckedGateLinkV1, bytes: &[u8]) -> Result<()> {
         object_digest,
         &format!("{} frame object SHA-256", link.label),
     )?;
-    if text.lines().nth(8) != Some("measurement_output:") {
+    if text.lines().nth(10) != Some("measurement_output:") {
         return Err(Error::new(format!(
             "{} frame report omitted measurement output",
             link.label
@@ -9022,8 +9185,14 @@ mod tests {
             .map(|(ordinal, (label, package, produces_artifact))| {
                 let compile_marker =
                     format!("   Compiling {package} v0.1.0 (/checked/programs/{package})");
+                let build_invocation = format!(
+                    "CARGO_TERM_COLOR=never CARGO_TARGET_DIR=build-target cargo build-sbf \
+                     --manifest-path programs/{package}/Cargo.toml -- --locked"
+                );
                 let build_log_text = format!(
-                    "dclutch-sbf-build-run-v1={run_id}\n{compile_marker}\n    Finished release\n"
+                    "dclutch-sbf-build-run-v1={run_id}\n\
+                     dclutch-sbf-build-invocation-v1={build_invocation}\n\
+                     {compile_marker}\n    Finished release\n"
                 );
                 let build_log = write_gate_evidence(
                     root,
@@ -9031,20 +9200,36 @@ mod tests {
                     build_log_text.as_bytes(),
                 );
                 let frame_compile_marker = compile_marker.clone();
+                let frame_invocation = format!(
+                    "RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' \
+                     CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-{label} cargo build-sbf \
+                     --manifest-path programs/{package}/Cargo.toml -- --locked"
+                );
                 let frame_build_log_text = format!(
-                    "dclutch-sbf-frame-run-v1={run_id}\n{frame_compile_marker}\n    Finished release\n"
+                    "dclutch-sbf-frame-run-v1={run_id}\n\
+                     dclutch-sbf-frame-invocation-v1={frame_invocation}\n\
+                     {frame_compile_marker}\n    Finished release\n"
                 );
                 let frame_build_log = write_gate_evidence(
                     root,
                     &format!("frame-build-{label}.log"),
                     frame_build_log_text.as_bytes(),
                 );
+                let frame_object = write_gate_evidence(
+                    root,
+                    &format!(
+                        "frame-target-{label}/sbpf-solana-solana/release/deps/{}.o",
+                        package.replace('-', "_")
+                    ),
+                    format!("measured-object-{label}").as_bytes(),
+                );
                 let frame_report_text = format!(
                     "dclutch-sbf-frame-report-v1\nlabel={label}\npackage={package}\n\
-                     frame_count=3\nframe_bound_bytes=4096\nframes_at_or_over_bound=0\n\
+                     source_tree_sha256={}\nbuild_run_id={run_id}\nframe_count=3\n\
+                     frame_bound_bytes=4096\nframes_at_or_over_bound=0\n\
                      deepest_frame_bytes=2048\nobject_sha256={}\nmeasurement_output:\n  3 \
                      measured frames, bound 4096; deepest:\n      2048    2048 spare  fake\n",
-                    "cd".repeat(32)
+                    source_tree.sha256, frame_object.sha256,
                 );
                 let frame_report = write_gate_evidence(
                     root,
@@ -9055,9 +9240,7 @@ mod tests {
                     let bytes = if *label == "custody" {
                         raw_elf.to_vec()
                     } else {
-                        synthetic_sbf_elf(
-                            u8::try_from(ordinal).expect("fixture link ordinal") + 1,
-                        )
+                        synthetic_sbf_elf(u8::try_from(ordinal).expect("fixture link ordinal") + 1)
                     };
                     let checked = checked_build_manifest(
                         label,
@@ -9083,6 +9266,39 @@ mod tests {
                 } else {
                     (None, None)
                 };
+                let provenance_body = serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema": LINK_PROVENANCE_SCHEMA,
+                    "label": label,
+                    "package": package,
+                    "artifact_stem": if *produces_artifact {
+                        Some(package.replace('-', "_"))
+                    } else {
+                        None
+                    },
+                    "source_revision": "0123456789abcdef0123456789abcdef01234567",
+                    "source_tree_sha256": source_tree.sha256,
+                    "build_run_id": run_id,
+                    "plain_build": {
+                        "invocation": build_invocation,
+                        "log": build_log,
+                        "compile_marker": compile_marker,
+                        "sbf_diagnostics_count": 0,
+                    },
+                    "shipped_elf": elf,
+                    "frame_measurement": {
+                        "invocation": frame_invocation,
+                        "build_log": frame_build_log,
+                        "compile_marker": frame_compile_marker,
+                        "object": frame_object,
+                        "report": frame_report,
+                    },
+                }))
+                .expect("serialize artifact provenance fixture");
+                let artifact_provenance = write_gate_evidence(
+                    root,
+                    &format!("provenance/{label}.json"),
+                    &provenance_body,
+                );
                 CheckedGateLinkV1 {
                     label: (*label).into(),
                     package: (*package).into(),
@@ -9092,6 +9308,7 @@ mod tests {
                     frame_build_log,
                     frame_compile_marker,
                     frame_report,
+                    artifact_provenance,
                     frame_count: 3,
                     frame_bound_bytes: 4096,
                     frames_at_or_over_bound: 0,
@@ -11308,7 +11525,54 @@ mod tests {
             .elf = Some(core);
         fixture.rewrite_gate();
         let error = validate_checked_release_gate(&fixture.args).expect_err("swapped role ELF");
-        assert!(error.to_string().contains("exact canonical role ELF"));
+        assert!(
+            error
+                .to_string()
+                .contains("artifact provenance differs from its named link"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn swapped_or_changed_link_provenance_refuses_even_when_gate_is_reacknowledged() {
+        let mut swapped = Fixture::new();
+        let core = swapped
+            .gate
+            .links
+            .iter()
+            .find(|link| link.label == "core")
+            .expect("core link")
+            .artifact_provenance
+            .clone();
+        swapped
+            .gate
+            .links
+            .iter_mut()
+            .find(|link| link.label == "custody")
+            .expect("custody link")
+            .artifact_provenance = core;
+        swapped.rewrite_gate();
+        let error = validate_checked_release_gate(&swapped.args)
+            .expect_err("swapped role provenance must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("artifact provenance is not at its canonical named-link path"),
+            "{error}"
+        );
+
+        let changed = Fixture::new();
+        fs::write(
+            changed._directory.0.join("provenance/claims.json"),
+            b"changed after admission\n",
+        )
+        .expect("change provenance descriptor");
+        let error = validate_checked_release_gate(&changed.args)
+            .expect_err("changed provenance descriptor must refuse");
+        assert!(
+            error.to_string().contains("bytes or SHA-256 changed"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -11353,14 +11617,27 @@ mod tests {
     #[test]
     fn gate_path_escape_and_symlink_refuse() {
         let mut escape = Fixture::new();
-        escape
+        let custody = escape
             .gate
             .links
             .iter_mut()
             .find(|link| link.label == "custody")
-            .and_then(|link| link.elf.as_mut())
-            .expect("trading ELF")
-            .canonical_path = "../outside.so".into();
+            .expect("custody link");
+        custody.elf.as_mut().expect("custody ELF").canonical_path = "../outside.so".into();
+        let provenance_path = escape
+            ._directory
+            .0
+            .join(&custody.artifact_provenance.canonical_path);
+        let mut provenance: Value =
+            serde_json::from_slice(&fs::read(&provenance_path).expect("read custody provenance"))
+                .expect("custody provenance JSON");
+        provenance["shipped_elf"]["canonical_path"] = json!("../outside.so");
+        fs::write(
+            &provenance_path,
+            serde_json::to_vec_pretty(&provenance).expect("encode changed provenance"),
+        )
+        .expect("write changed provenance");
+        custody.artifact_provenance = gate_file(&escape._directory.0, "provenance/custody.json");
         escape.rewrite_gate();
         assert!(
             validate_checked_release_gate(&escape.args)

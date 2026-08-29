@@ -56,9 +56,9 @@ use solana_program::{
     program::{invoke_signed, set_return_data},
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::SysvarSerialize,
+    sysvar::Sysvar,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
@@ -74,13 +74,12 @@ pub use dclutch_market_core_codec::{
 };
 
 const _: () =
-    assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 3);
+    assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 2);
 
 struct GenericFoundAccounts<'accounts, 'info> {
     found: ProjectedFoundAccountsV2<'accounts, 'info>,
     trading_program: &'accounts AccountInfo<'info>,
     trading_programdata: &'accounts AccountInfo<'info>,
-    clock: &'accounts AccountInfo<'info>,
     funding: &'accounts [AccountInfo<'info>],
     suffix: GenericFoundSuffix<'accounts, 'info>,
 }
@@ -129,7 +128,6 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
         )?;
         let trading_program = account(accounts, PROJECTED_FOUND_ACCOUNT_COUNT_V2)?;
         let trading_programdata = account(accounts, PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 1)?;
-        let clock = account(accounts, PROJECTED_FOUND_ACCOUNT_COUNT_V2 + 2)?;
         let funding_start = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1;
         let suffix_start = funding_start
             .checked_add(funding_count)
@@ -148,10 +146,6 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
             || trading_programdata.is_signer
             || trading_programdata.is_writable
             || trading_programdata.executable
-            || clock.key != &sysvar::clock::ID
-            || clock.is_signer
-            || clock.is_writable
-            || clock.executable
         {
             return Err(CoreSbfError::AccountFrame);
         }
@@ -159,7 +153,6 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
             found,
             trading_program,
             trading_programdata,
-            clock,
             funding,
             suffix,
         })
@@ -244,8 +237,6 @@ struct GenericOpenFrame<'accounts, 'info> {
     aggregate: &'accounts AccountInfo<'info>,
     position: &'accounts AccountInfo<'info>,
     admission: &'accounts AccountInfo<'info>,
-    clock: &'accounts AccountInfo<'info>,
-    rent: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
@@ -279,8 +270,6 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             aggregate: account(accounts, 18)?,
             position: account(accounts, 19)?,
             admission: account(accounts, 20)?,
-            clock: account(accounts, 21)?,
-            rent: account(accounts, 22)?,
         };
         if !value.caller.is_signer
             || value.caller.is_writable
@@ -295,8 +284,6 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             || !value.rent_credit.is_writable
             || value.rent_credit.executable
             || value.core_program.key != program_id
-            || value.clock.key != &sysvar::clock::ID
-            || value.rent.key != &sysvar::rent::ID
         {
             return Err(CoreSbfError::AccountFrame);
         }
@@ -324,8 +311,6 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             value.aggregate,
             value.position,
             value.admission,
-            value.clock,
-            value.rent,
         ] {
             if readonly.is_signer || readonly.is_writable || readonly.executable {
                 return Err(CoreSbfError::AccountFrame);
@@ -407,8 +392,8 @@ fn process_found(
 ) -> Result<(), solana_program::program_error::ProgramError> {
     let frame =
         GenericFoundAccounts::parse(program_id, accounts, usize::from(request.funding_count()))?;
-    let rent = Rent::from_account_info(frame.found.rent).map_err(|_| CoreSbfError::Creation)?;
-    let clock = Clock::from_account_info(frame.clock).map_err(|_| CoreSbfError::Creation)?;
+    let rent = Rent::get().map_err(|_| CoreSbfError::Creation)?;
+    let clock = Clock::get().map_err(|_| CoreSbfError::Creation)?;
     if clock.slot > request.expiry_slot() {
         return Err(CoreSbfError::Reference.into());
     }
@@ -615,8 +600,8 @@ fn process_open(
     claims_receipt_bytes: &[u8],
 ) -> Result<(), solana_program::program_error::ProgramError> {
     let frame = GenericOpenFrame::parse(program_id, accounts)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
-    let clock = Clock::from_account_info(frame.clock).map_err(|_| CoreSbfError::Creation)?;
+    let rent = Rent::get().map_err(|_| CoreSbfError::Creation)?;
+    let clock = Clock::get().map_err(|_| CoreSbfError::Creation)?;
     let roles = authenticate_generic_open_roles(&frame, request)?;
     let mut state = authenticate_generic_market(program_id, &frame, request)?;
     authenticate_generic_caller(frame.caller, frame.trading_program, request, request_bytes)?;

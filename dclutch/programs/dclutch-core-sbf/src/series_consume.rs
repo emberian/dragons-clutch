@@ -297,7 +297,8 @@ pub(crate) fn process(
     let frame = SeriesConsumeAccounts::parse(program_id, accounts)?;
     require_distinct(accounts)?;
     let lock_receipt = decode_lock_receipt(lock_receipt_bytes)?;
-    let rent = Rent::from_account_info(frame.found.rent).map_err(|_| CoreSbfError::Creation)?;
+    let rent = Rent::from_account_info(frame.found.rent.ok_or(CoreSbfError::AccountFrame)?)
+        .map_err(|_| CoreSbfError::Creation)?;
     let release_admissions = Box::new(authenticate_release_batch(&frame, request)?);
 
     // This single preparation establishes the infrastructure root, immutable

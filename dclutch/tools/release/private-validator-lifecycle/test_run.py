@@ -88,12 +88,12 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
     def test_compute_report_names_pass_count_and_exact_mean(self) -> None:
         report = MODULE.compute_unit_report(
             [
-                {"compute_units": {"founding-dcltgmf2": 10, "pyth-verify": 21}},
-                {"compute_units": {"founding-dcltgmf2": 12, "pyth-verify": 22}},
+                {"compute_units": {"founding-dcltgmf3": 10, "pyth-verify": 21}},
+                {"compute_units": {"founding-dcltgmf3": 12, "pyth-verify": 22}},
             ]
         )
         self.assertEqual(
-            report["founding-dcltgmf2"],
+            report["founding-dcltgmf3"],
             {
                 "pass_count": 2,
                 "arithmetic_mean": {

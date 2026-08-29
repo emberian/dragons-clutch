@@ -46,6 +46,7 @@ write_fresh_log() {
     local label=$1 package=$2 run_id=${3:-$RUN_ID}
     {
         printf 'dclutch-sbf-build-run-v1=%s\n' "$run_id"
+        printf 'dclutch-sbf-build-invocation-v1=CARGO_TARGET_DIR=fixture cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked\n' "$package"
         printf '   Compiling %s v0.1.0 (/scratch/programs/%s)\n' "$package" "$package"
         printf '    Finished release [optimized] target(s) in 1.00s\n'
     } > "$SCRATCH/build-$label.log"
@@ -67,6 +68,7 @@ expect_refusal "missing build log refuses" "missing build log for claims" check
 write_fresh_log claims dclutch-claims-sbf
 {
     printf 'dclutch-sbf-build-run-v1=%s\n' "$RUN_ID"
+    printf 'dclutch-sbf-build-invocation-v1=fresh but warm fixture\n'
     printf '    Finished release [optimized] target(s) in 0.01s\n'
 } > "$SCRATCH/build-claims.log"
 expect_refusal "warm build with no compile marker refuses" \
@@ -79,6 +81,12 @@ expect_refusal "stale log from another run refuses" \
 write_fresh_log claims dclutch-core-sbf
 expect_refusal "dependency compile marker cannot stand in for top package" \
     "no fresh top-package compile marker for dclutch-claims-sbf" check
+
+write_fresh_log claims dclutch-claims-sbf
+sed -i.bak '2d' "$SCRATCH/build-claims.log"
+rm "$SCRATCH/build-claims.log.bak"
+expect_refusal "missing build invocation stamp refuses" \
+    "omitted its exact invocation stamp" check
 
 write_fresh_log claims dclutch-claims-sbf
 printf 'core=0\n' > "$DIAGNOSTICS"
@@ -132,6 +140,15 @@ if grep -Fq 'CHECKED_UPGRADE_GATE.json' "$RUNNER" \
     ok "generated Upgrade gate remains behind exact all-13 fresh frame admission"
 else
     not_ok "generated Upgrade gate lost an all-link/frame admission seam"
+fi
+
+if grep -Fq 'rm -f "$link_target/deploy/$stem.so"' "$RUNNER" \
+    && grep -Fq 'artifact_provenance.py' "$RUNNER" \
+    && grep -Fq 'artifact_provenance": evidence(f"provenance/{label}.json")' "$RUNNER" \
+    && grep -Fq -- '--frame-object "frame-target-$label/$TARGET_TRIPLE/release/deps/$object_stem.o"' "$RUNNER"; then
+    ok "each gate link binds a newly emitted ELF to exact source/build/frame provenance"
+else
+    not_ok "release runner lost its named-link artifact provenance binding"
 fi
 
 if [ "$fail" -ne 0 ]; then

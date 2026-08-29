@@ -15,7 +15,6 @@ use dclutch_claims_svm::{
 };
 use dclutch_fractional_claim_contract::{FractionalExposureActionV2, FractionalExposureRequestV2};
 use dclutch_fractional_claim_kernel::{FractionalExposureTermsV2, divide_exposure_shards_v2};
-use sha2::{Digest, Sha256};
 
 use crate::{Error, Result};
 
@@ -268,13 +267,12 @@ pub fn prepare_fractional_exposure_signed_delta_v2(
         rows.swap(0, 1);
     }
     row_scratch.copy_from_slice(&rows);
-    let request_digest: [u8; 32] = Sha256::digest(
-        input
+    let request_digest = request_digest_v2(
+        &input
             .request
             .to_bytes()
             .map_err(|_| Error::IdentityMismatch)?,
-    )
-    .into();
+    );
     SignedDeltaPlanV3::encode_into(
         SignedDeltaPlanInputV3 {
             caller_role: CallerRole::Trading,
@@ -463,4 +461,25 @@ fn decode_position(
 
 fn is_zero(value: &[u8; 32]) -> bool {
     value.iter().all(|byte| *byte == 0)
+}
+
+fn request_digest_v2(bytes: &[u8]) -> [u8; 32] {
+    dclutch_sha256_adapter::digest(bytes)
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+    use dclutch_fractional_claim_contract::FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn exact_request_width_uses_the_same_sha256_digest_as_the_software_oracle() {
+        let mut request = [0_u8; FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2];
+        for (index, byte) in request.iter_mut().enumerate() {
+            *byte = u8::try_from(index % 251).expect("pattern is below u8::MAX");
+        }
+        let oracle: [u8; 32] = Sha256::digest(request).into();
+        assert_eq!(request_digest_v2(&request), oracle);
+    }
 }

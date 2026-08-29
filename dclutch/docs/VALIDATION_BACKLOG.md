@@ -27,14 +27,14 @@ The checkpoint must include:
    separate frame-diagnostic build for every shipped link. Record the gate
    digest, exact source commit, all ELF digests, zero build diagnostics, deepest
    frame per link, and immutable Cargo-lock closure. Reconfirm the compiled
-   DCLTGMF2 59-key and DCLTPCB2 62-key censuses, including the admitted
+   DCLTGMF3 58-key and DCLTPCB2 62-key censuses, including the admitted
    64-key/refused 65-key boundary.
 2. One fresh owned-loopback run through Founding and collateralized participant
    admission before Direct starts. Require the explicit partition of
    1,000,000,000 founding atoms plus 100,000,000 participant atoms, removed mint
    authority, the `direct-buyer` source account owned by `participant`, and both
    participant transactions finalized. Require admission to join the exact
-   `founding_lifecycle_rent_credit` owned by the DCLTGMF2/Open-market generation;
+   `founding_lifecycle_rent_credit` owned by the DCLTGMF3/Open-market generation;
    the earlier Found37 `lifecycle_rent_credit`, an aliased coordinate, or a
    missing founding label must refuse before any signer access. For the
    owned-loopback SourceAbort lane, record the actual slot deltas across its
@@ -103,11 +103,11 @@ The checkpoint must include:
 ## Resolution V7 split lifecycle convergence
 
 - Exercise the atomic-founding recovery order from one finalized successor
-  campaign: `DCLTCFQ1`, `DCLTPCB2`, `DCLTGMF2`, `core-funding-create-v1`,
+  campaign: `DCLTCFQ1`, `DCLTPCB2`, `DCLTGMF3`, `core-funding-create-v1`,
   `resolution-funding-activate-v1`, `core-funding-accept-v1`, then participant
   admission and Direct. Create, activation, and Accept are three distinct
   payer-only transactions. A projected Found37 Market is not a live Core
-  account, and DCLTGMF2 does not create `SourceResolutionStateV2`; neither may
+  account, and DCLTGMF3 does not create `SourceResolutionStateV2`; neither may
   be used to skip CreateFund. Crash after Create must resume activation from
   the live Primary Source and Pending ledger. Crash after activation must
   resume the Accept suffix from the immutable `DCLRFAR1` receipt and the live
@@ -140,6 +140,33 @@ The checkpoint must include:
   Accept, provider execute, terminal Accept, and direct-close controls under
   M-61. Report pass count and the exact 20-seed arithmetic mean for every named
   mutation; no single focused draw is an M-61 result.
+
+## SourceAbort interruption convergence
+
+- After the checked SBF/source family freezes, run one disposable Agave 4.0.2
+  SourceAbort campaign through the three owned-loopback driver stops in
+  `fixtures/source-abort/interruption-contract-v1.json`. Copy the evidence after
+  terminal `source-abort-controller-terminal-v1` reaches `Planned`; restart the
+  same ledger and immutable invocation to `Dispatching`, copy again; restart to
+  `Submitted`, and copy a third time. `Planned` may reauthenticate the
+  predecessor and sign once; `Dispatching` must poll first and may resend only
+  the byte-identical persisted packet; `Submitted` is permanently poll-only.
+- Run `source-abort-interruption-audit-v1` over those three canonical evidence
+  copies, the checked
+  `fixtures/source-abort/interruption-contract-v1.json`, and their embedded
+  finalized `dclutch-source-abort-frozen-union-alt-capture-v1`. Require the ALT
+  to be frozen, active, activated, sorted, duplicate-free, byte-pinned by every
+  evidence copy, and exactly equal to the canonical non-signer address union of
+  DCLTPCA1, DCLTCF1A, and DCLTCF2A. Preserve all three independently verified
+  v0 packets, signatures, fees, CU fields, and the unchanged finalized
+  two-operation prefix.
+- Reconfirm DCLTPCA1 at 36 physical/33 unique keys with +31 admitted at 64 and
+  +32 refused at 65, and both cleanup messages at 19 unique keys. A killed or
+  partial prefix must not authorize Open, terminal, payout, activity success,
+  or completion. Completion remains last and requires all three distinct
+  finalized receipts plus exact principal, controller-native, and rent
+  conservation. Batch this private interruption evidence with the final SBF
+  campaign; the static audit is not validator evidence.
 
 ## Activity V3 devnet convergence
 

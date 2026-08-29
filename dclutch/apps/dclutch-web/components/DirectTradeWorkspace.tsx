@@ -98,7 +98,7 @@ function parseRouteManifest(text: string, checkedInfrastructure: Uint8Array | nu
   const input = value as Record<string, unknown>;
   if (typeof input.payer !== 'string' || !Array.isArray(input.fixedAccounts) || !Array.isArray(input.strategyAccounts)
       || !Array.isArray(input.runtimeAccounts) || !Array.isArray(input.lookupTables)
-      || input.lookupTables.some((entry) => typeof entry !== 'string')) {
+      || input.lookupTables.some((entry) => typeof entry !== 'string') || typeof input.lookupTableCreationSlot !== 'string') {
     throw new Error('route manifest has the wrong exact field types');
   }
   return Object.freeze({
@@ -107,6 +107,7 @@ function parseRouteManifest(text: string, checkedInfrastructure: Uint8Array | nu
     strategyAccounts: Object.freeze(input.strategyAccounts.map((entry, index) => coordinate(entry, `strategy account ${index}`))),
     runtimeAccounts: Object.freeze(input.runtimeAccounts.map((entry, index) => coordinate(entry, `runtime account ${index}`))),
     lookupTables: Object.freeze(input.lookupTables as string[]),
+    lookupTableCreationSlot: unsigned(input.lookupTableCreationSlot, 'lookup table creation slot', 0xffff_ffff_ffff_ffffn),
     checkedInfrastructure,
   });
 }
@@ -118,6 +119,7 @@ function manifestScaffold(): string {
     strategyAccounts: [],
     runtimeAccounts: [],
     lookupTables: [],
+    lookupTableCreationSlot: '',
   }, null, 2);
 }
 

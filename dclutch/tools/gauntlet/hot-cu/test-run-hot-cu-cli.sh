@@ -25,17 +25,25 @@ expect_refusal() {
 
 expect_refusal "relative Trading override refuses" \
     "--trading-elf must be absolute" \
-    "$RUNNER" --work "$SCRATCH/work-relative" --trading-elf relative.so
+    "$RUNNER" --probe --work "$SCRATCH/work-relative" --trading-elf relative.so
 
 expect_refusal "missing Trading override refuses" \
     "--trading-elf is not a regular file" \
-    "$RUNNER" --work "$SCRATCH/work-missing" --trading-elf "$SCRATCH/missing.so"
+    "$RUNNER" --probe --work "$SCRATCH/work-missing" --trading-elf "$SCRATCH/missing.so"
 
 printf 'not-an-elf\n' > "$SCRATCH/regular.so"
 ln -s "$SCRATCH/regular.so" "$SCRATCH/symlink.so"
 expect_refusal "symlink Trading override refuses" \
     "--trading-elf must not be a symlink" \
-    "$RUNNER" --work "$SCRATCH/work-symlink" --trading-elf "$SCRATCH/symlink.so"
+    "$RUNNER" --probe --work "$SCRATCH/work-symlink" --trading-elf "$SCRATCH/symlink.so"
+
+expect_refusal "single draw cannot present as M-61" \
+    "release M-61 requires --checked-gate" \
+    "$RUNNER" --work "$SCRATCH/work-single" --seeds 1
+
+expect_refusal "checked gate requires its out-of-band digest" \
+    "are one required pair" \
+    "$RUNNER" --work "$SCRATCH/work-gate-pair" --checked-gate "$SCRATCH/gate.json"
 
 # These are deliberately literal source seams, not this test script's values.
 # shellcheck disable=SC2016
@@ -58,6 +66,7 @@ printf 'final-direct\n' > "$SCRATCH/final-direct.so"
 base_sha="$(shasum -a 256 "$SCRATCH/elf/dclutch_trading_sbf.so" | cut -d' ' -f1)"
 override_sha="$(shasum -a 256 "$SCRATCH/final-direct.so" | cut -d' ' -f1)"
 if PATH="$SCRATCH/bin:$PATH" "$RUNNER" \
+    --probe \
     --work "$SCRATCH/work-overlay" \
     --elf-dir "$SCRATCH/elf" \
     --trading-elf "$SCRATCH/final-direct.so" \
@@ -74,7 +83,9 @@ expected = sys.argv[2]
 assert summary["trading_elf_sha256"] == expected
 assert summary["trading_elf_override_sha256"] == expected
 assert summary["pass"] == 1
-assert summary["mean_cu"] == 1_234_567
+assert summary["m61_eligible"] is False
+assert summary["mean_cu"] is None
+assert summary["probe_mean_cu"] == 1_234_567
 PY
 then
     ok "Trading override uses a work-local exact-digest overlay"

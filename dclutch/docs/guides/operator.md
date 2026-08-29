@@ -42,7 +42,7 @@ ordered stages:
    the empty Hoard, creates the one-shot projected custody state, funds the
    named obligations, and records the exact controller-owned funding ledgers.
    It does not create claims or open the market.
-3. **Found atomically.** The `DCLTGMF2` transaction locks custody, creates the
+3. **Found atomically.** The `DCLTGMF3` transaction locks custody, creates the
    market, makes it real, sets up claims, and opens trading last in one
    all-or-nothing rollback domain.
 

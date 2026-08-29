@@ -462,7 +462,7 @@ independently project it beyond the chain ceiling before any send.
 Before activation, run the hybrid real-ELF gate with the exact authenticated
 live Registry/Rent dumps beside the five new checked ELFs. It must publish and
 activate the new five-role set, authenticate the unchanged profile, create
-RentCredit, and run DCLTGMF2 through Open. The founding census remains exactly
+RentCredit, and run DCLTGMF3 through Open. The founding census remains exactly
 59 unique keys and one signature; run every shipped-link frame diagnostic and
 report M-61 only as 20/20 plus its true 20-seed mean. A host-only plan test is
 not a substitute for that gate.

@@ -31,7 +31,7 @@ use crate::{
         FOUNDING_REQUIRED_ROLES, authenticate_checked_campaign_plan,
         authenticate_checked_live_substrate, load_market_input, read_keypair_file,
     },
-    cluster::ClusterOriginV1,
+    cluster::{ClusterOriginV1, ExpectedClusterV1},
     market::{
         FoundingActorsV1, MarketExecutionCheckpointV1, SourceAbortRecoveryBaselineV1,
         SourceAbortRecoveryOperationV1, SourceAbortRecoveryPhaseV1,
@@ -43,12 +43,41 @@ use crate::{
 };
 
 pub(crate) const COMMAND_V1: &str = "source-abort-v1";
+pub(crate) const INTERRUPTION_AUDIT_COMMAND_V1: &str = "source-abort-interruption-audit-v1";
 const EVIDENCE_SCHEMA_V1: &str = "dclutch-source-abort-exterior-evidence-v1";
 const COMPLETION_SCHEMA_V1: &str = "dclutch-source-abort-completion-v1";
+const INTERRUPTION_CONTRACT_SCHEMA_V1: &str = "dclutch-source-abort-interruption-contract-v1";
+const INTERRUPTION_AUDIT_SCHEMA_V1: &str = "dclutch-source-abort-interruption-audit-v1";
+const FROZEN_UNION_ALT_CAPTURE_SCHEMA_V1: &str = "dclutch-source-abort-frozen-union-alt-capture-v1";
 const MAX_INPUT_BYTES_V1: u64 = 16 * 1024 * 1024;
 
 pub(crate) fn usage() -> &'static str {
-    "\n  dclutch-local-successor-bootstrap source-abort-v1 \\\n+     --rpc-url RPC [--acknowledge-devnet-genesis DEVNET_GENESIS] \\\n+     --plan ABSOLUTE_JSON --market ABSOLUTE_JSON --founding-evidence ABSOLUTE_JSON \\\n+     --evidence ABSOLUTE_NEW_OR_EXISTING_JSON --completion ABSOLUTE_JSON \\\n+     --lookup-table FROZEN_PUBKEY --fee-payer PUBKEY --beneficiary PUBKEY \\\n+     --founding-founder PUBKEY --substituted-founder PUBKEY \\\n+     --keypair-campaign-payer ABSOLUTE_KEYPAIR \\\n+     --keypair-collateral-mint ABSOLUTE_KEYPAIR \\\n+     --keypair-collateral-wallet ABSOLUTE_KEYPAIR \\\n+     --keypair-founding-beneficiary ABSOLUTE_KEYPAIR \\\n+     --keypair-founding-projection-witness ABSOLUTE_KEYPAIR \\\n+     --keypair-founding-source-funder ABSOLUTE_KEYPAIR [--execute]\n\nWithout --execute, this command authenticates the checked deployment set, exact expired DCLTPCB2 checkpoint, and frozen routing table, then fsyncs a key-free intent. Execute reads the six role files only after that boundary and advances at most the exact crash-resumable DCLTPCA1 -> DCLTCF1A -> DCLTCF2A suffix. Rerun until finalized. It refuses an Open success report, pre-expiry abort, mainnet, changed packet, changed phase, missing receipt, or incomplete conservation."
+    concat!(
+        "\n  dclutch-local-successor-bootstrap source-abort-v1 \\\n",
+        "     --rpc-url RPC [--acknowledge-devnet-genesis DEVNET_GENESIS] \\\n",
+        "     --plan ABSOLUTE_JSON --market ABSOLUTE_JSON --founding-evidence ABSOLUTE_JSON \\\n",
+        "     --evidence ABSOLUTE_NEW_OR_EXISTING_JSON --completion ABSOLUTE_JSON \\\n",
+        "     --lookup-table FROZEN_PUBKEY --fee-payer PUBKEY --beneficiary PUBKEY \\\n",
+        "     --founding-founder PUBKEY --substituted-founder PUBKEY \\\n",
+        "     --keypair-campaign-payer ABSOLUTE_KEYPAIR \\\n",
+        "     --keypair-collateral-mint ABSOLUTE_KEYPAIR \\\n",
+        "     --keypair-collateral-wallet ABSOLUTE_KEYPAIR \\\n",
+        "     --keypair-founding-beneficiary ABSOLUTE_KEYPAIR \\\n",
+        "     --keypair-founding-projection-witness ABSOLUTE_KEYPAIR \\\n",
+        "     --keypair-founding-source-funder ABSOLUTE_KEYPAIR \\\n",
+        "     [--interruption-stop-after planned|dispatching|submitted] [--execute]\n\n",
+        "Without --execute, this command authenticates the checked deployment set, exact expired DCLTPCB2 checkpoint, and frozen routing table, then fsyncs a key-free intent. Execute reads the six role files only after that boundary and advances at most the exact crash-resumable DCLTPCA1 -> DCLTCF1A -> DCLTCF2A suffix. Rerun until finalized. It refuses an Open success report, pre-expiry abort, mainnet, changed packet, changed phase, missing receipt, or incomplete conservation."
+    )
+}
+
+pub(crate) fn interruption_audit_usage() -> &'static str {
+    concat!(
+        "\n  dclutch-local-successor-bootstrap source-abort-interruption-audit-v1 \\\n",
+        "     --contract ABSOLUTE_JSON --planned-evidence ABSOLUTE_JSON \\\n",
+        "     --dispatching-evidence ABSOLUTE_JSON --submitted-evidence ABSOLUTE_JSON \\\n",
+        "     --output ABSOLUTE_NEW_OR_EXISTING_JSON\n\n",
+        "This command is offline and key-free. It authenticates three copied SourceAbort evidence snapshots at the Planned, Dispatching, and Submitted kill boundaries for the terminal cleanup operation. The finalized two-operation prefix, immutable invocation, active instruction, exact signed packet, and embedded finalized frozen-union-ALT capture must remain byte-identical. It writes a static audit only; partial evidence never authorizes an Open Market, terminal state, payout, or external mutation."
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +94,7 @@ struct ArgumentsV1 {
     founding_founder: Pubkey,
     substituted_founder: Pubkey,
     keypairs: BTreeMap<String, PathBuf>,
+    interruption_stop_after: Option<JournalPhaseV1>,
     execute: bool,
 }
 
@@ -167,6 +197,7 @@ struct SourceAbortEvidenceV1 {
     completion_path: String,
     lookup_table: String,
     lookup_table_sha256: String,
+    lookup_table_account: FrozenUnionAltCaptureV1,
     fee_payer: String,
     beneficiary: String,
     founding_founder: String,
@@ -188,6 +219,474 @@ struct SourceAbortCompletionV1<'a> {
     controller_native_refund_lamports: u64,
     controller_rent_refund_lamports: u64,
     transactions: Vec<&'a TransactionEvidence>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct InterruptionBoundaryContractV1 {
+    name: String,
+    phase: JournalPhaseV1,
+    driver_argv: [String; 2],
+    recovery: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct InterruptionContractV1 {
+    schema: String,
+    target_operation: SourceAbortRecoveryOperationV1,
+    operation_labels: [String; 3],
+    boundaries: [InterruptionBoundaryContractV1; 3],
+    exact_frozen_union_alt: bool,
+    wallet_keys_required: bool,
+    rpc_required: bool,
+    external_mutation_authorized: bool,
+    partial_success_authorized: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct FrozenUnionAltCaptureV1 {
+    schema: String,
+    observation_slot: u64,
+    observation_unix_timestamp: i64,
+    key: String,
+    owner: String,
+    lamports: u64,
+    executable: bool,
+    data_base64: String,
+    data_sha256: String,
+}
+
+impl FrozenUnionAltCaptureV1 {
+    fn from_observed(value: &dclutch_versioned_message_operator::ObservedAccount) -> Self {
+        Self {
+            schema: FROZEN_UNION_ALT_CAPTURE_SCHEMA_V1.into(),
+            observation_slot: value.observation.slot,
+            observation_unix_timestamp: value.observation.unix_timestamp,
+            key: value.key.to_string(),
+            owner: value.owner.to_string(),
+            lamports: value.lamports,
+            executable: value.executable,
+            data_base64: BASE64.encode(&value.data),
+            data_sha256: sha256_hex(&value.data),
+        }
+    }
+
+    fn observed_account(&self) -> Result<dclutch_versioned_message_operator::ObservedAccount> {
+        if self.schema != FROZEN_UNION_ALT_CAPTURE_SCHEMA_V1 {
+            return Err(refusal("interruption audit ALT capture schema changed"));
+        }
+        let data = BASE64
+            .decode(&self.data_base64)
+            .map_err(|error| refusal(format!("interruption audit ALT base64: {error}")))?;
+        if BASE64.encode(&data) != self.data_base64 || sha256_hex(&data) != self.data_sha256 {
+            return Err(refusal("interruption audit ALT bytes or digest changed"));
+        }
+        Ok(dclutch_versioned_message_operator::ObservedAccount {
+            observation: dclutch_versioned_message_operator::Observation {
+                slot: self.observation_slot,
+                unix_timestamp: self.observation_unix_timestamp,
+                finality: dclutch_versioned_message_operator::Finality::Finalized,
+            },
+            key: parse_key(&self.key, "interruption audit ALT key")?,
+            owner: parse_key(&self.owner, "interruption audit ALT owner")?,
+            lamports: self.lamports,
+            executable: self.executable,
+            data,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InterruptionAuditArgumentsV1 {
+    contract: PathBuf,
+    planned_evidence: PathBuf,
+    dispatching_evidence: PathBuf,
+    submitted_evidence: PathBuf,
+    output: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InterruptionAuditReportV1 {
+    schema: &'static str,
+    contract_sha256: String,
+    planned_evidence_sha256: String,
+    dispatching_evidence_sha256: String,
+    submitted_evidence_sha256: String,
+    immutable_invocation_sha256: String,
+    lookup_table: String,
+    lookup_table_capture_sha256: String,
+    lookup_table_data_sha256: String,
+    lookup_table_address_sha256: String,
+    lookup_table_address_count: usize,
+    finalized_prefix_signatures: [String; 2],
+    terminal_packet_signature: String,
+    terminal_packet_sha256: String,
+    boundaries: [InterruptionBoundaryContractV1; 3],
+    wallet_key_read_count: u8,
+    rpc_call_count: u8,
+    external_mutation_count: u8,
+    partial_success_authorized: bool,
+}
+
+pub(crate) fn run_interruption_audit(arguments: Vec<String>) -> Result<()> {
+    let arguments = parse_interruption_audit_arguments_v1(arguments)?;
+    let (contract_source, contract) = read_canonical_json_v1::<InterruptionContractV1>(
+        &arguments.contract,
+        "SourceAbort interruption contract",
+    )?;
+    let (planned_source, planned) = read_canonical_json_v1::<SourceAbortEvidenceV1>(
+        &arguments.planned_evidence,
+        "SourceAbort Planned evidence",
+    )?;
+    let (dispatching_source, dispatching) = read_canonical_json_v1::<SourceAbortEvidenceV1>(
+        &arguments.dispatching_evidence,
+        "SourceAbort Dispatching evidence",
+    )?;
+    let (submitted_source, submitted) = read_canonical_json_v1::<SourceAbortEvidenceV1>(
+        &arguments.submitted_evidence,
+        "SourceAbort Submitted evidence",
+    )?;
+    let table = planned.lookup_table_account.observed_account()?;
+    let report = authenticate_interruption_bundle_v1(
+        &contract,
+        &planned,
+        &dispatching,
+        &submitted,
+        &table,
+        sha256_hex(&contract_source),
+        sha256_hex(&planned_source),
+        sha256_hex(&dispatching_source),
+        sha256_hex(&submitted_source),
+        sha256_hex(&canonical_json_v1(&planned.lookup_table_account)?),
+    )?;
+    write_or_authenticate_json_v1(&arguments.output, &report, "SourceAbort interruption audit")?;
+    stdout_v1(serde_json::to_value(report)?)
+}
+
+fn expected_interruption_contract_v1() -> InterruptionContractV1 {
+    InterruptionContractV1 {
+        schema: INTERRUPTION_CONTRACT_SCHEMA_V1.into(),
+        target_operation: SourceAbortRecoveryOperationV1::ControllerTerminal,
+        operation_labels: SourceAbortRecoveryOperationV1::ORDERED
+            .map(|operation| operation.label().to_owned()),
+        boundaries: [
+            InterruptionBoundaryContractV1 {
+                name: "after-planned-fsync".into(),
+                phase: JournalPhaseV1::Planned,
+                driver_argv: ["--interruption-stop-after".into(), "planned".into()],
+                recovery: "reauthenticate-predecessor-then-sign-once-and-fsync-dispatching".into(),
+            },
+            InterruptionBoundaryContractV1 {
+                name: "after-dispatching-fsync-before-send".into(),
+                phase: JournalPhaseV1::Dispatching,
+                driver_argv: ["--interruption-stop-after".into(), "dispatching".into()],
+                recovery: "poll-finalized-then-identical-persisted-packet-resend-only".into(),
+            },
+            InterruptionBoundaryContractV1 {
+                name: "after-submitted-fsync".into(),
+                phase: JournalPhaseV1::Submitted,
+                driver_argv: ["--interruption-stop-after".into(), "submitted".into()],
+                recovery: "poll-exact-persisted-signature-only".into(),
+            },
+        ],
+        exact_frozen_union_alt: true,
+        wallet_keys_required: false,
+        rpc_required: false,
+        external_mutation_authorized: false,
+        partial_success_authorized: false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_interruption_bundle_v1(
+    contract: &InterruptionContractV1,
+    planned: &SourceAbortEvidenceV1,
+    dispatching: &SourceAbortEvidenceV1,
+    submitted: &SourceAbortEvidenceV1,
+    table: &dclutch_versioned_message_operator::ObservedAccount,
+    contract_sha256: String,
+    planned_evidence_sha256: String,
+    dispatching_evidence_sha256: String,
+    submitted_evidence_sha256: String,
+    lookup_table_capture_sha256: String,
+) -> Result<InterruptionAuditReportV1> {
+    let expected_contract = expected_interruption_contract_v1();
+    if contract != &expected_contract {
+        return Err(refusal(
+            "interruption contract changed its boundaries or authority exclusions",
+        ));
+    }
+    let snapshots = [planned, dispatching, submitted];
+    for (snapshot, phase) in snapshots.iter().zip([
+        JournalPhaseV1::Planned,
+        JournalPhaseV1::Dispatching,
+        JournalPhaseV1::Submitted,
+    ]) {
+        if snapshot.schema != EVIDENCE_SCHEMA_V1 || snapshot.baseline.is_none() {
+            return Err(refusal(
+                "interruption snapshot omitted the armed SourceAbort schema or baseline",
+            ));
+        }
+        authenticate_journal_prefix_v1(&snapshot.journals)?;
+        if snapshot.journals.len() != SourceAbortRecoveryOperationV1::ORDERED.len()
+            || snapshot.journals[2].operation != contract.target_operation
+            || snapshot.journals[2].phase != phase
+            || snapshot.journals[..2]
+                .iter()
+                .any(|journal| journal.phase != JournalPhaseV1::Finalized)
+        {
+            return Err(refusal(
+                "interruption snapshots were not the exact two-finalized plus terminal-tail prefix",
+            ));
+        }
+    }
+
+    let immutable_invocation_sha256 = interruption_immutable_sha256_v1(planned)?;
+    if snapshots.iter().skip(1).any(|snapshot| {
+        interruption_immutable_sha256_v1(snapshot).ok().as_deref()
+            != Some(immutable_invocation_sha256.as_str())
+    }) {
+        return Err(refusal(
+            "interruption snapshots changed the immutable SourceAbort invocation",
+        ));
+    }
+    for index in 0..2 {
+        let expected = canonical_json_v1(&planned.journals[index])?;
+        if canonical_json_v1(&dispatching.journals[index])? != expected
+            || canonical_json_v1(&submitted.journals[index])? != expected
+        {
+            return Err(refusal(
+                "interruption snapshots changed the exact finalized journal prefix",
+            ));
+        }
+    }
+    let active_identity = interruption_active_identity_v1(&planned.journals[2])?;
+    if interruption_active_identity_v1(&dispatching.journals[2])? != active_identity
+        || interruption_active_identity_v1(&submitted.journals[2])? != active_identity
+    {
+        return Err(refusal(
+            "interruption snapshots changed the active operation or instruction",
+        ));
+    }
+
+    let table_addresses = authenticate_frozen_table_account_v1(table)?;
+    if snapshots.iter().any(|snapshot| {
+        snapshot.lookup_table != table.key.to_string()
+            || snapshot.lookup_table_sha256 != sha256_hex(&table.data)
+    }) {
+        return Err(refusal(
+            "interruption snapshots changed the exact frozen union ALT",
+        ));
+    }
+    let payer = parse_key(&planned.fee_payer, "interruption audit fee payer")?;
+    let expected_union = canonical_abort_union_addresses_v1(payer, &planned.journals)?;
+    if table_addresses != expected_union {
+        return Err(refusal(
+            "interruption ALT was not the exact canonical union of all three SourceAbort instructions",
+        ));
+    }
+    for snapshot in snapshots {
+        authenticate_snapshot_packets_v1(snapshot, payer, table)?;
+    }
+
+    let dispatching_packet = dispatching.journals[2]
+        .packet
+        .as_ref()
+        .ok_or_else(|| refusal("Dispatching interruption snapshot omitted terminal packet"))?;
+    let submitted_packet = submitted.journals[2]
+        .packet
+        .as_ref()
+        .ok_or_else(|| refusal("Submitted interruption snapshot omitted terminal packet"))?;
+    if dispatching_packet != submitted_packet {
+        return Err(refusal(
+            "Submitted interruption snapshot changed the Dispatching packet or signature",
+        ));
+    }
+    let finalized_prefix_signatures = [0_usize, 1_usize].map(|index| {
+        planned.journals[index]
+            .finalized
+            .as_ref()
+            .expect("journal prefix authenticated above")
+            .signature
+            .clone()
+    });
+    Ok(InterruptionAuditReportV1 {
+        schema: INTERRUPTION_AUDIT_SCHEMA_V1,
+        contract_sha256,
+        planned_evidence_sha256,
+        dispatching_evidence_sha256,
+        submitted_evidence_sha256,
+        immutable_invocation_sha256,
+        lookup_table: table.key.to_string(),
+        lookup_table_capture_sha256,
+        lookup_table_data_sha256: sha256_hex(&table.data),
+        lookup_table_address_sha256: address_list_sha256_v1(&table_addresses),
+        lookup_table_address_count: table_addresses.len(),
+        finalized_prefix_signatures,
+        terminal_packet_signature: dispatching_packet.signature.clone(),
+        terminal_packet_sha256: dispatching_packet.packet_sha256.clone(),
+        boundaries: contract.boundaries.clone(),
+        wallet_key_read_count: 0,
+        rpc_call_count: 0,
+        external_mutation_count: 0,
+        partial_success_authorized: false,
+    })
+}
+
+fn interruption_immutable_sha256_v1(evidence: &SourceAbortEvidenceV1) -> Result<String> {
+    let mut immutable = evidence.clone();
+    immutable.journals.clear();
+    Ok(sha256_hex(&canonical_json_v1(&immutable)?))
+}
+
+fn interruption_active_identity_v1(journal: &SourceAbortJournalV1) -> Result<Vec<u8>> {
+    let mut identity = journal.clone();
+    identity.phase = JournalPhaseV1::Planned;
+    identity.packet = None;
+    identity.finalized = None;
+    canonical_json_v1(&identity)
+}
+
+fn authenticate_snapshot_packets_v1(
+    evidence: &SourceAbortEvidenceV1,
+    payer: Pubkey,
+    table: &dclutch_versioned_message_operator::ObservedAccount,
+) -> Result<()> {
+    for journal in &evidence.journals {
+        if let Some(packet) = &journal.packet {
+            Rpc::authenticate_signed_v0_packet(
+                journal.operation.label(),
+                std::slice::from_ref(&journal.instruction.instruction()?),
+                payer,
+                table,
+                packet,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn canonical_abort_union_addresses_v1(
+    payer: Pubkey,
+    journals: &[SourceAbortJournalV1],
+) -> Result<Vec<Pubkey>> {
+    if journals.len() != SourceAbortRecoveryOperationV1::ORDERED.len() {
+        return Err(refusal(
+            "SourceAbort union ALT requires all three exact journal instructions",
+        ));
+    }
+    let mut addresses = Vec::new();
+    for journal in journals {
+        let instruction = journal.instruction.instruction()?;
+        if instruction.program_id != payer {
+            addresses.push(instruction.program_id);
+        }
+        addresses.extend(
+            instruction
+                .accounts
+                .iter()
+                .filter(|account| !account.is_signer && account.pubkey != payer)
+                .map(|account| account.pubkey),
+        );
+    }
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(refusal("SourceAbort union ALT was empty"));
+    }
+    Ok(addresses)
+}
+
+fn address_list_sha256_v1(addresses: &[Pubkey]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/source-abort/frozen-union-alt-addresses/v1");
+    hasher.update(
+        u64::try_from(addresses.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for address in addresses {
+        hasher.update(address.as_ref());
+    }
+    crate::plan::hex(&hasher.finalize())
+}
+
+fn parse_interruption_audit_arguments_v1(
+    arguments: Vec<String>,
+) -> Result<InterruptionAuditArgumentsV1> {
+    let mut values = BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        if !matches!(
+            argument.as_str(),
+            "--contract"
+                | "--planned-evidence"
+                | "--dispatching-evidence"
+                | "--submitted-evidence"
+                | "--output"
+        ) {
+            return Err(refusal(format!(
+                "unknown {INTERRUPTION_AUDIT_COMMAND_V1} argument: {argument}"
+            )));
+        }
+        let value = iterator
+            .next()
+            .ok_or_else(|| refusal(format!("{argument} requires a value")))?;
+        if values.insert(argument.clone(), value).is_some() {
+            return Err(refusal(format!("{argument} may be supplied only once")));
+        }
+    }
+    let take = |values: &mut BTreeMap<String, String>, flag: &str| {
+        values
+            .remove(flag)
+            .ok_or_else(|| refusal(format!("{flag} is required")))
+    };
+    let parsed = InterruptionAuditArgumentsV1 {
+        contract: absolute(&take(&mut values, "--contract")?, "--contract")?,
+        planned_evidence: absolute(
+            &take(&mut values, "--planned-evidence")?,
+            "--planned-evidence",
+        )?,
+        dispatching_evidence: absolute(
+            &take(&mut values, "--dispatching-evidence")?,
+            "--dispatching-evidence",
+        )?,
+        submitted_evidence: absolute(
+            &take(&mut values, "--submitted-evidence")?,
+            "--submitted-evidence",
+        )?,
+        output: absolute(&take(&mut values, "--output")?, "--output")?,
+    };
+    let paths = [
+        &parsed.contract,
+        &parsed.planned_evidence,
+        &parsed.dispatching_evidence,
+        &parsed.submitted_evidence,
+        &parsed.output,
+    ];
+    for (index, left) in paths.iter().enumerate() {
+        if paths.iter().skip(index + 1).any(|right| left == right) {
+            return Err(refusal(
+                "interruption audit input and output paths must be pairwise distinct",
+            ));
+        }
+    }
+    Ok(parsed)
+}
+
+fn read_canonical_json_v1<T: serde::de::DeserializeOwned + Serialize>(
+    path: &Path,
+    label: &str,
+) -> Result<(Vec<u8>, T)> {
+    let source = read_bounded(path, label)?;
+    let value: T = serde_json::from_slice(&source)?;
+    if canonical_json_v1(&value)? != source {
+        return Err(refusal(format!("{label} was not exact canonical JSON")));
+    }
+    Ok((source, value))
 }
 
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
@@ -417,6 +916,23 @@ fn recover_active_v1(
         .checked_sub(1)
         .ok_or_else(|| refusal("SourceAbort recovery omitted active journal"))?;
     let active = evidence.journals[index].clone();
+    if should_stop_interruption_v1(
+        active.operation,
+        active.phase,
+        arguments.interruption_stop_after,
+    ) {
+        return stdout_progress_v1(
+            arguments,
+            active.operation,
+            match active.phase {
+                JournalPhaseV1::Planned => "interrupted-after-planned-fsync",
+                JournalPhaseV1::Dispatching => "interrupted-after-dispatching-fsync-before-send",
+                JournalPhaseV1::Submitted => "interrupted-after-submitted-fsync",
+                JournalPhaseV1::Finalized => "finalized",
+            },
+            "Owned-loopback interruption seam reached. The journal is durable; copy this exact evidence before restarting the same immutable invocation without the stop flag.",
+        );
+    }
     let instruction = active.instruction.instruction()?;
     match active.phase {
         JournalPhaseV1::Planned => {
@@ -692,6 +1208,7 @@ fn load_or_create_evidence_v1(
         completion_path: arguments.completion.display().to_string(),
         lookup_table: arguments.lookup_table.to_string(),
         lookup_table_sha256: sha256_hex(&table.data),
+        lookup_table_account: FrozenUnionAltCaptureV1::from_observed(table),
         fee_payer: arguments.fee_payer.to_string(),
         beneficiary: arguments.beneficiary.to_string(),
         founding_founder: arguments.founding_founder.to_string(),
@@ -725,6 +1242,7 @@ fn authenticate_evidence_v1(
         || evidence.completion_path != arguments.completion.display().to_string()
         || evidence.lookup_table != arguments.lookup_table.to_string()
         || evidence.lookup_table_sha256 != sha256_hex(&table.data)
+        || evidence.lookup_table_account != FrozenUnionAltCaptureV1::from_observed(table)
         || evidence.fee_payer != arguments.fee_payer.to_string()
         || evidence.beneficiary != arguments.beneficiary.to_string()
         || evidence.founding_founder != arguments.founding_founder.to_string()
@@ -743,6 +1261,19 @@ fn authenticate_journal_prefix_v1(journals: &[SourceAbortJournalV1]) -> Result<(
     }
     for (index, journal) in journals.iter().enumerate() {
         let operation = SourceAbortRecoveryOperationV1::ORDERED[index];
+        let finalized_receipt_changed = journal.phase == JournalPhaseV1::Finalized
+            && journal
+                .packet
+                .as_ref()
+                .zip(journal.finalized.as_ref())
+                .is_none_or(|(packet, receipt)| {
+                    receipt.label != operation.label()
+                        || receipt.signature != packet.signature
+                        || receipt.error.is_some()
+                        || !receipt.transaction_metadata_available
+                        || receipt.fee_lamports.is_none()
+                        || receipt.compute_units_consumed.is_none()
+                });
         if journal.operation != operation
             || journal.predecessor != operation.predecessor()
             || journal.successor != operation.successor()
@@ -757,6 +1288,7 @@ fn authenticate_journal_prefix_v1(journals: &[SourceAbortJournalV1]) -> Result<(
             ) && (journal.packet.is_none() || journal.finalized.is_some()))
             || (journal.phase == JournalPhaseV1::Finalized
                 && (journal.packet.is_none() || journal.finalized.is_none()))
+            || finalized_receipt_changed
         {
             return Err(refusal(
                 "SourceAbort journals were not one exact canonical adjacent prefix",
@@ -774,6 +1306,13 @@ fn observe_frozen_table_v1(
     let value = values
         .pop()
         .ok_or_else(|| refusal("SourceAbort lookup observation omitted its account"))?;
+    authenticate_frozen_table_account_v1(&value)?;
+    Ok(value)
+}
+
+fn authenticate_frozen_table_account_v1(
+    value: &dclutch_versioned_message_operator::ObservedAccount,
+) -> Result<Vec<Pubkey>> {
     let decoded = AddressLookupTable::deserialize(&value.data)
         .map_err(|_| refusal("SourceAbort lookup table did not decode"))?;
     if value.owner != lookup_table_program::id()
@@ -787,7 +1326,16 @@ fn observe_frozen_table_v1(
             "SourceAbort lookup table was not exact, frozen, active, and activated",
         ));
     }
-    Ok(value)
+    let mut addresses = decoded.addresses.to_vec();
+    let observed_order = addresses.clone();
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    if addresses != observed_order {
+        return Err(refusal(
+            "SourceAbort lookup table addresses were not canonical and duplicate-free",
+        ));
+    }
+    Ok(addresses)
 }
 
 fn write_completion_v1(arguments: &ArgumentsV1, evidence: &SourceAbortEvidenceV1) -> Result<()> {
@@ -874,6 +1422,7 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
                 | "--beneficiary"
                 | "--founding-founder"
                 | "--substituted-founder"
+                | "--interruption-stop-after"
         ) && !argument.starts_with("--keypair-")
         {
             return Err(refusal(format!(
@@ -892,6 +1441,25 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let rpc_url = take(&mut values, "--rpc-url")?;
     let acknowledgment = values.remove("--acknowledge-devnet-genesis");
     let origin = ClusterOriginV1::parse(&rpc_url, acknowledgment.as_deref())?;
+    let interruption_stop_after = values
+        .remove("--interruption-stop-after")
+        .map(|value| match value.as_str() {
+            "planned" => Ok(JournalPhaseV1::Planned),
+            "dispatching" => Ok(JournalPhaseV1::Dispatching),
+            "submitted" => Ok(JournalPhaseV1::Submitted),
+            _ => Err(refusal(
+                "--interruption-stop-after must be planned, dispatching, or submitted",
+            )),
+        })
+        .transpose()?;
+    if interruption_stop_after.is_some() {
+        ExpectedClusterV1::OwnedLoopback.authenticate(&origin)?;
+        if !execute {
+            return Err(refusal(
+                "--interruption-stop-after requires --execute against owned loopback",
+            ));
+        }
+    }
     let mut keypairs = BTreeMap::new();
     for role in FOUNDING_REQUIRED_ROLES {
         let flag = format!("--keypair-{role}");
@@ -943,6 +1511,7 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<ArgumentsV1> {
         founding_founder,
         substituted_founder,
         keypairs,
+        interruption_stop_after,
         execute,
     };
     if let Some((flag, _)) = values.first_key_value() {
@@ -1100,6 +1669,16 @@ fn stdout_progress_v1(
     }))
 }
 
+fn should_stop_interruption_v1(
+    operation: SourceAbortRecoveryOperationV1,
+    phase: JournalPhaseV1,
+    requested: Option<JournalPhaseV1>,
+) -> bool {
+    operation == SourceAbortRecoveryOperationV1::ControllerTerminal
+        && requested == Some(phase)
+        && phase != JournalPhaseV1::Finalized
+}
+
 fn stdout_v1(value: Value) -> Result<()> {
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(&serde_json::to_vec_pretty(&value)?)?;
@@ -1114,6 +1693,11 @@ fn refusal(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
+
+    use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
+    use solana_program::instruction::AccountMeta;
+    use solana_sdk::{hash::Hash, transaction::VersionedTransaction};
 
     fn instruction() -> DurableInstructionV1 {
         DurableInstructionV1::from_instruction(&Instruction {
@@ -1210,5 +1794,375 @@ mod tests {
             SourceAbortRecoveryOperationV1::ControllerTerminal.successor(),
             SourceAbortRecoveryPhaseV1::Complete
         );
+    }
+
+    #[test]
+    fn source_abort_help_has_no_literal_patch_markers() {
+        for text in [usage(), interruption_audit_usage()] {
+            assert!(!text.contains("\n+"));
+        }
+        assert!(usage().contains("     --rpc-url RPC"));
+        assert!(interruption_audit_usage().contains("     --dispatching-evidence ABSOLUTE_JSON"));
+    }
+
+    fn key(byte: u8) -> Pubkey {
+        Pubkey::new_from_array([byte; 32])
+    }
+
+    fn abort_instruction(
+        operation: SourceAbortRecoveryOperationV1,
+        beneficiary: Pubkey,
+    ) -> Instruction {
+        let byte = u8::try_from(operation.ordinal()).expect("ordinal") + 10;
+        let mut accounts = vec![AccountMeta::new(key(byte + 20), false)];
+        if operation == SourceAbortRecoveryOperationV1::Custody {
+            accounts.push(AccountMeta::new_readonly(beneficiary, true));
+        }
+        Instruction {
+            program_id: key(byte),
+            accounts,
+            data: operation.label().as_bytes().to_vec(),
+        }
+    }
+
+    fn frozen_union_table(
+        payer: Pubkey,
+        journals: &[SourceAbortJournalV1],
+    ) -> dclutch_versioned_message_operator::ObservedAccount {
+        let addresses = canonical_abort_union_addresses_v1(payer, journals).expect("union");
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                authority: None,
+                deactivation_slot: u64::MAX,
+                last_extended_slot: 40,
+                last_extended_slot_start_index: 0,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(addresses),
+        };
+        dclutch_versioned_message_operator::ObservedAccount {
+            observation: dclutch_versioned_message_operator::Observation {
+                slot: 41,
+                unix_timestamp: 1_800_000_000,
+                finality: dclutch_versioned_message_operator::Finality::Finalized,
+            },
+            key: key(90),
+            owner: lookup_table_program::id(),
+            lamports: 9_999,
+            executable: false,
+            data: table.serialize_for_tests().expect("ALT bytes"),
+        }
+    }
+
+    fn signed_packet(
+        operation: SourceAbortRecoveryOperationV1,
+        instruction: &Instruction,
+        payer: &Keypair,
+        beneficiary: &Keypair,
+        table: &dclutch_versioned_message_operator::ObservedAccount,
+    ) -> SignedVersionedPacketV1 {
+        let bounded = crate::rpc::bounded_instructions(std::slice::from_ref(instruction), None)
+            .expect("bounded instruction");
+        let routed = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            Hash::new_from_array([operation.ordinal() as u8 + 50; 32]),
+            table.observation,
+            std::slice::from_ref(table),
+        )
+        .expect("compiled packet");
+        let signers = if operation == SourceAbortRecoveryOperationV1::Custody {
+            vec![payer, beneficiary]
+        } else {
+            vec![payer]
+        };
+        let transaction =
+            VersionedTransaction::try_new(routed.message, &signers).expect("signed packet");
+        let packet = bincode::serialize(&transaction).expect("packet bytes");
+        SignedVersionedPacketV1 {
+            signature: transaction.signatures[0].to_string(),
+            packet_base64: BASE64.encode(&packet),
+            packet_sha256: sha256_hex(&packet),
+            last_valid_block_height: 500,
+        }
+    }
+
+    fn finalized_receipt(
+        operation: SourceAbortRecoveryOperationV1,
+        packet: &SignedVersionedPacketV1,
+    ) -> TransactionEvidence {
+        TransactionEvidence {
+            label: operation.label().into(),
+            signature: packet.signature.clone(),
+            slot: 100 + operation.ordinal() as u64,
+            transaction_metadata_available: true,
+            fee_lamports: Some(5_000),
+            fee_only_balance_change: Some(false),
+            compute_units_consumed: Some(100_000),
+            error: None,
+            logs: Vec::new(),
+        }
+    }
+
+    fn interruption_fixture() -> (
+        InterruptionContractV1,
+        SourceAbortEvidenceV1,
+        SourceAbortEvidenceV1,
+        SourceAbortEvidenceV1,
+        dclutch_versioned_message_operator::ObservedAccount,
+    ) {
+        let payer = Keypair::new_from_array([1; 32]);
+        let beneficiary = Keypair::new_from_array([2; 32]);
+        let instructions = SourceAbortRecoveryOperationV1::ORDERED
+            .map(|operation| abort_instruction(operation, beneficiary.pubkey()));
+        let mut journals = SourceAbortRecoveryOperationV1::ORDERED
+            .into_iter()
+            .zip(instructions.iter())
+            .map(|(operation, instruction)| SourceAbortJournalV1 {
+                operation,
+                predecessor: operation.predecessor(),
+                successor: operation.successor(),
+                phase: JournalPhaseV1::Planned,
+                instruction: DurableInstructionV1::from_instruction(instruction),
+                complete_keys: operation.expected_complete_keys(),
+                message_bytes: 200,
+                packet_bytes: 400,
+                packet: None,
+                finalized: None,
+            })
+            .collect::<Vec<_>>();
+        let table = frozen_union_table(payer.pubkey(), &journals);
+        for (index, journal) in journals.iter_mut().enumerate().take(2) {
+            let operation = journal.operation;
+            let packet = signed_packet(
+                operation,
+                &instructions[index],
+                &payer,
+                &beneficiary,
+                &table,
+            );
+            journal.phase = JournalPhaseV1::Finalized;
+            journal.finalized = Some(finalized_receipt(operation, &packet));
+            journal.packet = Some(packet);
+        }
+        let checkpoint = MarketExecutionCheckpointV1 {
+            schema: crate::market::DCLTPCB2_CHECKPOINT_SCHEMA_V1.into(),
+            market: key(70).to_string(),
+            founding_custody_context: key(71).to_string(),
+            direct_selected_manifest_entry_index: 1,
+            direct_capability_root: key(72).to_string(),
+            direct_trading_funding_ledger: key(73).to_string(),
+            expiry_slot: 80,
+            found_record: key(74).to_string(),
+            lock_record: key(75).to_string(),
+            local_participant_fixture_liquidity: None,
+            accounts: BTreeMap::new(),
+            completed: vec!["DCLTPCB2 staged".into()],
+        };
+        let baseline = SourceAbortRecoveryBaselineV1 {
+            market: checkpoint.market.clone(),
+            controller_funding_checkpoint: key(76).to_string(),
+            funding_ledgers: vec![key(77).to_string(), key(78).to_string()],
+            destination: key(79).to_string(),
+            destination_before_atoms: 1,
+            principal_atoms: 1_000_000_000,
+            lifecycle_rent_credit: key(80).to_string(),
+            lifecycle_rent_credit_before_lamports: 2,
+            controller_funding_source: key(81).to_string(),
+            controller_funding_source_before_lamports: 3,
+            controller_rent_refund_lamports: 4,
+            controller_native_refund_lamports: 5,
+            beneficiary: beneficiary.pubkey().to_string(),
+            expiry_slot: checkpoint.expiry_slot,
+        };
+        let planned = SourceAbortEvidenceV1 {
+            schema: EVIDENCE_SCHEMA_V1.into(),
+            cluster: "owned-loopback".into(),
+            genesis_hash: "fixture-genesis".into(),
+            rpc_url: "http://127.0.0.1:8899".into(),
+            plan_sha256: "11".repeat(32),
+            market_sha256: "22".repeat(32),
+            founding_evidence_sha256: "33".repeat(32),
+            evidence_path: "/tmp/source-abort.json".into(),
+            completion_path: "/tmp/source-abort-completion.json".into(),
+            lookup_table: table.key.to_string(),
+            lookup_table_sha256: sha256_hex(&table.data),
+            lookup_table_account: FrozenUnionAltCaptureV1::from_observed(&table),
+            fee_payer: payer.pubkey().to_string(),
+            beneficiary: beneficiary.pubkey().to_string(),
+            founding_founder: key(82).to_string(),
+            substituted_founder: key(83).to_string(),
+            founding_checkpoint: checkpoint,
+            baseline: Some(baseline),
+            journals,
+        };
+        let terminal_packet = signed_packet(
+            SourceAbortRecoveryOperationV1::ControllerTerminal,
+            &instructions[2],
+            &payer,
+            &beneficiary,
+            &table,
+        );
+        let mut dispatching = planned.clone();
+        dispatching.journals[2].phase = JournalPhaseV1::Dispatching;
+        dispatching.journals[2].packet = Some(terminal_packet.clone());
+        let mut submitted = dispatching.clone();
+        submitted.journals[2].phase = JournalPhaseV1::Submitted;
+        (
+            expected_interruption_contract_v1(),
+            planned,
+            dispatching,
+            submitted,
+            table,
+        )
+    }
+
+    #[test]
+    fn source_abort_interruption_contract_fixture_is_canonical_and_frozen() {
+        let source =
+            include_bytes!("../../../../../fixtures/source-abort/interruption-contract-v1.json");
+        let contract: InterruptionContractV1 =
+            serde_json::from_slice(source).expect("contract fixture");
+        assert_eq!(contract, expected_interruption_contract_v1());
+        assert_eq!(source.as_slice(), canonical_json_v1(&contract).unwrap());
+    }
+
+    #[test]
+    fn source_abort_interruption_audit_binds_three_boundaries_packet_and_union_alt() {
+        let (contract, planned, dispatching, submitted, table) = interruption_fixture();
+        let report = authenticate_interruption_bundle_v1(
+            &contract,
+            &planned,
+            &dispatching,
+            &submitted,
+            &table,
+            "a".into(),
+            "b".into(),
+            "c".into(),
+            "d".into(),
+            "e".into(),
+        )
+        .expect("static interruption audit");
+        assert_eq!(report.wallet_key_read_count, 0);
+        assert_eq!(report.rpc_call_count, 0);
+        assert_eq!(report.external_mutation_count, 0);
+        assert!(!report.partial_success_authorized);
+        assert_eq!(report.lookup_table_address_count, 6);
+        assert_eq!(report.boundaries, contract.boundaries);
+    }
+
+    #[test]
+    fn source_abort_interruption_audit_refuses_changed_boundary_receipt_packet_or_alt() {
+        let (contract, planned, dispatching, submitted, table) = interruption_fixture();
+        let audit =
+            |contract: &InterruptionContractV1,
+             planned: &SourceAbortEvidenceV1,
+             dispatching: &SourceAbortEvidenceV1,
+             submitted: &SourceAbortEvidenceV1,
+             table: &dclutch_versioned_message_operator::ObservedAccount| {
+                authenticate_interruption_bundle_v1(
+                    contract,
+                    planned,
+                    dispatching,
+                    submitted,
+                    table,
+                    "a".into(),
+                    "b".into(),
+                    "c".into(),
+                    "d".into(),
+                    "e".into(),
+                )
+            };
+
+        let mut changed_contract = contract.clone();
+        changed_contract.partial_success_authorized = true;
+        assert!(
+            audit(
+                &changed_contract,
+                &planned,
+                &dispatching,
+                &submitted,
+                &table
+            )
+            .is_err()
+        );
+
+        let mut changed_receipt = planned.clone();
+        changed_receipt.journals[0]
+            .finalized
+            .as_mut()
+            .unwrap()
+            .signature = Signature::default().to_string();
+        assert!(
+            audit(
+                &contract,
+                &changed_receipt,
+                &dispatching,
+                &submitted,
+                &table
+            )
+            .is_err()
+        );
+
+        let mut changed_submitted = submitted.clone();
+        changed_submitted.journals[2]
+            .packet
+            .as_mut()
+            .unwrap()
+            .last_valid_block_height += 1;
+        assert!(
+            audit(
+                &contract,
+                &planned,
+                &dispatching,
+                &changed_submitted,
+                &table
+            )
+            .is_err()
+        );
+
+        let decoded = AddressLookupTable::deserialize(&table.data).expect("ALT");
+        let mut changed_table = table.clone();
+        changed_table.data = AddressLookupTable {
+            meta: decoded.meta,
+            addresses: Cow::Owned(decoded.addresses[..decoded.addresses.len() - 1].to_vec()),
+        }
+        .serialize_for_tests()
+        .expect("changed ALT bytes");
+        assert!(
+            audit(
+                &contract,
+                &planned,
+                &dispatching,
+                &submitted,
+                &changed_table
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn source_abort_interruption_stops_only_at_the_terminal_durable_boundary() {
+        for phase in [
+            JournalPhaseV1::Planned,
+            JournalPhaseV1::Dispatching,
+            JournalPhaseV1::Submitted,
+        ] {
+            assert!(should_stop_interruption_v1(
+                SourceAbortRecoveryOperationV1::ControllerTerminal,
+                phase,
+                Some(phase),
+            ));
+            assert!(!should_stop_interruption_v1(
+                SourceAbortRecoveryOperationV1::ControllerFirst,
+                phase,
+                Some(phase),
+            ));
+        }
+        assert!(!should_stop_interruption_v1(
+            SourceAbortRecoveryOperationV1::ControllerTerminal,
+            JournalPhaseV1::Finalized,
+            Some(JournalPhaseV1::Finalized),
+        ));
     }
 }

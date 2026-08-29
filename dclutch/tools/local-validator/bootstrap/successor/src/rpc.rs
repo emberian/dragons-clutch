@@ -47,7 +47,7 @@ const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 /// and `admit_heap_frame_v1` re-derives the grant from the instructions sysvar
 /// the runtime itself serialized, applying agave's own
 /// `sanitize_requested_heap_size`. Exactly two routes declare the extended
-/// profile — `DCLTGMF2` and `DCLTPCB2` — and both now carry the instructions
+/// profile — `DCLTGMF3` and `DCLTPCB2` — and both now carry the instructions
 /// sysvar in their frame so the adapter can find it. The Hot execution path is
 /// deliberately **not** on that list and keeps the 32 KiB discipline, so this
 /// constant is applied per transaction and never globally.
@@ -1136,7 +1136,7 @@ impl Rpc {
 
     /// Submit one routed v0 transaction on a runtime-granted extended heap.
     ///
-    /// Only the two founding routes may use this: `DCLTGMF2` and `DCLTPCB2`
+    /// Only the two founding routes may use this: `DCLTGMF3` and `DCLTPCB2`
     /// are the exhaustive list in
     /// `entrypoint_adapter::declares_extended_heap_profile_v1`, and each
     /// presents the instructions sysvar in its own frame so the program can

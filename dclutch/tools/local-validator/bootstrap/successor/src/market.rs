@@ -47,9 +47,10 @@ use dclutch_direct_codec::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
-    FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
-    MarketCoreStateSeedsV2, MarketIdentity, Phase, ProjectFoundReceiptV2, ProjectFoundRequestV2,
-    Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
+    Identity, MarketCoreStateSeedsV2, MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2, Phase,
+    ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness, Request,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
     generic_founding_funding_list_id_v1,
 };
 use dclutch_market_founding_v1_operator::{
@@ -178,7 +179,7 @@ const TERMINAL_WINDOW_WIDTH_SECONDS: i64 = 300;
 /// refreshed. A Market resolving against a live feed states seconds here.
 const FIXTURE_SHELF_LIFE_SECONDS: u32 = 31_536_000;
 
-pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complete authenticated Product and Source graph, creates the lifecycle credit, projects the future Market through Core Found37, prepares the two controller-owned FundingLedgerV2 accounts and their checkpoint through DCLTCFQ1, stages projected custody through DCLTPCB2, and then opens the Market atomically through DCLTGMF2. The opening transaction locks the Hoard, creates Core and Claims state, realizes custody, consumes the one-shot permit, and commits Open last. Compute evidence must be remeasured for these split routes; the runner does not reuse pre-split founding measurements.";
+pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complete authenticated Product and Source graph, creates the lifecycle credit, projects the future Market through Core Found37, prepares the two controller-owned FundingLedgerV2 accounts and their checkpoint through DCLTCFQ1, stages projected custody through DCLTPCB2, and then opens the Market atomically through DCLTGMF3. The opening transaction locks the Hoard, creates Core and Claims state, realizes custody, consumes the one-shot permit, and commits Open last. Compute evidence must be remeasured for these split routes; the runner does not reuse pre-split founding measurements.";
 
 /// The one local-only participant allocation. It is test liquidity, not
 /// founding principal, and therefore never enters a Hoard or a principal cap.
@@ -1260,7 +1261,7 @@ pub(crate) fn materialize_dcltcfq1_checkpoint_v1(
 /// Rebuild the already-finalized DCLTPCB2 checkpoint from its Planned payload
 /// and the exact accounts now visible on chain. The normal checkpoint resume
 /// subsequently re-derives every coordinate and runs the full projected-
-/// Custody verifier before DCLTGMF2 can be constructed.
+/// Custody verifier before DCLTGMF3 can be constructed.
 pub(crate) fn materialize_dcltpcb2_checkpoint_v1(
     rpc: &mut Rpc,
     binding: &FoundingSubmissionBindingV1,
@@ -2538,7 +2539,7 @@ fn targets_found31(plan: &SuccessorPlan, input: &MarketRunInput, mint: Pubkey) -
     Ok(derive_founding_targets(plan, input, mint)?.found31_market)
 }
 
-/// Rebuild full caller-consumable evidence after the atomic DCLTGMF2 packet
+/// Rebuild full caller-consumable evidence after the atomic DCLTGMF3 packet
 /// finalized but the process died before the campaign report update.
 pub(crate) fn recover_completed_market_from_checkpoint(
     rpc: &mut Rpc,
@@ -2604,8 +2605,8 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         };
         if let Some(evidence) = finalize_existing_founding_submission_v1(
             rpc,
-            "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
-            FoundingSubmissionOperationV1::Dcltgmf2,
+            "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
+            FoundingSubmissionOperationV1::Dcltgmf3,
             recorder,
             &mut completion,
         )? {
@@ -2629,16 +2630,16 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     }
     let mut completed = checkpoint.completed.clone();
     completed.push(
-        "recovered finalized DCLTGMF2 poststate from the durable DCLTPCB2 checkpoint after process interruption".into(),
+        "recovered finalized DCLTGMF3 poststate from the durable DCLTPCB2 checkpoint after process interruption".into(),
     );
     completed.push(
-        "executed DCLTGMF2: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
+        "executed DCLTGMF3: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
     );
     let routing_table_keys = finalized_founding_routing_table_keys_v1(
         submission_recorder
             .as_deref()
             .ok_or_else(|| Error::new("completed public recovery omitted its journal owner"))?,
-        FoundingSubmissionOperationV1::Dcltgmf2,
+        FoundingSubmissionOperationV1::Dcltgmf3,
     )?;
     let minimum_slot = rpc.finalized_slot()?;
     execute_funding_readiness_suffix_v1(
@@ -3259,7 +3260,7 @@ pub(crate) struct FoundingTargetsV1 {
     pub(crate) realm_record: Pubkey,
     /// The canonical Found37 Market at the input's own generation.
     pub(crate) found31_market: Pubkey,
-    /// The DCLTGMF2 Market at generation + 1 — the one that ends Open, which
+    /// The DCLTGMF3 Market at generation + 1 — the one that ends Open, which
     /// is the product of the whole founding.
     pub(crate) open_market: Pubkey,
     /// The abort-lane Market at generation + 2 (staged and unwound; its
@@ -3819,7 +3820,6 @@ fn found_snapshot_keys(
         pubkey(&plan.core.program_id)?,
         pubkey(&plan.core.programdata_id)?,
         pubkey(&plan.registry.program_id)?,
-        sysvar::rent::ID,
         system_program::ID,
         pubkey(&plan.infrastructure_profile.address)?,
         registry_artifact.0,
@@ -3839,7 +3839,25 @@ fn found_snapshot_keys(
     Ok(keys)
 }
 
-/// The compact ProjectedFound V2 prefix consumed inside DCLTGMF2.
+/// Complete ordinary ProjectFound V2 graph with runtime Rent supplied by Core.
+fn ordinary_project_found_snapshot_keys_v2(
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+    market: Pubkey,
+    credit: Pubkey,
+    records: &MarketRecords,
+) -> Result<Vec<Pubkey>> {
+    let mut keys = found_snapshot_keys(plan, payer, market, credit, records)?;
+    keys.remove(FOUND_RENT_SYSVAR_INDEX_V3);
+    if keys.len() != PROJECT_FOUND_ACCOUNT_COUNT_V2 {
+        return Err(Error::new(
+            "ordinary ProjectFound36 runtime-sysvar erasure drifted",
+        ));
+    }
+    Ok(keys)
+}
+
+/// The compact ProjectedFound V2 prefix consumed inside DCLTGMF3.
 ///
 /// Realm, SourceMaterial, SourceSpec, capacity profile, manipulation floor,
 /// and linked basis were authenticated when Custody created the projection.
@@ -4104,17 +4122,17 @@ const PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2: [u8; 8] = *b"DCLTPCB2";
 /// transaction's heap grant from that sysvar and scans the instruction's own
 /// account list to find it, so a frame without it keeps the compile-time
 /// 32 KiB ceiling this route was measured exhausting at stage three.
-const PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNTS_V2: usize = 85;
-const PROJECTED_CUSTODY_BOOTSTRAP_CHECKPOINT_V2: usize = 85;
-const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_LEDGER_V2: usize = 86;
-const PROJECTED_CUSTODY_BOOTSTRAP_TRADING_LEDGER_V2: usize = 87;
-const PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNTS_V2: usize = 88;
+const PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNTS_V2: usize = 84;
+const PROJECTED_CUSTODY_BOOTSTRAP_CHECKPOINT_V2: usize = 84;
+const PROJECTED_CUSTODY_BOOTSTRAP_RESOLUTION_LEDGER_V2: usize = 85;
+const PROJECTED_CUSTODY_BOOTSTRAP_TRADING_LEDGER_V2: usize = 86;
+const PROJECTED_CUSTODY_BOOTSTRAP_ACCOUNTS_V2: usize = 87;
 const PROJECTED_CUSTODY_BOOTSTRAP_COMPLETE_KEYS_V2: usize = 60;
 const DEVNET_ACCOUNT_LOCK_LIMIT_V1: usize = 64;
 
 const CONTROLLER_FUNDING_PREPARE_MAGIC_V1: [u8; 8] = *b"DCLTCFQ1";
-const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 49;
-const CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1: usize = 51;
+const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 47;
+const CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1: usize = 49;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompiledMessageGeometryV1 {
@@ -4831,9 +4849,8 @@ fn build_controller_funding_prepare_v1(
         AccountMeta::new(resolution_ledger.address, false),
         AccountMeta::new(trading_ledger.address, false),
         AccountMeta::new(coordinates.controller_funding_checkpoint, false),
-        AccountMeta::new_readonly(sysvar::clock::ID, false),
     ];
-    for (index, key) in found_snapshot_keys(
+    for (index, key) in ordinary_project_found_snapshot_keys_v2(
         plan,
         projection_witness,
         coordinates.market,
@@ -4851,7 +4868,7 @@ fn build_controller_funding_prepare_v1(
     }
     if accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 {
         return Err(Error::new(
-            "assembled controller-funding prepare frame did not match 49 accounts",
+            "assembled controller-funding prepare frame did not match 47 accounts",
         ));
     }
     Ok(Instruction {
@@ -5132,7 +5149,7 @@ fn build_projected_custody_bootstrap_v2(
     accounts.push(AccountMeta::new_readonly(custody, false));
 
     // Initialize: the seven shared projected coordinates, four Initialize
-    // coordinates, then Core's own 37-account ProjectFound sub-frame verbatim.
+    // coordinates, then Core's exact ProjectFound36 sub-frame verbatim.
     let common = |caller: Pubkey| {
         vec![
             AccountMeta::new_readonly(caller, false),
@@ -5153,7 +5170,7 @@ fn build_projected_custody_bootstrap_v2(
     accounts.push(AccountMeta::new(payer, true));
     accounts.push(AccountMeta::new_readonly(sysvar::rent::ID, false));
     accounts.push(AccountMeta::new_readonly(system_program::ID, false));
-    for key in found_snapshot_keys(
+    for key in ordinary_project_found_snapshot_keys_v2(
         plan,
         projection_witness,
         coordinates.market,
@@ -5202,7 +5219,7 @@ fn build_projected_custody_bootstrap_v2(
 
     if accounts.len() != PROJECTED_CUSTODY_BOOTSTRAP_COMMON_ACCOUNTS_V2 {
         return Err(Error::new(
-            "assembled DCLTPCB2 common frame did not have 85 accounts",
+            "assembled DCLTPCB2 common frame did not have 84 accounts",
         ));
     }
     let resolution = pubkey(&plan.resolution.program_id)?;
@@ -5255,7 +5272,7 @@ fn build_projected_custody_bootstrap_v2(
 
 /// Schema namespacing this campaign's readonly raw-request records.
 ///
-/// `DCLTPCB2` and `DCLTGMF2` carry no payload: every economic byte travels in
+/// `DCLTPCB2` and `DCLTGMF3` carry no economic payload: every economic byte travels in
 /// readonly data accounts. Publishing them as ordinary content-addressed
 /// Registry records means their addresses are a function of their bytes, so a
 /// substituted request is a substituted address and the outer's own frame
@@ -5270,7 +5287,7 @@ fn raw_request_schema_v1(role: &str) -> [u8; 32] {
 
 /// Derive a raw-request Record's complete canonical coordinate without writing it.
 ///
-/// DCLTGMF2 uses this before any pre-funding or publication so the final
+/// DCLTGMF3 uses this before any pre-funding or publication so the final
 /// compiled-message lock census is an admission guard, not post-spend evidence.
 fn derive_raw_request_record_v1(
     registry: Pubkey,
@@ -5391,7 +5408,7 @@ fn require_expiry_margin_v1(
 /// which of the two exits out of `SourceFunded` they then take.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrestateLaneV1 {
-    /// Stage the prestate and found the Market atomically through `DCLTGMF2`.
+    /// Stage the prestate and found the Market atomically through `DCLTGMF3`.
     Founding,
     /// Stage the prestate, let it expire, and unwind it through `DCLTPCA1`.
     ///
@@ -5755,11 +5772,11 @@ fn execute_projected_custody_bootstrap(
         projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &controller_funding_prepare)?;
     let controller_funding_prepare_admitted = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&controller_funding_prepare, 13),
+        &append_distinct_census_accounts_v1(&controller_funding_prepare, 15),
     )?;
     let controller_funding_prepare_refused = projected_bootstrap_compiled_geometry_v2(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&controller_funding_prepare, 14),
+        &append_distinct_census_accounts_v1(&controller_funding_prepare, 16),
     )?;
     if controller_funding_prepare_geometry.complete_keys
         != CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1
@@ -5767,7 +5784,7 @@ fn execute_projected_custody_bootstrap(
         || controller_funding_prepare_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
     {
         return Err(Error::new(format!(
-            "DCLTCFQ1 census refused: base {} keys, +13 {} keys, +14 {} keys; expected exactly {}, {}, {}",
+            "DCLTCFQ1 census refused: base {} keys, +15 {} keys, +16 {} keys; expected exactly {}, {}, {}",
             controller_funding_prepare_geometry.complete_keys,
             controller_funding_prepare_admitted.complete_keys,
             controller_funding_prepare_refused.complete_keys,
@@ -6344,7 +6361,7 @@ fn execute_projected_custody_bootstrap(
     // written only after the exact SourceFunded prestate, both controller
     // ledgers, record graph, and rent credit have been reacquired from the
     // finalized chain. A restart can therefore resume the still-atomic
-    // DCLTGMF2 suffix without replaying any principal movement.
+    // DCLTGMF3 suffix without replaying any principal movement.
     if lane == PrestateLaneV1::Founding {
         let trading = pubkey(&plan.trading.program_id)?;
         let trading_ledger = coordinates
@@ -7563,12 +7580,13 @@ fn authenticate_bootstrap_poststate(
 }
 
 // ---------------------------------------------------------------------------
-// DCLTGMF2 - the compact atomic generic Market founding.
+// DCLTGMF3 - the compact atomic generic Market founding.
 //
 // Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core Open, five
-// stages in one rollback domain. The outer carries eight bytes; every economic
-// byte travels in four readonly content-addressed request records, so a
-// substituted request is a substituted address.
+// stages in one rollback domain. The outer carries an eight-byte discriminator
+// followed by five canonical caller bumps; every economic byte travels in four
+// readonly content-addressed request records, so a substituted request is a
+// substituted address. The bumps are invocation evidence, not semantic truth.
 //
 // Nothing below is a runner choice. The Lock and Realize receipts the founding
 // commits to are produced by running the Custody kernel's own transitions over
@@ -7580,29 +7598,33 @@ fn authenticate_bootstrap_poststate(
 /// Sole top-level generic Market founding instruction.
 ///
 /// Owned by `programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`
-/// (`GENERIC_MARKET_FOUNDING_MAGIC_V2`); restated here because a localhost host
+/// (`GENERIC_MARKET_FOUNDING_MAGIC_V3`); restated here because a localhost host
 /// utility does not depend on an SBF program crate.
-const GENERIC_MARKET_FOUNDING_MAGIC_V2: [u8; 8] = *b"DCLTGMF2";
+const GENERIC_MARKET_FOUNDING_MAGIC_V3: [u8; 8] = *b"DCLTGMF3";
+const GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3: usize = 5;
+const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3: usize =
+    8 + GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3;
 
-/// Exact `DCLTGMF2` frame width before the founding's FundingLedgerV2 tail.
+/// Exact `DCLTGMF3` frame width before the founding's FundingLedgerV2 tail.
 ///
 /// Four readonly requests, the instructions sysvar the heap-frame admission
-/// reads back, then Lock (14), Found (28 fixed + tail + 15 suffix), Realize
-/// (12), Claims (32), and Open (23). The total is
-/// `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2 + physical_funding_count`.
-const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2: usize = 130;
-const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V2: usize = 2;
-const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V2: usize = 60;
+/// reads back, then Lock (14), Found (26 fixed + tail + 15 suffix), Realize
+/// (12), Claims (31), Open (21), and the durable funding checkpoint. The total is
+/// `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + physical_funding_count`.
+const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3: usize = 125;
+const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3: usize = 2;
+const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize = 12;
+const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3: usize = 58;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GenericMarketFoundingLockExpectationV2 {
+struct GenericMarketFoundingLockExpectationV3 {
     frame_digest: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
-struct PreparedGenericMarketFoundingV2 {
+struct PreparedGenericMarketFoundingV3 {
     instruction: Instruction,
-    lock_expectation: GenericMarketFoundingLockExpectationV2,
+    lock_expectation: GenericMarketFoundingLockExpectationV3,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7661,7 +7683,7 @@ fn compiled_complete_lock_census_v1(
 ) -> Result<CompleteLockCensusV1> {
     let addresses = canonical_routing_addresses_v1(payer, std::slice::from_ref(instruction));
     let routing = build_lookup_table_creation_v1(payer, payer, 1, &addresses)
-        .map_err(|error| Error::new(format!("DCLTGMF2 census table: {error:?}")))?;
+        .map_err(|error| Error::new(format!("DCLTGMF3 census table: {error:?}")))?;
     let bounded = bounded_instructions(std::slice::from_ref(instruction), Some(256_u32 * 1024))?;
     let table = AddressLookupTableAccount {
         key: routing.lookup_table,
@@ -7673,7 +7695,7 @@ fn compiled_complete_lock_census_v1(
         std::slice::from_ref(&table),
         Hash::new_from_array([0x43; 32]),
     )
-    .map_err(|error| Error::new(format!("DCLTGMF2 census compile: {error}")))?;
+    .map_err(|error| Error::new(format!("DCLTGMF3 census compile: {error}")))?;
 
     let required_signatures = usize::from(message.header.num_required_signatures);
     let readonly_signed = usize::from(message.header.num_readonly_signed_accounts);
@@ -7681,10 +7703,10 @@ fn compiled_complete_lock_census_v1(
     let static_keys = message.account_keys.len();
     let writable_signed = required_signatures
         .checked_sub(readonly_signed)
-        .ok_or_else(|| Error::new("DCLTGMF2 signed privilege census underflow"))?;
+        .ok_or_else(|| Error::new("DCLTGMF3 signed privilege census underflow"))?;
     let writable_unsigned_end = static_keys
         .checked_sub(readonly_unsigned)
-        .ok_or_else(|| Error::new("DCLTGMF2 unsigned privilege census underflow"))?;
+        .ok_or_else(|| Error::new("DCLTGMF3 unsigned privilege census underflow"))?;
     let mut resolved = Vec::new();
     for (index, key) in message.account_keys.iter().copied().enumerate() {
         let signer = index < required_signatures;
@@ -7700,7 +7722,7 @@ fn compiled_complete_lock_census_v1(
     for lookup in &message.address_table_lookups {
         if lookup.account_key != table.key {
             return Err(Error::new(
-                "DCLTGMF2 census selected an unknown lookup table",
+                "DCLTGMF3 census selected an unknown lookup table",
             ));
         }
         for index in &lookup.writable_indexes {
@@ -7708,22 +7730,22 @@ fn compiled_complete_lock_census_v1(
                 .addresses
                 .get(usize::from(*index))
                 .copied()
-                .ok_or_else(|| Error::new("DCLTGMF2 writable lookup index was out of range"))?;
+                .ok_or_else(|| Error::new("DCLTGMF3 writable lookup index was out of range"))?;
             resolved.push((key, false, true, 1_u8));
             loaded_writable = loaded_writable
                 .checked_add(1)
-                .ok_or_else(|| Error::new("DCLTGMF2 writable census overflow"))?;
+                .ok_or_else(|| Error::new("DCLTGMF3 writable census overflow"))?;
         }
         for index in &lookup.readonly_indexes {
             let key = table
                 .addresses
                 .get(usize::from(*index))
                 .copied()
-                .ok_or_else(|| Error::new("DCLTGMF2 readonly lookup index was out of range"))?;
+                .ok_or_else(|| Error::new("DCLTGMF3 readonly lookup index was out of range"))?;
             resolved.push((key, false, false, 2_u8));
             loaded_readonly = loaded_readonly
                 .checked_add(1)
-                .ok_or_else(|| Error::new("DCLTGMF2 readonly census overflow"))?;
+                .ok_or_else(|| Error::new("DCLTGMF3 readonly census overflow"))?;
         }
     }
 
@@ -7747,22 +7769,22 @@ fn compiled_complete_lock_census_v1(
     for (key, signer, writable, class) in &resolved {
         if unique.insert(*key, (*signer, *writable, *class)).is_some() {
             return Err(Error::new(
-                "DCLTGMF2 compiled complete-key list contained a duplicate",
+                "DCLTGMF3 compiled complete-key list contained a duplicate",
             ));
         }
         if expected.get(key).copied() != Some((*signer, *writable)) {
             return Err(Error::new(
-                "DCLTGMF2 compiled key privilege differed from the complete instruction union",
+                "DCLTGMF3 compiled key privilege differed from the complete instruction union",
             ));
         }
     }
     if unique.len() != expected.len() {
         return Err(Error::new(
-            "DCLTGMF2 compiled complete-key list omitted an instruction key",
+            "DCLTGMF3 compiled complete-key list omitted an instruction key",
         ));
     }
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/successor/dcltgmf2-complete-lock-census/v1");
+    hasher.update(b"dclutch/successor/dcltgmf3-complete-lock-census/v1");
     hasher.update(
         u64::try_from(resolved.len())
             .unwrap_or(u64::MAX)
@@ -7792,34 +7814,35 @@ fn require_devnet_complete_key_limit_v1(census: CompleteLockCensusV1) -> Result<
     Ok(())
 }
 
-fn authenticate_generic_market_founding_lock_census_v2(
+fn authenticate_generic_market_founding_lock_census_v3(
     payer: Pubkey,
-    prepared: &PreparedGenericMarketFoundingV2,
+    prepared: &PreparedGenericMarketFoundingV3,
 ) -> Result<CompleteLockCensusV1> {
     let instruction = &prepared.instruction;
-    let expected_frame = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2
-        .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V2)
-        .ok_or_else(|| Error::new("DCLTGMF2 expected frame overflow"))?;
-    if instruction.data != GENERIC_MARKET_FOUNDING_MAGIC_V2
+    let expected_frame = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
+        .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3)
+        .ok_or_else(|| Error::new("DCLTGMF3 expected frame overflow"))?;
+    if instruction.data.len() != GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3
+        || instruction.data.get(..8) != Some(GENERIC_MARKET_FOUNDING_MAGIC_V3.as_slice())
         || instruction.accounts.len() != expected_frame
         || instruction.accounts.iter().any(|meta| meta.is_signer)
         || instruction.accounts.iter().any(|meta| meta.pubkey == payer)
         || exact_instruction_frame_digest_v1(instruction) != prepared.lock_expectation.frame_digest
     {
         return Err(Error::new(
-            "DCLTGMF2 exact frame/key/order/privilege expectation changed before compilation",
+            "DCLTGMF3 exact frame/key/order/privilege expectation changed before compilation",
         ));
     }
     let census = compiled_complete_lock_census_v1(payer, instruction)?;
     require_devnet_complete_key_limit_v1(census)?;
-    if census.complete_keys != GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V2
+    if census.complete_keys != GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
         || census.required_signatures != 1
         || census.static_keys != 3
-        || census.loaded_writable != 12
-        || census.loaded_readonly != 45
+        || census.loaded_writable != GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3
+        || census.loaded_readonly != 43
     {
         return Err(Error::new(format!(
-            "DCLTGMF2 compiled lock census refused: {} complete, {} static, {} writable loaded, {} readonly loaded, {} signatures",
+            "DCLTGMF3 compiled lock census refused: {} complete, {} static, {} writable loaded, {} readonly loaded, {} signatures",
             census.complete_keys,
             census.static_keys,
             census.loaded_writable,
@@ -7910,10 +7933,15 @@ struct FoundingOuterV1 {
     claims_raw: Vec<u8>,
     substituted_claims_raw: Vec<u8>,
     lock_caller: Pubkey,
+    lock_caller_bump: u8,
     realize_caller: Pubkey,
+    realize_caller_bump: u8,
     claims_caller: Pubkey,
+    claims_caller_bump: u8,
     found_authority: Pubkey,
+    found_authority_bump: u8,
     open_authority: Pubkey,
+    open_authority_bump: u8,
     permit: Pubkey,
     aggregate: Pubkey,
     position: Pubkey,
@@ -8057,7 +8085,7 @@ fn derive_founding_outer_v1(
 
     // One semantic owner for the final coordinates. Completed-crash recovery
     // calls the same helper against finalized Open state; it never tries to
-    // replay the SourceFunded kernel state that DCLTGMF2 consumed and closed.
+    // replay the SourceFunded kernel state that DCLTGMF3 consumed and closed.
     let poststate =
         derive_founding_poststate_expectation_v1(plan, coordinates, founder, claim_count)?;
     let permit = poststate.permit;
@@ -8166,7 +8194,7 @@ fn derive_founding_outer_v1(
     .to_vec();
 
     let claims_digest: [u8; 32] = Sha256::digest(&claims_raw).into();
-    let claims_caller = Pubkey::find_program_address(
+    let (claims_caller, claims_caller_bump) = Pubkey::find_program_address(
         &CallerAuthoritySeedsV1::from_bytes(
             release_set,
             coordinates.market.to_bytes(),
@@ -8177,19 +8205,16 @@ fn derive_founding_outer_v1(
         .map_err(|error| Error::new(format!("Claims caller seeds: {error:?}")))?
         .as_slices(),
         &trading,
-    )
-    .0;
+    );
 
-    let lock_caller = Pubkey::find_program_address(
+    let (lock_caller, lock_caller_bump) = Pubkey::find_program_address(
         &ProjectedCustodyCallerSeedsV1::new(coordinates.lock, lock_digest).as_slices(),
         &trading,
-    )
-    .0;
-    let realize_caller = Pubkey::find_program_address(
+    );
+    let (realize_caller, realize_caller_bump) = Pubkey::find_program_address(
         &ProjectedCustodyCallerSeedsV1::new(realize, realize_digest).as_slices(),
         &trading,
-    )
-    .0;
+    );
 
     let selected = authenticate_generic_market_founding_artifact_v1(
         CapabilityContentId::new(Sha256::digest(found_raw).into())
@@ -8212,10 +8237,15 @@ fn derive_founding_outer_v1(
         claims_raw,
         substituted_claims_raw,
         lock_caller,
+        lock_caller_bump,
         realize_caller,
+        realize_caller_bump,
         claims_caller,
+        claims_caller_bump,
         found_authority: stages.found_authority,
+        found_authority_bump: stages.found_authority_bump,
         open_authority: stages.open_authority,
+        open_authority_bump: stages.open_authority_bump,
         permit,
         aggregate,
         position,
@@ -8250,15 +8280,15 @@ fn authenticate_core_state_encoding_v1(rpc: &mut Rpc, market: Pubkey) -> Result<
     Ok(())
 }
 
-/// Build the exact 129 + physical-funding-count account `DCLTGMF2` frame.
+/// Build the exact 125 + physical-funding-count account `DCLTGMF3` frame.
 ///
-/// Privileges are the outer's own assertion. Exactly eleven distinct keys are
+/// Privileges are the outer's own assertion. Exactly twelve distinct keys are
 /// writable — the projected replay, the rent credit, the Hoard vault, the
 /// source vault, the source replay, the Found caller PDA, the Market, the
-/// permit, and the three Claims accounts — and **no account in the frame is a
-/// transaction-level signer**: every stage's signer is a PDA the outer signs
-/// for under `invoke_signed`, so the fee payer must be a key that appears
-/// nowhere in this list.
+/// permit, the three Claims accounts, and the controller-funding checkpoint —
+/// and **no account in the frame is a transaction-level signer**: every stage's
+/// signer is a PDA the outer signs for under `invoke_signed`, so the fee payer
+/// must be a key that appears nowhere in this list.
 ///
 /// Writability is unioned per key at the end rather than per slot. Solana
 /// grants privileges per key, so an account that must be writable in one stage
@@ -8266,7 +8296,7 @@ fn authenticate_core_state_encoding_v1(rpc: &mut Rpc, market: Pubkey) -> Result<
 /// readonly in each child's metas, which is where the child's own
 /// non-writability requirements are enforced.
 #[allow(clippy::too_many_arguments)]
-fn build_generic_market_founding_v2(
+fn build_generic_market_founding_v3(
     plan: &SuccessorPlan,
     coordinates: &FoundingCoordinates,
     outer: &FoundingOuterV1,
@@ -8274,7 +8304,7 @@ fn build_generic_market_founding_v2(
     requests: [Pubkey; 4],
     founder: Pubkey,
     mint: Pubkey,
-) -> Result<PreparedGenericMarketFoundingV2> {
+) -> Result<PreparedGenericMarketFoundingV3> {
     let trading = pubkey(&plan.trading.program_id)?;
     let trading_programdata = pubkey(&plan.trading.programdata_id)?;
     let core = pubkey(&plan.core.program_id)?;
@@ -8289,7 +8319,7 @@ fn build_generic_market_founding_v2(
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
     let mut accounts: Vec<AccountMeta> = Vec::with_capacity(
-        GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2
+        GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
             .checked_add(coordinates.funding_ledgers.len())
             .ok_or_else(|| Error::new("founding frame width overflow"))?,
     );
@@ -8324,8 +8354,8 @@ fn build_generic_market_founding_v2(
     push(coordinates.source_replay, true, &mut accounts);
     push(coordinates.market, false, &mut accounts);
 
-    // Found: Core's compact 25-account ProjectedFound V2 frame, then Trading
-    // and the clock, then this founding's FundingLedgerV2 tail and the
+    // Found: Core's compact 24-account ProjectedFound V2 frame, then Trading,
+    // this founding's FundingLedgerV2 tail, and the
     // fifteen-account suffix.
     for (index, key) in projected_found_snapshot_keys_v2(
         plan,
@@ -8343,7 +8373,6 @@ fn build_generic_market_founding_v2(
     }
     push(trading, false, &mut accounts);
     push(trading_programdata, false, &mut accounts);
-    push(sysvar::clock::ID, false, &mut accounts);
     for funding in &coordinates.funding_ledgers {
         push(funding.address, false, &mut accounts);
     }
@@ -8377,7 +8406,7 @@ fn build_generic_market_founding_v2(
     push(mint, false, &mut accounts);
     push(token_program, false, &mut accounts);
 
-    // Claims FoundingV5, 32 accounts.
+    // Claims FoundingV5, 31 accounts.
     push(outer.claims_caller, false, &mut accounts);
     push(outer.permit, true, &mut accounts);
     push(outer.aggregate, true, &mut accounts);
@@ -8394,7 +8423,6 @@ fn build_generic_market_founding_v2(
     push(records.domain.staging, false, &mut accounts);
     push(records.portfolio.raw, false, &mut accounts);
     push(records.portfolio.staging, false, &mut accounts);
-    push(sysvar::rent::ID, false, &mut accounts);
     push(system_program::ID, false, &mut accounts);
     push(coordinates.market, false, &mut accounts);
     push(cache, false, &mut accounts);
@@ -8411,7 +8439,7 @@ fn build_generic_market_founding_v2(
     push(coordinates.credit, true, &mut accounts);
     push(rent_program, false, &mut accounts);
 
-    // Core Open, commit-last, 23 accounts.
+    // Core Open, commit-last, 21 accounts.
     push(outer.open_authority, false, &mut accounts);
     push(coordinates.market, true, &mut accounts);
     push(outer.permit, true, &mut accounts);
@@ -8433,8 +8461,6 @@ fn build_generic_market_founding_v2(
     push(outer.aggregate, true, &mut accounts);
     push(outer.position, true, &mut accounts);
     push(outer.admission, true, &mut accounts);
-    push(sysvar::clock::ID, false, &mut accounts);
-    push(sysvar::rent::ID, false, &mut accounts);
 
     // The durable CustodyStaged checkpoint is authenticated before Lock and
     // consumed only after the exact Open acknowledgement and unchanged
@@ -8446,7 +8472,7 @@ fn build_generic_market_founding_v2(
         &mut accounts,
     );
 
-    let expected = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2
+    let expected = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
         .checked_add(coordinates.funding_ledgers.len())
         .ok_or_else(|| Error::new("founding frame width overflow"))?;
     if accounts.len() != expected {
@@ -8488,13 +8514,25 @@ fn build_generic_market_founding_v2(
             distinct_writable.len()
         )));
     }
+    let mut data = Vec::with_capacity(GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3);
+    data.extend_from_slice(&GENERIC_MARKET_FOUNDING_MAGIC_V3);
+    data.extend_from_slice(&[
+        outer.lock_caller_bump,
+        outer.found_authority_bump,
+        outer.realize_caller_bump,
+        outer.claims_caller_bump,
+        outer.open_authority_bump,
+    ]);
+    if data.len() != GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3 {
+        return Err(Error::new("DCLTGMF3 caller-bump encoding width changed"));
+    }
     let instruction = Instruction {
         program_id: trading,
         accounts,
-        data: GENERIC_MARKET_FOUNDING_MAGIC_V2.to_vec(),
+        data,
     };
-    Ok(PreparedGenericMarketFoundingV2 {
-        lock_expectation: GenericMarketFoundingLockExpectationV2 {
+    Ok(PreparedGenericMarketFoundingV3 {
+        lock_expectation: GenericMarketFoundingLockExpectationV3 {
             frame_digest: exact_instruction_frame_digest_v1(&instruction),
         },
         instruction,
@@ -9146,7 +9184,7 @@ fn execute_funding_readiness_suffix_v1(
     Ok(())
 }
 
-/// Found the Market atomically on a real validator: `DCLTGMF2`.
+/// Found the Market atomically on a real validator: `DCLTGMF3`.
 ///
 /// Five stages in one rollback domain against the prestate `DCLTPCB2` left.
 /// The Market is created by the Found stage and Opened by the last, so this
@@ -9223,7 +9261,7 @@ fn execute_generic_market_founding(
         "claims-founding-v5-substituted-founder",
         &outer.substituted_claims_raw,
     )?;
-    let prepared_founding = build_generic_market_founding_v2(
+    let prepared_founding = build_generic_market_founding_v3(
         plan,
         coordinates,
         &outer,
@@ -9238,14 +9276,14 @@ fn execute_generic_market_founding(
         mint,
     )?;
     let initial_founding_census =
-        authenticate_generic_market_founding_lock_census_v2(payer.pubkey(), &prepared_founding)?;
+        authenticate_generic_market_founding_lock_census_v3(payer.pubkey(), &prepared_founding)?;
     let open_admitted = compiled_complete_lock_census_v1(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 4),
+        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 6),
     )?;
     let open_refused = compiled_complete_lock_census_v1(
         payer.pubkey(),
-        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 5),
+        &append_distinct_census_accounts_v1(&prepared_founding.instruction, 7),
     )?;
     if open_admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
         || open_refused.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1
@@ -9253,14 +9291,14 @@ fn execute_generic_market_founding(
         || require_devnet_complete_key_limit_v1(open_refused).is_ok()
     {
         return Err(Error::new(format!(
-            "DCLTGMF2 boundary census refused: base {}, +4 {}, +5 {}",
+            "DCLTGMF3 boundary census refused: base {}, +6 {}, +7 {}",
             initial_founding_census.complete_keys,
             open_admitted.complete_keys,
             open_refused.complete_keys,
         )));
     }
     eprintln!(
-        "campaign: DCLTGMF2 pre-mutation compiled-message lock census: {} complete keys ({} static, {} writable loaded, {} readonly loaded), digest {}",
+        "campaign: DCLTGMF3 pre-mutation compiled-message lock census: {} complete keys ({} static, {} writable loaded, {} readonly loaded), digest {}",
         initial_founding_census.complete_keys,
         initial_founding_census.static_keys,
         initial_founding_census.loaded_writable,
@@ -9313,11 +9351,11 @@ fn execute_generic_market_founding(
         })
     {
         eprintln!(
-            "campaign: exact DCLTGMF2 pre-funding already finalized; resumed without a second debit"
+            "campaign: exact DCLTGMF3 pre-funding already finalized; resumed without a second debit"
         );
     } else {
         return Err(Error::new(
-            "DCLTGMF2 pre-funding is partial or differs from the five exact rent principals; never top up or overwrite it",
+            "DCLTGMF3 pre-funding is partial or differs from the five exact rent principals; never top up or overwrite it",
         ));
     }
     authenticate_founding_prefunding_v1(rpc, &outer, coordinates.market)?;
@@ -9372,14 +9410,14 @@ fn execute_generic_market_founding(
     // canonical record coordinates must still produce the byte-identical
     // complete-key/privilege digest admitted before any write.
     let founding_census =
-        authenticate_generic_market_founding_lock_census_v2(payer.pubkey(), &prepared_founding)?;
+        authenticate_generic_market_founding_lock_census_v3(payer.pubkey(), &prepared_founding)?;
     if founding_census != initial_founding_census {
         return Err(Error::new(
-            "DCLTGMF2 pre-ALT lock census differed from its pre-mutation admission",
+            "DCLTGMF3 pre-ALT lock census differed from its pre-mutation admission",
         ));
     }
     eprintln!(
-        "campaign: DCLTGMF2 pre-ALT compiled-message lock census recheck: {} complete keys ({} static, {} writable loaded, {} readonly loaded), digest {}",
+        "campaign: DCLTGMF3 pre-ALT compiled-message lock census recheck: {} complete keys ({} static, {} writable loaded, {} readonly loaded), digest {}",
         founding_census.complete_keys,
         founding_census.static_keys,
         founding_census.loaded_writable,
@@ -9402,7 +9440,7 @@ fn execute_generic_market_founding(
     let (routing, tables) = publish_frozen_founding_routing_table_v1(
         rpc,
         payer,
-        "DCLTGMF2",
+        "DCLTGMF3",
         &[founding.clone(), readiness_routing],
         transactions,
     )?;
@@ -9461,7 +9499,7 @@ fn execute_generic_market_founding(
     // founding — a strictly smaller transaction, and the thing this campaign
     // exists to do — proceeds fail-closed on its own delivery.
     match rpc.send_v0_on_founding_heap_expected_failure_with_signers(
-        "DCLTGMF2 refuses a substituted Claims request and rolls the whole founding back",
+        "DCLTGMF3 refuses a substituted Claims request and rolls the whole founding back",
         &[
             transfer(&payer.pubkey(), &rollback_recipient, 1),
             substituted,
@@ -9482,7 +9520,7 @@ fn execute_generic_market_founding(
             transactions.push(rolled_back);
             untouched(rpc, "the refused substituted-Claims founding")?;
             completed.push(
-                "proved DCLTGMF2 refuses a substituted Claims request and rolls the whole \
+                "proved DCLTGMF3 refuses a substituted Claims request and rolls the whole \
                  founding back to a fee-only debit"
                     .into(),
             );
@@ -9506,7 +9544,7 @@ fn execute_generic_market_founding(
     let poststate =
         derive_founding_poststate_expectation_v1(plan, coordinates, actors.founder, claim_count)?;
     let founding_label =
-        "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)";
+        "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)";
     let honest = match submission_recorder.as_deref_mut() {
         Some(recorder) => {
             let mut prestate_addresses = created.iter().map(|(_, key)| *key).collect::<Vec<_>>();
@@ -9535,7 +9573,7 @@ fn execute_generic_market_founding(
             send_durable_founding_v1(
                 rpc,
                 founding_label,
-                FoundingSubmissionOperationV1::Dcltgmf2,
+                FoundingSubmissionOperationV1::Dcltgmf3,
                 std::slice::from_ref(&founding),
                 &[payer],
                 routing,
@@ -9543,7 +9581,7 @@ fn execute_generic_market_founding(
                 hex(&founding_census.key_privilege_digest),
                 &prestate_addresses,
                 &completion_addresses,
-                b"dclutch-market-dcltgmf2-recovery-payload-v1".to_vec(),
+                b"dclutch-market-dcltgmf3-recovery-payload-v1".to_vec(),
                 Some(FOUNDING_HEAP_FRAME_BYTES),
                 recorder,
                 &mut completion,
@@ -9607,7 +9645,7 @@ fn execute_generic_market_founding(
     // The substituted-Claims probe's own line is pushed at its send site,
     // where delivered-and-refused and undeliverable are told apart honestly.
     completed.push(
-        "executed DCLTGMF2: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
+        "executed DCLTGMF3: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
     );
     Ok(())
 }
@@ -10643,10 +10681,10 @@ mod tests {
         )
     }
 
-    fn generic_market_founding_census_fixture_v2() -> (Pubkey, PreparedGenericMarketFoundingV2) {
+    fn generic_market_founding_census_fixture_v3() -> (Pubkey, PreparedGenericMarketFoundingV3) {
         let payer = Pubkey::new_from_array([0xf1; 32]);
         let program_id = Pubkey::new_from_array([0xf2; 32]);
-        let distinct = (0_u8..57)
+        let distinct = (0_u8..55)
             .map(|index| Pubkey::new_from_array([index.saturating_add(1); 32]))
             .collect::<Vec<_>>();
         let mut accounts = distinct
@@ -10662,22 +10700,24 @@ mod tests {
             .collect::<Vec<_>>();
         let unique_width = accounts.len();
         while accounts.len()
-            < GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2
-                + GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V2
+            < GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3
+                + GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3
         {
             accounts.push(accounts[accounts.len() % unique_width].clone());
         }
+        let mut data = GENERIC_MARKET_FOUNDING_MAGIC_V3.to_vec();
+        data.extend_from_slice(&[1, 2, 3, 4, 5]);
         let instruction = Instruction {
             program_id,
             accounts,
-            data: GENERIC_MARKET_FOUNDING_MAGIC_V2.to_vec(),
+            data,
         };
-        let lock_expectation = GenericMarketFoundingLockExpectationV2 {
+        let lock_expectation = GenericMarketFoundingLockExpectationV3 {
             frame_digest: exact_instruction_frame_digest_v1(&instruction),
         };
         (
             payer,
-            PreparedGenericMarketFoundingV2 {
+            PreparedGenericMarketFoundingV3 {
                 instruction,
                 lock_expectation,
             },
@@ -10691,7 +10731,7 @@ mod tests {
         let mut accounts = (0_u8..CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 as u8)
             .map(|index| {
                 let key = Pubkey::new_from_array([index.saturating_add(1); 32]);
-                if matches!(index, 8 | 9 | 10 | 14) {
+                if matches!(index, 8 | 9 | 10 | 13) {
                     AccountMeta::new(key, false)
                 } else {
                     AccountMeta::new_readonly(key, false)
@@ -10699,7 +10739,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         accounts[6].pubkey = program_id;
-        accounts[12] = AccountMeta::new(projection_witness, true);
+        accounts[11] = AccountMeta::new(projection_witness, true);
         (
             payer,
             Instruction {
@@ -11039,17 +11079,17 @@ mod tests {
     }
 
     #[test]
-    fn controller_funding_prepare_compiler_census_pins_the_51_64_65_wall() {
+    fn controller_funding_prepare_compiler_census_pins_the_49_64_65_wall() {
         let (payer, prepare) = controller_funding_prepare_census_fixture_v1();
         let base = projected_bootstrap_compiled_geometry_v2(payer, &prepare).expect("base census");
         let admitted = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&prepare, 13),
+            &append_distinct_census_accounts_v1(&prepare, 15),
         )
         .expect("64-key census");
         let refused = projected_bootstrap_compiled_geometry_v2(
             payer,
-            &append_distinct_census_accounts_v1(&prepare, 14),
+            &append_distinct_census_accounts_v1(&prepare, 16),
         )
         .expect("65-key census");
         assert_eq!(
@@ -11059,9 +11099,9 @@ mod tests {
         assert_eq!(base.required_signatures, 2);
         assert_eq!(base.static_keys, 4);
         assert_eq!(base.loaded_writable, 4);
-        assert_eq!(base.loaded_readonly, 43);
-        assert_eq!(base.message_bytes, 336);
-        assert_eq!(base.packet_bytes, 465);
+        assert_eq!(base.loaded_readonly, 41);
+        assert_eq!(base.message_bytes, 332);
+        assert_eq!(base.packet_bytes, 461);
         assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
         assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
     }
@@ -11134,48 +11174,48 @@ mod tests {
         assert_eq!(base_geometry.static_keys, 4);
         assert_eq!(base_geometry.loaded_writable, 7);
         assert_eq!(base_geometry.loaded_readonly, 49);
-        assert_eq!(base_geometry.message_bytes, 384);
-        assert_eq!(base_geometry.packet_bytes, 513);
+        assert_eq!(base_geometry.message_bytes, 383);
+        assert_eq!(base_geometry.packet_bytes, 512);
         assert_eq!(admitted.complete_keys, 64);
-        assert_eq!(admitted.message_bytes, 392);
-        assert_eq!(admitted.packet_bytes, 521);
+        assert_eq!(admitted.message_bytes, 391);
+        assert_eq!(admitted.packet_bytes, 520);
         assert_eq!(refused.complete_keys, 65);
-        assert_eq!(refused.message_bytes, 394);
-        assert_eq!(refused.packet_bytes, 523);
+        assert_eq!(refused.message_bytes, 393);
+        assert_eq!(refused.packet_bytes, 522);
     }
 
     #[test]
-    fn generic_founding_final_compiler_census_pins_the_60_key_shape() {
-        let (payer, prepared) = generic_market_founding_census_fixture_v2();
-        let census = authenticate_generic_market_founding_lock_census_v2(payer, &prepared)
-            .expect("canonical DCLTGMF2 census");
-        assert_eq!(census.complete_keys, 60);
+    fn generic_founding_final_compiler_census_pins_the_58_key_shape() {
+        let (payer, prepared) = generic_market_founding_census_fixture_v3();
+        let census = authenticate_generic_market_founding_lock_census_v3(payer, &prepared)
+            .expect("canonical DCLTGMF3 census");
+        assert_eq!(census.complete_keys, 58);
         assert_eq!(census.required_signatures, 1);
         assert_eq!(census.static_keys, 3);
         assert_eq!(census.loaded_writable, 12);
-        assert_eq!(census.loaded_readonly, 45);
+        assert_eq!(census.loaded_readonly, 43);
         assert_eq!(
             hex(&census.key_privilege_digest),
-            "a2ee6343d2649aef9f7365d9457a28a4741250339b157fa4dcb14bda1041f5dd"
+            "8fb27f15c8509350a0702a1c6e3208ade60d6c16b48bb6d324cc721a08186561"
         );
         assert_eq!(
             census,
-            authenticate_generic_market_founding_lock_census_v2(payer, &prepared)
+            authenticate_generic_market_founding_lock_census_v3(payer, &prepared)
                 .expect("deterministic census")
         );
     }
 
     #[test]
     fn generic_founding_complete_key_census_enforces_the_64_65_wall() {
-        let (payer, prepared) = generic_market_founding_census_fixture_v2();
+        let (payer, prepared) = generic_market_founding_census_fixture_v3();
         let admitted = compiled_complete_lock_census_v1(
             payer,
-            &append_distinct_census_accounts_v1(&prepared.instruction, 4),
+            &append_distinct_census_accounts_v1(&prepared.instruction, 6),
         )
         .expect("64-key census");
         let refused = compiled_complete_lock_census_v1(
             payer,
-            &append_distinct_census_accounts_v1(&prepared.instruction, 5),
+            &append_distinct_census_accounts_v1(&prepared.instruction, 7),
         )
         .expect("65-key census");
         assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
@@ -11186,9 +11226,9 @@ mod tests {
 
     #[test]
     fn generic_founding_65_key_drift_plans_zero_writes_or_transactions() {
-        let (payer, mut prepared) = generic_market_founding_census_fixture_v2();
+        let (payer, mut prepared) = generic_market_founding_census_fixture_v3();
         let width = prepared.instruction.accounts.len();
-        for offset in 0_u8..5 {
+        for offset in 0_u8..7 {
             prepared.instruction.accounts[width - 1 - usize::from(offset)].pubkey =
                 Pubkey::new_from_array([0xa0 + offset; 32]);
         }
@@ -11201,7 +11241,7 @@ mod tests {
         let mut planned_writes = Vec::<Pubkey>::new();
         let mut planned_transactions = Vec::<Instruction>::new();
         let admission = (|| -> Result<()> {
-            authenticate_generic_market_founding_lock_census_v2(payer, &prepared)?;
+            authenticate_generic_market_founding_lock_census_v3(payer, &prepared)?;
             planned_writes.push(prepared.instruction.accounts[0].pubkey);
             planned_transactions.push(prepared.instruction.clone());
             Ok(())
@@ -11213,11 +11253,11 @@ mod tests {
 
     #[test]
     fn generic_founding_census_refuses_substitution_duplicate_order_and_privilege_drift() {
-        let (payer, prepared) = generic_market_founding_census_fixture_v2();
+        let (payer, prepared) = generic_market_founding_census_fixture_v3();
 
         let mut substituted = prepared.clone();
         substituted.instruction.accounts[0].pubkey = Pubkey::new_from_array([0xe1; 32]);
-        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &substituted).is_err());
+        assert!(authenticate_generic_market_founding_lock_census_v3(payer, &substituted).is_err());
 
         let mut duplicate = prepared.clone();
         let removed = duplicate.instruction.accounts[55].pubkey;
@@ -11227,21 +11267,21 @@ mod tests {
                 meta.pubkey = retained;
             }
         }
-        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &duplicate).is_err());
+        assert!(authenticate_generic_market_founding_lock_census_v3(payer, &duplicate).is_err());
         duplicate.lock_expectation.frame_digest =
             exact_instruction_frame_digest_v1(&duplicate.instruction);
-        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &duplicate).is_err());
+        assert!(authenticate_generic_market_founding_lock_census_v3(payer, &duplicate).is_err());
 
         let mut reordered = prepared.clone();
         reordered.instruction.accounts.swap(0, 1);
-        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &reordered).is_err());
+        assert!(authenticate_generic_market_founding_lock_census_v3(payer, &reordered).is_err());
 
         let mut privilege = prepared.clone();
         privilege.instruction.accounts[12].is_writable = true;
-        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &privilege).is_err());
+        assert!(authenticate_generic_market_founding_lock_census_v3(payer, &privilege).is_err());
         privilege.lock_expectation.frame_digest =
             exact_instruction_frame_digest_v1(&privilege.instruction);
-        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &privilege).is_err());
+        assert!(authenticate_generic_market_founding_lock_census_v3(payer, &privilege).is_err());
     }
 
     #[test]

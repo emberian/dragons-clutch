@@ -1,0 +1,43 @@
+{
+  "schema": "dclutch-source-abort-interruption-contract-v1",
+  "targetOperation": "controller-terminal",
+  "operationLabels": [
+    "source-abort-custody-v1",
+    "source-abort-controller-first-v1",
+    "source-abort-controller-terminal-v1"
+  ],
+  "boundaries": [
+    {
+      "name": "after-planned-fsync",
+      "phase": "planned",
+      "driverArgv": [
+        "--interruption-stop-after",
+        "planned"
+      ],
+      "recovery": "reauthenticate-predecessor-then-sign-once-and-fsync-dispatching"
+    },
+    {
+      "name": "after-dispatching-fsync-before-send",
+      "phase": "dispatching",
+      "driverArgv": [
+        "--interruption-stop-after",
+        "dispatching"
+      ],
+      "recovery": "poll-finalized-then-identical-persisted-packet-resend-only"
+    },
+    {
+      "name": "after-submitted-fsync",
+      "phase": "submitted",
+      "driverArgv": [
+        "--interruption-stop-after",
+        "submitted"
+      ],
+      "recovery": "poll-exact-persisted-signature-only"
+    }
+  ],
+  "exactFrozenUnionAlt": true,
+  "walletKeysRequired": false,
+  "rpcRequired": false,
+  "externalMutationAuthorized": false,
+  "partialSuccessAuthorized": false
+}

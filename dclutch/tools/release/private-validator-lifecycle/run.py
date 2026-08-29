@@ -154,7 +154,7 @@ CAMPAIGN_FOUNDING_KEY_ROLES = (
 FOUNDING_SUCCESS_MUTATIONS = (
     "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
     "stage projected custody against prepared controller funding (DCLTPCB2)",
-    "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
+    "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
     "core-funding-create-v1",
     "resolution-funding-activate-v1",
     "core-funding-accept-v1",
@@ -162,16 +162,16 @@ FOUNDING_SUCCESS_MUTATIONS = (
 FOUNDING_COMPUTE_LABELS = (
     "founding-dcltcfq1",
     "founding-dcltpcb2",
-    "founding-dcltgmf2",
+    "founding-dcltgmf3",
     "founding-core-funding-create",
     "founding-resolution-funding-activate",
     "founding-core-funding-accept",
 )
-FOUNDING_JOURNAL_SCHEMA = "dclutch-public-founding-submission-journal-v1"
+FOUNDING_JOURNAL_SCHEMA = "dclutch-public-founding-submission-journal-v2"
 FOUNDING_JOURNAL_OPERATIONS = (
     "dcltcfq1",
     "dcltpcb2",
-    "dcltgmf2",
+    "dcltgmf3",
     "core-funding-create-v1",
     "resolution-funding-activate-v1",
     "core-funding-accept-v1",
@@ -3973,7 +3973,7 @@ def run_one(
             )
 
         founding_metrics = founding_compute_units(campaign_report)
-        metric = founding_metrics["founding-dcltgmf2"]
+        metric = founding_metrics["founding-dcltgmf3"]
         bankroll_compute_units = canonical_decimal(
             funding_poststate["transaction"]["computeUnitsConsumed"],
             "local test-bankroll CU",
@@ -4004,7 +4004,7 @@ def run_one(
                 "seed_sha256": sha256_bytes(bytes.fromhex(seed)),
                 "status": "passed",
                 "finalized_stages": ["founding", "participant"],
-                "dcltgmf2_compute_units": metric,
+                "dcltgmf3_compute_units": metric,
                 "compute_units": {
                     "local-test-bankroll": bankroll_compute_units,
                     **founding_metrics,
@@ -4065,7 +4065,7 @@ def run_one(
             "name": name,
             "seed_sha256": sha256_bytes(bytes.fromhex(seed)),
             "status": "passed",
-            "dcltgmf2_compute_units": metric,
+            "dcltgmf3_compute_units": metric,
             "compute_units": {
                 "local-test-bankroll": bankroll_compute_units,
                 **founding_metrics,
@@ -4218,7 +4218,7 @@ def main(argv: Sequence[str]) -> int:
             )
         except Exception as error:
             failures.append({"seed": f"seed-{index:02d}", "error": str(error)})
-    mean = arithmetic_mean(row["dcltgmf2_compute_units"] for row in runs)
+    mean = arithmetic_mean(row["dcltgmf3_compute_units"] for row in runs)
     compute_units = compute_unit_report(runs)
     summary = {
         "schema": (
@@ -4255,7 +4255,7 @@ def main(argv: Sequence[str]) -> int:
         "through": through,
         "pass_count": len(runs),
         "fail_count": len(failures),
-        "dcltgmf2_compute_units_arithmetic_mean": mean,
+        "dcltgmf3_compute_units_arithmetic_mean": mean,
         "compute_unit_report": compute_units,
         "runs": runs,
         "failures": failures,

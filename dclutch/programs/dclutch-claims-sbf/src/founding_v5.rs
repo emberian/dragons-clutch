@@ -45,13 +45,14 @@ use solana_program::{
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::SysvarSerialize,
+    sysvar::Sysvar,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
 use super::{
-    affine_batch_v2::authenticate_runtime_product_basis_core_v3, authenticate_activated_role,
+    affine_batch_v2::authenticate_runtime_product_basis_core_with_rent_v3,
+    authenticate_activated_role,
 };
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -82,22 +83,21 @@ const RESULT_RECORD: usize = 12;
 const RESULT_STAGING: usize = 13;
 const PORTFOLIO_RECORD: usize = 14;
 const PORTFOLIO_STAGING: usize = 15;
-const RENT: usize = 16;
-const SYSTEM: usize = 17;
-const CORE_MARKET: usize = 18;
-const CACHE: usize = 19;
-const REGISTRY: usize = 20;
-const CLAIMS_PROGRAM: usize = 21;
-const CLAIMS_PROGRAMDATA: usize = 22;
-const CORE_PROGRAM: usize = 23;
-const CORE_PROGRAMDATA: usize = 24;
-const TRADING_PROGRAM: usize = 25;
-const TRADING_PROGRAMDATA: usize = 26;
-const CUSTODY_PROGRAM: usize = 27;
-const CUSTODY_PROGRAMDATA: usize = 28;
-const FOUNDER: usize = 29;
-const RENT_CREDIT: usize = 30;
-const RENT_PROGRAM: usize = 31;
+const SYSTEM: usize = 16;
+const CORE_MARKET: usize = 17;
+const CACHE: usize = 18;
+const REGISTRY: usize = 19;
+const CLAIMS_PROGRAM: usize = 20;
+const CLAIMS_PROGRAMDATA: usize = 21;
+const CORE_PROGRAM: usize = 22;
+const CORE_PROGRAMDATA: usize = 23;
+const TRADING_PROGRAM: usize = 24;
+const TRADING_PROGRAMDATA: usize = 25;
+const CUSTODY_PROGRAM: usize = 26;
+const CUSTODY_PROGRAMDATA: usize = 27;
+const FOUNDER: usize = 28;
+const RENT_CREDIT: usize = 29;
+const RENT_PROGRAM: usize = 30;
 
 /// Stable FoundingV5 adapter refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,7 +163,6 @@ struct FoundingAccounts<'accounts, 'info> {
     result_staging: &'accounts AccountInfo<'info>,
     portfolio_record: &'accounts AccountInfo<'info>,
     portfolio_staging: &'accounts AccountInfo<'info>,
-    rent: &'accounts AccountInfo<'info>,
     system: &'accounts AccountInfo<'info>,
     core_market: &'accounts AccountInfo<'info>,
     cache: &'accounts AccountInfo<'info>,
@@ -203,7 +202,6 @@ impl<'accounts, 'info> FoundingAccounts<'accounts, 'info> {
             result_staging: account(accounts, RESULT_STAGING)?,
             portfolio_record: account(accounts, PORTFOLIO_RECORD)?,
             portfolio_staging: account(accounts, PORTFOLIO_STAGING)?,
-            rent: account(accounts, RENT)?,
             system: account(accounts, SYSTEM)?,
             core_market: account(accounts, CORE_MARKET)?,
             cache: account(accounts, CACHE)?,
@@ -238,6 +236,7 @@ pub fn process(
     let lock_receipt_digest = decoded.lock_receipt_digest;
     let projected_receipt_digest = decoded.projected_receipt_digest;
     let accounts = FoundingAccounts::parse(account_infos)?;
+    let rent = Rent::get().map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
     authenticate_privileges(program_id, accounts, &request)?;
     authenticate_authority(accounts, &request, request_digest)?;
     authenticate_releases(accounts, &request)?;
@@ -256,8 +255,8 @@ pub fn process(
         &projected_receipt,
         projected_receipt_digest,
     )?;
-    let market = authenticate_product_core(program_id, accounts, &request, custody_context)?;
-    authenticate_rent_and_vacancy(program_id, accounts, &request, market)?;
+    let market = authenticate_product_core(program_id, accounts, &request, custody_context, &rent)?;
+    authenticate_rent_and_vacancy(program_id, accounts, &request, market, &rent)?;
 
     let candidates =
         build_candidates_boxed(program_id, accounts, &request, market, request_digest)?;
@@ -377,7 +376,6 @@ fn authenticate_privileges(
         || !accounts.rent_program.executable
         || accounts.system.key != &system_program::ID
         || !accounts.system.executable
-        || accounts.rent.key != &sysvar::rent::ID
     {
         return Err(ClaimsFoundingSbfErrorV5::Accounts.into());
     }
@@ -394,7 +392,6 @@ fn authenticate_privileges(
         accounts.result_staging,
         accounts.portfolio_record,
         accounts.portfolio_staging,
-        accounts.rent,
         accounts.system,
         accounts.core_market,
         accounts.cache,
@@ -734,6 +731,7 @@ fn authenticate_product_core(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     custody_context: [u8; 32],
+    rent: &Rent,
 ) -> Result<MarketViewV2, ProgramError> {
     if accounts.core_market.key.to_bytes() != request.market()
         || accounts.core_market.owner != accounts.core_program.key
@@ -770,9 +768,9 @@ fn authenticate_product_core(
         custody_context,
         generation: request.generation(),
     };
-    authenticate_runtime_product_basis_core_v3(
+    authenticate_runtime_product_basis_core_with_rent_v3(
         accounts.registry,
-        accounts.rent,
+        rent,
         accounts.core_market,
         accounts.core_program,
         ProductRuntimeFrameV3 {
@@ -816,9 +814,8 @@ fn authenticate_rent_and_vacancy(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     market: MarketViewV2,
+    rent: &Rent,
 ) -> Result<(), ProgramError> {
-    let rent =
-        Rent::from_account_info(accounts.rent).map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
     let aggregate_width = vector_width(
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
         request.claim_count(),

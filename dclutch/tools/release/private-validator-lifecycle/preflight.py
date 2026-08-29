@@ -18,19 +18,39 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 
 SCHEMA = "dclutch-private-lifecycle-offline-preflight-v1"
 MAX_SOURCE_BYTES = 24 * 1024 * 1024
 PACKET_BYTES = 1_232
 DEVNET_LOCK_LIMIT = 64
+PREFLIGHT = "tools/release/private-validator-lifecycle/preflight.py"
+ECONOMIC_LEDGER = "tools/economic-lifecycle-ledger/ledger.py"
+PRIVATE_ECONOMIC_FIXTURE = "tools/economic-lifecycle-ledger/fixtures/private-canonical.json"
+ACTIVITY_V3_ECONOMIC_FIXTURE = (
+    "tools/economic-lifecycle-ledger/fixtures/activity-v3-canonical.json"
+)
+ACTIVITY_V3_OWNER = "tools/devnet-activity/activity.py"
 
 
 class Refusal(RuntimeError):
     """One fail-closed source-contract refusal."""
+
+
+@dataclasses.dataclass(frozen=True)
+class RepositorySnapshot:
+    root: str
+    head: str
+    tree: str
+    source_sha256: dict[str, str]
+    source_set_sha256: str
+
+
+_ACTIVE_SOURCE_SNAPSHOT: RepositorySnapshot | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -206,6 +226,15 @@ EXPOSURES: tuple[CommandExposure, ...] = (
         f"{SUCCESSOR}/private_lifecycle.rs",
         "COMMAND_V1",
     ),
+)
+
+SOURCE_ABORT_EXPOSURE = CommandExposure(
+    "source-abort-v1",
+    "source_abort_exterior::COMMAND_V1",
+    f"{SUCCESSOR}/source_abort_exterior.rs",
+    "usage",
+    f"{SUCCESSOR}/source_abort_exterior.rs",
+    "COMMAND_V1",
 )
 
 
@@ -418,7 +447,66 @@ def exact_repo(path: Path) -> Path:
     return resolved
 
 
-def read_source(repo: Path, relative: str) -> str:
+def git_output(repo: Path, arguments: Sequence[str], label: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Refusal(f"cannot inspect repository {label}: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise Refusal(f"cannot inspect repository {label}: {detail}")
+    return result.stdout
+
+
+def git_identity(repo: Path) -> tuple[str, str]:
+    root = git_output(repo, ["rev-parse", "--show-toplevel"], "root").decode().strip()
+    if root != str(repo):
+        raise Refusal("--repo is not the exact Git working-tree root")
+    status = git_output(
+        repo,
+        ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+        "status",
+    )
+    if status:
+        raise Refusal("repository is not clean; offline preflight requires one exact committed snapshot")
+    head = git_output(repo, ["rev-parse", "--verify", "HEAD"], "HEAD").decode().strip()
+    tree = git_output(repo, ["rev-parse", "--verify", "HEAD^{tree}"], "tree").decode().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", head) or not re.fullmatch(r"[0-9a-f]{40}", tree):
+        raise Refusal("repository HEAD or tree is not one full lowercase Git object id")
+    return head, tree
+
+
+def modeled_source_paths() -> set[str]:
+    return {
+        PREFLIGHT,
+        RUNNER,
+        MAIN,
+        ECONOMIC_LEDGER,
+        PRIVATE_ECONOMIC_FIXTURE,
+        ACTIVITY_V3_ECONOMIC_FIXTURE,
+        ACTIVITY_V3_OWNER,
+        SOURCE_ABORT_EXPOSURE.help_path,
+        *(row.help_path for row in EXPOSURES),
+        *(row.owner_path for row in EXPOSURES if row.owner_path is not None),
+        *(owner for _, owner in SCHEMA_OWNERS),
+        f"{SUCCESSOR}/market.rs",
+        f"{SUCCESSOR}/founding_submission_journal.rs",
+        f"{SUCCESSOR}/private_activity.rs",
+        f"{SUCCESSOR}/private_lifecycle.rs",
+        f"{SUCCESSOR}/direct_trade.rs",
+        f"{SUCCESSOR}/terminal_lifecycle.rs",
+        f"{SUCCESSOR}/user_position_admission.rs",
+        "crates/dclutch-operator/src/wallet_terminal_payout_v3.rs",
+    }
+
+
+def raw_source_bytes(repo: Path, relative: str) -> bytes:
     path = repo / relative
     try:
         stat = path.lstat()
@@ -427,7 +515,44 @@ def read_source(repo: Path, relative: str) -> str:
     if path.is_symlink() or not path.is_file() or stat.st_size <= 0 or stat.st_size > MAX_SOURCE_BYTES:
         raise Refusal(f"required lifecycle source is not one bounded regular file: {relative}")
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_bytes()
+    except OSError as error:
+        raise Refusal(f"required lifecycle source cannot be read: {relative}: {error}") from error
+
+
+def capture_repository_snapshot(repo: Path, paths: Iterable[str]) -> RepositorySnapshot:
+    head, tree = git_identity(repo)
+    tracked = {
+        row.decode("utf-8")
+        for row in git_output(repo, ["ls-files", "-z"], "tracked files").split(b"\0")
+        if row
+    }
+    selected = sorted(set(paths))
+    missing = set(selected) - tracked
+    if missing:
+        raise Refusal("modeled lifecycle sources are not tracked: " + ", ".join(sorted(missing)))
+    source_sha256 = {relative: sha256(raw_source_bytes(repo, relative)) for relative in selected}
+    source_set_sha256 = sha256(
+        json.dumps(source_sha256, sort_keys=True, separators=(",", ":")).encode()
+    )
+    return RepositorySnapshot(str(repo), head, tree, source_sha256, source_set_sha256)
+
+
+def require_same_snapshot(before: RepositorySnapshot, after: RepositorySnapshot) -> None:
+    if before != after:
+        raise Refusal("repository HEAD, tree, or modeled source bytes changed during offline preflight")
+
+
+def read_source(repo: Path, relative: str) -> str:
+    data = raw_source_bytes(repo, relative)
+    if _ACTIVE_SOURCE_SNAPSHOT is not None:
+        expected = _ACTIVE_SOURCE_SNAPSHOT.source_sha256.get(relative)
+        if expected is None:
+            raise Refusal(f"lifecycle source read escaped the modeled snapshot: {relative}")
+        if sha256(data) != expected:
+            raise Refusal(f"modeled lifecycle source changed during offline preflight: {relative}")
+    try:
+        return data.decode("utf-8")
     except UnicodeDecodeError as error:
         raise Refusal(f"required lifecycle source is not UTF-8: {relative}") from error
 
@@ -674,6 +799,36 @@ def validate_constants(constants: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_exposure(
+    repo: Path,
+    row: CommandExposure,
+    main: str,
+    dispatch: str,
+    main_usage: str,
+) -> dict[str, str]:
+    if row.dispatch_fragment not in dispatch:
+        raise Refusal(f"{row.command} is absent from the successor dispatch function")
+    if row.owner_path is not None:
+        owner = read_source(repo, row.owner_path)
+        if row.owner_fragment not in owner or row.command not in owner:
+            raise Refusal(f"{row.command} dispatch constant is absent from {row.owner_path}")
+    help_source = main if row.help_path == MAIN else read_source(repo, row.help_path)
+    help_body = (
+        main_usage
+        if row.help_path == MAIN and row.help_function == "usage"
+        else rust_function(help_source, row.help_function, row.help_path)
+    )
+    if row.command not in help_body:
+        raise Refusal(f"{row.command} is dispatched but absent from its accepted help function")
+    if r"\n+" in help_body:
+        raise Refusal(f"{row.command} help contains a literal patch-marker prefix")
+    return {
+        "command": row.command,
+        "dispatch": f"{MAIN}::{row.dispatch_fragment}",
+        "help": f"{row.help_path}::{row.help_function}",
+    }
+
+
 def validate_exposures(repo: Path, constants: dict[str, Any], through: str) -> list[dict[str, str]]:
     required = command_groups(constants, through)
     mapping = {row.command: row for row in EXPOSURES}
@@ -682,29 +837,10 @@ def validate_exposures(repo: Path, constants: dict[str, Any], through: str) -> l
     main = read_source(repo, MAIN)
     dispatch = rust_function(main, "run", MAIN)
     main_usage = rust_function(main, "usage", MAIN)
-    report: list[dict[str, str]] = []
-    for command in required:
-        row = mapping[command]
-        if row.dispatch_fragment not in dispatch:
-            raise Refusal(f"{command} is absent from the successor dispatch function")
-        if row.owner_path is not None:
-            owner = read_source(repo, row.owner_path)
-            if row.owner_fragment not in owner or command not in owner:
-                raise Refusal(f"{command} dispatch constant is absent from {row.owner_path}")
-        help_source = main if row.help_path == MAIN else read_source(repo, row.help_path)
-        help_body = main_usage if row.help_path == MAIN and row.help_function == "usage" else rust_function(help_source, row.help_function, row.help_path)
-        if command not in help_body:
-            raise Refusal(f"{command} is dispatched but absent from its accepted help function")
-        if r"\n+" in help_body:
-            raise Refusal(f"{command} help contains a literal patch-marker prefix")
-        report.append(
-            {
-                "command": command,
-                "dispatch": f"{MAIN}::{row.dispatch_fragment}",
-                "help": f"{row.help_path}::{row.help_function}",
-            }
-        )
-    return report
+    return [
+        validate_exposure(repo, mapping[command], main, dispatch, main_usage)
+        for command in required
+    ]
 
 
 def validate_schemas(repo: Path, constants: dict[str, Any]) -> list[dict[str, str]]:
@@ -740,10 +876,218 @@ def validate_stage_vocabulary(repo: Path) -> dict[str, list[str]]:
             "dclutch-owned-loopback-private-lifecycle-session-v1",
             "dclutch-owned-loopback-activity-reconcile-manifest-v1",
             "activity manifest differs from the six authenticated stage completions",
+            "authenticate_aggregate_retirement_conservation_receipt_v1",
+            "project_aggregate_retirement_completion",
+            "AggregateRetirementOperationV1::ORDERED",
+            "retirement activity requires four AggregateRetirement events",
+            '"_deriveFinalizedLamports": true',
         ),
         "private activity projection",
     )
     return {"private": list(activity), "chaos": list(chaos), "public": list(manifest)}
+
+
+def validate_source_abort_recovery(repo: Path, constants: dict[str, Any]) -> dict[str, Any]:
+    if SOURCE_ABORT_EXPOSURE.command in command_groups(constants, "full") or any(
+        SOURCE_ABORT_EXPOSURE.command in stage.commands for stage in STAGES
+    ):
+        raise Refusal("SourceAbort recovery was incorrectly admitted as a happy-path stage")
+    main = read_source(repo, MAIN)
+    exposure = validate_exposure(
+        repo,
+        SOURCE_ABORT_EXPOSURE,
+        main,
+        rust_function(main, "run", MAIN),
+        rust_function(main, "usage", MAIN),
+    )
+    market = read_source(repo, f"{SUCCESSOR}/market.rs")
+    operations = (
+        "source-abort-custody-v1",
+        "source-abort-controller-first-v1",
+        "source-abort-controller-terminal-v1",
+    )
+    require_fragments(
+        market,
+        (
+            "pub(crate) enum SourceAbortRecoveryOperationV1",
+            "pub(crate) const ORDERED: [Self; 3]",
+            *operations,
+            "SourceAbortRecoveryPhaseV1::Complete",
+            "SourceAbort refuses while the staged founding remains satisfiable",
+        ),
+        "SourceAbort semantic owner",
+    )
+    exterior = read_source(repo, SOURCE_ABORT_EXPOSURE.help_path)
+    require_fragments(
+        exterior,
+        (
+            'const EVIDENCE_SCHEMA_V1: &str = "dclutch-source-abort-exterior-evidence-v1"',
+            'const COMPLETION_SCHEMA_V1: &str = "dclutch-source-abort-completion-v1"',
+            "SourceAbortRecoveryOperationV1::ORDERED.len()",
+            "SourceAbort completion requires three distinct finalized receipts",
+            "SourceAbort journals were not one exact canonical adjacent prefix",
+            "finalized SourceAbort packet did not produce its exact successor phase",
+            "incomplete conservation",
+        ),
+        "SourceAbort exterior",
+    )
+    return {
+        "happy_path_stage": False,
+        "command_exposure": exposure,
+        "evidence_schema": "dclutch-source-abort-exterior-evidence-v1",
+        "completion_schema": "dclutch-source-abort-completion-v1",
+        "operations": list(operations),
+        "terminal_phase": "complete",
+    }
+
+
+def derive_economic_fixture(repo: Path, relative: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    fixture_source = read_source(repo, relative)
+    try:
+        fixture = json.loads(fixture_source)
+    except json.JSONDecodeError as error:
+        raise Refusal(f"economic semantic-owner fixture is not JSON: {relative}: {error}") from error
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(repo / ECONOMIC_LEDGER), "derive", str(repo / relative)],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=environment,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Refusal(f"economic semantic owner could not derive {relative}: {error}") from error
+    if result.returncode != 0:
+        raise Refusal(
+            f"economic semantic owner refused {relative}: {result.stderr.strip()}"
+        )
+    try:
+        derived = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise Refusal(f"economic semantic owner emitted non-JSON for {relative}") from error
+    canonical_fixture = (json.dumps(fixture, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if derived.get("schema") != "dclutch-exact-economic-lifecycle-ledger-v1" or derived.get(
+        "fixtureSha256"
+    ) != sha256(canonical_fixture):
+        raise Refusal("economic semantic owner changed its output schema or fixture digest")
+    snapshots = derived.get("stageSnapshots")
+    if not isinstance(snapshots, list) or not snapshots:
+        raise Refusal("economic semantic owner omitted its stage snapshots")
+    for row in snapshots:
+        snapshot = row.get("snapshot") if isinstance(row, dict) else None
+        invariants = snapshot.get("invariants") if isinstance(snapshot, dict) else None
+        if not isinstance(invariants, dict) or not invariants or set(invariants.values()) != {True}:
+            raise Refusal("economic semantic owner did not prove every snapshot invariant")
+    terminal = snapshots[-1]
+    terminal_snapshot = terminal.get("snapshot") if isinstance(terminal, dict) else None
+    terminal_stage = terminal.get("stage") if isinstance(terminal, dict) else None
+    positions = terminal_snapshot.get("positions") if isinstance(terminal_snapshot, dict) else None
+    aggregate = (
+        terminal_snapshot.get("claimAggregateSupplyAtoms")
+        if isinstance(terminal_snapshot, dict)
+        else None
+    )
+    if (
+        terminal_stage != "aggregate-retirement"
+        or not isinstance(terminal_snapshot, dict)
+        or terminal_snapshot.get("retired") is not True
+        or terminal_snapshot.get("hoardPrincipalAtoms") != "0"
+        or not isinstance(aggregate, list)
+        or not aggregate
+        or set(aggregate) != {"0"}
+        or not isinstance(positions, dict)
+        or not positions
+        or any(not isinstance(row, list) or not row or set(row) != {"0"} for row in positions.values())
+    ):
+        raise Refusal("economic semantic owner did not discharge every liability before retirement")
+    return fixture, derived
+
+
+def validate_economic_owner(repo: Path, constants: dict[str, Any]) -> dict[str, Any]:
+    read_source(repo, ECONOMIC_LEDGER)
+    private_fixture, private = derive_economic_fixture(repo, PRIVATE_ECONOMIC_FIXTURE)
+    activity_fixture, activity = derive_economic_fixture(repo, ACTIVITY_V3_ECONOMIC_FIXTURE)
+    participant_events = [
+        event
+        for stage in private_fixture.get("stages", [])
+        if stage.get("id") == "participant"
+        for event in stage.get("events", [])
+        if event.get("kind") == "transfer-collateral"
+    ]
+    direct_events = [
+        event
+        for stage in private_fixture.get("stages", [])
+        for event in stage.get("events", [])
+        if event.get("kind") == "direct"
+    ]
+    funding = private.get("lamportContract", {}).get("requiredFundingTransfers")
+    if (
+        len(participant_events) != 1
+        or participant_events[0].get("quantityAtoms")
+        != str(constants["PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS"])
+        or not direct_events
+        or any(
+            event.get("feeBasisPoints") != constants["DEVELOPMENT_FEE_BASIS_POINTS"]
+            or event.get("feeDenominator")
+            != str(constants["FEE_BASIS_POINTS_DENOMINATOR"])
+            for event in direct_events
+        )
+        or not isinstance(funding, list)
+        or len(funding) != 1
+        or funding[0].get("lamports") != str(constants["LOCAL_TEST_BANKROLL_LAMPORTS"])
+    ):
+        raise Refusal("PRIVATE runner constants differ from the economic semantic owner")
+    resolution = next(
+        (row["snapshot"] for row in private["stageSnapshots"] if row["stage"] == "resolution"),
+        None,
+    )
+    schedule = resolution.get("frozenPayoutSchedule") if isinstance(resolution, dict) else None
+    payouts = resolution.get("payoutAtomsPerClaim") if isinstance(resolution, dict) else None
+    if (
+        not isinstance(schedule, list)
+        or not schedule
+        or not isinstance(payouts, list)
+        or not payouts
+    ):
+        raise Refusal("PRIVATE economic owner omitted its frozen zero-payout burn schedule")
+    losing_burn = False
+    for row in schedule:
+        index = row.get("claimIndex") if isinstance(row, dict) else None
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(payouts):
+            raise Refusal("PRIVATE economic owner emitted a bad payout claim coordinate")
+        losing_burn |= payouts[index] == "0"
+    if not losing_burn:
+        raise Refusal("PRIVATE economic owner omitted its frozen zero-payout burn schedule")
+    authority = activity.get("activityV3Authority")
+    read_source(repo, ACTIVITY_V3_OWNER)
+    if (
+        private.get("activityV3Authority") is not None
+        or not isinstance(authority, dict)
+        or authority.get("clusterTarget") != "devnet"
+        or authority.get("allLifecycleMutationsExpected") is not True
+        or activity_fixture.get("activityV3Authority") is None
+    ):
+        raise Refusal("corrected Activity-v3 economic authority is absent or misclassified")
+    return {
+        "private": {
+            "fixture": PRIVATE_ECONOMIC_FIXTURE,
+            "fixture_sha256": private["fixtureSha256"],
+            "stages": [row["stage"] for row in private["stageSnapshots"]],
+            "frozen_payout_rows": len(schedule),
+            "terminal_liabilities_zero": True,
+        },
+        "activity_v3": {
+            "fixture": ACTIVITY_V3_ECONOMIC_FIXTURE,
+            "fixture_sha256": activity["fixtureSha256"],
+            "classification": authority.get("classification"),
+            "stages": [row["stage"] for row in activity["stageSnapshots"]],
+            "terminal_liabilities_zero": True,
+        },
+    }
 
 
 def validate_founding_geometry(repo: Path, constants: dict[str, Any]) -> dict[str, Any]:
@@ -789,6 +1133,17 @@ def validate_founding_geometry(repo: Path, constants: dict[str, Any]) -> dict[st
     operations = constants["FOUNDING_JOURNAL_OPERATIONS"]
     if sum(magic in row for row in mutations) != 1 or sum(magic.lower() in row for row in operations) != 1:
         raise Refusal("runner founding mutation/journal vocabulary differs from current generic founding magic")
+    private_activity = read_source(repo, f"{SUCCESSOR}/private_activity.rs")
+    require_fragments(
+        private_activity,
+        (
+            f"found the Market atomically: Lock, Found, Realize, Claims, Open ({magic})",
+            f"create {magic} routing address lookup table",
+            f"extend {magic} routing table page ",
+            f"DCLTCFQ1 -> DCLTPCB2 -> {magic} -> CreateFund -> Activate -> Accept",
+        ),
+        "private activity founding vocabulary",
+    )
     return {
         "magic": magic,
         "abi_version": int(version),
@@ -939,61 +1294,107 @@ def source_digests(repo: Path, paths: Iterable[str]) -> dict[str, str]:
     return {path: sha256(read_source(repo, path).encode()) for path in sorted(set(paths))}
 
 
-def run_preflight(repo: Path, through: str) -> dict[str, Any]:
+def run_preflight(
+    repo: Path,
+    through: str,
+    *,
+    _stability_hook: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    global _ACTIVE_SOURCE_SNAPSHOT
     repo = exact_repo(repo)
     if through not in ("participant", "full-probe", "full"):
         raise Refusal("--through must be participant, full-probe, or full")
-    runner_source = read_source(repo, RUNNER)
-    constants = python_constants(runner_source)
-    constant_report = validate_constants(constants)
-    exposures = validate_exposures(repo, constants, through)
-    schemas = validate_schemas(repo, constants)
-    vocabulary = validate_stage_vocabulary(repo)
-    founding = validate_founding_geometry(repo, constants)
-    geometry = validate_geometry_and_state(repo)
-    validate_runner_source_predicates(repo)
-    selected_stages = (
-        [row for row in STAGES if row.stage in ("prepare", "funding", "administration", "founding", "participant")]
-        if through == "participant"
-        else list(STAGES)
+    if _ACTIVE_SOURCE_SNAPSHOT is not None:
+        raise Refusal("offline preflight may not nest source snapshots")
+    paths = modeled_source_paths()
+    before = capture_repository_snapshot(repo, paths)
+    try:
+        executed_preflight_sha256 = sha256(Path(__file__).resolve(strict=True).read_bytes())
+    except OSError as error:
+        raise Refusal(f"cannot bind the executing offline preflight: {error}") from error
+    if executed_preflight_sha256 != before.source_sha256[PREFLIGHT]:
+        raise Refusal("executing offline preflight bytes differ from the clean target repository")
+    _ACTIVE_SOURCE_SNAPSHOT = before
+    try:
+        runner_source = read_source(repo, RUNNER)
+        constants = python_constants(runner_source)
+        constant_report = validate_constants(constants)
+        exposures = validate_exposures(repo, constants, through)
+        schemas = validate_schemas(repo, constants)
+        vocabulary = validate_stage_vocabulary(repo)
+        founding = validate_founding_geometry(repo, constants)
+        geometry = validate_geometry_and_state(repo)
+        recovery = validate_source_abort_recovery(repo, constants)
+        economics = validate_economic_owner(repo, constants)
+        validate_runner_source_predicates(repo)
+        selected_stages = (
+            [
+                row
+                for row in STAGES
+                if row.stage in ("prepare", "funding", "administration", "founding", "participant")
+            ]
+            if through == "participant"
+            else list(STAGES)
+        )
+        if _stability_hook is not None:
+            _stability_hook()
+        after = capture_repository_snapshot(repo, paths)
+        require_same_snapshot(before, after)
+        report: dict[str, Any] = {
+            "schema": SCHEMA,
+            "status": "accepted",
+            "evidence_level": "offline-clean-committed-source-contract-only",
+            "through": through,
+            "validator_started": False,
+            "rpc_used": False,
+            "keys_read": False,
+            "build_run": False,
+            "repository": {
+                "head": before.head,
+                "tree": before.tree,
+                "source_set_sha256": before.source_set_sha256,
+            },
+            "command_exposures": exposures,
+            "recovery_exposure": recovery,
+            "schema_handoffs": schemas,
+            "stage_vocabulary": vocabulary,
+            "constants": constant_report,
+            "economic_owner": economics,
+            "founding_geometry": founding,
+            "transaction_geometry": geometry,
+            "expected_execution": [dataclasses.asdict(row) for row in selected_stages],
+            "source_sha256": before.source_sha256,
+        }
+        canonical = json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+        report["model_sha256"] = sha256(canonical)
+        return report
+    finally:
+        _ACTIVE_SOURCE_SNAPSHOT = None
+
+
+def write_new(path: Path, report: dict[str, Any], repo: Path) -> None:
+    repo = exact_repo(repo)
+    repository = report.get("repository")
+    source_sha256 = report.get("source_sha256")
+    if not isinstance(repository, dict) or not isinstance(source_sha256, dict):
+        raise Refusal("offline preflight report omitted its repository snapshot")
+    expected = RepositorySnapshot(
+        str(repo),
+        repository.get("head"),
+        repository.get("tree"),
+        source_sha256,
+        repository.get("source_set_sha256"),
     )
-    digest_paths = {
-        RUNNER,
-        MAIN,
-        *(row.help_path for row in EXPOSURES if row.command in command_groups(constants, through)),
-        *(owner for _, owner in SCHEMA_OWNERS),
-        f"{SUCCESSOR}/market.rs",
-        f"{SUCCESSOR}/founding_submission_journal.rs",
-        f"{SUCCESSOR}/private_activity.rs",
-        f"{SUCCESSOR}/private_lifecycle.rs",
-        "crates/dclutch-operator/src/wallet_terminal_payout_v3.rs",
-    }
-    report: dict[str, Any] = {
-        "schema": SCHEMA,
-        "status": "accepted",
-        "evidence_level": "offline-source-contract-only",
-        "through": through,
-        "validator_started": False,
-        "rpc_used": False,
-        "keys_read": False,
-        "build_run": False,
-        "command_exposures": exposures,
-        "schema_handoffs": schemas,
-        "stage_vocabulary": vocabulary,
-        "constants": constant_report,
-        "founding_geometry": founding,
-        "transaction_geometry": geometry,
-        "expected_execution": [dataclasses.asdict(row) for row in selected_stages],
-        "source_sha256": source_digests(repo, digest_paths),
-    }
-    canonical = json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
-    report["model_sha256"] = sha256(canonical)
-    return report
-
-
-def write_new(path: Path, report: dict[str, Any]) -> None:
+    current = capture_repository_snapshot(repo, source_sha256)
+    require_same_snapshot(expected, current)
     if not path.is_absolute():
         raise Refusal("--output must be absolute")
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        pass
+    else:
+        raise Refusal("--output must remain outside the clean source repository")
     parent = path.parent.resolve(strict=True)
     if parent != path.parent or path.exists() or path.is_symlink():
         raise Refusal("--output must be one absent path in a canonical directory")
@@ -1017,7 +1418,7 @@ def main(argv: Sequence[str]) -> int:
     arguments = parse(argv)
     report = run_preflight(arguments.repo, arguments.through)
     if arguments.output is not None:
-        write_new(arguments.output, report)
+        write_new(arguments.output, report, arguments.repo)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

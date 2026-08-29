@@ -20,8 +20,8 @@ pub const PROJECTED_CUSTODY_RECEIPT_BYTES_V1: usize = 320;
 /// Exact projected-Custody replay-creation physical frame width.
 ///
 /// Seven common accounts, four Initialize-specific accounts, and the exact
-/// thirty-seven-account Core `ProjectFound` sub-frame this operation forwards.
-pub const PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2: usize = 48;
+/// thirty-six-account Core `ProjectFound` sub-frame this operation forwards.
+pub const PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2: usize = 47;
 /// Exact projected-Custody Hoard-vault-creation physical frame width.
 pub const PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact projected-Custody source-compartment-creation physical frame width.

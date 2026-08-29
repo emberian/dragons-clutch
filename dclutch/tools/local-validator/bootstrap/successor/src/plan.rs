@@ -1250,7 +1250,7 @@ fn prepare_inner(
                 "Re-authenticate the exact checked-release gate and all seven mutable Loader pairs before any key read.".into(),
                 "Publish the exact seven ArtifactRelease records and singleton infrastructure profile through Registry transactions.".into(),
                 "Activate the five-role exact-authority ExecutionReleaseSet without revoking the disposable local Upgrade authority.".into(),
-                "Execute DCLTGMF2 founding, participant admission, Direct, resolution, payout, and retirement through their accepted exterior callers.".into(),
+                "Execute DCLTGMF3 founding, participant admission, Direct, resolution, payout, and retirement through their accepted exterior callers.".into(),
             ]
         } else {
             vec![

@@ -269,7 +269,7 @@
       "note": "Five System transfers. Core allocates the Market and the one-shot founding permit and Claims allocates the aggregate, the founder Position, and the admission with `allocate` and `assign` only, never a transfer, so each must already hold its rent. The Market and the permit are compared for EXACT equality with their rent minima, and all three Claims balances are folded byte-exactly into the Claims request Core commits to inside the permit."
     },
     {
-      "label": "DCLTGMF2 refuses a substituted Claims request and rolls the whole founding back",
+      "label": "DCLTGMF3 refuses a substituted Claims request and rolls the whole founding back",
       "routes": [
         "trading/generic_market_founding_v1::process_generic_market_founding_v2",
         "trading/process_instruction"
@@ -280,7 +280,7 @@
       "note": "HOSTILE, and the one this campaign existed to reach. The substituted readonly Claims request record names a DIFFERENT FOUNDER and is otherwise byte-identical, so the Position and the admission it would mint belong to somebody else. The outer's cross-request join is the only thing between that record and a stolen Position; it refuses before its first CPI, and the refusal has to take Lock, Found, Realize, and Claims with it. The runner asserts a fee-only debit and that all five allocated accounts are still vacant."
     },
     {
-      "label": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
+      "label": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF3)",
       "routes": [
         "trading/generic_market_founding_v1::process_generic_market_founding_v2",
         "trading/process_instruction",

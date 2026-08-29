@@ -107,12 +107,15 @@ def main() -> None:
         refuse(f"diagnostics labels differ: missing={missing} extra={extra}")
 
     header = f"dclutch-sbf-build-run-v1={args.run_id}"
+    invocation_prefix = "dclutch-sbf-build-invocation-v1="
     for label, package in expected:
         log = work / f"build-{label}.log"
         lines = read_lines(log, f"build log for {label}")
         if lines[0] != header:
             refuse(f"build log for {label} belongs to a different or unstamped run")
-        if not has_top_package_compile(lines[1:], package):
+        if len(lines) < 3 or not lines[1].startswith(invocation_prefix) or len(lines[1]) == len(invocation_prefix):
+            refuse(f"build log for {label} omitted its exact invocation stamp")
+        if not has_top_package_compile(lines[2:], package):
             refuse(f"build log for {label} has no fresh top-package compile marker for {package}")
 
     print(f"SBF build freshness PASS links={len(expected)}")

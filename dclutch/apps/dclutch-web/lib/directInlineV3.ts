@@ -68,6 +68,18 @@ import {
   HOT_EXECUTION_VERSION_V3,
   HOT_FIXED_ACCOUNT_COUNT_V3,
   HOT_CONFIG_RAW_ACCOUNT_V3,
+  HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+  HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+  HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+  HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+  HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+  HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+  HOT_TRANSITION_RAW_ACCOUNT_V3,
+  HOT_TRANSITION_STAGING_ACCOUNT_V3,
+  HOT_EFFECT_RAW_ACCOUNT_V3,
+  HOT_EFFECT_STAGING_ACCOUNT_V3,
+  HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+  HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
   HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
   HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
   HOT_MARKET_ACCOUNT_V3,
@@ -84,6 +96,28 @@ const MAX_U64 = 18_446_744_073_709_551_615n;
 const MAX_U16 = 0xffff;
 const DIRECT_COMPUTE_UNIT_LIMIT_V3 = 1_400_000;
 const ED25519_SIGNATURE_BYTES = 64;
+
+/** Current sealed Direct physical shape, owned by the Rust route projection. */
+export const DIRECT_INLINE_SEALED_FIXED_ALIASES_V3 = Object.freeze([
+  [HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3],
+  [HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3],
+  [HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3],
+  [HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3],
+  [HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3],
+  [HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3],
+] as const);
+export const DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3 = 39 as const;
+export const DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3 = 57 as const;
+export const DIRECT_INLINE_CURRENT_UNIQUE_MESSAGE_ACCOUNTS_V3 = 61 as const;
+export const DIRECT_INLINE_CURRENT_TRADING_ACCOUNT_INDICES_V3 = 78 as const;
+export const DIRECT_INLINE_CURRENT_WIRE_BYTES_V3 = 1_159 as const;
+/** Exact named-route tail joins, before the six fixed seal aliases project. */
+export const DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3 = Object.freeze([
+  [8, 37], [9, 31], [10, 32], [11, 33], [12, 35], [13, 28], [14, 0],
+  [15, 22], [16, 27], [17, 25], [18, 26], [21, 23], [22, 24],
+] as const);
+export const DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3 = Object.freeze([0, 1, 2, 3, 7, 23, 24, 28, 30, 31, 36] as const);
+export const DIRECT_INLINE_RUNTIME_TAIL_EXECUTABLE_V3 = Object.freeze([4, 5, 16, 17, 19, 21, 33, 38] as const);
 
 export type CompactIntentV2Input = Readonly<{
   side: 0 | 1;
@@ -135,10 +169,14 @@ export type DirectInlineHotRouteV3 = Readonly<{
   accountProfile: Uint8Array;
   selectedProgramSchema: Uint8Array;
   selectedProgram: Uint8Array;
+  observedSlot: bigint;
   fixedAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   strategyAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   runtimeAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   recentBlockhash: string;
+  blockhashObservedSlot: bigint;
+  lastValidBlockHeight: bigint;
+  lookupTableCreationSlot: bigint;
   lookupTables: ReadonlyArray<AddressLookupTableAccount>;
   outerEvidence: CheckedHotOuterEvidenceV3;
 }>;
@@ -168,17 +206,7 @@ export type DirectInlineTransactionPlanV3 = Readonly<{
   loadedAddresses: number;
 }>;
 
-function compareKeys(left: PublicKey, right: PublicKey): number {
-  const a = left.toBytes();
-  const b = right.toBytes();
-  for (let index = 0; index < 32; index += 1) {
-    const order = (a[index] ?? 0) - (b[index] ?? 0);
-    if (order !== 0) return order;
-  }
-  return 0;
-}
-
-/** The sole sorted, duplicate-free LUT sequence accepted by the Rust operator. */
+/** The sole first-semantic-use, duplicate-free LUT sequence accepted by Rust. */
 export function canonicalDirectInlineLookupAddressesV3(
   route: Pick<DirectInlineHotRouteV3, 'payer' | 'tradingProgram' | 'fixedAccounts' | 'strategyAccounts' | 'runtimeAccounts'>,
 ): ReadonlyArray<PublicKey> {
@@ -188,15 +216,44 @@ export function canonicalDirectInlineLookupAddressesV3(
   for (const account of [...route.fixedAccounts, ...route.strategyAccounts, ...route.runtimeAccounts]) {
     if (account.isSigner) signers.add(exactKey(account.address, 'Hot instruction signer').toBase58());
   }
-  const byAddress = new Map<string, PublicKey>();
+  const addresses: PublicKey[] = [];
+  const seen = new Set<string>();
   for (const [index, account] of [...route.fixedAccounts, ...route.strategyAccounts, ...route.runtimeAccounts].entries()) {
     const address = exactKey(account.address, `Hot account ${index}`);
     const text = address.toBase58();
-    if (!signers.has(text) && !programs.has(text)) byAddress.set(text, address);
+    if (!signers.has(text) && !programs.has(text) && !seen.has(text)) {
+      seen.add(text);
+      addresses.push(address);
+    }
   }
-  const addresses = [...byAddress.values()].sort(compareKeys);
   if (addresses.length === 0 || addresses.length > 256) throw new Error('Direct InlineOrdinary canonical lookup sequence is empty or exceeds 256 addresses');
   return Object.freeze(addresses);
+}
+
+/**
+ * Apply the execution-only projection owned by an already-authenticated
+ * CapabilitySeal. Public route manifests must retain the distinct named
+ * raw/staging addresses; callers may not supply this projected shape.
+ */
+export function projectDirectInlineSealedExecutionRouteV3(
+  route: DirectInlineHotRouteV3,
+): DirectInlineHotRouteV3 {
+  if (route.fixedAccounts.length !== HOT_FIXED_ACCOUNT_COUNT_V3
+      || new Set(route.fixedAccounts.map((account) => account.address)).size !== route.fixedAccounts.length) {
+    throw new Error('named Direct route must carry 39 distinct fixed accounts before seal projection');
+  }
+  const fixedAccounts = [...route.fixedAccounts];
+  for (const [raw, staging] of DIRECT_INLINE_SEALED_FIXED_ALIASES_V3) {
+    const rawMeta = fixedAccounts[raw];
+    const stagingMeta = fixedAccounts[staging];
+    if (rawMeta === undefined || stagingMeta === undefined
+        || rawMeta.isSigner || rawMeta.isWritable || stagingMeta.isSigner || stagingMeta.isWritable
+        || rawMeta.address === stagingMeta.address) {
+      throw new Error(`named Direct route cannot project sealed roles ${raw}/${staging}`);
+    }
+    fixedAccounts[staging] = rawMeta;
+  }
+  return Object.freeze({ ...route, fixedAccounts: Object.freeze(fixedAccounts) });
 }
 
 function validateCanonicalLookupTableV3(route: DirectInlineHotRouteV3): void {
@@ -204,6 +261,9 @@ function validateCanonicalLookupTableV3(route: DirectInlineHotRouteV3): void {
   const observed = route.lookupTables[0];
   if (observed === undefined || !observed.isActive()) throw new Error('Direct InlineOrdinary lookup table is absent or deactivated');
   const expected = canonicalDirectInlineLookupAddressesV3(route);
+  if (expected.length !== DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3) {
+    throw new Error(`Direct InlineOrdinary lookup closure has ${expected.length} addresses, not the current exact ${DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3}`);
+  }
   if (observed.state.addresses.length !== expected.length
       || observed.state.addresses.some((address, index) => !address.equals(expected[index] as PublicKey))) {
     throw new Error('Direct InlineOrdinary lookup table differs from the sole canonical address sequence');
@@ -468,13 +528,44 @@ function validateFixedFrame(route: DirectInlineHotRouteV3): void {
       || route.fixedAccounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]?.address !== SYSVAR_INSTRUCTIONS_PUBKEY.toBase58()) {
     throw new Error('hot fixed-account roles differ from the canonical V3 ABI');
   }
-  if (new Set(route.fixedAccounts.map((account) => account.address)).size !== route.fixedAccounts.length) {
-    throw new Error('hot fixed-account frame aliases two semantic roles');
-  }
   for (const [index, account] of route.fixedAccounts.entries()) {
     exactKey(account.address, `fixed account ${index}`);
     const expectedWritable = index === HOT_ROOT_ACCOUNT_V3;
     if (account.isSigner || account.isWritable !== expectedWritable) throw new Error(`fixed account ${index} has noncanonical signer/writable privilege`);
+  }
+  for (const [left, account] of route.fixedAccounts.entries()) {
+    for (let right = left + 1; right < route.fixedAccounts.length; right += 1) {
+      if (account.address !== route.fixedAccounts[right]?.address) continue;
+      if (!DIRECT_INLINE_SEALED_FIXED_ALIASES_V3.some(([raw, staging]) => raw === left && staging === right)) {
+        throw new Error(`hot fixed-account frame aliases non-sealed roles ${left} and ${right}`);
+      }
+    }
+  }
+  for (const [raw, staging] of DIRECT_INLINE_SEALED_FIXED_ALIASES_V3) {
+    if (route.fixedAccounts[raw]?.address !== route.fixedAccounts[staging]?.address) {
+      throw new Error(`hot sealed fixed roles ${raw}/${staging} do not carry the required execution alias`);
+    }
+  }
+  if (route.strategyAccounts.length !== 0
+      || route.runtimeAccounts.length !== DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3
+      || new Set(route.runtimeAccounts.map((account) => account.address)).size !== route.runtimeAccounts.length) {
+    throw new Error('hot route differs from the current no-strategy, 39-account physical runtime tail');
+  }
+  const payerAliases = route.runtimeAccounts.filter((account) => account.address === route.payer);
+  if (payerAliases.length !== 1 || payerAliases[0]?.isSigner !== true || payerAliases[0]?.isWritable !== true) {
+    throw new Error('hot route does not carry the sole payer as one writable runtime signer alias');
+  }
+  const crossAliases = new Map<number, number>(DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3);
+  for (const [runtimeIndex, entry] of route.runtimeAccounts.entries()) {
+    const expectedFixed = crossAliases.get(runtimeIndex);
+    const actualFixed = route.fixedAccounts.findIndex((fixed) => fixed.address === entry.address);
+    const expectedSigner = runtimeIndex === 1;
+    const expectedWritable = DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3.includes(runtimeIndex as never);
+    const expectedExecutable = DIRECT_INLINE_RUNTIME_TAIL_EXECUTABLE_V3.includes(runtimeIndex as never);
+    if ((expectedFixed === undefined ? actualFixed !== -1 : route.fixedAccounts[expectedFixed]?.address !== entry.address)
+        || entry.isSigner !== expectedSigner || entry.isWritable !== expectedWritable || entry.executable !== expectedExecutable) {
+      throw new Error(`hot runtime tail account ${runtimeIndex} differs from the canonical physical role`);
+    }
   }
 }
 
@@ -698,6 +789,15 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     .slice(0, transaction.message.header.numRequiredSignatures)
     .map((key) => key.toBase58()));
   if (requiredSigners.length !== 1 || requiredSigners[0] !== input.route.payer) throw new Error('Direct V3 message requires an unexpected transaction signer');
+  const loadedAddresses = transaction.message.addressTableLookups.reduce((sum, value) => sum + value.readonlyIndexes.length + value.writableIndexes.length, 0);
+  const tradingAccounts = transaction.message.compiledInstructions[tradingInstructionIndex]?.accountKeyIndexes.length;
+  if (transaction.message.staticAccountKeys.length !== 4
+      || loadedAddresses !== DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3
+      || transaction.message.staticAccountKeys.length + loadedAddresses !== DIRECT_INLINE_CURRENT_UNIQUE_MESSAGE_ACCOUNTS_V3
+      || tradingAccounts !== DIRECT_INLINE_CURRENT_TRADING_ACCOUNT_INDICES_V3
+      || wireBytes.length !== DIRECT_INLINE_CURRENT_WIRE_BYTES_V3) {
+    throw new Error('Direct V3 transaction differs from the current exact 4/57/61/78/1159 physical geometry');
+  }
   return Object.freeze({
     requestBytes,
     hotInstructionBytes,
@@ -712,6 +812,6 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     wireBytes,
     requiredSigners,
     preview,
-    loadedAddresses: transaction.message.addressTableLookups.reduce((sum, value) => sum + value.readonlyIndexes.length + value.writableIndexes.length, 0),
+    loadedAddresses,
   });
 }

@@ -155,6 +155,9 @@ fn run() -> Result<()> {
         Some(command) if command == source_abort_exterior::COMMAND_V1 => {
             source_abort_exterior::run(arguments.collect())
         }
+        Some(command) if command == source_abort_exterior::INTERRUPTION_AUDIT_COMMAND_V1 => {
+            source_abort_exterior::run_interruption_audit(arguments.collect())
+        }
         Some("local-private-validator-sponsored-push-v1") => {
             sponsored_push::run_owned_loopback(arguments.collect())
         }
@@ -1510,6 +1513,7 @@ fn usage() {
     println!("{}", terminal_sequence::owned_loopback_usage());
     println!("{}", aggregate_retirement_exterior::usage());
     println!("{}", source_abort_exterior::usage());
+    println!("{}", source_abort_exterior::interruption_audit_usage());
     println!("{}", user_position_admission::usage());
     println!("{}", user_position_admission::local_usage());
     println!("{}", pyth_vaa_provisioning::usage());

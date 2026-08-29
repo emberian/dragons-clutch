@@ -576,9 +576,34 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
 ) -> Result<u64, ProgramError> {
     let rent =
         Rent::from_account_info(rent_account).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
+    authenticate_runtime_product_basis_core_with_rent_v3(
+        registry,
+        &rent,
+        core_market,
+        core_program,
+        product_frame,
+        market,
+        expected_product_record_digest,
+        expected_linked_basis_record_digest,
+        expected_core_phase,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
+    registry: &AccountInfo<'_>,
+    rent: &Rent,
+    core_market: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    product_frame: ProductRuntimeFrameV3<'_, '_>,
+    market: MarketViewV2,
+    expected_product_record_digest: [u8; 32],
+    expected_linked_basis_record_digest: [u8; 32],
+    expected_core_phase: CorePhase,
+) -> Result<u64, ProgramError> {
     let runtime = authenticate_product_runtime_v2(
         registry.key,
-        &rent,
+        rent,
         expected_product_record_digest,
         None,
         ProductRuntimeFrameV2 {
@@ -589,7 +614,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     )
     .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     let product =
-        authenticate_product_basis_v3(registry.key, &rent, runtime, product_frame.linked_basis)
+        authenticate_product_basis_v3(registry.key, rent, runtime, product_frame.linked_basis)
             .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     if product.runtime.product_record.content_digest.to_bytes() != expected_product_record_digest
         || product.runtime.product_id.to_bytes() != market.product_instance_id

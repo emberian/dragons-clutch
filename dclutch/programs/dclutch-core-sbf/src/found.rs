@@ -30,7 +30,7 @@ use solana_program::{
     program::{invoke, invoke_signed, set_return_data},
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::SysvarSerialize,
+    sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
@@ -146,9 +146,9 @@ impl PreparedFound {
     }
 }
 
-/// Authenticate the exact Found37 authority graph and return its future
-/// Market projection without acquiring any writable account or applying the
-/// prepared creation plan.
+/// Authenticate the exact readonly ProjectFound36 authority graph and return
+/// its future Market projection without acquiring any writable account or
+/// applying the prepared creation plan.
 #[inline(never)]
 pub(crate) fn project(
     program_id: &Pubkey,
@@ -160,7 +160,7 @@ pub(crate) fn project(
         return Err(CoreSbfError::Instruction.into());
     }
     let frame = FoundAccounts::parse_project(program_id, accounts)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
+    let rent = Rent::get().map_err(|_| CoreSbfError::Creation)?;
     let prepared = prepare_boxed(program_id, &frame, request, &rent)?;
     let receipt = ProjectFoundReceiptV2::new(
         request.market,
@@ -212,7 +212,8 @@ fn process_frame(
     request: Request,
 ) -> Result<(), solana_program::program_error::ProgramError> {
     let frame = FoundAccounts::parse(program_id, accounts)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
+    let rent_account = frame.rent.ok_or(CoreSbfError::AccountFrame)?;
+    let rent = Rent::from_account_info(rent_account).map_err(|_| CoreSbfError::Creation)?;
     authenticate_plan_and_apply(program_id, &frame, request, &rent)
 }
 
