@@ -12,6 +12,16 @@ The two canonical contracts are:
 - `fixtures/activity-v3-canonical.json`: corrected ten-wallet devnet-only
   Activity-v3 authority and the four-participant flagship economic ensemble.
 
+The deterministic model-based companion is:
+
+- `fixtures/multiwallet-20-seeds.json`: the exact ordered seed/profile contract.
+- `fixtures/multiwallet-20-seeds.expected.json`: canonical expected snapshots
+  for all twenty seeds, bound to both source-fixture byte digests.
+
+`multiwallet.py` owns only control-flow expectations around the economic
+ledger. `ledger.py` remains the single semantic owner for collateral, Claims,
+Hoard principal, Direct fee arithmetic, redemption, and conservation.
+
 The old `tools/devnet-scenarios/fixtures/flagship.json` remains intentionally
 untouched and scenario-only. It is not admissible Activity-v3 authority: its
 adapter-required Direct/redeem/retire operations have
@@ -191,3 +201,63 @@ fee rounding, altered/missing payout quantity, omitted zero-payout loser burns,
 premature retirement, fee-to-Hoard substitution, collateral supply mismatch,
 fixture-digest substitution, Rent refund mismatch/class omission, authorization
 cap changes, nonmutating Activity-v3 gaps, and the old scenario-only flagship.
+
+## Twenty-seed model-based oracle
+
+The multiwallet contract derives the same PRIVATE named-seed digest domain for
+`seed-01` through `seed-20`. Each seed carries an ordered transition log with
+the full economic/control post-snapshot, pre/post SHA-256, and explicit
+conservation vector. It covers crossed per-maker Direct nonces, stale/future
+nonces, an exact duplicate paired intent, simultaneous actions sharing a
+seller or buyer nonce, signed collateral-account switching and foreign-account
+refusal, every exact cut boundary, provider failure, the gross-199/gross-200
+50-bps fee floor, stale replay, payout resume, zero-payout losing burns, and
+retirement-before-zero refusal.
+
+“Paired intent” is the generator's stable name for the two signed inline
+Direct actions settled together; it does not introduce a second onchain ticket
+type. Simultaneous candidates are sorted by their paired-intent SHA-256. The
+first valid candidate consumes both makers' exact next nonces atomically; a
+candidate sharing either consumed nonce then refuses without changing state.
+Signed collateral accounts are checked against their owner on every action and
+are deliberately not sticky across the campaign.
+
+Winner selection uses integer rational cross-products. Successful prices at
+`11999/100`, `12000/100`, `17999/100`, `18000/100`, and `18001/100` select
+outcomes 0, 1, 1, 2, and 2 respectively; provider failure selects outcome 3.
+No float enters the oracle. Payout progress always burns one complete positive
+row from the frozen schedule. Losing rows transfer zero collateral but remain
+mandatory burns. The resume seed stops only between rows and binds the same
+frozen-schedule digest before continuing.
+
+Regenerate or print the canonical ensemble entirely offline:
+
+```sh
+python3 tools/economic-lifecycle-ledger/multiwallet.py derive \
+  tools/economic-lifecycle-ledger/fixtures/multiwallet-20-seeds.json
+
+python3 tools/economic-lifecycle-ledger/multiwallet.py emit \
+  tools/economic-lifecycle-ledger/fixtures/multiwallet-20-seeds.json \
+  tools/economic-lifecycle-ledger/fixtures/multiwallet-20-seeds.expected.json
+```
+
+PRIVATE and Activity-v3 can compare a captured poststate without RPC work in
+the oracle. Provide schema `dclutch-model-based-multiwallet-observed-v1`, the
+derived `contractSha256`, `seedName`, transition `ordinal`, and exact
+model-shaped `snapshot`:
+
+```sh
+python3 tools/economic-lifecycle-ledger/multiwallet.py check \
+  tools/economic-lifecycle-ledger/fixtures/multiwallet-20-seeds.json \
+  OBSERVED.json
+```
+
+The check refuses another contract, missing/ambiguous seed, absent ordinal, or
+any economic/control difference. The generator never opens RPC, reads a key,
+builds, signs, deploys, or submits a transaction.
+
+```sh
+python3 -m unittest \
+  tools/economic-lifecycle-ledger/test_ledger.py \
+  tools/economic-lifecycle-ledger/test_multiwallet.py
+```
