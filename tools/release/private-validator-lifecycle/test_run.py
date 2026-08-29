@@ -46,6 +46,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             MODULE.FLAGSHIP_RESOLUTION_COMMAND,
             MODULE.PAYOUT_INPUT_COMMAND,
             MODULE.PAYOUT_EXECUTE_COMMAND,
+            MODULE.TERMINAL_SEQUENCE_COMMAND,
             MODULE.TERMINAL_RETIREMENT_COMMAND,
         )
         full_required = (*probe_required, *MODULE.FINAL_EVIDENCE_COMMANDS)
@@ -1221,64 +1222,242 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 {**document, "claimIndex": 2}, target, PUBKEY_C
             )
 
-    def test_terminal_completion_refuses_packet_inadmissible_monolith_until_split_freezes(
-        self,
-    ) -> None:
-        kinds = [
-            "core-begin-retiring",
-            "direct-begin-retiring",
-            "resolution-close-fund",
-            "direct-close-capability",
-            "retirement-replay-handoff",
-            "aggregate-retirement",
-        ]
-        journals = [
-            {
-                "schema": MODULE.TERMINAL_JOURNAL_SCHEMA,
-                "mutation": {"kind": kind},
-                "phase": "finalized",
-                "signature": SIGNATURES[index],
-                "finalizedSlot": str(50 + index),
-                "transactionFeeLamports": "5000",
-                "computeUnitsConsumed": str(100 + index),
+    def test_terminal_completion_requires_exact_four_phase_conservation(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            journal_dir = Path(root_text)
+            plan = journal_dir / "plan.json"
+            evidence = journal_dir / "evidence.json"
+            plan.write_text("plan\n")
+            evidence.write_text("evidence\n")
+            classified = {
+                "market": 10,
+                "rentCredit": 20,
+                "claimsRefund": 30,
+                "custodyReplay": 40,
+                "hoardVault": 50,
+                "expectedRefundDelta": 150,
+                "refundWalletBefore": 1_000,
             }
-            for index, kind in enumerate(kinds)
-        ]
-        completion = {
-            "schema": MODULE.TERMINAL_COMPLETION_SCHEMA,
-            "status": "finalized",
-            "cluster": "owned-loopback",
-            "genesisHash": PUBKEY_A,
-            "invocation": {"command": MODULE.TERMINAL_RETIREMENT_COMMAND},
-            "session": {},
-            "journalDirectory": "retirement/journals",
-            "market": PUBKEY_B,
-            "payer": PUBKEY_C,
-            "lookupTable": PUBKEY_A,
-            "journals": journals,
-            "finalizedSlot": "55",
-            "transactionFeesLamports": str(6 * 5000),
-            "computeUnitsConsumed": str(sum(range(100, 106))),
-        }
-        with self.assertRaisesRegex(MODULE.Refusal, "packet-inadmissible"):
-            MODULE.authenticate_terminal_completion(
-                completion, market=PUBKEY_B, payer=PUBKEY_C
+            def account(address: str, lamports: int) -> dict[str, object]:
+                row: dict[str, object] = {
+                    "address": address,
+                    "owner": PUBKEY_A,
+                    "lamports": lamports,
+                    "executable": False,
+                    "dataLen": 0,
+                    "dataSha256": MODULE.sha256_bytes(b""),
+                    "accountSha256": "",
+                }
+                row["accountSha256"] = MODULE.semantic_owner_digest(
+                    row, "accountSha256", "fixture account"
+                )
+                return row
+
+            operations = []
+            for operation in MODULE.TERMINAL_AGGREGATE_OPERATIONS:
+                data = operation.encode()
+                operations.append(
+                    {
+                        "operation": operation,
+                        "programId": PUBKEY_A,
+                        "accounts": [
+                            {"address": PUBKEY_A, "signer": False, "writable": False}
+                            for _ in range(35)
+                        ],
+                        "dataBase64": MODULE.base64.b64encode(data).decode(),
+                        "dataSha256": MODULE.sha256_bytes(data),
+                        "expectedWireBytes": 800,
+                        "exactProtocolAndPayerKeys": 36,
+                    }
+                )
+            campaign = {
+                "schema": MODULE.TERMINAL_CAMPAIGN_SCHEMA,
+                "cluster": "owned-loopback",
+                "genesisHash": PUBKEY_A,
+                "rpcUrl": "http://127.0.0.1:8899",
+                "planSha256": MODULE.sha256_file(plan),
+                "evidenceSha256": MODULE.sha256_file(evidence),
+                "payer": PUBKEY_C,
+                "lookupTable": PUBKEY_A,
+                "lookupTableSha256": "33" * 32,
+                "coreProgram": PUBKEY_A,
+                "claimsProgram": PUBKEY_B,
+                "market": account(PUBKEY_B, 10),
+                "rentCredit": account(PUBKEY_A, 20),
+                "checkpoint": account(PUBKEY_A, 30),
+                "custodyReplay": account(PUBKEY_A, 40),
+                "hoardVault": account(PUBKEY_A, 50),
+                "sourceReceipt": account(PUBKEY_B, 0),
+                "refundWallet": account(PUBKEY_A, 1_000),
+                "classifiedLamports": classified,
+                "operations": operations,
+                "campaignSha256": "",
+            }
+            campaign["campaignSha256"] = MODULE.semantic_owner_digest(
+                campaign, "campaignSha256", "fixture campaign"
             )
-        pending_split = {
-            **completion,
-            "journals": [
-                *journals[:-1],
-                {
-                    **journals[-1],
-                    "mutation": {"kind": "aggregate-retirement-prepare"},
-                },
-            ],
-        }
-        with self.assertRaisesRegex(MODULE.Refusal, "four-phase"):
-            MODULE.authenticate_terminal_completion(
-                pending_split,
-                market=PUBKEY_B,
-                payer=PUBKEY_C,
+            self.assertIs(
+                MODULE.authenticate_terminal_campaign(
+                    campaign,
+                    url="http://127.0.0.1:8899",
+                    plan=plan,
+                    evidence=evidence,
+                    market=PUBKEY_B,
+                    payer=PUBKEY_C,
+                    source_receipt=PUBKEY_B,
+                    lookup_table=PUBKEY_A,
+                    genesis_hash=PUBKEY_A,
+                ),
+                campaign,
+            )
+            compact = []
+            predecessors = (
+                "ready",
+                "claims-closed",
+                "hoard-vault-closed",
+                "custody-replay-closed",
+            )
+            successors = (
+                "claims-closed",
+                "hoard-vault-closed",
+                "custody-replay-closed",
+                "complete",
+            )
+            for index, operation in enumerate(MODULE.TERMINAL_AGGREGATE_OPERATIONS):
+                finalization = {
+                    "signature": SIGNATURES[index],
+                    "finalizedSlot": 50 + index,
+                    "packetSha256": f"{index + 1:02x}" * 32,
+                    "feeLamports": 0,
+                    "computeUnitsConsumed": 100 + index,
+                    "poststateSha256": f"{index + 5:02x}" * 32,
+                    "checkpointHistorySha256": None,
+                }
+                journal = {
+                    "schema": MODULE.TERMINAL_AGGREGATE_JOURNAL_SCHEMA,
+                    "campaignSha256": campaign["campaignSha256"],
+                    "operation": operation,
+                    "phase": "finalized",
+                    "predecessor": predecessors[index],
+                    "successor": successors[index],
+                    "plannedPrestateSha256": "44" * 32,
+                    "intentSha256": "55" * 32,
+                    "packet": {"signed": {"packetSha256": finalization["packetSha256"]}},
+                    "finalization": finalization,
+                    "stateSha256": "",
+                }
+                journal["stateSha256"] = MODULE.semantic_owner_digest(
+                    journal, "stateSha256", "fixture journal"
+                )
+                (journal_dir / f"{index:02d}-{operation}.json").write_text(
+                    MODULE.json.dumps(journal, indent=2) + "\n"
+                )
+                compact.append(
+                    {
+                        "operation": operation,
+                        "journalSha256": journal["stateSha256"],
+                        **{
+                            key: value
+                            for key, value in finalization.items()
+                            if key != "checkpointHistorySha256"
+                        },
+                    }
+                )
+            completion = {
+                "schema": MODULE.TERMINAL_COMPLETION_SCHEMA,
+                "status": "finalized",
+                "campaignSha256": campaign["campaignSha256"],
+                "market": PUBKEY_B,
+                "checkpoint": PUBKEY_A,
+                "rentCredit": PUBKEY_A,
+                "refundWallet": PUBKEY_A,
+                "payer": PUBKEY_C,
+                "classifiedLamports": classified,
+                "totalTransactionFeesLamports": 0,
+                "terminalRefundWalletLamports": 1_150,
+                "journals": compact,
+                "receiptSha256": "",
+            }
+            completion["receiptSha256"] = MODULE.semantic_owner_digest(
+                completion, "receiptSha256", "fixture completion"
+            )
+            self.assertEqual(
+                len(
+                    MODULE.authenticate_terminal_completion(
+                        completion,
+                        campaign=campaign,
+                        journal_dir=journal_dir,
+                        market=PUBKEY_B,
+                        payer=PUBKEY_C,
+                    )["facts"]
+                ),
+                4,
+            )
+            for hostile in (
+                {**completion, "journals": list(reversed(compact))},
+                {**completion, "totalTransactionFeesLamports": 1},
+                {**completion, "journals": [{"mutation": {"kind": "aggregate-retirement"}}]},
+            ):
+                with self.assertRaises(MODULE.Refusal):
+                    MODULE.authenticate_terminal_completion(
+                        hostile,
+                        campaign=campaign,
+                        journal_dir=journal_dir,
+                        market=PUBKEY_B,
+                        payer=PUBKEY_C,
+                    )
+            sequence_dir = journal_dir / "sequence"
+            sequence_dir.mkdir()
+            sequence = (
+                ("00-alt-create.json", {"kind": "lookup-create"}),
+                ("01-alt-extend-032.json", {"kind": "lookup-extend", "prefixLen": 32}),
+                ("02-alt-freeze.json", {"kind": "lookup-freeze"}),
+                ("10-core-begin-retiring.json", {"kind": "core-begin-retiring"}),
+                ("11-direct-begin-retiring.json", {"kind": "direct-begin-retiring"}),
+                ("13-resolution-close-fund.json", {"kind": "resolution-close-fund"}),
+                ("14-direct-close-capability.json", {"kind": "direct-close-capability"}),
+                ("15-retirement-replay-handoff.json", {"kind": "retirement-replay-handoff"}),
+            )
+            for index, (name, mutation) in enumerate(sequence):
+                intent = {"mutation": mutation}
+                finalized = {
+                    "signature": SIGNATURES[index + 4],
+                    "slot": 100 + index,
+                    "feeLamports": 0,
+                    "computeUnitsConsumed": 200 + index,
+                    "packetSha256": "66" * 32,
+                    "poststate": {},
+                }
+                journal = {
+                    "schema": MODULE.TERMINAL_JOURNAL_SCHEMA,
+                    "cluster": "owned-loopback",
+                    "rpcUrl": "http://127.0.0.1:8899",
+                    "authorizedMutation": True,
+                    "stateSha256": "",
+                    "phase": "finalized",
+                    "intentSha256": MODULE.sha256_bytes(
+                        MODULE.json.dumps(
+                            intent, ensure_ascii=False, separators=(",", ":")
+                        ).encode()
+                    ),
+                    "intent": intent,
+                    "signedPacketBase64": "AQ==",
+                    "expectedSignature": finalized["signature"],
+                    "finalized": finalized,
+                }
+                journal["stateSha256"] = MODULE.semantic_owner_digest(
+                    journal, "stateSha256", "sequence fixture"
+                )
+                (sequence_dir / name).write_text(
+                    MODULE.json.dumps(journal, indent=2) + "\n"
+                )
+            self.assertEqual(
+                len(
+                    MODULE.terminal_sequence_finalized_history(
+                        sequence_dir, url="http://127.0.0.1:8899"
+                    )
+                ),
+                8,
             )
 
     def test_terminal_stdout_joins_exact_completion_path_and_hash(self) -> None:
@@ -1288,41 +1467,44 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             journal_dir.mkdir()
             completion_path = root / "completion.json"
             completion_path.write_text('{"status":"finalized"}\n')
-            completion = {"lookupTable": PUBKEY_A}
+            campaign_path = root / "campaign.json"
+            campaign_path.write_text('{"schema":"campaign"}\n')
+            campaign = {"campaignSha256": "11" * 32}
             summary = {
-                "status": "complete",
-                "market": PUBKEY_B,
-                "lookupTable": PUBKEY_A,
+                "schema": MODULE.TERMINAL_PROGRESS_SCHEMA,
+                "status": "finalized",
+                "campaign": str(campaign_path),
+                "campaignSha256": campaign["campaignSha256"],
                 "journalDirectory": str(journal_dir),
                 "completion": str(completion_path),
                 "completionSha256": MODULE.sha256_file(completion_path),
-                "message": "Every exact terminal journal reverified at finalized and the aggregate Market account is closed.",
+                "message": "Aggregate retirement finalized through prepare, close-vault, close-replay, and finish; exact rent/refund conservation reverified.",
             }
             self.assertEqual(
                 MODULE.authenticate_terminal_stdout(
                     summary,
-                    completion=completion,
+                    campaign=campaign,
+                    campaign_path=campaign_path,
                     completion_path=completion_path,
                     journal_dir=journal_dir,
-                    market=PUBKEY_B,
                 ),
                 summary,
             )
             with self.assertRaisesRegex(MODULE.Refusal, "completion path, hash"):
                 MODULE.authenticate_terminal_stdout(
                     {**summary, "completionSha256": "00" * 32},
-                    completion=completion,
+                    campaign=campaign,
+                    campaign_path=campaign_path,
                     completion_path=completion_path,
                     journal_dir=journal_dir,
-                    market=PUBKEY_B,
                 )
             with self.assertRaisesRegex(MODULE.Refusal, "fields changed"):
                 MODULE.authenticate_terminal_stdout(
                     {**summary, "extra": True},
-                    completion=completion,
+                    campaign=campaign,
+                    campaign_path=campaign_path,
                     completion_path=completion_path,
                     journal_dir=journal_dir,
-                    market=PUBKEY_B,
                 )
 
     def test_full_probe_is_distinct_and_admits_exactly_one_seed(self) -> None:

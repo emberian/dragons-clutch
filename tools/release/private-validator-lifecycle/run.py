@@ -52,7 +52,8 @@ PYTH_PROVISION_COMMAND = "local-private-validator-pyth-vaa-provision-v1"
 FLAGSHIP_RESOLUTION_COMMAND = "local-private-validator-flagship-resolution-v1"
 PAYOUT_INPUT_COMMAND = "local-private-validator-wallet-terminal-payout-input-v1"
 PAYOUT_EXECUTE_COMMAND = "local-private-validator-wallet-terminal-payout-v1"
-TERMINAL_RETIREMENT_COMMAND = "local-private-validator-terminal-sequence-v1"
+TERMINAL_SEQUENCE_COMMAND = "local-private-validator-terminal-sequence-v1"
+TERMINAL_RETIREMENT_COMMAND = "local-private-validator-aggregate-retirement-v1"
 DIRECT_PRODUCER_COMMAND = "local-private-validator-direct-trade-produce-v1"
 DIRECT_EXECUTE_COMMAND = "local-private-validator-direct-trade-v1"
 DIRECT_PAYOUT_SCHEDULE_COMMAND = "local-private-validator-direct-payout-schedule-v1"
@@ -87,7 +88,20 @@ PAYOUT_EVIDENCE_SCHEMA = (
 )
 TERMINAL_SESSION_SCHEMA = "dclutch-owned-loopback-terminal-sequence-session-v1"
 TERMINAL_JOURNAL_SCHEMA = "dclutch-owned-loopback-terminal-sequence-journal-v1"
-TERMINAL_COMPLETION_SCHEMA = "dclutch-owned-loopback-terminal-sequence-completion-v1"
+TERMINAL_COMPLETION_SCHEMA = (
+    "dclutch-owned-loopback-aggregate-retirement-completion-v1"
+)
+TERMINAL_CAMPAIGN_SCHEMA = "dclutch-owned-loopback-aggregate-retirement-campaign-v1"
+TERMINAL_AGGREGATE_JOURNAL_SCHEMA = (
+    "dclutch-owned-loopback-aggregate-retirement-journal-v1"
+)
+TERMINAL_PROGRESS_SCHEMA = "dclutch-owned-loopback-aggregate-retirement-progress-v1"
+TERMINAL_AGGREGATE_OPERATIONS = (
+    "prepare",
+    "close-vault",
+    "close-replay",
+    "finish",
+)
 MAX_RESOLUTION_TABLE_INVOCATIONS = 64
 MAX_RESOLUTION_STAGE_INVOCATIONS = 16
 MAX_PAYOUT_INVOCATIONS = 24
@@ -505,6 +519,7 @@ def command_surface(bootstrap: Path, through: str) -> str:
                 FLAGSHIP_RESOLUTION_COMMAND,
                 PAYOUT_INPUT_COMMAND,
                 PAYOUT_EXECUTE_COMMAND,
+                TERMINAL_SEQUENCE_COMMAND,
                 TERMINAL_RETIREMENT_COMMAND,
             )
         )
@@ -1489,6 +1504,17 @@ def lowercase_sha256(value: Any, label: str) -> str:
     return value
 
 
+def semantic_owner_digest(document: dict[str, Any], field: str, label: str) -> str:
+    """Reproduce a Rust semantic owner's blank-self-field serde digest."""
+
+    if field not in document:
+        raise Refusal(f"{label} omitted its self digest")
+    material = {**document, field: ""}
+    return sha256_bytes(
+        json.dumps(material, ensure_ascii=False, separators=(",", ":")).encode()
+    )
+
+
 def authenticate_resolution_producer(
     document: Any,
     *,
@@ -1773,9 +1799,404 @@ def authenticate_payout_evidence(
     return evidence
 
 
+def authenticate_terminal_sequence_journal(
+    document: Any, *, url: str, label: str
+) -> dict[str, Any]:
+    journal = exact_keys(
+        document,
+        {
+            "schema",
+            "cluster",
+            "rpcUrl",
+            "authorizedMutation",
+            "stateSha256",
+            "phase",
+            "intentSha256",
+            "intent",
+            "signedPacketBase64",
+            "expectedSignature",
+            "finalized",
+        },
+        label,
+    )
+    intent = journal.get("intent")
+    mutation = intent.get("mutation") if isinstance(intent, dict) else None
+    finalization = journal.get("finalized")
+    fact = finalized_fact(finalization, f"{label} finalization")
+    if (
+        journal.get("schema") != TERMINAL_JOURNAL_SCHEMA
+        or journal.get("cluster") != "owned-loopback"
+        or journal.get("rpcUrl") != url
+        or journal.get("authorizedMutation") is not True
+        or journal.get("phase") != "finalized"
+        or not isinstance(mutation, dict)
+        or not isinstance(mutation.get("kind"), str)
+        or not isinstance(journal.get("signedPacketBase64"), str)
+        or journal.get("expectedSignature") != fact["signature"]
+        or not isinstance(intent, dict)
+        or sha256_bytes(
+            json.dumps(intent, ensure_ascii=False, separators=(",", ":")).encode()
+        )
+        != lowercase_sha256(journal.get("intentSha256"), f"{label} intent")
+        or semantic_owner_digest(journal, "stateSha256", label)
+        != lowercase_sha256(journal.get("stateSha256"), f"{label} state")
+    ):
+        raise Refusal(f"{label} was not its exact finalized semantic owner")
+    lowercase_sha256(finalization.get("packetSha256"), f"{label} packet")
+    return {
+        "mutation": mutation,
+        "state_sha256": journal["stateSha256"],
+        "finalized": fact,
+    }
+
+
+def terminal_sequence_finalized_history(
+    journal_dir: Path, *, url: str
+) -> list[dict[str, Any]]:
+    paths = sorted(journal_dir.glob("*.json"), key=lambda path: path.name)
+    rows = []
+    for index, path in enumerate(paths):
+        canonical_file(path, f"terminal sequence journal {index}")
+        row = authenticate_terminal_sequence_journal(
+            read_unique_json(path, f"terminal sequence journal {index}"),
+            url=url,
+            label=f"terminal sequence journal {index}",
+        )
+        row["path"] = str(path)
+        row["sha256"] = sha256_file(path)
+        rows.append(row)
+    kinds = [row["mutation"]["kind"] for row in rows]
+    expected = ["lookup-create"]
+    extension_count = kinds.count("lookup-extend")
+    if extension_count < 1:
+        raise Refusal("terminal sequence omitted its ALT extension prefix")
+    expected.extend(["lookup-extend"] * extension_count)
+    expected.extend(
+        [
+            "lookup-freeze",
+            "core-begin-retiring",
+            "direct-begin-retiring",
+        ]
+    )
+    if "resolution-receipt-prepay" in kinds:
+        expected.append("resolution-receipt-prepay")
+    expected.extend(
+        [
+            "resolution-close-fund",
+            "direct-close-capability",
+            "retirement-replay-handoff",
+        ]
+    )
+    if kinds != expected:
+        raise Refusal("terminal sequence changed its exact finalized handoff order")
+    extension_prefixes = []
+    for path, row in zip(paths, rows, strict=True):
+        kind = row["mutation"]["kind"]
+        expected_name = {
+            "lookup-create": "00-alt-create.json",
+            "lookup-freeze": "02-alt-freeze.json",
+            "core-begin-retiring": "10-core-begin-retiring.json",
+            "direct-begin-retiring": "11-direct-begin-retiring.json",
+            "resolution-receipt-prepay": "12-resolution-receipt-prepay.json",
+            "resolution-close-fund": "13-resolution-close-fund.json",
+            "direct-close-capability": "14-direct-close-capability.json",
+            "retirement-replay-handoff": "15-retirement-replay-handoff.json",
+        }.get(kind)
+        if kind == "lookup-extend":
+            prefix = positive_integer(
+                row["mutation"].get("prefixLen"), "terminal ALT extension prefix"
+            )
+            extension_prefixes.append(prefix)
+            expected_name = f"01-alt-extend-{prefix:03}.json"
+        elif set(row["mutation"]) != {"kind"}:
+            raise Refusal("terminal sequence mutation fields changed")
+        if path.name != expected_name:
+            raise Refusal("terminal sequence journal filename changed")
+    if extension_prefixes != sorted(set(extension_prefixes)):
+        raise Refusal("terminal ALT extension prefixes were not canonical")
+    return rows
+
+
+def terminal_sequence_handoff(
+    session_path: Path,
+    journal_dir: Path,
+    *,
+    url: str,
+    plan: Path,
+    market_input: Path,
+    evidence: Path,
+    market: str,
+    payer: str,
+) -> dict[str, Any] | None:
+    handoff_path = journal_dir / "15-retirement-replay-handoff.json"
+    if not handoff_path.exists():
+        return None
+    if (journal_dir / "16-aggregate-retirement.json").exists():
+        raise Refusal(
+            "packet-inadmissible monolithic aggregate-retirement journal appeared"
+        )
+    session = exact_keys(
+        read_unique_json(session_path, "terminal sequence session"),
+        {
+            "schema",
+            "ownedLoopbackGenesisHash",
+            "rpcUrl",
+            "planSha256",
+            "marketInputSha256",
+            "evidenceSha256",
+            "market",
+            "payer",
+            "sourceReceipt",
+            "receiptInitialLamports",
+            "receiptRentLamports",
+            "suppliedLookupTable",
+            "lookupTable",
+            "lookupRecentSlot",
+            "lookupAddresses",
+            "lookupAddressesSha256",
+            "sessionSha256",
+        },
+        "terminal sequence session",
+    )
+    initial_rent = nonnegative_integer(
+        session.get("receiptInitialLamports"), "terminal receipt initial rent"
+    )
+    receipt_rent = nonnegative_integer(
+        session.get("receiptRentLamports"), "terminal receipt rent"
+    )
+    addresses = session.get("lookupAddresses")
+    if not isinstance(addresses, list) or not addresses:
+        raise Refusal("terminal session omitted its exact ALT union")
+    decoded = [
+        base58_bytes(address, 32, f"terminal ALT address {index}")
+        for index, address in enumerate(addresses)
+    ]
+    vector_digest = hashlib.sha256()
+    vector_digest.update(b"dclutch/terminal-alt-stable-addresses/v1")
+    vector_digest.update(len(decoded).to_bytes(8, "little"))
+    for address in decoded:
+        vector_digest.update(address)
+    if (
+        session.get("schema") != TERMINAL_SESSION_SCHEMA
+        or canonical_pubkey(
+            session.get("ownedLoopbackGenesisHash"), "terminal session genesis"
+        )
+        != session["ownedLoopbackGenesisHash"]
+        or session.get("rpcUrl") != url
+        or session.get("planSha256") != sha256_file(plan)
+        or session.get("marketInputSha256") != sha256_file(market_input)
+        or session.get("evidenceSha256") != sha256_file(evidence)
+        or session.get("market") != market
+        or session.get("payer") != payer
+        or session.get("suppliedLookupTable") is not False
+        or positive_integer(
+            session.get("lookupRecentSlot"), "terminal lookup recent slot"
+        )
+        <= 0
+        or initial_rent > receipt_rent
+        or decoded != sorted(decoded)
+        or len(set(decoded)) != len(decoded)
+        or vector_digest.hexdigest()
+        != lowercase_sha256(
+            session.get("lookupAddressesSha256"), "terminal ALT union digest"
+        )
+        or semantic_owner_digest(
+            session, "sessionSha256", "terminal sequence session"
+        )
+        != lowercase_sha256(
+            session.get("sessionSha256"), "terminal session digest"
+        )
+    ):
+        raise Refusal("terminal sequence handoff session identity changed")
+    source_receipt = canonical_pubkey(
+        session.get("sourceReceipt"), "terminal Source receipt"
+    )
+    lookup_table = canonical_pubkey(
+        session.get("lookupTable"), "terminal lookup table"
+    )
+    history = terminal_sequence_finalized_history(journal_dir, url=url)
+    if history[-1]["mutation"] != {"kind": "retirement-replay-handoff"}:
+        raise Refusal("terminal replay handoff was not the finalized prefix terminal")
+    return {
+        "source_receipt": source_receipt,
+        "lookup_table": lookup_table,
+        "genesis_hash": session["ownedLoopbackGenesisHash"],
+        "session_sha256": session["sessionSha256"],
+        "journal": str(handoff_path),
+        "journal_sha256": sha256_file(handoff_path),
+        "finalized": history[-1]["finalized"],
+        "transactions": [
+            {"mutation": row["mutation"]["kind"], **row["finalized"]}
+            for row in history
+        ],
+    }
+
+
+def authenticate_terminal_campaign(
+    document: Any,
+    *,
+    url: str,
+    plan: Path,
+    evidence: Path,
+    market: str,
+    payer: str,
+    source_receipt: str,
+    lookup_table: str,
+    genesis_hash: str,
+) -> dict[str, Any]:
+    campaign = exact_keys(
+        document,
+        {
+            "schema",
+            "cluster",
+            "genesisHash",
+            "rpcUrl",
+            "planSha256",
+            "evidenceSha256",
+            "payer",
+            "lookupTable",
+            "lookupTableSha256",
+            "coreProgram",
+            "claimsProgram",
+            "market",
+            "rentCredit",
+            "checkpoint",
+            "custodyReplay",
+            "hoardVault",
+            "sourceReceipt",
+            "refundWallet",
+            "classifiedLamports",
+            "operations",
+            "campaignSha256",
+        },
+        "AggregateRetirement campaign",
+    )
+    operations = campaign.get("operations")
+    if (
+        campaign.get("schema") != TERMINAL_CAMPAIGN_SCHEMA
+        or campaign.get("cluster") != "owned-loopback"
+        or campaign.get("genesisHash") != genesis_hash
+        or campaign.get("rpcUrl") != url
+        or campaign.get("planSha256") != sha256_file(plan)
+        or campaign.get("evidenceSha256") != sha256_file(evidence)
+        or campaign.get("payer") != payer
+        or campaign.get("lookupTable") != lookup_table
+        or not isinstance(operations, list)
+        or [row.get("operation") for row in operations if isinstance(row, dict)]
+        != list(TERMINAL_AGGREGATE_OPERATIONS)
+        or semantic_owner_digest(
+            campaign, "campaignSha256", "AggregateRetirement campaign"
+        )
+        != lowercase_sha256(
+            campaign.get("campaignSha256"), "AggregateRetirement campaign digest"
+        )
+    ):
+        raise Refusal("AggregateRetirement campaign changed its exact invocation")
+    lowercase_sha256(campaign.get("lookupTableSha256"), "retirement ALT digest")
+    for label in ("coreProgram", "claimsProgram"):
+        canonical_pubkey(campaign.get(label), f"retirement {label}")
+    account_fields = {
+        "address",
+        "owner",
+        "lamports",
+        "executable",
+        "dataLen",
+        "dataSha256",
+        "accountSha256",
+    }
+    for label in (
+        "market",
+        "rentCredit",
+        "checkpoint",
+        "custodyReplay",
+        "hoardVault",
+        "sourceReceipt",
+        "refundWallet",
+    ):
+        account = exact_keys(campaign.get(label), account_fields, f"retirement {label}")
+        canonical_pubkey(account.get("address"), f"retirement {label} address")
+        canonical_pubkey(account.get("owner"), f"retirement {label} owner")
+        nonnegative_integer(account.get("lamports"), f"retirement {label} lamports")
+        nonnegative_integer(account.get("dataLen"), f"retirement {label} data length")
+        if not isinstance(account.get("executable"), bool):
+            raise Refusal(f"retirement {label} executable flag changed type")
+        lowercase_sha256(account.get("dataSha256"), f"retirement {label} data")
+        if semantic_owner_digest(account, "accountSha256", f"retirement {label}") != lowercase_sha256(
+            account.get("accountSha256"), f"retirement {label} account"
+        ):
+            raise Refusal(f"retirement {label} account digest changed")
+    if (
+        campaign["market"]["address"] != market
+        or campaign["sourceReceipt"]["address"] != source_receipt
+    ):
+        raise Refusal("AggregateRetirement campaign changed Market or Source receipt")
+    classified = exact_keys(
+        campaign.get("classifiedLamports"),
+        {
+            "market",
+            "rentCredit",
+            "claimsRefund",
+            "custodyReplay",
+            "hoardVault",
+            "expectedRefundDelta",
+            "refundWalletBefore",
+        },
+        "AggregateRetirement classified lamports",
+    )
+    for label, value in classified.items():
+        nonnegative_integer(value, f"retirement classified {label}")
+    if classified["expectedRefundDelta"] != sum(
+        classified[label]
+        for label in (
+            "market",
+            "rentCredit",
+            "claimsRefund",
+            "custodyReplay",
+            "hoardVault",
+        )
+    ):
+        raise Refusal("AggregateRetirement classified refund sum changed")
+    for index, operation in enumerate(operations):
+        row = exact_keys(
+            operation,
+            {
+                "operation",
+                "programId",
+                "accounts",
+                "dataBase64",
+                "dataSha256",
+                "expectedWireBytes",
+                "exactProtocolAndPayerKeys",
+            },
+            f"AggregateRetirement operation {index}",
+        )
+        if (
+            row.get("programId") != campaign.get("coreProgram")
+            or not isinstance(row.get("accounts"), list)
+            or len(row["accounts"]) != 35
+            or positive_integer(
+                row.get("expectedWireBytes"), "retirement expected wire bytes"
+            )
+            <= 0
+            or row.get("exactProtocolAndPayerKeys") != 36
+        ):
+            raise Refusal("AggregateRetirement operation geometry changed")
+        try:
+            data = base64.b64decode(row.get("dataBase64"), validate=True)
+        except (TypeError, ValueError) as error:
+            raise Refusal("AggregateRetirement operation data was not base64") from error
+        if sha256_bytes(data) != lowercase_sha256(
+            row.get("dataSha256"), "retirement instruction data"
+        ):
+            raise Refusal("AggregateRetirement operation data digest changed")
+    return campaign
+
+
 def authenticate_terminal_completion(
     document: Any,
     *,
+    campaign: dict[str, Any],
+    journal_dir: Path,
     market: str,
     payer: str,
 ) -> dict[str, Any]:
@@ -1784,62 +2205,181 @@ def authenticate_terminal_completion(
         {
             "schema",
             "status",
-            "cluster",
-            "genesisHash",
-            "invocation",
-            "session",
-            "journalDirectory",
+            "campaignSha256",
             "market",
+            "checkpoint",
+            "rentCredit",
+            "refundWallet",
             "payer",
-            "lookupTable",
+            "classifiedLamports",
+            "totalTransactionFeesLamports",
+            "terminalRefundWalletLamports",
             "journals",
-            "finalizedSlot",
-            "transactionFeesLamports",
-            "computeUnitsConsumed",
+            "receiptSha256",
         },
-        "terminal retirement completion",
+        "AggregateRetirement completion",
     )
+    journals = completion.get("journals")
     if (
         completion.get("schema") != TERMINAL_COMPLETION_SCHEMA
         or completion.get("status") != "finalized"
-        or completion.get("cluster") != "owned-loopback"
+        or completion.get("campaignSha256") != campaign.get("campaignSha256")
         or completion.get("market") != market
         or completion.get("payer") != payer
-        or completion.get("invocation", {}).get("command")
-        != TERMINAL_RETIREMENT_COMMAND
+        or completion.get("checkpoint") != campaign["checkpoint"]["address"]
+        or completion.get("rentCredit") != campaign["rentCredit"]["address"]
+        or completion.get("refundWallet") != campaign["refundWallet"]["address"]
+        or completion.get("classifiedLamports") != campaign.get("classifiedLamports")
+        or not isinstance(journals, list)
+        or [row.get("operation") for row in journals if isinstance(row, dict)]
+        != list(TERMINAL_AGGREGATE_OPERATIONS)
     ):
-        raise Refusal(
-            "terminal retirement completion changed cluster, command, Market, or payer"
-        )
-    canonical_pubkey(completion.get("genesisHash"), "terminal genesis")
-    canonical_pubkey(completion.get("lookupTable"), "terminal lookup table")
-    journals = completion.get("journals")
-    if not isinstance(journals, list) or not journals:
-        raise Refusal("terminal retirement completion omitted finalized journals")
-    kinds = [row.get("mutation", {}).get("kind") for row in journals]
-    if kinds[-1:] == ["aggregate-retirement"]:
-        raise Refusal(
-            "monolithic aggregate-retirement is packet-inadmissible; the exact four-phase checkpoint exterior is required"
-        )
-    raise Refusal(
-        "four-phase AggregateRetirement caller schema is not frozen in this runner revision"
+        raise Refusal("AggregateRetirement completion changed its exact campaign join")
+    fees = 0
+    facts: list[dict[str, Any]] = []
+    signatures: set[str] = set()
+    predecessor = (
+        "ready",
+        "claims-closed",
+        "hoard-vault-closed",
+        "custody-replay-closed",
     )
+    successor = (
+        "claims-closed",
+        "hoard-vault-closed",
+        "custody-replay-closed",
+        "complete",
+    )
+    for index, operation in enumerate(TERMINAL_AGGREGATE_OPERATIONS):
+        compact = exact_keys(
+            journals[index],
+            {
+                "operation",
+                "journalSha256",
+                "signature",
+                "finalizedSlot",
+                "feeLamports",
+                "computeUnitsConsumed",
+                "packetSha256",
+                "poststateSha256",
+            },
+            f"AggregateRetirement completion journal {index}",
+        )
+        path = canonical_file(
+            journal_dir / f"{index:02d}-{operation}.json",
+            f"AggregateRetirement journal {index}",
+        )
+        journal = exact_keys(
+            read_unique_json(path, f"AggregateRetirement journal {index}"),
+            {
+                "schema",
+                "campaignSha256",
+                "operation",
+                "phase",
+                "predecessor",
+                "successor",
+                "plannedPrestateSha256",
+                "intentSha256",
+                "packet",
+                "finalization",
+                "stateSha256",
+            },
+            f"AggregateRetirement journal {index}",
+        )
+        finalization = exact_keys(
+            journal.get("finalization"),
+            {
+                "signature",
+                "finalizedSlot",
+                "packetSha256",
+                "feeLamports",
+                "computeUnitsConsumed",
+                "poststateSha256",
+                "checkpointHistorySha256",
+            },
+            f"AggregateRetirement journal {index} finalization",
+        )
+        fact = finalized_fact(
+            compact,
+            f"AggregateRetirement journal {index}",
+            slot_key="finalizedSlot",
+        )
+        if (
+            journal.get("schema") != TERMINAL_AGGREGATE_JOURNAL_SCHEMA
+            or journal.get("campaignSha256") != campaign.get("campaignSha256")
+            or journal.get("operation") != operation
+            or journal.get("phase") != "finalized"
+            or journal.get("predecessor") != predecessor[index]
+            or journal.get("successor") != successor[index]
+            or not isinstance(journal.get("packet"), dict)
+            or finalization.get("signature") != compact.get("signature")
+            or finalization.get("finalizedSlot") != compact.get("finalizedSlot")
+            or finalization.get("feeLamports") != compact.get("feeLamports")
+            or finalization.get("computeUnitsConsumed")
+            != compact.get("computeUnitsConsumed")
+            or finalization.get("packetSha256") != compact.get("packetSha256")
+            or finalization.get("poststateSha256") != compact.get("poststateSha256")
+            or semantic_owner_digest(
+                journal, "stateSha256", f"AggregateRetirement journal {index}"
+            )
+            != lowercase_sha256(
+                compact.get("journalSha256"),
+                f"AggregateRetirement journal {index} state",
+            )
+            or journal.get("stateSha256") != compact.get("journalSha256")
+        ):
+            raise Refusal("AggregateRetirement compact journal projection changed")
+        for field in (
+            "plannedPrestateSha256",
+            "intentSha256",
+            "stateSha256",
+        ):
+            lowercase_sha256(journal.get(field), f"retirement journal {field}")
+        for field in ("packetSha256", "poststateSha256"):
+            lowercase_sha256(compact.get(field), f"retirement compact {field}")
+        if fact["signature"] in signatures:
+            raise Refusal("AggregateRetirement repeated one transaction signature")
+        signatures.add(fact["signature"])
+        facts.append(fact)
+        fees += fact["fee_lamports"]
+    if completion.get("totalTransactionFeesLamports") != fees:
+        raise Refusal("AggregateRetirement total fee projection changed")
+    terminal_lamports = nonnegative_integer(
+        completion.get("terminalRefundWalletLamports"),
+        "AggregateRetirement terminal refund wallet",
+    )
+    classified = campaign["classifiedLamports"]
+    expected_terminal = (
+        classified["refundWalletBefore"] + classified["expectedRefundDelta"]
+    )
+    if payer == campaign["refundWallet"]["address"]:
+        expected_terminal -= fees
+    if expected_terminal < 0 or terminal_lamports != expected_terminal:
+        raise Refusal("AggregateRetirement refund/fee conservation changed")
+    if semantic_owner_digest(
+        completion, "receiptSha256", "AggregateRetirement completion"
+    ) != lowercase_sha256(
+        completion.get("receiptSha256"), "AggregateRetirement completion digest"
+    ):
+        raise Refusal("AggregateRetirement completion digest changed")
+    return {"completion": completion, "facts": facts}
 
 
 def authenticate_terminal_stdout(
     document: Any,
     *,
-    completion: dict[str, Any],
+    campaign: dict[str, Any],
+    campaign_path: Path,
     completion_path: Path,
     journal_dir: Path,
-    market: str,
 ) -> dict[str, Any]:
     summary = exact_keys(
         document,
         {
+            "schema",
             "status",
-            "market",
-            "lookupTable",
+            "campaign",
+            "campaignSha256",
             "journalDirectory",
             "completion",
             "completionSha256",
@@ -1848,17 +2388,18 @@ def authenticate_terminal_stdout(
         "terminal retirement stdout",
     )
     if (
-        summary.get("status") != "complete"
-        or summary.get("market") != market
-        or summary.get("lookupTable") != completion.get("lookupTable")
+        summary.get("schema") != TERMINAL_PROGRESS_SCHEMA
+        or summary.get("status") != "finalized"
+        or summary.get("campaign") != str(campaign_path)
+        or summary.get("campaignSha256") != campaign.get("campaignSha256")
         or summary.get("journalDirectory") != str(journal_dir)
         or summary.get("completion") != str(completion_path)
         or summary.get("completionSha256") != sha256_file(completion_path)
         or summary.get("message")
-        != "Every exact terminal journal reverified at finalized and the aggregate Market account is closed."
+        != "Aggregate retirement finalized through prepare, close-vault, close-replay, and finish; exact rent/refund conservation reverified."
     ):
         raise Refusal(
-            "terminal retirement stdout changed its exact completion path, hash, or semantic summary"
+            "AggregateRetirement stdout changed its exact completion path, hash, or semantic summary"
         )
     return summary
 
@@ -2168,21 +2709,25 @@ def run_terminal_retirement(
     market: str,
     first_ordinal: int,
 ) -> tuple[dict[str, Any], int]:
-    """Advance the accepted terminal semantic owner until create-new completion."""
+    """Advance the terminal prelude, then the four-packet aggregate owner."""
 
     root = run / "retirement"
     root.mkdir(mode=0o700)
-    journal_dir = root / "journals"
-    journal_dir.mkdir(mode=0o700)
-    session_path = root / "session.json"
+    sequence_journal_dir = root / "sequence-journals"
+    sequence_journal_dir.mkdir(mode=0o700)
+    session_path = root / "sequence-session.json"
+    legacy_completion_path = root / "packet-inadmissible-monolith.json"
+    aggregate_campaign_path = root / "aggregate-campaign.json"
+    aggregate_journal_dir = root / "aggregate-journals"
+    aggregate_journal_dir.mkdir(mode=0o700)
     completion_path = root / "completion.json"
     payer_key = require_role_key(report, VALIDATOR_MINT_ROLE)
     payer = canonical_pubkey(
         key_address(paths.solana, payer_key), "retirement fee payer"
     )
-    argv = [
+    sequence_argv = [
         str(paths.bootstrap),
-        TERMINAL_RETIREMENT_COMMAND,
+        TERMINAL_SEQUENCE_COMMAND,
         "--rpc-url",
         url,
         "--plan",
@@ -2200,56 +2745,123 @@ def run_terminal_retirement(
         "--session",
         str(session_path),
         "--journal-dir",
-        str(journal_dir),
+        str(sequence_journal_dir),
         "--completion",
-        str(completion_path),
+        str(legacy_completion_path),
         "--execute",
     ]
     ordinal = first_ordinal
     for attempt in range(MAX_TERMINAL_INVOCATIONS):
+        handoff = terminal_sequence_handoff(
+            session_path,
+            sequence_journal_dir,
+            url=url,
+            plan=plan,
+            market_input=market_input,
+            evidence=campaign_evidence,
+            market=market,
+            payer=payer,
+        )
+        if handoff is not None:
+            break
+        run_json_stage(
+            run,
+            ordinal,
+            f"retirement-sequence-{attempt:02d}",
+            sequence_argv,
+        )
+        ordinal += 1
+    else:
+        raise Refusal("terminal sequence exceeded the bounded pre-aggregate loop")
+    if legacy_completion_path.exists():
+        raise Refusal("packet-inadmissible monolithic terminal completion appeared")
+    aggregate_argv = [
+        str(paths.bootstrap),
+        TERMINAL_RETIREMENT_COMMAND,
+        "--rpc-url",
+        url,
+        "--plan",
+        str(plan),
+        "--evidence",
+        str(campaign_evidence),
+        "--market",
+        market,
+        "--source-receipt",
+        handoff["source_receipt"],
+        "--fee-payer",
+        payer,
+        "--fee-payer-keypair",
+        str(payer_key),
+        "--lookup-table",
+        handoff["lookup_table"],
+        "--campaign",
+        str(aggregate_campaign_path),
+        "--journal-dir",
+        str(aggregate_journal_dir),
+        "--completion",
+        str(completion_path),
+        "--execute",
+    ]
+    for attempt in range(MAX_TERMINAL_INVOCATIONS):
         stdout = run_json_stage(
             run,
             ordinal,
-            f"retirement-{attempt:02d}",
-            argv,
+            f"retirement-aggregate-{attempt:02d}",
+            aggregate_argv,
         )
         ordinal += 1
         if completion_path.is_file():
-            completion = read_unique_json(
-                completion_path, "terminal retirement completion"
+            campaign = authenticate_terminal_campaign(
+                read_unique_json(
+                    aggregate_campaign_path, "AggregateRetirement campaign"
+                ),
+                url=url,
+                plan=plan,
+                evidence=campaign_evidence,
+                market=market,
+                payer=payer,
+                source_receipt=handoff["source_receipt"],
+                lookup_table=handoff["lookup_table"],
+                genesis_hash=handoff["genesis_hash"],
             )
-            authenticate_terminal_completion(completion, market=market, payer=payer)
+            completion = read_unique_json(
+                completion_path, "AggregateRetirement completion"
+            )
+            authenticated = authenticate_terminal_completion(
+                completion,
+                campaign=campaign,
+                journal_dir=aggregate_journal_dir,
+                market=market,
+                payer=payer,
+            )
             authenticate_terminal_stdout(
                 stdout,
-                completion=completion,
+                campaign=campaign,
+                campaign_path=aggregate_campaign_path,
                 completion_path=completion_path,
-                journal_dir=journal_dir,
-                market=market,
+                journal_dir=aggregate_journal_dir,
             )
             transactions = [
                 {
-                    "mutation": row["mutation"]["kind"],
-                    **finalized_fact(
-                        row,
-                        f"terminal journal {index}",
-                        slot_key="finalizedSlot",
-                        fee_key="transactionFeeLamports",
-                        decimal_text=True,
-                    ),
+                    "mutation": operation,
+                    **authenticated["facts"][index],
                 }
-                for index, row in enumerate(completion["journals"])
+                for index, operation in enumerate(TERMINAL_AGGREGATE_OPERATIONS)
             ]
             return {
                 "schema": "dclutch-private-validator-retirement-controller-v1",
                 "status": "finalized",
-                "session": str(session_path),
-                "session_sha256": sha256_file(session_path),
-                "journal_dir": str(journal_dir),
+                "terminal_sequence_session": str(session_path),
+                "terminal_sequence_session_sha256": sha256_file(session_path),
+                "terminal_sequence_handoff": handoff,
+                "campaign": str(aggregate_campaign_path),
+                "campaign_sha256": sha256_file(aggregate_campaign_path),
+                "journal_dir": str(aggregate_journal_dir),
                 "completion": str(completion_path),
                 "completion_sha256": sha256_file(completion_path),
-                "transactions": transactions,
+                "transactions": [*handoff["transactions"], *transactions],
             }, ordinal
-    raise Refusal("terminal retirement exceeded the bounded 32-invocation loop")
+    raise Refusal("AggregateRetirement exceeded the bounded four-packet loop")
 
 
 def run_post_direct_lifecycle(
