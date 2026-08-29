@@ -2,6 +2,7 @@
 
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
+use dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3;
 use dclutch_fractional_claim_operator::{FractionalFrameKindV3, fractional_frame_census_v3};
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, v0};
@@ -76,7 +77,7 @@ fn every_bounded_route_is_below_lock_and_packet_limits() {
         (FractionalFrameKindV3::TerminalRedeemOrZeroBurn, 708, 42),
         (FractionalFrameKindV3::Terminalize, 656, 16),
         (FractionalFrameKindV3::RetirementBegin, 508, 6),
-        (FractionalFrameKindV3::RetirementCoordinate, 534, 19),
+        (FractionalFrameKindV3::RetirementCoordinate, 536, 20),
         (FractionalFrameKindV3::RetirementFinish, 512, 8),
     ] {
         let census = fractional_frame_census_v3(kind);
@@ -94,7 +95,11 @@ fn every_bounded_route_is_below_lock_and_packet_limits() {
 fn maximum_width_retirement_never_reintroduces_a_k_account_tail() {
     let step = fractional_frame_census_v3(FractionalFrameKindV3::RetirementCoordinate);
     let finish = fractional_frame_census_v3(FractionalFrameKindV3::RetirementFinish);
-    assert_eq!(step.unique_account_locks, 21);
+    assert_eq!(
+        step.unique_account_locks,
+        FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3
+    );
+    assert_eq!(step.unique_account_locks, 22);
     assert_eq!(finish.unique_account_locks, 10);
     // K=256 changes the number of transactions, not either transaction frame.
     assert_eq!(

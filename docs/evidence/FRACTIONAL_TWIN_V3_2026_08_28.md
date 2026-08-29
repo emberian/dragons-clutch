@@ -101,7 +101,7 @@ contract numbers, not real-ELF execution evidence:
 | TerminalRedeem / TerminalZeroBurn | 44 | 417 | 708 | 524 |
 | Terminalize | 18 | 417 | 656 | 576 |
 | Retirement Begin | 8 | 289 | 508 | 724 |
-| Retirement Coordinate | 21 | 289 | 534 | 698 |
+| Retirement Coordinate | 22 | 289 | 536 | 696 |
 | Retirement Finish | 10 | 289 | 512 | 720 |
 
 Every transaction is below 64 unique locks and 1,232 bytes. At `K = 256`, the
