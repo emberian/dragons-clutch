@@ -38,6 +38,7 @@ import {
   type DirectTradeBalanceSnapshotV1,
 } from '@/lib/directTradeJournal';
 import { type MarketLiabilityV1 } from '@/lib/marketDiscovery';
+import { publishedDirectRouteManifestV1 } from '@/lib/publishedRouteManifests';
 import {
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
@@ -207,7 +208,8 @@ export default function MarketTradePanel({
   const [outcome, setOutcome] = useState<number | null>(null);
   const [desired, setDesired] = useState('');
   const [ticketText, setTicketText] = useState('');
-  const [routeText, setRouteText] = useState('');
+  const publishedRoute = publishedDirectRouteManifestV1(marketAddress);
+  const [routeText, setRouteText] = useState(publishedRoute ?? '');
   const [execution, setExecution] = useState<ExecutionState>({ kind: 'idle' });
   const [walletPreparation, setWalletPreparation] = useState<WalletPreparationState>({ kind: 'idle' });
 
@@ -737,6 +739,7 @@ export default function MarketTradePanel({
       <details className="trade-v3-bytes">
         <summary>Prepare the exact wallet handoff</summary>
         <p className="direct-status">Paste the operator-published <code>dclutch-direct-hot-route-manifest-v3</code>. The reader hostile-decodes the bounded JSON, reacquires the 39 named accounts plus the frozen lookup table, authenticates its checked release and capability seal, and then rechecks both participants and both nonces after your detached intent signature.</p>
+        {publishedRoute !== null && routeText === publishedRoute && <p className="direct-status">This build already carries the operator&apos;s published route for this market, so the field below is pre-filled. You can replace it with your own; either way the route is re-authenticated before anything is signed.</p>}
         <label><span>Checked Direct Hot route manifest · JSON</span><textarea rows={7} spellCheck={false} value={routeText} onChange={(event) => { setRouteText(event.target.value); setWalletPreparation({ kind: 'idle' }); }} /></label>
         <div className="direct-actions">
           <button
