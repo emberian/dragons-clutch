@@ -2719,14 +2719,6 @@ fn authenticate_admission_balance_vector(
     message: &VersionedMessage,
     intent: &IntentV1,
 ) -> Result<BTreeMap<Pubkey, u64>> {
-    if message
-        .address_table_lookups()
-        .is_some_and(|lookups| !lookups.is_empty())
-    {
-        return Err(Error::new(
-            "admission balance accounting refuses loaded addresses",
-        ));
-    }
     let pre = meta
         .get("preBalances")
         .and_then(Value::as_array)
@@ -2735,10 +2727,34 @@ fn authenticate_admission_balance_vector(
         .get("postBalances")
         .and_then(Value::as_array)
         .ok_or_else(|| Error::new("finalized admission meta omitted postBalances"))?;
-    let keys = message.static_account_keys();
+    // A routed admission's balance vectors cover the static keys and then the
+    // loaded writable and readonly addresses, in the runtime's own order. The
+    // loaded keys come from the finalized meta itself; every loaded account
+    // must be balance-immutable here (the admission loads only readonly
+    // program, record, and sysvar addresses through its frozen table), and
+    // the whole-vector fee conservation below runs over all of them.
+    let mut keys: Vec<Pubkey> = message.static_account_keys().to_vec();
+    let static_len = keys.len();
+    if let Some(loaded) = meta.get("loadedAddresses") {
+        for section in ["writable", "readonly"] {
+            for value in loaded
+                .get(section)
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+            {
+                let key = value
+                    .as_str()
+                    .ok_or_else(|| Error::new("loaded address was not a string"))?
+                    .parse::<Pubkey>()
+                    .map_err(|error| Error::new(format!("loaded address: {error}")))?;
+                keys.push(key);
+            }
+        }
+    }
     if pre.len() != keys.len() || post.len() != keys.len() {
         return Err(Error::new(
-            "admission balance vector did not match exact static message keys",
+            "admission balance vector did not match exact static-plus-loaded message keys",
         ));
     }
     let mut durable_lamports = BTreeMap::new();
@@ -2760,13 +2776,25 @@ fn authenticate_admission_balance_vector(
     let mut pre_sum = 0_u128;
     let mut post_sum = 0_u128;
     let mut finalized_balances = BTreeMap::new();
-    for ((key, before), after) in keys.iter().zip(pre).zip(post) {
+    for (index, ((key, before), after)) in keys.iter().zip(pre).zip(post).enumerate() {
         let before = before
             .as_u64()
             .ok_or_else(|| Error::new("admission preBalances contained a non-u64"))?;
         let after = after
             .as_u64()
             .ok_or_else(|| Error::new("admission postBalances contained a non-u64"))?;
+        if index >= static_len {
+            // Loaded addresses: not part of the durable prestate set, and the
+            // admission may not move a lamport through any of them.
+            if before != after {
+                return Err(Error::new(format!(
+                    "loaded address {key} changed balance inside the admission"
+                )));
+            }
+            pre_sum += u128::from(before);
+            post_sum += u128::from(after);
+            continue;
+        }
         if durable_lamports.get(key).copied() != Some(before) {
             return Err(Error::new(format!(
                 "admission pre-balance for {key} differed from the durable finalized snapshot"
