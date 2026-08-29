@@ -1627,6 +1627,7 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
+ "dclutch-representation-composition-v3-kernel",
  "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-program",

@@ -18,6 +18,7 @@ use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, STATE_BYTES,
 };
+
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -32,6 +33,11 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_representation_composition_v3_kernel::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
+};
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,
@@ -65,6 +71,8 @@ pub enum NarrowFixtureError {
     Basis,
     /// Core or Claims fixed-layout encoding refused.
     State,
+    /// Canonical composition-exposure encoding refused.
+    Exposure,
     /// The requested outcome width is not usable by a Fractional capability.
     Width,
 }
@@ -100,6 +108,15 @@ pub struct NarrowPositionV2 {
     pub bytes: Vec<u8>,
 }
 
+/// A resolved Market: the Core state carries a terminal receipt and a winner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NarrowTerminalInputV2 {
+    /// Winning representation coordinate.
+    pub winner: u32,
+    /// Core terminal receipt identity.
+    pub receipt: [u8; 32],
+}
+
 /// Immutable inputs selecting one narrow fixture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NarrowFixtureInputV2 {
@@ -127,6 +144,12 @@ pub struct NarrowFixtureInputV2 {
     pub funded_coordinate: usize,
     /// Native Claims units the actor holds at that coordinate.
     pub funded_balance: u64,
+    /// When set, the Market is resolved rather than open.
+    pub terminal: Option<NarrowTerminalInputV2>,
+    /// Stable source composition-graph identity, shared with the terms record.
+    pub graph_id: [u8; 32],
+    /// Caller-asserted exposure bundle identity, shared with the terms record.
+    pub exposure_id: [u8; 32],
 }
 
 /// Complete canonical narrow fixture.
@@ -154,6 +177,11 @@ pub struct NarrowFixtureV2 {
     pub claims_market: Pubkey,
     /// Complete aggregate bytes.
     pub claims_market_bytes: Vec<u8>,
+    /// Canonical composition-exposure record: the identity Claims translation
+    /// from Product result coordinates onto Claims representation roots.
+    pub exposure: NarrowRecordV2,
+    /// Caller-asserted exposure bundle identity.
+    pub exposure_id: [u8; 32],
     /// Actor Position, funded at the selected coordinate.
     pub actor_position: NarrowPositionV2,
     /// Reserve Position, initially empty.
@@ -187,6 +215,8 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         return Err(NarrowFixtureError::Width);
     }
     let product_id = content([0x41; 32])?;
+    let outcome_width =
+        u32::try_from(input.outcome_count).map_err(|_| NarrowFixtureError::Width)?;
     let basis_width =
         u32::try_from(input.outcome_count).map_err(|_| NarrowFixtureError::Basis)?;
     let provisional_basis_input = BasisInputV3 {
@@ -276,15 +306,30 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
     )
     .0;
     core_identity.market_id = identity(core_market.to_bytes())?;
+    // An open Market carries no winner and no receipt; a resolved one must
+    // carry both, and CoreState::encode refuses any other combination.
+    let (phase, terminal_winner, terminal_receipt) = match input.terminal {
+        None => (Phase::Open, 0, None),
+        Some(terminal) => {
+            if terminal.winner >= outcome_width {
+                return Err(NarrowFixtureError::Width);
+            }
+            (
+                Phase::Terminal,
+                terminal.winner,
+                Some(identity(terminal.receipt)?),
+            )
+        }
+    };
     let core_state = CoreState {
-        phase: Phase::Open,
+        phase,
         readiness: Readiness::Consumed,
-        terminal_winner: 0,
+        terminal_winner,
         identity: core_identity,
         outstanding_capabilities: 1,
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(input.actor_owner.to_bytes())?,
-        terminal_receipt: None,
+        terminal_receipt,
     }
     .encode()
     .map_err(|_| NarrowFixtureError::State)?;
@@ -323,7 +368,59 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         &vec![0_u64; input.outcome_count],
     )?;
 
+    // One Claims representation root per Product result coordinate, weight 1.
+    // The identity mapping is what makes the terminal payout legible: burning
+    // at the winning coordinate redeems, burning anywhere else pays zero.
+    let terms: Vec<[CompositionExposureTermV3; 1]> = (0..input.outcome_count)
+        .map(|index| {
+            [CompositionExposureTermV3 {
+                product_coordinate: u32::try_from(index).unwrap_or_default(),
+                numerator: 1,
+            }]
+        })
+        .collect();
+    let rows: Vec<CompositionExposureRowInputV3<'_>> = terms
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let mut node_id = [0x51_u8; 32];
+            let index = u32::try_from(index).unwrap_or_default();
+            node_id[0..4].copy_from_slice(&index.to_le_bytes());
+            CompositionExposureRowInputV3 {
+                node_id,
+                denominator: 1,
+                terms: row.as_slice(),
+            }
+        })
+        .collect();
+    let exposure_width = composition_exposure_bytes_v3(outcome_width, outcome_width)
+        .map_err(|_| NarrowFixtureError::Exposure)?;
+    let mut exposure_scratch = vec![0_u8; exposure_width];
+    let mut exposure_bytes = vec![0_u8; exposure_width];
+    encode_composition_exposure_v3_atomic(
+        CompositionExposureInputV3 {
+            market: core_market.to_bytes(),
+            result_domain: result_domain.digest,
+            release_set: input.release_set,
+            product_basis: linked_basis.digest,
+            representation_basis: semantic_basis_id,
+            graph_id: input.graph_id,
+            product_width: outcome_width,
+            rows: &rows,
+        },
+        &mut exposure_scratch,
+        &mut exposure_bytes,
+    )
+    .map_err(|_| NarrowFixtureError::Exposure)?;
+    let exposure = finalized(
+        input.registry_program,
+        COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+        exposure_bytes,
+    );
+
     Ok(NarrowFixtureV2 {
+        exposure,
+        exposure_id: input.exposure_id,
         outcome_count: u32::try_from(input.outcome_count)
             .map_err(|_| NarrowFixtureError::State)?,
         product_id: product_id.to_bytes(),

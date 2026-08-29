@@ -23,6 +23,7 @@ dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtim
 dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-product-runtime-v2-operator = { path = "../../../../crates/dclutch-product-runtime-v2-operator" }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
+dclutch-representation-composition-v3-kernel = { path = "../../../../crates/dclutch-representation-composition-v3-kernel" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }

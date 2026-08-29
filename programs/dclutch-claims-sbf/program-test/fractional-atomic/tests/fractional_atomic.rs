@@ -72,6 +72,8 @@ const WRAP_NATIVE_CLAIMS: u64 = 7;
 const ACTOR_FUNDED_BALANCE: u64 = 1_000;
 const OUTCOME: u32 = 0;
 const MINT_DECIMALS: u8 = 0;
+const GRAPH_ID: [u8; 32] = [0x7c; 32];
+const EXPOSURE_ID: [u8; 32] = [0x7a; 32];
 const TOKEN_ACCOUNT_BYTES: usize = 165;
 
 /// Deterministic actor identity: it must sign, so it needs a real key.
@@ -275,6 +277,9 @@ fn compile_shared(
         reserve_owner,
         funded_coordinate: OUTCOME as usize,
         funded_balance: ACTOR_FUNDED_BALANCE,
+        terminal: None,
+        graph_id: GRAPH_ID,
+        exposure_id: EXPOSURE_ID,
     })
     .expect("narrow Product/LBV2 fixture at the Fractional width bound")
 }
@@ -423,10 +428,10 @@ fn fixture() -> (ProgramTest, Fixture) {
             release_set,
             token_program: TOKEN_2022_PROGRAM_ID,
             token_behavior: behavior_record.digest,
-            exposure_id: [0x7a; 32],
+            exposure_id: EXPOSURE_ID,
             product_basis: probe.linked_basis.digest,
             representation_basis: probe.semantic_basis_id,
-            graph_id: [0x7c; 32],
+            graph_id: GRAPH_ID,
             product_width: probe.outcome_count,
             denominator: DENOMINATOR,
             shard_mints: &shard_mints,
@@ -552,7 +557,7 @@ fn fixture() -> (ProgramTest, Fixture) {
                 result_domain: shared.result_domain.digest,
                 terms: terms_record.digest,
                 token_behavior: behavior_record.digest,
-                exposure: [0x7a; 32],
+                exposure: EXPOSURE_ID,
                 owner: actor.to_bytes(),
                 source_token_account: source,
                 destination_token_account: destination,
@@ -977,7 +982,7 @@ async fn a_transfer_is_refused_by_the_family_caller_and_routed_direct_to_token_2
             result_domain: fixture.shared.result_domain.digest,
             terms: fixture.terms_record.digest,
             token_behavior: fixture.behavior_record.digest,
-            exposure: [0x7a; 32],
+            exposure: EXPOSURE_ID,
             owner: fixture.actor.to_bytes(),
             source_token_account: fixture.holder_token.to_bytes(),
             destination_token_account: [0x79; 32],
@@ -1051,6 +1056,9 @@ fn the_fractional_representation_width_bound_is_exactly_256() {
         reserve_owner: Pubkey::new_from_array([0x02; 32]),
         funded_coordinate: 0,
         funded_balance: 1,
+        terminal: None,
+        graph_id: GRAPH_ID,
+        exposure_id: EXPOSURE_ID,
     });
     assert_eq!(
         admissible.expect("the bound itself must compile").outcome_count,
@@ -1069,6 +1077,9 @@ fn the_fractional_representation_width_bound_is_exactly_256() {
         reserve_owner: Pubkey::new_from_array([0x02; 32]),
         funded_coordinate: 0,
         funded_balance: 1,
+        terminal: None,
+        graph_id: GRAPH_ID,
+        exposure_id: EXPOSURE_ID,
     });
     assert_eq!(refused, Err(NarrowFixtureError::Width));
 }
