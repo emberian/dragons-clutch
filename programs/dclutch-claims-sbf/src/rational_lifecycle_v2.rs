@@ -107,8 +107,15 @@ const PORTFOLIO_STAGING: usize = 33;
 
 const VACANCY_SHARD_MINT: usize = 0;
 const VACANCY_STRUCTURED_CUSTODY: usize = 1;
-const VACANCY_POSITION: usize = 2;
-const VACANCY_ADMISSION: usize = 3;
+/// Supplied claims custody owner, in the same slot the coordinate group uses.
+///
+/// The row now SUPPLIES this authority rather than leaving the caller's
+/// artifacts to name it. It is still derived and pinned here -- nothing about
+/// the admission weakens -- but supplying it lets the compact effect project
+/// the address instead of baking a Market-dependent PDA into its own bytes.
+const VACANCY_CUSTODY_OWNER: usize = 2;
+const VACANCY_POSITION: usize = 3;
+const VACANCY_ADMISSION: usize = 4;
 
 const POST_RESOURCE_DOMAIN_V2: &[u8] = b"dclutch/rational-lifecycle/post/v2";
 
@@ -1257,6 +1264,7 @@ fn authenticate_complete_vacancy(
             .ok_or(RationalLifecycleSbfErrorV2::Accounts)?;
         let shard = account(accounts, base + VACANCY_SHARD_MINT)?;
         let structured = account(accounts, base + VACANCY_STRUCTURED_CUSTODY)?;
+        let owner_account = account(accounts, base + VACANCY_CUSTODY_OWNER)?;
         let position = account(accounts, base + VACANCY_POSITION)?;
         let admission = account(accounts, base + VACANCY_ADMISSION)?;
         let outcome = coordinate.outcome.to_le_bytes();
@@ -1293,10 +1301,14 @@ fn authenticate_complete_vacancy(
                 program_id,
             )
             .0,
+            owner,
             Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0,
             Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).0,
         ];
-        for (resource, expected) in [shard, structured, position, admission]
+        // The supplied owner is checked against the SAME re-derivation that
+        // already produced the Position and admission coordinates, so naming a
+        // different one refuses here rather than propagating.
+        for (resource, expected) in [shard, structured, owner_account, position, admission]
             .into_iter()
             .zip(expected)
         {
@@ -1416,7 +1428,7 @@ mod tests {
     fn account_geometry_is_sparse_and_runtime_width() {
         assert_eq!(RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, 20);
         assert_eq!(RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2, 34);
-        assert_eq!(RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, 4);
+        assert_eq!(RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, 5);
         assert_eq!(
             dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_COORDINATE_BYTES_V2,
             272
@@ -1486,6 +1498,101 @@ mod tests {
         assert_eq!(
             authenticate_vacancy_custody_owner(&program, descriptor, outcome, [0xb3; 32]),
             Err(ProgramError::from(RationalLifecycleSbfErrorV2::Position)),
+        );
+
+        // SUPPLYING the owner account did not make the authority
+        // caller-choosable. The derivation still consumes the AUTHENTICATED
+        // descriptor, so another descriptor names another owner and the
+        // substitution refuses -- which is exactly why the artifacts are free
+        // to stop naming it.
+        let other_descriptor = [0xb4; 32];
+        let other = Pubkey::find_program_address(
+            &ProtocolPositionClaimsCapabilitySeedsV2::new(other_descriptor, outcome)
+                .expect("other owner seeds")
+                .as_slices(),
+            &program,
+        )
+        .0;
+        assert_ne!(other, expected);
+        assert_eq!(
+            authenticate_vacancy_custody_owner(&program, descriptor, outcome, other.to_bytes()),
+            Err(ProgramError::from(RationalLifecycleSbfErrorV2::Position)),
+        );
+        // The outcome is a seed too, so rows cannot borrow each other's owner.
+        assert_eq!(
+            authenticate_vacancy_custody_owner(
+                &program,
+                descriptor,
+                outcome + 1,
+                expected.to_bytes()
+            ),
+            Err(ProgramError::from(RationalLifecycleSbfErrorV2::Position)),
+        );
+    }
+
+    /// The vacancy group is the coordinate group, field for field.
+    ///
+    /// This is the fix's whole content: the compact row was the only Rational
+    /// account group that omitted the custody owner, and that omission is why
+    /// its effect had to BAKE the address -- which made the compact artifacts,
+    /// and every digest up to the capability manifest entry, move with a Core
+    /// Market that does not exist until after the manifest is sealed. If these
+    /// two orders ever diverge again, the projection reads the wrong account.
+    #[test]
+    fn the_vacancy_account_group_matches_the_coordinate_group() {
+        use dclutch_rational_representation_v2_lifecycle_contract::{
+            compact_hot_v4::{
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_POSITION_V4,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_SHARD_MINT_V4,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_STRUCTURED_CUSTODY_V4,
+            },
+            hot_v3::{
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_CUSTODY_OWNER_V3,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_CUSTODY_POSITION_V3,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_POSITION_ADMISSION_V3,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_SHARD_MINT_V3,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_STRUCTURED_CUSTODY_V3,
+            },
+        };
+
+        // This program's account slots, the compact register row, and the
+        // coordinate register item are three statements of one order.
+        for (account_slot, compact_field, coordinate_field) in [
+            (
+                VACANCY_SHARD_MINT,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_SHARD_MINT_V4,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_SHARD_MINT_V3,
+            ),
+            (
+                VACANCY_STRUCTURED_CUSTODY,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_STRUCTURED_CUSTODY_V4,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_STRUCTURED_CUSTODY_V3,
+            ),
+            (
+                VACANCY_CUSTODY_OWNER,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_CUSTODY_OWNER_V3,
+            ),
+            (
+                VACANCY_POSITION,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_POSITION_V4,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_CUSTODY_POSITION_V3,
+            ),
+            (
+                VACANCY_ADMISSION,
+                RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4,
+                RATIONAL_LIFECYCLE_ITEM_IDENTITY_POSITION_ADMISSION_V3,
+            ),
+        ] {
+            assert_eq!(account_slot, compact_field);
+            assert_eq!(account_slot, coordinate_field);
+        }
+        assert_eq!(
+            RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
+            RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4
         );
     }
 }

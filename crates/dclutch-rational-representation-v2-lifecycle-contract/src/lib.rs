@@ -42,7 +42,22 @@ pub const LIFECYCLE_COMMON_ACCOUNT_COUNT_V2: usize = 20;
 /// Exact physical account count for one coordinate activation or retirement.
 pub const LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2: usize = 34;
 /// Exact physical account count added per proven-vacant retirement row.
-pub const LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2: usize = 4;
+///
+/// Five, in the SAME order the coordinate actions use: shard Mint, Structured
+/// custody, claims custody owner, Position, admission.
+///
+/// The owner was historically absent here and present on every other Rational
+/// path, and that asymmetry was not free. A row that does not SUPPLY the
+/// custody owner cannot PROJECT it into a register, so the compact effect
+/// baked the address into its child template instead -- and that address is a
+/// PDA seeded by the descriptor identity, which hashes a preimage carrying the
+/// Core Market. Baking it therefore made the compact artifacts move with the
+/// Market, which in turn made a Rational capability manifest entry
+/// unconstructible before the Market it would be selected by existed.
+///
+/// Supplying the account restores the projection the other three actions
+/// already use and deletes the second author, rather than adding one.
+pub const LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2: usize = 5;
 /// Domain preimage for the Rational lifecycle capability-kind identity.
 ///
 /// Rational has executed for a long time without one of these, because a
