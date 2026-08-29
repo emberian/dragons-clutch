@@ -176,7 +176,7 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
         <h1>{redemption ? <>Your winning claims.<br /><em>Payout is not open yet.</em></> : <>Your claims, derived.<br /><em>Never looked up.</em></>}</h1>
         <p>{redemption
           ? <>Connect your wallet and this page finds every claim it holds, reading the markets straight from the deployment&apos;s own programs and working out where your claims live from your address alone. Paying winning claims out is not available yet: when a market resolves and you hold the winning side, this is where you will do it. Nothing here — no market, no balance, no eligibility — comes from browser storage.</>
-          : <>dClutch runs no indexer and this browser will not pretend to be one. A Position lives at the program-derived address of the Position seed domain plus the exact Market and owner keys, so an owner identity is enough: the Markets come from the deployment&apos;s own Core program, and every Position address is derived from them. A derived address that holds no account is reported as exactly that, which is the honest chain state.</>}</p>
+          : <>dClutch runs no indexer and this browser will not pretend to be one. Your claims in a market live at an address worked out from that market and your own address — nothing is looked up, so an address is all this page needs. It gets the markets from the deployment&apos;s own program, works out where your claims would be in each one, and reads them. An address with nothing at it is reported as exactly that, which is what the chain actually says.</>}</p>
       </div>
       <aside>
         <span>The one input</span>
