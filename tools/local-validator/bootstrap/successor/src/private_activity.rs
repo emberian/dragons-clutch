@@ -70,10 +70,13 @@ const STAGES: [&str; 6] = [
     "payout",
     "retirement",
 ];
-const FOUNDING_SUCCESS_MUTATIONS: [&str; 3] = [
+const FOUNDING_SUCCESS_MUTATIONS: [&str; 6] = [
     "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
     "stage projected custody against prepared controller funding (DCLTPCB2)",
     "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
+    "core-funding-create-v1",
+    "resolution-funding-activate-v1",
+    "core-funding-accept-v1",
 ];
 
 #[derive(Clone, Debug)]
@@ -816,6 +819,9 @@ fn is_authorized_founding_label(label: &str) -> bool {
             | "stage projected custody against prepared controller funding (DCLTPCB2)"
             | "pre-fund the founding's five program-allocated accounts"
             | "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)"
+            | "core-funding-create-v1"
+            | "resolution-funding-activate-v1"
+            | "core-funding-accept-v1"
     ) || label.starts_with("publish record: ")
         || label.starts_with("publish Product graph: ")
         || label.starts_with("create DCLTPCB2 routing address lookup table")
@@ -827,7 +833,7 @@ fn is_authorized_founding_label(label: &str) -> bool {
 fn authenticate_founding_success_mutations(labels: &[&str]) -> Result<()> {
     if labels != FOUNDING_SUCCESS_MUTATIONS {
         return Err(Error::new(
-            "founding history changed the exact DCLTCFQ1 -> DCLTPCB2 -> DCLTGMF2 success order",
+            "founding history changed the exact DCLTCFQ1 -> DCLTPCB2 -> DCLTGMF2 -> CreateFund -> Activate -> Accept success order",
         ));
     }
     Ok(())
@@ -3101,9 +3107,12 @@ mod tests {
             FOUNDING_SUCCESS_MUTATIONS[1],
             FOUNDING_SUCCESS_MUTATIONS[0],
             FOUNDING_SUCCESS_MUTATIONS[2],
+            FOUNDING_SUCCESS_MUTATIONS[3],
+            FOUNDING_SUCCESS_MUTATIONS[4],
+            FOUNDING_SUCCESS_MUTATIONS[5],
         ];
         assert!(authenticate_founding_success_mutations(&reordered).is_err());
-        assert!(authenticate_founding_success_mutations(&FOUNDING_SUCCESS_MUTATIONS[..2]).is_err());
+        assert!(authenticate_founding_success_mutations(&FOUNDING_SUCCESS_MUTATIONS[..5]).is_err());
         assert!(!is_authorized_founding_label(
             "create projected custody and controller funding (DCLTPCB2)"
         ));
