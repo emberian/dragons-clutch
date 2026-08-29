@@ -1521,6 +1521,27 @@ fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcom
     assert_eq!(evidence.outcome_count, outcome_count);
     assert!(evidence.compute_units > 0);
     assert!(evidence.compute_units <= 1_400_000);
+    // NAMED DEBT, and the 2026-08-29 addendum to
+    // `docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md` is the reason
+    // it is worth naming. `instruction_accounts` is the number that document
+    // records per action, and this is the only assertion standing behind it:
+    // `> 20` admits every wrong answer above twenty. The counts reach the
+    // document through the `eprintln!` below, by hand, so when `f581af6b`
+    // widened Custody `InitializeReplay` this harness stayed green while the
+    // document stopped describing the code. What caught it was a control in
+    // another crate that had no business being the first line of defence.
+    //
+    // The fix is an exact assertion that DERIVES rather than restates:
+    //   2 + ADMITTED_RUNTIME_ACCOUNTS_START_V3
+    //     + general_account_profile_fixed_count_v3(action)
+    //     + evidence.scratch_pages
+    // every term already available here -- `dclutch-execution-strategy-contract`
+    // is a dependency, the count is imported above, and the page span is
+    // measured in `evidence` itself. It was left undone deliberately rather
+    // than overlooked: it changes a shared General harness, and the same pass
+    // should replace the restated `18` in `build_fixture`'s
+    // `vec![DUMMY; 18 + fixed_count]` with that constant, which is the same
+    // defect class this whole addendum is about.
     assert!(evidence.instruction_accounts > 20);
     // This readonly CPI harness deliberately submits a legacy message so the
     // accelerator can see every scratch page directly. Some N=258 actions
@@ -1531,8 +1552,14 @@ fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcom
     // `dclutch-operator::general_hot_v3::
     //  every_action_is_alt_packet_safe_at_the_canonical_runtime_width`
     // compiles all seven N=258 account sets through `compile_general_hot_v0`,
-    // widest 918 of 1,232 bytes, and reproduces every account count measured
+    // widest 922 of 1,232 bytes, and reproduces every account count measured
     // here. See `docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`.
+    //
+    // The widest was 918, then 920, and is 922 because `f581af6b` appended a
+    // rent-refund account to Custody `InitializeReplay`; `InitializeSettlement`
+    // is the only General action that embeds that operation. Restating a number
+    // that lives in another crate's assertion is how it goes stale, which is
+    // exactly what the count below does not do -- see the note there.
     assert!(evidence.packet_bytes > 0 && evidence.packet_bytes <= 2_000);
     assert!(evidence.scratch_pages > 0);
     eprintln!(
