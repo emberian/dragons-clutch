@@ -109,13 +109,48 @@ address seen in a completed cycle. Only a child V3 supervisor status with exact
 reconciled completion plus the same admitted wallet ledger and reconciliation
 can close the cycle and expose its successor.
 
+Before a V4 authorization is signed, every Direct progressive adapter in every
+cycle must already have its ordinary manifest-bound private-session file and
+one distinct successor
+`dclutch-devnet-direct-trade-session-producer-journal-v1` reference in that
+cycle's `directSessionProducers` list.  Each entry is exactly
+`{adapterId,journal:{path,sha256}}`, in Direct-adapter order.  The finite-plan
+parser accepts only the producer's `finalized` phase and rechecks its state
+digest, public-manifest/source SHA, checked-release plan SHA, Market SHA, and
+the exact manifest session path/SHA.  It records the producer journal SHA,
+terminal producer state SHA, and session path/SHA in both the signed plan and
+the run journal.  A prepared journal, a different session file, or a reused
+producer journal refuses before a V4 body can be formed.  The V3 child then
+continues to consume its normal immutable `{{input.*}}` session; the finite
+adapter never introduces a second session authority or a runtime override.
+
+The preceding offline preparation manifest is separately versioned as
+`dclutch-devnet-activity-direct-session-preparation-manifest-v1`.  It names an
+accepted successor binary and finite `cycles[]`; each producer entry carries
+the five accepted input file/digest pairs (public manifest, plan, Market,
+seller participant, buyer participant), the runtime payer-keypair *path*, and
+three unique output paths.  Run it before generating the V3 manifests that
+bind those produced sessions:
+
+```sh
+python3 tools/devnet-activity/prepare_direct_sessions_v1.py \
+  --manifest /absolute/direct-session-preparation.json \
+  --manifest-sha256 HEX64
+```
+
+It invokes only `devnet-direct-trade-session-produce-v1`; that successor
+command is offline and does not read its payer key bytes, call RPC, sign, or
+submit. Repeating the preparer is a journal-authenticated producer resume, not
+a newly synthesized authority.
+
 This rung does not itself sign, generate keys, call RPC, fund, or invoke the
-child supervisor. A one-command live ongoing campaign still requires the
+child supervisor. Direct-session production is a separately accepted,
+key-free successor preparation boundary; the finite plan consumes only its
+Finalized journal. A one-command live ongoing campaign still requires the
 accepted launcher to connect these journal transitions to the existing
-single-cycle child ABI and requires real per-cycle Direct private-session
-artifacts. Until that handoff exists, the correct live-readiness statement is
-“finite signed plan and recovery contract accepted; live ongoing dispatch not
-yet connected,” not “ongoing devnet activity ready.”
+single-cycle child ABI. Until that handoff exists, the correct live-readiness
+statement is “finite signed plan and recovery contract accepted; live ongoing
+dispatch not yet connected,” not “ongoing devnet activity ready.”
 
 ## Safety properties
 

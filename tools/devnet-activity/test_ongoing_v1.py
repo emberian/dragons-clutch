@@ -83,6 +83,7 @@ class OngoingFixture(unittest.TestCase):
         ]
         self.manifest_paths: list[Path] = []
         self.rent_paths: list[Path] = []
+        self.direct_producer_paths: list[Path] = []
         self.write_cycle(0, 1_000_000)
         self.write_cycle(1, 2_000_000)
         self.ongoing_path = self.root / "ongoing.json"
@@ -224,6 +225,41 @@ class OngoingFixture(unittest.TestCase):
             self.manifest_value(scenario_path, direct_session, terminal_session),
         )
         manifest = ongoing.activity.parse_manifest(manifest_path)
+        direct = next(
+            adapter
+            for adapter in manifest.adapters
+            if adapter.argv[0] == "devnet-direct-trade-v1"
+        )
+        assert direct.progressive is not None
+        producer_path = self.root / f"direct-producer-{ordinal}.json"
+        producer = {
+            "schema": ongoing.DIRECT_SESSION_PRODUCER_JOURNAL_SCHEMA,
+            "phase": "finalized",
+            "cluster": "devnet",
+            "genesisHash": ongoing.activity.DEVNET_GENESIS_HASH,
+            "publicManifest": str(manifest.inputs[direct.progressive.source_input_id]),
+            "publicManifestSha256": direct.progressive.source_sha256,
+            "plan": str(manifest.inputs["checked-release"]),
+            "planSha256": digest(manifest.inputs["checked-release"]),
+            "marketInput": str(manifest.inputs[direct.progressive.market_input_id]),
+            "marketInputSha256": direct.progressive.market_sha256,
+            "checkedExecutionReleaseSha256": "a" * 64,
+            "checkedBinaries": {},
+            "payer": "9" * 32,
+            "payerKeypair": str(self.root / f"payer-{ordinal}.json"),
+            "seller": {},
+            "buyer": {},
+            "sellerTicketSha256": "b" * 64,
+            "buyerTicketSha256": "c" * 64,
+            "journalDir": str(self.root / f"direct-journals-{ordinal}"),
+            "evidenceFile": str(self.root / f"direct-evidence-{ordinal}.json"),
+            "privateSession": str(manifest.inputs[direct.progressive.session_input_id]),
+            "privateSessionSha256": digest(manifest.inputs[direct.progressive.session_input_id]),
+            "previousStateSha256": "d" * 64,
+            "stateSha256": "",
+        }
+        producer["stateSha256"] = ongoing.producer_state_sha256(producer)
+        write_json(producer_path, producer)
         rent_path = self.root / f"rent-{ordinal}.json"
         write_json(
             rent_path,
@@ -245,6 +281,7 @@ class OngoingFixture(unittest.TestCase):
         )
         self.manifest_paths.append(manifest_path)
         self.rent_paths.append(rent_path)
+        self.direct_producer_paths.append(producer_path)
 
     def write_ongoing(self) -> None:
         write_json(
@@ -279,9 +316,21 @@ class OngoingFixture(unittest.TestCase):
                             "path": str(rent),
                             "sha256": digest(rent),
                         },
+                        "directSessionProducers": [
+                            {
+                                "adapterId": "live-direct",
+                                "journal": {
+                                    "path": str(producer),
+                                    "sha256": digest(producer),
+                                },
+                            }
+                        ],
                     }
-                    for manifest, rent in zip(
-                        self.manifest_paths, self.rent_paths, strict=True
+                    for manifest, rent, producer in zip(
+                        self.manifest_paths,
+                        self.rent_paths,
+                        self.direct_producer_paths,
+                        strict=True,
                     )
                 ],
             },
@@ -440,9 +489,27 @@ class OngoingTests(OngoingFixture):
         # Restore a distinct cycle, then exceed the fixture-owned payer funding.
         self.manifest_paths.pop()
         self.rent_paths.pop()
+        self.direct_producer_paths.pop()
         self.write_cycle(1, 150_000_000)
         self.write_ongoing()
         with self.assertRaisesRegex(ongoing.Refusal, "exceeds payer funding"):
+            self.plan()
+
+    def test_direct_producer_must_be_finalized_and_manifest_bound(self) -> None:
+        producer = json.loads(self.direct_producer_paths[0].read_text())
+        producer["phase"] = "prepared"
+        producer["stateSha256"] = ongoing.producer_state_sha256(producer)
+        write_json(self.direct_producer_paths[0], producer)
+        self.write_ongoing()
+        with self.assertRaisesRegex(ongoing.Refusal, "Finalized devnet Direct producer"):
+            self.plan()
+
+        producer["phase"] = "finalized"
+        producer["privateSessionSha256"] = "e" * 64
+        producer["stateSha256"] = ongoing.producer_state_sha256(producer)
+        write_json(self.direct_producer_paths[0], producer)
+        self.write_ongoing()
+        with self.assertRaisesRegex(ongoing.Refusal, "private session bytes differ"):
             self.plan()
 
     def test_forged_authorization_refuses_before_work_creation(self) -> None:

@@ -40,6 +40,9 @@ V4_AUTHORIZATION_BODY_SCHEMA = (
 V4_AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v4"
 RUN_JOURNAL_SCHEMA = "dclutch-devnet-activity-ongoing-run-journal-v1"
 CYCLE_WORK_MARKER_SCHEMA = "dclutch-devnet-activity-cycle-work-marker-v1"
+DIRECT_SESSION_PRODUCER_JOURNAL_SCHEMA = (
+    "dclutch-devnet-direct-trade-session-producer-journal-v1"
+)
 VERIFIER_RESULT_SCHEMA = "dclutch-ed25519-verification-v1"
 AUTHORIZATION_PHRASE = "authorize-finite-devnet-activity-v4-live-send"
 BINARY_ROLES = ("dclutch", "successor", "solana-keygen", "solana")
@@ -83,6 +86,7 @@ class CyclePlan:
     rent_lamports: int
     wallet_slots: tuple[Mapping[str, Any], ...]
     session_slots: tuple[Mapping[str, str], ...]
+    direct_session_producers: tuple[Mapping[str, str], ...]
     envelope: Mapping[str, str]
 
     def document(self) -> dict[str, Any]:
@@ -95,6 +99,7 @@ class CyclePlan:
             "rentEnvelope": self.rent_file.document(),
             "walletSlots": [dict(row) for row in self.wallet_slots],
             "sessionSlots": [dict(row) for row in self.session_slots],
+            "directSessionProducers": [dict(row) for row in self.direct_session_producers],
             "envelope": dict(self.envelope),
         }
 
@@ -408,6 +413,84 @@ def authenticate_cycle_manifest(
     return manifest
 
 
+def producer_state_sha256(value: Mapping[str, Any]) -> str:
+    """Match the successor journal's serde-json digest boundary exactly."""
+    projected = dict(value)
+    projected["stateSha256"] = ""
+    return sha256_bytes(json.dumps(projected, separators=(",", ":")).encode())
+
+
+def authenticate_finalized_direct_session_producer(
+    reference: Any,
+    manifest: Any,
+    adapter: Any,
+    label: str,
+) -> Mapping[str, str]:
+    """Accept only the successor-owned terminal producer fact for one Direct.
+
+    The producer is the sole authority for the private-session wire.  This
+    adapter merely joins its finalized fact to the immutable V3 input that the
+    ordinary child will later consume; it never manufactures a replacement.
+    """
+    file = accepted_file(reference, label)
+    try:
+        value = exact_object(activity.read_exact_json(file.path, label), label)
+    except activity.Refusal as error:
+        raise Refusal(str(error)) from error
+    expected_keys = {
+        "schema", "phase", "cluster", "genesisHash", "publicManifest",
+        "publicManifestSha256", "plan", "planSha256", "marketInput",
+        "marketInputSha256", "checkedExecutionReleaseSha256", "checkedBinaries",
+        "payer", "payerKeypair", "seller", "buyer", "sellerTicketSha256",
+        "buyerTicketSha256", "journalDir", "evidenceFile", "privateSession",
+        "privateSessionSha256", "previousStateSha256", "stateSha256",
+    }
+    exact_keys(value, expected_keys, label)
+    if (
+        value["schema"] != DIRECT_SESSION_PRODUCER_JOURNAL_SCHEMA
+        or value["phase"] != "finalized"
+        or value["cluster"] != "devnet"
+        or value["genesisHash"] != activity.DEVNET_GENESIS_HASH
+    ):
+        raise Refusal(f"{label} is not one Finalized devnet Direct producer journal")
+    if digest(value["stateSha256"], f"{label} state digest") != producer_state_sha256(value):
+        raise Refusal(f"{label} state digest changed")
+    previous = digest(value["previousStateSha256"], f"{label} prepared predecessor")
+    session_sha = digest(value["privateSessionSha256"], f"{label} private session digest")
+    spec = adapter.progressive
+    assert spec is not None
+    session_path = manifest.inputs[spec.session_input_id]
+    source_path = manifest.inputs[spec.source_input_id]
+    market_path = manifest.inputs[spec.market_input_id]
+    plan_path = manifest.inputs.get("checked-release")
+    if plan_path is None:
+        raise Refusal(f"{label} has no checked-release Activity input")
+    expected = {
+        "publicManifest": str(source_path),
+        "publicManifestSha256": spec.source_sha256,
+        "plan": str(plan_path),
+        "planSha256": sha256_file(plan_path),
+        "marketInput": str(market_path),
+        "marketInputSha256": spec.market_sha256,
+        "privateSession": str(session_path),
+        "privateSessionSha256": session_sha,
+        "previousStateSha256": previous,
+    }
+    for key, expected_value in expected.items():
+        if value.get(key) != expected_value:
+            raise Refusal(f"{label} does not bind the manifest Direct {key}")
+    if sha256_file(session_path) != session_sha or session_sha != spec.session_sha256:
+        raise Refusal(f"{label} private session bytes differ from the manifest binding")
+    return {
+        "adapterId": adapter.adapter_id,
+        "producerJournalPath": str(file.path),
+        "producerJournalSha256": file.sha256,
+        "producerStateSha256": str(value["stateSha256"]),
+        "privateSessionPath": str(session_path),
+        "privateSessionSha256": session_sha,
+    }
+
+
 def parse_ongoing_manifest(path: Path, expected_sha256: str) -> OngoingPlan:
     try:
         manifest_path = activity.canonical_existing_file(path, "ongoing manifest")
@@ -515,9 +598,15 @@ def parse_ongoing_manifest(path: Path, expected_sha256: str) -> OngoingPlan:
     session_digests: set[str] = set()
     wallet_slot_ids: set[str] = set()
     session_slot_ids: set[str] = set()
+    producer_paths: set[Path] = set()
+    producer_digests: set[str] = set()
     for ordinal, raw in enumerate(raw_cycles):
         row = exact_object(raw, f"ongoing cycle {ordinal}")
-        exact_keys(row, {"manifest", "rentEnvelope"}, f"ongoing cycle {ordinal}")
+        exact_keys(
+            row,
+            {"manifest", "rentEnvelope", "directSessionProducers"},
+            f"ongoing cycle {ordinal}",
+        )
         manifest_file = accepted_file(row["manifest"], f"cycle {ordinal} manifest")
         if (
             manifest_file.path in manifest_paths
@@ -601,6 +690,55 @@ def parse_ongoing_manifest(path: Path, expected_sha256: str) -> OngoingPlan:
                     "sessionSlotId": session_slot,
                 }
             )
+        direct_adapters = [
+            adapter
+            for adapter in progressive
+            if adapter.argv[0] == "devnet-direct-trade-v1"
+        ]
+        raw_producers = exact_list(
+            row["directSessionProducers"],
+            f"ongoing cycle {ordinal} Direct session producers",
+        )
+        if len(raw_producers) != len(direct_adapters):
+            raise Refusal(
+                "ongoing cycle must bind exactly one Finalized producer journal per Direct adapter"
+            )
+        direct_session_producers: list[Mapping[str, str]] = []
+        seen_direct_adapters: set[str] = set()
+        for producer_index, raw_producer in enumerate(raw_producers):
+            producer = exact_object(
+                raw_producer,
+                f"ongoing cycle {ordinal} Direct producer {producer_index}",
+            )
+            exact_keys(
+                producer,
+                {"adapterId", "journal"},
+                f"ongoing cycle {ordinal} Direct producer {producer_index}",
+            )
+            adapter_id = stable_id(
+                producer["adapterId"],
+                f"ongoing cycle {ordinal} Direct producer adapter",
+            )
+            adapter = next(
+                (item for item in direct_adapters if item.adapter_id == adapter_id),
+                None,
+            )
+            if adapter is None or adapter_id in seen_direct_adapters:
+                raise Refusal("ongoing Direct producer adapter partition changed")
+            binding = authenticate_finalized_direct_session_producer(
+                producer["journal"],
+                manifest,
+                adapter,
+                f"ongoing cycle {ordinal} Direct producer {adapter_id}",
+            )
+            journal_path = Path(binding["producerJournalPath"])
+            journal_sha = binding["producerJournalSha256"]
+            if journal_path in producer_paths or journal_sha in producer_digests:
+                raise Refusal("ongoing cycles reuse Direct producer journal bytes or paths")
+            producer_paths.add(journal_path)
+            producer_digests.add(journal_sha)
+            seen_direct_adapters.add(adapter_id)
+            direct_session_producers.append(binding)
         cycles.append(
             CyclePlan(
                 ordinal,
@@ -612,6 +750,7 @@ def parse_ongoing_manifest(path: Path, expected_sha256: str) -> OngoingPlan:
                 rent_lamports,
                 tuple(wallet_slots),
                 tuple(session_slots),
+                tuple(direct_session_producers),
                 cycle_envelope(authority, rent_lamports),
             )
         )
@@ -880,6 +1019,9 @@ def new_run_journal(
                 "sessionSlotIds": [
                     row["sessionSlotId"] for row in cycle.session_slots
                 ],
+                "directSessionProducers": [
+                    dict(row) for row in cycle.direct_session_producers
+                ],
                 "phase": "pending",
                 "startedAt": None,
                 "completedAt": None,
@@ -926,6 +1068,8 @@ def bind_run_journal(
             != [slot["keySlotId"] for slot in cycle.wallet_slots]
             or row.get("sessionSlotIds")
             != [slot["sessionSlotId"] for slot in cycle.session_slots]
+            or row.get("directSessionProducers")
+            != [dict(slot) for slot in cycle.direct_session_producers]
         ):
             raise Refusal(f"run journal cycle {cycle.ordinal} changed identity or slots")
         phase = row.get("phase")
