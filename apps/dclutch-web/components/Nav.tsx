@@ -23,6 +23,7 @@ import { docsIndexHrefV1 } from '@/lib/flags';
  */
 
 const PRODUCT_ITEMS = [
+  { href: '/live', label: 'Live' },
   { href: '/markets', label: 'Markets' },
   { href: '/create', label: 'Design' },
   { href: '/portfolio', label: 'Portfolio' },
