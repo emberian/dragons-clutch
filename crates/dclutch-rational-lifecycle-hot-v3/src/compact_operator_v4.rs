@@ -12,7 +12,7 @@ use dclutch_capability_program_contract::hot_v3::{
     HotExecutionEnvelopeV3,
 };
 use dclutch_rational_representation_v2_contract::{
-    AuthenticatedTokenBehaviorV2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
+    AuthenticatedTokenBehaviorV2, ProtocolPositionClaimsCapabilitySeedsV2,
     RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
 };
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
@@ -374,15 +374,14 @@ fn validate_vacancy_group(
         &claims_program,
     )
     .0;
-    let expected_owner = Pubkey::find_program_address(
-        &[
-            RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-            &descriptor_id,
-            &outcome,
-        ],
-        &claims_program,
+    // The owning crate's seed constructor, not a hand-assembled tuple: the
+    // domain AND the order come from the one place that declares them.
+    let owner_seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(
+        descriptor_id,
+        u32::from_le_bytes(outcome),
     )
-    .0;
+    .map_err(|_| Error::ContentIdentity)?;
+    let expected_owner = Pubkey::find_program_address(&owner_seeds.as_slices(), &claims_program).0;
     if group.shard_mint.pubkey != expected_shard
         || group.structured_custody.pubkey != expected_structured
         // The owner is now supplied, so the operator pins it exactly as the
@@ -703,11 +702,12 @@ mod tests {
                     ),
                     custody_owner: AccountMeta::new_readonly(
                         Pubkey::find_program_address(
-                            &[
-                                RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-                                key(21).as_ref(),
-                                &outcome,
-                            ],
+                            &ProtocolPositionClaimsCapabilitySeedsV2::new(
+                                key(21).to_bytes(),
+                                u32::from_le_bytes(outcome),
+                            )
+                            .expect("owner seeds")
+                            .as_slices(),
                             &claims,
                         )
                         .0,
