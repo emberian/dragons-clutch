@@ -233,29 +233,36 @@ class OngoingFixture(unittest.TestCase):
         assert direct.progressive is not None
         producer_path = self.root / f"direct-producer-{ordinal}.json"
         producer = {
-            "schema": ongoing.DIRECT_SESSION_PRODUCER_JOURNAL_SCHEMA,
+            "schema": ongoing.DIRECT_PRODUCER_JOURNAL_SCHEMA,
             "phase": "finalized",
             "cluster": "devnet",
             "genesisHash": ongoing.activity.DEVNET_GENESIS_HASH,
-            "publicManifest": str(manifest.inputs[direct.progressive.source_input_id]),
-            "publicManifestSha256": direct.progressive.source_sha256,
             "plan": str(manifest.inputs["checked-release"]),
             "planSha256": digest(manifest.inputs["checked-release"]),
             "marketInput": str(manifest.inputs[direct.progressive.market_input_id]),
             "marketInputSha256": direct.progressive.market_sha256,
-            "checkedExecutionReleaseSha256": "a" * 64,
-            "checkedBinaries": {},
+            "campaignReport": str(self.root / f"campaign-{ordinal}.json"),
+            "campaignReportSha256": "a" * 64,
+            "buyerParticipant": str(self.root / f"buyer-{ordinal}.json"),
+            "buyerParticipantSha256": "b" * 64,
+            "checkedExecutionRelease": str(self.root / f"release-{ordinal}.json"),
+            "checkedExecutionReleaseSha256": "c" * 64,
+            "sellerTicket": str(self.root / f"seller-ticket-{ordinal}.json"),
+            "sellerTicketSha256": "d" * 64,
+            "buyerTicket": str(self.root / f"buyer-ticket-{ordinal}.json"),
+            "buyerTicketSha256": "e" * 64,
             "payer": "9" * 32,
             "payerKeypair": str(self.root / f"payer-{ordinal}.json"),
-            "seller": {},
-            "buyer": {},
-            "sellerTicketSha256": "b" * 64,
-            "buyerTicketSha256": "c" * 64,
+            "observationSlot": 1,
+            "publicManifest": str(manifest.inputs[direct.progressive.source_input_id]),
+            "publicManifestSha256": direct.progressive.source_sha256,
+            "publicManifestBase64": "e30=",
             "journalDir": str(self.root / f"direct-journals-{ordinal}"),
             "evidenceFile": str(self.root / f"direct-evidence-{ordinal}.json"),
             "privateSession": str(manifest.inputs[direct.progressive.session_input_id]),
             "privateSessionSha256": digest(manifest.inputs[direct.progressive.session_input_id]),
-            "previousStateSha256": "d" * 64,
+            "privateSessionBase64": "e30=",
+            "previousStateSha256": "f" * 64,
             "stateSha256": "",
         }
         producer["stateSha256"] = ongoing.producer_state_sha256(producer)
@@ -501,7 +508,7 @@ class OngoingTests(OngoingFixture):
         producer["stateSha256"] = ongoing.producer_state_sha256(producer)
         write_json(self.direct_producer_paths[0], producer)
         self.write_ongoing()
-        with self.assertRaisesRegex(ongoing.Refusal, "Finalized devnet Direct producer"):
+        with self.assertRaisesRegex(ongoing.Refusal, "Finalized reachable devnet Direct producer"):
             self.plan()
 
         producer["phase"] = "finalized"
