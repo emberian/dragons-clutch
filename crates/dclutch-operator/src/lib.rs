@@ -27,10 +27,10 @@ pub mod dealer_scenario_hot_v4;
 pub mod delegated_custody;
 /// Chain-derived unsigned Direct root retirement construction.
 pub mod direct_begin_retiring_v1;
-/// Chain-derived action-selected Direct V3 inline execution construction.
-pub mod direct_inline_v3;
 /// Canonical logical-to-physical routing and finalized poststate planning for Direct V3.
 pub mod direct_inline_route_v3;
+/// Chain-derived action-selected Direct V3 inline execution construction.
+pub mod direct_inline_v3;
 /// Exact unsigned signing material for the Direct V2 successor.
 pub mod direct_successor;
 /// Chain-derived General V3 capability activation planning.
