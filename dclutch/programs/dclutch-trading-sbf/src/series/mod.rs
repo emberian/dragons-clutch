@@ -4,7 +4,7 @@
 //! list semantics, and future-Market projection have one SDK-free owner in
 //! `dclutch-series-v3-kernel`. This module retains only Solana account access,
 //! PDA derivation, Core request construction, replay persistence, and physical
-//! commit-last lifecycle planning.
+//! commit-last occurrence planning.
 
 /// Exact dynamic-span physical AccountProfile for global Consume execution.
 pub mod account_profile_v4;
@@ -27,8 +27,16 @@ pub mod execute_v3;
 pub mod instruction;
 /// Content-to-Solana/Core conversion at the explicit adapter boundary.
 mod kernel_adapter;
-/// Total commit-last lifecycle planning for recurring Series V3.
-pub mod lifecycle;
+/// The Series `StateLifecyclePolicyV5`: root-only, derived, lamport-silent.
+pub mod lifecycle_policy_v5;
+/// Commit-last occurrence, funding, and terminal plans for recurring Series V3.
+///
+/// This module is deliberately NOT named "lifecycle": the protocol-wide term
+/// means the `StateLifecyclePolicyV5` artifact a capability release binds
+/// (see [`release_v4`]), while everything here plans the FUNDING and
+/// commit-last replay flows — `FundingStateV1` top-ups, Ticket refunds,
+/// occurrence commits, retirement, and closure.
+pub mod commit_plans;
 /// Chain-derived unsigned hot-action request construction.
 pub mod operator;
 /// Canonical projected-Hoard Custody request construction.

@@ -289,26 +289,44 @@ impl PythSponsoredPushReleaseV1 {
         let mut out = [0_u8; PYTH_SPONSORED_PUSH_RELEASE_V1_ENCODED_LEN];
         out[..8].copy_from_slice(&PYTH_SPONSORED_PUSH_RELEASE_V1_MAGIC);
         out[8..10].copy_from_slice(&PYTH_SPONSORED_PUSH_RELEASE_V1_SCHEMA_VERSION.to_le_bytes());
-        for (offset, value) in [
-            (16, self.input.cluster_id),
-            (48, self.input.receiver_program),
-            (80, self.input.receiver_programdata),
-            (112, self.input.receiver_abi_id),
-            (144, self.input.push_oracle_program),
-            (176, self.input.push_oracle_programdata),
-            (208, self.input.push_oracle_abi_id),
-            (240, self.input.price_account),
-            (272, self.input.feed_id),
-            (304, self.input.price_update_codec_id),
-            (336, self.input.adapter_id),
-            (368, self.input.provider_family_id),
-            (400, self.input.transport_profile_id),
-            (432, self.input.receiver_upgrade_authority),
-            (464, self.input.push_oracle_upgrade_authority),
-            (496, self.input.receiver_config),
-            (528, self.input.receiver_config_digest),
-        ] {
-            out[offset..offset + 32].copy_from_slice(&value);
+        // The seventeen 32-byte identities occupy 16..560 with no gaps, so the
+        // offsets were never independent facts — each was the previous one plus
+        // 32, written out seventeen times. Listing them in order and tiling the
+        // region with `chunks_exact_mut` says the same thing once, with no
+        // computed index to get wrong, and writes the identical bytes.
+        //
+        // `out[16..IDENTITY_FIELDS_END]` is a constant range into a
+        // fixed-width array, so it cannot be out of bounds. Both
+        // `chunks_exact_mut` and `zip` truncate rather than panic, and a field
+        // silently dropped from a release preimage is exactly the kind of
+        // quiet wrongness this file exists to prevent — so the assert pins the
+        // tiling. It is compiled out of the SBF release build.
+        const IDENTITY_FIELDS_END: usize = 560;
+        let identities = [
+            self.input.cluster_id,
+            self.input.receiver_program,
+            self.input.receiver_programdata,
+            self.input.receiver_abi_id,
+            self.input.push_oracle_program,
+            self.input.push_oracle_programdata,
+            self.input.push_oracle_abi_id,
+            self.input.price_account,
+            self.input.feed_id,
+            self.input.price_update_codec_id,
+            self.input.adapter_id,
+            self.input.provider_family_id,
+            self.input.transport_profile_id,
+            self.input.receiver_upgrade_authority,
+            self.input.push_oracle_upgrade_authority,
+            self.input.receiver_config,
+            self.input.receiver_config_digest,
+        ];
+        debug_assert!(IDENTITY_FIELDS_END - 16 == identities.len().saturating_mul(32));
+        for (slot, value) in out[16..IDENTITY_FIELDS_END]
+            .chunks_exact_mut(32)
+            .zip(identities.iter())
+        {
+            slot.copy_from_slice(value);
         }
         out[560..568].copy_from_slice(&self.input.receiver_deployment_slot.to_le_bytes());
         out[568..576].copy_from_slice(&self.input.push_oracle_deployment_slot.to_le_bytes());

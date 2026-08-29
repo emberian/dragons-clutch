@@ -286,15 +286,77 @@ demonstrably load-bearing rather than decorative.
 | replay cursor one revision ahead (batch prestate digest re-sealed over the tampered cursor) | `CustodyReplayV1::advance` — *after* the transfer, proven by the token program in the transaction log |
 | substituted destination (a third token account, real, same Mint, same balance, different owner; reservation re-sealed to name it and commit to its prestate) | the external destination owner the request names (0x6006, past every 0x6005 reservation join) |
 
+## The reservation is Custody-produced, and the staging was masking two defects
+
+The reservation batch, state and receipt used to be installed as Custody-owned
+accounts carrying real coordinates and real digests. Everything downstream
+authenticated them exactly as it would authenticate Custody's own output — but
+Custody's reserve route did not write them, and four coordinates could not be
+real because only the chain knows them: the source vault's prestate and
+poststate digests, the batch's last-prestate digest, and the receipt's vacancy
+digest were literals (`0xf8`, `0xfb`, `0xfe`, and a `hash(&[])` standing in for
+Custody's own `vacant_digest()`).
+
+Custody writes them now. `Create → Page(0..5) → Evaluate → RESERVE → Commit →
+Deliver`, where Reserve is Custody's own route against the real Custody ELF: it
+creates the escrow vault, invokes the real token program to move the collateral
+out of the trading-principal vault into it, and writes the batch, the state and
+the typed receipt. Trading's ingest then joins the receipt Custody actually
+wrote, and commit and delivery run on those bodies.
+
+The campaign asserts where the value went rather than that the route succeeded:
+what left the vault is in the escrow and the two sum to the vault's opening
+balance; the escrow Custody created is byte-identical to the escrow the campaign
+used to stage, and so is the debited vault — the two staged bodies became
+poststates the route had to reach on its own; and the state's source prestate,
+source poststate and effect poststate digests are the digests of the accounts
+the chain actually holds.
+
+**Two protocol defects, and they are why the evidence was staged.** The reserve
+route was unreachable for every scenario that could ever commit. Both are the
+same family as the three above: an identity or a privilege that two sides derive
+independently and disagree about.
+
+**The effect producer could not be in the reserve frame either.** Exactly the
+contradiction the activation frame carried, one leg earlier and still unfixed:
+`require_frame` ran `has_duplicate_keys` over the whole 26-account frame, while
+Trading's evaluate and Trading's commit both refuse any effect manifest whose
+`producer_program` is not the Trading program. So the frame carries Trading at
+`EFFECT_PRODUCER` and at `TRADING_PROGRAM` by construction, and was forbidden to
+repeat any key. Fixed the way activation was fixed, three lines away in the same
+file: the equality is pinned positively and that one slot is excused.
+
+**An exact-privilege census is a constraint on the whole transaction, not on
+your instruction.** `build_dealer_scenario_reservation_bundle_v1` is documented
+as one atomic transaction — Custody produces, Trading immediately ingests, so a
+receipt Trading refuses rolls back whole — and it had no consumer anywhere. It
+could not be submitted. Solana merges account privileges across the instructions
+of one transaction, and the two halves want opposite privileges on the same
+accounts: Custody's frame pinned the checkpoint readonly while Trading's ingest
+takes it writable, and Custody must have the receipt and the reservation state
+writable because it creates them while Trading's ingest refuses unless both are
+readonly.
+
+The checkpoint half is fixed here: Custody writes nothing to the checkpoint, so
+its writability was never Custody's to pin. The receipt and state half is in
+`programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs` and is not
+this lane's file. So the campaign submits the producer and the ingest as two
+transactions — the recovery shape the operator's own contract contemplates
+("either durable producer output also remains independently ingestible after an
+RPC-response loss") — and
+`the_atomic_reservation_bundle_still_refuses_on_the_trading_side` pins the
+boundary rather than describing it: the pair now gets past Custody and dies at
+instruction **one**, `0x4003`, with Custody's own success in the transaction log.
+Asserting the instruction index is the point — it is what distinguishes "one
+program left to fix" from "still both". When Trading stops pinning those two
+slots readonly, that test is the one that fails, and the campaign should go back
+to the atomic pair.
+
 ## Named debt
 
-**The reservation evidence is staged, not Custody-produced.** The reservation
-batch, state and receipt are installed as Custody-owned accounts carrying real
-coordinates and real digests — the executed routes authenticate them exactly as
-they would authenticate Custody's own output, and delivery refuses unless those
-digests are what the chain actually holds. But Custody's reserve route did not
-write them. That is the same evidence class the reserve leg already had, now
-carried one leg further.
+**The reservation is produced, but not atomically with its ingest.** Between the
+two transactions a reservation exists that Trading has not yet joined. That is a
+real gap and it is the defect above, not a design.
 
 **One effect, one coordinate.** The delivery is a single-effect batch. The
 activation frame admits up to four, and the operator builder is exercised at four

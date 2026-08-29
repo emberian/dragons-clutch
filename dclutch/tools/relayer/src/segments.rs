@@ -396,8 +396,12 @@ fn file_len(path: &Path) -> Result<u64> {
 
 /// Read `len` bytes from `offset`, refusing a short read.
 fn read_range(path: &Path, offset: u64, len: u64) -> Result<Vec<u8>> {
-    let len = usize::try_from(len)
-        .map_err(|_| index_refusal(format!("{} is longer than this machine can address", path.display())))?;
+    let len = usize::try_from(len).map_err(|_| {
+        index_refusal(format!(
+            "{} is longer than this machine can address",
+            path.display()
+        ))
+    })?;
     let mut file = std::fs::File::open(path).map_err(|source| RelayerError::io(path, source))?;
     file.seek(SeekFrom::Start(offset))
         .map_err(|source| RelayerError::io(path, source))?;
@@ -506,7 +510,10 @@ impl PublishedLog {
         let mut index = if index_path.exists() {
             let text = read_file(&index_path)?;
             let index: SegmentIndex = serde_json::from_slice(&text).map_err(|source| {
-                index_refusal(format!("{} is not a segment index: {source}", index_path.display()))
+                index_refusal(format!(
+                    "{} is not a segment index: {source}",
+                    index_path.display()
+                ))
             })?;
             if index.schema != INDEX_SCHEMA {
                 return Err(index_refusal(format!(
@@ -627,7 +634,11 @@ impl PublishedLog {
     /// bytes behind it are pinned by digests taken at seal time and folded into
     /// a chain that the served directory publishes and any reader can recompute.
     /// `verify-log --against` performs the whole-file comparison on demand.
-    pub fn publish(&mut self, local_log: &Path, segment_bytes_target: u64) -> Result<PublishOutcome> {
+    pub fn publish(
+        &mut self,
+        local_log: &Path,
+        segment_bytes_target: u64,
+    ) -> Result<PublishOutcome> {
         let local_len = file_len(local_log)?;
         let sealed_record_bytes = self.index.sealed_record_bytes();
         let published_record_bytes = sealed_record_bytes.saturating_add(self.current.record_bytes);
@@ -645,7 +656,8 @@ impl PublishedLog {
         // The exact, bounded prefix check: the active segment's records must be
         // byte-identical to the local log's bytes at the same offsets.
         if self.current.record_bytes > 0 {
-            let local_slice = read_range(local_log, sealed_record_bytes, self.current.record_bytes)?;
+            let local_slice =
+                read_range(local_log, sealed_record_bytes, self.current.record_bytes)?;
             let published = read_file(&self.current.path)?;
             let header = usize::try_from(self.current.header_bytes).unwrap_or(usize::MAX);
             let published_records = published.get(header..).unwrap_or(&[]);
@@ -737,7 +749,10 @@ impl PublishedLog {
             sealed_this_run,
             current_segment: self.current.number,
             current_bytes: self.current.bytes(),
-            total_records: self.index.sealed_records().saturating_add(self.current.records),
+            total_records: self
+                .index
+                .sealed_records()
+                .saturating_add(self.current.records),
             total_record_bytes: self
                 .index
                 .sealed_record_bytes()
@@ -911,11 +926,10 @@ impl PublishedLog {
                 let digest = sha256(&flat);
                 ("live", flat.len(), to_hex(&digest))
             } else {
-                let sealed = self
-                    .index
-                    .segments
-                    .first()
-                    .ok_or_else(|| index_refusal("a retired flat log with no sealed segment 1"))?;
+                let sealed =
+                    self.index.segments.first().ok_or_else(|| {
+                        index_refusal("a retired flat log with no sealed segment 1")
+                    })?;
                 ("sealed", 0usize, sealed.sha256_hex.clone())
             };
             let published_prefix_bytes = if self.flat_log_live {
@@ -1026,7 +1040,9 @@ fn segment_header_line(index: &SegmentIndex, number: u32) -> Result<Vec<u8>> {
         return Ok(Vec::new());
     }
     let previous = index.segments.last().ok_or_else(|| {
-        index_refusal(format!("segment {number} needs a predecessor and the index has none"))
+        index_refusal(format!(
+            "segment {number} needs a predecessor and the index has none"
+        ))
     })?;
     let header = serde_json::json!({
         "schema": SEGMENT_HEADER_SCHEMA,
@@ -1081,11 +1097,17 @@ fn scan_segment(path: &Path, number: u32, index: &SegmentIndex) -> Result<Scanne
     let mut header_bytes = 0u64;
     let mut record_lines = lines.as_slice();
     if number > 1 {
-        let first = lines
-            .first()
-            .ok_or_else(|| index_refusal(format!("{} is empty but segment {number} must open with a header", path.display())))?;
+        let first = lines.first().ok_or_else(|| {
+            index_refusal(format!(
+                "{} is empty but segment {number} must open with a header",
+                path.display()
+            ))
+        })?;
         let value: serde_json::Value = serde_json::from_slice(first).map_err(|source| {
-            index_refusal(format!("{}'s first line is not JSON: {source}", path.display()))
+            index_refusal(format!(
+                "{}'s first line is not JSON: {source}",
+                path.display()
+            ))
         })?;
         if value.get("schema").and_then(serde_json::Value::as_str) != Some(SEGMENT_HEADER_SCHEMA) {
             return Err(index_refusal(format!(
@@ -1156,9 +1178,9 @@ fn derive_entry(path: &Path, number: u32, index: &SegmentIndex) -> Result<Segmen
     let scanned = scan_segment(path, number, index)?;
     let previous_chain = parse_digest(&index.chain_head_sha256_hex, "chain head")?;
     let chain = chain_fold(&previous_chain, &scanned.digest);
-    let first_slot = scanned
-        .first_slot
-        .ok_or_else(|| index_refusal(format!("{} carries no publication record", path.display())))?;
+    let first_slot = scanned.first_slot.ok_or_else(|| {
+        index_refusal(format!("{} carries no publication record", path.display()))
+    })?;
     Ok(SegmentEntry {
         segment: number,
         name: segment_file_name(number),
@@ -1226,7 +1248,10 @@ pub fn verify_directory(dir: &Path, against: Option<&Path>) -> Result<VerifyRepo
     let index: SegmentIndex = if index_path.exists() {
         let bytes = read_file(&index_path)?;
         serde_json::from_slice(&bytes).map_err(|source| {
-            index_refusal(format!("{} is not a segment index: {source}", index_path.display()))
+            index_refusal(format!(
+                "{} is not a segment index: {source}",
+                index_path.display()
+            ))
         })?
     } else {
         checks.push(format!(
@@ -1752,7 +1777,8 @@ mod tests {
         if let Some(slot) = bytes.get_mut(0) {
             *slot = b'{';
         }
-        let text = String::from_utf8_lossy(&bytes).replace("\"observed_slot\":100", "\"observed_slot\":999");
+        let text = String::from_utf8_lossy(&bytes)
+            .replace("\"observed_slot\":100", "\"observed_slot\":999");
         std::fs::write(&local, text).expect("rewrite");
 
         let mut log = PublishedLog::open(&served, 1 << 20).expect("reopen");
@@ -1775,8 +1801,11 @@ mod tests {
 
         let victim = served.join(segment_file_name(1));
         let text = std::fs::read_to_string(&victim).expect("read");
-        std::fs::write(&victim, text.replace("\"observed_slot\":100", "\"observed_slot\":101"))
-            .expect("tamper");
+        std::fs::write(
+            &victim,
+            text.replace("\"observed_slot\":100", "\"observed_slot\":101"),
+        )
+        .expect("tamper");
         let refusal = verify_directory(&served, None).expect_err("must refuse");
         assert!(
             refusal.to_string().contains("hashes to"),
@@ -1861,7 +1890,10 @@ mod tests {
 
         let flat = std::fs::read(served.join(LEGACY_FLAT_LOG_FILE)).expect("flat");
         assert_eq!(flat.get(..original.len()), Some(original.as_slice()));
-        assert_eq!(to_hex(&sha256(original.as_slice())), to_hex(&original_digest));
+        assert_eq!(
+            to_hex(&sha256(original.as_slice())),
+            to_hex(&original_digest)
+        );
 
         let sealed = std::fs::read(served.join(segment_file_name(1))).expect("sealed");
         assert_eq!(flat.get(..sealed.len()), Some(sealed.as_slice()));

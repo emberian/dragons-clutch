@@ -190,6 +190,17 @@ pub enum ClaimsSbfError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x500A,
+    /// The execution terms disagree with the Market-selected config.
+    ///
+    /// Distinct from [`ClaimsSbfError::Representation`] because the cause and
+    /// the fix are different. Representation means a record was substituted or
+    /// a root did not authenticate; this means both records are authentic and
+    /// the Market selected a DIFFERENT INSTRUMENT than the terms describe --
+    /// a different denominator, width, Token program, or source graph. It is
+    /// the runtime half of the Fractional config split, and it is the check
+    /// that keeps a market-free manifest config honest about the
+    /// market-bearing terms it admits.
+    SelectionConfig = 0x500B,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).

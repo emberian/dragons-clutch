@@ -44,6 +44,7 @@ import {
   decodeArtifactReleaseV1,
   decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
+  REGISTRY_ACTIVATION_PDA_SEED_V1 as ACTIVATION_SEED,
 } from './releaseRegistry';
 import { decodeToken2022BehaviorMintV2, TOKEN_2022_PROGRAM_ID } from './rationalTokenV2';
 import {
@@ -87,7 +88,6 @@ const SHARD_MINT_SEED = new TextEncoder().encode('dclutch:rational-shard-mint:v2
 const STRUCTURED_CUSTODY_SEED = new TextEncoder().encode('dclutch:rational-structured:v2');
 const CLAIMS_CUSTODY_OWNER_SEED = new TextEncoder().encode('dclutch:rational-claims:v2');
 const ADMISSION_SEED = new TextEncoder().encode('dclutch:protocol-position:v2');
-const ACTIVATION_SEED = new TextEncoder().encode('dclutch:release-activation:v1');
 const SEMANTIC_BASIS_CONTENT_DOMAIN_V3 = new TextEncoder().encode('dclutch/product-basis/semantic/v3');
 
 export type RationalHotAccountMetaV4 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;

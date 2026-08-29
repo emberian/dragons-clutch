@@ -22,8 +22,14 @@ describe('public deployment evidence', () => {
       expect(programs[role]).toEqual({
         program: DEVNET_DEPLOYMENT_V1.programs[role],
         programData: DEVNET_PROGRAM_EVIDENCE_V1[role].programData,
-        observedDeploymentSlot: DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot,
+        // Named for what it is. A static document cannot observe a chain, and
+        // "observed" invited the reader to treat a build-time constant as
+        // current state; a FIRST deployment slot is a historical fact that
+        // never ages. The same care was already taken with the link text below
+        // and had not reached the field name.
+        firstDeploymentSlot: DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot,
       });
+      expect(programs[role].observedDeploymentSlot).toBeUndefined();
     }
     expect(document.genesisHash).toBe(DEVNET_DEPLOYMENT_V1.genesisHash);
     expect(document.activationCache).toBe(DEVNET_DEPLOYMENT_V1.activationCache);

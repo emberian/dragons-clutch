@@ -51,8 +51,8 @@ use dclutch_rent_contract::{
     },
 };
 use dclutch_token_svm::{
-    ACCOUNT_BYTES, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
-    Token2022CloseableMintProfileV2, TokenAccount,
+    ACCOUNT_BYTES, InertMetadataV2, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
+    Token2022BehaviorProfileV2, Token2022CloseableMintProfileV2, TokenAccount,
 };
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
@@ -1035,6 +1035,56 @@ fn make_core_retiring(context: &mut ProgramTestContext, f: &Fixture, mut account
     context.set_account(&f.graph.core_market, &AccountSharedData::from(account));
 }
 
+/// Authenticate one Mint the lifecycle just created against BOTH readers that
+/// matter to it, at the exact width it must have allocated.
+///
+/// The lifecycle's own post-create reader is not the last word on these Mints.
+/// The representation family retires them elsewhere — `rational_representation_v2`
+/// `BurnReceipt`/`BurnShard` and `fractional_atomic_v3` `WholeUnwrap` all read
+/// these same PDAs through `Token2022BehaviorProfileV2`, which requires a
+/// `PermissionedBurn` extension because it then burns through it. Those two
+/// campaigns are disjoint, so for a long time each side's fixture invented
+/// exactly the bytes that side expected and the join was never executed: the
+/// lifecycle wrote a 202-byte close-only Mint that the terminal readers refuse,
+/// and Token-2022 extensions are init-time-only, so every such Mint was broken
+/// permanently. This assertion is that join, on bytes the real v11 Token-2022
+/// program wrote in this transaction.
+fn assert_lifecycle_mint_is_terminally_burnable(
+    mint: Pubkey,
+    data: &[u8],
+    representation_authority: Pubkey,
+    expected_supply: u64,
+) {
+    assert_eq!(
+        data.len(),
+        TOKEN_2022_CLOSEABLE_MINT_BYTES_V2,
+        "lifecycle Mint width"
+    );
+    let facts = Token2022CloseableMintProfileV2::check_mint(
+        TOKEN_2022_PROGRAM_ID,
+        data,
+        representation_authority.to_bytes(),
+        representation_authority.to_bytes(),
+        representation_authority.to_bytes(),
+        expected_supply,
+        0,
+    )
+    .expect("closeable lifecycle Mint profile");
+    assert_eq!(facts.close_authority(), representation_authority.to_bytes());
+    assert_eq!(facts.burn_authority(), representation_authority.to_bytes());
+
+    let behavior = Token2022BehaviorProfileV2::check_mint(
+        TOKEN_2022_PROGRAM_ID,
+        mint.to_bytes(),
+        data,
+        representation_authority.to_bytes(),
+        expected_supply,
+    )
+    .expect("terminal representation readers admit the Mint the lifecycle wrote");
+    assert_eq!(behavior.metadata(), InertMetadataV2::Absent);
+    assert_eq!(behavior.controller(), representation_authority.to_bytes());
+}
+
 fn assert_lifecycle_receipt(
     returned: Option<(Pubkey, Vec<u8>)>,
     request: &[u8],
@@ -1174,15 +1224,12 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         .await
         .expect("live receipt Mint");
     assert_eq!(receipt_account.owner, TOKEN_2022);
-    Token2022CloseableMintProfileV2::check_mint(
-        TOKEN_2022_PROGRAM_ID,
+    assert_lifecycle_mint_is_terminally_burnable(
+        f.receipt_mint,
         &receipt_account.data,
-        f.representation_authority.to_bytes(),
-        f.representation_authority.to_bytes(),
+        f.representation_authority,
         0,
-        0,
-    )
-    .expect("closeable receipt Mint profile");
+    );
     let (accepted, _, _, _) = submit(
         &mut context,
         replay_receipt,
@@ -1242,15 +1289,12 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
     let shard = account(&mut context, f.shard_mint)
         .await
         .expect("shard Mint");
-    Token2022CloseableMintProfileV2::check_mint(
-        TOKEN_2022_PROGRAM_ID,
+    assert_lifecycle_mint_is_terminally_burnable(
+        f.shard_mint,
         &shard.data,
-        f.representation_authority.to_bytes(),
-        f.representation_authority.to_bytes(),
+        f.representation_authority,
         0,
-        0,
-    )
-    .expect("closeable shard Mint profile");
+    );
     let structured = account(&mut context, f.structured_custody)
         .await
         .expect("structured custody");

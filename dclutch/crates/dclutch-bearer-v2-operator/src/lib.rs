@@ -35,7 +35,8 @@ pub use hot_artifacts_v3::{
 pub use hot_bundle_v3::{
     RATIONAL_TERMINAL_DESCRIPTOR_BYTES_V3, RATIONAL_TERMINAL_STRATEGY_BYTES_V3,
     RationalTerminalHotBundleInputV3, RationalTerminalHotBundleV3,
-    build_rational_terminal_hot_bundle_v3,
+    RationalTerminalSelectedBundleInputV6, build_rational_terminal_hot_bundle_v3,
+    build_rational_terminal_selected_bundle_v6,
     validate_rational_terminal_hot_bundle_for_authenticated_selection_v3,
     validate_rational_terminal_hot_bundle_v3,
 };
@@ -50,8 +51,9 @@ pub use hot_transaction_v3::{
     build_rational_terminal_hot_instruction_v3,
 };
 pub use open_capability_set_v3::{
-    RationalOpenCapabilityProgramSetInputV3, RationalOpenCapabilityProgramSetV3,
-    build_rational_open_capability_program_set_v3,
+    RationalOpenCapabilityProgramSetInputV3, RationalOpenCapabilityProgramSetInputV6,
+    RationalOpenCapabilityProgramSetV3, build_rational_open_capability_program_set_v3,
+    build_rational_open_capability_program_set_v6,
     validate_rational_open_capability_program_set_v3,
 };
 pub use open_selected_transaction_v3::{
@@ -62,7 +64,8 @@ pub use open_selected_transaction_v3::{
 pub use open_selected_v3::{
     RATIONAL_OPEN_SELECTED_CHILD_ACCOUNTS_V3, RATIONAL_OPEN_SELECTED_COMMON_IDENTITIES_V3,
     RATIONAL_OPEN_SELECTED_COMMON_SCALARS_V3, RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
-    RationalOpenSelectedHotBundleInputV3, RationalOpenSelectedHotBundleV3,
+    RationalOpenSelectedBundleInputV6, RationalOpenSelectedHotBundleInputV3,
+    RationalOpenSelectedHotBundleV3, build_rational_open_selected_bundle_v6,
     build_rational_open_selected_hot_bundle_v3,
     validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3,
     validate_rational_open_selected_hot_bundle_v3,
@@ -79,7 +82,9 @@ pub use open_structured_v3::{
     RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3,
     RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3, RationalOpenStructuredHotBundleInputV3,
-    RationalOpenStructuredHotBundleV3, build_rational_open_structured_hot_bundle_v3,
+    RationalOpenStructuredHotBundleV3, RationalOpenStructuredSelectedBundleInputV6,
+    build_rational_open_structured_hot_bundle_v3,
+    build_rational_open_structured_selected_bundle_v6,
     validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
     validate_rational_open_structured_hot_bundle_v3,
 };

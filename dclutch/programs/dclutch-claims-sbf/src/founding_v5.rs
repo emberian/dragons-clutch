@@ -50,10 +50,7 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
-use super::{
-    affine_batch_v2::authenticate_runtime_product_basis_core_with_rent_v3,
-    authenticate_activated_role,
-};
+use super::affine_batch_v2::authenticate_runtime_product_basis_core_with_rent_v3;
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2, MarketViewV2,
@@ -622,6 +619,11 @@ fn authenticate_releases(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
 ) -> Result<(), ProgramError> {
+    // One canonical cache search admits the first role and returns the bump
+    // witness; the remaining roles reproduce the address from it instead of
+    // each paying the 256-way search again. Same checks, one search - the
+    // composed founding runs this batch against a 1.4M ceiling it exhausts.
+    let mut bump = None;
     for (role, program, programdata) in [
         (
             ExecutionRoleV1::Claims,
@@ -644,15 +646,34 @@ fn authenticate_releases(
             accounts.custody_programdata,
         ),
     ] {
-        let receipt = authenticate_activated_role(
-            accounts.registry,
-            accounts.cache,
-            role,
-            program,
-            programdata,
-            &request.release_set(),
-        )
-        .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+        let receipt = match bump {
+            None => {
+                let (receipt, witness) =
+                    dclutch_registry_activation_auth_v1::authenticate_activated_role_and_bump_v1(
+                        accounts.registry,
+                        accounts.cache,
+                        &request.release_set(),
+                        role,
+                        program,
+                        programdata,
+                    )
+                    .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+                bump = Some(witness);
+                receipt
+            }
+            Some(witness) => {
+                dclutch_registry_activation_auth_v1::authenticate_activated_role_with_bump_v1(
+                    accounts.registry,
+                    accounts.cache,
+                    &request.release_set(),
+                    witness,
+                    role,
+                    program,
+                    programdata,
+                )
+                .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?
+            }
+        };
         if receipt.execution_release_set_id().as_bytes() != &request.release_set() {
             return Err(ClaimsFoundingSbfErrorV5::Release.into());
         }

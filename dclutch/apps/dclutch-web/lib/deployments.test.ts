@@ -31,7 +31,11 @@ describe('the deployment manifest', () => {
       trading: '5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk',
       core: 'HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N',
     });
-    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('Hz6BXyxyf66teABb6Pr6ev9jCZBJJpP5Q9p4sYJwJSkj');
+    // Generated, not typed: `scripts/derive-activation-hint.mjs --write` moves
+    // this and the manifest together. Pinned here so the value cannot change
+    // without a reviewer seeing it — but it is a HINT the session follows past,
+    // so a cohort making it stale costs a reader accuracy, not a session.
+    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('69d1MKP4PaPVDFankLfnzeHBugoVBjPCDm7PEHParRF6');
     expect(DEVNET_DEPLOYMENT_V1.genesisHash).toBe('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(DEVNET_DEPLOYMENT_V1.endpoint).toBe('https://api.devnet.solana.com');
   });

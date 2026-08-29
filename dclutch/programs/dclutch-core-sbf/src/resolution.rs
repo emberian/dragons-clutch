@@ -718,6 +718,13 @@ fn authenticate_recovery_policy(
     // executed walk.
     let policy = match material.recovery_policy() {
         Some(recovery_id) => {
+            // Liveness census R2/Q2: the ordered recovery ladder has no live
+            // route, so a fund created over this material would have no
+            // terminal at all. Refuse to create it. See
+            // `recovery_walk_has_a_live_route`.
+            if !recovery_walk_has_a_live_route(action) {
+                return Err(CoreSbfError::RecoveryWalkUnavailable);
+            }
             let policy_account = account(accounts, policy_index)?;
             let policy_data = policy_account
                 .try_borrow_data()
@@ -845,6 +852,41 @@ fn authenticate_no_recovery_entries(
         return Err(CoreSbfError::Funding);
     }
     Ok(())
+}
+
+/// May this action still touch a material that bought an ordered recovery walk?
+///
+/// Liveness census R2 / queue Q2, welded on the 16:36 board ruling. A recovery
+/// material's failure walk is dead code in both directions:
+/// `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses
+/// `recovery_policy().is_some()` outright
+/// (`crates/dclutch-source-contract/src/source_resolution_v2.rs`,
+/// `Error::RecoveryNotExhausted`), and the ladder that was supposed to consume
+/// the paid-for legs instead — `funded::process_funded_transition` — has
+/// exactly one call site, inside a `#[cfg(any())]` function
+/// (`programs/dclutch-resolution-proof-sbf/src/lib.rs`). So at the resolution
+/// deadline such a market admits neither the success capture nor the failure
+/// walk: it is stuck in `Primary` forever, with every holder's principal in it.
+///
+/// The weld is exactly one conjunct and it sits on **creation only**.
+/// `CreateFund` is what mints the `SourceResolutionStateV2` — the object with
+/// no exit — so refusing there is refusing to bring the unresolvable thing into
+/// existence, before any position can be sold against it.
+/// `VerifyFundReady` and `CloseFund` stay admissible on purpose: welding those
+/// would take routes *away* from a state that already exists, which is the
+/// opposite of the census's charter. A weld may not strand what it finds.
+///
+/// This returns `true` again the moment the ladder gets a live route (Q2's
+/// build half: resurrect `funded::process_funded_transition` and give
+/// `RecoveryAdvanced`/`Exhausted` real routes). Deleting this function is then
+/// the whole of the revert.
+pub(crate) const fn recovery_walk_has_a_live_route(action: ResolutionCoreActionV1) -> bool {
+    match action {
+        ResolutionCoreActionV1::CreateFund => false,
+        ResolutionCoreActionV1::VerifyFundReady
+        | ResolutionCoreActionV1::CloseFund
+        | ResolutionCoreActionV1::AdmitTerminal => true,
+    }
 }
 
 fn recovery_policy_indices(action: ResolutionCoreActionV1) -> Result<(usize, usize), CoreSbfError> {

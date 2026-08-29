@@ -1702,6 +1702,14 @@ pub(crate) struct GenericFoundingOpenAccounts<'accounts, 'info> {
 }
 
 /// Authenticate the sole Core permit for one already family-admitted context.
+///
+/// Completion-only, per the 2026-08-29 13:30 founding ruling: an allocated
+/// permit has no refund route and never expires, so the permissionless Open
+/// stays available to everyone forever and stage-1-committed value cannot
+/// strand. `expiry_slot` still gates the Found stage and the pre-allocation
+/// refund family (`series_permit_expiry`), which only ever touches a permit
+/// this route cannot accept (System-owned, data-empty). The slot argument is
+/// retained unused so neither caller nor frame changes shape.
 #[inline(never)]
 pub(crate) fn authenticate_permit(
     program_id: &Pubkey,
@@ -1709,7 +1717,7 @@ pub(crate) fn authenticate_permit(
     context: [u8; 32],
     founder: [u8; 32],
     rent: &Rent,
-    current_slot: u64,
+    _current_slot: u64,
     state: CoreState,
 ) -> Result<Box<SeriesFoundingPermitV1>, CoreSbfError> {
     if frame.permit.owner != program_id
@@ -1744,7 +1752,6 @@ pub(crate) fn authenticate_permit(
         || intent.claims_program().to_bytes() != frame.claims_program.key.to_bytes()
         || intent.rent_credit().to_bytes() != frame.rent_credit.key.to_bytes()
         || intent.generation() != state.identity.generation
-        || current_slot > intent.expiry_slot()
     {
         return Err(CoreSbfError::Reference);
     }

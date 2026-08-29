@@ -21,7 +21,7 @@ use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use super::{
-    lifecycle::{
+    commit_plans::{
         ClosePlanV3, OccurrenceCommitPlanV3, PendingFundingAccountV3, PendingFundingPlanV3,
         RetirePlanV3,
     },
@@ -617,7 +617,7 @@ mod tests {
     use super::*;
     use crate::series::{
         generated,
-        lifecycle::{plan_close, plan_retire},
+        commit_plans::{plan_close, plan_retire},
         state::TicketPhaseV3,
     };
 
@@ -685,7 +685,7 @@ mod tests {
     fn rent_sink(
         credit: Pubkey,
         refund_wallet: AccountKeyV3,
-    ) -> crate::series::lifecycle::SeriesLifecycleRentSinkV3 {
+    ) -> crate::series::commit_plans::SeriesLifecycleRentSinkV3 {
         let state = LifecycleRentCreditV2::new(
             RefundAuthority::new(refund_wallet.to_bytes()).expect("refund wallet"),
             LifecycleAccountIdV2::new([91; 32]).expect("Market"),
@@ -694,7 +694,7 @@ mod tests {
             4,
         )
         .expect("Rent V2");
-        crate::series::lifecycle::SeriesLifecycleRentSinkV3::admit(
+        crate::series::commit_plans::SeriesLifecycleRentSinkV3::admit(
             AccountKeyV3::new(credit.to_bytes()).expect("credit"),
             &state.to_bytes(),
             AccountKeyV3::new([91; 32]).expect("Market"),
@@ -766,7 +766,7 @@ mod tests {
         let sink = rent_sink(credit_key, admitted_ticket.ticket().refund_owner());
         assert_eq!(
             plan_retire(1, before, ticket_state, admitted_ticket, 2, 0, 11, 10, sink),
-            Err(crate::series::lifecycle::LifecycleErrorV3::Replay)
+            Err(crate::series::commit_plans::LifecycleErrorV3::Replay)
         );
         let plan = plan_retire(1, before, ticket_state, admitted_ticket, 2, 1, 11, 10, sink)
             .expect("retire plan");

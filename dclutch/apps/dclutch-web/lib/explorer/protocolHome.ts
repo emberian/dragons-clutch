@@ -32,6 +32,16 @@ export type ProtocolProgramCardV1 = Readonly<{
   ownerLabel: string | null;
   lamports: string | null;
   /** DEPLOY-1's recorded deployment slot, when this deployment carries evidence. */
+  /**
+   * DEPLOY-1's ORIGINAL deployment slot, not the program's current one.
+   *
+   * These programs are mutable and upgraded in place at permanent addresses,
+   * so the slot they sit at moves and this constant does not. It is kept
+   * because a first-deployment slot is a historical fact that cannot go stale;
+   * the card labels it as such. The live slot is read from ProgramData by the
+   * /operate deployment inspector, which is the surface that already fetches
+   * Loader headers.
+   */
   deploymentSlot: string | null;
 }>;
 

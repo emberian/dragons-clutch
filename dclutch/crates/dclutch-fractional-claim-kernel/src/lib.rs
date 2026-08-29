@@ -14,6 +14,7 @@ mod exposure_v2;
 #[allow(missing_docs)]
 mod generated_abi;
 mod projection_encode;
+mod selection_config_v1;
 mod terms_encode;
 mod transition;
 
@@ -35,6 +36,14 @@ pub use exposure_v2::{
     fractional_exposure_terms_bytes_v2, require_categorical_embedding_v2,
 };
 pub use projection_encode::{encode_fractional_projection_v1, fractional_projection_bytes_v1};
+pub use selection_config_v1::{
+    FRACTIONAL_SELECTION_CONFIG_BYTES_V1, FRACTIONAL_SELECTION_CONFIG_MAGIC_V1,
+    FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1, FRACTIONAL_SELECTION_CONFIG_SCHEMA_PREIMAGE_V1,
+    FractionalSelectionConfigAdmissionV1, FractionalSelectionConfigInputV1,
+    FractionalSelectionConfigV1, admit_fractional_selection_config_v1,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
+    join_fractional_selection_config_v1,
+};
 pub use terms_encode::{
     FractionalTermsInputV1, encode_fractional_terms_v1, fractional_terms_bytes_v1,
 };

@@ -1,7 +1,22 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import LaunchStory from './LaunchStory';
+// The closed face, pinned against a mock pending cut now that the published
+// fixture names a Market. Its companion, LaunchStory.opened.test.tsx, renders
+// the open face the same way; between them both states stay guarded whatever
+// the fixture currently says.
+vi.mock('@/lib/publicCutStaging', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/publicCutStaging')>('@/lib/publicCutStaging');
+  const cut = actual.parsePublicDevnetCutV1({
+    schema: 'dclutch-public-cut-v1',
+    cluster: 'devnet',
+    market: null,
+    activity: { found: null, trade: null, resolve: null, redeem: null },
+  });
+  return { ...actual, PUBLIC_DEVNET_CUT_V1: cut };
+});
+
+const { default: LaunchStory } = await import('./LaunchStory');
 
 describe('launch story', () => {
   it('says no market is open, in words a reader can act on', () => {

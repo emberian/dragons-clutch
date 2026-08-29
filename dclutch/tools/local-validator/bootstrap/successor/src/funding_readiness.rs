@@ -105,6 +105,12 @@ pub(crate) enum FundingReadinessPlanV1 {
     /// Founding/Ready is durably visible on chain. The embedded idempotent
     /// report reauthenticates all completion facts without inventing a second DTO.
     Complete(FundingReadinessInstructionPlanV1<ResolutionVerifyFundReadyReportV3>),
+    /// Open/Consumed is durably visible on chain: the atomic founding consumed
+    /// the readiness it was staged from and committed the Market Open. Every
+    /// adjacent builder rightly refuses (the fund exists, nothing tops up, and
+    /// verify-ready demands the Founding phase the Market has left), so the
+    /// only honest plan is the terminal one - there is nothing left to drive.
+    ConsumedByFounding,
 }
 
 /// One semantic readiness plan and address-table accounts observed in the
@@ -123,6 +129,7 @@ impl FundingReadinessPlanV1 {
             Self::Activate(_) => "activate",
             Self::Accept(_) => "accept",
             Self::Complete(_) => "complete",
+            Self::ConsumedByFounding => "consumed-by-founding",
         }
     }
 }
@@ -404,6 +411,14 @@ fn plan_funding_readiness_from_observation_v1(
         system_program: snapshot.account(system_program::ID)?,
     });
     let accept = build_resolution_verify_fund_ready_v3(&verify_snapshot);
+    if create.is_err() && activate.is_err() && accept.is_err() {
+        eprintln!(
+            "funding-readiness builders all refused: create={:?} activate={:?} accept={:?}",
+            create.as_ref().err(),
+            activate.as_ref().err(),
+            accept.as_ref().err()
+        );
+    }
     let selection = select_authenticated_route_v1(
         market.phase,
         market.readiness,
@@ -463,6 +478,9 @@ fn plan_funding_readiness_from_observation_v1(
                 None,
                 completion_accounts_v1(coordinates),
             )))
+        }
+        AuthenticatedRouteV1::ConsumedByFounding => {
+            return Ok(FundingReadinessPlanV1::ConsumedByFounding);
         }
         AuthenticatedRouteV1::Complete => {
             let report = accept.map_err(|error| operator_refusal("Ready completion", error))?;
@@ -567,6 +585,7 @@ enum AuthenticatedRouteV1 {
     Activate,
     Accept,
     Complete,
+    ConsumedByFounding,
 }
 
 fn select_authenticated_route_v1(
@@ -599,6 +618,11 @@ fn select_authenticated_route_v1(
             true,
         ) => AuthenticatedRouteV1::Accept,
         (Phase::Founding, Readiness::Ready, false, None, true) => AuthenticatedRouteV1::Complete,
+        // The atomic founding's success poststate: readiness consumed into an
+        // Open Market, no adjacent route buildable. Terminal, not mixed.
+        (Phase::Open, Readiness::Consumed, false, None, false) => {
+            AuthenticatedRouteV1::ConsumedByFounding
+        }
         _ => {
             return Err(refusal(format!(
                 "funding-readiness account states were mixed or did not select one adjacent route: phase={phase:?} readiness={readiness:?} create={create} activate={activate:?} accept={accept}",

@@ -314,3 +314,23 @@ fn hostile_headers_reserved_bytes_and_truncation_refuse() {
         Err(Error::InvalidLength)
     );
 }
+
+/// The kind identity is the SHA-256 of its own preimage, not a chosen literal.
+///
+/// A capability kind is a Market-manifest key: an entry carrying the wrong 32
+/// bytes selects nothing, or worse, collides with another family's entry. The
+/// literal therefore has to be derivable by anyone from the domain string
+/// beside it, and this recomputes it rather than trusting that it was pasted
+/// correctly. Same control General keeps for its own kind.
+#[test]
+fn the_rational_lifecycle_capability_kind_is_the_digest_of_its_preimage() {
+    use sha2::{Digest as _, Sha256};
+
+    assert_eq!(
+        Sha256::digest(RATIONAL_LIFECYCLE_CAPABILITY_KIND_PREIMAGE_V1).as_slice(),
+        RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1.as_slice()
+    );
+    // A kind of all zeroes is the reserved absent value every manifest entry
+    // constructor refuses, so the domain must not hash to it.
+    assert_ne!(RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1, [0; 32]);
+}

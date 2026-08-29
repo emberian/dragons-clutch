@@ -66,7 +66,9 @@ use dclutch_operator::{
         DealerAcceptedTranscriptInputV4, DealerScenarioCommitAccountsV1,
         DealerScenarioCommitEffectAccountsV1, DealerScenarioEvaluationBodiesV1,
         DealerScenarioActivationAccountsV1, DealerScenarioActivationEffectAccountsV1,
+        DealerScenarioReservationAccountsV1, DealerScenarioReservationBundlePacketV1,
         build_dealer_accepted_transcript_v4, build_dealer_scenario_activation_v1,
+        build_dealer_scenario_reservation_bundle_v1,
         build_dealer_scenario_checkpoint_cleanup_v1,
         encode_dealer_scenario_custody_effect_artifacts_v1,
         build_dealer_scenario_checkpoint_create_v1, build_dealer_scenario_checkpoint_reserve_v1,
@@ -2375,6 +2377,353 @@ fn reservation_evidence(
     }
 }
 
+/// The Custody-derived address of one reservation receipt.
+fn reservation_receipt_address(scenario: &Scenario, ordinal: u8) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_RESERVATION_RECEIPT_PDA_DOMAIN_V1,
+            scenario.checkpoint.as_ref(),
+            &scenario.request_digest,
+            &[DealerScenarioReservationActionV1::Reserve as u8],
+            &[ordinal],
+        ],
+        &scenario.waist.custody_program,
+    )
+    .0
+}
+
+/// Make CUSTODY produce the reservation, instead of the campaign publishing it.
+///
+/// The reservation evidence was the campaign's last staged protocol body. It was
+/// real in shape -- `reservation_evidence` builds the receipt, state and batch
+/// through the supported encoders, and every route downstream authenticates them
+/// exactly as it would authenticate Custody's own output -- but Custody's reserve
+/// route had never written them. Four of the state's coordinates could not be
+/// real, because only the chain knows them: the source vault's prestate and
+/// poststate digests, and the batch's last-prestate digest, were literals.
+///
+/// This drives the route instead. `build_dealer_scenario_reservation_bundle_v1`
+/// is the operator's atomic producer-then-ingest pair and had no consumer in the
+/// tree: instruction one is Custody's own `Reserve`, which moves real collateral
+/// out of the trading-principal vault into an escrow it creates, and writes the
+/// batch, the state and the typed receipt; instruction two is Trading's ingest,
+/// which must immediately join that receipt to the checkpoint. They share one
+/// transaction, so a producer whose receipt Trading refuses is rolled back whole.
+///
+/// Two prestates have to be corrected for the route to have anything to do. The
+/// staged campaign installed the vault as the reservation LEFT it and the escrow
+/// already funded, because nothing was going to debit anything. Here the vault
+/// is installed as the reservation FINDS it and the escrow is vacant, because
+/// Custody creates it. Those two staged bodies do not disappear -- they become
+/// the poststate the caller asserts the chain reached.
+/// The operator's atomic Custody-producer plus Trading-ingest pair for ordinal zero.
+///
+/// Every coordinate is the scenario's own; nothing here is a second derivation.
+fn reservation_bundle(
+    scenario: &Scenario,
+    payer: Pubkey,
+) -> DealerScenarioReservationBundlePacketV1 {
+    let delivery = &scenario.delivery;
+    build_dealer_scenario_reservation_bundle_v1(
+        DealerScenarioReservationActionV1::Reserve,
+        0,
+        DealerScenarioReservationAccountsV1 {
+            custody_program: scenario.waist.custody_program,
+            market: scenario.core_market,
+            activation_cache: scenario.waist.activation_cache,
+            registry_program: scenario.waist.registry,
+            trading_program: TRADING,
+            trading_programdata: scenario.waist.trading_programdata,
+            realm: scenario.realm.raw,
+            realm_staging: scenario.realm.staging,
+            custody_replay: delivery.replay,
+            checkpoint: scenario.checkpoint,
+            effect_producer: TRADING,
+            effect_manifest: EFFECTS,
+            effect_body: EFFECT_BODY,
+            batch: dealer_scenario_reservation_batch_address_v1(
+                scenario.waist.custody_program,
+                scenario.checkpoint,
+            ),
+            reservation_state: delivery.reservation_state,
+            reservation_receipt: reservation_receipt_address(scenario, 0),
+            source: delivery.source,
+            destination: delivery.destination,
+            escrow: delivery.escrow,
+            mint: delivery.mint,
+            custody_authority: delivery.custody_authority,
+            token_program: delivery.token_program,
+            payer,
+            refund_beneficiary: BENEFICIARY,
+            clock: sysvar::clock::ID,
+            rent: sysvar::rent::ID,
+            system_program: system_program::ID,
+            custody_programdata: scenario.waist.custody_programdata,
+        },
+        Hash::default(),
+        &[],
+    )
+    .expect("reservation bundle")
+}
+
+async fn reserve_through_custody(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+) -> ReservationEvidence {
+    let delivery = &scenario.delivery;
+    let payer = context.payer.pubkey();
+    context.set_account(
+        &delivery.source,
+        &AccountSharedData::from(data_account(
+            delivery.token_program,
+            delivery.source_prereservation_bytes(),
+        )),
+    );
+    context.set_account(&delivery.escrow, &AccountSharedData::from(Account {
+        lamports: 0,
+        data: Vec::new(),
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    }));
+
+    let receipt_address = reservation_receipt_address(scenario, 0);
+    let batch = dealer_scenario_reservation_batch_address_v1(
+        scenario.waist.custody_program,
+        scenario.checkpoint,
+    );
+    let bundle = reservation_bundle(scenario, payer);
+    assert!(
+        bundle.lock_census.unique_account_lock_count <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "the producer-plus-ingest pair must stay lock-bounded: {}",
+        bundle.lock_census.unique_account_lock_count
+    );
+
+    // The two instructions are submitted as two transactions, NOT as the
+    // operator's atomic pair, and that is a defect being worked around rather
+    // than a preference. See
+    // `the_atomic_reservation_bundle_still_refuses_on_the_trading_side` below:
+    // the pair cannot be submitted at all, because Solana merges account
+    // privileges across a transaction's instructions and the two sides want
+    // opposite privileges on the same three accounts. Custody's half of that
+    // contradiction is fixed; Trading's half is not this lane's file.
+    //
+    // The operator's own contract says the split form is legitimate -- "either
+    // durable producer output also remains independently ingestible after an
+    // RPC-response loss" -- so this is the recovery shape, driven deliberately.
+    // What it costs is the atomicity: between these two transactions a
+    // reservation exists that Trading has not yet joined.
+    for (index, instruction) in bundle.instructions.iter().enumerate() {
+        let processed = submit(context, instruction.clone(), &[])
+            .await
+            .expect("ProgramTest processing");
+        assert!(
+            processed.result.is_ok(),
+            "reservation instruction {index} must commit: {:?} logs {:?}",
+            processed.result,
+            processed.metadata.as_ref().map(|value| &value.log_messages)
+        );
+    }
+
+    // What the reservation DID, asserted rather than assumed. The three bodies
+    // this used to publish are now read back off the chain, and the two token
+    // bodies the campaign used to stage are now poststates the route had to
+    // reach on its own.
+    let custody = scenario.waist.custody_program;
+    let escrow_after = account_body(context, delivery.escrow)
+        .await
+        .expect("Custody created the escrow it locks into");
+    assert_eq!(
+        escrow_after, delivery.escrow_bytes,
+        "the escrow Custody created and funded is exactly the escrow the campaign used to stage"
+    );
+    let source_after = account_body(context, delivery.source)
+        .await
+        .expect("the trading-principal vault");
+    assert_eq!(
+        source_after, delivery.source_bytes,
+        "the vault the reservation debited is exactly the vault the campaign used to stage"
+    );
+    assert_eq!(
+        token_account_amount(&source_after) + token_account_amount(&escrow_after),
+        token_account_amount(&delivery.source_prereservation_bytes()),
+        "collateral is conserved across the lock: what left the vault is in the escrow"
+    );
+
+    let state_body = account_body(context, delivery.reservation_state)
+        .await
+        .expect("Custody wrote the reservation state");
+    let state = DealerScenarioReservationStateV1::decode(&state_body)
+        .expect("the reservation state Custody wrote decodes");
+    assert_eq!(state.status, DealerScenarioReservationStateStatusV1::Active);
+    assert_eq!(state.amount, DELIVERY_AMOUNT);
+    assert_eq!(state.source_after, DELIVERY_SOURCE_AFTER);
+    assert_eq!(state.escrow_after, DELIVERY_AMOUNT);
+    // The four coordinates the staged body could not have known, because only
+    // the chain knows them. They were literals -- 0xf8, 0xfb, 0xfe and a
+    // `hash(&[])` standing in for Custody's own vacancy digest -- and a literal
+    // is exactly as authentic as whatever wrote it.
+    assert_eq!(
+        state.source_prestate_digest,
+        hash(&delivery.source_prereservation_bytes()).to_bytes(),
+        "the source prestate is the vault the reservation actually found"
+    );
+    assert_eq!(
+        state.source_poststate_digest,
+        hash(&source_after).to_bytes(),
+        "the source poststate is the vault the reservation actually left"
+    );
+    assert_eq!(
+        state.effect_poststate_digest,
+        hash(&escrow_after).to_bytes(),
+        "the effect poststate is the escrow the reservation actually created"
+    );
+
+    let receipt_body = account_body(context, receipt_address)
+        .await
+        .expect("Custody wrote the reservation receipt");
+    let written = DealerScenarioReservationReceiptV1::decode(&receipt_body)
+        .expect("the receipt Custody wrote decodes");
+    assert_eq!(written.producer_program, custody.to_bytes());
+    assert_eq!(written.reservation, delivery.reservation_state.to_bytes());
+    assert_eq!(
+        written.reservation_poststate_digest,
+        hash(&state_body).to_bytes(),
+        "the receipt commits to the state body the chain holds"
+    );
+
+    let batch_body = account_body(context, batch)
+        .await
+        .expect("Custody wrote the reservation batch");
+    let written_batch = DealerScenarioReservationBatchV1::decode(&batch_body)
+        .expect("the batch Custody wrote decodes");
+    assert_eq!(
+        written_batch.status,
+        DealerScenarioReservationBatchStatusV1::Reserved
+    );
+    assert_eq!(written_batch.reserved_count, 1);
+    assert_eq!(
+        written_batch.receipt_digests.first().copied(),
+        Some(hash(&receipt_body).to_bytes()),
+        "the batch records the digest of the receipt Custody actually wrote"
+    );
+    assert_eq!(
+        written_batch.replay_prestate_digest,
+        delivery.replay_digest(),
+        "and it pins the replay cursor the chain holds"
+    );
+
+    ReservationEvidence {
+        receipt_address,
+        reservation_state: delivery.reservation_state,
+        batch,
+        // Nothing was published. The whole point of this path is that the three
+        // bodies downstream authenticates are the ones Custody wrote.
+        installed: Vec::new(),
+    }
+}
+
+/// The supported atomic reservation shape still cannot be submitted, and the
+/// remaining half of why is in Trading.
+///
+/// `build_dealer_scenario_reservation_bundle_v1` is documented as one atomic
+/// transaction: Custody produces the reservation, and Trading immediately joins
+/// the receipt, so a producer whose receipt Trading refuses is rolled back
+/// whole. It has never had a consumer, and this is why. Solana merges account
+/// privileges across the instructions of ONE transaction, so the two halves are
+/// resolving the same accounts with opposite requirements:
+///
+/// * the checkpoint: Custody's frame pinned it readonly, Trading's ingest takes
+///   it writable. FIXED here -- Custody writes nothing to the checkpoint, so its
+///   writability was never Custody's to pin.
+/// * the reservation receipt and the reservation state: Custody must have both
+///   WRITABLE, because it creates them; Trading's ingest refuses unless both are
+///   READONLY (`dealer_scenario_checkpoint_v1.rs`, the reservation-receipt frame
+///   census). NOT fixed: that is Trading's file, and this lane does not edit it.
+///
+/// So the pair now gets past Custody and refuses in Trading, which is exactly
+/// one program further than it used to get. This test pins that boundary rather
+/// than describing it, and it is what makes the split submission above a
+/// documented workaround instead of an unexplained choice. When Trading's frame
+/// stops pinning those two slots readonly, this test is the one that fails, and
+/// the campaign should go back to the atomic pair.
+#[tokio::test]
+async fn the_atomic_reservation_bundle_still_refuses_on_the_trading_side() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    prepare_through_evaluation(&mut context, &scenario).await;
+    let delivery = &scenario.delivery;
+    let payer = context.payer.pubkey();
+    context.set_account(
+        &delivery.source,
+        &AccountSharedData::from(data_account(
+            delivery.token_program,
+            delivery.source_prereservation_bytes(),
+        )),
+    );
+    context.set_account(&delivery.escrow, &AccountSharedData::from(Account {
+        lamports: 0,
+        data: Vec::new(),
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    }));
+    let bundle = reservation_bundle(&scenario, payer);
+
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let signer = context.payer.insecure_clone();
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(Transaction::new_signed_with_payer(
+            &bundle.instructions,
+            Some(&payer),
+            &[&signer],
+            blockhash,
+        ))
+        .await
+        .expect("ProgramTest processing");
+
+    // Instruction ONE, not instruction zero: Custody's half of the frame
+    // contradiction is fixed, so the producer runs to completion and the pair
+    // now dies on the ingest. Asserting the index is the whole point -- it is
+    // what distinguishes "one program left to fix" from "still both".
+    assert_eq!(
+        processed.result,
+        Err(TransactionError::InstructionError(
+            1,
+            solana_sdk::instruction::InstructionError::Custom(0x4003),
+        )),
+        "TradingSbfError::Content, at the ingest, not at the producer: {:?}",
+        processed.metadata.as_ref().map(|value| &value.log_messages)
+    );
+    let logs = processed
+        .metadata
+        .as_ref()
+        .map(|value| value.log_messages.clone())
+        .unwrap_or_default();
+    assert!(
+        logs.iter().any(|line| line
+            == &format!("Program {} success", scenario.waist.custody_program)),
+        "Custody must have produced the reservation before Trading refused it: {logs:?}"
+    );
+    // And the transaction rolled back whole, which is the property the atomic
+    // shape exists for: no escrow, no reservation.
+    assert!(
+        account_body(&mut context, delivery.escrow).await.is_none(),
+        "a refused bundle leaves no escrow behind"
+    );
+    assert!(
+        account_body(&mut context, delivery.reservation_state)
+            .await
+            .is_none(),
+        "a refused bundle leaves no reservation behind"
+    );
+}
+
 /// Build one reservation route over a caller-supplied release waist.
 ///
 /// The producer and cache are parameters so a case can present a waist that is
@@ -3184,21 +3533,13 @@ async fn drive_to_committed(
     context: &mut ProgramTestContext,
     scenario: &Scenario,
 ) -> (DealerScenarioCommitAccountsV1, Pubkey, Vec<Pubkey>) {
-    let (reservation, _, _) = evaluated_with_reservation_evidence(context, scenario).await;
+    // The reservation every committed case is built on is CUSTODY-PRODUCED: the
+    // batch, state and receipt commit reads are the bodies Custody's own reserve
+    // route wrote, and the collateral it spends was really moved into escrow by
+    // that route rather than staged there.
+    prepare_through_evaluation(context, scenario).await;
+    let reservation = reserve_through_custody(context, scenario).await;
     let payer = context.payer.pubkey();
-    let instruction = reserve_instruction(
-        scenario,
-        payer,
-        &reservation,
-        scenario.waist.custody_program,
-        scenario.waist.custody_programdata,
-        scenario.waist.activation_cache,
-    );
-    submit(context, instruction, &[])
-        .await
-        .expect("ProgramTest processing")
-        .result
-        .expect("the reservation must be ingested");
     let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
         TRADING,
         scenario.checkpoint,

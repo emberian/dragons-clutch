@@ -201,3 +201,68 @@ SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
 
 `--inventory-only` is a quick way to inspect the discovered workspace and lock
 counts. It intentionally emits no admitted summary.
+
+## Nested lockfile sweep
+
+Every workspace above refuses a lock it cannot resolve, so one stale nested
+`Cargo.lock` reds the gate from a crate the lane never opened. Adding an
+in-repo crate edge to a widely-depended crate (`dclutch-operator` is the usual
+one) drifts every nested workspace that reaches it, and the drift is invisible
+until a `--locked` build. It has cost this repository a full gate rebuild more
+than once. The check is seconds and needs no build:
+
+```sh
+for lock in $(git ls-files '*Cargo.lock'); do
+  (cd "$(dirname "$lock")" && cargo metadata --locked --offline >/dev/null) \
+    || echo "STALE $lock"
+done
+```
+
+Fix a stale one with `cargo metadata --offline` in its directory — offline, so
+nothing resolves off the network and no third-party version can move. Confirm
+the diff is purely additive before committing it.
+
+## Publishing the deployment manifest's activation-cache hint
+
+`DEVNET_DEPLOYMENT_V1.activationCache` is a bootstrap hint, not an answer. A
+cohort activates a new release set, which mints a new cache at a new PDA, so
+the shipped address ages by itself. `openReleaseBoundSessionV1` already
+survives that — it follows the chain past a hint whose pinned deployment slots
+no longer match the live programs — which is precisely why nobody noticed the
+shipped hint going four cohorts stale on 2026-08-29: a superseded cache keeps
+its Registry owner, its `DCLTACT1` magic and its exact width forever, so every
+cheap health check on it passes and only its content ages.
+
+The value is therefore generated, never typed:
+
+```sh
+cd packages/dclutch-sdk
+node scripts/derive-activation-hint.mjs            # report; exit 1 on drift
+node scripts/derive-activation-hint.mjs --write    # rewrite both manifest twins
+```
+
+It imports `discoverCurrentActivationCacheV1` from the SDK rather than
+restating its rule, so the publish and the client answer "which release is
+live?" with the same code. Two RPC rounds: every 1,288-byte account the
+Registry owns, then the five live ProgramData deployment slots; the current
+cache is the single one whose five pinned slots equal those five.
+
+Wire it into a publish as an INFORMATIONAL step, not a gate. A stale hint costs
+a reader accuracy and costs a session nothing, and a check that can block a
+real deploy over a cosmetic field is a check someone will delete. The wrapper
+publish script runs it before the archive-sync and prints the remedy on drift.
+
+Two things it deliberately does not do:
+
+- it never joins `final-generated-convergence.py`. That batch is offline and
+  refuses generated changes outside its owner list; this reads a live cluster,
+  so its output legitimately differs between two runs of the same commit;
+- it never stamps the slot the reading happened at. That advances constantly,
+  so stamping it would make the generator report drift against its own last
+  output and produce a diff on every publish. The block records facts about the
+  ANSWER — cache address, release set, pinned Core deployment slot — which move
+  only when a cohort does.
+
+After `--write`, the literal pin in `apps/dclutch-web/lib/deployments.test.ts`
+still wants a human, and a new cohort may want a new ABI table in
+`packages/dclutch-sdk/lib/releaseIdentity.ts`. The script says both on exit.

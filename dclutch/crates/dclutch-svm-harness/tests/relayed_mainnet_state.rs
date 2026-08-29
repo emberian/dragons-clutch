@@ -1842,6 +1842,61 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
         Some(VIRTUAL_POOL_DISCRIMINATOR.as_slice())
     );
 
+    // Liveness census Y3 / queue Q9, on the real adapter. This record is
+    // SEALED: one permissionless `ConsumeRecord` away from resolving this
+    // Market successfully. Retiring it CLOSES the account, so if a stranger
+    // could do that here, a transaction fee would buy the destruction of the
+    // honest outcome and drop the Market onto the failure walk — where the
+    // walker collects a bounty. The worker who prepaid the rent cannot do it
+    // either; nobody can, while the Market is live.
+    refused_with(
+        submit_recorded(
+            &mut context,
+            &[fixture.retire_instruction()],
+            &[&fixture.worker],
+            "relayed transport: a sealed record is not a stranger's to delete",
+        )
+        .await,
+        ResolutionError::RecordStillConsumable as u32,
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(fixture.record)
+            .await
+            .expect("bank read")
+            .is_some_and(|account| !account.data.is_empty()),
+        "a refused retirement must leave the evidence exactly where it was"
+    );
+
+    // One slot forward, so the retirement below is a distinct transaction and
+    // not a replay of the refused one. Nothing about the refusal depends on the
+    // slot; this is bank bookkeeping, not part of the property.
+    let clock: Clock = context
+        .banks_client
+        .get_sysvar()
+        .await
+        .expect("Clock sysvar");
+    context
+        .warp_to_slot(clock.slot.checked_add(1).expect("bounded fixture slot"))
+        .expect("advance one slot past the refused retirement");
+
+    // Now terminalize the Market the way its own routes do — the funded failure
+    // walk needs no identified party to get here, so this state is reachable
+    // permissionlessly and the deferral is bounded. The SAME instruction from
+    // the SAME stranger then succeeds: Q9's refusal is "not yet", never "never".
+    let mut market_account = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("bank read")
+        .expect("Market exists");
+    let mut state = CoreState::decode(&market_account.data).expect("Core state");
+    state.phase = Phase::Terminal;
+    state.terminal_receipt = Some(CoreIdentity::new([0x5a; 32]).expect("terminal receipt"));
+    market_account.data = state.encode().expect("terminalized Core state").to_vec();
+    context.set_account(&fixture.market, &market_account.into());
+
     // The rent goes where Core says this Market's rent goes, and the record's
     // whole balance moves: the worker prepaid it, and the beneficiary collects
     // it. Asserting the lamports is the difference between "the account is

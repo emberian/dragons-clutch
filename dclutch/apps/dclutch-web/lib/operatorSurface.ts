@@ -50,7 +50,17 @@ export type OperatorSurfaceSnapshotV1 = Readonly<{
     label: OperatorDeploymentPresetV1['label'];
     genesisHash: string;
     activationCache: string;
+    /** Live deployment slots, read from each ProgramData header this run. */
     deploymentSlots: Readonly<Record<OperatorRole, string>>;
+    /**
+     * Roles whose live slot is past the one the shipped manifest recorded.
+     *
+     * An upgrade in place at a permanent address is ordinary and expected, so
+     * this is a statement about the manifest's age, not a fault. It is
+     * surfaced rather than thrown because the operator is the one who knows
+     * whether an upgrade was supposed to have happened.
+     */
+    upgradedSinceRecord: ReadonlyArray<OperatorRole>;
   }>;
   realm: null | Readonly<{
     address: string;
@@ -179,11 +189,27 @@ function exactLoaderPair(
   const programDataView = new DataView(programData.data.buffer, programData.data.byteOffset, programData.data.byteLength);
   if (programDataView.getUint32(0, true) !== 3 || programData.data[12] > 1) throw new Error(`${role} ProgramData has an invalid Loader-v3 header`);
   const observedSlot = littleU64(programData.data, 4, `${role} ProgramData deployment slot`);
-  if (observedSlot !== recordedSlot) {
-    const direction = BigInt(observedSlot) > BigInt(recordedSlot)
-      ? 'ReleaseSupersededByUpgrade: the program has moved since this preset was checked'
-      : 'DeploymentSlotMismatch: this is a stale or wrong-generation observation';
-    throw new Error(`${role} ${direction}; the preset records slot ${recordedSlot}, and finalized chain state reports ${observedSlot}`);
+  // The deployment slot is STATE, not identity. Every check above this line is
+  // identity -- Loader ownership, the executable flag, the exact 36-byte
+  // Program body, its link to this ProgramData, the canonical PDA derivation,
+  // the ProgramData header tag -- and none of them move when a program is
+  // upgraded in place at a permanent address. The slot does, by design, on
+  // every upgrade.
+  //
+  // Requiring it to equal a slot baked into the shipped manifest made an
+  // ordinary upgrade indistinguishable from an attack, and the manifest cannot
+  // win that race: it is a build-time constant and the chain moves after the
+  // build. Five of the seven devnet roles were upgraded on 2026-08-29 and the
+  // whole /operate live-devnet preset had been refusing ever since -- not
+  // because anything was wrong, but because the constant had aged. A check
+  // that fires on correct behaviour is not protecting anyone.
+  //
+  // Backwards is still refused, and that one is real: the genesis hash already
+  // pinned the cluster, so an observation OLDER than the recorded deployment
+  // cannot be a later state of the same program. Forward is reported by the
+  // caller instead, which is what an operator actually needs to know.
+  if (BigInt(observedSlot) < BigInt(recordedSlot)) {
+    throw new Error(`${role} DeploymentSlotMismatch: this is a stale or wrong-generation observation; the preset records slot ${recordedSlot}, and finalized chain state reports the earlier ${observedSlot}`);
   }
   return observedSlot;
 }
@@ -266,6 +292,9 @@ export async function acquireOperatorSurfaceV1(
       genesisHash: deploymentPreset.genesisHash,
       activationCache: deploymentPreset.activationCache,
       deploymentSlots: Object.freeze(deploymentSlots),
+      upgradedSinceRecord: Object.freeze(OPERATOR_ROLES.filter(
+        (role) => BigInt(deploymentSlots[role]) > BigInt(deploymentPreset.evidence[role].deploymentSlot),
+      )),
     });
   }
   let nextStateIndex = roleAddresses.length + presetAddresses.length;

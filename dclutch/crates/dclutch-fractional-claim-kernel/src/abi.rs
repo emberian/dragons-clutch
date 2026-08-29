@@ -47,6 +47,15 @@ pub enum Error {
     DuplicateShardMint,
     /// Selected, finalized, recomputed, or projected immutable identities differed.
     AdmissionMismatch,
+    /// The manifest-named selection config and the execution terms disagreed on
+    /// a market-free field.
+    ///
+    /// Distinct from [`Error::AdmissionMismatch`] on purpose. An admission
+    /// mismatch means a record was substituted for another record; this means
+    /// both records are authentic and describe *different instruments* — the
+    /// Market committed to one denominator, width, Token program, exposure, or
+    /// graph and the terms would execute against another.
+    SelectionConfigMismatch,
     /// Finalized Record ownership, PDA, vacancy, digest, or rent was not authenticated.
     UnauthenticatedRecord,
     /// A checked byte width, sum, product, subtraction, or revision overflowed.

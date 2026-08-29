@@ -1339,14 +1339,62 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     let recipient_secret =
         crate::campaign::read_keypair_file(&recipient_path, "retirement-beneficiary")?;
     let recipient = Keypair::new_from_array(recipient_secret).pubkey();
-    let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
-        &plan_path,
-        &required(rpc_url, "--rpc-url")?,
-        registry,
-        Some(fee_basis_points),
-        Some(recipient),
-    )?;
-    let market = crate::market::demo_market_input(registry, direct.compiler())?;
+    let rpc_url = required(rpc_url, "--rpc-url")?;
+    // Capability selection follows the split-founding precedent: an
+    // environment toggle rather than a new required flag, so every existing
+    // caller keeps compiling the Direct-selected demo market unchanged.
+    let market = match std::env::var("DCLUTCH_MARKET_CAPABILITY") {
+        Ok(family) if family == "general" => crate::general_market::demo_general_market_input(
+            &plan_path,
+            &rpc_url,
+            registry,
+            recipient,
+        )?,
+        // Rational needs one fact General does not: its config record binds
+        // the immutable Realm, and the Realm is RealmV1 over the collateral
+        // Mint. That is an ORDERING constraint rather than a fixed point --
+        // mint -> realm -> config -> manifest -> market runs strictly one way,
+        // and the Realm is itself a Market-PDA seed -- but it does mean the
+        // Mint must be chosen BEFORE this input is compiled, while the local
+        // founding pipeline creates it from the run's own key forge partway
+        // through. Until the founding driver can be told which Mint to use,
+        // the Mint is named here and the caller is responsible for founding
+        // over that exact one.
+        Ok(family) if family == "rational" => {
+            let mint = std::env::var("DCLUTCH_RATIONAL_COLLATERAL_MINT").map_err(|_| {
+                Error::new(
+                    "DCLUTCH_MARKET_CAPABILITY=rational also requires \
+                     DCLUTCH_RATIONAL_COLLATERAL_MINT=BASE58_MINT. Rational's config record \
+                     binds the immutable Realm, and the Realm is derived from the collateral \
+                     Mint, so the Mint must be chosen before the capability closure is \
+                     compiled. This is an ordering constraint, not a cycle: the Realm is a \
+                     seed of the Market PDA, never an output of it.",
+                )
+            })?;
+            let mint = mint
+                .parse::<solana_sdk::pubkey::Pubkey>()
+                .map_err(|_| Error::new("DCLUTCH_RATIONAL_COLLATERAL_MINT must be base58"))?;
+            crate::rational_market::demo_rational_market_input(
+                &plan_path, &rpc_url, registry, mint,
+            )?
+        }
+        Ok(family) if family != "direct" => {
+            return Err(Error::new(format!(
+                "DCLUTCH_MARKET_CAPABILITY={family} names no selectable capability compiler; \
+                 this command compiles direct (default), general or rational"
+            )));
+        }
+        _ => {
+            let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
+                &plan_path,
+                &rpc_url,
+                registry,
+                Some(fee_basis_points),
+                Some(recipient),
+            )?;
+            crate::market::demo_market_input(registry, direct.compiler())?
+        }
+    };
     let mut stdout = std::io::stdout();
     serde_json::to_writer_pretty(&mut stdout, &market)?;
     stdout.write_all(b"\n")?;

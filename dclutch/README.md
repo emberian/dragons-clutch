@@ -34,9 +34,17 @@ on a local test chain you can run yourself.
   harness, at the real compute and memory limits. None of the three has
   been driven on a validator yet, and winding a market all the way down
   to retired has not run anywhere yet.
-- Once the setup transactions have finalized, a single transaction locks the
-  collateral, creates the market, and opens it for trading — or rolls the
-  whole thing back, leaving nothing half-made.
+- Once the setup transactions have finalized, founding locks the collateral,
+  creates the market, and opens it for trading. There are two routes to that
+  outcome. The composed route does all of it in a single transaction that
+  either commits whole or rolls back, leaving nothing half-made. Because that
+  transaction runs at the edge of Solana's compute limit, there is also a
+  two-stage route: the first transaction commits the market and escrows a
+  one-shot permit, and a second, permissionless transaction consumes the
+  permit to open the market. The permit is what makes the outcome
+  all-or-nothing across the two transactions — the market cannot open on any
+  terms but the ones the first stage already committed to, and the escrow has
+  a pinned refund path so no value can strand between the stages.
 - Range and tail protection ("pays out if SOL ends below X") is just a
   bundle of cell claims, so its price is exactly the sum of the cell
   prices. No extra machinery, nothing to liquidate.

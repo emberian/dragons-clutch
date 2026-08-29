@@ -47,6 +47,88 @@ The returned `routeSpecificReleaseAdmission` remains `unproven`. A matching
 program generation does not invent a Realm or Market and does not authenticate
 the releases selected by a particular route.
 
+## Release identity and ABI selection
+
+`lib/releaseIdentity.ts`. A dClutch program is upgraded in place — the
+permanent-ID ladder keeps all seven addresses across every cohort, deliberately
+— so a program address tells a client nothing about which code it is talking
+to. Ask the chain instead:
+
+```ts
+const session = await openReleaseBoundSessionV1(client, {
+  registryProgram: deployment.programs.registry,
+  activationCache: deployment.activationCache,
+});
+session.abi.coreFoundAccountCount; // the frame this release actually speaks
+```
+
+Two bounded RPC rounds, once per session, before the first frame is built. The
+first reads the Registry's `DCLTACT1` activation cache through the contract's
+own hostile decode; the second confirms that cache is the CURRENT one by
+comparing its five pinned deployment slots against the live ProgramData
+accounts.
+
+**The manifest's `activationCache` is a bootstrap HINT, not the answer.** Each
+cohort activates a new release set, which mints a new cache at a new PDA, so a
+baked address ages out the moment a cohort lands — and superseded caches are
+never deleted, keeping their Registry owner, their `DCLTACT1` magic and their
+exact width forever, so existence, owner and magic cannot tell you a cache is
+current. When the hint has aged out, the session FOLLOWS the chain instead of
+refusing: `discoverCurrentActivationCacheV1` reads every 1288-byte account the
+Registry owns and takes the one whose five pinned slots equal the five live
+ProgramData slots. Still two rounds regardless of cohort count, because the
+program addresses are permanent, so every cohort names the same five
+ProgramData accounts. `session.source` says which path was taken and names both
+caches when it followed. Pass `followCurrent: false` to refuse instead.
+
+Discovery finding NO coherent cache is a real alarm, not a fallback: it means
+the deployment was upgraded without re-activating a release set, and no client
+can bind a frame to a release the chain is not running. That refusal, and the
+unknown-identity refusal, are the point — they replace a frame mismatch
+surfacing as an opaque `0x4001` deep inside a composed on-chain instruction,
+diagnosable only by archaeology across client and program git history.
+
+Tables are keyed on each role's `semantic_release_id`, not on the release-set
+id. A release set id is the hash of the whole activated set, so it moves on any
+rebuild — keying on it would make clients refuse on every cohort bump, which is
+breakage on a schedule rather than upgrade-proofing. The semantic release id is
+derived from the role's source, which is exactly what a generated ABI table
+describes; observed on devnet, Trading and Resolution held one semantic release
+id across four consecutive cohorts while their ELF digests and slots moved every
+time. This is the protocol's own idiom: `authenticate_role_semantic_release` in
+`dclutch-resolution-core-v3-operator` performs the same refusal on chain.
+
+Scope, stated narrowly: this guarantees a client REFUSES TO ACT against a
+release it was not built and pinned for. It does not verify that a pinned
+table's frames are correct for that release — that is the `abi:*:verify`
+generator gates' job. It also does not close `routeSpecificReleaseAdmission`,
+which is about a particular route's selected releases, not the activated set.
+
+### Shipping a new cohort
+
+One step. A new cohort activates a new release set, which mints a new activation
+cache at a new PDA and may move any role's semantics.
+
+1. Regenerate the ABI modules: `npm run abi:<surface>` for whatever moved (or
+   all of them), and let `abi:*:verify` prove they match the Rust authorities.
+2. Append one `AbiReleaseTableV1` to `KNOWN_ABI_RELEASES_V1`, with the five
+   semantic release ids **read off the live activation cache**, not transcribed
+   from a plan. `DCLUTCH_LIVE_DEVNET=1 npx vitest run lib/releaseIdentity.live.test.ts`
+   prints them in its refusal when the identity is unknown.
+
+Do not edit an existing entry — it describes a release that really ran — and do
+not add tables for releases this repository never observed. A fabricated table
+is worse than a refusal: it selects silently, and it is wrong. There is no era
+reasoning anywhere in this: no client-vs-program git archaeology, no coherent
+build windows, no composite clients.
+
+Finding the current cache, if the deployment manifest's `activationCache` has
+aged past it: read the Registry program's accounts of width 1288 — one exists
+per cohort, and superseded ones are never deleted — and take the one whose five
+pinned deployment slots equal the five live ProgramData deployment slots. A
+superseded cache keeps its Registry owner, its `DCLTACT1` magic and its exact
+width forever, so existence, owner and magic cannot tell you it is current.
+
 ## Versioning
 
 `0.1.0`, and honestly so: the API is the extraction of a moving application

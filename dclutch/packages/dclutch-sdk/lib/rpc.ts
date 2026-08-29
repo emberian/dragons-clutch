@@ -404,6 +404,42 @@ export class SolanaRpcClient {
     return Object.freeze({ slot: String(exactUnsigned(raw.context.slot, 'program scan slot')), accounts: Object.freeze(accounts) });
   }
 
+  /**
+   * Every finalized account of one EXACT width owned by a program.
+   *
+   * Filtered server-side by `dataSize`, because the interesting fixed-width
+   * families (the 1288-byte Registry activation caches, one per cohort) are a
+   * handful of accounts inside a program that owns thousands of records. The
+   * unfiltered `programHeaders` scan would refuse such a program outright on
+   * the account bound, which is why this exists rather than a client-side
+   * filter over everything.
+   */
+  async programAccountsOfExactWidth(
+    programId: string,
+    dataLength: number,
+  ): Promise<Readonly<{ slot: string; accounts: ReadonlyArray<Readonly<{ address: string; account: RpcAccount }>> }>> {
+    new PublicKey(programId);
+    const width = exactUnsigned(dataLength, 'exact account width');
+    const raw = await this.#request('getProgramAccounts', [programId, {
+      commitment: 'finalized',
+      encoding: 'base64',
+      withContext: true,
+      filters: [{ dataSize: width }],
+    }]);
+    if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value)) throw new Error('getProgramAccounts did not return a finalized context and account array');
+    if (raw.value.length > MAX_PROGRAM_ACCOUNTS) throw new Error(`program scan found ${raw.value.length} accounts of width ${width}, above the explicit ${MAX_PROGRAM_ACCOUNTS}-account browser bound`);
+    const accounts = raw.value.map((entry, index) => {
+      if (!plain(entry)) throw new Error(`program account ${index} is malformed`);
+      const address = exactText(entry.pubkey, `program account ${index} address`, 64);
+      new PublicKey(address);
+      const account = parseAccount(entry.account, `program account ${index}`);
+      if (account.data.length !== width) throw new Error(`program account ${address} answered a ${width}-byte filter with ${account.data.length} bytes`);
+      return Object.freeze({ address, account });
+    });
+    if (new Set(accounts.map((account) => account.address)).size !== accounts.length) throw new Error('program scan repeated an account address');
+    return Object.freeze({ slot: String(exactUnsigned(raw.context.slot, 'program scan slot')), accounts: Object.freeze(accounts) });
+  }
+
   async accountInfo(address: string, minimumContextSlot?: string): Promise<AccountInfoObservation> {
     new PublicKey(address);
     const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64' };

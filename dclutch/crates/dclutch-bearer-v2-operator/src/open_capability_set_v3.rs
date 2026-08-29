@@ -15,15 +15,21 @@ use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, RepresentationActionV2,
 };
 use dclutch_rational_representation_v2_request_contract::generated::REQUEST_ACTION_OFFSET;
-use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2};
+use dclutch_token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
+};
 use solana_program::hash::hash;
 
 use crate::{
     Error, RationalOpenSelectedHotBundleV3, RationalOpenStructuredHotBundleV3,
     RationalTerminalHotBundleV3, Result,
     validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3,
+    validate_rational_open_selected_hot_bundle_v3,
     validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
+    validate_rational_open_structured_hot_bundle_v3,
     validate_rational_terminal_hot_bundle_for_authenticated_selection_v3,
+    validate_rational_terminal_hot_bundle_v3,
 };
 
 /// Five exact action descriptors sharing one admitted Token selection.
@@ -57,6 +63,81 @@ pub struct RationalOpenCapabilityProgramSetV3 {
 }
 
 /// Build the canonical schema-bound five-action set.
+/// The same five bundles, joined with no Market in scope.
+///
+/// The V3 form takes an `AuthenticatedTokenBehaviorV2`, which can only be built
+/// from a finalized `RepresentationDescriptorV2` and therefore not before the
+/// Market exists. This form takes the immutable `TokenBehaviorSelectionV2` the
+/// five bundles were compiled against, which is the only thing the join ever
+/// needed: every check the V3 path runs against the admission is a check that
+/// each bundle's config equals that selection.
+#[derive(Clone, Copy, Debug)]
+pub struct RationalOpenCapabilityProgramSetInputV6<'a> {
+    /// Immutable Realm/release selection every bundle was compiled against.
+    pub token_behavior_selection: TokenBehaviorSelectionV2,
+    /// Exact Denominate artifact bundle.
+    pub denominate: &'a RationalOpenSelectedHotBundleV3,
+    /// Exact Reconstitute artifact bundle.
+    pub reconstitute: &'a RationalOpenSelectedHotBundleV3,
+    /// Exact IssueStructured artifact bundle.
+    pub issue_structured: &'a RationalOpenStructuredHotBundleV3,
+    /// Exact UnwrapStructured artifact bundle.
+    pub unwrap_structured: &'a RationalOpenStructuredHotBundleV3,
+    /// Exact RedeemTerminal artifact bundle.
+    pub redeem_terminal: &'a RationalTerminalHotBundleV3,
+}
+
+/// Build the canonical five-action set before the Market that selects it.
+///
+/// This is the function that makes an open capability release compilable
+/// pre-founding: its output `program_set_id` is the `release_id` a Market's
+/// capability manifest entry names, and nothing reachable from this input can
+/// observe a Market.
+pub fn build_rational_open_capability_program_set_v6(
+    input: RationalOpenCapabilityProgramSetInputV6<'_>,
+) -> Result<RationalOpenCapabilityProgramSetV3> {
+    let selection = input.token_behavior_selection.to_bytes();
+    validate_rational_open_selected_hot_bundle_v3(input.denominate)?;
+    validate_rational_open_selected_hot_bundle_v3(input.reconstitute)?;
+    validate_rational_open_structured_hot_bundle_v3(input.issue_structured)?;
+    validate_rational_open_structured_hot_bundle_v3(input.unwrap_structured)?;
+    validate_rational_terminal_hot_bundle_v3(input.redeem_terminal)?;
+    for observed in [
+        input.denominate.token_behavior_selection.as_slice(),
+        input.reconstitute.token_behavior_selection.as_slice(),
+        input.issue_structured.token_behavior_selection.as_slice(),
+        input.unwrap_structured.token_behavior_selection.as_slice(),
+        input.redeem_terminal.token_behavior_selection.as_slice(),
+    ] {
+        if observed != selection {
+            return Err(Error::ArtifactGeometry);
+        }
+    }
+    let output = assemble_open_capability_program_set(
+        selection,
+        input.denominate,
+        input.reconstitute,
+        input.issue_structured,
+        input.unwrap_structured,
+        input.redeem_terminal,
+    )?;
+    validate_open_capability_program_set_core(
+        &output,
+        input.denominate,
+        input.reconstitute,
+        input.issue_structured,
+        input.unwrap_structured,
+        input.redeem_terminal,
+    )?;
+    Ok(output)
+}
+
+/// Build the canonical five-action set from a Token-behavior admission.
+///
+/// Identical bytes to [`build_rational_open_capability_program_set_v6`]: both
+/// route through one assembler. What this entry point adds is the admission
+/// join -- each bundle is required to match a finalized descriptor's Token
+/// behavior, not merely to agree with the others.
 pub fn build_rational_open_capability_program_set_v3(
     input: RationalOpenCapabilityProgramSetInputV3<'_>,
 ) -> Result<RationalOpenCapabilityProgramSetV3> {
@@ -97,35 +178,14 @@ pub fn build_rational_open_capability_program_set_v3(
         }
     }
 
-    let descriptors = [
-        descriptor_entry(input.denominate, RepresentationActionV2::Denominate)?,
-        descriptor_entry(input.reconstitute, RepresentationActionV2::Reconstitute)?,
-        structured_descriptor_entry(
-            input.issue_structured,
-            RepresentationActionV2::IssueStructured,
-        )?,
-        structured_descriptor_entry(
-            input.unwrap_structured,
-            RepresentationActionV2::UnwrapStructured,
-        )?,
-        terminal_descriptor_entry(input.redeem_terminal)?,
-    ];
-    let width =
-        encoded_program_set_bytes_v2(descriptors.len()).map_err(Error::CapabilityProgramSet)?;
-    let mut program_set = vec![0_u8; width];
-    encode_program_set_v2(
-        u32::try_from(REQUEST_ACTION_OFFSET).map_err(|_| Error::ArtifactGeometry)?,
-        SelectorWidthV2::U8,
-        &descriptors,
-        &mut program_set,
-    )
-    .map_err(Error::CapabilityProgramSet)?;
-    let output = RationalOpenCapabilityProgramSetV3 {
-        token_behavior_selection: selection,
-        token_behavior_selection_id: hash(&selection).to_bytes(),
-        program_set_id: hash(&program_set).to_bytes(),
-        program_set,
-    };
+    let output = assemble_open_capability_program_set(
+        selection,
+        input.denominate,
+        input.reconstitute,
+        input.issue_structured,
+        input.unwrap_structured,
+        input.redeem_terminal,
+    )?;
     validate_rational_open_capability_program_set_v3(&output, input)?;
     Ok(output)
 }
@@ -158,7 +218,32 @@ pub fn validate_rational_open_capability_program_set_v3(
     )?;
     if value.token_behavior_selection != input.authenticated_token_behavior.selection().to_bytes()
         || value.token_behavior_selection_id != input.authenticated_token_behavior.content_digest()
-        || value.token_behavior_selection_id != hash(&value.token_behavior_selection).to_bytes()
+    {
+        return Err(Error::ContentIdentity);
+    }
+    validate_open_capability_program_set_core(
+        value,
+        input.denominate,
+        input.reconstitute,
+        input.issue_structured,
+        input.unwrap_structured,
+        input.redeem_terminal,
+    )
+}
+
+/// Every set check that does not need a Token-behavior ADMISSION.
+///
+/// Both entry points join through this, so the pre-founding path and the
+/// descriptor-bound path cannot drift into two readings of one set.
+fn validate_open_capability_program_set_core(
+    value: &RationalOpenCapabilityProgramSetV3,
+    denominate: &RationalOpenSelectedHotBundleV3,
+    reconstitute: &RationalOpenSelectedHotBundleV3,
+    issue_structured: &RationalOpenStructuredHotBundleV3,
+    unwrap_structured: &RationalOpenStructuredHotBundleV3,
+    redeem_terminal: &RationalTerminalHotBundleV3,
+) -> Result<()> {
+    if value.token_behavior_selection_id != hash(&value.token_behavior_selection).to_bytes()
         || value.program_set_id != hash(&value.program_set).to_bytes()
     {
         return Err(Error::ContentIdentity);
@@ -170,17 +255,11 @@ pub fn validate_rational_open_capability_program_set_v3(
     )
     .map_err(Error::CapabilityProgramSet)?;
     let expected_entries = [
-        descriptor_entry(input.denominate, RepresentationActionV2::Denominate)?,
-        descriptor_entry(input.reconstitute, RepresentationActionV2::Reconstitute)?,
-        structured_descriptor_entry(
-            input.issue_structured,
-            RepresentationActionV2::IssueStructured,
-        )?,
-        structured_descriptor_entry(
-            input.unwrap_structured,
-            RepresentationActionV2::UnwrapStructured,
-        )?,
-        terminal_descriptor_entry(input.redeem_terminal)?,
+        descriptor_entry(denominate, RepresentationActionV2::Denominate)?,
+        descriptor_entry(reconstitute, RepresentationActionV2::Reconstitute)?,
+        structured_descriptor_entry(issue_structured, RepresentationActionV2::IssueStructured)?,
+        structured_descriptor_entry(unwrap_structured, RepresentationActionV2::UnwrapStructured)?,
+        terminal_descriptor_entry(redeem_terminal)?,
     ];
     if usize::from(set.entry_count()) != expected_entries.len() {
         return Err(Error::ArtifactGeometry);
@@ -203,6 +282,44 @@ pub fn validate_rational_open_capability_program_set_v3(
         .map_err(Error::CapabilityProgramSet)?;
     }
     Ok(())
+}
+
+/// Encode the five-entry set from bundles whose config already agrees.
+///
+/// Sole author of the set bytes: both entry points route here, so the
+/// pre-founding path and the descriptor-bound path cannot emit two different
+/// encodings of one capability.
+fn assemble_open_capability_program_set(
+    selection: [u8; TOKEN_BEHAVIOR_SELECTION_BYTES_V2],
+    denominate: &RationalOpenSelectedHotBundleV3,
+    reconstitute: &RationalOpenSelectedHotBundleV3,
+    issue_structured: &RationalOpenStructuredHotBundleV3,
+    unwrap_structured: &RationalOpenStructuredHotBundleV3,
+    redeem_terminal: &RationalTerminalHotBundleV3,
+) -> Result<RationalOpenCapabilityProgramSetV3> {
+    let descriptors = [
+        descriptor_entry(denominate, RepresentationActionV2::Denominate)?,
+        descriptor_entry(reconstitute, RepresentationActionV2::Reconstitute)?,
+        structured_descriptor_entry(issue_structured, RepresentationActionV2::IssueStructured)?,
+        structured_descriptor_entry(unwrap_structured, RepresentationActionV2::UnwrapStructured)?,
+        terminal_descriptor_entry(redeem_terminal)?,
+    ];
+    let width =
+        encoded_program_set_bytes_v2(descriptors.len()).map_err(Error::CapabilityProgramSet)?;
+    let mut program_set = vec![0_u8; width];
+    encode_program_set_v2(
+        u32::try_from(REQUEST_ACTION_OFFSET).map_err(|_| Error::ArtifactGeometry)?,
+        SelectorWidthV2::U8,
+        &descriptors,
+        &mut program_set,
+    )
+    .map_err(Error::CapabilityProgramSet)?;
+    Ok(RationalOpenCapabilityProgramSetV3 {
+        token_behavior_selection: selection,
+        token_behavior_selection_id: hash(&selection).to_bytes(),
+        program_set_id: hash(&program_set).to_bytes(),
+        program_set,
+    })
 }
 
 fn descriptor_entry(

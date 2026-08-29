@@ -139,7 +139,7 @@ lane only when the tier states that **every** clause holds. One does not.
 
 Solana's legacy packet maximum is **1,232 bytes**. **Six of the seven N=258
 actions exceed it** in this transport — 1,273, 1,276, 1,295, 1,310, 1,310 and
-1,329 bytes. Only `Freeze`, at 1,207, fits. The campaign submits a legacy
+1,330 bytes. Only `Freeze`, at 1,207, fits. The campaign submits a legacy
 message deliberately, so the accelerator can see every scratch page directly;
 the production operator's plan is ALT-backed v0, where the account keys do not
 ride inline. **That plan is not exercised here**, so this campaign cannot
@@ -286,6 +286,13 @@ rows**, as they have been through every re-take of this table. Removing a hash
 implementation moves compute and nothing else, and the three unmoved columns
 are what says so.
 
+> **Superseded on 2026-08-29 by *The rent-refund account* below.** The two
+> `InitializeSettlement` rows are stale by exactly one account and one legacy
+> byte: `f581af6b` widened Custody `InitializeReplay` from twelve accounts to
+> thirteen on 2026-08-28, and `InitializeSettlement` is the only General action
+> that embeds that operation. The other twelve rows are still exact. These
+> tables are kept because the Δ column above is a comparison against them.
+
 ### The control is the slope, not the constant
 
 Sixteen commits touched this program's surface between the baseline tables and
@@ -335,3 +342,120 @@ change, 989,104 → 933,328. Trading still carries the implementation: three
 `shadow_digest_v3` functions take unbounded slices whose preimages cannot be
 restated inside a 4,096-byte SBF frame, and they need a caller-supplied scratch
 rather than a bound. See the commit message at `6d1ee60c` for the arithmetic.
+
+## Addendum, 2026-08-29 — the rent-refund account
+
+**One account joined `InitializeSettlement`, and this document could not say
+so.** The tables above have carried a `commit` for the *run* since the first
+re-take, but never one per *row*, so a number could go stale without anything
+in the document changing. It did. From 2026-08-28 16:56 EDT until this re-take,
+the `InitializeSettlement` account count here described no code.
+
+It was caught by the evidence-pinned control in
+`crates/dclutch-operator/src/general_hot_v3.rs`,
+`the_derived_geometry_reproduces_the_executed_campaign_frame`, whose seven
+literals are *this document's* numbers and are deliberately not derived from
+that crate. Six of the seven still reconciled; the seventh asserted 104 against
+a recorded 103. **A control that agreed with the code would have said nothing**
+— it is precisely because those literals come from outside the crate that the
+drift was visible at all.
+
+### Provenance
+
+Re-taken at `bb4e83ca`, accelerator ELF
+`ce180115ccf17a12d07a7108f425ace9329a9922cd6f80baab4cf34a7391afe7`, caller
+`3e9621e99612fca5fca98d98c15d1bf2a46b0c8d6637a1427cf6511ce01b7038`, both with
+**zero SBF stack-frame diagnostics**. The accelerator digest moved from
+`ead59b22...`; the caller is byte-identical to the `6d1ee60c` run, as it has
+been through every re-take, because it authenticates no artifact.
+
+**This was a filtered run: `--test lifecycle` only, 4/4.** `freeze.rs` (2) and
+the `joined_artifacts` unit suite (3) were not re-run, because neither
+contributes a row to these tables — `lifecycle.rs` alone drives all seven
+actions at both widths. The three suite counts quoted earlier in this document
+belong to their own runs and are not restated here.
+
+### N = 1 (re-taken at `bb4e83ca`)
+
+| action | CU | accounts | legacy packet | scratch pages | count set by |
+|---|---:|---:|---:|---:|---|
+| `Consider` | 36,113 | 33 | 811 | 3 | unmoved since `6d1ee60c` |
+| `Freeze` | 32,659 | 31 | 745 | 3 | unmoved since `6d1ee60c` |
+| `InitializeSettlement` | 61,753 | **90** | **868** | 3 | **`f581af6b`** |
+| `Collect` | 56,991 / 58,196 / 58,173 | 70 | 848 | 3 | unmoved since `6d1ee60c` |
+| `Materialize` | 53,171 | 68 | 814 | 3 | unmoved since `6d1ee60c` |
+| `Distribute` | 56,942 / 58,147 / 58,178 | 70 | 848 | 3 | unmoved since `6d1ee60c` |
+| `Close` | 61,334 | 87 | 833 | 3 | unmoved since `6d1ee60c` |
+
+### N = 258 (re-taken at `bb4e83ca`)
+
+| action | CU | accounts | legacy packet | scratch pages | count set by |
+|---|---:|---:|---:|---:|---|
+| `Consider` | 74,877 | 47 | 1,273 | 17 | unmoved since `6d1ee60c` |
+| `Freeze` | 65,070 | 45 | 1,207 | 17 | unmoved since `6d1ee60c` |
+| `InitializeSettlement` | 164,970 | **104** | **1,330** | 17 | **`f581af6b`** |
+| `Collect` | 146,947 / 147,374 / 148,168 | 84 | 1,310 | 17 | unmoved since `6d1ee60c` |
+| `Materialize` | 141,402 | 82 | 1,276 | 17 | unmoved since `6d1ee60c` |
+| `Distribute` | 144,585 / 146,608 / 145,806 | 84 | 1,310 | 17 | unmoved since `6d1ee60c` |
+| `Close` | 155,786 | 101 | 1,295 | 17 | unmoved since `6d1ee60c` |
+
+The `InitializeSettlement` N=258 row is measured twice per run, by two
+independent test functions, and both report 164,970 / 104 / 1,330.
+
+### Why exactly one row moved
+
+`f581af6b` ("direct: make replay setup and trade exterior callable") appended
+`CustodyFrameRoleV1::RentRefund` at coordinate 12 of Custody `InitializeReplay`
+and raised `INITIALIZE_REPLAY_ACCOUNT_COUNT_V1` from 12 to 13. It is **appended
+past the existing frame, so it renumbered nothing**, and it is reached from
+General through one edge only:
+
+```text
+general_effect_account_count_v3(InitializeSettlement)
+  = general_child_account_start_v3        11   (8 prefix + 3 readonly evidence)
+  + PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1  26
+  + INITIALIZE_REPLAY_ACCOUNT_COUNT_V1        13   <- 12 before f581af6b
+  + OPEN_VAULT_ACCOUNT_COUNT_V1               16
+  + general_custody_callee_account_count_v3    1
+  = 67                                              (66 before)
+```
+
+and the campaign frame is `2 + ADMITTED_RUNTIME_ACCOUNTS_START_V3 + 67 +
+general_scratch_pages_v3(N)`. `Close` embeds `CloseReplay`, the three transfer
+actions embed `Transfer`, and `Consider` and `Freeze` route to no child at all —
+none of which `f581af6b` touched. **Six of seven reconciling was not a puzzle;
+it was the signature of a single-operation frame change.** It is also what lets
+the shared inputs be exonerated by arithmetic rather than by bisection: the
+prefix and the callee coordinate are shared with rows that still reconciled, so
+neither could have moved without moving those too.
+
+### What the account buys, and what it costs
+
+The old path called `create_account`, which **fails outright if the account
+already holds lamports** — so any stranger could permanently block replay
+creation by sending dust to the PDA. The new path transfers any excess above
+exact rent to the named beneficiary, charges the payer only the shortfall, then
+`allocate`s and `assign`s at exact rent. The program authenticates the account
+rather than trusting it: `rent_refund.key.to_bytes() != request.rent_refund`,
+and distinctness from both payer and replay, refuse with `AccountFrame`.
+
+The price, isolated by this table: **+1 account, +1 legacy byte, and +570 CU**
+on `InitializeSettlement` at N=258 (164,400 → 164,970). Every other action moved
+by +16 to +42 CU, the shared-prelude drift of a day of unrelated commits, with
+`accounts`, `legacy packet` and `scratch pages` bit-identical. `InitializeSettlement`
+remains the binding action at **11.8%** of the 1,400,000 ceiling.
+
+**The packet conclusion is unchanged and the number is not.** Six of the seven
+N=258 actions still exceed the 1,232-byte legacy maximum; the largest is now
+1,330 rather than 1,329. The census row does not flip for the same reason it did
+not flip before.
+
+### The blast radius is Custody-wide
+
+`f581af6b` changed a **Custody** frame, not a General one. Any family frame or
+evidence document that embeds Custody `InitializeReplay` and was measured before
+2026-08-28 16:56 EDT is stale by exactly one account. General's is the one that
+was found, and it was found only because General had a control pinned to
+evidence rather than to itself. **A family with no such control has no signal**
+— which is the argument for the `count set by` column above, and for putting one
+in every table that records a width.

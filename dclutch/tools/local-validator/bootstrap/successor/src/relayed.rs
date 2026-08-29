@@ -559,6 +559,7 @@ pub(crate) fn relayed_market_input(
         recovery_policy_hex: String::new(),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
+        selected_capability: None,
         linked_basis_hex: hex(&linked_basis),
     };
     attach_direct_market_capability_v1(&mut input, direct)?;

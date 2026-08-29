@@ -21,6 +21,8 @@ dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
 dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
+dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
+dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractional-claim-operator" }
 dclutch-general-adapter-contract = { path = "../../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-codec = { path = "../../../../crates/dclutch-general-codec" }
 dclutch-general-config-contract = { path = "../../../../crates/dclutch-general-config-contract" }

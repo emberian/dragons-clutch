@@ -17,6 +17,18 @@ pub const SOURCE_SEMANTIC_RELEASE_DOMAIN_V1: &[u8] =
 pub const SOURCE_SEMANTIC_RELEASE_PREIMAGE_BYTES_V1: usize =
     SOURCE_SEMANTIC_RELEASE_DOMAIN_V1.len() + 1 + SOURCE_REVISION_HEX_BYTES_V1;
 
+/// The preimage is exactly its three spans: domain, role coordinate, revision.
+///
+/// `source_semantic_release_preimage_v1` fills the buffer by tiling those three
+/// in order, which is total only while this identity holds. It is definitional
+/// today; the assert makes it stay definitional, so a later width change that
+/// forgot a term is a build failure rather than a silently zero-padded preimage
+/// feeding a release identity.
+const _: () = assert!(
+    SOURCE_SEMANTIC_RELEASE_PREIMAGE_BYTES_V1
+        == SOURCE_SEMANTIC_RELEASE_DOMAIN_V1.len() + 1 + SOURCE_REVISION_HEX_BYTES_V1,
+);
+
 /// Closed set of program roles whose semantic identity is source-revision-pinned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -74,15 +86,39 @@ pub fn source_semantic_release_preimage_v1(
     {
         return Err(SourceSemanticReleaseErrorV1::SourceRevision);
     }
+    // The three spans below tile the preimage exactly, and nothing here can
+    // refuse: the width is DEFINED as domain + one role coordinate + revision,
+    // and the revision's length was just admitted as exactly
+    // SOURCE_REVISION_HEX_BYTES_V1. So the panics the previous indexed writes
+    // carried were unreachable by construction rather than load-bearing, and
+    // there is no refusal for this rewrite to preserve.
+    //
+    // Writing it as one zip over the concatenated source keeps that totality
+    // and removes the indexing. Zip's own failure mode is truncation, which
+    // WOULD be a silent short preimage, so the const assert above makes the
+    // definition that rules it out a compile-time obligation instead of a
+    // comment: change the width without changing its three terms and this stops
+    // building, rather than quietly hashing a partly-zero preimage.
+    let coordinate = role.coordinate();
     let mut preimage = [0_u8; SOURCE_SEMANTIC_RELEASE_PREIMAGE_BYTES_V1];
-    let domain_end = SOURCE_SEMANTIC_RELEASE_DOMAIN_V1.len();
-    preimage[..domain_end].copy_from_slice(SOURCE_SEMANTIC_RELEASE_DOMAIN_V1);
-    preimage[domain_end] = role.coordinate();
-    preimage[domain_end + 1..].copy_from_slice(source_revision);
+    for (slot, byte) in preimage.iter_mut().zip(
+        SOURCE_SEMANTIC_RELEASE_DOMAIN_V1
+            .iter()
+            .chain(core::iter::once(&coordinate))
+            .chain(source_revision.iter()),
+    ) {
+        *slot = *byte;
+    }
     Ok(preimage)
 }
 
 #[cfg(test)]
+// These assertions read the preimage by the same three coordinates the builder
+// writes, which is the point: an out-of-bounds read here IS the failure the
+// test exists to report, and turning it into a checked `get` would let a short
+// preimage pass as `None == None`. The repository's test files carry this same
+// allow at file scope; an inline module needs it here.
+#[allow(clippy::indexing_slicing, clippy::cast_possible_truncation)]
 mod tests {
     use super::*;
 

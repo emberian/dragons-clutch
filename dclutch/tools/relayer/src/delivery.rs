@@ -13,7 +13,11 @@ use std::path::{Path, PathBuf};
 
 use dclutch_relay_contract::record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1};
 
-use crate::chain::{LOADER_V3_PROGRAM_ID, program_programdata_link, programdata_deployment_slot};
+use crate::chain::{
+    ADDRESS_LOOKUP_TABLE_PROGRAM_ID, LOADER_V3_PROGRAM_ID, lookup_table_facts,
+    program_programdata_link, programdata_deployment_slot,
+};
+use crate::config::AddressLookupTableConfig;
 use crate::derive::{SetDigestFold, sha256};
 use crate::error::{RelayerError, Result};
 use crate::id32::{ID_BYTES, base58, to_hex};
@@ -66,6 +70,82 @@ pub fn require_live_launch_accounts(
         return Err(RelayerError::MissingCapability(
             "Market is absent or does not have the capability-pinned live owner shape".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+/// Check the configured lookup table against its finalized live account.
+///
+/// The `[submit.address_lookup_table]` list was, until this check, trusted
+/// verbatim — a claim, not a fact.  A v0 message compiles table *indexes*, so
+/// a live table whose stored order differs from the configured order delivers
+/// a permuted account frame that the program refuses as an AccountFrame error
+/// while the table looks healthy from every other angle (the publisher hit
+/// exactly this by returning insertion order instead of the extended order).
+/// The equality here is therefore ordered, element for element.
+///
+/// The activation check refuses a table extended at or after the slot this
+/// read observed: the runtime serves lookups only for slots strictly after the
+/// last extension, so compiling against a fresher table would build a wire the
+/// cluster cannot load yet.  A real cluster is waited on, then re-read.
+pub fn require_live_lookup_table(
+    expected: &AddressLookupTableConfig,
+    table: &ObservedAccount,
+    finalized_slot: u64,
+) -> Result<()> {
+    if table.owner != ADDRESS_LOOKUP_TABLE_PROGRAM_ID || table.executable {
+        return Err(RelayerError::MissingCapability(format!(
+            "configured lookup table {} is not owned by the address-lookup-table program",
+            base58(&expected.key)
+        )));
+    }
+    // The read may be sliced to the expected width, so the FULL width is
+    // checked first: a table holding more addresses than configured would
+    // otherwise truncate into a false ordered match.
+    let expected_len = crate::chain::LOOKUP_TABLE_META_BYTES as u64
+        + (ID_BYTES as u64).saturating_mul(expected.addresses.len() as u64);
+    if table.data_len != expected_len {
+        return Err(RelayerError::MissingCapability(format!(
+            "configured lookup table {} is {} bytes on chain where the configured {} addresses \
+             take {}; it holds a different address list",
+            base58(&expected.key),
+            table.data_len,
+            expected.addresses.len(),
+            expected_len
+        )));
+    }
+    let facts = lookup_table_facts(&table.data).ok_or_else(|| {
+        RelayerError::MissingCapability(format!(
+            "configured lookup table {} is not an initialized lookup table",
+            base58(&expected.key)
+        ))
+    })?;
+    if facts.deactivation_slot != u64::MAX {
+        return Err(RelayerError::MissingCapability(format!(
+            "configured lookup table {} is deactivating (deactivation slot {}); a routed wire \
+             would stop loading mid-delivery",
+            base58(&expected.key),
+            facts.deactivation_slot
+        )));
+    }
+    if facts.last_extended_slot >= finalized_slot {
+        return Err(RelayerError::MissingCapability(format!(
+            "configured lookup table {} was extended at slot {}, not strictly before finalized \
+             slot {}; the cluster does not serve its lookups yet",
+            base58(&expected.key),
+            facts.last_extended_slot,
+            finalized_slot
+        )));
+    }
+    if facts.addresses != expected.addresses {
+        return Err(RelayerError::MissingCapability(format!(
+            "configured lookup table {} holds {} addresses that are not the configured {} in the \
+             configured order; a v0 message compiled from this config would deliver a permuted \
+             account frame",
+            base58(&expected.key),
+            facts.addresses.len(),
+            expected.addresses.len()
+        )));
     }
     Ok(())
 }
@@ -343,6 +423,100 @@ mod tests {
     const KEYS: [u8; ID_BYTES] = [0x16; ID_BYTES];
     const OBSERVED_CLUSTER: [u8; ID_BYTES] = [0x17; ID_BYTES];
     const SLOT: u64 = 423_941_138;
+
+    fn live_table(
+        deactivation_slot: u64,
+        last_extended_slot: u64,
+        addresses: &[[u8; ID_BYTES]],
+    ) -> ObservedAccount {
+        let mut data = vec![0u8; crate::chain::LOOKUP_TABLE_META_BYTES];
+        data[..4].copy_from_slice(&crate::chain::LOOKUP_TABLE_DISCRIMINANT.to_le_bytes());
+        data[crate::chain::LOOKUP_TABLE_DEACTIVATION_SLOT_OFFSET
+            ..crate::chain::LOOKUP_TABLE_DEACTIVATION_SLOT_OFFSET + 8]
+            .copy_from_slice(&deactivation_slot.to_le_bytes());
+        data[crate::chain::LOOKUP_TABLE_LAST_EXTENDED_SLOT_OFFSET
+            ..crate::chain::LOOKUP_TABLE_LAST_EXTENDED_SLOT_OFFSET + 8]
+            .copy_from_slice(&last_extended_slot.to_le_bytes());
+        for address in addresses {
+            data.extend_from_slice(address);
+        }
+        let data_len = data.len() as u64;
+        ObservedAccount {
+            lamports: 1,
+            owner: ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+            executable: false,
+            data,
+            data_len,
+        }
+    }
+
+    fn table_config(addresses: &[[u8; ID_BYTES]]) -> AddressLookupTableConfig {
+        AddressLookupTableConfig {
+            key: [0x77; ID_BYTES],
+            addresses: addresses.to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_live_activated_table_in_the_configured_order_is_admitted() {
+        let stored = [[0x21; ID_BYTES], [0x22; ID_BYTES], [0x23; ID_BYTES]];
+        let table = live_table(u64::MAX, SLOT - 1, &stored);
+        require_live_lookup_table(&table_config(&stored), &table, SLOT)
+            .expect("a healthy table is admitted");
+    }
+
+    #[test]
+    fn a_permuted_table_refuses_before_any_wire_is_compiled() {
+        // The publisher's own hard-won bug, as an executable refusal: same
+        // addresses, different order, and the frame a v0 message would load is
+        // permuted while the table looks healthy from every other angle.
+        let stored = [[0x21; ID_BYTES], [0x22; ID_BYTES], [0x23; ID_BYTES]];
+        let configured = [[0x22; ID_BYTES], [0x21; ID_BYTES], [0x23; ID_BYTES]];
+        let table = live_table(u64::MAX, SLOT - 1, &stored);
+        let error = require_live_lookup_table(&table_config(&configured), &table, SLOT)
+            .expect_err("a permuted order must refuse");
+        assert!(error.to_string().contains("permuted account frame"));
+    }
+
+    #[test]
+    fn a_longer_live_table_refuses_rather_than_truncating_into_a_match() {
+        let stored = [[0x21; ID_BYTES], [0x22; ID_BYTES], [0x23; ID_BYTES]];
+        let mut table = live_table(u64::MAX, SLOT - 1, &stored);
+        // The live account holds one more address than the sliced read shows.
+        table.data_len += ID_BYTES as u64;
+        let configured = table_config(&stored);
+        let error = require_live_lookup_table(&configured, &table, SLOT)
+            .expect_err("a wider table must refuse");
+        assert!(error.to_string().contains("different address list"));
+    }
+
+    #[test]
+    fn a_deactivating_or_unwarmed_or_foreign_table_refuses() {
+        let stored = [[0x21; ID_BYTES]];
+        let configured = table_config(&stored);
+        let deactivating = live_table(SLOT + 10, SLOT - 1, &stored);
+        assert!(
+            require_live_lookup_table(&configured, &deactivating, SLOT)
+                .expect_err("deactivating refuses")
+                .to_string()
+                .contains("deactivating")
+        );
+        let unwarmed = live_table(u64::MAX, SLOT, &stored);
+        assert!(
+            require_live_lookup_table(&configured, &unwarmed, SLOT)
+                .expect_err("an extension at the read slot refuses")
+                .to_string()
+                .contains("does not serve its lookups yet")
+        );
+        let mut foreign = live_table(u64::MAX, SLOT - 1, &stored);
+        foreign.owner = LOADER_V3_PROGRAM_ID;
+        assert!(
+            require_live_lookup_table(&configured, &foreign, SLOT)
+                .expect_err("a foreign owner refuses")
+                .to_string()
+                .contains("not owned by the address-lookup-table program")
+        );
+    }
 
     fn body(key: u8) -> Vec<u8> {
         let inline = [key, key.wrapping_add(1)];

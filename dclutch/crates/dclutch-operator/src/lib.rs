@@ -41,6 +41,8 @@ pub mod general_activation_v3;
 pub mod general_hot_v3;
 /// Durable content-addressed caller construction over executable General V3.
 pub mod general_invocation_v1;
+/// Compile the seven General actions into one publishable, selectable release.
+pub mod general_selected_release_v1;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
 /// Shared authentication of Rent, Clock, and finalized-record observations.
@@ -60,6 +62,8 @@ pub mod provider_transport_v3 {
     pub use dclutch_provider_transport_v3_operator::*;
 }
 /// Packet-safe unsigned Rational terminal Bearer redemption construction.
+pub mod rational_selected_release_v1;
+
 pub mod rational_terminal_v3;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.
 pub mod registry;

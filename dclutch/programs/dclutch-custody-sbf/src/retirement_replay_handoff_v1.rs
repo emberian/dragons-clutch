@@ -43,7 +43,7 @@ pub(crate) fn process(
     request: RetirementReplayHandoffRequestV1,
     request_bytes: &[u8],
 ) -> ProgramResult {
-    require_frame(program_id, accounts)?;
+    let accounts = require_frame(program_id, accounts)?;
     let market = authenticate_market(accounts, request)?;
     authenticate_current_roles(accounts, market)?;
     let aggregate = authenticate_claims_aggregate(accounts, market, request)?;
@@ -62,7 +62,7 @@ pub(crate) fn process(
 #[inline(never)]
 fn execute_handoff(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     market: CoreState,
     aggregate: LiabilityBasisMarketViewV2,
     request: RetirementReplayHandoffRequestV1,
@@ -88,7 +88,7 @@ fn execute_handoff(
 #[inline(never)]
 fn prepare_plan(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     market: CoreState,
     aggregate: LiabilityBasisMarketViewV2,
     request: RetirementReplayHandoffRequestV1,
@@ -130,11 +130,16 @@ fn prepare_plan(
     Ok(Box::new(plan))
 }
 
+/// Check the frame once and hand back the arity as a type, so that every
+/// downstream `accounts[ORDINAL]` is a proof rather than a hope.
 #[inline(never)]
-fn require_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> ProgramResult {
-    if accounts.len() != RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1 {
-        return Err(CustodySbfError::AccountFrame.into());
-    }
+fn require_frame<'a, 'b>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'b>],
+) -> Result<&'a [AccountInfo<'b>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1], ProgramError> {
+    let accounts: &'a [AccountInfo<'b>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1] = accounts
+        .try_into()
+        .map_err(|_| CustodySbfError::AccountFrame)?;
     for (left_index, left) in accounts.iter().enumerate() {
         for right in accounts.iter().skip(left_index.saturating_add(1)) {
             if left.key == right.key {
@@ -165,12 +170,12 @@ fn require_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> ProgramRe
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
-    Ok(())
+    Ok(accounts)
 }
 
 #[inline(never)]
 fn authenticate_market(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     request: RetirementReplayHandoffRequestV1,
 ) -> Result<CoreState, ProgramError> {
     let data = accounts[MARKET]
@@ -196,19 +201,26 @@ fn authenticate_market(
 }
 
 #[inline(never)]
-fn authenticate_current_roles(accounts: &[AccountInfo<'_>], state: CoreState) -> ProgramResult {
+fn authenticate_current_roles(
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
+    state: CoreState,
+) -> ProgramResult {
     let release = state.identity.selected_release_set.to_bytes();
     for (role, program, programdata) in [
-        (ExecutionRoleV1::Core, CORE_PROGRAM, CORE_PROGRAMDATA),
+        (
+            ExecutionRoleV1::Core,
+            &accounts[CORE_PROGRAM],
+            &accounts[CORE_PROGRAMDATA],
+        ),
         (
             ExecutionRoleV1::Trading,
-            TRADING_PROGRAM,
-            TRADING_PROGRAMDATA,
+            &accounts[TRADING_PROGRAM],
+            &accounts[TRADING_PROGRAMDATA],
         ),
         (
             ExecutionRoleV1::Custody,
-            CUSTODY_PROGRAM,
-            CUSTODY_PROGRAMDATA,
+            &accounts[CUSTODY_PROGRAM],
+            &accounts[CUSTODY_PROGRAMDATA],
         ),
     ] {
         authenticate_activated_role_v1(
@@ -216,8 +228,8 @@ fn authenticate_current_roles(accounts: &[AccountInfo<'_>], state: CoreState) ->
             &accounts[CACHE],
             &release,
             registry_role(role),
-            &accounts[program],
-            &accounts[programdata],
+            program,
+            programdata,
         )
         .map_err(CustodySbfError::from)?;
     }
@@ -226,7 +238,7 @@ fn authenticate_current_roles(accounts: &[AccountInfo<'_>], state: CoreState) ->
 
 #[inline(never)]
 fn authenticate_claims_aggregate(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     request: RetirementReplayHandoffRequestV1,
 ) -> Result<LiabilityBasisMarketViewV2, ProgramError> {
@@ -272,7 +284,7 @@ fn authenticate_claims_aggregate(
 
 #[inline(never)]
 fn authenticate_realm_and_rent_credit(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     aggregate: LiabilityBasisMarketViewV2,
 ) -> ProgramResult {
@@ -350,7 +362,7 @@ fn authenticate_realm_and_rent_credit(
 #[inline(never)]
 fn authenticate_caller(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     request: RetirementReplayHandoffRequestV1,
     request_bytes: &[u8],
@@ -374,7 +386,7 @@ fn authenticate_caller(
 #[inline(never)]
 fn authenticate_replays(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     request: RetirementReplayHandoffRequestV1,
 ) -> Result<(CustodyReplayV1, [u8; 32]), ProgramError> {
@@ -421,7 +433,7 @@ fn authenticate_replays(
 #[inline(never)]
 fn authenticate_hoard(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     aggregate: LiabilityBasisMarketViewV2,
     request: RetirementReplayHandoffRequestV1,
@@ -474,7 +486,7 @@ fn authenticate_hoard(
 #[inline(never)]
 fn create_core_replay(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     request: RetirementReplayHandoffRequestV1,
 ) -> ProgramResult {
@@ -512,7 +524,10 @@ fn create_core_replay(
 }
 
 #[inline(never)]
-fn commit_core_replay(accounts: &[AccountInfo<'_>], replay: CustodyReplayV1) -> ProgramResult {
+fn commit_core_replay(
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
+    replay: CustodyReplayV1,
+) -> ProgramResult {
     let bytes = replay.to_bytes().map_err(|_| CustodySbfError::Commit)?;
     let mut data = accounts[CORE_REPLAY]
         .try_borrow_mut_data()
@@ -526,7 +541,7 @@ fn commit_core_replay(accounts: &[AccountInfo<'_>], replay: CustodyReplayV1) -> 
 
 #[inline(never)]
 fn close_trading_replay(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     request: RetirementReplayHandoffRequestV1,
 ) -> ProgramResult {
     let refund_after = accounts[RENT_CREDIT]
@@ -561,7 +576,7 @@ fn close_trading_replay(
 
 #[inline(never)]
 fn verify_poststate(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     request: RetirementReplayHandoffRequestV1,
     receipt: dclutch_custody_contract::RetirementReplayHandoffReceiptV1,
     core_digest: [u8; 32],

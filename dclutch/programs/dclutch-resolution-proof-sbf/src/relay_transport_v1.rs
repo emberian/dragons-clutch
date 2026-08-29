@@ -78,6 +78,7 @@ use dclutch_relay_contract::{
     RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYED_RECORD_PDA_DOMAIN_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYER_KEY_SET_BYTES,
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
+    Error as RelayContractError,
     frame::{RelayAccountPrivilegeV1, RelayFrameKindV1, validate_relay_frame_v1},
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,
@@ -843,14 +844,28 @@ fn process_retire(
     {
         return Err(ResolutionError::MarketAuthority.into());
     }
+    // Census Y3/Q9. The Market is already in this frame and already read; its
+    // terminal receipt is the whole authority for whether this record is still
+    // live evidence. `terminal_receipt.is_some()` is exactly
+    // `phase in {Terminal, Retiring, Retired}` by `CoreState::valid_static`, so
+    // this reads the fact rather than re-deriving it from the phase byte.
+    let market_has_terminalized = state.terminal_receipt.is_some();
     drop(market_data);
 
     {
         let mut data = record_account
             .try_borrow_mut_data()
             .map_err(|_| ResolutionError::OutputState)?;
-        retire_relayed_observation_in_place_v1(&mut data, request.generation(), created)
-            .map_err(|_| ResolutionError::Transition)?;
+        retire_relayed_observation_in_place_v1(
+            &mut data,
+            request.generation(),
+            created,
+            market_has_terminalized,
+        )
+        .map_err(|error| match error {
+            RelayContractError::RecordStillConsumable => ResolutionError::RecordStillConsumable,
+            _ => ResolutionError::Transition,
+        })?;
     }
     close_to_beneficiary(record_account, beneficiary)
 }

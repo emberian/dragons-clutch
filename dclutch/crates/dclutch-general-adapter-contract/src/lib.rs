@@ -63,6 +63,8 @@ pub mod shadow_accelerator_v3;
 pub mod specialization;
 /// Action-selected nonroot state lifecycle artifacts.
 pub mod state_artifacts_v3;
+/// The one supported derivation for every General action-state PDA.
+pub mod state_seeds_v3;
 /// Action-selected TransitionVM programs for admitted General execution.
 pub mod transition_artifacts_v3;
 

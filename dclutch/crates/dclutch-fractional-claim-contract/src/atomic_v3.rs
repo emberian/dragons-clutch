@@ -71,6 +71,10 @@ pub const FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCFRTM03";
 pub const FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_SCHEMA_PREIMAGE_V3: &[u8] = b"dclutch/schema/fractional-terminal-atomic-receipt-v3|bytes256|claims+custody+token2022|chain-derived-recipient+replay|exact-denominator-burn";
 
 const VERSION: u16 = 3;
+/// Width of one digest or identity field in either receipt.
+const IDENTITY_BYTES: usize = 32;
+/// Width of one little-endian u64 field in either receipt.
+const SCALAR_BYTES: usize = 8;
 const REQUEST_DIGEST: usize = 16;
 const SIGNED_PACKET_DIGEST: usize = 48;
 const SIGNED_RECEIPT_DIGEST: usize = 80;
@@ -196,25 +200,48 @@ impl FractionalAtomicReceiptV3 {
         output[..8].copy_from_slice(&FRACTIONAL_ATOMIC_RECEIPT_MAGIC_V3);
         output[8..10].copy_from_slice(&VERSION.to_le_bytes());
         output[10] = self.action.byte();
-        for (offset, value) in [
-            (REQUEST_DIGEST, self.request_digest),
-            (SIGNED_PACKET_DIGEST, self.signed_packet_digest),
-            (SIGNED_RECEIPT_DIGEST, self.signed_receipt_digest),
-            (TOKEN_POST_DIGEST, self.token_post_digest),
-            (CLAIMS_POST_DIGEST, self.claims_post_digest),
-            (ROOT, self.root),
-        ] {
-            output[offset..offset + 32].copy_from_slice(&value);
+        // Six digests then six little-endian u64s, each run gapless: the
+        // offsets were never independent facts, each was the previous plus the
+        // field width. Listing the fields in order tiles each run exactly, and
+        // a constant range into this fixed-width buffer cannot be out of
+        // bounds. The asserts keep the tiling loud -- zip truncates, so a field
+        // added without widening the receipt would vanish from it silently
+        // rather than panic -- and compile out of the SBF release build.
+        let digests = [
+            self.request_digest,
+            self.signed_packet_digest,
+            self.signed_receipt_digest,
+            self.token_post_digest,
+            self.claims_post_digest,
+            self.root,
+        ];
+        debug_assert!(
+            POST_MARKET_REVISION.saturating_sub(REQUEST_DIGEST)
+                == digests.len().saturating_mul(IDENTITY_BYTES)
+        );
+        for (slot, value) in output[REQUEST_DIGEST..POST_MARKET_REVISION]
+            .chunks_exact_mut(IDENTITY_BYTES)
+            .zip(digests.iter())
+        {
+            slot.copy_from_slice(value);
         }
-        for (offset, value) in [
-            (POST_MARKET_REVISION, self.post_market_revision),
-            (POST_ACTOR_REVISION, self.post_actor_revision),
-            (POST_RESERVE_REVISION, self.post_reserve_revision),
-            (POST_MINT_SUPPLY, self.post_mint_supply),
-            (POST_HOLDER_AMOUNT, self.post_holder_amount),
-            (CONSUMED_SHARDS, self.consumed_shards),
-        ] {
-            output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        let scalars = [
+            self.post_market_revision,
+            self.post_actor_revision,
+            self.post_reserve_revision,
+            self.post_mint_supply,
+            self.post_holder_amount,
+            self.consumed_shards,
+        ];
+        debug_assert!(
+            FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3.saturating_sub(POST_MARKET_REVISION)
+                == scalars.len().saturating_mul(SCALAR_BYTES)
+        );
+        for (slot, value) in output[POST_MARKET_REVISION..FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3]
+            .chunks_exact_mut(SCALAR_BYTES)
+            .zip(scalars.iter())
+        {
+            slot.copy_from_slice(&value.to_le_bytes());
         }
         output
     }
@@ -415,23 +442,37 @@ impl FractionalTerminalAtomicReceiptV3 {
         output[..8].copy_from_slice(&FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_MAGIC_V3);
         output[8..10].copy_from_slice(&VERSION.to_le_bytes());
         output[10] = self.action.byte();
-        for (offset, value) in [
-            (16, self.request_digest),
-            (48, self.terminal_request_digest),
-            (80, self.terminal_receipt_digest),
-            (112, self.terminal_post_resource_digest),
-            (144, self.token_post_digest),
-            (176, self.root),
-        ] {
-            output[offset..offset + 32].copy_from_slice(&value);
+        // Same two gapless runs as the non-terminal receipt, at this record's
+        // own literal offsets: six digests filling 16..208, then four u64s
+        // filling 208..240. The 240..256 trailer stays zero, which is what
+        // `decode` checks it for.
+        let digests = [
+            self.request_digest,
+            self.terminal_request_digest,
+            self.terminal_receipt_digest,
+            self.terminal_post_resource_digest,
+            self.token_post_digest,
+            self.root,
+        ];
+        debug_assert!(192 == digests.len().saturating_mul(IDENTITY_BYTES));
+        for (slot, value) in output[16..208]
+            .chunks_exact_mut(IDENTITY_BYTES)
+            .zip(digests.iter())
+        {
+            slot.copy_from_slice(value);
         }
-        for (offset, value) in [
-            (208, self.payout),
-            (216, self.post_mint_supply),
-            (224, self.post_holder_amount),
-            (232, self.consumed_shards),
-        ] {
-            output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        let scalars = [
+            self.payout,
+            self.post_mint_supply,
+            self.post_holder_amount,
+            self.consumed_shards,
+        ];
+        debug_assert!(32 == scalars.len().saturating_mul(SCALAR_BYTES));
+        for (slot, value) in output[208..240]
+            .chunks_exact_mut(SCALAR_BYTES)
+            .zip(scalars.iter())
+        {
+            slot.copy_from_slice(&value.to_le_bytes());
         }
         output
     }

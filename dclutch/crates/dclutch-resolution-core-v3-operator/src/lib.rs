@@ -488,6 +488,15 @@ pub enum ResolutionCoreOperatorErrorV3 {
     Frame,
     /// Fixed-width request construction refused.
     Encoding,
+    /// The material bought an ordered recovery walk no live route can walk.
+    ///
+    /// Liveness census R2 / queue Q2. Mirrors the on-chain weld
+    /// (`CoreSbfError::RecoveryWalkUnavailable`, `0x3011`): `CreateFund` will
+    /// not mint a `SourceResolutionStateV2` whose only terminal transition,
+    /// `exhaust_after_primary_deadline`, refuses the very material it is being
+    /// created over. Building the instruction anyway would only move the
+    /// refusal from here to the validator.
+    RecoveryWalkUnavailable,
 }
 
 /// Construct the canonical Core `CreateFund` effect from finalized chain state.
@@ -561,7 +570,12 @@ pub fn build_resolution_create_fund_v3(
     // Keep these decoded authorities live in the builder rather than accepting
     // caller-selected entry coordinates.
     match (material.recovery_policy(), recovery_policy) {
-        (Some(_), Some(policy)) if policy.attempt_count() == 1 => {}
+        // Q2 weld, mirroring `CoreSbfError::RecoveryWalkUnavailable` (0x3011).
+        // A shape that authenticates perfectly and can never terminalize is
+        // still a shape this builder must not construct.
+        (Some(_), Some(policy)) if policy.attempt_count() == 1 => {
+            return Err(ResolutionCoreOperatorErrorV3::RecoveryWalkUnavailable);
+        }
         (None, None) => {}
         _ => return Err(ResolutionCoreOperatorErrorV3::Record),
     }
@@ -641,6 +655,7 @@ pub fn build_resolution_verify_fund_ready_v3(
     if snapshot.beneficiary.key.to_bytes() != market.rent_beneficiary.to_bytes()
         || snapshot.beneficiary.executable
     {
+        eprintln!("verify-fund-ready refused: beneficiary");
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let (verify_material, _, entries) = authenticate_founding_records(
@@ -670,7 +685,18 @@ pub fn build_resolution_verify_fund_ready_v3(
         &rent,
         false,
     )?;
-    if active_entries != entries {
+    // The records-derived entry list arrives in record-traversal order while
+    // the ledger derives its list from the mask's ascending bits; the sets are
+    // the fact being compared, and the composed founding's first execution
+    // proved the two authors disagree on order ([3,2,1] vs [1,2,3]) while
+    // agreeing on membership. CreateFund already compares order-insensitively
+    // by folding entries into the mask.
+    let mut canonical_entries = entries;
+    canonical_entries.sort_unstable();
+    let mut canonical_active = active_entries;
+    canonical_active.sort_unstable();
+    if canonical_active != canonical_entries {
+        eprintln!("verify-fund-ready refused: entries {entries:?} != active {active_entries:?}");
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
     let role_request = funding_role_request(
@@ -914,7 +940,16 @@ pub fn build_resolution_activate_fund_v1(
             pending.funding_ledger.lamports,
             &pending.funding_ledger.data,
         );
-        if active_entries != entries
+        // Same two-authors order fact 0c26bba0 fixed at verify-fund-ready:
+        // the ledger derives ascending mask bits, the records arrive in
+        // traversal order, and membership is the fact under comparison. This
+        // inequality is why a completed activation could never shape its
+        // zero-lamport Replay witness and the Accept route stayed unreachable.
+        let mut canonical_entries = entries;
+        canonical_entries.sort_unstable();
+        let mut canonical_active = active_entries;
+        canonical_active.sort_unstable();
+        if canonical_active != canonical_entries
             || receipt.release_set != market.identity.selected_release_set.to_bytes()
             || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
             || receipt.market != pending.market.key.to_bytes()
@@ -2885,29 +2920,35 @@ fn authenticate_active_funding_ledger(
     rent: &solana_program::rent::Rent,
     allow_lamport_surplus: bool,
 ) -> Result<[u16; 3], ResolutionCoreOperatorErrorV3> {
+    let refuse = |conjunct: &str| {
+        eprintln!("active-funding-ledger refused: {conjunct}");
+        ResolutionCoreOperatorErrorV3::Funding
+    };
     if account.owner != resolution_program || account.executable {
-        return Err(ResolutionCoreOperatorErrorV3::Funding);
+        return Err(refuse("owner/executable"));
     }
-    let ledger = FundingLedgerV2::decode(&account.data)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    let ledger = FundingLedgerV2::decode(&account.data).map_err(|_| refuse("decode"))?;
     let entries = funding_entries_from_mask(ledger.selected_mask())?;
     let authenticated = ledger
         .authenticate(manifest_id, manifest)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| refuse("manifest binding"))?;
     for entry_index in entries {
         if authenticated
             .slot(entry_index)
-            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
+            .map_err(|_| refuse("slot read"))?
             .status()
             != FundingLedgerStatusV2::Active
-            || manifest
-                .entry(entry_index)
-                .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
-                .funding_quote()
-                .realm_collateral()
-                .is_some()
         {
-            return Err(ResolutionCoreOperatorErrorV3::Funding);
+            return Err(refuse("entry not Active"));
+        }
+        if manifest
+            .entry(entry_index)
+            .map_err(|_| refuse("manifest entry"))?
+            .funding_quote()
+            .realm_collateral()
+            .is_some()
+        {
+            return Err(refuse("realm-collateral quote"));
         }
     }
     authenticated
@@ -2916,7 +2957,7 @@ fn authenticate_active_funding_ledger(
             rent.minimum_balance(account.data.len()),
             allow_lamport_surplus,
         )
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        .map_err(|_| refuse("native custody arithmetic"))?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         resolution_program.to_bytes(),
         market.to_bytes(),

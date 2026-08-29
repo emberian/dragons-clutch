@@ -146,7 +146,7 @@ fn authenticate_rent_sink(
     rent_credit: &AccountInfo<'_>,
     rent_program: &AccountInfo<'_>,
     rent: &Rent,
-) -> Result<super::lifecycle::SeriesLifecycleRentSinkV3, ProgramError> {
+) -> Result<super::commit_plans::SeriesLifecycleRentSinkV3, ProgramError> {
     if rent_program.is_signer
         || rent_program.is_writable
         || !rent_program.executable
@@ -166,7 +166,7 @@ fn authenticate_rent_sink(
     let data = rent_credit
         .try_borrow_data()
         .map_err(|_| SeriesAccountErrorV3::State)?;
-    let sink = super::lifecycle::SeriesLifecycleRentSinkV3::admit(
+    let sink = super::commit_plans::SeriesLifecycleRentSinkV3::admit(
         credit_key,
         &data,
         market,

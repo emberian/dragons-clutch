@@ -167,21 +167,101 @@ pub struct RationalOpenSelectedHotBundleV3 {
     pub descriptor: [u8; CAPABILITY_PROGRAM_V4_BYTES],
 }
 
+/// Pre-founding-safe inputs for one selected open-action artifact bundle.
+///
+/// Identical in every field to [`RationalOpenSelectedHotBundleInputV3`] except
+/// that it names the immutable `TokenBehaviorSelectionV2` directly instead of
+/// an `AuthenticatedTokenBehaviorV2`, which cannot be constructed before the
+/// Market exists. The builder consulted the admission only for `selection()`
+/// and for a self-consistency check on its own digest, so nothing this form
+/// omits ever reached an artifact byte.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalOpenSelectedBundleInputV6<'a> {
+    /// Denominate or Reconstitute.
+    pub action: RepresentationActionV2,
+    /// Exact logical-41 account data lengths.
+    pub logical_data_lengths: &'a [u32],
+    /// Exact Registry-authenticated CategoricalQ1 ProductBasis body.
+    pub product_basis: &'a [u8],
+    /// Manifest-selected capability kind.
+    pub kind: [u8; 32],
+    /// Immutable Realm/release selection, chosen before Market founding.
+    pub token_behavior_selection: TokenBehaviorSelectionV2,
+    /// Manifest-selected root-tail schema.
+    pub root_schema: [u8; 32],
+    /// Exact finalized successor lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
+    /// Manifest-selected capacity profile.
+    pub capacity_profile: [u8; 32],
+    /// Exact root-tail data width.
+    pub root_state_bytes: u32,
+}
+
+/// Build one selected open-action artifact bundle with no Market in scope.
+pub fn build_rational_open_selected_bundle_v6(
+    input: RationalOpenSelectedBundleInputV6<'_>,
+) -> Result<RationalOpenSelectedHotBundleV3> {
+    build_open_selected_bundle_inner(
+        input.action,
+        input.logical_data_lengths,
+        input.product_basis,
+        input.kind,
+        input.token_behavior_selection,
+        input.root_schema,
+        input.lifecycle_policy,
+        input.capacity_profile,
+        input.root_state_bytes,
+    )
+}
+
 /// Build one complete immutable selected-action artifact bundle.
+///
+/// Identical output to [`build_rational_open_selected_bundle_v6`], which it
+/// delegates to after checking the admission against its own selection.
 pub fn build_rational_open_selected_hot_bundle_v3(
     input: RationalOpenSelectedHotBundleInputV3<'_>,
 ) -> Result<RationalOpenSelectedHotBundleV3> {
-    if !matches!(
+    let selection = input.authenticated_token_behavior.selection();
+    if hash(&selection.to_bytes()).to_bytes() != input.authenticated_token_behavior.content_digest()
+    {
+        return Err(Error::ContentIdentity);
+    }
+    build_open_selected_bundle_inner(
         input.action,
+        input.logical_data_lengths,
+        input.product_basis,
+        input.kind,
+        selection,
+        input.root_schema,
+        input.lifecycle_policy,
+        input.capacity_profile,
+        input.root_state_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_open_selected_bundle_inner(
+    action: RepresentationActionV2,
+    logical_data_lengths: &[u32],
+    product_basis: &[u8],
+    kind: [u8; 32],
+    token_behavior_selection: TokenBehaviorSelectionV2,
+    root_schema: [u8; 32],
+    lifecycle_policy_bytes: &[u8],
+    capacity_profile: [u8; 32],
+    root_state_bytes: u32,
+) -> Result<RationalOpenSelectedHotBundleV3> {
+    if !matches!(
+        action,
         RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute
     ) {
         return Err(Error::ArtifactGeometry);
     }
-    let account_profile = encode_account_profile(input)?;
-    let lifecycle_policy = Vec::from(input.lifecycle_policy);
-    let request_profile = encode_request_profile(input.action)?;
+    let account_profile = encode_account_profile(logical_data_lengths, product_basis)?;
+    let lifecycle_policy = Vec::from(lifecycle_policy_bytes);
+    let request_profile = encode_request_profile(action)?;
     let transition = encode_transition()?;
-    let effect = encode_effect(input.action)?;
+    let effect = encode_effect(action)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
         content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
@@ -195,20 +275,15 @@ pub fn build_rational_open_selected_hot_bundle_v3(
     )
     .map_err(Error::ExecutionStrategy)?;
     let strategy = strategy_value.to_bytes();
-    let token_behavior_selection = input.authenticated_token_behavior.selection().to_bytes();
-    if hash(&token_behavior_selection).to_bytes()
-        != input.authenticated_token_behavior.content_digest()
-    {
-        return Err(Error::ContentIdentity);
-    }
+    let token_behavior_selection = token_behavior_selection.to_bytes();
     let lifecycle_id = digest(&lifecycle_policy)?;
     let descriptor = CapabilityProgramV4::new(
-        content(input.kind)?,
+        content(kind)?,
         content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
         content(OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3)?,
-        content(input.root_schema)?,
+        content(root_schema)?,
         lifecycle_id,
-        content(input.capacity_profile)?,
+        content(capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
                 dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
@@ -229,7 +304,7 @@ pub fn build_rational_open_selected_hot_bundle_v3(
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect)?.to_bytes())?,
         },
-        input.root_state_bytes,
+        root_state_bytes,
     )
     .map_err(Error::CapabilityDescriptor)?
     .encode();
@@ -243,10 +318,9 @@ pub fn build_rational_open_selected_hot_bundle_v3(
         effect,
         descriptor,
     };
-    validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3(
-        &bundle,
-        input.authenticated_token_behavior,
-    )?;
+    // True by construction here: the bundle's config IS the selection it was
+    // built from, so the geometry is what remains to check.
+    validate_rational_open_selected_hot_bundle_v3(&bundle)?;
     Ok(bundle)
 }
 
@@ -367,17 +441,16 @@ pub fn validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3
     Ok(())
 }
 
-fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Result<Vec<u8>> {
-    if input.logical_data_lengths.len() != usize::from(RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3) {
+fn encode_account_profile(logical_data_lengths: &[u32], product_basis: &[u8]) -> Result<Vec<u8>> {
+    if logical_data_lengths.len() != usize::from(RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3) {
         return Err(Error::AccountProfileInput);
     }
-    let basis =
-        ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountProfileInput)?;
+    let basis = ProductBasisV3::decode(product_basis).map_err(|_| Error::AccountProfileInput)?;
     if basis.kind() != BasisKindV3::CategoricalQ1 || basis.basis_width() < 2 {
         return Err(Error::AccountProfileInput);
     }
-    let mut rules = Vec::with_capacity(input.logical_data_lengths.len());
-    for index in 0..input.logical_data_lengths.len() {
+    let mut rules = Vec::with_capacity(logical_data_lengths.len());
+    for index in 0..logical_data_lengths.len() {
         let writable = matches!(index, 0 | 16 | 17 | 28 | 37 | 38 | 39);
         let signer = index == 8;
         // A route alias carries NO privileges of its own: `authenticate` takes
@@ -411,8 +484,7 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
             4 => u32::try_from(BASIS_HEADER_BYTES_V3).map_err(|_| Error::AccountProfileInput)?,
             26 | 29 | 31 | 35 => 0,
             _ if opaque => 0,
-            _ => *input
-                .logical_data_lengths
+            _ => *logical_data_lengths
                 .get(index)
                 .ok_or(Error::AccountProfileInput)?,
         };

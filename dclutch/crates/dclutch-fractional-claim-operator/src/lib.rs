@@ -96,7 +96,8 @@ pub use selected_release_v4::{
     FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4, FRACTIONAL_SELECTED_ACTION_COUNT_V4,
     FRACTIONAL_SELECTED_ACTIONS_V4, FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4,
     FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4, FractionalFrameWidthsV4,
-    FractionalSelectedPublicationV4, FractionalSelectedReleaseErrorV4,
+    FractionalPublicationRecordV1, FractionalSelectedPublicationV4,
+    FractionalSelectedReleaseErrorV4,
     FractionalSelectedReleaseInputV4, FractionalSelectedReleaseV4, fractional_claims_frame_spec_v4,
     fractional_selected_release_v4, validate_fractional_selected_release_v4,
 };

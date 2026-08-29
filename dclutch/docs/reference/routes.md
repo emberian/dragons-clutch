@@ -18,7 +18,7 @@ stands:
 - **NEVER-EXECUTED** -- no campaign has run it and no reason is recorded
   yet.
 
-Currently **47** of **138**
+Currently **49** of **141**
 routes are in that last group.
 
 ## claims
@@ -47,39 +47,39 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `core/activate_capability_child#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/activate_capability_child#ActivateCapability`: Capability child activation; needs an activated capability root first. | `programs/dclutch-core-sbf/src/capability.rs:188` |
-| `core/authenticate_no_recovery_entries#None` | action | tag `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:794` |
-| `core/begin_retiring::process#BeginRetiring` | entry | variant `Action::BeginRetiring`; length `REQUEST_BYTES` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:324` |
-| `core/capability::process#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/capability::process#ActivateCapability`: ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. | `programs/dclutch-core-sbf/src/capability.rs:203` |
-| `core/capability::process#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/capability::process#CloseCapability`: Capability closure; needs an activated capability root first. | `programs/dclutch-core-sbf/src/lib.rs:423` |
-| `core/close_capability_child#CloseCapability` | action | variant `Action::CloseCapability` | blocked by rule `core/close_capability_child#CloseCapability`: Capability child closure; needs an activated capability child first. | `programs/dclutch-core-sbf/src/capability.rs:192` |
+| `core/activate_capability_child#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/activate_capability_child#ActivateCapability`: Capability child activation; needs an activated capability root first. | `programs/dclutch-core-sbf/src/capability.rs:187` |
+| `core/authenticate_no_recovery_entries#None` | action | tag `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:801` |
+| `core/begin_retiring::process#BeginRetiring` | entry | variant `Action::BeginRetiring`; length `REQUEST_BYTES` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:347` |
+| `core/capability::process#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/capability::process#ActivateCapability`: ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. | `programs/dclutch-core-sbf/src/capability.rs:202` |
+| `core/capability::process#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/capability::process#CloseCapability`: Capability closure; needs an activated capability root first. | `programs/dclutch-core-sbf/src/lib.rs:454` |
+| `core/close_capability_child#CloseCapability` | action | variant `Action::CloseCapability` | blocked by rule `core/close_capability_child#CloseCapability`: Capability child closure; needs an activated capability child first. | `programs/dclutch-core-sbf/src/capability.rs:191` |
 | `core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1` | action | tag ``; length `RETIREMENT_CHECKPOINT_CUSTODY_SUFFIX_BYTES_V1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/retire_v1.rs:796` |
 | `core/commit_checkpoint#AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1` | action | tag ``; length `RETIREMENT_CHECKPOINT_CUSTODY_SUFFIX_BYTES_V1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/retire_v1.rs:776` |
+| `core/execute_provider_v3::process#ExecuteProvider` | entry | variant `Action::ExecuteProvider`; length `execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:355` |
 | `core/finish_checkpoint_retirement#AGGREGATE_RETIREMENT_FINISH_MAGIC_V1` | action | tag ``; length `RETIREMENT_CHECKPOINT_FINISH_BYTES_V1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/retire_v1.rs:809` |
-| `core/found::process#Found` | entry | variant `Action::Found`; length `REQUEST_BYTES` | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:321` |
-| `core/found::project` | entry | length `PROJECT_FOUND_REQUEST_BYTES_V2`; magic `DCLTPFQ2` | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:313` |
-| `core/generic_founding_v1::process` | entry | length `GENERIC_FOUNDING_REQUEST_BYTES_V1`; magic `DCLTGFQ1` | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:236` |
-| `core/infrastructure::process_initialize` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1` | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:208` |
-| `core/open_market::process#OpenMarket` | entry | variant `Action::OpenMarket`; length `open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1` | blocked by rule `core/open_market::process#OpenMarket`: The standalone `Action::OpenMarket` route. | `programs/dclutch-core-sbf/src/lib.rs:338` |
+| `core/found::process#Found` | entry | variant `Action::Found`; length `REQUEST_BYTES` | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:344` |
+| `core/found::project` | entry | length `PROJECT_FOUND_REQUEST_BYTES_V2`; magic `DCLTPFQ2` | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:336` |
+| `core/generic_founding_v1::process` | entry | length `GENERIC_FOUNDING_REQUEST_BYTES_V1`; magic `DCLTGFQ1` | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:259` |
+| `core/infrastructure::process_initialize` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1` | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:231` |
+| `core/open_market::process#OpenMarket` | entry | variant `Action::OpenMarket`; length `open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1` | blocked by rule `core/open_market::process#OpenMarket`: The standalone `Action::OpenMarket` route. | `programs/dclutch-core-sbf/src/lib.rs:369` |
 | `core/process_found#FoundAndPermit` | action | variant `GenericFoundingStageV1::FoundAndPermit` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:368` |
 | `core/process_instruction` | entry | -- | executed (journey); executed (relayed-vertical); executed (tier1); refused (journey); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:1` |
-| `core/process_instruction#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:414` |
-| `core/process_instruction#ExecuteProvider` | action | variant `Action::ExecuteProvider` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:326` |
-| `core/process_instruction#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1`; magic `DCLTCRQ1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:380` |
+| `core/process_instruction#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:445` |
+| `core/process_instruction#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1`; magic `DCLTCRQ1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:411` |
 | `core/process_open#Open` | action | variant `GenericFoundingStageV1::Open` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:375` |
-| `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | action | tag `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:773` |
+| `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | action | tag `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:780` |
 | `core/resolution::process#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:266` |
 | `core/resolution::process#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | executed (journey) | `programs/dclutch-core-sbf/src/resolution.rs:267` |
 | `core/resolution::process#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-core-sbf/src/resolution.rs:264` |
-| `core/resolution::process#Retire` | entry | variant `Action::VerifyReadiness`; variant `Action::AdmitTerminal`; variant `Action::Retire`; length `resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1` | blocked by rule `core/resolution::process#Retire`: Resolution readiness/terminal admission; needs the Source/provider tier and an open Market. | `programs/dclutch-core-sbf/src/lib.rs:446` |
+| `core/resolution::process#Retire` | entry | variant `Action::VerifyReadiness`; variant `Action::AdmitTerminal`; variant `Action::Retire`; length `resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1` | blocked by rule `core/resolution::process#Retire`: Resolution readiness/terminal admission; needs the Source/provider tier and an open Market. | `programs/dclutch-core-sbf/src/lib.rs:477` |
 | `core/resolution::process#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:265` |
-| `core/retire_v1::process#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1` | blocked by rule `core/retire_v1::process#Retire`: Market retirement; needs an open, then terminal, Market. | `programs/dclutch-core-sbf/src/lib.rs:357` |
-| `core/retire_v1::process_checkpoint_prepare#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:387` |
-| `core/retire_v1::process_checkpoint_suffix` | entry | length `AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:187` |
-| `core/retirement_replay_handoff_v1::process` | entry | length `dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1`; magic `DCLCRH01` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:198` |
-| `core/series_consume::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLPCL01` | executed (tier4-series-occurrence-programtest); refused (tier4-series-occurrence-programtest) | `programs/dclutch-core-sbf/src/lib.rs:291` |
-| `core/series_open::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLFDC05` | blocked by rule `core/series_open::process`: Series Core route; needs the Series family tier and a Claims FoundingV5 receipt. | `programs/dclutch-core-sbf/src/lib.rs:267` |
-| `core/series_permit_expiry::process` | entry | length `SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1`; magic `DCLTSFX1` | blocked by rule `core/series_permit_expiry::process`: Series permit expiry; needs an open Series Market. | `programs/dclutch-core-sbf/src/lib.rs:222` |
+| `core/retire_v1::process#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1` | blocked by rule `core/retire_v1::process#Retire`: Market retirement; needs an open, then terminal, Market. | `programs/dclutch-core-sbf/src/lib.rs:388` |
+| `core/retire_v1::process_checkpoint_prepare#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:418` |
+| `core/retire_v1::process_checkpoint_suffix` | entry | length `AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:210` |
+| `core/retirement_replay_handoff_v1::process` | entry | length `dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1`; magic `DCLCRH01` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/lib.rs:221` |
+| `core/series_consume::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLPCL01` | executed (tier4-series-occurrence-programtest); refused (tier4-series-occurrence-programtest) | `programs/dclutch-core-sbf/src/lib.rs:314` |
+| `core/series_open::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLFDC05` | blocked by rule `core/series_open::process`: Series Core route; needs the Series family tier and a Claims FoundingV5 receipt. | `programs/dclutch-core-sbf/src/lib.rs:290` |
+| `core/series_permit_expiry::process` | entry | length `SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1`; magic `DCLTSFX1` | blocked by rule `core/series_permit_expiry::process`: Series permit expiry; needs an open Series Market. | `programs/dclutch-core-sbf/src/lib.rs:245` |
 
 ## custody
 
@@ -143,10 +143,11 @@ routes are in that last group.
 | --- | --- | --- | --- | --- |
 | `registry/continuation_v1::process` | entry | magic `DCLRGCI1` | blocked by rule `registry/continuation_v1::process`: DCLRGCI1, the Registry continuation route. | `programs/dclutch-registry-sbf/src/lib.rs:181` |
 | `registry/hot_continuation_v2::process` | entry | magic `DCLTHOT3` | blocked by rule `registry/hot_continuation_v2::process`: No gauntlet campaign drives this route yet. | `programs/dclutch-registry-sbf/src/lib.rs:163` |
+| `registry/process_abort#4` | action | tag `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-registry-sbf/src/record_v1.rs:68` |
 | `registry/process_activate_role#ActivateRole` | entry | variant `RegistryInstructionV1::ActivateRole` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:185` |
-| `registry/process_append#2` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:52` |
-| `registry/process_begin#1` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:49` |
-| `registry/process_finalize#3` | action | tag `` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:55` |
+| `registry/process_append#2` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:62` |
+| `registry/process_begin#1` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:59` |
+| `registry/process_finalize#3` | action | tag `` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:65` |
 | `registry/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
 | `registry/process_reauthenticate#Reauthenticate` | entry | variant `RegistryInstructionV1::Reauthenticate` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:188` |
 | `registry/record_v1::dispatch` | entry | magic `DCLTRIX1`; length `dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:173` |
@@ -164,33 +165,33 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `resolution/core_effect::process_core_effect` | entry | predicate `` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:192` |
-| `resolution/core_effect::process_direct_funding_activation_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:178` |
-| `resolution/core_effect::process_direct_funding_close_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:185` |
-| `resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:164` |
-| `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:171` |
+| `resolution/core_effect::process_core_effect` | entry | predicate `` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:207` |
+| `resolution/core_effect::process_direct_funding_activation_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:193` |
+| `resolution/core_effect::process_direct_funding_close_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:200` |
+| `resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:179` |
+| `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:186` |
 | `resolution/process_admit#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | blocked by rule `resolution/process_admit#AdmitTerminal`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1478` |
-| `resolution/process_append#AppendObservation` | action | variant `RelayInstructionV1::AppendObservation` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:175` |
+| `resolution/process_append#AppendObservation` | action | variant `RelayInstructionV1::AppendObservation` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:176` |
 | `resolution/process_capture#Capture` | action | variant `SponsoredPushActionV1::Capture` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:78` |
 | `resolution/process_close#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1487` |
 | `resolution/process_close_candidate#CloseCandidate` | action | variant `SponsoredPushActionV1::CloseCandidate` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:81` |
 | `resolution/process_close_head#CloseHead` | action | variant `SponsoredPushActionV1::CloseHead` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:83` |
-| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:185` |
+| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:186` |
 | `resolution/process_commit_failure#CommitFailure` | action | variant `SponsoredPushActionV1::CommitFailure` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:85` |
-| `resolution/process_consume#ConsumeRecord` | action | variant `RelayInstructionV1::ConsumeRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:182` |
+| `resolution/process_consume#ConsumeRecord` | action | variant `RelayInstructionV1::ConsumeRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:183` |
 | `resolution/process_create#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1460` |
-| `resolution/process_create_record#CreateRecord` | action | variant `RelayInstructionV1::CreateRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:172` |
+| `resolution/process_create_record#CreateRecord` | action | variant `RelayInstructionV1::CreateRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:173` |
 | `resolution/process_instruction` | entry | -- | executed (journey); executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:1` |
 | `resolution/process_reclaim#magic` | action | tag ``; magic `DCLTPRL3` | blocked by rule `resolution/process_reclaim#magic`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:81` |
-| `resolution/process_retire#RetireRecord` | action | variant `RelayInstructionV1::RetireRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:180` |
-| `resolution/process_seal#SealRecord` | action | variant `RelayInstructionV1::SealRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:178` |
+| `resolution/process_retire#RetireRecord` | action | variant `RelayInstructionV1::RetireRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:181` |
+| `resolution/process_seal#SealRecord` | action | variant `RelayInstructionV1::SealRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:179` |
 | `resolution/process_settle#Settle` | action | variant `SponsoredPushActionV1::Settle` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:79` |
 | `resolution/process_submit#magic` | action | tag ``; magic `DCLTPSB3` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:78` |
 | `resolution/process_verify#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey); executed (relayed-vertical) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1469` |
-| `resolution/provider_instruction_v3::process_provider_resolution_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:195` |
-| `resolution/provider_transport_v3::process_provider_transport_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:202` |
-| `resolution/relay_transport_v1::process_relay_transport_v1` | entry | predicate `` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:209` |
-| `resolution/sponsored_push_v1::process_sponsored_push_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:216` |
+| `resolution/provider_instruction_v3::process_provider_resolution_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:210` |
+| `resolution/provider_transport_v3::process_provider_transport_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:217` |
+| `resolution/relay_transport_v1::process_relay_transport_v1` | entry | predicate `` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:224` |
+| `resolution/sponsored_push_v1::process_sponsored_push_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:231` |
 
 ## series-shadow
 
@@ -202,27 +203,29 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:333` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:325` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:285` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:301` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:293` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:309` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:317` |
-| `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:348` |
-| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:356` |
-| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:364` |
-| `trading/generic_market_founding_v1::process_generic_market_founding_v3` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:376` |
-| `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:452` |
-| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: No gauntlet campaign drives this route yet. | `programs/dclutch-trading-sbf/src/lib.rs:455` |
-| `trading/outer::process_capability_lifecycle#else` | entry | fallthrough `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:457` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:340` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:332` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:292` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:308` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:300` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:316` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:324` |
+| `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:355` |
+| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:363` |
+| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:371` |
+| `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:395` |
+| `trading/generic_founding_stages_v1::process_generic_market_open_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:407` |
+| `trading/generic_market_founding_v1::process_generic_market_founding_v3` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:383` |
+| `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:483` |
+| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: No gauntlet campaign drives this route yet. | `programs/dclutch-trading-sbf/src/lib.rs:486` |
+| `trading/outer::process_capability_lifecycle#else` | entry | fallthrough `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:488` |
 | `trading/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:1` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:429` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:441` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:400` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:417` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:388` |
-| `trading/user_position_admission_v1::process_user_position_admission_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:340` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:460` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:472` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:431` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:448` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:419` |
+| `trading/user_position_admission_v1::process_user_position_admission_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:347` |
 
 ## Campaign records naming routes the code does not
 
@@ -241,7 +244,6 @@ fixed rather than dropped.
 | `claims/process_close#Close` | `tools/gauntlet/claims-custody/claims-bindings.json` | claims position: close a zero Position |
 | `claims/process_close#Close` | `tools/gauntlet/claims-custody/claims-bindings.json` | claims sparse: caller refuses after the complete chain |
 | `claims/process_close#Close` | `tools/gauntlet/claims-custody/claims-bindings.json` | claims sparse: admit, transfer and close |
-| `core/execute_provider_v3::process#ExecuteProvider` | `tools/gauntlet/journey/bindings.json` | journey: Core admits the terminal state of an atomically founded Market |
 | `core/persist_state#VerifyFundReady` | `tools/gauntlet/journey/bindings.json` | journey: activate the three-ledger Resolution funding of an Open Market |
 | `core/persist_state#VerifyFundReady` | `tools/gauntlet/relayed-vertical/bindings.json` | relayed vertical: activate the no-recovery Resolution funding |
 | `trading/generic_market_founding_v1::process_generic_market_founding_v2` | `tools/gauntlet/tier1/bindings.json` | DCLTGMF3 refuses a substituted Claims request and rolls the whole founding back |

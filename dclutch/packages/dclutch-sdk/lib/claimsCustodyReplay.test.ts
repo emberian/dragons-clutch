@@ -200,6 +200,11 @@ describe('Claims-role Custody replay creation (the wallet-side redemption precon
     expect(request[CUSTODY_REQUEST_OPERATION_OFFSET_V1]).toBe(0);
     expect(request[CUSTODY_REQUEST_CALLER_ROLE_OFFSET_V1]).toBe(EXECUTION_ROLE_CLAIMS_V1);
     expect(new PublicKey(request.slice(CUSTODY_REQUEST_MARKET_OFFSET_V1, CUSTODY_REQUEST_MARKET_OFFSET_V1 + 32)).toBase58()).toBe(MARKET);
+    // Payer and rent refund are distinct keys at distinct offsets, and the
+    // encoder writes both. Pinning only the refund would let the two swap
+    // places without a test noticing — the refund is the immutable Core Market
+    // RentCredit this case is named for, and the payer is a funding wallet.
+    expect(new PublicKey(request.slice(CUSTODY_REQUEST_PAYER_OFFSET_V1, CUSTODY_REQUEST_PAYER_OFFSET_V1 + 32)).toBase58()).toBe(PAYER);
     expect(new PublicKey(request.slice(CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1, CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1 + 32)).toBase58())
       .toBe(RENT_REFUND);
     expect(new DataView(request.buffer).getBigUint64(CUSTODY_REQUEST_RENT_LAMPORTS_OFFSET_V1, true)).toBe(2895840n);

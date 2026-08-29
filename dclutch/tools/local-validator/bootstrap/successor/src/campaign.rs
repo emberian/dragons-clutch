@@ -2670,6 +2670,9 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     // Key-free detectors first. Their authenticated result is fsynced before
     // the process opens any keypair file.
     let (substrate, observed_roles) = substrate_state(&mut rpc, &plan)?;
+    // The activated release must be the one actually running. Costs no extra
+    // RPC: substrate_state already read every role's live slot and ELF digest.
+    crate::release_identity::authenticate_activated_release_is_live_v1(&plan, &observed_roles)?;
     let mut states = vec![(StageV1::Substrate, substrate)];
     states.push((StageV1::Publication, publication_state(&mut rpc, &plan)?));
     states.push((StageV1::Initialize, initialize_state(&mut rpc, &plan)?));
@@ -3225,6 +3228,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         return Ok(());
     }
     let report_cell = RefCell::new(report);
+    let sealing_binding;
     let execution = {
         let mut checkpoint = |value: &crate::market::MarketExecutionCheckpointV1| -> Result<()> {
             let mut report = report_cell.borrow_mut();
@@ -3258,6 +3262,10 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             market_sha256,
             payer.pubkey(),
         )?;
+        // The binding is moved into the recorder and dropped with it; the
+        // sealing totality pass below needs the same identity to annotate any
+        // journal the run never observed finalize.
+        sealing_binding = binding.clone();
         let mut recorder = Some(crate::market::FoundingSubmissionRecorderV1::new(
             binding,
             &mut founding_submission_journals,
@@ -3279,6 +3287,25 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         )?
     };
     let mut report = report_cell.into_inner();
+    // Sealing-time fee totality: any journal the run never observed finalize
+    // either resolves against the chain now or gains an explicit
+    // unresolved-fee marker, so the report accounts every send it made. This
+    // pass may not abort the seal; every refusal degrades inside it.
+    if crate::market::resolve_stranded_founding_submissions_v1(
+        &mut rpc,
+        &sealing_binding,
+        &mut founding_submission_journals,
+    ) {
+        report["foundingSubmissionJournals"] = serde_json::to_value(
+            founding_submission_journals
+                .values()
+                .cloned()
+                .collect::<Vec<_>>(),
+        )?;
+        if let Some(path) = &args.evidence_path {
+            write_evidence_atomically(path, &report)?;
+        }
+    }
     let local_participant_fixture_liquidity = execution
         .market
         .as_ref()

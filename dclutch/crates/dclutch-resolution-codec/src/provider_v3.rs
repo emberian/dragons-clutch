@@ -83,6 +83,9 @@ const GENERATION_OFFSET: usize = 16;
 const TERMINAL_SEQUENCE_OFFSET: usize = 24;
 const REQUEST_IDENTITIES_OFFSET: usize = 32;
 const REQUEST_IDENTITY_COUNT: usize = 18;
+/// Where `parent_request_digest` sits: the seventeenth request identity, and so
+/// the one field the direct-intent digest has to blank out.
+const PARENT_REQUEST_DIGEST_OFFSET: usize = REQUEST_IDENTITIES_OFFSET + 16 * 32;
 const RECEIPT_IDENTITIES_OFFSET: usize = 32;
 const RECEIPT_IDENTITY_COUNT: usize = 18;
 
@@ -500,8 +503,7 @@ pub fn provider_resolution_direct_intent_digest_v1(
         return Err(Error::InvalidReceiptShape);
     }
     let mut bytes = request.to_bytes()?;
-    let parent_offset = REQUEST_IDENTITIES_OFFSET + 16 * 32;
-    bytes[parent_offset..parent_offset + 32].fill(0);
+    bytes[PARENT_REQUEST_DIGEST_OFFSET..PARENT_REQUEST_DIGEST_OFFSET + 32].fill(0);
     Ok(digestv(&[
         PROVIDER_RESOLUTION_DIRECT_INTENT_DIGEST_DOMAIN_V1,
         &bytes,

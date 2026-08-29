@@ -109,8 +109,10 @@ const _: () = assert!(
 const ALLOWED_FUNDING_COUNTS: u64 =
     ((1_u64 << (SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3 + 1)) - 1) & !1;
 const SERIES_ACTION_HEADER_OFFSET_V4: u32 = 128;
-const SERIES_CONSUME_COMMON_SCALAR_COUNT_V4: u16 = 5;
-const SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4: u16 = 1;
+const SERIES_CONSUME_COMMON_SCALAR_COUNT_V4: u16 =
+    super::consume_artifacts_v4::SERIES_CONSUME_COMMON_SCALAR_COUNT_V4;
+const SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4: u16 =
+    super::consume_artifacts_v4::SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4;
 const _: () = assert!(SERIES_ACTION_HEADER_BYTES_V3 == 128);
 
 /// Stable refusal from the Series-owned Effect V4 topology join.
@@ -441,8 +443,8 @@ fn validate_base_route(
     {
         return Err(SeriesConsumeEffectErrorV4::BaseProgram);
     }
-    let zero_scalars = [0_u64; 5];
-    let zero_identities = [[0_u8; 32]; 1];
+    let zero_scalars = [0_u64; SERIES_CONSUME_COMMON_SCALAR_COUNT_V4 as usize];
+    let zero_identities = [[0_u8; 32]; SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4 as usize];
     let resolved = program
         .resolved_invocation(expected.route, 0, 0, &zero_scalars, &zero_identities)
         .map_err(|_| SeriesConsumeEffectErrorV4::BaseProgram)?;
@@ -530,7 +532,8 @@ pub(super) mod tests {
     use super::*;
     use crate::series::instruction::encode_series_action_header_v3;
 
-    const SCALARS: usize = 5;
+    const SCALARS: usize = SERIES_CONSUME_COMMON_SCALAR_COUNT_V4 as usize;
+    const IDENTITIES: usize = SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4 as usize;
 
     fn id(byte: u8) -> ContentId {
         ContentId::new([byte; 32]).expect("fixture identity")
@@ -653,7 +656,9 @@ pub(super) mod tests {
     }
 
     fn registers(funding_count: u16) -> [u64; SCALARS] {
-        [128, 64, 2, 32, u64::from(funding_count)]
+        // Request geometry in 0..5; the root-header generation and manifest
+        // entry index occupy the two profile-projected scalars.
+        [128, 64, 2, 32, u64::from(funding_count), 9, 4]
     }
 
     #[test]
@@ -661,7 +666,7 @@ pub(super) mod tests {
         let bytes = successor();
         let request = request();
         let scalars = registers(7);
-        let identities = [[0_u8; 32]; 1];
+        let identities = [[0_u8; 32]; IDENTITIES];
         let admitted = SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &identities, 7)
             .expect("global Series program");
         assert_eq!(admitted.program().account_count(0, &scalars), Ok(168));
@@ -713,7 +718,7 @@ pub(super) mod tests {
     fn funding_hint_and_duplicate_proof_ranges_are_exact() {
         let bytes = successor();
         let request = request();
-        let identities = [[0_u8; 32]; 1];
+        let identities = [[0_u8; 32]; IDENTITIES];
         for count in [1_u16, 16] {
             let scalars = registers(count);
             let admitted =
@@ -751,7 +756,7 @@ pub(super) mod tests {
         let bytes = successor();
         let mut padded_request = request();
         let scalars = registers(2);
-        let identities = [[0_u8; 32]; 1];
+        let identities = [[0_u8; 32]; IDENTITIES];
         padded_request.push(0);
         assert!(
             SeriesConsumeEffectV4::decode(&bytes, &padded_request, 0, &scalars, &identities, 2,)

@@ -119,7 +119,55 @@ pub(crate) struct MarketRunInput {
     /// while an in-process producer is assembling the Resolution base and is
     /// refused by `validate_market_input`.
     pub(crate) direct_capability: Option<DirectMarketCapabilityV1>,
+    /// Family-neutral selected-capability closure for the one non-Resolution
+    /// manifest entry, in the byte shape the selection seam consumes. Exactly
+    /// one of this and `direct_capability` must be present:
+    /// `validate_market_input` refuses zero closures and refuses two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_capability: Option<SelectedCapabilityV1>,
     pub(crate) linked_basis_hex: String,
+}
+
+/// One Registry record a selected capability's publication chain finalizes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectedCapabilityRecordV1 {
+    /// Operator-facing name; also the founding-evidence label, so it must be
+    /// unique within one closure.
+    pub(crate) label: String,
+    /// Schema/release identity the record finalizes under, read off the
+    /// release's own artifacts by the family compiler.
+    pub(crate) schema_hex: String,
+    /// Exact semantic bytes.
+    pub(crate) body_hex: String,
+}
+
+/// One family-neutral selected-capability closure, serialized.
+///
+/// Every byte field is the family release compiler's own output; the driver
+/// derives the manifest entry from these through the selection seam
+/// (`selected_capability.rs`) and restates nothing. An additional family is
+/// this payload plus its publication — not new driver code.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectedCapabilityV1 {
+    /// Operator-facing family label (for example "general").
+    pub(crate) family: String,
+    /// Exact `CapabilityProgramSetV2` bytes.
+    pub(crate) program_set_hex: String,
+    /// The selected V4 descriptor authoring the entry's kind, capacity
+    /// profile, root schema, and derivation policy.
+    pub(crate) selected_descriptor_hex: String,
+    /// Exact config record body; must be derivable before the Market exists
+    /// (the seam's fixed-point invariant).
+    pub(crate) config_hex: String,
+    /// The family's canonical Market-bindable publication bytes.
+    pub(crate) publication_hex: String,
+    /// Every record the Registry must finalize for this release.
+    pub(crate) records: Vec<SelectedCapabilityRecordV1>,
+    pub(crate) activation_deadline_slot: u64,
+    pub(crate) root_rent_minimum_lamports: u64,
+    pub(crate) selected_manifest_entry_index: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -432,6 +480,57 @@ pub(crate) struct TransactionEvidence {
     pub(crate) logs: Vec<String>,
 }
 
+impl TransactionEvidence {
+    /// The program refusal code this transaction actually earned, if any.
+    ///
+    /// `error` carries the runtime's whole `TransactionError`. A program
+    /// refusal is exactly `{"InstructionError":[index,{"Custom":code}]}`;
+    /// everything else the runtime can say — a missing signature, a lamport
+    /// shortfall, an unknown instruction, a blown compute meter — is a
+    /// different kind of failure and returns `None` here. That distinction is
+    /// the one a hostile most needs, because "the transaction failed" and "the
+    /// wall I aimed at refused it" are different claims and only the second is
+    /// evidence.
+    pub(crate) fn refusal_code(&self) -> Option<u32> {
+        let entry = self.error.as_ref()?.get("InstructionError")?.as_array()?;
+        u32::try_from(entry.get(1)?.get("Custom")?.as_u64()?).ok()
+    }
+
+    /// Require the exact refusal this hostile claims to prove.
+    ///
+    /// A hostile that only asserts failure proves that SOMETHING refused, which
+    /// is the weakest reading an adversarial probe admits: a typo in the frame,
+    /// an unfunded probe wallet, or a wall three layers before the one under
+    /// test all satisfy it equally. Three walls stayed invisible behind exactly
+    /// that during this wave, and the composed founding's own refusal shared a
+    /// code with a hostile that was passing beside it.
+    ///
+    /// Pinning makes the probe state which wall it believes it hit. A wall that
+    /// MOVES then becomes a loud failure naming both codes, instead of a
+    /// campaign that stays green while testing something else.
+    pub(crate) fn refusing(self, expected: u32) -> crate::Result<Self> {
+        match self.refusal_code() {
+            Some(code) if code == expected => Ok(self),
+            Some(code) => Err(crate::Error::new(format!(
+                "{}: refused with 0x{code:04X}, not the pinned 0x{expected:04X}. \
+                 The probe still refused, so the campaign would have passed on \
+                 the old boolean assertion — read which wall moved before \
+                 repinning.",
+                self.label
+            ))),
+            None => Err(crate::Error::new(format!(
+                "{}: expected refusal 0x{expected:04X} but the failure carried no \
+                 program refusal code: {}",
+                self.label,
+                self.error
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "no error at all".into())
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AccountEvidence {
     pub(crate) address: String,
@@ -475,4 +574,58 @@ pub(crate) struct SuccessorRunEvidence {
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
     pub(crate) remaining_execution_seam: String,
+}
+
+#[cfg(test)]
+mod refusal_pin_tests {
+    use super::TransactionEvidence;
+    use serde_json::json;
+
+    fn evidence(error: Option<serde_json::Value>) -> TransactionEvidence {
+        TransactionEvidence {
+            label: "probe".into(),
+            signature: "sig".into(),
+            slot: 1,
+            transaction_metadata_available: true,
+            fee_lamports: Some(5000),
+            fee_only_balance_change: Some(true),
+            compute_units_consumed: Some(1234),
+            error,
+            logs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn reads_the_custom_code_out_of_an_instruction_error() {
+        let refused = evidence(Some(json!({"InstructionError": [1, {"Custom": 0x600B}]})));
+        assert_eq!(refused.refusal_code(), Some(0x600B));
+        let kept = refused.refusing(0x600B).expect("the pinned code is the observed one");
+        assert_eq!(kept.label, "probe");
+    }
+
+    #[test]
+    fn a_moved_wall_is_an_error_naming_both_codes() {
+        // The whole point: this transaction DID refuse, so the boolean
+        // assertion this replaces would have passed it.
+        let refused = evidence(Some(json!({"InstructionError": [0, {"Custom": 0x1004}]})));
+        let message = refused.refusing(0x1003).unwrap_err().to_string();
+        assert!(message.contains("0x1004"), "{message}");
+        assert!(message.contains("0x1003"), "{message}");
+    }
+
+    #[test]
+    fn a_failure_that_is_not_a_program_refusal_is_not_a_refusal() {
+        // A hostile that dies on its own malformed signature proves nothing
+        // about the wall it aimed at, and must not read as the pinned code.
+        for other in [
+            json!("AccountNotFound"),
+            json!({"InstructionError": [0, "PrivilegeEscalation"]}),
+            json!({"InsufficientFundsForRent": {"account_index": 0}}),
+        ] {
+            let failed = evidence(Some(other.clone()));
+            assert_eq!(failed.refusal_code(), None, "{other}");
+            assert!(failed.refusing(0x3001).is_err(), "{other}");
+        }
+        assert_eq!(evidence(None).refusal_code(), None);
+    }
 }

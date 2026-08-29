@@ -88,10 +88,16 @@ The Token-2022 zero-extension profile accepts only exact 82-byte Mints and
 165-byte Accounts. It does not parse account-type or TLV storage. Any longer
 state, including padding plus a zero/unknown/known extension, is refused.
 
-The separately named closeable-Mint V2 profile accepts exactly 202 bytes: one
-initialized base Mint, canonical zero padding, the Mint account type, and one
-`MintCloseAuthority` entry. It refuses spare TLV capacity, unknown or duplicate
-extensions, noncanonical padding, and trailing bytes. This narrow exception is
+The separately named closeable-Mint V2 profile accepts exactly 238 bytes: one
+initialized base Mint, canonical zero padding, the Mint account type, and the
+two lifecycle extensions the protocol's terminal path uses — one
+`MintCloseAuthority` and one `PermissionedBurn`, in either relative order,
+because Token-2022 fixes that order nowhere. `PermissionedBurn` is required
+rather than optional because `BurnReceipt`, `BurnShard` and the Fractional
+`WholeUnwrap` retire these Mints through it, and Token-2022 extensions are
+init-time-only, so a Mint that lacks it can never be burned or repaired. The
+profile refuses spare TLV capacity, unknown or duplicate extensions,
+noncanonical padding, and trailing bytes. This narrow exception is
 for lifecycle-created protocol Mints whose zero supply must permit exact rent
 reclamation; it does not broaden the ordinary transfer profile.
 

@@ -26,8 +26,9 @@ use dclutch_fractional_claim_contract::{
     FractionalRetirementRequestV3, decode_fractional_capability_root_v4,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsV2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
 use dclutch_sha256_adapter::digest;
 use dclutch_token_svm::{
@@ -276,12 +277,42 @@ fn authenticate_root(
     let root_input = root.input();
     let (expected_root, expected_root_bump) =
         Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key);
+    // The config split, pinned on its own code. The terms account was already
+    // authenticated against `input.terms` by `authenticate_terms_market_and_mint`
+    // before this function runs; re-decoding it here is the same pattern
+    // `prepare_cursor` already uses, and keeps the selection check beside the
+    // root authentication it belongs to.
+    let terms_data = account(accounts, TERMS_RAW)?
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let terms = FractionalExposureTermsV2::decode(
+        &terms_data,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: input.terms,
+            finalized_terms_id: input.terms,
+            recomputed_terms_digest: input.terms,
+            finalized_terms_digest: input.terms,
+            record_authenticated: true,
+        },
+    )
+    .map_err(|_| ClaimsSbfError::Representation)?;
+    let mut selection_config = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut selection_config,
+    )
+    .map_err(|_| ClaimsSbfError::SelectionConfig)?;
+    if header.selection().config().to_bytes() != digest(&selection_config) {
+        return Err(ClaimsSbfError::SelectionConfig.into());
+    }
+    drop(terms_data);
     if root_account.key != &expected_root
         || root_account.key.to_bytes() != input.root
         || root_account.owner != trading_program.key
         || header.release_set().to_bytes() != input.release_set
         || header.market() != input.market
-        || header.selection().config().to_bytes() != input.terms
         || root_input.bump != expected_root_bump
         || root_input.terms != input.terms
         || root_input.market != input.market

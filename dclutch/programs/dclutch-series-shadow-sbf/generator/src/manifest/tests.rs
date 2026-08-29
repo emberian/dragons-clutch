@@ -53,6 +53,10 @@ impl Fixture {
     }
 
     fn source(&self) -> SeriesShadowBundleSourceV4<'_> {
+        self.source_with_certificate(identity(7))
+    }
+
+    fn source_with_certificate(&self, certificate: ContentId) -> SeriesShadowBundleSourceV4<'_> {
         SeriesShadowBundleSourceV4 {
             descriptor: SeriesShadowDescriptorSemanticsV4 {
                 kind: identity(1),
@@ -67,7 +71,7 @@ impl Fixture {
                 semantic_source: SEMANTIC_SOURCE,
                 compiler_source: EPHEMERAL_COMPILER_SOURCE_MANIFEST,
                 toolchain_manifest: EPHEMERAL_TOOLCHAIN_MANIFEST,
-                certificate: identity(7),
+                certificate,
             },
             lifecycle: &self.lifecycle,
             fixed_data_lengths: &self.lengths,
@@ -198,6 +202,61 @@ fn input_bundle_and_framing_substitution_refuse() {
         ),
         Ok(())
     );
+}
+
+/// The ShadowAot certificate reaches every downstream artifact.
+///
+/// This is the software half of a fact whose other half was measured on
+/// real SBF ELFs: two accelerator builds whose generated includes differed
+/// only in `SERIES_SHADOW_CERTIFICATE_ID_V1` produced different `elf_digest`
+/// values, with the 32 certificate bytes appearing verbatim twice in each
+/// ELF and the rebuild of either one byte-identical.
+///
+/// That matters because `ExecutionStrategyCertificateV2::artifact_release`
+/// must name an `ArtifactReleaseV1`, and that record carries `elf_digest`.
+/// So the certificate's identity determines the ELF, and the ELF determines
+/// what the certificate must contain — a SHA-256 fixed point. No certificate
+/// can truthfully name the deployment that embeds it.
+///
+/// What this test pins is the DEPENDENCY, not the impossibility. If any
+/// assertion here starts failing, the certificate has stopped reaching the
+/// bundle, and the conclusion above has to be re-derived rather than assumed.
+#[test]
+fn the_certificate_reaches_every_downstream_artifact() {
+    let fixture = Fixture::new();
+    let first = crate::compile_series_shadow_bundle_v4(fixture.source_with_certificate(identity(7)))
+        .expect("bundle compiles for the first certificate");
+    let second =
+        crate::compile_series_shadow_bundle_v4(fixture.source_with_certificate(identity(8)))
+            .expect("bundle compiles for the second certificate");
+
+    assert_eq!(first.certificate, identity(7));
+    assert_eq!(second.certificate, identity(8));
+
+    // The certificate is inside the strategy, the strategy is named by the
+    // descriptor, and both are inside the complete-bundle digest.
+    assert_ne!(first.strategy, second.strategy);
+    assert_ne!(first.capability_program, second.capability_program);
+    assert_ne!(first.bundle_digest, second.bundle_digest);
+
+    // Everything the certificate does NOT reach stays fixed, so the
+    // divergence above is the certificate alone and not a noisy fixture.
+    assert_eq!(first.account_profile, second.account_profile);
+    assert_eq!(first.request_profile, second.request_profile);
+    assert_eq!(first.transition, second.transition);
+    assert_eq!(first.effect, second.effect);
+    assert_eq!(first.lifecycle, second.lifecycle);
+
+    // And it survives all the way into the bytes the accelerator ELF
+    // compiles in, which is the edge that closes the loop.
+    let emit = |certificate| {
+        let manifest =
+            compile_series_shadow_source_manifest_v1(fixture.source_with_certificate(certificate))
+                .expect("manifest compiles");
+        crate::emit_series_shadow_generated_include_v1(&manifest).expect("include emits")
+    };
+    assert_ne!(emit(identity(7)), emit(identity(8)));
+    assert_eq!(emit(identity(7)), emit(identity(7)));
 }
 
 fn identity(tag: u8) -> ContentId {

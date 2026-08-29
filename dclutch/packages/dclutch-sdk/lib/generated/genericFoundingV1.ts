@@ -49,7 +49,7 @@ export const MAX_TX_ACCOUNT_LOCKS_V2 = 64 as const;
 /** Indexes into the Found stage that the route itself dereferences. */
 export const CORE_FOUND_MARKET_INDEX_V1 = 1 as const;
 export const CORE_FOUND_CORE_PROGRAM_INDEX_V1 = 13 as const;
-export const CORE_FOUND_TRADING_PROGRAM_INDEX_V1 = 25 as const;
+export const CORE_FOUND_TRADING_PROGRAM_INDEX_V1 = 24 as const;
 export const CORE_FOUND_PERMIT_SUFFIX_INDEX_V1 = 0 as const;
 export const CORE_FOUND_CLAIMS_PROGRAM_SUFFIX_INDEX_V1 = 7 as const;
 export const CORE_FOUND_CUSTODY_PROGRAM_SUFFIX_INDEX_V1 = 9 as const;

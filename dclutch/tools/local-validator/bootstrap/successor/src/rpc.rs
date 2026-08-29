@@ -396,6 +396,21 @@ enum ConfirmOutcomeV1 {
     Dropped,
 }
 
+/// The chain's sealing-time answer about a durable signature the campaign
+/// never observed finalize -- [`Rpc::finalized_signed_packet`]'s `None`,
+/// distinguished into the three facts an accounting marker must separate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LateSignatureProbeV1 {
+    /// A finalized status is served but the transaction metadata is not: the
+    /// send LANDED at this slot, and its deterministic fee was charged.
+    StatusWithoutMetadata { slot: u64 },
+    /// Neither status nor metadata: purged history, or a send that never
+    /// landed. The fee stays two-point.
+    Unserved,
+    /// The endpoint could not answer; nothing may be concluded.
+    Refused,
+}
+
 /// One exact finalized transaction recovered without any submission attempt.
 pub(crate) struct FinalizedSignedPacketV1 {
     pub(crate) evidence: TransactionEvidence,
@@ -528,6 +543,51 @@ impl Rpc {
             )));
         }
         Ok(returned)
+    }
+
+    /// One late, single-shot question at campaign sealing: did the chain ever
+    /// see this durable signature? Errors are ANSWERS here, not fatalities --
+    /// the caller is writing an accounting marker for a submission it never
+    /// observed finalize, and a refused endpoint must degrade the marker to
+    /// "refused", never abort the seal. Returns the verdict and the finalized
+    /// slot at which the chain was asked (0 when even that is unknowable).
+    pub(crate) fn late_signature_probe_v1(
+        &mut self,
+        signature: Signature,
+    ) -> (LateSignatureProbeV1, u64) {
+        let result = match self.call(
+            "getSignatureStatuses",
+            &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
+        ) {
+            Ok(result) => result,
+            Err(_) => return (LateSignatureProbeV1::Refused, 0),
+        };
+        let checked_at_slot = result
+            .get("context")
+            .and_then(|context| context.get("slot"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let Some(status) = result
+            .get("value")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .filter(|value| !value.is_null())
+        else {
+            return (LateSignatureProbeV1::Unserved, checked_at_slot);
+        };
+        // Only a FINALIZED status proves the fee is settled history; a lesser
+        // commitment at sealing time stays an unserved two-point unknown
+        // rather than becoming a claim the chain could still roll back.
+        if status.get("confirmationStatus").and_then(Value::as_str) != Some("finalized") {
+            return (LateSignatureProbeV1::Unserved, checked_at_slot);
+        }
+        match status.get("slot").and_then(Value::as_u64) {
+            Some(slot) if slot > 0 => (
+                LateSignatureProbeV1::StatusWithoutMetadata { slot },
+                checked_at_slot,
+            ),
+            _ => (LateSignatureProbeV1::Refused, checked_at_slot),
+        }
     }
 
     /// Poll one exact signature and, only when finalized, authenticate and

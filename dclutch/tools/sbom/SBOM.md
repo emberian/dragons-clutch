@@ -2233,10 +2233,10 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller/Cargo.toml` | 173 |
 | `programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml` | 175 |
 | `programs/dclutch-custody-sbf/test-programs/caller/Cargo.toml` | 165 |
-| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 807 |
+| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 808 |
 | `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml` | 201 |
 | `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 771 |
-| `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 803 |
+| `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 804 |
 | `programs/dclutch-general-accelerator-sbf/test-programs/general-caller/Cargo.toml` | 160 |
 | `programs/dclutch-series-shadow-sbf/generator/Cargo.toml` | 198 |
 | `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml` | 787 |
@@ -2256,8 +2256,8 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `tools/gauntlet/census/Cargo.toml` | 22 |
 | `tools/gauntlet/direct/producer/Cargo.toml` | 754 |
 | `tools/gauntlet/journey/Cargo.toml` | 362 |
-| `tools/gauntlet/relayed-vertical/Cargo.toml` | 362 |
-| `tools/local-validator/bootstrap/successor/Cargo.toml` | 403 |
+| `tools/gauntlet/relayed-vertical/Cargo.toml` | 405 |
+| `tools/local-validator/bootstrap/successor/Cargo.toml` | 405 |
 | `tools/relayer/Cargo.toml` | 229 |
 
 ## Stray lockfiles (not read by cargo, not part of this closure)

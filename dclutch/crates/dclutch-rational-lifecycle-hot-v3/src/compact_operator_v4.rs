@@ -12,7 +12,8 @@ use dclutch_capability_program_contract::hot_v3::{
     HotExecutionEnvelopeV3,
 };
 use dclutch_rational_representation_v2_contract::{
-    AuthenticatedTokenBehaviorV2, RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+    AuthenticatedTokenBehaviorV2, ProtocolPositionClaimsCapabilitySeedsV2,
+    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
 };
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
 use dclutch_rational_representation_v2_lifecycle_contract::{
@@ -41,6 +42,12 @@ pub struct RationalLifecycleVacancyAccountsV4 {
     pub shard_mint: AccountMeta,
     /// Claims-derived Token-2022 Structured custody PDA.
     pub structured_custody: AccountMeta,
+    /// Claims-derived capability custody owner PDA.
+    ///
+    /// Supplied rather than baked into the artifacts, which is what lets the
+    /// compact effect PROJECT it like the coordinate actions already do. The
+    /// order here matches the coordinate account group exactly.
+    pub custody_owner: AccountMeta,
     /// Canonical LBV2 ProtocolPosition PDA for the derived custody owner.
     pub position: AccountMeta,
     /// Canonical ProtocolPosition admission PDA.
@@ -130,6 +137,7 @@ pub fn build_rational_lifecycle_compact_hot_instruction_v4(
         claims_accounts.extend([
             group.shard_mint.clone(),
             group.structured_custody.clone(),
+            group.custody_owner.clone(),
             group.position.clone(),
             group.admission.clone(),
         ]);
@@ -366,11 +374,23 @@ fn validate_vacancy_group(
         &claims_program,
     )
     .0;
+    // The owning crate's seed constructor, not a hand-assembled tuple: the
+    // domain AND the order come from the one place that declares them.
+    let owner_seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(
+        descriptor_id,
+        u32::from_le_bytes(outcome),
+    )
+    .map_err(|_| Error::ContentIdentity)?;
+    let expected_owner = Pubkey::find_program_address(&owner_seeds.as_slices(), &claims_program).0;
     if group.shard_mint.pubkey != expected_shard
         || group.structured_custody.pubkey != expected_structured
+        // The owner is now supplied, so the operator pins it exactly as the
+        // Claims vacancy admission does -- a caller cannot name another one.
+        || group.custody_owner.pubkey != expected_owner
         || [
             &group.shard_mint,
             &group.structured_custody,
+            &group.custody_owner,
             &group.position,
             &group.admission,
         ]
@@ -680,6 +700,19 @@ mod tests {
                         .0,
                         false,
                     ),
+                    custody_owner: AccountMeta::new_readonly(
+                        Pubkey::find_program_address(
+                            &ProtocolPositionClaimsCapabilitySeedsV2::new(
+                                key(21).to_bytes(),
+                                u32::from_le_bytes(outcome),
+                            )
+                            .expect("owner seeds")
+                            .as_slices(),
+                            &claims,
+                        )
+                        .0,
+                        false,
+                    ),
                     position: AccountMeta::new_readonly(
                         key(200_u8
                             .checked_add(u8::try_from(index).expect("row"))
@@ -707,7 +740,9 @@ mod tests {
         let (bundle, authenticated) = compact_bundle(
             descriptor(&descriptor_bytes),
             claims,
-            5 + common.len() + vacancies.len() * 4,
+            5 + common.len()
+                + vacancies.len()
+                    * dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
         );
         let instruction = build_rational_lifecycle_compact_hot_instruction_v4(
             &state(&fixed),
@@ -723,8 +758,11 @@ mod tests {
         )
         .expect("compact K3 instruction");
         assert_eq!(instruction.instruction.data.len(), 528);
-        // 70 before the validated-artifact seal joined the fixed hot prefix.
-        assert_eq!(instruction.instruction.accounts.len(), 71);
+        // 70 before the validated-artifact seal joined the fixed hot prefix;
+        // 71 before each vacancy row began SUPPLYING its custody owner instead
+        // of the artifacts baking that address in (which is what made the
+        // compact effect move with the Market).
+        assert_eq!(instruction.instruction.accounts.len(), 74);
         assert!(instruction.requires_v0_address_lookup);
         assert!(instruction.required_wallet_signers.is_empty());
         let (_, family) = HotExecutionEnvelopeV3::split_instruction(&instruction.instruction.data)

@@ -15,7 +15,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
         LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
         LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3, LifecyclePlanInputV3,
         LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
-        LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic, encode_lifecycle_policy_v5_atomic,
+        encode_lifecycle_policy_v4_atomic, encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_claims_svm::{
@@ -30,6 +30,10 @@ use crate::{
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
     runtime_width::{SETTLEMENT_CURSOR_HEADER_BYTES_V2, SettlementCursorLayoutV2},
+    state_seeds_v3::{
+        GENERAL_CLOSE_STATE_SEED_TABLE_V3, GENERAL_CLOSE_TERMINAL_SEED_START_V3,
+        GeneralStateRecipeV3,
+    },
 };
 
 /// First action-selected nonroot General state account.
@@ -71,10 +75,12 @@ pub struct GeneralReadonlyEvidenceV3 {
     pub kind: GeneralReadonlyEvidenceKindV3,
 }
 
-const GENERAL_STATE_SEED_DOMAIN_V3: &[u8] = b"dclutch-general-state-v3";
-const SELECTION_STATE_SEED_V3: &[u8] = b"selection";
-const SETTLEMENT_STATE_SEED_V3: &[u8] = b"settlement";
-const TERMINAL_STATE_SEED_V3: &[u8] = b"terminal";
+// The seed literals and the exact seed ORDER used to live here as four private
+// constants and three inline tables. They now live in `state_seeds_v3`, which
+// this module consumes, because a policy that gets one of them subtly wrong
+// AUTHENTICATES and then derives the wrong addresses -- and a private constant
+// forces every other side (the accelerator program-test did exactly this) to
+// restate it. See that module's header for the full argument.
 
 /// Stable refusal from General lifecycle-artifact generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,7 +284,8 @@ fn encode_primary(
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<()> {
-    let selection = matches!(action, Action::Consider | Action::Freeze);
+    let state_recipe = GeneralStateRecipeV3::primary_for_action(action);
+    let selection = matches!(state_recipe, GeneralStateRecipeV3::Selection);
     let data_base = if selection {
         u32::try_from(
             GENERAL_LOCAL_STATE_HEADER_BYTES_V3
@@ -294,11 +301,14 @@ fn encode_primary(
         )
         .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?
     };
+    // The count and the bump ordinal are READ OFF the recipe's own seed table
+    // rather than written down beside it, so a seed added to that table cannot
+    // leave this policy declaring a truncated seed program.
     let recipe = [LifecycleRecipeInputV3 {
         state: LifecycleAccountCoordinateV3::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
         seed_start: 0,
-        seed_count: if selection { 4 } else { 5 },
-        bump_offset: if selection { 3 } else { 4 },
+        seed_count: state_recipe.seed_count(),
+        bump_offset: state_recipe.bump_offset(),
         data_base,
         data_stride: if selection {
             0
@@ -306,19 +316,6 @@ fn encode_primary(
             SettlementCursorLayoutV2::inventory_stride()
         },
     }];
-    let selection_seeds = [
-        LifecycleSeedInputV3::Literal(GENERAL_STATE_SEED_DOMAIN_V3),
-        LifecycleSeedInputV3::CommonIdentity(identity_u16(identity::GENERAL_ROOT)?),
-        LifecycleSeedInputV3::Literal(SELECTION_STATE_SEED_V3),
-        LifecycleSeedInputV3::CanonicalBump,
-    ];
-    let settlement_seeds = [
-        LifecycleSeedInputV3::Literal(GENERAL_STATE_SEED_DOMAIN_V3),
-        LifecycleSeedInputV3::CommonIdentity(identity_u16(identity::GENERAL_ROOT)?),
-        LifecycleSeedInputV3::CommonIdentity(identity_u16(identity::CANDIDATE)?),
-        LifecycleSeedInputV3::Literal(SETTLEMENT_STATE_SEED_V3),
-        LifecycleSeedInputV3::CanonicalBump,
-    ];
     let plan = [LifecyclePlanInputV3 {
         action: action as u32,
         operation: LifecycleOperationInputV3::AuthenticateOrCreate,
@@ -339,11 +336,7 @@ fn encode_primary(
     }];
     let protected = [Some(primary_protected()?)];
     let bindings = selection_or_settlement_bindings(action)?;
-    let seeds = if selection {
-        &selection_seeds[..]
-    } else {
-        &settlement_seeds[..]
-    };
+    let seeds = state_recipe.lifecycle_seeds();
     if let Some(quotes) = current_rent_quotes {
         encode_lifecycle_policy_v5_atomic(
             &recipe,
@@ -387,40 +380,32 @@ fn encode_close(
             .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
     )
     .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
+    // Close closes the settlement state and creates the terminal record, so it
+    // declares two recipes over one seed table. Both windows, the table, and
+    // the offset where the second window begins all come from `state_seeds_v3`
+    // -- writing the eleven-entry table out here again is what made the seed
+    // order restatable in the first place.
+    let settlement_recipe = GeneralStateRecipeV3::Settlement;
+    let terminal_recipe = GeneralStateRecipeV3::Terminal;
     let recipes = [
         LifecycleRecipeInputV3 {
             state: LifecycleAccountCoordinateV3::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
             seed_start: 0,
-            seed_count: 5,
-            bump_offset: 4,
+            seed_count: settlement_recipe.seed_count(),
+            bump_offset: settlement_recipe.bump_offset(),
             data_base: settlement_base,
             data_stride: SettlementCursorLayoutV2::inventory_stride(),
         },
         LifecycleRecipeInputV3 {
             state: LifecycleAccountCoordinateV3::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
-            seed_start: 5,
-            seed_count: 6,
-            bump_offset: 5,
+            seed_start: GENERAL_CLOSE_TERMINAL_SEED_START_V3,
+            seed_count: terminal_recipe.seed_count(),
+            bump_offset: terminal_recipe.bump_offset(),
             data_base: settlement_base,
             data_stride: SettlementCursorLayoutV2::inventory_stride(),
         },
     ];
-    let seeds = [
-        LifecycleSeedInputV3::Literal(GENERAL_STATE_SEED_DOMAIN_V3),
-        LifecycleSeedInputV3::CommonIdentity(identity_u16(identity::GENERAL_ROOT)?),
-        LifecycleSeedInputV3::CommonIdentity(identity_u16(identity::CANDIDATE)?),
-        LifecycleSeedInputV3::Literal(SETTLEMENT_STATE_SEED_V3),
-        LifecycleSeedInputV3::CanonicalBump,
-        LifecycleSeedInputV3::Literal(GENERAL_STATE_SEED_DOMAIN_V3),
-        LifecycleSeedInputV3::CommonIdentity(identity_u16(identity::GENERAL_ROOT)?),
-        LifecycleSeedInputV3::CommonIdentity(identity_u16(identity::CANDIDATE)?),
-        LifecycleSeedInputV3::CommonScalar {
-            index: scalar_u16(scalar::CURSOR_TERMINAL_COORDINATE)?,
-            width: 8,
-        },
-        LifecycleSeedInputV3::Literal(TERMINAL_STATE_SEED_V3),
-        LifecycleSeedInputV3::CanonicalBump,
-    ];
+    let seeds = GENERAL_CLOSE_STATE_SEED_TABLE_V3;
     // Same action entries remain canonical by operation tag: Close precedes
     // AuthenticateOrCreate. Creation is nevertheless applied before Effects
     // by the generic Trading lifecycle adapter.

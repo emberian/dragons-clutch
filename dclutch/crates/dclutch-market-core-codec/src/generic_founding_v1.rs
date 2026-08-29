@@ -1,9 +1,18 @@
-//! Family-neutral atomic Market founding request and acknowledgement.
+//! Family-neutral generic Market founding request and acknowledgement.
 //!
 //! The request is an immutable capability-artifact projection.  It carries
 //! only the coordinates that cannot be recovered from Found37 or the
 //! projected-Custody state.  Core still authenticates every repeated field
 //! against those semantic owners before creating a Market or a permit.
+//!
+//! The founding is defined in two stages ([`GenericFoundingStageV1`]).  The
+//! composed `DCLTGMF3` Trading route runs both, plus the projected-Custody
+//! legs, in one transaction and one rollback domain, paying for all of it
+//! under a single compute ceiling.  The two-stage `DCLTGFP1`/`DCLTGMO1`
+//! routes run the same stages as two transactions joined by the Core-owned
+//! one-shot permit: founding through them is economically atomic via that
+//! escrow rather than transaction-atomic.  The request bytes are identical
+//! either way; only the `stage` field and the Trading dispatch differ.
 
 use crate::{Error, IDENTITY_BYTES, Identity};
 use dclutch_sha256_adapter::digest;
@@ -87,7 +96,11 @@ pub fn generic_founding_funding_list_id_v1(funding_states: &[Identity]) -> Resul
     Identity::new(digest(preimage.get(..written).ok_or(Error::InvalidLength)?))
 }
 
-/// Stage of the atomic generic founding protocol.
+/// Stage of the generic founding protocol.
+///
+/// The composed `DCLTGMF3` route executes both stages in one transaction; the
+/// two-stage `DCLTGFP1`/`DCLTGMO1` routes execute one each, joined by the
+/// Core-owned one-shot permit the first stage escrows and the second consumes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum GenericFoundingStageV1 {
@@ -409,12 +422,12 @@ impl GenericFoundingRequestV1 {
     /// Return the exact selected capability config identity for this request.
     ///
     /// This is the sole value a Trading capability root may carry as its
-    /// selection config when the root authorizes atomic generic founding.
+    /// selection config when the root authorizes generic founding.
     pub fn selection_config_id(self) -> Result<Identity, Error> {
         Identity::new(digest(&self.selection_preimage()?))
     }
 
-    /// Return the same artifact coordinates for the other atomic stage.
+    /// Return the same artifact coordinates for the other founding stage.
     pub fn with_stage(self, stage: GenericFoundingStageV1) -> Result<Self, Error> {
         Self::new(
             stage,
