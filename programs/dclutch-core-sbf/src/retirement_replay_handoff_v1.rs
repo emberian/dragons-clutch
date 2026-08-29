@@ -43,7 +43,7 @@ pub(crate) fn process(
     request: RetirementReplayHandoffRequestV1,
     request_bytes: &[u8],
 ) -> ProgramResult {
-    require_frame(program_id, accounts)?;
+    let accounts = require_frame(program_id, accounts)?;
     let rent = Rent::from_account_info(&accounts[RENT]).map_err(|_| CoreSbfError::Creation)?;
     if rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1) != request.core_replay_rent_lamports() {
         return Err(CoreSbfError::Creation.into());
@@ -57,11 +57,16 @@ pub(crate) fn process(
     authenticate_poststate(accounts, request, request_bytes)
 }
 
-fn require_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> ProgramResult {
-    if accounts.len() != RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1 {
-        return Err(CoreSbfError::AccountFrame.into());
-    }
-    crate::frame::require_distinct(accounts)?;
+/// Check the frame once and hand back the arity as a type, so that every
+/// downstream `accounts[ORDINAL]` is a proof rather than a hope.
+fn require_frame<'a, 'b>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'b>],
+) -> Result<&'a [AccountInfo<'b>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1], ProgramError> {
+    let accounts: &'a [AccountInfo<'b>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1] = accounts
+        .try_into()
+        .map_err(|_| CoreSbfError::AccountFrame)?;
+    crate::frame::require_distinct(accounts.as_slice())?;
     for (index, account) in accounts.iter().enumerate() {
         let writable = matches!(index, PAYER | RENT_CREDIT | TRADING_REPLAY | CORE_REPLAY);
         let signer = index == PAYER;
@@ -85,12 +90,12 @@ fn require_frame(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> ProgramRe
     {
         return Err(CoreSbfError::AccountFrame.into());
     }
-    Ok(())
+    Ok(accounts)
 }
 
 fn authenticate_market(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     request: RetirementReplayHandoffRequestV1,
 ) -> Result<CoreState, ProgramError> {
     let data = accounts[MARKET]
@@ -116,7 +121,7 @@ fn authenticate_market(
 }
 
 fn authenticate_releases(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
 ) -> Result<[u8; 32], ProgramError> {
     let admissions = authenticate_roles(
@@ -149,7 +154,7 @@ fn authenticate_releases(
 }
 
 fn authenticate_claims_and_realm(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     claims_program: [u8; 32],
     request: RetirementReplayHandoffRequestV1,
@@ -221,7 +226,10 @@ fn authenticate_claims_and_realm(
     Ok(())
 }
 
-fn authenticate_rent_credit(accounts: &[AccountInfo<'_>], state: CoreState) -> ProgramResult {
+fn authenticate_rent_credit(
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
+    state: CoreState,
+) -> ProgramResult {
     let data = accounts[RENT_CREDIT]
         .try_borrow_data()
         .map_err(|_| CoreSbfError::RentCredit)?;
@@ -253,7 +261,7 @@ fn authenticate_rent_credit(accounts: &[AccountInfo<'_>], state: CoreState) -> P
 
 fn authenticate_prestate(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     request: RetirementReplayHandoffRequestV1,
 ) -> ProgramResult {
@@ -359,7 +367,7 @@ fn authenticate_prestate(
 
 fn invoke_custody(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     state: CoreState,
     request: RetirementReplayHandoffRequestV1,
     request_bytes: &[u8],
@@ -411,7 +419,7 @@ fn invoke_custody(
 }
 
 fn authenticate_poststate(
-    accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>; RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
     request: RetirementReplayHandoffRequestV1,
     request_bytes: &[u8],
 ) -> ProgramResult {
