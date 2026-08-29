@@ -18,7 +18,7 @@ use std::{env, fs, path::PathBuf};
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_fractional_atomic_program_test::narrow_fixture::{
     FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2, NarrowFixtureError, NarrowFixtureInputV2,
-    NarrowFixtureV2, NarrowRecordV2, compile_narrow_fixture_v2,
+    NarrowFixtureV2, NarrowRecordV2, NarrowTerminalInputV2, compile_narrow_fixture_v2,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_fractional_atomic_test_caller_sbf::FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES;
@@ -73,6 +73,7 @@ const ACTOR_FUNDED_BALANCE: u64 = 1_000;
 const OUTCOME: u32 = 0;
 const MINT_DECIMALS: u8 = 0;
 const GRAPH_ID: [u8; 32] = [0x7c; 32];
+const RENT_CREDIT: Pubkey = Pubkey::new_from_array([0x65; 32]);
 const EXPOSURE_ID: [u8; 32] = [0x7a; 32];
 const TOKEN_ACCOUNT_BYTES: usize = 165;
 
@@ -91,6 +92,7 @@ struct Artifacts {
     core: Vec<u8>,
     caller: Vec<u8>,
     token: Vec<u8>,
+    custody: Vec<u8>,
 }
 
 fn artifacts() -> Artifacts {
@@ -106,6 +108,7 @@ fn artifacts() -> Artifacts {
         core: read("dclutch_core_sbf.so"),
         caller: read("dclutch_fractional_atomic_test_caller_sbf.so"),
         token: read("spl_token_2022.so"),
+        custody: read("dclutch_custody_sbf.so"),
     }
 }
 
@@ -202,16 +205,24 @@ fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(artifact_id(value), value, observation)
 }
 
-fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
+fn activation_cache(artifacts: &Artifacts, custody: Option<Pubkey>) -> ([u8; 32], Vec<u8>) {
     let core = release(CORE_PROGRAM_ID, 0x31, &artifacts.core);
     let claims = release(CLAIMS_PROGRAM_ID, 0x32, &artifacts.claims);
     let trading = release(TEST_CALLER_PROGRAM_ID, 0x33, &artifacts.caller);
+    // Custody must be a program distinct from Claims -- the replay-creation
+    // route explicitly refuses `custody_program.key == program_id` -- so a
+    // terminal campaign binds the real Custody ELF where an atomic one can
+    // leave the role pointing at Claims.
+    let custody = match custody {
+        None => claims,
+        Some(program) => release(program, 0x34, &artifacts.custody),
+    };
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(claims),
         binding(trading),
         binding(claims),
-        binding(claims),
+        binding(custody),
     )
     .expect("release set");
     let release_set_id = hash(&release_set.to_bytes()).to_bytes();
@@ -223,7 +234,7 @@ fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
         (ExecutionRoleV1::Claims, claims),
         (ExecutionRoleV1::Trading, trading),
         (ExecutionRoleV1::Resolution, claims),
-        (ExecutionRoleV1::Custody, claims),
+        (ExecutionRoleV1::Custody, custody),
     ] {
         activate_execution_role_into_v1(
             &mut bytes,
@@ -277,7 +288,9 @@ fn compile_shared(
         reserve_owner,
         funded_coordinate: OUTCOME as usize,
         funded_balance: ACTOR_FUNDED_BALANCE,
+        reserve_balance: 0,
         terminal: None,
+        rent_beneficiary: RENT_CREDIT,
         graph_id: GRAPH_ID,
         exposure_id: EXPOSURE_ID,
     })
@@ -306,7 +319,7 @@ fn mint_bytes(controller: Pubkey, supply: u64) -> Vec<u8> {
     bytes
 }
 
-fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
+fn token_account_bytes_for(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
     let mut bytes = vec![0_u8; TOKEN_ACCOUNT_BYTES];
     put(&mut bytes, 0, mint.as_ref());
     put(&mut bytes, 32, owner.as_ref());
@@ -372,7 +385,7 @@ fn fixture() -> (ProgramTest, Fixture) {
     ] {
         add_upgradeable_program(&mut test, name, program, elf);
     }
-    let (release_set, cache_bytes) = activation_cache(&artifacts);
+    let (release_set, cache_bytes) = activation_cache(&artifacts, None);
     let activation_cache_key = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
         &REGISTRY_PROGRAM_ID,
@@ -529,7 +542,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         &mut test,
         holder_token,
         token_program_id(),
-        token_account_bytes(shard_mint, actor, 0),
+        token_account_bytes_for(shard_mint, actor, 0),
     );
     add_account(&mut test, actor, system_program::ID, Vec::new());
 
@@ -1056,7 +1069,9 @@ fn the_fractional_representation_width_bound_is_exactly_256() {
         reserve_owner: Pubkey::new_from_array([0x02; 32]),
         funded_coordinate: 0,
         funded_balance: 1,
+        reserve_balance: 0,
         terminal: None,
+        rent_beneficiary: RENT_CREDIT,
         graph_id: GRAPH_ID,
         exposure_id: EXPOSURE_ID,
     });
@@ -1077,9 +1092,577 @@ fn the_fractional_representation_width_bound_is_exactly_256() {
         reserve_owner: Pubkey::new_from_array([0x02; 32]),
         funded_coordinate: 0,
         funded_balance: 1,
+        reserve_balance: 0,
         terminal: None,
+        rent_beneficiary: RENT_CREDIT,
         graph_id: GRAPH_ID,
         exposure_id: EXPOSURE_ID,
     });
     assert_eq!(refused, Err(NarrowFixtureError::Width));
+}
+
+// ---------------------------------------------------------------- terminal
+//
+// The Fractional terminal frame is the 36-account Claims terminal-settlement
+// frame plus the 8-coordinate Fractional tail. Coordinates 0..36 are the same
+// frame the Rational campaign drives, so the Custody composition below is a
+// port of that staging rather than a second invention.
+
+use dclutch_custody_contract::{
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
+};
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
+use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
+use dclutch_token_svm::PRODUCTION_ADAPTER_RELEASES;
+
+const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa4; 32]);
+const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0x74; 32]);
+const RECIPIENT_TOKEN: Pubkey = Pubkey::new_from_array([0x85; 32]);
+const CERTIFICATE_ACCOUNT: Pubkey = Pubkey::new_from_array([0x86; 32]);
+const RESOLUTION_POLICY: [u8; 32] = [0x51; 32];
+const HOARD_ATOMS: u64 = 10_000;
+const RECIPIENT_ATOMS: u64 = 0;
+const CUSTODY_EXPECTED_REVISION: u64 = 1;
+/// Shards the actor already holds when a terminal campaign opens: the market
+/// resolved after a wrap, so the reserve is locked and the shards are issued.
+const TERMINAL_SHARDS: u64 = WRAP_NATIVE_CLAIMS * DENOMINATOR;
+/// A coordinate that is not the winner, so its terminal payout is exactly zero.
+const LOSING_COORDINATE: u32 = 1;
+
+/// Base Token-2022 Mint with no mint or freeze authority.
+///
+/// The Realm's `RequireAbsent` policies are why the collateral Mint carries
+/// neither authority; unlike the shard Mints it has no extensions.
+fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 82];
+    put(&mut bytes, 0, &0_u32.to_le_bytes());
+    put(&mut bytes, 36, &supply.to_le_bytes());
+    *bytes.get_mut(44).expect("decimals") = 6;
+    *bytes.get_mut(45).expect("initialized") = 1;
+    put(&mut bytes, 46, &0_u32.to_le_bytes());
+    bytes
+}
+
+struct TerminalFixture {
+    shared: NarrowFixtureV2,
+    release_set: [u8; 32],
+    activation_cache: Pubkey,
+    caller_authority: Pubkey,
+    root: Pubkey,
+    terms_record: NarrowRecordV2,
+    behavior_record: NarrowRecordV2,
+    realm_record: NarrowRecordV2,
+    shard_mint: Pubkey,
+    holder_token: Pubkey,
+    actor: Pubkey,
+    custody_replay: Pubkey,
+    custody_authority: Pubkey,
+    hoard: Pubkey,
+    wrapper: Vec<u8>,
+}
+
+/// Stage a resolved Market with its full Custody composition.
+///
+/// `winner` selects the terminal outcome, which is what separates the two
+/// terminal actions: burning shards at the winner redeems collateral, burning
+/// them anywhere else pays exactly zero. Everything else is identical.
+fn terminal_fixture(winner: u32, action: FractionalExposureActionV2) -> (ProgramTest, TerminalFixture) {
+    let artifacts = artifacts();
+    let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
+    test.set_compute_max_units(1_400_000);
+    for (name, program, elf) in [
+        ("dclutch_claims_sbf", CLAIMS_PROGRAM_ID, artifacts.claims.as_slice()),
+        ("dclutch_registry_sbf", REGISTRY_PROGRAM_ID, artifacts.registry.as_slice()),
+        ("dclutch_core_sbf", CORE_PROGRAM_ID, artifacts.core.as_slice()),
+        ("dclutch_custody_sbf", CUSTODY_PROGRAM_ID, artifacts.custody.as_slice()),
+        (
+            "dclutch_fractional_atomic_test_caller_sbf",
+            TEST_CALLER_PROGRAM_ID,
+            artifacts.caller.as_slice(),
+        ),
+        ("spl_token_2022", token_program_id(), artifacts.token.as_slice()),
+    ] {
+        add_upgradeable_program(&mut test, name, program, elf);
+    }
+    let (release_set, cache_bytes) = activation_cache(&artifacts, Some(CUSTODY_PROGRAM_ID));
+    let activation_cache_key = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    add_account(&mut test, activation_cache_key, REGISTRY_PROGRAM_ID, cache_bytes);
+
+    // The Realm commits to the collateral Mint, and its own content digest is
+    // the Realm identity the Market and every Custody coordinate are keyed by.
+    let adapter = PRODUCTION_ADAPTER_RELEASES
+        .get(1)
+        .copied()
+        .expect("Token-2022 production adapter");
+    let realm_bytes = RealmV1::new(RealmV1Input {
+        token_program: TOKEN_2022_PROGRAM_ID,
+        collateral_mint: COLLATERAL_MINT.to_bytes(),
+        collateral_adapter_release_id: hash(&adapter.to_bytes()).to_bytes(),
+        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+    })
+    .expect("canonical Realm")
+    .to_bytes()
+    .to_vec();
+    let realm_record = finalized(REGISTRY_PROGRAM_ID, REALM_SCHEMA_RELEASE_ID_V1, realm_bytes);
+    let realm_id = realm_record.digest;
+
+    let actor = actor_keypair().pubkey();
+    let terminal = NarrowTerminalInputV2 {
+        winner,
+        receipt: CERTIFICATE_ACCOUNT.to_bytes(),
+    };
+    let compile = |reserve_owner: Pubkey| {
+        compile_narrow_fixture_v2(NarrowFixtureInputV2 {
+            outcome_count: FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2,
+            registry_program: REGISTRY_PROGRAM_ID,
+            core_program: CORE_PROGRAM_ID,
+            claims_program: CLAIMS_PROGRAM_ID,
+            release_set,
+            realm_id,
+            custody_context: CUSTODY_CONTEXT,
+            generation: GENERATION,
+            actor_owner: actor,
+            reserve_owner,
+            funded_coordinate: OUTCOME as usize,
+            funded_balance: ACTOR_FUNDED_BALANCE - WRAP_NATIVE_CLAIMS,
+            reserve_balance: WRAP_NATIVE_CLAIMS,
+            terminal: Some(terminal),
+            rent_beneficiary: RENT_CREDIT,
+            graph_id: GRAPH_ID,
+            exposure_id: EXPOSURE_ID,
+        })
+        .expect("narrow terminal fixture")
+    };
+    let probe = compile(Pubkey::new_from_array([0xef; 32]));
+    let core_market = probe.core_market;
+
+    let shard_mints: Vec<[u8; 32]> = (0..FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2)
+        .map(|index| {
+            let mut bytes = [0x77_u8; 32];
+            let index = u32::try_from(index).expect("representation coordinate");
+            bytes[0..4].copy_from_slice(&index.to_le_bytes());
+            bytes
+        })
+        .collect();
+    let shard_mint = Pubkey::new_from_array(shard_mints[OUTCOME as usize]);
+    let behavior_record = finalized(
+        REGISTRY_PROGRAM_ID,
+        TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+        TokenBehaviorSelectionV2::new(realm_id, release_set)
+            .expect("token behavior selection")
+            .to_bytes()
+            .to_vec(),
+    );
+    let terms_width = fractional_exposure_terms_bytes_v2(shard_mints.len()).expect("terms width");
+    let mut terms_scratch = vec![0_u8; terms_width];
+    let mut terms_bytes = vec![0_u8; terms_width];
+    encode_fractional_exposure_terms_v2(
+        FractionalExposureTermsInputV2 {
+            market: core_market.to_bytes(),
+            product_record: probe.product.digest,
+            result_domain: probe.result_domain.digest,
+            release_set,
+            token_program: TOKEN_2022_PROGRAM_ID,
+            token_behavior: behavior_record.digest,
+            exposure_id: EXPOSURE_ID,
+            product_basis: probe.linked_basis.digest,
+            representation_basis: probe.semantic_basis_id,
+            graph_id: GRAPH_ID,
+            product_width: probe.outcome_count,
+            denominator: DENOMINATOR,
+            shard_mints: &shard_mints,
+        },
+        &mut terms_scratch,
+        &mut terms_bytes,
+    )
+    .expect("exact Fractional exposure terms");
+    let terms_record = finalized(
+        REGISTRY_PROGRAM_ID,
+        dclutch_fractional_claim_kernel::FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+        terms_bytes,
+    );
+
+    let selection = CapabilityExecutionSelectionV1::new(
+        0,
+        ContentId::new([0x81; 32]).expect("manifest"),
+        ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
+            .expect("kind"),
+        ContentId::new([0x83; 32]).expect("capability release"),
+        ContentId::new(terms_record.digest).expect("config"),
+    )
+    .expect("capability execution selection");
+    let header = CapabilityRootHeaderV1::new(
+        ContentId::new(release_set).expect("release set"),
+        core_market.to_bytes(),
+        GENERATION,
+        selection,
+        SelectedRecordBumpsV1::default(),
+    )
+    .expect("capability root header");
+    let (root, root_bump) =
+        Pubkey::find_program_address(&header.seeds().as_slices(), &TEST_CALLER_PROGRAM_ID);
+
+    // The reserve Position belongs to the root: it holds the native Claims the
+    // wrap locked, and the terminal settlement redeems out of it.
+    let shared = compile(root);
+    assert_eq!(shared.core_market, core_market);
+
+    let root_state = FractionalRootV1::new(FractionalRootInputV1 {
+        bump: root_bump,
+        terms: terms_record.digest,
+        market: core_market.to_bytes(),
+        rent_beneficiary: actor.to_bytes(),
+        revision: ROOT_REVISION,
+        historical_rent_principal: 1,
+    })
+    .expect("fractional root state");
+    let mut root_bytes = vec![0_u8; FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4];
+    root_bytes.copy_from_slice(&header.to_bytes());
+    root_bytes.extend_from_slice(&root_state.to_bytes());
+
+    let holder_token = Pubkey::new_from_array([0x78; 32]);
+    for record in [
+        &shared.product,
+        &shared.result_domain,
+        &shared.portfolio,
+        &shared.linked_basis,
+        &shared.exposure,
+        &terms_record,
+        &behavior_record,
+        &realm_record,
+    ] {
+        add_finalized(&mut test, record);
+    }
+    add_account(&mut test, shared.core_market, CORE_PROGRAM_ID, shared.core_state.clone());
+    add_account(
+        &mut test,
+        shared.claims_market,
+        CLAIMS_PROGRAM_ID,
+        shared.claims_market_bytes.clone(),
+    );
+    for position in shared.ordered_positions() {
+        add_account(&mut test, position.account, CLAIMS_PROGRAM_ID, position.bytes.clone());
+    }
+    add_account(&mut test, root, TEST_CALLER_PROGRAM_ID, root_bytes);
+    add_account(&mut test, shard_mint, token_program_id(), mint_bytes(root, TERMINAL_SHARDS));
+    add_account(
+        &mut test,
+        holder_token,
+        token_program_id(),
+        token_account_bytes_for(shard_mint, actor, TERMINAL_SHARDS),
+    );
+
+    // The certificate is a flat account whose authority is that Core's state
+    // names it; its own bytes must rejoin every Core identity.
+    let certificate_bytes = ResolutionCertificateV2 {
+        kind: ResolutionCertificateKindV2::ResolutionSuccess,
+        market: core_market.to_bytes(),
+        route: [0x87; 32],
+        source_material: RESOLUTION_POLICY,
+        product_record_digest: shared.product.digest,
+        provider_evidence: [0x88; 32],
+        funding_allocation: [0; 32],
+        receipt_account: CERTIFICATE_ACCOUNT.to_bytes(),
+        generation: GENERATION,
+        attempt_index: 0,
+        schedule_index: 0,
+        selector: winner,
+        work_paid: 0,
+        funding_remaining: 0,
+        result_numerator: 1,
+        result_denominator: 1,
+        observed_at: 1,
+    }
+    .to_bytes()
+    .expect("canonical Resolution certificate");
+    add_account(&mut test, CERTIFICATE_ACCOUNT, CLAIMS_PROGRAM_ID, certificate_bytes.to_vec());
+
+    let custody_authority = Pubkey::find_program_address(
+        &[
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            core_market.as_ref(),
+            release_set.as_slice(),
+        ],
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let hoard = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            core_market.to_bytes(),
+            release_set,
+            CUSTODY_CONTEXT,
+            CompartmentV1::HoardPrincipal,
+        )
+        .as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let custody_replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::new(
+            core_market.to_bytes(),
+            release_set,
+            CallerRoleV1::Claims,
+            CUSTODY_CONTEXT,
+        )
+        .as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    add_account(
+        &mut test,
+        COLLATERAL_MINT,
+        token_program_id(),
+        collateral_mint_bytes(HOARD_ATOMS + RECIPIENT_ATOMS),
+    );
+    add_account(
+        &mut test,
+        hoard,
+        token_program_id(),
+        token_account_bytes_for(COLLATERAL_MINT, custody_authority, HOARD_ATOMS),
+    );
+    add_account(
+        &mut test,
+        RECIPIENT_TOKEN,
+        token_program_id(),
+        token_account_bytes_for(COLLATERAL_MINT, actor, RECIPIENT_ATOMS),
+    );
+    // The replay is NOT planted: a Claims-role cursor is a prestate no route in
+    // the tree can produce, so the campaign creates it by executing the real
+    // route first. All that is staged is an empty, rent-funded system account.
+    test.add_account(
+        custody_replay,
+        Account {
+            lamports: Rent::default().minimum_balance(CUSTODY_REPLAY_BYTES_V1) * 2,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    add_account(&mut test, RENT_CREDIT, system_program::ID, Vec::new());
+    test.add_account(
+        actor,
+        Account {
+            lamports: 1_000_000_000,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let request = FractionalExposureRequestV2::new(
+        action,
+        FractionalExposureRequestInputV2 {
+            release_set,
+            market: core_market.to_bytes(),
+            product_record: shared.product.digest,
+            result_domain: shared.result_domain.digest,
+            terms: terms_record.digest,
+            token_behavior: behavior_record.digest,
+            exposure: EXPOSURE_ID,
+            owner: actor.to_bytes(),
+            source_token_account: holder_token.to_bytes(),
+            destination_token_account: [0; 32],
+            terminal_digest: CERTIFICATE_ACCOUNT.to_bytes(),
+            expected_revision: ROOT_REVISION,
+            quantity: TERMINAL_SHARDS,
+            representation_coordinate: OUTCOME,
+        },
+    )
+    .expect("canonical Fractional terminal request");
+    let request_bytes = request.to_bytes().expect("request bytes");
+    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
+        release_set,
+        core_market.to_bytes(),
+        ExecutionRoleV1::Trading,
+        terms_record.digest,
+        hash(&request_bytes).to_bytes(),
+    )
+    .expect("caller authority seeds");
+    let caller_authority =
+        Pubkey::find_program_address(&caller_seeds.as_slices(), &TEST_CALLER_PROGRAM_ID).0;
+    add_account(&mut test, caller_authority, system_program::ID, Vec::new());
+    let mut wrapper = Vec::with_capacity(FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES);
+    wrapper.push(0);
+    wrapper.extend_from_slice(&request_bytes);
+
+    (
+        test,
+        TerminalFixture {
+            shared,
+            release_set,
+            activation_cache: activation_cache_key,
+            caller_authority,
+            root,
+            terms_record,
+            behavior_record,
+            realm_record,
+            shard_mint,
+            holder_token,
+            actor,
+            custody_replay,
+            custody_authority,
+            hoard,
+            wrapper,
+        },
+    )
+}
+
+/// The exact 44-account production terminal frame, in contract coordinate order.
+fn terminal_child_accounts(fixture: &TerminalFixture) -> Vec<AccountMeta> {
+    let shared = &fixture.shared;
+    let accounts = vec![
+        AccountMeta::new_readonly(fixture.caller_authority, false),
+        AccountMeta::new(shared.claims_market, false),
+        AccountMeta::new_readonly(shared.linked_basis.raw, false),
+        AccountMeta::new_readonly(shared.linked_basis.staging, false),
+        AccountMeta::new_readonly(shared.product.raw, false),
+        AccountMeta::new_readonly(shared.product.staging, false),
+        AccountMeta::new_readonly(shared.result_domain.raw, false),
+        AccountMeta::new_readonly(shared.result_domain.staging, false),
+        AccountMeta::new_readonly(shared.portfolio.raw, false),
+        AccountMeta::new_readonly(shared.portfolio.staging, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(shared.core_market, false),
+        AccountMeta::new_readonly(fixture.activation_cache, false),
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(TEST_CALLER_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(TEST_CALLER_PROGRAM_ID), false),
+        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(CLAIMS_PROGRAM_ID), false),
+        AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(CORE_PROGRAM_ID), false),
+        // The single Position is the ROOT's reserve: it holds the native Claims
+        // the wrap locked, and the terminal settlement redeems out of it.
+        AccountMeta::new(shared.reserve_position.account, false),
+        AccountMeta::new_readonly(shared.exposure.raw, false),
+        AccountMeta::new_readonly(shared.exposure.staging, false),
+        // On the zero-payout path this coordinate must literally be the Claims
+        // program; there is no Custody CPI to sign for.
+        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+        AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(CERTIFICATE_ACCOUNT, false),
+        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+        AccountMeta::new_readonly(programdata_address(CLAIMS_PROGRAM_ID), false),
+        AccountMeta::new_readonly(fixture.realm_record.raw, false),
+        AccountMeta::new_readonly(fixture.realm_record.staging, false),
+        AccountMeta::new(fixture.custody_replay, false),
+        AccountMeta::new_readonly(COLLATERAL_MINT, false),
+        AccountMeta::new(fixture.hoard, false),
+        AccountMeta::new(RECIPIENT_TOKEN, false),
+        AccountMeta::new_readonly(fixture.custody_authority, false),
+        AccountMeta::new_readonly(token_program_id(), false),
+        AccountMeta::new_readonly(fixture.terms_record.raw, false),
+        AccountMeta::new_readonly(fixture.terms_record.staging, false),
+        AccountMeta::new_readonly(fixture.behavior_record.raw, false),
+        AccountMeta::new_readonly(fixture.behavior_record.staging, false),
+        AccountMeta::new(fixture.root, false),
+        AccountMeta::new_readonly(fixture.actor, true),
+        AccountMeta::new(fixture.shard_mint, false),
+        AccountMeta::new(fixture.holder_token, false),
+    ];
+    assert_eq!(accounts.len(), 44);
+    accounts
+}
+
+fn terminal_instruction(fixture: &TerminalFixture, fail_after: bool) -> Instruction {
+    let mut accounts = Vec::with_capacity(45);
+    accounts.push(AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false));
+    accounts.extend(terminal_child_accounts(fixture));
+    let mut data = fixture.wrapper.clone();
+    *data.first_mut().expect("control byte") = u8::from(fail_after);
+    Instruction {
+        program_id: TEST_CALLER_PROGRAM_ID,
+        accounts,
+        data,
+    }
+}
+
+/// Create the Claims-role Custody replay cursor by executing the real route.
+///
+/// Nothing may plant this account. A Claims-role cursor at this namespace is a
+/// prestate no route in the tree can produce, so a planted one would be
+/// evidence of nothing. The campaign creates it the way a redeemer would.
+async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &TerminalFixture) {
+    use dclutch_claims_sbf::custody_replay_v1::expected_request_v1;
+    use dclutch_claims_svm::custody_replay_v1::ClaimsCustodyReplayRequestV1;
+    use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
+
+    let aggregate = LiabilityBasisMarketViewV2::decode(&fixture.shared.claims_market_bytes)
+        .expect("aggregate decode");
+    let rent = Rent::default();
+    let request = expected_request_v1(
+        aggregate,
+        CLAIMS_PROGRAM_ID.to_bytes(),
+        fixture.actor.to_bytes(),
+        RENT_CREDIT.to_bytes(),
+        rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
+    )
+    .expect("the sole Custody request this route sends");
+    let request_bytes = request.to_bytes().expect("custody request bytes");
+    let caller = Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::from_bytes(
+            fixture.release_set,
+            fixture.shared.core_market.to_bytes(),
+            ExecutionRoleV1::Claims,
+            request.context,
+            hash(&request_bytes).to_bytes(),
+        )
+        .expect("claims custody caller seeds")
+        .as_slices(),
+        &CLAIMS_PROGRAM_ID,
+    )
+    .0;
+    let instruction = Instruction {
+        program_id: CLAIMS_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new_readonly(caller, false),
+            AccountMeta::new_readonly(fixture.shared.core_market, false),
+            AccountMeta::new_readonly(fixture.activation_cache, false),
+            AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+            AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+            AccountMeta::new_readonly(programdata_address(CLAIMS_PROGRAM_ID), false),
+            AccountMeta::new_readonly(fixture.realm_record.raw, false),
+            AccountMeta::new_readonly(fixture.realm_record.staging, false),
+            AccountMeta::new(fixture.custody_replay, false),
+            AccountMeta::new(fixture.actor, true),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new(RENT_CREDIT, false),
+            AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+            AccountMeta::new_readonly(fixture.shared.claims_market, false),
+        ],
+        data: ClaimsCustodyReplayRequestV1::new(fixture.shared.core_market.to_bytes())
+            .expect("replay-creation request")
+            .to_bytes()
+            .to_vec(),
+    };
+    let (accepted, _logs, _units, result) = submit(context, instruction).await;
+    assert!(accepted, "the Claims-role Custody replay must be creatable: {result:?}");
+
+    let created = account(context, fixture.custody_replay).await;
+    assert_eq!(created.owner, CUSTODY_PROGRAM_ID);
+    assert_eq!(created.data.len(), CUSTODY_REPLAY_BYTES_V1);
+    let replay = CustodyReplayV1::decode(&created.data).expect("created replay decodes");
+    assert_eq!(replay.caller_role, CallerRoleV1::Claims);
+    assert_eq!(replay.next_revision, CUSTODY_EXPECTED_REVISION);
+    assert_eq!(replay.open_vault_count, 0);
+}
+
+#[tokio::test]
+async fn the_claims_role_custody_replay_is_created_by_the_real_route() {
+    let (test, fixture) =
+        terminal_fixture(OUTCOME, FractionalExposureActionV2::TerminalRedeem);
+    let mut context = test.start_with_context().await;
+    create_custody_replay(&mut context, &fixture).await;
 }

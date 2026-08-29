@@ -11,8 +11,12 @@ path = "src/lib.rs"
 [dependencies]
 dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
 dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
+dclutch-claims-sbf = { path = "../..", features = ["no-entrypoint"] }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
+dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
+dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
 dclutch-fractional-atomic-test-caller-sbf = { path = "../../test-programs/fractional-atomic-caller", features = ["no-entrypoint"] }
 dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }

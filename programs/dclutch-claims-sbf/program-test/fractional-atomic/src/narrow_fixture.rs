@@ -144,8 +144,18 @@ pub struct NarrowFixtureInputV2 {
     pub funded_coordinate: usize,
     /// Native Claims units the actor holds at that coordinate.
     pub funded_balance: u64,
+    /// Native Claims already locked in the reserve Position at that coordinate.
+    ///
+    /// A terminal campaign opens after a wrap has happened, so the reserve is
+    /// not empty; this is how that already-wrapped state is expressed.
+    pub reserve_balance: u64,
     /// When set, the Market is resolved rather than open.
     pub terminal: Option<NarrowTerminalInputV2>,
+    /// Permanent Core rent beneficiary.
+    ///
+    /// Custody refuses an aliased account frame, so this must not be the payer
+    /// that funds the replay cursor.
+    pub rent_beneficiary: Pubkey,
     /// Stable source composition-graph identity, shared with the terms record.
     pub graph_id: [u8; 32],
     /// Caller-asserted exposure bundle identity, shared with the terms record.
@@ -328,7 +338,7 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         identity: core_identity,
         outstanding_capabilities: 1,
         principal_cap_sets: u64::MAX,
-        rent_beneficiary: identity(input.actor_owner.to_bytes())?,
+        rent_beneficiary: identity(input.rent_beneficiary.to_bytes())?,
         terminal_receipt,
     }
     .encode()
@@ -345,7 +355,10 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
     let mut supplies = vec![0_u64; input.outcome_count];
     *supplies
         .get_mut(input.funded_coordinate)
-        .ok_or(NarrowFixtureError::State)? = input.funded_balance;
+        .ok_or(NarrowFixtureError::State)? = input
+        .funded_balance
+        .checked_add(input.reserve_balance)
+        .ok_or(NarrowFixtureError::State)?;
     let claims_market_bytes = encode_market(
         core_market,
         input,
@@ -353,19 +366,27 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         semantic_basis_id,
         &supplies,
     )?;
+    let mut actor_balances = vec![0_u64; input.outcome_count];
+    *actor_balances
+        .get_mut(input.funded_coordinate)
+        .ok_or(NarrowFixtureError::State)? = input.funded_balance;
     let actor_position = position(
         input.claims_program,
         claims_market,
         input.actor_owner,
         semantic_basis_id,
-        &supplies,
+        &actor_balances,
     )?;
+    let mut reserve_balances = vec![0_u64; input.outcome_count];
+    *reserve_balances
+        .get_mut(input.funded_coordinate)
+        .ok_or(NarrowFixtureError::State)? = input.reserve_balance;
     let reserve_position = position(
         input.claims_program,
         claims_market,
         input.reserve_owner,
         semantic_basis_id,
-        &vec![0_u64; input.outcome_count],
+        &reserve_balances,
     )?;
 
     // One Claims representation root per Product result coordinate, weight 1.

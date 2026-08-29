@@ -11,7 +11,8 @@
 //! the shipped handler had never executed. This program is that caller and
 //! nothing more. It owns no protocol state and publishes no production ABI.
 //!
-//! It forwards the exact 31-account frame and the exact 416-byte request
+//! It forwards the exact production frame -- 31 accounts for the open-market
+//! actions, 44 for the terminal ones -- and the exact 416-byte request
 //! unchanged -- it never rewrites a coordinate or a byte -- validates the
 //! receipt Claims returns, and can refuse afterwards so a late-failure rollback
 //! is provable against real account state.
@@ -23,7 +24,9 @@ use dclutch_capability_program_contract::CapabilityRootHeaderV1;
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3, FRACTIONAL_ATOMIC_ROOT_V3,
     FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4, FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2,
+    FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3, FRACTIONAL_TERMINAL_ROOT_V3,
     FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
+    FractionalTerminalAtomicReceiptV3,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -105,12 +108,22 @@ pub fn process_instruction(
         .ok_or(FractionalAtomicTestCallerError::Instruction)?;
     let request = FractionalExposureRequestV2::decode(request_bytes)
         .map_err(|_| FractionalAtomicTestCallerError::Instruction)?;
-    if !matches!(
-        request.action(),
-        FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap
-    ) {
-        return Err(FractionalAtomicTestCallerError::Instruction.into());
-    }
+    // The frame width and the root coordinate are both selected by the action,
+    // so they are read off the contract rather than off the account list: a
+    // caller that inferred its root coordinate from `accounts.len()` would sign
+    // whatever the caller of the caller chose to pass.
+    let (expected_accounts, root_coordinate) = match request.action() {
+        FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap => (
+            FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3,
+            FRACTIONAL_ATOMIC_ROOT_V3,
+        ),
+        FractionalExposureActionV2::TerminalRedeem
+        | FractionalExposureActionV2::TerminalZeroBurn => (
+            FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3,
+            FRACTIONAL_TERMINAL_ROOT_V3,
+        ),
+        _ => return Err(FractionalAtomicTestCallerError::Instruction.into()),
+    };
 
     let claims_program = accounts
         .get(FRACTIONAL_ATOMIC_TEST_CLAIMS_PROGRAM_COORDINATE)
@@ -121,7 +134,7 @@ pub fn process_instruction(
     if !claims_program.executable
         || claims_program.is_signer
         || claims_program.is_writable
-        || forwarded.len() != FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3
+        || forwarded.len() != expected_accounts
     {
         return Err(FractionalAtomicTestCallerError::AccountFrame.into());
     }
@@ -129,7 +142,7 @@ pub fn process_instruction(
     // The root's own immutable header is the sole seed source. Deriving from
     // anything the caller was told would let a test fabricate a root PDA.
     let root_account = forwarded
-        .get(FRACTIONAL_ATOMIC_ROOT_V3)
+        .get(root_coordinate)
         .ok_or(FractionalAtomicTestCallerError::AccountFrame)?;
     let root_seeds = {
         let root_data = root_account
@@ -169,9 +182,8 @@ pub fn process_instruction(
 
     let mut metas = Vec::with_capacity(forwarded.len());
     for (index, account) in forwarded.iter().enumerate() {
-        let signer = account.is_signer
-            || index == CALLER_AUTHORITY
-            || index == FRACTIONAL_ATOMIC_ROOT_V3;
+        let signer =
+            account.is_signer || index == CALLER_AUTHORITY || index == root_coordinate;
         metas.push(if account.is_writable {
             AccountMeta::new(*account.key, signer)
         } else {
@@ -232,12 +244,30 @@ pub fn process_instruction(
 
     let (producer, receipt_bytes) =
         get_return_data().ok_or(FractionalAtomicTestCallerError::ClaimsCpi)?;
-    let receipt = FractionalAtomicReceiptV3::decode(&receipt_bytes)
-        .map_err(|_| FractionalAtomicTestCallerError::ClaimsCpi)?;
+    let (receipt_action, receipt_digest, receipt_root) = match request.action() {
+        FractionalExposureActionV2::Wrap | FractionalExposureActionV2::WholeUnwrap => {
+            let receipt = FractionalAtomicReceiptV3::decode(&receipt_bytes)
+                .map_err(|_| FractionalAtomicTestCallerError::ClaimsCpi)?;
+            (
+                receipt.action(),
+                receipt.request_digest(),
+                receipt.root(),
+            )
+        }
+        _ => {
+            let receipt = FractionalTerminalAtomicReceiptV3::decode(&receipt_bytes)
+                .map_err(|_| FractionalAtomicTestCallerError::ClaimsCpi)?;
+            (
+                receipt.action(),
+                receipt.request_digest(),
+                receipt.root(),
+            )
+        }
+    };
     if producer != *claims_program.key
-        || receipt.action() != request.action()
-        || receipt.request_digest() != request_digest
-        || receipt.root() != expected_root.to_bytes()
+        || receipt_action != request.action()
+        || receipt_digest != request_digest
+        || receipt_root != expected_root.to_bytes()
     {
         return Err(FractionalAtomicTestCallerError::ClaimsCpi.into());
     }

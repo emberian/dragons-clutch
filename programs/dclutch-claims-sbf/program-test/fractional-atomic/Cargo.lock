@@ -1574,6 +1574,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-economic-slice-kernel",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-fractional-claims-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-rational-representation-v2-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
+ "dclutch-sha256-adapter",
+ "dclutch-source-contract",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
+ "spl-associated-token-account-interface",
+ "spl-token-2022-interface",
+]
+
+[[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
@@ -1588,6 +1627,19 @@ dependencies = [
 
 [[package]]
 name = "dclutch-core-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-custody-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
+name = "dclutch-economic-slice-kernel"
 version = "0.1.0"
 
 [[package]]
@@ -1613,8 +1665,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-claims-affine-batch-program-test",
+ "dclutch-claims-sbf",
  "dclutch-claims-svm",
  "dclutch-core-contract",
+ "dclutch-custody-contract",
  "dclutch-fractional-atomic-test-caller-sbf",
  "dclutch-fractional-claim-contract",
  "dclutch-fractional-claim-kernel",
@@ -1624,10 +1678,12 @@ dependencies = [
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
+ "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
  "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-program",
@@ -1747,6 +1803,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-runtime-v2-svm-reader"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-record-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-custody-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-token-svm",
+]
+
+[[package]]
 name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1780,6 +1862,17 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-refusal-registry"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-registry-activation-auth-v1"
+version = "0.1.0"
+dependencies = [
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
 
 [[package]]
 name = "dclutch-registry-contract"
@@ -1820,6 +1913,14 @@ name = "dclutch-request-profile-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-seal-contract",
+]
+
+[[package]]
+name = "dclutch-resolution-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -7739,6 +7840,16 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "spl-associated-token-account-interface"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6433917b60441d68d99a17e121d9db0ea15a9a69c0e5afa34649cf5ba12612f"
+dependencies = [
+ "solana-instruction",
+ "solana-pubkey 3.0.0",
 ]
 
 [[package]]
