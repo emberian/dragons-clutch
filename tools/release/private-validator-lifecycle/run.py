@@ -53,6 +53,9 @@ FLAGSHIP_RESOLUTION_COMMAND = "local-private-validator-flagship-resolution-v1"
 PAYOUT_INPUT_COMMAND = "local-private-validator-wallet-terminal-payout-input-v1"
 PAYOUT_EXECUTE_COMMAND = "local-private-validator-wallet-terminal-payout-v1"
 TERMINAL_RETIREMENT_COMMAND = "local-private-validator-terminal-sequence-v1"
+DIRECT_PRODUCER_COMMAND = "local-private-validator-direct-trade-produce-v1"
+DIRECT_EXECUTE_COMMAND = "local-private-validator-direct-trade-v1"
+DIRECT_PAYOUT_SCHEDULE_COMMAND = "local-private-validator-direct-payout-schedule-v1"
 PROVIDER_CLOSURE_COMMAND = "local-private-validator-pyth-provider-closure-v1"
 ACTIVITY_STAGE_COMMAND = "local-private-validator-activity-stage-completion-v1"
 ACTIVITY_MANIFEST_COMMAND = "local-private-validator-activity-manifest-v1"
@@ -67,10 +70,10 @@ FINAL_EVIDENCE_COMMANDS = (
     LIFECYCLE_SESSION_COMMAND,
     LIFECYCLE_RECEIPT_COMMAND,
 )
-FULL_LIFECYCLE_BLOCKERS = (
-    "owned-loopback Direct producer",
-    "Direct-owned canonical nonzero-claim payout schedule",
-)
+FULL_LIFECYCLE_BLOCKERS = ("exact seventeen-case resumable chaos session",)
+DIRECT_PRODUCER_SCHEMA = "dclutch-owned-loopback-direct-trade-producer-receipt-v1"
+DIRECT_FINALIZED_SCHEMA = "dclutch-owned-loopback-direct-trade-finalized-v1"
+DIRECT_PAYOUT_SCHEDULE_SCHEMA = "dclutch-owned-loopback-direct-payout-schedule-v1"
 PYTH_JOURNAL_SCHEMA = "dclutch-owned-loopback-pyth-prerequisite-transaction-v1"
 RESOLUTION_PRODUCER_SCHEMA = "dclutch-owned-loopback-flagship-resolution-producer-v1"
 RESOLUTION_TABLE_SCHEMA = "dclutch-owned-loopback-flagship-resolution-alt-journal-v2"
@@ -89,6 +92,7 @@ MAX_RESOLUTION_TABLE_INVOCATIONS = 64
 MAX_RESOLUTION_STAGE_INVOCATIONS = 16
 MAX_PAYOUT_INVOCATIONS = 24
 MAX_TERMINAL_INVOCATIONS = 32
+MAX_DIRECT_INVOCATIONS = 32
 MAX_PAYOUT_TARGETS = 32
 PYTH_JOURNAL_FILES = (
     "00-router-initialize.json",
@@ -434,14 +438,18 @@ def command_surface(bootstrap: Path, through: str) -> str:
     if through in ("full", "full-probe"):
         required.extend(
             (
+                DIRECT_PRODUCER_COMMAND,
+                DIRECT_EXECUTE_COMMAND,
+                DIRECT_PAYOUT_SCHEDULE_COMMAND,
                 PYTH_PROVISION_COMMAND,
                 FLAGSHIP_RESOLUTION_COMMAND,
                 PAYOUT_INPUT_COMMAND,
                 PAYOUT_EXECUTE_COMMAND,
                 TERMINAL_RETIREMENT_COMMAND,
-                *FINAL_EVIDENCE_COMMANDS,
             )
         )
+    if through == "full":
+        required.extend(FINAL_EVIDENCE_COMMANDS)
     missing = [command for command in required if command not in result.stdout]
     if missing:
         raise Refusal(
@@ -2095,13 +2103,379 @@ def post_direct_compute_units(result: dict[str, Any]) -> dict[str, int]:
     return metrics
 
 
-def accepted_direct_payout_schedule(_direct_evidence: Path) -> tuple[PayoutTarget, ...]:
-    """Intentional seam: no provisional Direct schema may become controller authority."""
-
-    raise Refusal(
-        "Direct payout schedule adapter is not frozen; require exact ordered "
-        "nonzero owner/recipient/claimIndex facts from the Direct semantic owner"
+def authenticate_direct_producer_receipt(
+    document: Any,
+    root: Path,
+    plan: Path,
+    market_input: Path,
+    campaign_report: Path,
+    participant_report: Path,
+) -> tuple[Path, Path, str]:
+    receipt = exact_keys(
+        document,
+        {
+            "schema",
+            "status",
+            "producerReceipt",
+            "publicManifest",
+            "publicManifestSha256",
+            "privateSession",
+            "privateSessionSha256",
+            "planSha256",
+            "marketInputSha256",
+            "campaignReportSha256",
+            "participantReportSha256",
+            "participantAdmissionSignature",
+            "participantAdmissionSlot",
+            "participantCollateralSignature",
+            "participantCollateralSlot",
+            "replaySetup",
+            "tokenSetup",
+            "receiptSha256",
+        },
+        "Direct producer receipt",
     )
+    expected_receipt = root / "direct-trade-produced.json"
+    expected_public = root / "direct-trade-public.json"
+    expected_session = root / "direct-trade-session.json"
+    receipt_path = canonical_file(receipt.get("producerReceipt"), "Direct producer receipt")
+    public_path = canonical_file(receipt.get("publicManifest"), "Direct public manifest")
+    session_path = canonical_file(receipt.get("privateSession"), "Direct private session")
+    if (
+        receipt.get("schema") != DIRECT_PRODUCER_SCHEMA
+        or receipt.get("status") != "produced"
+        or receipt_path != expected_receipt
+        or public_path != expected_public
+        or session_path != expected_session
+        or sha256_file(public_path)
+        != lowercase_sha256(receipt.get("publicManifestSha256"), "Direct public manifest digest")
+        or sha256_file(session_path)
+        != lowercase_sha256(receipt.get("privateSessionSha256"), "Direct private session digest")
+        or sha256_file(plan)
+        != lowercase_sha256(receipt.get("planSha256"), "Direct plan digest")
+        or sha256_file(market_input)
+        != lowercase_sha256(receipt.get("marketInputSha256"), "Direct Market input digest")
+        or sha256_file(campaign_report)
+        != lowercase_sha256(receipt.get("campaignReportSha256"), "Direct campaign digest")
+        or sha256_file(participant_report)
+        != lowercase_sha256(
+            receipt.get("participantReportSha256"), "Direct participant digest"
+        )
+        or not isinstance(receipt.get("replaySetup"), dict)
+        or not isinstance(receipt.get("tokenSetup"), dict)
+    ):
+        raise Refusal("Direct producer receipt changed its exact authenticated inputs")
+    canonical_signature(
+        receipt.get("participantAdmissionSignature"),
+        "Direct participant admission signature",
+    )
+    canonical_signature(
+        receipt.get("participantCollateralSignature"),
+        "Direct participant collateral signature",
+    )
+    positive_integer(
+        receipt.get("participantAdmissionSlot"), "Direct participant admission slot"
+    )
+    positive_integer(
+        receipt.get("participantCollateralSlot"), "Direct participant collateral slot"
+    )
+    lowercase_sha256(receipt.get("receiptSha256"), "Direct producer receipt digest")
+    public = read_unique_json(public_path, "Direct public manifest")
+    if (
+        not isinstance(public, dict)
+        or public.get("schema")
+        != "dclutch-owned-loopback-direct-trade-public-manifest-v1"
+        or public.get("cluster") != "owned-loopback"
+    ):
+        raise Refusal("Direct public manifest changed its owned-loopback schema")
+    market = canonical_pubkey(public.get("market"), "Direct Market")
+    return session_path, root / "direct-trade-finalized.json", market
+
+
+def accepted_direct_payout_schedule(
+    schedule_path: Path, direct_evidence: Path
+) -> tuple[tuple[PayoutTarget, ...], dict[str, int], dict[str, Any]]:
+    direct_evidence = canonical_file(direct_evidence, "Direct finalized evidence")
+    schedule = exact_keys(
+        read_unique_json(schedule_path, "Direct payout schedule"),
+        {
+            "schema",
+            "status",
+            "cluster",
+            "directEvidence",
+            "market",
+            "planSha256",
+            "marketInputSha256",
+            "finalizedSlot",
+            "mutations",
+            "claims",
+            "scheduleSetSha256",
+        },
+        "Direct payout schedule",
+    )
+    direct = exact_keys(
+        schedule.get("directEvidence"),
+        {"path", "sha256", "schema", "evidenceSha256"},
+        "Direct finalized evidence reference",
+    )
+    finalized_slot = canonical_decimal(
+        schedule.get("finalizedSlot"), "Direct finalized slot"
+    )
+    if (
+        schedule.get("schema") != DIRECT_PAYOUT_SCHEDULE_SCHEMA
+        or schedule.get("status") != "finalized"
+        or schedule.get("cluster") != "owned-loopback"
+        or canonical_file(direct.get("path"), "Direct finalized evidence")
+        != direct_evidence
+        or direct.get("schema") != DIRECT_FINALIZED_SCHEMA
+        or sha256_file(direct_evidence)
+        != lowercase_sha256(direct.get("sha256"), "Direct finalized file digest")
+    ):
+        raise Refusal("Direct payout schedule names another terminal semantic owner")
+    lowercase_sha256(direct.get("evidenceSha256"), "Direct semantic evidence digest")
+    canonical_pubkey(schedule.get("market"), "Direct payout Market")
+    lowercase_sha256(schedule.get("planSha256"), "Direct payout plan digest")
+    lowercase_sha256(
+        schedule.get("marketInputSha256"), "Direct payout Market input digest"
+    )
+
+    mutations = schedule.get("mutations")
+    if not isinstance(mutations, list) or not 7 <= len(mutations) <= MAX_DIRECT_INVOCATIONS:
+        raise Refusal("Direct terminal mutation sequence is absent or unbounded")
+    vocabulary = {
+        "replay-setup": 0,
+        "token-setup": 1,
+        "lookup-create": 2,
+        "lookup-extend": 3,
+        "lookup-freeze": 4,
+        "capability-seal": 5,
+        "hot": 6,
+    }
+    ranks: list[int] = []
+    signatures: set[str] = set()
+    journals: set[Path] = set()
+    compute_units: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    for index, raw in enumerate(mutations):
+        row = exact_keys(
+            raw,
+            {
+                "kind",
+                "prefixLen",
+                "path",
+                "sha256",
+                "intentSha256",
+                "schema",
+                "completionPointer",
+                "completionValue",
+                "signature",
+                "slot",
+                "feePayer",
+                "feeLamports",
+                "computeUnitsConsumed",
+            },
+            f"Direct mutation {index}",
+        )
+        kind = row.get("kind")
+        if kind not in vocabulary:
+            raise Refusal("Direct terminal mutation kind changed")
+        rank = vocabulary[kind]
+        ranks.append(rank)
+        prefix = row.get("prefixLen")
+        if kind == "lookup-extend":
+            canonical_decimal(prefix, f"Direct mutation {index} prefix length")
+        elif prefix is not None:
+            raise Refusal("only a Direct lookup extension may carry prefixLen")
+        journal = canonical_file(row.get("path"), f"Direct mutation {index} journal")
+        signature = canonical_signature(
+            row.get("signature"), f"Direct mutation {index} signature"
+        )
+        slot = canonical_decimal(row.get("slot"), f"Direct mutation {index} slot")
+        fee = canonical_decimal(
+            row.get("feeLamports"), f"Direct mutation {index} fee"
+        )
+        units = canonical_decimal(
+            row.get("computeUnitsConsumed"), f"Direct mutation {index} CU"
+        )
+        if (
+            journal in journals
+            or signature in signatures
+            or sha256_file(journal)
+            != lowercase_sha256(row.get("sha256"), f"Direct mutation {index} digest")
+            or row.get("completionPointer") != "/phase"
+            or row.get("completionValue") != "finalized"
+            or slot > finalized_slot
+        ):
+            raise Refusal("Direct mutation journal closure changed or repeated")
+        lowercase_sha256(
+            row.get("intentSha256"), f"Direct mutation {index} intent digest"
+        )
+        if not isinstance(row.get("schema"), str) or not row["schema"]:
+            raise Refusal("Direct mutation journal schema is absent")
+        canonical_pubkey(row.get("feePayer"), f"Direct mutation {index} fee payer")
+        journals.add(journal)
+        signatures.add(signature)
+        occurrence = kind_counts.get(kind, 0)
+        kind_counts[kind] = occurrence + 1
+        compute_units[f"direct-{index:02d}-{kind}-{occurrence:02d}"] = units
+        if fee <= 0:
+            raise Refusal("Direct mutation fee is not positive")
+    if (
+        ranks != sorted(ranks)
+        or ranks[0] != 0
+        or ranks[-1] != 6
+        or any(kind_counts.get(kind) != 1 for kind in vocabulary if kind != "lookup-extend")
+        or kind_counts.get("lookup-extend", 0) < 1
+    ):
+        raise Refusal("Direct mutation sequence is not replay through Hot exactly once")
+
+    claims = schedule.get("claims")
+    if not isinstance(claims, list):
+        raise Refusal("Direct payout schedule claims are not one array")
+    canonical_rows: list[PayoutTarget] = []
+    for index, raw in enumerate(claims):
+        row = exact_keys(
+            raw,
+            {"owner", "position", "recipientToken", "claimIndex", "quantityAtoms"},
+            f"Direct payout claim {index}",
+        )
+        owner = canonical_pubkey(row.get("owner"), f"Direct payout owner {index}")
+        canonical_pubkey(row.get("position"), f"Direct payout Position {index}")
+        recipient = canonical_pubkey(
+            row.get("recipientToken"), f"Direct payout recipient {index}"
+        )
+        claim_index = canonical_decimal(
+            row.get("claimIndex"), f"Direct payout claim index {index}", positive=False
+        )
+        if claim_index > 0xFFFFFFFF:
+            raise Refusal("Direct payout claim index exceeds u32")
+        canonical_decimal(row.get("quantityAtoms"), f"Direct payout quantity {index}")
+        canonical_rows.append(PayoutTarget(owner, claim_index, recipient))
+    encoded_claims = (
+        json.dumps(claims, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    if sha256_bytes(encoded_claims) != lowercase_sha256(
+        schedule.get("scheduleSetSha256"), "Direct payout schedule-set digest"
+    ):
+        raise Refusal("Direct payout schedule-set digest changed")
+    targets = canonical_payout_schedule(tuple(canonical_rows))
+    return targets, compute_units, schedule
+
+
+def run_direct_lifecycle(
+    run: Path,
+    paths: Paths,
+    url: str,
+    plan: Path,
+    market_input: Path,
+    campaign_report: Path,
+    participant_report: Path,
+    key_directory: Path,
+    first_ordinal: int,
+) -> tuple[dict[str, Any], tuple[PayoutTarget, ...], int]:
+    root = run / "direct"
+    root.mkdir(mode=0o700)
+    produced = run_json_stage(
+        run,
+        first_ordinal,
+        "direct-produce",
+        [
+            str(paths.bootstrap),
+            DIRECT_PRODUCER_COMMAND,
+            "--rpc-url",
+            url,
+            "--plan",
+            str(plan),
+            "--market-input",
+            str(market_input),
+            "--campaign-report",
+            str(campaign_report),
+            "--participant-report",
+            str(participant_report),
+            "--key-dir",
+            str(canonical_directory(key_directory, "Direct key directory")),
+            "--output-dir",
+            str(root),
+        ],
+    )
+    receipt_path = root / "direct-trade-produced.json"
+    if read_unique_json(receipt_path, "persisted Direct producer receipt") != produced:
+        raise Refusal("Direct producer stdout differs from its durable receipt")
+    session_path, evidence_path, market = authenticate_direct_producer_receipt(
+        produced,
+        root,
+        plan,
+        market_input,
+        campaign_report,
+        participant_report,
+    )
+    ordinal = first_ordinal + 1
+    for attempt in range(MAX_DIRECT_INVOCATIONS):
+        document = run_json_stage(
+            run,
+            ordinal,
+            f"direct-execute-{attempt:02d}",
+            [
+                str(paths.bootstrap),
+                DIRECT_EXECUTE_COMMAND,
+                "--rpc-url",
+                url,
+                "--session",
+                str(session_path),
+                "--execute",
+            ],
+        )
+        ordinal += 1
+        if evidence_path.is_file():
+            if read_unique_json(evidence_path, "persisted Direct finalized evidence") != document:
+                raise Refusal("Direct executor stdout differs from its terminal evidence")
+            break
+    else:
+        raise Refusal("Direct executor exceeded its bounded 32-mutation loop")
+
+    schedule_path = root / "direct-payout-schedule.json"
+    projected = run_json_stage(
+        run,
+        ordinal,
+        "direct-payout-schedule",
+        [
+            str(paths.bootstrap),
+            DIRECT_PAYOUT_SCHEDULE_COMMAND,
+            "--rpc-url",
+            url,
+            "--plan",
+            str(plan),
+            "--market-input",
+            str(market_input),
+            "--market",
+            market,
+            "--direct-evidence",
+            str(evidence_path),
+            "--output",
+            str(schedule_path),
+        ],
+    )
+    ordinal += 1
+    if read_unique_json(schedule_path, "persisted Direct payout schedule") != projected:
+        raise Refusal("Direct payout schedule stdout differs from its durable receipt")
+    targets, compute_units, authenticated_schedule = accepted_direct_payout_schedule(
+        schedule_path, evidence_path
+    )
+    result = {
+        "schema": "dclutch-private-validator-direct-controller-v1",
+        "status": "finalized",
+        "producer_receipt": str(receipt_path),
+        "producer_receipt_sha256": sha256_file(receipt_path),
+        "private_session": str(session_path),
+        "private_session_sha256": sha256_file(session_path),
+        "finalized_evidence": str(evidence_path),
+        "finalized_evidence_sha256": sha256_file(evidence_path),
+        "payout_schedule": str(schedule_path),
+        "payout_schedule_sha256": sha256_file(schedule_path),
+        "market": authenticated_schedule["market"],
+        "compute_units": compute_units,
+    }
+    return result, targets, ordinal
 
 
 def checked_mutable_slot_floor(plan_path: Path) -> int:
@@ -2495,17 +2869,17 @@ def run_one(
                 hold_after_participant(handoff_path, handoff, child)
             return result
 
-        # Exterior stages intentionally have their own driver commands.  The
-        # exact argument producers are frozen beside those commands; this
-        # supervisor never reconstructs their packets or persisted facts.
-        # Direct is executed by its accepted exterior immediately before this
-        # provisioning boundary. Its exact caller supplies direct-finalized.json.
-        direct_evidence = run / "direct-finalized.json"
-        if not direct_evidence.is_file():
-            raise Refusal(
-                "accepted Direct exterior did not preserve run/direct-finalized.json before Pyth"
-            )
-        schedule = accepted_direct_payout_schedule(direct_evidence)
+        direct, schedule, next_ordinal = run_direct_lifecycle(
+            run,
+            paths,
+            url,
+            plan,
+            market,
+            evidence,
+            participant,
+            prepare_work / "keys",
+            7,
+        )
         post_direct, _next_ordinal = run_post_direct_lifecycle(
             run,
             paths,
@@ -2515,7 +2889,7 @@ def run_one(
             market,
             evidence,
             schedule,
-            8,
+            next_ordinal,
         )
         result = {
             "schema": RUN_SCHEMA if through == "full" else FULL_PROBE_RUN_SCHEMA,
@@ -2525,13 +2899,14 @@ def run_one(
             "dcltgmf2_compute_units": metric,
             "compute_units": {
                 "founding-dcltgmf2": metric,
+                **direct["compute_units"],
                 **post_direct["compute_units"],
             },
             "fee_profile": fee_profile,
             "plan": str(plan),
             "founding_evidence": str(evidence),
             "participant_evidence": str(participant),
-            "direct_evidence": str(direct_evidence),
+            "direct": direct,
             "post_direct": post_direct,
             "validator_log": str(run / "validator.log"),
         }
@@ -2608,9 +2983,9 @@ def parse(argv: Sequence[str]) -> tuple[Paths, int, str, bool]:
         raise Refusal(
             "the full-lifecycle development probe requires exactly one named seed"
         )
-    if args.through in ("full", "full-probe"):
+    if args.through == "full":
         raise Refusal(
-            "full private-validator lifecycle is not accepted in this revision; "
+            "twenty-seed private-validator release evidence is not accepted in this revision; "
             "missing semantic owners: " + ", ".join(FULL_LIFECYCLE_BLOCKERS)
         )
     if args.through == "participant" and args.seeds != 1:

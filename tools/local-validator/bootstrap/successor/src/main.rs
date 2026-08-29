@@ -179,6 +179,13 @@ fn run() -> Result<()> {
             let value = private_lifecycle::run(parsed)?;
             stdout_json_value_v1(&value)
         }
+        Some(command) if command == private_lifecycle::DIRECT_PAYOUT_SCHEDULE_COMMAND_V1 => {
+            let parsed = private_lifecycle::parse_direct_payout_schedule_args(
+                arguments.collect::<Vec<_>>(),
+            )?;
+            let value = private_lifecycle::run_direct_payout_schedule(parsed)?;
+            stdout_json_value_v1(&value)
+        }
         Some("local-mutable-prepare-v1") => local_mutable::run_prepare(arguments.collect()),
         Some("local-mutable-plan-authenticate-v1") => {
             local_mutable::run_authenticate(arguments.collect())
@@ -1349,6 +1356,7 @@ fn usage() {
     );
     println!("{}", private_activity::usage());
     println!("{}", private_lifecycle::usage());
+    println!("{}", private_lifecycle::direct_payout_schedule_usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", wallet_terminal::usage());
