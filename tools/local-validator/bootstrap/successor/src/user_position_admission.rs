@@ -97,6 +97,11 @@ struct ArgumentsV1 {
     output: PathBuf,
     execute: bool,
     collateral: Option<CollateralArgumentsV1>,
+    /// Frozen founding routing tables the v0 admission message may load
+    /// addresses through. Comma-separated in one `--routing-table` value; the
+    /// snapshot fetches them in the same finalized observation as every
+    /// semantic account, exactly as the founding ladder does.
+    routing_tables: Vec<Pubkey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -493,6 +498,9 @@ struct SnapshotBundleV1 {
     replay: ObservedAccount,
     fee_payer: ObservedAccount,
     states: BTreeMap<String, AccountStateV1>,
+    /// Caller-selected frozen routing tables, observed in the same finalized
+    /// snapshot as every semantic account so the v0 compiler admits them.
+    routing_tables: Vec<ObservedAccount>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3178,7 +3186,7 @@ fn build_report(
         &unsigned.instructions,
         recent_blockhash,
         unsigned.observation,
-        &[],
+        &snapshot.routing_tables,
     )
     .map_err(|error| Error::new(format!("admission message compilation: {error:?}")))?;
     let message_bytes = compiled.message.serialize();
@@ -4024,12 +4032,25 @@ fn acquire_snapshot(
             unique.push(*key);
         }
     }
+    let semantic_len = unique.len();
+    for table in &arguments.routing_tables {
+        if unique.contains(table) {
+            return Err(Error::new(
+                "--routing-table aliased a semantic admission account",
+            ));
+        }
+        unique.push(*table);
+    }
     let (slot, values) = rpc.finalized_accounts(&unique, raw_slot)?;
     let observation = Observation {
         slot,
         unix_timestamp: rpc.block_time(slot)?,
         finality: Finality::Finalized,
     };
+    let mut unique = unique;
+    let mut values = values;
+    let table_values = values.split_off(semantic_len);
+    let table_keys = unique.split_off(semantic_len);
     let by_key = unique.into_iter().zip(values).collect::<BTreeMap<_, _>>();
     let observed = |key: Pubkey, allow_vacant: bool| -> Result<ObservedAccount> {
         match by_key
@@ -4088,11 +4109,28 @@ fn acquire_snapshot(
         let value = by_key.get(&key).and_then(Option::as_ref);
         states.insert(label.into(), account_state(key, value));
     }
+    let routing_tables = table_keys
+        .into_iter()
+        .zip(table_values)
+        .map(|(key, value)| {
+            let value = value
+                .ok_or_else(|| Error::new(format!("snapshot missing routing table {key}")))?;
+            Ok(ObservedAccount {
+                observation,
+                key,
+                owner: value.owner,
+                lamports: value.lamports,
+                executable: value.executable,
+                data: value.data,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(SnapshotBundleV1 {
         operator,
         replay,
         fee_payer,
         states,
+        routing_tables,
     })
 }
 
@@ -4760,6 +4798,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut collateral_source_owner_keypair = None;
     let mut collateral_source_account = None;
     let mut collateral_quantity_atoms = None;
+    let mut routing_tables_raw: Option<String> = None;
     let mut seen = BTreeSet::new();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
@@ -4791,6 +4830,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--collateral-source-owner-keypair" => collateral_source_owner_keypair = Some(value),
             "--collateral-source-account" => collateral_source_account = Some(value),
             "--collateral-quantity-atoms" => collateral_quantity_atoms = Some(value),
+            "--routing-table" => routing_tables_raw = Some(value),
             _ => {
                 return Err(Error::new(format!(
                     "unknown devnet-user-position-admission-v1 argument: {argument}"
@@ -4846,6 +4886,20 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             ));
         }
     };
+    let routing_tables = match routing_tables_raw {
+        None => Vec::new(),
+        Some(raw) => {
+            let mut tables = Vec::new();
+            for part in raw.split(',') {
+                let table = pubkey(part.trim())?;
+                if tables.contains(&table) {
+                    return Err(Error::new("--routing-table repeats a table"));
+                }
+                tables.push(table);
+            }
+            tables
+        }
+    };
     Ok(ArgumentsV1 {
         origin,
         plan: absolute(plan, "--plan")?,
@@ -4858,6 +4912,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         output: absolute(output, "--output")?,
         execute,
         collateral,
+        routing_tables,
     })
 }
 
