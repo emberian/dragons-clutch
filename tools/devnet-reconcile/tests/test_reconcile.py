@@ -150,16 +150,17 @@ def fixture():
     pos_post = position_data(identities["token_authority"][1], 2, [50, 0])
     cert = certificate_data(identities["market"][1])
 
-    def event(index, kind, lamports, tokens, **extra):
+    def event(index, kind, lamports, tokens, operation=None, signature=None, **extra):
         return {
             "id": f"event-{index}-{kind}",
             "kind": kind,
-            "operation": f"fixture-{kind}",
-            "predecessor": None if index == 1 else f"event-{index - 1}-{reconcile.EVENT_KINDS[index - 2]}",
-            "signature": f"signature-{kind}",
+            "operation": operation or f"fixture-{kind}",
+            "predecessor": None,
+            "signature": signature or f"signature-{kind}",
             "slot": str(100 + index),
             "feePayer": "payer",
             "feeLamports": "5000",
+            "computeUnitsConsumed": "100000",
             "lamportDeltas": [{"account": ref, "lamports": str(amount)} for ref, amount in lamports.items()],
             "tokenDeltas": [{"account": ref, "atoms": str(amount)} for ref, amount in tokens.items()],
             "sourcePath": "fixture-journal.json",
@@ -175,19 +176,26 @@ def fixture():
             "feeBasisPointsPerSide": "50", "sellerToken": "seller_token", "buyerToken": "buyer_token",
             "feeRecipientToken": "fee_token", "mint": mint_address,
         }),
-        event(4, "resolution", {"payer": -5000}, {}, certificate={
+        event(4, "resolution", {"payer": -5000}, {}, operation="resolution-submit", signature="signature-resolution-submit"),
+        event(5, "resolution", {"payer": -5000}, {}, operation="resolution-provider-execute-v1", signature="signature-resolution-provider-execute-v1", certificate={
             "account": "certificate", "owner": identities["protocol_owner"][0],
             "dataBase64": base64.b64encode(cert).decode(), "market": identities["market"][0],
         }),
-        event(5, "payout", {"payer": -5000}, {"hoard_token": -50, "recipient_token": 50},
+        event(6, "resolution", {"payer": -5000}, {}, operation="core-terminal-accept-v1", signature="signature-core-terminal-accept-v1"),
+        event(7, "resolution", {"payer": -5000}, {}, operation="resolution-reclaim", signature="signature-resolution-reclaim"),
+        event(8, "payout", {"payer": -5000}, {"hoard_token": -50, "recipient_token": 50},
               position={"account": "position", "preDataBase64": base64.b64encode(pos_pre).decode(), "postDataBase64": base64.b64encode(pos_post).decode()},
               payout={"hoardToken": "hoard_token", "recipientToken": "recipient_token", "position": "position", "principalAtoms": "50", "claimsBurnedAtoms": ["50", "0"], "mint": mint_address}),
-        event(6, "retirement", {"payer": -5000, "refund": 10000}, {}, retirement={
+        event(9, "retirement", {"payer": -5000, "refund": 10000}, {}, retirement={
             "stage": "aggregate-retirement",
             "closedAccounts": ["closed_protocol"],
             "refundLamports": [{"account": "refund", "lamports": "10000"}],
         }),
     ]
+    predecessor = None
+    for current in events:
+        current["predecessor"] = predecessor
+        predecessor = current["id"]
     final_amounts = {
         "source_token": 900, "participant_token": 100, "seller_token": 1990,
         "buyer_token": 2990, "fee_token": 20, "hoard_token": 950, "recipient_token": 50,
@@ -655,7 +663,8 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(dossier["schema"], reconcile.DOSSIER_SCHEMA)
         self.assertEqual(dossier["signatureScheme"], "none")
         self.assertEqual(dossier["evidence"]["rpc"]["mode"], "captured-finalized-rpc-replay")
-        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "30000")
+        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "45000")
+        self.assertEqual(dossier["totals"]["computeUnitsConsumed"], "900000")
         self.assertEqual(dossier["totals"]["protocolFeesAtoms"], "20")
         self.assertEqual(dossier["totals"]["hoardPrincipalPaidAtoms"], "50")
         self.assertEqual(dossier, reconcile.reconcile(manifest, reconcile.CapturedRpc(capture)))
@@ -699,6 +708,7 @@ class ReconcileTest(unittest.TestCase):
                 "slot": "103",
                 "feePayer": "payer",
                 "feeLamports": "5000",
+                "computeUnitsConsumed": "100000",
                 "lamportDeltas": [{"account": "payer", "lamports": "-5000"}],
                 "tokenDeltas": [],
                 "sourcePath": "fixture-journal.json",
@@ -724,76 +734,95 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual([event["signature"] for event in direct], [setup_signature, "signature-direct"])
         self.assertNotIn("direct", direct[0])
         self.assertIn("direct", direct[1])
-        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "35000")
+        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "50000")
 
-    def test_resolution_submit_and_execute_keep_one_certificate_owner(self):
+    def test_resolution_v7_keeps_exact_four_mutations_and_one_certificate_owner(self):
         manifest, capture = fixture()
-        payer = next(row for row in manifest["accounts"] if row["ref"] == "payer")
-        resolution_index = next(
-            index for index, event in enumerate(manifest["events"])
-            if event["kind"] == "resolution"
-        )
-        for event in manifest["events"][resolution_index:]:
-            event["slot"] = str(int(event["slot"]) + 1)
-            captured_transaction = capture["transactions"][event["signature"]]
-            captured_transaction["slot"] += 1
-            captured_transaction["blockTime"] += 1
-            payer_index = captured_transaction["transaction"]["message"]["accountKeys"].index(
-                payer["address"]
-            )
-            captured_transaction["meta"]["preBalances"][payer_index] -= 5_000
-            captured_transaction["meta"]["postBalances"][payer_index] -= 5_000
-        submit_signature = "signature-resolution-submit"
-        submit_transaction = transaction(
-            submit_signature,
-            104,
-            [payer["address"]],
-            {payer["address"]: -5_000},
-            {},
-        )
-        submit_transaction["meta"]["preBalances"][0] = 85_000
-        submit_transaction["meta"]["postBalances"][0] = 80_000
-        capture["transactions"][submit_signature] = submit_transaction
-        manifest["events"].insert(
-            resolution_index,
-            {
-                "id": "pending-resolution-submit",
-                "kind": "resolution",
-                "operation": "resolution-submit",
-                "predecessor": None,
-                "signature": submit_signature,
-                "slot": "104",
-                "feePayer": "payer",
-                "feeLamports": "5000",
-                "lamportDeltas": [{"account": "payer", "lamports": "-5000"}],
-                "tokenDeltas": [],
-                "sourcePath": "fixture-journal.json",
-                "sourceSha256": manifest["events"][0]["sourceSha256"],
-            },
-        )
-        predecessor = None
-        for index, event in enumerate(manifest["events"]):
-            event["id"] = f"activity-{index:03}"
-            event["predecessor"] = predecessor
-            predecessor = event["id"]
-        manifest["sourceSetSha256"] = hashlib.sha256(
-            reconcile.canonical_bytes(
-                [
-                    {"event": event["id"], "sha256": event["sourceSha256"]}
-                    for event in manifest["events"]
-                ]
-            )
-        ).hexdigest()
-
         dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
         resolution = [event for event in dossier["events"] if event["kind"] == "resolution"]
         self.assertEqual(
-            [event["signature"] for event in resolution],
-            [submit_signature, "signature-resolution"],
+            [event["operation"] for event in resolution],
+            list(reconcile.RESOLUTION_OPERATIONS_V7),
         )
         self.assertNotIn("certificate", resolution[0])
         self.assertIn("certificate", resolution[1])
-        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "35000")
+        self.assertNotIn("certificate", resolution[2])
+        self.assertNotIn("certificate", resolution[3])
+        self.assertEqual(
+            [event["computeUnitsConsumed"] for event in resolution],
+            ["100000"] * 4,
+        )
+
+    def test_resolution_v7_partial_accept_replay_order_slot_and_compute_hostiles_refuse(self):
+        def rechain(manifest):
+            predecessor = None
+            for event in manifest["events"]:
+                event["predecessor"] = predecessor
+                predecessor = event["id"]
+            manifest["sourceSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(
+                    [
+                        {"event": event["id"], "sha256": event["sourceSha256"]}
+                        for event in manifest["events"]
+                    ]
+                )
+            ).hexdigest()
+
+        def partial_execute(manifest, _capture):
+            manifest["events"] = [
+                event for event in manifest["events"]
+                if event["operation"] not in ("core-terminal-accept-v1", "resolution-reclaim")
+            ]
+            rechain(manifest)
+
+        def omitted_accept(manifest, _capture):
+            manifest["events"] = [
+                event for event in manifest["events"]
+                if event["operation"] != "core-terminal-accept-v1"
+            ]
+            rechain(manifest)
+
+        def certificate_on_accept(manifest, _capture):
+            execute = next(event for event in manifest["events"] if event["operation"] == "resolution-provider-execute-v1")
+            accept = next(event for event in manifest["events"] if event["operation"] == "core-terminal-accept-v1")
+            accept["certificate"] = execute.pop("certificate")
+
+        def same_slot(manifest, capture):
+            execute = next(event for event in manifest["events"] if event["operation"] == "resolution-provider-execute-v1")
+            accept = next(event for event in manifest["events"] if event["operation"] == "core-terminal-accept-v1")
+            accept["slot"] = execute["slot"]
+            capture["transactions"][accept["signature"]]["slot"] = int(execute["slot"])
+
+        def compute_substitution(manifest, _capture):
+            accept = next(event for event in manifest["events"] if event["operation"] == "core-terminal-accept-v1")
+            accept["computeUnitsConsumed"] = "99999"
+
+        def replayed_accept(manifest, _capture):
+            accept_index = next(
+                index for index, event in enumerate(manifest["events"])
+                if event["operation"] == "core-terminal-accept-v1"
+            )
+            replay = copy.deepcopy(manifest["events"][accept_index])
+            replay.update(
+                id="event-core-terminal-accept-replay",
+                signature="signature-core-terminal-accept-replay",
+                slot=str(int(replay["slot"]) + 1),
+            )
+            manifest["events"].insert(accept_index + 1, replay)
+            for event in manifest["events"][accept_index + 2:]:
+                event["slot"] = str(int(event["slot"]) + 1)
+            rechain(manifest)
+
+        for mutate, message in (
+            (partial_execute, "exact submit"),
+            (omitted_accept, "exact submit"),
+            (certificate_on_accept, "belongs only to provider execute"),
+            (same_slot, "strictly ordered"),
+            (compute_substitution, "substituted compute units"),
+            (replayed_accept, "exact submit"),
+        ):
+            with self.subTest(mutate=mutate.__name__):
+                self.assert_refuses(mutate, message)
 
     def assert_refuses(self, mutate, message):
         manifest, capture = fixture()
@@ -883,7 +912,7 @@ class ReconcileTest(unittest.TestCase):
                 by_ref["fee_token"]["address"]: (mint, authority, 20, 30),
             },
         )
-        first_payout = manifest["events"][4]
+        first_payout = next(event for event in manifest["events"] if event["kind"] == "payout")
         second_payout = copy.deepcopy(first_payout)
         second_payout.update(id="event-payout-2", signature="signature-payout-2", operation="fixture-payout-2")
         position_2 = base64.b64decode(first_payout["position"]["postDataBase64"])
@@ -932,7 +961,7 @@ class ReconcileTest(unittest.TestCase):
         dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
         self.assertEqual(dossier["totals"]["protocolFeesAtoms"], "30")
         self.assertEqual(dossier["totals"]["hoardPrincipalPaidAtoms"], "100")
-        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "40000")
+        self.assertEqual(dossier["totals"]["transactionFeesLamports"], "55000")
 
     def test_discontinuous_wallet_history_refuses(self):
         def mutate(manifest, capture):
