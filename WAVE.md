@@ -253,6 +253,23 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
   that. The assembler in the same file (e4aa2bbd) takes `lifecycle` and
   `strategy` as typed parameters rather than defaulting them, so the moment a
   policy exists the bundle assembles and authenticates with no other change.
+  **RULING (ORCH, 2026-08-29 12:30 EDT, ember-endorsed: selection is the
+  spine now).** The single-author principle — the day's entire defect
+  taxonomy was "two authors for one fact" — governs all three:
+  (a) the policy covers the states Series routes CREATE AND OWN: the root.
+  The Ticket appears as a referenced coordinate only; its lamport flow is
+  authored by the funding path (`ticket_capability_refund`) and the policy
+  claiming it must be a PINNED REFUSAL, not merely absent.
+  (b) the rent-quote generation pin is DERIVED at emit time from the
+  publication context the release set already binds — never supplied, never
+  a second copy.
+  (c) the refund recipient is a RULE, never an identity: the beneficiary
+  fixed at state creation (Dealer checkpoint precedent — every lamport
+  reaches the creation-fixed beneficiary).
+  Implementations are checked against `SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4`,
+  not this prose. While in there: fix the naming collision — series/lifecycle.rs
+  is about FUNDING, the protocol-wide term means the artifact; a name that
+  misleads is the found_request_digest trap waiting for a third lane.
 - **LINGER₂ Sonnet batch — DONE.** Satellites folded (root `exclude` is now
   empty; nested program-test harness workspaces stay per 5c663da precedent);
   both skeleton dirs deleted; `dealer_chain` warnings cleared (21df8e5).
