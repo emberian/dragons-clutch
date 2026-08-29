@@ -207,6 +207,30 @@ pub(crate) struct MarketExecutionEvidence {
         Option<LocalParticipantFixtureLiquidityEvidenceV1>,
 }
 
+/// Public identities that shape founding but never sign a campaign packet.
+///
+/// Keeping them separate from [`KeyForge`] prevents a public driver from
+/// demanding private-key files for roles whose secret material is never used.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FoundingActorsV1 {
+    pub(crate) founder: Pubkey,
+    pub(crate) substituted_founder: Pubkey,
+}
+
+impl FoundingActorsV1 {
+    pub(crate) fn new(founder: Pubkey, substituted_founder: Pubkey) -> Result<Self> {
+        if founder == substituted_founder {
+            return Err(Error::new(
+                "founder and substituted-founder identities must be distinct",
+            ));
+        }
+        Ok(Self {
+            founder,
+            substituted_founder,
+        })
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MarketExecutionCheckpointV1 {
@@ -1223,12 +1247,17 @@ pub(crate) fn execute_found_market(
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<MarketExecutionEvidence> {
+    let actors = FoundingActorsV1::new(
+        forge.keypair(role::FOUNDING_FOUNDER).pubkey(),
+        forge.keypair(role::SUBSTITUTED_FOUNDER).pubkey(),
+    )?;
     execute_found_market_with_checkpoint_and_journal(
         rpc,
         plan,
         input,
         payer,
         forge,
+        actors,
         transactions,
         &mut |_| Ok(()),
         None,
@@ -1244,12 +1273,17 @@ pub(crate) fn execute_found_market_with_checkpoint(
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
 ) -> Result<MarketExecutionEvidence> {
+    let actors = FoundingActorsV1::new(
+        forge.keypair(role::FOUNDING_FOUNDER).pubkey(),
+        forge.keypair(role::SUBSTITUTED_FOUNDER).pubkey(),
+    )?;
     execute_found_market_with_checkpoint_and_journal(
         rpc,
         plan,
         input,
         payer,
         forge,
+        actors,
         transactions,
         checkpoint,
         None,
@@ -1263,6 +1297,7 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
     input: &MarketRunInput,
     payer: &Keypair,
     forge: &KeyForge,
+    actors: FoundingActorsV1,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
@@ -1573,6 +1608,7 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
             None,
             payer,
             forge,
+            actors,
             transactions,
             &mut accounts,
             &mut completed,
@@ -1655,6 +1691,7 @@ fn reconstruct_founding_checkpoint_v1(
     input: &MarketRunInput,
     payer: &Keypair,
     forge: &KeyForge,
+    actors: FoundingActorsV1,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
     consume_role_keys: bool,
@@ -1813,16 +1850,12 @@ fn reconstruct_founding_checkpoint_v1(
         ));
     }
 
-    let (beneficiary, founder) = if consume_role_keys {
+    let beneficiary = if consume_role_keys {
         let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY).pubkey();
-        let founder = forge.keypair(role::FOUNDING_FOUNDER).pubkey();
         let _projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS);
-        (beneficiary, founder)
+        beneficiary
     } else {
-        (
-            forge.peek_pubkey(role::FOUNDING_BENEFICIARY)?,
-            forge.peek_pubkey(role::FOUNDING_FOUNDER)?,
-        )
+        forge.peek_pubkey(role::FOUNDING_BENEFICIARY)?
     };
     let coordinates = derive_founding_coordinates(
         rpc,
@@ -1833,7 +1866,7 @@ fn reconstruct_founding_checkpoint_v1(
         product,
         mint,
         payer.pubkey(),
-        founder,
+        actors.founder,
         beneficiary,
         PrestateLaneV1::Founding.generation(input)?,
         checkpoint.expiry_slot,
@@ -1898,7 +1931,7 @@ fn reconstruct_founding_checkpoint_v1(
         mint,
         collateral_wallet: wallet,
         found31_market,
-        founder,
+        founder: actors.founder,
         found_record: found_record.raw,
         lock_record: lock_record.raw,
         claim_count,
@@ -2006,6 +2039,7 @@ pub(crate) fn resume_found_market_from_prepared_checkpoint(
     input: &MarketRunInput,
     payer: &Keypair,
     forge: &KeyForge,
+    actors: FoundingActorsV1,
     transactions: &mut Vec<TransactionEvidence>,
     prepared_checkpoint: &MarketExecutionCheckpointV1,
     checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
@@ -2022,6 +2056,7 @@ pub(crate) fn resume_found_market_from_prepared_checkpoint(
         input,
         payer,
         forge,
+        actors,
         transactions,
         prepared_checkpoint,
         false,
@@ -2056,6 +2091,7 @@ pub(crate) fn resume_found_market_from_prepared_checkpoint(
         Some(prepared_checkpoint),
         payer,
         forge,
+        actors,
         transactions,
         &mut accounts,
         &mut completed,
@@ -2085,6 +2121,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
     input: &MarketRunInput,
     payer: &Keypair,
     forge: &KeyForge,
+    actors: FoundingActorsV1,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
@@ -2100,6 +2137,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
         input,
         payer,
         forge,
+        actors,
         transactions,
         checkpoint,
         true,
@@ -2154,12 +2192,11 @@ pub(crate) fn resume_found_market_from_checkpoint(
         context.product,
         context.mint,
         targets_found31(plan, input, context.mint)?,
-        context.founder,
+        actors,
         context.found_record,
         context.lock_record,
         context.claim_count,
         payer,
-        forge,
         transactions,
         &mut accounts,
         &mut completed,
@@ -2186,6 +2223,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     input: &MarketRunInput,
     payer: &Keypair,
     forge: &KeyForge,
+    actors: FoundingActorsV1,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
     submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
@@ -2201,6 +2239,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         input,
         payer,
         forge,
+        actors,
         transactions,
         checkpoint,
         true,
@@ -5059,6 +5098,7 @@ fn execute_projected_custody_bootstrap(
     prepared_checkpoint: Option<&MarketExecutionCheckpointV1>,
     payer: &Keypair,
     forge: &KeyForge,
+    actors: FoundingActorsV1,
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
@@ -5075,7 +5115,6 @@ fn execute_projected_custody_bootstrap(
     // funding source's owner to sign and to be non-writable, while the rent
     // payer must be writable, and a transaction grants privileges per key.
     let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY);
-    let founder = forge.keypair(role::FOUNDING_FOUNDER);
     let projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS);
     let market_rent = rpc.minimum_balance(STATE_BYTES)?;
     let resume_prepared = prepared_checkpoint.is_some();
@@ -5101,7 +5140,7 @@ fn execute_projected_custody_bootstrap(
         product,
         mint,
         payer.pubkey(),
-        founder.pubkey(),
+        actors.founder,
         beneficiary.pubkey(),
         lane.generation(input)?,
         expiry_slot,
@@ -5938,12 +5977,11 @@ fn execute_projected_custody_bootstrap(
             product,
             mint,
             found31_market,
-            founder.pubkey(),
+            actors,
             found_record.raw,
             lock_record.raw,
             claim_count,
             payer,
-            forge,
             transactions,
             accounts,
             completed,
@@ -7059,8 +7097,8 @@ fn derive_founding_outer_v1(
     coordinates: &FoundingCoordinates,
     product: ProductContentId,
     founder: Pubkey,
+    substituted_founder: Pubkey,
     claim_count: u32,
-    forge: &KeyForge,
 ) -> Result<FoundingOuterV1> {
     let core = pubkey(&plan.core.program_id)?;
     let claims_program = pubkey(&plan.claims.program_id)?;
@@ -7269,7 +7307,6 @@ fn derive_founding_outer_v1(
     // digest it carries, is the honest founding's. The outer's cross-request
     // join is the only thing between a substituted Claims record and a Position
     // minted to somebody else.
-    let substituted_founder = forge.keypair(role::SUBSTITUTED_FOUNDER).pubkey();
     let substituted_claims_raw = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
         founder: substituted_founder.to_bytes(),
         ..claims_input
@@ -7631,12 +7668,11 @@ fn execute_generic_market_founding(
     product: ProductContentId,
     mint: Pubkey,
     found31_market: Pubkey,
-    founder: Pubkey,
+    actors: FoundingActorsV1,
     found_raw_account: Pubkey,
     lock_raw_account: Pubkey,
     claim_count: u32,
     payer: &Keypair,
-    forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
@@ -7656,9 +7692,9 @@ fn execute_generic_market_founding(
         records,
         coordinates,
         product,
-        founder,
+        actors.founder,
+        actors.substituted_founder,
         claim_count,
-        forge,
     )?;
 
     // The founding artifact and the terminal Lock are the records the
@@ -7703,7 +7739,7 @@ fn execute_generic_market_founding(
             expected_realize_record.raw,
             expected_claims_record.raw,
         ],
-        founder,
+        actors.founder,
         mint,
     )?;
     let initial_founding_census =
@@ -7961,7 +7997,7 @@ fn execute_generic_market_founding(
     }
 
     let poststate =
-        derive_founding_poststate_expectation_v1(plan, coordinates, founder, claim_count)?;
+        derive_founding_poststate_expectation_v1(plan, coordinates, actors.founder, claim_count)?;
     let founding_label =
         "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)";
     let honest = match submission_recorder {
@@ -8873,6 +8909,23 @@ mod tests {
             forge.keypair(role::FOUNDING_PROJECTION_WITNESS).pubkey(),
             expected.2,
             "Prepared authentication must not advance the projection-witness role"
+        );
+    }
+
+    #[test]
+    fn founding_actor_owner_refuses_alias_without_requiring_secret_material() {
+        let founder = Pubkey::new_from_array([0x41; 32]);
+        let substituted = Pubkey::new_from_array([0x42; 32]);
+        assert_eq!(
+            FoundingActorsV1::new(founder, substituted).expect("distinct actors"),
+            FoundingActorsV1 {
+                founder,
+                substituted_founder: substituted,
+            }
+        );
+        assert!(
+            FoundingActorsV1::new(founder, founder).is_err(),
+            "the hostile founder identity must not alias the honest founder"
         );
     }
 
