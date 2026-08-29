@@ -117,6 +117,8 @@ const CLAIMS_DELTA: Pubkey = Pubkey::new_from_array([0xda; 32]);
 const EFFECTS: Pubkey = Pubkey::new_from_array([0xdb; 32]);
 /// Producer-owned single Custody effect body the manifest names.
 const EFFECT_BODY: Pubkey = Pubkey::new_from_array([0xdc; 32]);
+/// A real executable program the activated release set never named as Custody.
+const UNACTIVATED_PRODUCER: Pubkey = Pubkey::new_from_array([0xdd; 32]);
 
 /// The refusal Trading raises when a route's account content is not canonical.
 const TRADING_CONTENT: u32 = 0x4003;
@@ -124,6 +126,8 @@ const TRADING_CONTENT: u32 = 0x4003;
 const TRADING_TRANSITION: u32 = 0x4004;
 /// The refusal Trading raises when a projected physical mutation cannot commit.
 const TRADING_COMMIT: u32 = 0x4005;
+/// The refusal Trading raises when the release waist does not authenticate.
+const TRADING_RELEASE: u32 = 0x4001;
 
 /// Runtime Product outcome width this scenario transitions.
 const WIDTH: u32 = 3;
@@ -220,8 +224,13 @@ fn loader_programdata_body(slot: u64, authority: Option<[u8; 32]>, elf: &[u8]) -
 /// release set body, and the cache address is derived from that. A scenario
 /// therefore adopts its release set rather than naming one.
 fn release_waist() -> ReleaseWaist {
+    release_waist_for(0xe1)
+}
+
+/// Build one activated release set over a chosen Custody program identity.
+fn release_waist_for(custody_seed: u8) -> ReleaseWaist {
     let registry = Pubkey::new_from_array([0xe0; 32]);
-    let custody_program = Pubkey::new_from_array([0xe1; 32]);
+    let custody_program = Pubkey::new_from_array([custody_seed; 32]);
     let custody_programdata =
         Pubkey::find_program_address(&[custody_program.as_ref()], &bpf_loader_upgradeable::ID).0;
     // The Custody role is pinned to a real deployed artifact, not a stand-in:
@@ -543,6 +552,7 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         data_account(system_program::ID, Vec::new()),
     );
     add_executable(&mut test, MANIFEST_PRODUCER);
+    add_executable(&mut test, UNACTIVATED_PRODUCER);
     // The genuine release waist reservation authenticates against. The Custody
     // role is installed as a real loadable deployment and its ProgramData is
     // then written to the exact slot and authority the activation pinned.
@@ -1692,4 +1702,237 @@ fn reservation_evidence(
             (reservation_state, reservation_body),
         ],
     }
+}
+
+
+/// Build one reservation route over a caller-supplied release waist.
+///
+/// The producer and cache are parameters so a case can present a waist that is
+/// individually well-formed and still wrong for this checkpoint.
+fn reserve_instruction(
+    scenario: &Scenario,
+    payer: Pubkey,
+    reservation: &ReservationEvidence,
+    producer: Pubkey,
+    programdata: Pubkey,
+    activation_cache: Pubkey,
+) -> Instruction {
+    build_dealer_scenario_checkpoint_reserve_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        sysvar::clock::ID,
+        producer,
+        programdata,
+        activation_cache,
+        scenario.waist.registry,
+        reservation.receipt_address,
+        reservation.reservation_state,
+        MANIFEST_PRODUCER,
+        EFFECTS,
+        EFFECT_BODY,
+        0,
+        Hash::default(),
+        &[],
+    )
+    .expect("reserve packet")
+    .instruction
+}
+
+/// Reach a sealed evaluation and publish the Custody reservation evidence.
+async fn evaluated_with_reservation_evidence(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+) -> (ReservationEvidence, Vec<u8>) {
+    let mut journal = prepare_through_evaluation(context, scenario).await;
+    let _ = &mut journal;
+    let after_evaluation = checkpoint_body(context, scenario).await;
+    let effects_digest = evaluation_evidence(scenario, &after_evaluation).effects_digest;
+    let reservation = reservation_evidence(scenario, &after_evaluation, effects_digest);
+    for (key, body) in reservation.installed.iter() {
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(scenario.waist.custody_program, body.clone())),
+        );
+    }
+    (reservation, after_evaluation)
+}
+
+#[tokio::test]
+async fn a_reservation_from_an_unactivated_producer_refuses_on_the_release_waist() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let (reservation, before) = evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+
+    // A real executable program that the activated release set never named as
+    // Custody. Being a program is not the same as holding the role.
+    //
+    // The receipt and reservation move to that program too, so this reaches the
+    // release waist instead of stopping at the ownership frame: the point of the
+    // case is that a coherent Custody-shaped story still cannot buy the role.
+    for (key, body) in reservation.installed.iter() {
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(UNACTIVATED_PRODUCER, body.clone())),
+        );
+    }
+    let instruction = reserve_instruction(
+        &scenario,
+        payer,
+        &reservation,
+        UNACTIVATED_PRODUCER,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+    );
+    let processed = submit(&mut context, instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_RELEASE),
+        "an unactivated producer must refuse on the release waist; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        before,
+        "a refused reservation must not advance the checkpoint"
+    );
+}
+
+#[tokio::test]
+async fn a_valid_activation_cache_for_another_release_set_refuses() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let (reservation, before) = evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+
+    // A perfectly well-formed activation cache -- correct owner, correct width,
+    // every role activated -- belonging to a different release generation, and
+    // written at this generation's address. The header is the thing that must
+    // refuse it, not the shape.
+    let other = release_waist_for(0xf1);
+    assert_ne!(
+        other.release_set_id, scenario.waist.release_set_id,
+        "the substituted cache must belong to another generation"
+    );
+    context.set_account(
+        &scenario.waist.activation_cache,
+        &AccountSharedData::from(data_account(scenario.waist.registry, other.cache_body)),
+    );
+    let instruction = reserve_instruction(
+        &scenario,
+        payer,
+        &reservation,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+    );
+    let processed = submit(&mut context, instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_RELEASE),
+        "a cross-generation cache must refuse on the release waist; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        before,
+        "a refused reservation must not advance the checkpoint"
+    );
+}
+
+#[tokio::test]
+async fn locked_value_blocks_the_abandonment_path_until_it_is_rolled_back() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let (reservation, _) = evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+    let instruction = reserve_instruction(
+        &scenario,
+        payer,
+        &reservation,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+    );
+    submit(&mut context, instruction, &[])
+        .await
+        .expect("ProgramTest processing")
+        .result
+        .expect("the reservation must be ingested");
+    let reserved = checkpoint_body(&mut context, &scenario).await;
+
+    // Expiry alone must not release a checkpoint that is still holding locked
+    // Custody value: the rent is not the caller's to reclaim while a
+    // reservation stands unrolled-back.
+    context
+        .warp_to_slot(SCENARIO_EXPIRES_AT + 8)
+        .expect("warp past expiry");
+    let packet = build_dealer_scenario_checkpoint_cleanup_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        BENEFICIARY,
+        sysvar::clock::ID,
+        Hash::default(),
+        &[],
+    )
+    .expect("cleanup packet");
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "an expired checkpoint holding a reservation must refuse to close; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        reserved,
+        "a refused close must leave the reserved checkpoint intact"
+    );
+}
+
+
+#[tokio::test]
+async fn a_commit_refuses_before_any_value_is_locked() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    prepare_through_evaluation(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+    let before = checkpoint_body(&mut context, &scenario).await;
+
+    // The checkpoint is evaluated but nothing has been reserved. Commit is the
+    // route that spends locked value, so the phase is the first thing it reads
+    // and the whole of the rest of its frame never gets a say.
+    let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
+        MANIFEST_PRODUCER,
+        scenario.checkpoint,
+        scenario.request_digest,
+    );
+    let transcript = transcript(&scenario, payer, receipt_address);
+    let commit = transcript
+        .packets
+        .last()
+        .expect("the transcript ends in its commit");
+    assert_eq!(commit.route, DealerScenarioCheckpointRouteV1::Commit);
+    let processed = submit(&mut context, commit.instruction.clone(), &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "committing an unreserved checkpoint must refuse on transition; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        before,
+        "a refused commit must not advance the checkpoint"
+    );
 }
