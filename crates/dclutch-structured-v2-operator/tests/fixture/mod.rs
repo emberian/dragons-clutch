@@ -89,6 +89,29 @@ pub fn composition(
     root_denominator: u64,
     graph_id: [u8; 32],
 ) -> Composition {
+    composition_for_market(
+        root_numerators,
+        root_denominator,
+        graph_id,
+        identity(MARKET),
+    )
+}
+
+/// The same composition over a CHOSEN Market coordinate.
+///
+/// Both market-bearing records in the composition closure -- the composition
+/// descriptor and the composition exposure -- take the same value here, because
+/// the derivation cross-checks them against the Structured terms
+/// (`descriptor.rs:128` refuses when `exposure.market() != terms.market()`).
+/// Varying the Market therefore means varying it in every record that carries
+/// it, which is what makes a two-market comparison a comparison of the SAME
+/// closure at two Markets rather than of two disagreeing ones.
+pub fn composition_for_market(
+    root_numerators: [u64; 3],
+    root_denominator: u64,
+    graph_id: [u8; 32],
+    market: [u8; 32],
+) -> Composition {
     let leaves = [identity(0x10), identity(0x11), identity(0x12)];
     let nodes = [
         CompositionNodeInputV3 {
@@ -221,7 +244,7 @@ pub fn composition(
     let mut descriptor = [0_u8; COMPOSITION_DESCRIPTOR_BYTES_V3];
     encode_composition_descriptor_v3_atomic(
         CompositionDescriptorInputV3 {
-            market: identity(MARKET),
+            market,
             result_domain: identity(RESULT_DOMAIN),
             release_set: identity(RELEASE_SET),
             native_basis: identity(NATIVE_BASIS),
@@ -277,7 +300,7 @@ pub fn composition(
     let mut exposure = vec![0_u8; exposure_len];
     encode_composition_exposure_v3_atomic(
         CompositionExposureInputV3 {
-            market: identity(MARKET),
+            market,
             result_domain: identity(RESULT_DOMAIN),
             release_set: identity(RELEASE_SET),
             product_basis: identity(PRODUCT_BASIS),
@@ -336,6 +359,15 @@ pub fn shard_terms_bytes(exposure_id: [u8; 32]) -> Vec<u8> {
 /// two disagree, so a rescaled recipe is a different shard layer, not a
 /// presentation choice.
 pub fn shard_terms_bytes_scaled(exposure_id: [u8; 32], denominator: u64) -> Vec<u8> {
+    shard_terms_bytes_scaled_for_market(exposure_id, denominator, identity(MARKET))
+}
+
+/// The same shard layer over a CHOSEN Market coordinate.
+pub fn shard_terms_bytes_scaled_for_market(
+    exposure_id: [u8; 32],
+    denominator: u64,
+    market: [u8; 32],
+) -> Vec<u8> {
     use dclutch_fractional_claim_kernel::{
         FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
         fractional_exposure_terms_bytes_v2,
@@ -346,7 +378,7 @@ pub fn shard_terms_bytes_scaled(exposure_id: [u8; 32], denominator: u64) -> Vec<
     let mut output = vec![0_u8; size];
     encode_fractional_exposure_terms_v2(
         FractionalExposureTermsInputV2 {
-            market: identity(MARKET),
+            market,
             product_record: identity(PRODUCT_RECORD),
             result_domain: identity(RESULT_DOMAIN),
             release_set: identity(RELEASE_SET),
@@ -368,18 +400,38 @@ pub fn shard_terms_bytes_scaled(exposure_id: [u8; 32], denominator: u64) -> Vec<
 }
 
 pub fn terms_bytes(exposure_id: [u8; 32], coefficients: &[u64]) -> Vec<u8> {
+    terms_bytes_for_market(exposure_id, coefficients, identity(MARKET))
+}
+
+/// The same Structured terms over a CHOSEN Market coordinate.
+///
+/// The Market travels through the encoder's own named `market` field, so this
+/// helper makes no claim about a byte offset and cannot be silently wrong about
+/// which field it is substituting.
+pub fn terms_bytes_for_market(
+    exposure_id: [u8; 32],
+    coefficients: &[u64],
+    market: [u8; 32],
+) -> Vec<u8> {
     let size = structured_terms_bytes_v2(coefficients.len()).expect("terms width");
     let mut scratch = vec![0_u8; size];
     let mut output = vec![0_u8; size];
     encode_structured_terms_v2(
         StructuredTermsInputV2 {
-            market: identity(MARKET),
+            market,
             product_record: identity(PRODUCT_RECORD),
             result_domain: identity(RESULT_DOMAIN),
             release_set: identity(RELEASE_SET),
             token_program: TOKEN_2022_PROGRAM_ID,
             token_behavior: identity(0x17),
-            shard_terms: digest(&shard_terms_bytes(exposure_id)),
+            // The shard layer this names must be the one at the SAME Market,
+            // or the two records disagree and the derivation refuses for a
+            // reason that has nothing to do with the question being asked.
+            shard_terms: digest(&shard_terms_bytes_scaled_for_market(
+                exposure_id,
+                DENOMINATOR,
+                market,
+            )),
             shard_exposure: exposure_id,
             receipt_mint: identity(RECEIPT_MINT),
             graph_id: identity(GRAPH_ID),
@@ -400,10 +452,20 @@ pub fn decode_terms<'a>(bytes: &'a [u8], shard_bytes: &'a [u8]) -> StructuredTer
 
 /// The canonical derivation every artifact test starts from.
 pub fn derived_descriptor() -> StructuredRepresentationDescriptorV2 {
-    let composition = composition(COEFFICIENTS, DENOMINATOR, identity(GRAPH_ID));
+    derived_descriptor_for_market(identity(MARKET))
+}
+
+/// The canonical derivation at a CHOSEN Market coordinate.
+///
+/// Every record in the closure that carries a Market -- composition descriptor,
+/// composition exposure, shard terms, Structured terms -- is built at the same
+/// one. Nothing else about the closure changes: the coefficients, denominator,
+/// graph, release set, receipt Mint and Token program are the fixture's.
+pub fn derived_descriptor_for_market(market: [u8; 32]) -> StructuredRepresentationDescriptorV2 {
+    let composition = composition_for_market(COEFFICIENTS, DENOMINATOR, identity(GRAPH_ID), market);
     let exposure_id = composition.exposure_id();
-    let terms_source = terms_bytes(exposure_id, &COEFFICIENTS);
-    let shard_source = shard_terms_bytes(exposure_id);
+    let terms_source = terms_bytes_for_market(exposure_id, &COEFFICIENTS, market);
+    let shard_source = shard_terms_bytes_scaled_for_market(exposure_id, DENOMINATOR, market);
     let terms = decode_terms(&terms_source, &shard_source);
     derive_structured_representation_descriptor_v2(
         terms,
