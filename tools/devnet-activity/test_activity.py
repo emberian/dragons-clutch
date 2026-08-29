@@ -1063,11 +1063,98 @@ class ActivityTests(unittest.TestCase):
             parser.parse_args(required)
         with self.assertRaises(SystemExit):
             parser.parse_args([*required, "--no-send", "--live-send"])
-        self.assertTrue(parser.parse_args([*required, "--live-send"]).live_send)
+        parsed = parser.parse_args(
+            [
+                *required,
+                "--solana-bin",
+                "/tmp/solana",
+                "--accepted-solana-sha256",
+                "a" * 64,
+                "--live-send",
+            ]
+        )
+        self.assertTrue(parsed.live_send)
+        self.assertEqual(parsed.solana_bin, "/tmp/solana")
+
+    def test_v3_bounded_authorization_binds_plan_and_separate_funding_caps(self) -> None:
+        self.write_v3()
+        manifest = self.parsed()
+        devnet = dataclasses.replace(
+            manifest,
+            scenario=dataclasses.replace(
+                manifest.scenario,
+                cluster_target="devnet",
+                genesis_hash=activity.DEVNET_GENESIS_HASH,
+            ),
+            rpc_url=activity.DEVNET_MANIFEST_RPC_URL,
+            devnet_genesis_hash=activity.DEVNET_GENESIS_HASH,
+        )
+        path = self.root / "v3-live-authorization.json"
+        now = dt.datetime.now(dt.timezone.utc)
+        value = {
+            "schema": activity.V3_BOUNDED_AUTHORIZATION_SCHEMA,
+            "manifestSha256": devnet.sha256,
+            "scenarioSha256": devnet.scenario.sha256,
+            "devnetGenesisHash": activity.DEVNET_GENESIS_HASH,
+            "marketRef": devnet.scenario.market_ref,
+            "notBefore": (now - dt.timedelta(minutes=1)).isoformat(),
+            "expiresAt": (now + dt.timedelta(hours=1)).isoformat(),
+            "authorization": "authorize-bounded-devnet-activity-v3-live-send",
+            "maxCycles": 1,
+            "maxSpendLamports": "100000",
+            "maxFeeLamports": "20000",
+            "maxPostInitTransferLamports": "10000",
+            "maxPostInitFeeLamports": "5000",
+            "initialFundingClosureSha256": "1" * 64,
+            "postInitFundingPlanSha256": activity.post_init_funding_plan_sha256(
+                devnet
+            ),
+            "checkedReleaseSha256": "2" * 64,
+            "marketSha256": "3" * 64,
+            "acceptedHarnessSha256": "4" * 64,
+            "acceptedHarnessSourceCommit": "5" * 40,
+            "dclutchSha256": "6" * 64,
+            "successorSha256": "7" * 64,
+            "solanaKeygenSha256": "8" * 64,
+            "solanaSha256": "9" * 64,
+        }
+        write_json(path, value)
+        self.assertEqual(
+            activity.v3_bounded_live_authorization(path, devnet),
+            (
+                digest(path),
+                1,
+                100_000,
+                20_000,
+                10_000,
+                5_000,
+                "1" * 64,
+                activity.post_init_funding_plan_sha256(devnet),
+            ),
+        )
+
+        value["maxPostInitTransferLamports"] = "9999"
+        write_json(path, value)
+        with self.assertRaisesRegex(activity.Refusal, "plan exceeds"):
+            activity.v3_bounded_live_authorization(path, devnet)
+
+        value["maxPostInitTransferLamports"] = "10000"
+        value["postInitFundingPlanSha256"] = "a" * 64
+        write_json(path, value)
+        with self.assertRaisesRegex(activity.Refusal, "changed the post-init funding plan"):
+            activity.v3_bounded_live_authorization(path, devnet)
 
     def test_reconciled_wallet_debit_is_exact_and_bounded(self) -> None:
         value = {
             "schema": activity.RECONCILIATION_SCHEMA,
+            "postInitFunding": [
+                {
+                    "transferLamports": "10000",
+                    "feeLamports": "5000",
+                    "payerLamportDelta": "-15000",
+                    "walletLamportDelta": "10000",
+                }
+            ],
             "activity": [
                 {
                     "transactions": [
@@ -1077,7 +1164,14 @@ class ActivityTests(unittest.TestCase):
                 },
             ],
         }
-        self.assertEqual(activity.reconciled_wallet_debit_lamports(value), 50)
+        self.assertEqual(activity.reconciled_wallet_debit_lamports(value), 15_050)
+        self.assertEqual(
+            activity.reconciled_post_init_funding_totals(value), (10_000, 5_000)
+        )
+        value["postInitFunding"][0]["payerLamportDelta"] = "-14999"
+        with self.assertRaisesRegex(activity.Refusal, "do not close"):
+            activity.reconciled_post_init_funding_totals(value)
+        value["postInitFunding"][0]["payerLamportDelta"] = "-15000"
         value["activity"][0]["transactions"][0]["walletLamportDeltas"]["alice"] = "-0"
         with self.assertRaisesRegex(activity.Refusal, "canonical signed"):
             activity.reconciled_wallet_debit_lamports(value)
