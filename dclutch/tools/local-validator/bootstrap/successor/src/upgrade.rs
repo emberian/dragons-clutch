@@ -6010,7 +6010,6 @@ fn validate_checked_mixed_gate_selection(
         .map_err(|error| Error::new(format!("carry-forward plan JSON differs: {error}")))?;
     if plan.schema != RELEASE_BATCH_PLAN_SCHEMA
         || plan.link_count != SHIPPED_LINKS.len() as u64
-        || plan.changed_link_count != 1
         || plan.links.len() != SHIPPED_LINKS.len()
         || plan.candidate_revision != gate.source_revision
         || plan.candidate_source_tree_sha256 != gate.source_tree_sha256
@@ -6020,6 +6019,7 @@ fn validate_checked_mixed_gate_selection(
             "mixed gate carry-forward plan source, width, or changed count differs",
         ));
     }
+    authenticate_mixed_plan_rebuilt_count(&plan)?;
     let cohort_names = gate
         .cohorts
         .iter()
@@ -6100,15 +6100,15 @@ fn validate_checked_mixed_gate_selection(
         }
         let rebuilt = plan_link.requires_new_artifact;
         if rebuilt {
-            if link.label != "claims"
-                || mixed_link.disposition != "rebuilt"
+            if mixed_link.disposition != "rebuilt"
                 || mixed_link.cohort != "candidate"
                 || plan_link.changed_inputs.is_empty()
                 || plan_link.base_input_digest == plan_link.candidate_input_digest
             {
-                return Err(Error::new(
-                    "mixed gate rebuilt row is not exact Claims candidate",
-                ));
+                return Err(Error::new(format!(
+                    "mixed gate rebuilt {} row is not an exact candidate closure",
+                    link.label
+                )));
             }
         } else if mixed_link.disposition != "carry-forward"
             || mixed_link.cohort != "base"
@@ -6225,6 +6225,26 @@ fn validate_checked_mixed_gate_selection(
         checked_build_manifest_sha256,
         checked_build_manifest,
     })
+}
+
+fn authenticate_mixed_plan_rebuilt_count(plan: &ReleaseBatchPlanV1) -> Result<()> {
+    let rebuilt_link_count = u64::try_from(
+        plan.links
+            .iter()
+            .filter(|link| link.requires_new_artifact)
+            .count(),
+    )
+    .map_err(|_| Error::new("mixed gate rebuilt-link count does not fit u64"))?;
+    if plan.changed_link_count == 0
+        || plan.changed_link_count > SHIPPED_LINKS.len() as u64
+        || rebuilt_link_count != plan.changed_link_count
+    {
+        return Err(Error::new(format!(
+            "mixed gate changed-link count {} differs from {} exact nonempty rebuilt rows",
+            plan.changed_link_count, rebuilt_link_count
+        )));
+    }
+    Ok(())
 }
 
 fn verify_gate_file(root: &Path, evidence: &GateFileV1, label: &str) -> Result<(PathBuf, Vec<u8>)> {
@@ -13938,5 +13958,54 @@ mod tests {
                 .contains("requires --execute because Buffer upload is a devnet mutation")
         );
         drop(fixture);
+    }
+
+    #[test]
+    fn mixed_plan_admits_exact_nonempty_multi_link_rebuild_and_refuses_count_lies() {
+        let plan = |changed_link_count: u64, rebuilt: &[&str]| ReleaseBatchPlanV1 {
+            schema: RELEASE_BATCH_PLAN_SCHEMA.into(),
+            base_revision: "1".repeat(40),
+            base_source_tree_sha256: "2".repeat(64),
+            candidate_revision: "3".repeat(40),
+            candidate_source_tree_sha256: "4".repeat(64),
+            link_count: SHIPPED_LINKS.len() as u64,
+            changed_link_count,
+            links: SHIPPED_LINKS
+                .iter()
+                .map(|(label, package, produces_artifact)| {
+                    let requires_new_artifact = rebuilt.contains(label);
+                    ReleaseBatchPlanLinkV1 {
+                        label: (*label).into(),
+                        package: (*package).into(),
+                        artifact_stem: produces_artifact.then(|| package.replace('-', "_")),
+                        base_input_digest: "5".repeat(64),
+                        candidate_input_digest: if requires_new_artifact {
+                            "6".repeat(64)
+                        } else {
+                            "5".repeat(64)
+                        },
+                        requires_new_artifact,
+                        changed_inputs: requires_new_artifact
+                            .then(|| vec!["program source changed".into()])
+                            .unwrap_or_default(),
+                        consumers: vec![format!("program:{label}")],
+                    }
+                })
+                .collect(),
+            qualification: "focused fixture".into(),
+        };
+
+        authenticate_mixed_plan_rebuilt_count(&plan(3, &["resolution", "trading", "core"]))
+            .expect("three canonical rebuilt links");
+        let empty = authenticate_mixed_plan_rebuilt_count(&plan(0, &[]))
+            .expect_err("empty rebuild must refuse");
+        assert!(empty.to_string().contains("exact nonempty rebuilt rows"));
+        let understated =
+            authenticate_mixed_plan_rebuilt_count(&plan(2, &["resolution", "trading", "core"]))
+                .expect_err("understated changed count must refuse");
+        assert!(understated.to_string().contains("differs from 3"));
+        let overstated = authenticate_mixed_plan_rebuilt_count(&plan(4, &["resolution", "core"]))
+            .expect_err("overstated changed count must refuse");
+        assert!(overstated.to_string().contains("differs from 2"));
     }
 }

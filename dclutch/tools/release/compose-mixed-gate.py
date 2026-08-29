@@ -66,7 +66,23 @@ def copy_descriptor_closure(
         copy_exact(source_root, output_root, ref["canonical_path"])
 
 
-def load_plan(path: Path, rebuilt: str) -> dict:
+def rebuilt_labels(values: list[str]) -> tuple[str, ...]:
+    """Accept one canonical, nonempty subset of the shipped-link order."""
+    allowed = {label for label, _, _ in SHIPPED_LINKS}
+    if not values:
+        refuse("at least one --rebuilt-link is required")
+    if len(set(values)) != len(values):
+        refuse("rebuilt-link labels must not repeat")
+    unknown = set(values) - allowed
+    if unknown:
+        refuse("rebuilt-link labels are not shipped links: " + ", ".join(sorted(unknown)))
+    ordered = tuple(label for label, _, _ in SHIPPED_LINKS if label in values)
+    if tuple(values) != ordered:
+        refuse("rebuilt-link labels must use canonical shipped-link order")
+    return ordered
+
+
+def load_plan(path: Path, rebuilt: tuple[str, ...]) -> dict:
     plan = read_json(path, "carry-forward plan")
     expected = {
         "schema", "base_revision", "base_source_tree_sha256",
@@ -75,8 +91,13 @@ def load_plan(path: Path, rebuilt: str) -> dict:
     }
     if set(plan) != expected or plan["schema"] != PLAN_SCHEMA:
         refuse("carry-forward plan schema or fields differ")
-    if plan["link_count"] != len(SHIPPED_LINKS) or plan["changed_link_count"] != 1:
-        refuse("carry-forward plan is not exact all-13 with one rebuilt link")
+    if (
+        plan["link_count"] != len(SHIPPED_LINKS)
+        or not isinstance(plan["changed_link_count"], int)
+        or plan["changed_link_count"] != len(rebuilt)
+        or not rebuilt
+    ):
+        refuse("carry-forward plan is not exact all-13 with the requested rebuilt count")
     identities = [(row.get("label"), row.get("package")) for row in plan["links"]]
     if identities != [(label, package) for label, package, _ in SHIPPED_LINKS]:
         refuse("carry-forward plan link order/identity differs")
@@ -95,34 +116,41 @@ def load_plan(path: Path, rebuilt: str) -> dict:
                 refuse("rebuilt row lacks an exact changed closure")
         elif row["changed_inputs"] or row["base_input_digest"] != row["candidate_input_digest"]:
             refuse(f"carry-forward closure differs for {row['label']}")
-    if changed != [rebuilt]:
-        refuse(f"carry-forward plan rebuilt set is {changed}, expected [{rebuilt!r}]")
+    if tuple(changed) != rebuilt:
+        refuse(f"carry-forward plan rebuilt set is {changed}, expected {list(rebuilt)}")
     return plan
 
 
 def compose(args: argparse.Namespace) -> Path:
     source_root = Path(args.source_root).resolve(strict=True)
+    base_source_root = Path(args.base_source_root or source_root).resolve(strict=True)
+    candidate_source_root = Path(args.candidate_source_root or source_root).resolve(strict=True)
     manifest_root = Path(args.manifest_root).resolve(strict=True)
+    candidate_manifest_root = Path(args.candidate_manifest_root or manifest_root).resolve(strict=True)
     plan_source = Path(args.carry_forward_plan).resolve(strict=True)
     output_root = Path(args.output_root)
     if output_root.exists() or output_root.is_symlink() or not output_root.is_absolute():
         refuse("output root must be one new absolute path")
-    plan = load_plan(plan_source, args.rebuilt_link)
+    rebuilt = rebuilt_labels(args.rebuilt_link)
+    plan = load_plan(plan_source, rebuilt)
     output_root.mkdir(mode=0o700, parents=False)
     (output_root / "provenance").mkdir()
 
     base_descriptors = Path(args.base_descriptor_dir).resolve(strict=True)
     candidate_descriptors = Path(args.candidate_descriptor_dir).resolve(strict=True)
     for label, _, _ in SHIPPED_LINKS:
-        directory = candidate_descriptors if label == args.rebuilt_link else base_descriptors
-        copy_descriptor_closure(source_root, output_root, directory / f"{label}.json", label)
+        candidate = label in rebuilt
+        directory = candidate_descriptors if candidate else base_descriptors
+        descriptor_root = candidate_source_root if candidate else base_source_root
+        copy_descriptor_closure(descriptor_root, output_root, directory / f"{label}.json", label)
 
     shutil.copyfile(plan_source, output_root / "carry-forward-plan.json")
-    copy_exact(source_root, output_root, args.base_source_tree_manifest)
-    copy_exact(source_root, output_root, args.candidate_source_tree_manifest)
+    copy_exact(base_source_root, output_root, args.base_source_tree_manifest)
+    copy_exact(candidate_source_root, output_root, args.candidate_source_tree_manifest)
     for label, _, produces_artifact in SHIPPED_LINKS:
         if produces_artifact:
-            source = manifest_root / "evidence" / label / "checked.bin"
+            source_root_for_manifest = candidate_manifest_root if label in rebuilt else manifest_root
+            source = source_root_for_manifest / "evidence" / label / "checked.bin"
             target = output_root / "evidence" / label / "checked.bin"
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
@@ -137,7 +165,7 @@ def compose(args: argparse.Namespace) -> Path:
     for label, package, produces_artifact in SHIPPED_LINKS:
         descriptor_path = output_root / "provenance" / f"{label}.json"
         descriptor = read_json(descriptor_path, f"{label} descriptor")
-        disposition = "rebuilt" if label == args.rebuilt_link else "carry-forward"
+        disposition = "rebuilt" if label in rebuilt else "carry-forward"
         cohort = "candidate" if disposition == "rebuilt" else "base"
         expected_revision = plan[f"{cohort}_revision"]
         expected_tree = plan[f"{cohort}_source_tree_sha256"]
@@ -248,10 +276,9 @@ def authenticate_existing_gate(
         verify_evidence(root, gate["carry_forward_plan"], "mixed carry-forward plan"),
         "mixed carry-forward plan",
     )
-    rebuilt = [row.get("label") for row in plan.get("links", []) if row.get("requires_new_artifact")]
-    if len(rebuilt) != 1:
-        refuse("mixed carry-forward plan does not select exactly one rebuilt link")
-    plan = load_plan(root / gate["carry_forward_plan"]["canonical_path"], rebuilt[0])
+    rebuilt = tuple(row.get("label") for row in plan.get("links", []) if row.get("requires_new_artifact"))
+    rebuilt = rebuilt_labels(list(rebuilt))
+    plan = load_plan(root / gate["carry_forward_plan"]["canonical_path"], rebuilt)
     if (
         plan["candidate_revision"] != expected_source_revision
         or plan["candidate_source_tree_sha256"] != expected_source_tree_sha256
@@ -378,13 +405,16 @@ def main() -> int:
             return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True)
+    parser.add_argument("--base-source-root")
+    parser.add_argument("--candidate-source-root")
     parser.add_argument("--manifest-root", required=True)
+    parser.add_argument("--candidate-manifest-root")
     parser.add_argument("--carry-forward-plan", required=True)
     parser.add_argument("--base-descriptor-dir", required=True)
     parser.add_argument("--candidate-descriptor-dir", required=True)
     parser.add_argument("--base-source-tree-manifest", required=True)
     parser.add_argument("--candidate-source-tree-manifest", required=True)
-    parser.add_argument("--rebuilt-link", required=True)
+    parser.add_argument("--rebuilt-link", required=True, action="append")
     parser.add_argument("--solana-cli-version", required=True)
     parser.add_argument("--output-root", required=True)
     try:

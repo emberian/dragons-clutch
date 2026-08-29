@@ -88,9 +88,11 @@ def command_name(argv: list[str]) -> str:
 
 def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     expected = {"schema", "target", "bufferStrategy", "commands"}
-    unknown = set(flight) - expected
-    if unknown or set(flight) != expected:
-        raise FlightError("flight has exactly schema, target, and commands")
+    scoped = expected | {"upgradeRoles"}
+    keys = set(flight)
+    unknown = keys - scoped
+    if unknown or (keys != expected and keys != scoped):
+        raise FlightError("flight has canonical fields and an optional upgradeRoles scope")
     if flight["schema"] != SCHEMA:
         raise FlightError(f"flight schema must be {SCHEMA}")
     target = flight["target"]
@@ -99,6 +101,14 @@ def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
     buffer_strategy = flight["bufferStrategy"]
     if buffer_strategy not in {"batched", "interleaved"}:
         raise FlightError("bufferStrategy must be batched or interleaved")
+    roles_value = flight.get("upgradeRoles", list(ROLES))
+    if not isinstance(roles_value, list) or not roles_value:
+        raise FlightError("upgradeRoles must be a nonempty array when supplied")
+    if len(set(roles_value)) != len(roles_value) or any(role not in ROLES for role in roles_value):
+        raise FlightError("upgradeRoles must be unique permanent Upgrade roles")
+    roles = tuple(role for role in ROLES if role in roles_value)
+    if tuple(roles_value) != roles:
+        raise FlightError("upgradeRoles must use permanent Upgrade role order")
     commands = flight["commands"]
     if not isinstance(commands, list):
         raise FlightError("commands must be an array")
@@ -114,21 +124,22 @@ def validate_flight(flight: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[
             raise FlightError(f"commands[{index}] mutation must be boolean")
         seen.add(ident)
         parsed.append({"id": ident, "mutation": mutation, "argv": argv_of(argv, ident)})
-    required_missing = set(REQUIRED) - seen
+    required = ("candidate", *(item for role in roles for item in (f"buffer:{role}", f"upgrade:{role}")), *REQUIRED[11:])
+    required_missing = set(required) - seen
     if required_missing:
         raise FlightError("missing required commands: " + ", ".join(sorted(required_missing)))
-    allowed = set(REQUIRED) | {f"extend:{role}" for role in ROLES}
+    allowed = set(required) | {f"extend:{role}" for role in roles}
     extra = seen - allowed
     if extra:
         raise FlightError("unknown command ids: " + ", ".join(sorted(extra)))
     order = [item["id"] for item in parsed]
     expected_order = ["candidate"]
     if buffer_strategy == "batched":
-        expected_order.extend(f"extend:{role}" for role in ROLES if f"extend:{role}" in seen)
-        expected_order.extend(f"buffer:{role}" for role in ROLES)
-        expected_order.extend(f"upgrade:{role}" for role in ROLES)
+        expected_order.extend(f"extend:{role}" for role in roles if f"extend:{role}" in seen)
+        expected_order.extend(f"buffer:{role}" for role in roles)
+        expected_order.extend(f"upgrade:{role}" for role in roles)
     else:
-        for role in ROLES:
+        for role in roles:
             if f"extend:{role}" in seen:
                 expected_order.append(f"extend:{role}")
             expected_order.extend((f"buffer:{role}", f"upgrade:{role}"))

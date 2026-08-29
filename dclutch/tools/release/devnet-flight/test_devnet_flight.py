@@ -95,6 +95,23 @@ class FlightTests(unittest.TestCase):
         with self.assertRaisesRegex(flight.FlightError, "batched"):
             flight.validate_flight(document)
 
+    def test_scoped_three_role_flight_requires_canonical_scope_order(self):
+        document = fixture()
+        document["upgradeRoles"] = ["resolution", "trading"]
+        document["commands"] = [
+            command("candidate"),
+            command("buffer:resolution", True), command("buffer:trading", True),
+            command("upgrade:resolution", True), command("upgrade:trading", True),
+            *[command(ident, ident not in {"reconcile"}) for ident in flight.REQUIRED[11:]],
+        ]
+        for row in document["commands"]:
+            if row["id"].startswith("buffer:"):
+                row["argv"].append("--stop-after-buffer-ready")
+        flight.validate_flight(document)
+        document["upgradeRoles"] = ["trading", "resolution"]
+        with self.assertRaisesRegex(flight.FlightError, "role order"):
+            flight.validate_flight(document)
+
 
 if __name__ == "__main__":
     unittest.main()
