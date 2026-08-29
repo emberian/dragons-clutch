@@ -5,11 +5,9 @@
 //! ProgramData widths into the finalized Direct records selected by the
 //! manifest. It does not invent a family-level capacity label.
 
-use dclutch_capability_contract::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    CompartmentFundingV1, ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1,
-    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
-};
+use dclutch_capability_contract::CapabilityEntryV1;
+#[cfg(test)]
+use dclutch_capability_contract::CapabilityManifestV1;
 use dclutch_capability_program_contract::{CapabilityProgramV1, v4::CapabilityProgramV4};
 use dclutch_custody_contract::CustodyReplayLayoutV1;
 use dclutch_direct_codec::{
@@ -762,52 +760,16 @@ pub(crate) fn attach_direct_market_capability_v1(
         .map_err(|error| Error::new(format!("Direct ordinary bundle: {error:?}")))?;
     let release = build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, capacity_profile)
         .map_err(|error| Error::new(format!("Direct ordinary/native-close release: {error:?}")))?;
-    let descriptor = CapabilityProgramV4::decode(&release.ordinary.descriptor)
-        .map_err(|error| Error::new(format!("Direct CapabilityProgramV4: {error:?}")))?;
     let direct_entry = direct_manifest_entry_v1(
         &release,
-        descriptor,
-        config_id,
+        &execution_config_bytes,
         compiler.activation_deadline_slot,
         compiler.root_rent_minimum_lamports,
     )?;
 
     let base_bytes = decode_hex(&input.capability_manifest_hex)?;
-    let base = CapabilityManifestV1::decode(&base_bytes)
-        .map_err(|error| Error::new(format!("Resolution capability manifest: {error:?}")))?;
-    if base.entry_count() != 3 || base.as_bytes() != base_bytes {
-        return Err(Error::new(
-            "Direct compilation requires the canonical three-entry Resolution base",
-        ));
-    }
-    let first_release = base
-        .entry(0)
-        .map_err(|error| Error::new(format!("Resolution capability entry 0: {error:?}")))?
-        .release_id();
-    let mut entries = Vec::with_capacity(4);
-    for index in 0..base.entry_count() {
-        let entry = base.entry(index).map_err(|error| {
-            Error::new(format!("Resolution capability entry {index}: {error:?}"))
-        })?;
-        if entry.kind_id().to_bytes() == DIRECT_SUCCESSOR_KIND_ID_V3
-            || entry.release_id() != first_release
-        {
-            return Err(Error::new(
-                "Resolution base must contain three same-release non-Direct companions",
-            ));
-        }
-        entries.push(entry);
-    }
-    entries.push(direct_entry);
-    entries.sort_by_key(|entry| entry.kind_id().to_bytes());
-    let selected_manifest_entry_index = entries
-        .iter()
-        .position(|entry| entry.kind_id().to_bytes() == DIRECT_SUCCESSOR_KIND_ID_V3)
-        .and_then(|index| u16::try_from(index).ok())
-        .ok_or_else(|| Error::new("canonical manifest omitted its Direct entry"))?;
-    let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
-    CapabilityManifestV1::encode_into(&entries, &mut manifest)
-        .map_err(|error| Error::new(format!("Direct-capable manifest: {error:?}")))?;
+    let (manifest, selected_manifest_entry_index) =
+        crate::selected_capability::merge_selected_manifest_v1(&base_bytes, direct_entry)?;
 
     input.capability_manifest_hex = hex(&manifest);
     input.direct_capability = Some(DirectMarketCapabilityV1 {
@@ -871,47 +833,16 @@ pub(crate) fn validate_direct_market_capability_v1(input: &MarketRunInput) -> Re
     }
     let expected_entry = direct_manifest_entry_v1(
         &release,
-        descriptor,
-        config_id,
+        &execution_config,
         payload.activation_deadline_slot,
         payload.root_rent_minimum_lamports,
     )?;
     let manifest_bytes = decode_hex(&input.capability_manifest_hex)?;
-    let manifest = CapabilityManifestV1::decode(&manifest_bytes)
-        .map_err(|error| Error::new(format!("Direct-capable manifest: {error:?}")))?;
-    if manifest.entry_count() != 4 || manifest.as_bytes() != manifest_bytes {
-        return Err(Error::new(
-            "Direct-capable manifest must be canonical and contain exactly four entries",
-        ));
-    }
-    let selected = manifest
-        .entry(payload.selected_manifest_entry_index)
-        .map_err(|error| Error::new(format!("selected Direct manifest entry: {error:?}")))?;
-    if selected != expected_entry {
-        return Err(Error::new(
-            "selected Direct manifest entry did not equal the typed Direct closure",
-        ));
-    }
-    let mut direct_count = 0_u16;
-    for index in 0..manifest.entry_count() {
-        if manifest
-            .entry(index)
-            .map_err(|error| Error::new(format!("capability entry {index}: {error:?}")))?
-            .kind_id()
-            .to_bytes()
-            == DIRECT_SUCCESSOR_KIND_ID_V3
-        {
-            direct_count = direct_count
-                .checked_add(1)
-                .ok_or_else(|| Error::new("Direct manifest count overflow"))?;
-        }
-    }
-    if direct_count != 1 {
-        return Err(Error::new(
-            "Direct-capable manifest did not contain exactly one Direct kind",
-        ));
-    }
-    Ok(())
+    crate::selected_capability::validate_selected_manifest_v1(
+        &manifest_bytes,
+        expected_entry,
+        payload.selected_manifest_entry_index,
+    )
 }
 
 pub(crate) struct DirectPublicationRecordV1 {
@@ -1037,52 +968,28 @@ pub(crate) fn direct_publication_records_v1(
     Ok(records)
 }
 
+/// Direct's manifest entry, derived through the capability-neutral seam.
+///
+/// The ordinary descriptor is the single author of the kind, capacity
+/// profile, root schema, and derivation policy; the program-set and config
+/// bytes author their own identities. `validate_direct_market_capability_v1`
+/// separately pins that the descriptor really is Direct's, so the seam's
+/// derived kind cannot drift from `DIRECT_SUCCESSOR_KIND_ID_V3`.
 fn direct_manifest_entry_v1(
     release: &DirectInlineOrdinaryLifecycleProgramSetV1,
-    descriptor: CapabilityProgramV4,
-    config_id: [u8; 32],
+    config: &[u8],
     activation_deadline_slot: u64,
     root_rent_minimum_lamports: u64,
 ) -> Result<CapabilityEntryV1> {
-    if activation_deadline_slot == 0 {
-        return Err(Error::new(
-            "Direct activation deadline slot must be positive",
-        ));
-    }
-    if root_rent_minimum_lamports == 0 {
-        return Err(Error::new("Direct root rent minimum must be positive"));
-    }
-    let none = CompartmentFundingV1::not_applicable();
-    let amounts = FundingAmountsV1::new(
-        // The funding ledger owns the complete exact Rent quote. Any lamports
-        // already sitting on the vacant PDA are classified at activation by the
-        // dust-safe root-creation semantic owner as displaced prepayment or
-        // unsolicited surplus; they never reduce this immutable quote.
-        CompartmentFundingV1::native_lamports(root_rent_minimum_lamports)
-            .map_err(|error| Error::new(format!("Direct root rent quote: {error:?}")))?,
-        none,
-        none,
-        none,
-        none,
-        none,
-        none,
+    crate::selected_capability::selected_manifest_entry_v1(
+        crate::selected_capability::SelectedCapabilityClosureV1 {
+            program_set: &release.program_set,
+            selected_descriptor: &release.ordinary.descriptor,
+            config,
+            activation_deadline_slot,
+            root_rent_minimum_lamports,
+        },
     )
-    .map_err(|error| Error::new(format!("Direct funding amounts: {error:?}")))?;
-    CapabilityEntryV1::new(
-        capability_content(DIRECT_SUCCESSOR_KIND_ID_V3)?,
-        capability_content(release.program_set_id)?,
-        capability_content(config_id)?,
-        capability_content(descriptor.capacity_profile().to_bytes())?,
-        capability_content(descriptor.root_schema().to_bytes())?,
-        capability_content(descriptor.derivation_policy().to_bytes())?,
-        ActivationPolicy::PrepaidLazy,
-        activation_deadline_slot,
-        0,
-        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-        FundingQuoteV1::new(amounts, None)
-            .map_err(|error| Error::new(format!("Direct funding quote: {error:?}")))?,
-    )
-    .map_err(|error| Error::new(format!("Direct manifest entry: {error:?}")))
 }
 
 fn decode_direct_release_v1(
@@ -1150,11 +1057,6 @@ fn exact_array<const N: usize>(value: &str, label: &str) -> Result<[u8; N]> {
     bytes
         .try_into()
         .map_err(|_: Vec<u8>| Error::new(format!("{label} had another width than {N}")))
-}
-
-fn capability_content(value: [u8; 32]) -> Result<CapabilityContentId> {
-    CapabilityContentId::new(value)
-        .map_err(|error| Error::new(format!("capability content: {error:?}")))
 }
 
 fn programdata_bytes(pin: &ProgramPin) -> Result<u32> {

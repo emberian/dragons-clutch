@@ -38,6 +38,7 @@ mod release_capture;
 mod rpc;
 mod runtime;
 mod seed;
+mod selected_capability;
 mod source_abort_exterior;
 mod sponsored_push;
 mod terminal_exterior_pyth;
