@@ -86,6 +86,14 @@ const COMPUTE_UNIT_PRICE_MICROLAMPORTS: u64 = 50_000;
 /// a drop).
 const REBUILD_ON_DROP_ATTEMPTS: u32 = 5;
 
+/// How many times a durable legacy packet is polled for finalized history.
+///
+/// The blockhash's own last-valid height is the authority on whether the
+/// packet can still land, and it is checked every pass; this bound only stops
+/// an unresponsive endpoint from spinning forever. At 400ms a pass it is about
+/// two minutes, which is far past finality on a 16-tick loopback slot.
+const FINALIZED_POLL_ATTEMPTS: u32 = 300;
+
 /// One exact signed versioned packet persisted before its first submission.
 ///
 /// The last-valid height is liveness metadata returned beside the blockhash;
@@ -908,6 +916,129 @@ impl Rpc {
         payer: &Keypair,
     ) -> Result<TransactionEvidence> {
         self.send_inner(label, instructions, payer, false)
+    }
+
+    /// Sign one exact legacy packet without submitting it.
+    ///
+    /// The v0 path above is the right one whenever a frame needs routing. A
+    /// family whose whole frame already fits the 1,232-byte ceiling does not,
+    /// and making it publish an address lookup table first would add an
+    /// activation round trip and a table the campaign then has to own. The
+    /// durability rule is identical and is the entire point of both: persist
+    /// these exact bytes, then only ever resend them.
+    pub(crate) fn prepare_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+    ) -> Result<SignedVersionedPacketV1> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, last_valid_block_height) = self.latest_blockhash_with_height()?;
+        let signers: Vec<&dyn Signer> = vec![payer];
+        let transaction = Transaction::new_signed_with_payer(
+            &bounded,
+            Some(&payer.pubkey()),
+            &signers,
+            blockhash,
+        );
+        let packet = bincode::serialize(&transaction)
+            .map_err(|error| Error::new(format!("{label}: serialize transaction: {error}")))?;
+        if packet.len() > 1_232 {
+            return Err(Error::new(format!(
+                "{label}: legacy transaction is {} bytes, above the 1,232-byte packet ceiling; \
+                 this frame needs v0 routing",
+                packet.len()
+            )));
+        }
+        let signature = transaction
+            .signatures
+            .first()
+            .ok_or_else(|| Error::new(format!("{label}: signed packet omitted signature")))?
+            .to_string();
+        Ok(SignedVersionedPacketV1 {
+            signature,
+            packet_base64: BASE64.encode(&packet),
+            packet_sha256: hex(&Sha256::digest(&packet)),
+            last_valid_block_height,
+        })
+    }
+
+    /// Submit the already-persisted legacy packet exactly once.
+    pub(crate) fn submit_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        let expected = Self::authenticate_signed_legacy_packet(label, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, false)?;
+        if observed != expected {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Poll one submitted, persisted legacy signature through finalized history.
+    ///
+    /// Poll-only by construction, exactly like the v0 sibling: a `Submitted`
+    /// journal can never fan out into a second transaction identity.
+    pub(crate) fn confirm_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<FinalizedSignedPacketV1> {
+        let signature = Self::authenticate_signed_legacy_packet(label, packet)?;
+        for _ in 0..FINALIZED_POLL_ATTEMPTS {
+            if let Some(finalized) = self.finalized_signed_packet(label, signature, false)? {
+                return Ok(finalized);
+            }
+            let height = self.block_height()?;
+            if height > packet.last_valid_block_height {
+                return Err(Error::new(format!(
+                    "{label}: persisted signature {signature} expired at block height {height} \
+                     without a finalized status; retain the journal as evidence and prepare a new \
+                     action under a new output path"
+                )));
+            }
+            thread::sleep(Duration::from_millis(400));
+        }
+        Err(Error::new(format!(
+            "{label}: persisted signature {signature} did not reach finalized history within \
+             {FINALIZED_POLL_ATTEMPTS} polls"
+        )))
+    }
+
+    /// Reauthenticate one persisted legacy packet against its own digest.
+    pub(crate) fn authenticate_signed_legacy_packet(
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<Signature> {
+        let bytes = BASE64
+            .decode(&packet.packet_base64)
+            .map_err(|error| Error::new(format!("{label}: persisted packet base64: {error}")))?;
+        if BASE64.encode(&bytes) != packet.packet_base64
+            || hex(&Sha256::digest(&bytes)) != packet.packet_sha256
+        {
+            return Err(Error::new(format!(
+                "{label}: persisted packet digest changed"
+            )));
+        }
+        let transaction: Transaction = bincode::deserialize(&bytes)
+            .map_err(|error| Error::new(format!("{label}: persisted transaction: {error}")))?;
+        transaction
+            .verify()
+            .map_err(|error| Error::new(format!("{label}: persisted signature: {error}")))?;
+        let signature = transaction
+            .signatures
+            .first()
+            .copied()
+            .ok_or_else(|| Error::new(format!("{label}: persisted transaction is unsigned")))?;
+        if signature.to_string() != packet.signature {
+            return Err(Error::new(format!("{label}: persisted signature changed")));
+        }
+        Ok(signature)
     }
 
     /// Sign one exact routed v0 packet without submitting it.
