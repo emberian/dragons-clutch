@@ -2553,6 +2553,7 @@ dependencies = [
  "dclutch-refusal-registry",
  "dclutch-request-profile-contract",
  "dclutch-series-v3-kernel",
+ "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",
  "dclutch-transition-vm",
  "sha2 0.10.9",

@@ -39,10 +39,10 @@ use dclutch_series_v3_kernel::{
     shadow::{SeriesShadowInputV3, SeriesShadowObservationsV3, evaluate_series_shadow_v3},
     template_content_id,
 };
+use dclutch_sha256_adapter::digest;
 use dclutch_transition_vm::v3::{
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
 };
-use sha2::{Digest, Sha256};
 
 /// Exact fixed scalar width of the Series Consume artifact family.
 pub const SERIES_SHADOW_SCALAR_COUNT_V4: usize = 5;
@@ -698,7 +698,7 @@ const fn shadow_kind(kind: RouteKindV3) -> ShadowRouteKindV3 {
 }
 
 fn content(bytes: &[u8]) -> Result<ContentId> {
-    ContentId::new(Sha256::digest(bytes).into()).map_err(|_| SeriesShadowAotErrorV4::Digest)
+    ContentId::new(digest(bytes)).map_err(|_| SeriesShadowAotErrorV4::Digest)
 }
 
 #[cfg(test)]
