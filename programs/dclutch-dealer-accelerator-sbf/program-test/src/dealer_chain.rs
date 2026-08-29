@@ -1,12 +1,14 @@
-//! Canonical caller-backed Dealer selector-9 Hot bundle.
+//! Canonical Dealer selector-9 unsplit topology evidence.
 //!
 //! The semantic owner in `dclutch-operator::dealer_scenario_hot_v4` replays the
 //! exact scenario transition, derives all nine Profile13 span widths, validates
 //! the physical account geometry, and emits the canonical
 //! `fixed(39) ++ admitted extras(8) ++ caller authorities ++ runtime suffix`
-//! instruction. This module owns only ProgramTest installation and rollback
-//! classification. It does not restate a span, route bitmap, privilege, or
-//! account order.
+//! instruction. Its 121-lock canonical scenario is deliberately not submitted:
+//! devnet's 64-lock limit is unchanged by an address lookup table. This module
+//! owns only topology installation and rollback classification while the
+//! durable preparation/commit split is built. It does not restate a span,
+//! route bitmap, privilege, or account order.
 
 use std::vec::Vec;
 
@@ -15,7 +17,7 @@ use dclutch_direct_hot_program_test_support::chain::DirectHotInstallAccountV5;
 use dclutch_operator::{
     dealer_scenario_hot_v4::{
         DealerScenarioHotMetaErrorV4, DealerScenarioHotMetaReportV4, DealerScenarioHotMetaStateV4,
-        DealerScenarioSemanticStateV4, build_dealer_scenario_hot_instruction_v4,
+        DealerScenarioSemanticStateV4, project_dealer_scenario_unsplit_topology_v4,
     },
     direct_inline_v3::ObservedAccountMetaV3,
 };
@@ -44,10 +46,10 @@ pub struct DealerScenarioChainInputV4<'a> {
     pub externally_installed_keys: &'a [Pubkey],
 }
 
-/// One canonical Dealer chain fixture before any Registry continuation wrap.
+/// One canonical Dealer chain topology before any durable split.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DealerScenarioChainFixtureV4 {
-    /// Trading Hot instruction which invokes the admitted accelerator itself.
+pub struct DealerScenarioUnsplitChainTopologyV4 {
+    /// Unsplit Hot instruction retained only for topology analysis.
     pub hot_instruction: Instruction,
     /// All distinct fixed, strategy, and packed runtime account bodies.
     pub accounts: Vec<DirectHotInstallAccountV5>,
@@ -88,22 +90,22 @@ impl From<DealerScenarioHotMetaErrorV4> for DealerScenarioChainErrorV4 {
     }
 }
 
-/// Build one exact unsigned selector-9 Hot bundle.
+/// Project one exact unsplit selector-9 Hot topology.
 ///
 /// This is deliberately the sole public constructor in the Dealer chain
 /// fixture. Callers provide observations and semantic state; the operator
 /// supplies every account meta, protected-span count, admitted page count, and
-/// lock census. No signing or submission occurs.
-pub fn build_dealer_scenario_chain_fixture_v4(
+/// lock census. No signing or submission may occur.
+pub fn project_dealer_scenario_unsplit_chain_topology_v4(
     input: DealerScenarioChainInputV4<'_>,
-) -> Result<DealerScenarioChainFixtureV4, DealerScenarioChainErrorV4> {
+) -> Result<DealerScenarioUnsplitChainTopologyV4, DealerScenarioChainErrorV4> {
     let state = DealerScenarioHotMetaStateV4 {
         fixed_accounts: input.fixed_accounts,
         strategy_accounts: input.strategy_accounts,
         runtime_suffix_accounts: input.runtime_suffix_accounts,
     };
     let built =
-        build_dealer_scenario_hot_instruction_v4(state, input.semantic, input.family_request)?;
+        project_dealer_scenario_unsplit_topology_v4(state, input.semantic, input.family_request)?;
     let root = input
         .fixed_accounts
         .get(HOT_ROOT_ACCOUNT_V3)
@@ -140,7 +142,7 @@ pub fn build_dealer_scenario_chain_fixture_v4(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(DealerScenarioChainFixtureV4 {
+    Ok(DealerScenarioUnsplitChainTopologyV4 {
         hot_instruction: built.instruction,
         accounts,
         externally_installed_keys,

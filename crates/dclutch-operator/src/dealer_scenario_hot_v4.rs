@@ -46,6 +46,7 @@ use dclutch_trading_sbf::{
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
 };
 
 const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = 8;
@@ -58,6 +59,65 @@ const DEALER_HOT_INJECTED_PHYSICAL_INDICES_V4: [usize; DEALER_HOT_INJECTED_ACCOU
     HOT_PORTFOLIO_RAW_ACCOUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
 ];
+
+/// Account-lock ceiling currently active on Solana devnet.
+///
+/// Address lookup tables compress message addresses but do not change this
+/// runtime lock ceiling.
+pub const SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1: usize = 64;
+
+/// Exact resolved transaction lock census.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerScenarioTransactionLockCensusV1 {
+    /// Pairwise-distinct payer, instruction-meta, and invoked-program keys.
+    pub unique_account_lock_count: usize,
+}
+
+/// Stable refusal from the devnet transaction lock gate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerScenarioLockLimitErrorV1 {
+    /// The resolved transaction names more than 64 distinct account locks.
+    LockLimit,
+}
+
+/// Count exact resolved transaction locks before signing or serialization.
+///
+/// Pass every instruction in the transaction, including compute-budget or
+/// memo instructions. Account metas carry their resolved pubkeys before v0
+/// compilation, so moving them into an address lookup table cannot alter this
+/// census.
+pub fn census_dealer_scenario_transaction_locks_v1(
+    payer: Pubkey,
+    instructions: &[Instruction],
+) -> DealerScenarioTransactionLockCensusV1 {
+    let mut unique = vec![payer];
+    for instruction in instructions {
+        if !unique.contains(&instruction.program_id) {
+            unique.push(instruction.program_id);
+        }
+        for meta in &instruction.accounts {
+            if !unique.contains(&meta.pubkey) {
+                unique.push(meta.pubkey);
+            }
+        }
+    }
+    DealerScenarioTransactionLockCensusV1 {
+        unique_account_lock_count: unique.len(),
+    }
+}
+
+/// Admit one transaction only when its resolved lock census fits devnet.
+pub fn require_dealer_scenario_devnet_lock_limit_v1(
+    payer: Pubkey,
+    instructions: &[Instruction],
+) -> Result<DealerScenarioTransactionLockCensusV1, DealerScenarioLockLimitErrorV1> {
+    let census = census_dealer_scenario_transaction_locks_v1(payer, instructions);
+    if census.unique_account_lock_count <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1 {
+        Ok(census)
+    } else {
+        Err(DealerScenarioLockLimitErrorV1::LockLimit)
+    }
+}
 
 /// Same-finalized physical inputs after common Hot authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,10 +187,15 @@ pub struct DealerScenarioHotSemanticReportV4 {
     pub candidate_obligation_state: Vec<u8>,
 }
 
-/// Exact unsigned Trading instruction and its lock census.
+/// Exact unsplit Trading topology and its lock census.
+///
+/// This shape is intentionally not an executable capability. Its canonical
+/// 121 instruction locks exceed devnet's 64-lock runtime limit, and an address
+/// lookup table cannot change that limit. It exists to derive the split
+/// checkpoint topology without losing semantic or physical facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DealerScenarioHotInstructionV4 {
-    /// Canonical Trading Hot instruction; no signing or submission occurs.
+pub struct DealerScenarioUnsplitTopologyV4 {
+    /// Canonical unsplit Hot instruction used only for topology analysis.
     pub instruction: Instruction,
     /// Semantic and physical projection which authorized the instruction.
     pub report: DealerScenarioHotMetaReportV4,
@@ -348,17 +413,18 @@ pub fn project_dealer_scenario_hot_metas_v4(
     })
 }
 
-/// Build the exact unsigned Trading instruction from one same-finalized view.
+/// Project the exact unsplit Trading topology from one same-finalized view.
 ///
 /// The root prestate digest is derived from the observed root bytes. Release,
 /// Market, generation, program identity, account order, and all dynamic widths
 /// are taken from authenticated semantic or physical inputs; none are accepted
-/// as parallel caller fields.
-pub fn build_dealer_scenario_hot_instruction_v4(
+/// as parallel caller fields. The returned instruction must not be submitted:
+/// its lock census is the evidence that a durable split is required.
+pub fn project_dealer_scenario_unsplit_topology_v4(
     state: DealerScenarioHotMetaStateV4<'_>,
     semantic: DealerScenarioSemanticStateV4<'_>,
     family_request: &[u8],
-) -> Result<DealerScenarioHotInstructionV4, DealerScenarioHotMetaErrorV4> {
+) -> Result<DealerScenarioUnsplitTopologyV4, DealerScenarioHotMetaErrorV4> {
     let report = project_dealer_scenario_hot_metas_v4(state, semantic, family_request)?;
     let root = fixed(state, HOT_ROOT_ACCOUNT_V3)?;
     let trading = fixed(state, HOT_TRADING_PROGRAM_ACCOUNT_V3)?;
@@ -401,7 +467,7 @@ pub fn build_dealer_scenario_hot_instruction_v4(
         unique.push(trading.account.key);
     }
     let unique_account_lock_count = unique.len();
-    Ok(DealerScenarioHotInstructionV4 {
+    Ok(DealerScenarioUnsplitTopologyV4 {
         instruction: Instruction {
             program_id: trading.account.key,
             accounts: report.instruction_accounts.clone(),
@@ -699,6 +765,46 @@ mod tests {
     }
 
     #[test]
+    fn devnet_lock_gate_admits_exactly_64_and_refuses_65() {
+        let payer = Pubkey::new_from_array([250; 32]);
+        let program_id = Pubkey::new_from_array([249; 32]);
+        let instruction = |meta_count: u8| Instruction {
+            program_id,
+            accounts: (0..meta_count)
+                .map(|index| {
+                    AccountMeta::new_readonly(Pubkey::new_from_array([index + 1; 32]), false)
+                })
+                .collect(),
+            data: Vec::new(),
+        };
+        let admitted = instruction(62);
+        assert_eq!(
+            census_dealer_scenario_transaction_locks_v1(payer, core::slice::from_ref(&admitted)),
+            DealerScenarioTransactionLockCensusV1 {
+                unique_account_lock_count: 64,
+            }
+        );
+        assert_eq!(
+            require_dealer_scenario_devnet_lock_limit_v1(payer, core::slice::from_ref(&admitted),),
+            Ok(DealerScenarioTransactionLockCensusV1 {
+                unique_account_lock_count: 64,
+            })
+        );
+
+        let refused = instruction(63);
+        assert_eq!(
+            census_dealer_scenario_transaction_locks_v1(payer, core::slice::from_ref(&refused)),
+            DealerScenarioTransactionLockCensusV1 {
+                unique_account_lock_count: 65,
+            }
+        );
+        assert_eq!(
+            require_dealer_scenario_devnet_lock_limit_v1(payer, core::slice::from_ref(&refused),),
+            Err(DealerScenarioLockLimitErrorV1::LockLimit)
+        );
+    }
+
+    #[test]
     fn profile13_packs_sparse_and_dense_selector_nine_frames() {
         for spans in [
             [0, 0, 0, 0, 1, 0, 0, 3, 6],
@@ -844,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn admitted_bundle_derives_transition_owned_spans_and_exact_lock_census() {
+    fn unsplit_topology_derives_spans_and_proves_devnet_refusal() {
         let trading = [1; 32];
         let custody = [12; 32];
         let release = [6; 32];
@@ -983,7 +1089,7 @@ mod tests {
             .map(|index| meta(200 + index, 0, false, false, index == 6))
             .collect::<Vec<_>>();
         strategy_accounts[6].account.executable = true;
-        let built = build_dealer_scenario_hot_instruction_v4(
+        let built = project_dealer_scenario_unsplit_topology_v4(
             DealerScenarioHotMetaStateV4 {
                 fixed_accounts: &fixed_accounts,
                 strategy_accounts: &strategy_accounts,
@@ -992,12 +1098,24 @@ mod tests {
             semantic,
             &request,
         )
-        .expect("caller-backed instruction");
+        .expect("unsplit topology");
         assert_eq!(built.report.dynamic_span_counts, spans);
         assert_eq!(built.report.caller_authority_count, 6);
         assert_eq!(built.account_meta_count, 122);
         assert_eq!(built.instruction.accounts.len(), 122);
         assert_eq!(built.unique_account_lock_count, 121);
+        let transaction_census = census_dealer_scenario_transaction_locks_v1(
+            Pubkey::new_from_array([250; 32]),
+            core::slice::from_ref(&built.instruction),
+        );
+        assert_eq!(transaction_census.unique_account_lock_count, 122);
+        assert_eq!(
+            require_dealer_scenario_devnet_lock_limit_v1(
+                Pubkey::new_from_array([250; 32]),
+                core::slice::from_ref(&built.instruction),
+            ),
+            Err(DealerScenarioLockLimitErrorV1::LockLimit)
+        );
         let (envelope, family) = HotExecutionEnvelopeV3::split_instruction(&built.instruction.data)
             .expect("Hot instruction");
         assert_eq!(family, request);
@@ -1007,7 +1125,7 @@ mod tests {
 
         strategy_accounts.pop();
         assert_eq!(
-            build_dealer_scenario_hot_instruction_v4(
+            project_dealer_scenario_unsplit_topology_v4(
                 DealerScenarioHotMetaStateV4 {
                     fixed_accounts: &fixed_accounts,
                     strategy_accounts: &strategy_accounts,

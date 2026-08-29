@@ -92,10 +92,12 @@ satisfies. This one:
   layout question.
 - **Packet serialisation limits** — NOT satisfied. This legacy Dealer-family
   campaign still tops out at 35 accounts, but that is not an exemption for the
-  admitted selector-9 path. Its caller-backed canonical scenario has 122 metas
-  and 121 distinct instruction locks before the transaction payer, so it must
-  use a v0 message and address lookup table. This ProgramTest campaign submits
-  no packet; a real Accepted campaign must serialize and execute that v0 form.
+  admitted selector-9 path. Its unsplit canonical scenario has 122 metas and
+  121 distinct instruction locks before the transaction payer. A v0 message and
+  address lookup table can reduce packet bytes but cannot reduce Solana's lock
+  count, so that shape cannot run on devnet's 64-lock runtime. The Accepted path
+  must accumulate authenticated preparation receipts and use a separately
+  censused at-most-64-lock atomic commit. This campaign submits no packet.
 - **1,400,000 compute and 32,768 heap, neither adjustable** — satisfied. The
   campaign sets `set_compute_max_units(1_400_000)` and never raises it; the heap
   is the SBF default and is never lifted. The deepest transaction consumed
