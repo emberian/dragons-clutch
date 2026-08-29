@@ -1,0 +1,197 @@
+{
+  "schema": "dclutch-exact-economic-lifecycle-fixture-v1",
+  "fixtureId": "activity-v3-canonical-four-outcome",
+  "sourceAuthority": [
+    "tools/devnet-scenarios/fixtures/flagship.json economic operation ensemble only",
+    "tools/devnet-activity/activity.py::parse_campaign",
+    "tools/devnet-activity/activity.py::canonical_activity_ensemble",
+    "2026-08-29 root-authorized corrected devnet-only Activity-v3 funding envelope"
+  ],
+  "outcomeCount": 4,
+  "collateralMintSupplyAtoms": "200000",
+  "hoardCollateralAccount": "hoard-principal",
+  "feeCollateralAccount": "deployer-fee-recipient",
+  "activityV3Authority": {
+    "clusterTarget": "devnet",
+    "payerWallet": "deployer",
+    "wallets": [
+      {"id": "deployer", "role": "campaign-payer", "initialFundingLamports": "360000000", "postInitFundingLamports": "0"},
+      {"id": "collateral-mint", "role": "collateral-mint", "initialFundingLamports": "0", "postInitFundingLamports": "0"},
+      {"id": "collateral-wallet", "role": "collateral-wallet", "initialFundingLamports": "0", "postInitFundingLamports": "0"},
+      {"id": "founding-beneficiary", "role": "founding-beneficiary", "initialFundingLamports": "0", "postInitFundingLamports": "0"},
+      {"id": "founding-projection-witness", "role": "founding-projection-witness", "initialFundingLamports": "0", "postInitFundingLamports": "0"},
+      {"id": "founding-source-funder", "role": "founding-source-funder", "initialFundingLamports": "0", "postInitFundingLamports": "0"},
+      {"id": "ash", "role": "participant-ash", "initialFundingLamports": "0", "postInitFundingLamports": "50000000"},
+      {"id": "birch", "role": "participant-birch", "initialFundingLamports": "0", "postInitFundingLamports": "50000000"},
+      {"id": "cobalt", "role": "participant-cobalt", "initialFundingLamports": "0", "postInitFundingLamports": "50000000"},
+      {"id": "dahlia", "role": "participant-dahlia", "initialFundingLamports": "0", "postInitFundingLamports": "50000000"}
+    ],
+    "authorization": {
+      "initialFundingLamports": "360000000",
+      "maxPostInitTransferLamports": "200000000",
+      "maxPostInitFeeLamports": "10000000",
+      "maxFeeLamports": "10000000",
+      "maxSpendLamports": "210000000",
+      "guaranteedPreLifecycleResidualLamports": "150000000"
+    },
+    "allLifecycleMutationsExpected": true,
+    "feeBasisPointsPerSide": 50,
+    "feeDenominator": "10000"
+  },
+  "initial": {
+    "collateralAccounts": {
+      "ash-collateral": "50000",
+      "birch-collateral": "50000",
+      "cobalt-collateral": "50000",
+      "dahlia-collateral": "50000",
+      "deployer-fee-recipient": "0",
+      "hoard-principal": "0"
+    },
+    "claimOwners": ["ash", "birch", "cobalt", "dahlia"]
+  },
+  "stages": [
+    {
+      "id": "founding",
+      "events": []
+    },
+    {
+      "id": "participant-ash",
+      "events": [
+        {"kind": "complete-set", "sourceCollateral": "ash-collateral", "owner": "ash", "quantityAtoms": "1000"}
+      ]
+    },
+    {
+      "id": "participant-birch",
+      "events": [
+        {"kind": "complete-set", "sourceCollateral": "birch-collateral", "owner": "birch", "quantityAtoms": "700"}
+      ]
+    },
+    {
+      "id": "participant-cobalt",
+      "events": [
+        {"kind": "complete-set", "sourceCollateral": "cobalt-collateral", "owner": "cobalt", "quantityAtoms": "400"}
+      ]
+    },
+    {
+      "id": "participant-dahlia",
+      "events": [
+        {"kind": "complete-set", "sourceCollateral": "dahlia-collateral", "owner": "dahlia", "quantityAtoms": "250"}
+      ]
+    },
+    {
+      "id": "direct-ash-birch-o0",
+      "events": [
+        {
+          "kind": "direct", "sellerOwner": "ash", "buyerOwner": "birch",
+          "sellerCollateral": "ash-collateral", "buyerCollateral": "birch-collateral",
+          "feeCollateral": "deployer-fee-recipient", "outcome": 0,
+          "fillAtoms": "400", "executionPriceAtoms": "250", "priceScaleAtoms": "1000",
+          "feeBasisPoints": 50, "feeDenominator": "10000",
+          "expectedQuote": {
+            "grossCollateralAtoms": "100", "grossRemainderAtoms": "0",
+            "sellerFeeAtoms": "0", "buyerFeeAtoms": "0", "sellerNetAtoms": "100",
+            "buyerDebitAtoms": "100", "feeRecipientCreditAtoms": "0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "direct-birch-cobalt-o1",
+      "events": [
+        {
+          "kind": "direct", "sellerOwner": "birch", "buyerOwner": "cobalt",
+          "sellerCollateral": "birch-collateral", "buyerCollateral": "cobalt-collateral",
+          "feeCollateral": "deployer-fee-recipient", "outcome": 1,
+          "fillAtoms": "700", "executionPriceAtoms": "500", "priceScaleAtoms": "1000",
+          "feeBasisPoints": 50, "feeDenominator": "10000",
+          "expectedQuote": {
+            "grossCollateralAtoms": "350", "grossRemainderAtoms": "0",
+            "sellerFeeAtoms": "1", "buyerFeeAtoms": "1", "sellerNetAtoms": "349",
+            "buyerDebitAtoms": "351", "feeRecipientCreditAtoms": "2"
+          }
+        }
+      ]
+    },
+    {
+      "id": "direct-cobalt-dahlia-o2",
+      "events": [
+        {
+          "kind": "direct", "sellerOwner": "cobalt", "buyerOwner": "dahlia",
+          "sellerCollateral": "cobalt-collateral", "buyerCollateral": "dahlia-collateral",
+          "feeCollateral": "deployer-fee-recipient", "outcome": 2,
+          "fillAtoms": "400", "executionPriceAtoms": "750", "priceScaleAtoms": "1000",
+          "feeBasisPoints": 50, "feeDenominator": "10000",
+          "expectedQuote": {
+            "grossCollateralAtoms": "300", "grossRemainderAtoms": "0",
+            "sellerFeeAtoms": "1", "buyerFeeAtoms": "1", "sellerNetAtoms": "299",
+            "buyerDebitAtoms": "301", "feeRecipientCreditAtoms": "2"
+          }
+        }
+      ]
+    },
+    {
+      "id": "direct-dahlia-ash-o3",
+      "events": [
+        {
+          "kind": "direct", "sellerOwner": "dahlia", "buyerOwner": "ash",
+          "sellerCollateral": "dahlia-collateral", "buyerCollateral": "ash-collateral",
+          "feeCollateral": "deployer-fee-recipient", "outcome": 3,
+          "fillAtoms": "100", "executionPriceAtoms": "900", "priceScaleAtoms": "1000",
+          "feeBasisPoints": 50, "feeDenominator": "10000",
+          "expectedQuote": {
+            "grossCollateralAtoms": "90", "grossRemainderAtoms": "0",
+            "sellerFeeAtoms": "0", "buyerFeeAtoms": "0", "sellerNetAtoms": "90",
+            "buyerDebitAtoms": "90", "feeRecipientCreditAtoms": "0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "resolution",
+      "events": [
+        {"kind": "resolve", "payoutAtomsPerClaim": ["0", "0", "1", "0"]}
+      ]
+    },
+    {
+      "id": "payouts",
+      "events": [
+        {"kind": "redeem", "owner": "ash", "recipientCollateral": "ash-collateral", "outcome": 0, "quantityAtoms": "600"},
+        {"kind": "redeem", "owner": "ash", "recipientCollateral": "ash-collateral", "outcome": 1, "quantityAtoms": "1000"},
+        {"kind": "redeem", "owner": "ash", "recipientCollateral": "ash-collateral", "outcome": 2, "quantityAtoms": "1000"},
+        {"kind": "redeem", "owner": "ash", "recipientCollateral": "ash-collateral", "outcome": 3, "quantityAtoms": "1100"},
+        {"kind": "redeem", "owner": "birch", "recipientCollateral": "birch-collateral", "outcome": 0, "quantityAtoms": "1100"},
+        {"kind": "redeem", "owner": "birch", "recipientCollateral": "birch-collateral", "outcome": 2, "quantityAtoms": "700"},
+        {"kind": "redeem", "owner": "birch", "recipientCollateral": "birch-collateral", "outcome": 3, "quantityAtoms": "700"},
+        {"kind": "redeem", "owner": "cobalt", "recipientCollateral": "cobalt-collateral", "outcome": 0, "quantityAtoms": "400"},
+        {"kind": "redeem", "owner": "cobalt", "recipientCollateral": "cobalt-collateral", "outcome": 1, "quantityAtoms": "1100"},
+        {"kind": "redeem", "owner": "cobalt", "recipientCollateral": "cobalt-collateral", "outcome": 3, "quantityAtoms": "400"},
+        {"kind": "redeem", "owner": "dahlia", "recipientCollateral": "dahlia-collateral", "outcome": 0, "quantityAtoms": "250"},
+        {"kind": "redeem", "owner": "dahlia", "recipientCollateral": "dahlia-collateral", "outcome": 1, "quantityAtoms": "250"},
+        {"kind": "redeem", "owner": "dahlia", "recipientCollateral": "dahlia-collateral", "outcome": 2, "quantityAtoms": "650"},
+        {"kind": "redeem", "owner": "dahlia", "recipientCollateral": "dahlia-collateral", "outcome": 3, "quantityAtoms": "150"}
+      ]
+    },
+    {
+      "id": "aggregate-retirement",
+      "events": [
+        {"kind": "retire"}
+      ]
+    }
+  ],
+  "lamportContract": {
+    "requiredFundingTransfers": [
+      {"source": "devnet-authorized-funder", "destination": "deployer", "lamports": "360000000"},
+      {"source": "deployer", "destination": "ash", "lamports": "50000000"},
+      {"source": "deployer", "destination": "birch", "lamports": "50000000"},
+      {"source": "deployer", "destination": "cobalt", "lamports": "50000000"},
+      {"source": "deployer", "destination": "dahlia", "lamports": "50000000"}
+    ],
+    "aggregateRefundClasses": [],
+    "notes": [
+      "This is a devnet-only authorized spend envelope, never mainnet evidence.",
+      "Actual total wallet debit must not exceed 210000000 lamports.",
+      "Actual full-campaign activity fees and actual post-init funding fees are distinct reconciled quantities, each capped at 10000000 lamports.",
+      "The four post-init transfer principals total exactly 200000000 lamports, leaving at least 150000000 in the deployer under maxSpend."
+    ]
+  }
+}
