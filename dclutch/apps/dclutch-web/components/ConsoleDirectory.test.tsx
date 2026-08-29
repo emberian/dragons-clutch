@@ -17,7 +17,9 @@ describe('the console index', () => {
     expect(html).toContain('does not mean its mutation route is live');
     expect(html).toContain('For market authors');
     expect(html).toContain('Wallet redemption');
-    expect(html).toContain('Rust-authored payout plan');
+    // The blurb used to offer redemption as something a reader could do today.
+    expect(html).toContain('Wallet redemption (not open yet)');
+    expect(html).toContain('Paying out winning claims is not available yet');
     // Names the provenance answer key and its standard.
     expect(html).toContain('The artifacts, and where they come from');
     expect(html).toContain('a bug in the console');

@@ -7,7 +7,8 @@ describe('/redeem public route', () => {
   const html = renderToStaticMarkup(<RedeemPage />);
 
   it('opens the connected-wallet Claims redemption journey', () => {
-    expect(html).toContain('Redeem your winning claims');
+    expect(html).toContain('Your winning claims');
+    expect(html).toContain('Payout is not open yet');
     expect(html).toContain('Connect your wallet');
     expect(html).toContain('Your redeemable Positions');
   });

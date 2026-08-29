@@ -130,33 +130,47 @@ impl SeriesConsumeEmittedArtifactsV4 {
 pub fn emit_series_consume_artifacts_v4(
     profile: SeriesConsumeAccountProfileInputV4<'_>,
 ) -> Result<SeriesConsumeEmittedArtifactsV4> {
-    let mut account_profile_scratch = [0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
-    let mut account_profile = [0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
-    encode_series_consume_account_profile_v4_atomic(
-        profile,
-        &mut account_profile_scratch,
-        &mut account_profile,
-    )
-    .map_err(|_| SeriesReleaseErrorV4::Encode)?;
+    // Each emitter owns its own scratch in its own #[inline(never)] frame:
+    // holding all three scratch/output pairs in one frame overflowed the
+    // 4096-byte SBF bound (measured at offset 4544 — 12 frame diagnostics
+    // per compilation of this crate).
+    let mut artifacts = SeriesConsumeEmittedArtifactsV4 {
+        account_profile: [0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4],
+        request_profile: [0_u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4],
+        transition: [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4],
+    };
+    emit_series_consume_account_profile_part_v4(profile, &mut artifacts.account_profile)?;
+    emit_series_consume_request_profile_part_v4(&mut artifacts.request_profile)?;
+    emit_series_consume_transition_part_v4(&mut artifacts.transition)?;
+    Ok(artifacts)
+}
 
-    let mut request_profile_scratch = [0_u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4];
-    let mut request_profile = [0_u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4];
-    encode_series_consume_request_profile_v4_atomic(
-        &mut request_profile_scratch,
-        &mut request_profile,
-    )
-    .map_err(|_| SeriesReleaseErrorV4::Encode)?;
+#[inline(never)]
+fn emit_series_consume_account_profile_part_v4(
+    profile: SeriesConsumeAccountProfileInputV4<'_>,
+    output: &mut [u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4],
+) -> Result<()> {
+    let mut scratch = [0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+    encode_series_consume_account_profile_v4_atomic(profile, &mut scratch, output)
+        .map_err(|_| SeriesReleaseErrorV4::Encode)
+}
 
-    let mut transition_scratch = [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4];
-    let mut transition = [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4];
-    encode_series_consume_transition_v4_atomic(&mut transition_scratch, &mut transition)
-        .map_err(|_| SeriesReleaseErrorV4::Encode)?;
+#[inline(never)]
+fn emit_series_consume_request_profile_part_v4(
+    output: &mut [u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4],
+) -> Result<()> {
+    let mut scratch = [0_u8; SERIES_CONSUME_REQUEST_PROFILE_BYTES_V4];
+    encode_series_consume_request_profile_v4_atomic(&mut scratch, output)
+        .map_err(|_| SeriesReleaseErrorV4::Encode)
+}
 
-    Ok(SeriesConsumeEmittedArtifactsV4 {
-        account_profile,
-        request_profile,
-        transition,
-    })
+#[inline(never)]
+fn emit_series_consume_transition_part_v4(
+    output: &mut [u8; SERIES_CONSUME_TRANSITION_BYTES_V4],
+) -> Result<()> {
+    let mut scratch = [0_u8; SERIES_CONSUME_TRANSITION_BYTES_V4];
+    encode_series_consume_transition_v4_atomic(&mut scratch, output)
+        .map_err(|_| SeriesReleaseErrorV4::Encode)
 }
 
 /// The two artifacts this module will not invent, plus the emitted effect.

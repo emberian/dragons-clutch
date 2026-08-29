@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'dClutch · Bounded-state markets',
+  title: 'dClutch · Fully collateralized markets on Solana devnet',
   description:
-    'Explore the dClutch interface for fully collateralized bounded-state markets, trading, liquidity, and settlement.',
+    'Buy claims on real-world outcomes, each one fully backed by collateral locked up before the claim exists. Deployed on Solana devnet: nothing is for sale and nothing is at risk.',
 };
 
 export default function RootLayout({

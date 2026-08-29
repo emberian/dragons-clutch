@@ -1,0 +1,70 @@
+{
+  "schema": "dclutch-load-simulator-config-v1",
+  "_comment": "DEVNET FLIP TEMPLATE. Fill every <...> from SPINE's campaign-open facts on the wave board, then validate with: simulator.py run --config THIS --cycles 1 (preflight, signs nothing). Devnet rails: https RPC only, genesis acknowledged in full, gentle cadence, one process. NEVER mainnet; NEVER the deployer as a participant; ~/.helius-key never in a commit.",
+  "cluster": {
+    "label": "devnet",
+    "rpc_url": "https://api.devnet.solana.com",
+    "devnet_genesis": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+  },
+  "bootstrap_bin": "/Users/ember/dev/dclutch/tools/local-validator/bootstrap/successor/target/debug/dclutch-local-successor-bootstrap",
+  "work_dir": "/private/tmp/dclutch-sim-devnet-01",
+  "market_address": "<SPINE flagship market address>",
+  "cadence": { "period_seconds": 20.0, "jitter_fraction": 0.25 },
+  "trade": {
+    "mode": "devnet",
+    "max_steps_per_session": 32,
+    "step_pause_seconds": 5.0,
+    "devnet": {
+      "plan": "<campaign plan JSON>",
+      "plan_sha256": "<hex64>",
+      "market_input": "<MarketRunInput JSON from devnet-sponsored-market>",
+      "market_input_sha256": "<hex64>",
+      "campaign_report": "<campaign-open.json>",
+      "campaign_report_sha256": "<hex64>",
+      "buyer_participant": "<buyer admission report (devnet-user-position-admission-v1 --output)>",
+      "buyer_participant_sha256": "<hex64>",
+      "checked_execution_release": "<checked execution release JSON>",
+      "checked_execution_release_sha256": "<hex64>",
+      "payer": "<payer pubkey (a funded participant or campaign payer; never the deployer)>",
+      "payer_keypair": "<absolute keypair path>",
+      "pairs": [
+        {
+          "seller_ticket": "<seller ticket JSON>",
+          "seller_ticket_sha256": "<hex64>",
+          "buyer_ticket": "<buyer ticket JSON>",
+          "buyer_ticket_sha256": "<hex64>"
+        }
+      ]
+    }
+  },
+  "admissions": [
+    {
+      "name": "participant-1",
+      "plan": "<campaign plan JSON>",
+      "campaign_evidence": "<campaign-open.json>",
+      "position_owner": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",
+      "position_owner_keypair": "/private/tmp/dclutch-devnet-all-state.8hLf9M/participant-1.json",
+      "fee_payer": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",
+      "fee_payer_keypair": "/private/tmp/dclutch-devnet-all-state.8hLf9M/participant-1.json",
+      "minimum_finalized_slot": 0,
+      "output": "/private/tmp/dclutch-sim-devnet-01/admissions/participant-1.json",
+      "collateral": null
+    }
+  ],
+  "census": {
+    "mint": "<flagship collateral mint>",
+    "payer": "<campaign payer pubkey>",
+    "hoard": "<founding hoard vault>",
+    "aggregate": "<LBV2 aggregate>",
+    "claim_unit_atoms": 0,
+    "tokens": {},
+    "positions": {},
+    "watch": {}
+  },
+  "wallets": [
+    { "address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf", "source": "staged" },
+    { "address": "GcE6LWbduoATDgK8jsGyj2i8ywV37fcAYABKCmKgttDz", "source": "staged" },
+    { "address": "E9buaTm2SAovWXsaRBMPyfk5uhdryDVA744CfAogpoRR", "source": "staged" },
+    { "address": "E71d4qisbiQbt8UGb2PPmmJanqUeUxyPcjLjXX14ooZX", "source": "staged" }
+  ]
+}

@@ -62,9 +62,11 @@ describe('Redemption route', () => {
   const html = renderToStaticMarkup(<PortfolioWorkspace mode="redemption" />);
 
   it('starts with the connected wallet and the live Market set instead of the representation console', () => {
-    expect(html).toContain('Redeem your winning claims');
-    expect(html).toContain('find and redeem your winning claims');
-    expect(html).toContain('every current-compatible Market');
+    // The headline used to offer a payout this page cannot make.
+    expect(html).toContain('Your winning claims');
+    expect(html).toContain('Payout is not open yet');
+    expect(html).not.toContain('Redeem your winning claims');
+    expect(html).toContain('find the winning claims you hold');
     expect(html).not.toContain('Or paste any owner address');
     expect(html).not.toContain('Authenticate exact transfer route');
   });
