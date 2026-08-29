@@ -36,6 +36,8 @@ use crate::{
 };
 
 const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context/v1";
+pub(crate) const OWNED_LOOPBACK_WALLET_TERMINAL_INPUT_COMMAND_V1: &str =
+    "local-private-validator-wallet-terminal-payout-input-v1";
 const TERMINAL_COMPOSITION_LABELS_V1: [&str; 4] = [
     "terminal_composition_descriptor_record",
     "terminal_composition_graph_record",
@@ -85,6 +87,10 @@ pub(crate) fn produce_wallet_terminal_input_owned_loopback_v1(
     arguments: Vec<String>,
 ) -> Result<PlanInputV1> {
     produce_wallet_terminal_input_v1(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+pub(crate) fn run_wallet_terminal_input_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
+    stdout_json(&produce_wallet_terminal_input_owned_loopback_v1(arguments)?)
 }
 
 fn produce_wallet_terminal_input_v1(
@@ -593,6 +599,17 @@ pub(crate) fn usage() -> &'static str {
      Mainnet-beta is refused unconditionally."
 }
 
+pub(crate) fn owned_loopback_usage() -> &'static str {
+    "\n  dclutch-local-successor-bootstrap \
+     local-private-validator-wallet-terminal-payout-input-v1 \
+     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \
+     --evidence ABSOLUTE_JSON --market PUBKEY --owner PUBKEY --recipient PUBKEY \
+     --claim-index U32 [--quantity U64]\n\nThis read-only command derives the same exact \
+     wallet payout input from finalized protocol state, but accepts only a validator launched and \
+     owned by the private lifecycle runner. It refuses devnet, mainnet-beta, and every non-loopback \
+     origin."
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -605,6 +622,7 @@ mod tests {
     use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness};
     use dclutch_operator::{Finality, Observation, ObservedAccount};
     use serde_json::Value;
+    use solana_sdk::signature::{Keypair, Signer as _};
     use solana_sdk_ids::system_program;
 
     use super::*;
@@ -801,6 +819,7 @@ mod tests {
     fn missing_native_composition_is_an_explicit_lifecycle_blocker() {
         let evidence = CampaignTerminalEvidenceV1 {
             plan_sha256: hex(&[1; 32]),
+            market_sha256: hex(&[3; 32]),
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
             accounts: BTreeMap::new(),
@@ -824,6 +843,7 @@ mod tests {
             "rpc_url": "https://api.devnet.solana.com/",
             "mode": "execute",
             "plan_sha256": hex(&[1; 32]),
+            "market_sha256": hex(&[5; 32]),
             "execution": {
                 "completed": true,
                 "recoveredFinalizedFounding": false,
@@ -864,6 +884,49 @@ mod tests {
         let mut local: serde_json::Value =
             serde_json::from_slice(&exact).expect("local campaign projection");
         local["cluster"] = serde_json::json!("loopback");
+        let fixture_source = Pubkey::new_unique();
+        let fixture_owner = Pubkey::new_unique();
+        let fixture_mint = Pubkey::new_unique();
+        let fixture_signature = Keypair::new()
+            .sign_message(b"terminal local fixture")
+            .to_string();
+        let fixture_account = |address: Pubkey| {
+            serde_json::json!({
+                "address": address.to_string(),
+                "owner": owner.clone(),
+                "lamports": 1,
+                "executable": false,
+                "data_len": 1,
+                "data_sha256": hex(&[3; 32]),
+                "account_sha256": hex(&[4; 32])
+            })
+        };
+        local["execution"]["localParticipantFixtureLiquidity"] = serde_json::json!({
+            "sourceTokenAccount": fixture_source.to_string(),
+            "sourceOwner": fixture_owner.to_string(),
+            "quantityAtoms": 100_000_000,
+            "foundingCollateralAtoms": 1_000_000_000u64,
+            "totalSupplyAtoms": 1_100_000_000u64,
+            "mint": fixture_mint.to_string(),
+            "mintAuthorityRemoved": true,
+            "transactionSignature": fixture_signature.clone(),
+            "finalizedSlot": 77,
+            "computeUnitsConsumed": 88_000
+        });
+        local["execution"]["transactions"] = serde_json::json!([{
+            "label": "create local fixture",
+            "signature": fixture_signature,
+            "slot": 77,
+            "transaction_metadata_available": true,
+            "fee_lamports": 5_000,
+            "fee_only_balance_change": false,
+            "compute_units_consumed": 88_000,
+            "error": null,
+            "logs": []
+        }]);
+        local["execution"]["market"]["accounts"]["local_participant_fixture_source"] =
+            fixture_account(fixture_source);
+        local["execution"]["market"]["accounts"]["collateral_mint"] = fixture_account(fixture_mint);
         crate::campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
             &serde_json::to_vec(&local).expect("local campaign bytes"),
             crate::cluster::ExpectedClusterV1::OwnedLoopback,
@@ -1022,6 +1085,7 @@ mod tests {
         }
         let exact = CampaignTerminalEvidenceV1 {
             plan_sha256: hex(&[1; 32]),
+            market_sha256: hex(&[3; 32]),
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
             accounts: accounts.clone(),

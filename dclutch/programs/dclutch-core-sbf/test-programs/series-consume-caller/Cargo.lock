@@ -285,6 +285,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]

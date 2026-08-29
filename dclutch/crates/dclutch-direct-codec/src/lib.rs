@@ -52,9 +52,13 @@ pub mod registered_fill_artifacts_v4;
 pub mod registered_requests_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod registered_state_artifacts_v4;
+/// First-use Trading-mediated Direct Custody replay setup.
+pub mod replay_setup_v1;
 pub mod retirement_v1;
 pub mod state_artifacts_v3;
 pub mod successor;
+/// Permissionless dust-tolerant setup of Direct's Token-2022 destinations.
+pub mod token_setup_v1;
 
 /// Bytes in one independently signed compact intent.
 pub const COMPACT_INTENT_BYTES: usize = generated_layout::COMPACT_INTENT_BYTES_VALUE;

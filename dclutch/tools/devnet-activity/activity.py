@@ -34,16 +34,19 @@ from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 
-MANIFEST_SCHEMA = "dclutch-devnet-activity-manifest-v1"
+MANIFEST_SCHEMA = "dclutch-devnet-activity-manifest-v2"
 WALLET_LEDGER_SCHEMA = "dclutch-devnet-activity-wallet-ledger-v1"
 PRIVATE_INDEX_SCHEMA = "dclutch-devnet-activity-private-wallet-index-v1"
 FUNDING_JOURNAL_SCHEMA = "dclutch-devnet-activity-funding-journal-v1"
+FUNDING_CLOSURE_SCHEMA = "dclutch-devnet-activity-funding-closure-v1"
 AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v1"
+BOUNDED_AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v2"
 STOP_SCHEMA = "dclutch-devnet-activity-stop-v1"
 ADAPTER_JOURNAL_SCHEMA = "dclutch-devnet-activity-adapter-journal-v1"
 RECONCILIATION_SCHEMA = "dclutch-devnet-activity-reconciliation-v1"
-SUPERVISOR_REQUEST_SCHEMA = "dclutch-devnet-activity-supervisor-request-v1"
-SUPERVISOR_STATUS_SCHEMA = "dclutch-devnet-activity-supervisor-status-v1"
+SUPERVISOR_REQUEST_SCHEMA = "dclutch-devnet-activity-supervisor-request-v2"
+SUPERVISOR_STATUS_SCHEMA = "dclutch-devnet-activity-supervisor-status-v2"
+CAMPAIGN_REPORT_SCHEMA = "dclutch-successor-campaign-report-v1"
 DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 DEVNET_MANIFEST_RPC_URL = "https://api.devnet.solana.com:443/"
 DEVNET_SUPERVISOR_RPC_URL = "https://api.devnet.solana.com/"
@@ -341,6 +344,7 @@ class Scenario:
     schema: str
     scenario_id: str
     cluster_target: str
+    genesis_hash: str
     market_ref: str
     wallets: tuple[WalletSpec, ...]
     accounts: tuple[AccountSpec, ...]
@@ -363,6 +367,8 @@ class CompletionSpec:
     path: str
     schema: str | None
     signature_pointers: tuple[str, ...]
+    transaction_list_pointer: str | None
+    required_transaction_labels: tuple[str, ...]
     required_values: Mapping[str, Any]
 
 
@@ -627,7 +633,19 @@ def parse_scenario(path: Path, expected_sha256: str) -> Scenario:
             exact_list(snapshot[field], f"scenario {snapshot_name} {field}")
     if not isinstance(body["retireEligible"], bool):
         raise Refusal("scenario retireEligible must be boolean")
-    return Scenario(path, observed_sha256, schema, scenario_id, cluster_target, market_ref, tuple(wallets), tuple(accounts), tuple(operations), limits)
+    return Scenario(
+        path,
+        observed_sha256,
+        schema,
+        scenario_id,
+        cluster_target,
+        genesis_hash,
+        market_ref,
+        tuple(wallets),
+        tuple(accounts),
+        tuple(operations),
+        limits,
+    )
 
 
 def require_acyclic(graph: Mapping[str, Sequence[str]], label: str) -> None:
@@ -669,18 +687,69 @@ def validate_rpc_url(value: Any, target: str) -> str:
 
 def parse_completion(value: Any, adapter_id: str) -> CompletionSpec:
     source = exact_object(value, f"adapter {adapter_id} completion")
-    exact_keys(source, {"path", "schema", "signaturePointers", "requiredValues"}, f"adapter {adapter_id} completion")
+    exact_keys(
+        source,
+        {
+            "path",
+            "schema",
+            "signaturePointers",
+            "transactionListPointer",
+            "requiredTransactionLabels",
+            "requiredValues",
+        },
+        f"adapter {adapter_id} completion",
+    )
     path = text(source["path"], f"adapter {adapter_id} completion path")
     schema_value = source["schema"]
     schema = None if schema_value is None else text(schema_value, f"adapter {adapter_id} completion schema", 128)
     pointers = tuple(text(item, f"adapter {adapter_id} signature pointer", 256) for item in exact_list(source["signaturePointers"], f"adapter {adapter_id} signature pointers"))
     if len(set(pointers)) != len(pointers):
         raise Refusal(f"adapter {adapter_id} repeats a signature pointer")
+    transaction_list_value = source["transactionListPointer"]
+    transaction_list_pointer = (
+        None
+        if transaction_list_value is None
+        else text(
+            transaction_list_value,
+            f"adapter {adapter_id} transaction-list pointer",
+            256,
+        )
+    )
+    required_transaction_labels = tuple(
+        text(item, f"adapter {adapter_id} required transaction label", 512)
+        for item in exact_list(
+            source["requiredTransactionLabels"],
+            f"adapter {adapter_id} required transaction labels",
+        )
+    )
+    if len(set(required_transaction_labels)) != len(required_transaction_labels):
+        raise Refusal(f"adapter {adapter_id} repeats a required transaction label")
+    if transaction_list_pointer is None:
+        if required_transaction_labels:
+            raise Refusal(
+                f"adapter {adapter_id} has required transaction labels without a transaction list"
+            )
+    elif (
+        schema != CAMPAIGN_REPORT_SCHEMA
+        or transaction_list_pointer != "/execution/transactions"
+        or pointers
+        or not required_transaction_labels
+    ):
+        raise Refusal(
+            f"adapter {adapter_id} campaign transaction-list completion has another exact shape"
+        )
     required_values = exact_object(source["requiredValues"], f"adapter {adapter_id} required values")
     for pointer in required_values:
         if not pointer.startswith("/"):
             raise Refusal(f"adapter {adapter_id} required-value key is not a JSON pointer")
-    return CompletionSpec(path, schema, pointers, required_values)
+    return CompletionSpec(
+        path,
+        schema,
+        pointers,
+        transaction_list_pointer,
+        required_transaction_labels,
+        required_values,
+    )
 
 
 def parse_address_binding(value: Any, index: int, inputs: Mapping[str, Path], wallet_ids: set[str]) -> AddressBinding:
@@ -798,8 +867,16 @@ def parse_manifest(path: Path) -> Manifest:
         if any(operation_by_id[item].mutation_expected for item in covers) and not mutation:
             raise Refusal(f"adapter {adapter_id} disables a scenario operation with a committed mutating caller")
         completion = parse_completion(source["completion"], adapter_id)
-        if mutation and not completion.signature_pointers:
+        if mutation and not (
+            completion.signature_pointers or completion.required_transaction_labels
+        ):
             raise Refusal(f"mutating adapter {adapter_id} has no finalized-signature evidence pointer")
+        if completion.schema == CAMPAIGN_REPORT_SCHEMA and (
+            "checked-release" not in inputs or "market" not in inputs
+        ):
+            raise Refusal(
+                f"campaign adapter {adapter_id} requires checked-release and market inputs"
+            )
         adapters.append(AdapterSpec(adapter_id, covers, caller, argv, dependencies, tuple(sorted(adapter_wallets)), mutation, completion))
     if covered != set(operation_by_id):
         raise Refusal(f"activity adapters do not cover exactly the scenario operations: missing {sorted(set(operation_by_id) - covered)}")
@@ -954,13 +1031,67 @@ def authenticate_cluster(manifest: Manifest, rpc: Rpc) -> str:
 
 def authorization(path: Path, manifest: Manifest, *, allow_expired: bool = False) -> dict[str, Any]:
     value = exact_object(read_exact_json(canonical_existing_file(path, "live authorization"), "live authorization"), "live authorization")
-    exact_keys(value, {"schema", "manifestSha256", "scenarioSha256", "devnetGenesisHash", "marketRef", "notBefore", "expiresAt", "authorization"}, "live authorization")
-    if value["schema"] != AUTHORIZATION_SCHEMA or value["manifestSha256"] != manifest.sha256 or value["scenarioSha256"] != manifest.scenario.sha256:
+    schema = value.get("schema")
+    common = {
+        "schema", "manifestSha256", "scenarioSha256", "devnetGenesisHash",
+        "marketRef", "notBefore", "expiresAt", "authorization",
+    }
+    if schema == AUTHORIZATION_SCHEMA:
+        exact_keys(value, common, "live authorization")
+        phrase = "authorize-one-devnet-activity-run"
+    elif schema == BOUNDED_AUTHORIZATION_SCHEMA:
+        exact_keys(
+            value,
+            common
+            | {
+                "maxCycles",
+                "maxSpendLamports",
+                "maxFeeLamports",
+                "prefundedWalletClosureSha256",
+                "checkedReleaseSha256",
+                "marketSha256",
+                "acceptedHarnessSha256",
+                "acceptedHarnessSourceCommit",
+                "dclutchSha256",
+                "successorSha256",
+                "solanaKeygenSha256",
+            },
+            "live authorization",
+        )
+        phrase = "authorize-bounded-devnet-activity-live-send"
+        max_cycles = value["maxCycles"]
+        if not isinstance(max_cycles, int) or isinstance(max_cycles, bool) or not 1 <= max_cycles <= 72:
+            raise Refusal("bounded live authorization maxCycles must be in 1..72")
+        decimal(value["maxSpendLamports"], "bounded live authorization maxSpendLamports", positive=True)
+        decimal(value["maxFeeLamports"], "bounded live authorization maxFeeLamports", positive=True)
+        digest_text(
+            value["prefundedWalletClosureSha256"],
+            "bounded live authorization prefunded wallet closure digest",
+        )
+        for key in (
+            "checkedReleaseSha256",
+            "marketSha256",
+            "acceptedHarnessSha256",
+            "dclutchSha256",
+            "successorSha256",
+            "solanaKeygenSha256",
+        ):
+            digest_text(value[key], f"bounded live authorization {key}")
+        source_commit = text(
+            value["acceptedHarnessSourceCommit"],
+            "bounded live authorization accepted harness source commit",
+            40,
+        )
+        if COMMIT_RE.fullmatch(source_commit) is None:
+            raise Refusal("bounded live authorization source commit is not canonical")
+    else:
+        raise Refusal("live authorization schema is not admitted")
+    if value["manifestSha256"] != manifest.sha256 or value["scenarioSha256"] != manifest.scenario.sha256:
         raise Refusal("live authorization is not bound to this exact manifest and scenario")
     if value["devnetGenesisHash"] != DEVNET_GENESIS_HASH or value["marketRef"] != manifest.scenario.market_ref:
         raise Refusal("live authorization names another cluster or Market")
-    if value["authorization"] != "authorize-one-devnet-activity-run":
-        raise Refusal("live authorization lacks the exact one-run authorization phrase")
+    if value["authorization"] != phrase:
+        raise Refusal("live authorization lacks its exact authorization phrase")
     try:
         now = dt.datetime.now(dt.timezone.utc)
         not_before = dt.datetime.fromisoformat(text(value["notBefore"], "authorization notBefore").replace("Z", "+00:00"))
@@ -972,6 +1103,39 @@ def authorization(path: Path, manifest: Manifest, *, allow_expired: bool = False
     if not allow_expired and not (not_before <= now < expires):
         raise Refusal("live authorization is outside its current window")
     return value
+
+
+def bounded_live_authorization(
+    path: Path, manifest: Manifest, *, allow_expired: bool = False
+) -> tuple[str, int, int, int, str]:
+    value = authorization(path, manifest, allow_expired=allow_expired)
+    if value["schema"] != BOUNDED_AUTHORIZATION_SCHEMA:
+        raise Refusal("live-send requires the bounded v2 authorization schema")
+    max_cycles = value["maxCycles"]
+    max_spend = decimal(
+        value["maxSpendLamports"],
+        "bounded live authorization maxSpendLamports",
+        positive=True,
+    )
+    max_fee = decimal(
+        value["maxFeeLamports"],
+        "bounded live authorization maxFeeLamports",
+        positive=True,
+    )
+    prefunded_closure_sha256 = digest_text(
+        value["prefundedWalletClosureSha256"],
+        "bounded live authorization prefunded wallet closure digest",
+    )
+    bankroll = sum(wallet.funding_lamports for wallet in manifest.scenario.wallets)
+    if max_spend > bankroll:
+        raise Refusal("live authorization maxSpendLamports exceeds scenario wallet bankroll")
+    return (
+        sha256_file(canonical_existing_file(path, "live authorization")),
+        max_cycles,
+        max_spend,
+        max_fee,
+        prefunded_closure_sha256,
+    )
 
 
 def require_live_authorization(manifest: Manifest, path: Path | None, *, allow_expired: bool = False) -> str | None:
@@ -1008,7 +1172,7 @@ def prepare_wallets(manifest: Manifest, work: Path, keygen: Path) -> dict[str, A
         public = authenticated_state(public_ledger_path, "public wallet ledger")
         if private.get("schema") != PRIVATE_INDEX_SCHEMA or public.get("schema") != WALLET_LEDGER_SCHEMA or private.get("scenarioSha256") != manifest.scenario.sha256 or public.get("scenarioSha256") != manifest.scenario.sha256:
             raise Refusal("existing wallet ledgers belong to another scenario")
-        verify_wallet_files(private, public, manifest, keygen)
+        verify_wallet_files(private, public, manifest, keygen, work)
         return public
 
     private_rows: list[dict[str, Any]] = []
@@ -1060,7 +1224,13 @@ def prepare_wallets(manifest: Manifest, work: Path, keygen: Path) -> dict[str, A
         raise
 
 
-def verify_wallet_files(private: Mapping[str, Any], public: Mapping[str, Any], manifest: Manifest, keygen: Path) -> None:
+def verify_wallet_files(
+    private: Mapping[str, Any],
+    public: Mapping[str, Any],
+    manifest: Manifest,
+    keygen: Path,
+    work: Path,
+) -> None:
     if private.get("keygenSha256") != sha256_file(keygen):
         raise Refusal("wallet keygen binary changed since preparation")
     private_rows = exact_list(private.get("wallets"), "private wallet rows")
@@ -1073,6 +1243,15 @@ def verify_wallet_files(private: Mapping[str, Any], public: Mapping[str, Any], m
         if private_row.get("id") != spec.wallet_id or public_row.get("id") != spec.wallet_id or private_row.get("address") != public_row.get("address"):
             raise Refusal(f"wallet ledgers substitute {spec.wallet_id}")
         keypair = canonical_existing_file(text(private_row.get("keypair"), f"wallet {spec.wallet_id} keypair"), f"wallet {spec.wallet_id} keypair")
+        expected_keypair = wallet_paths(work)[0] / f"{spec.wallet_id}.json"
+        try:
+            expected_keypair = expected_keypair.resolve(strict=True)
+        except OSError as error:
+            raise Refusal(f"wallet {spec.wallet_id} exact disposable key path is absent") from error
+        if keypair != expected_keypair:
+            raise Refusal(
+                f"wallet {spec.wallet_id} keypair is not its exact disposable scenario path"
+            )
         mode = stat.S_IMODE(keypair.stat().st_mode)
         if mode & 0o077:
             raise Refusal(f"wallet {spec.wallet_id} keypair is not private (mode {mode:o})")
@@ -1088,6 +1267,10 @@ def sol_text(lamports: int) -> str:
 
 def funding_journal_path(work: Path, wallet_id: str) -> Path:
     return work / "journals" / "funding" / f"{wallet_id}.json"
+
+
+def funding_closure_path(work: Path) -> Path:
+    return work / "public" / "funding-closure.json"
 
 
 def funding_journal_phases(manifest: Manifest, work: Path) -> dict[str, str]:
@@ -1306,7 +1489,7 @@ def load_wallet_indexes(manifest: Manifest, work: Path, keygen: Path) -> tuple[d
         raise Refusal("prepare-wallets must complete before funding or activity")
     private = authenticated_state(private_path, "private wallet index")
     public = authenticated_state(public_path, "public wallet ledger")
-    verify_wallet_files(private, public, manifest, keygen)
+    verify_wallet_files(private, public, manifest, keygen, work)
     return private, public
 
 
@@ -1314,7 +1497,7 @@ def fund_wallets(manifest: Manifest, work: Path, solana: Path, keygen: Path, fun
     authorization_sha256 = require_live_authorization(manifest, live_authorization, allow_expired=poll_only)
     private, public = load_wallet_indexes(manifest, work, keygen)
     rpc = Rpc(manifest.rpc_url, minimum_interval_ms=manifest.scenario.limits.min_dispatch_interval_ms)
-    authenticate_cluster(manifest, rpc)
+    genesis = authenticate_cluster(manifest, rpc)
     funder_result = run_checked([str(keygen), "pubkey", str(funder_keypair)])
     if funder_result.returncode != 0:
         raise Refusal("solana-keygen could not derive the funder address")
@@ -1389,6 +1572,171 @@ def fund_wallets(manifest: Manifest, work: Path, solana: Path, keygen: Path, fun
         if transaction is None:
             raise Refusal(f"funding signature {signature} is not finalized; rerun with --poll-only")
         atomic_write_json(journal_path, verify_funding_transaction(transaction, journal, signature))
+
+    write_funding_closure(
+        manifest,
+        work,
+        genesis,
+        authorization_sha256,
+        funder,
+    )
+
+
+def funding_closure_rows(
+    manifest: Manifest,
+    work: Path,
+    funding_authorization_sha256: str | None,
+    funder: str,
+) -> tuple[list[dict[str, str]], int, int]:
+    rows: list[dict[str, str]] = []
+    total_transfer = 0
+    total_fee = 0
+    for wallet in manifest.scenario.wallets:
+        path = funding_journal_path(work, wallet.wallet_id)
+        journal = authenticated_state(path, f"funding journal {wallet.wallet_id}")
+        if (
+            journal.get("schema") != FUNDING_JOURNAL_SCHEMA
+            or journal.get("manifestSha256") != manifest.sha256
+            or journal.get("scenarioSha256") != manifest.scenario.sha256
+            or journal.get("clusterTarget") != manifest.scenario.cluster_target
+            or journal.get("walletId") != wallet.wallet_id
+            or journal.get("phase") != "finalized"
+            or journal.get("authorizationSha256") != funding_authorization_sha256
+            or journal.get("funderAddress") != funder
+        ):
+            raise Refusal(f"funding closure refuses journal {wallet.wallet_id}")
+        transfer = decimal(
+            journal.get("transferLamports"),
+            f"funding journal {wallet.wallet_id} transfer",
+            positive=True,
+        )
+        fee = decimal(
+            journal.get("feeLamports"),
+            f"funding journal {wallet.wallet_id} fee",
+        )
+        if transfer != wallet.funding_lamports:
+            raise Refusal(f"funding closure changed wallet {wallet.wallet_id} bankroll")
+        row = {
+            "walletId": wallet.wallet_id,
+            "address": pubkey_text(
+                journal.get("walletAddress"),
+                f"funding journal {wallet.wallet_id} address",
+            ),
+            "journalPath": f"journals/funding/{wallet.wallet_id}.json",
+            "journalSha256": sha256_file(path),
+            "signature": signature_text(
+                journal.get("signature"),
+                f"funding journal {wallet.wallet_id} signature",
+            ),
+            "slot": str(
+                decimal(
+                    journal.get("slot"),
+                    f"funding journal {wallet.wallet_id} slot",
+                )
+            ),
+            "transferLamports": str(transfer),
+            "feeLamports": str(fee),
+        }
+        rows.append(row)
+        total_transfer += transfer
+        total_fee += fee
+        if total_transfer > 2**64 - 1 or total_fee > 2**64 - 1:
+            raise Refusal("funding closure totals exceed u64")
+    return rows, total_transfer, total_fee
+
+
+def write_funding_closure(
+    manifest: Manifest,
+    work: Path,
+    genesis: str,
+    funding_authorization_sha256: str | None,
+    funder: str,
+) -> dict[str, Any]:
+    rows, total_transfer, total_fee = funding_closure_rows(
+        manifest, work, funding_authorization_sha256, funder
+    )
+    public_ledger = wallet_paths(work)[2]
+    expected = {
+        "schema": FUNDING_CLOSURE_SCHEMA,
+        "manifestSha256": manifest.sha256,
+        "scenarioSha256": manifest.scenario.sha256,
+        "clusterTarget": manifest.scenario.cluster_target,
+        "devnetGenesisHash": genesis,
+        "walletLedgerSha256": sha256_file(public_ledger),
+        "fundingAuthorizationSha256": funding_authorization_sha256,
+        "funderAddress": funder,
+        "wallets": rows,
+        "totalTransferLamports": str(total_transfer),
+        "totalFundingFeeLamports": str(total_fee),
+    }
+    path = funding_closure_path(work)
+    if path.exists():
+        prior = authenticated_state(path, "funding closure")
+        exact_keys(prior, set(expected) | {"closedAt", "stateSha256"}, "funding closure")
+        for key, value in expected.items():
+            if prior.get(key) != value:
+                raise Refusal(f"funding closure changed {key}")
+        text(prior.get("closedAt"), "funding closure timestamp", 64)
+        return prior
+    atomic_write_json(path, {**expected, "closedAt": utc_now()}, mode=0o644)
+    return authenticated_state(path, "funding closure")
+
+
+def authenticate_funding_closure(
+    manifest: Manifest, work: Path, expected_sha256: str
+) -> dict[str, Any]:
+    path = canonical_existing_file(funding_closure_path(work), "funding closure")
+    if sha256_file(path) != expected_sha256:
+        raise Refusal("funding closure differs from live authorization")
+    value = authenticated_state(path, "funding closure")
+    exact_keys(
+        value,
+        {
+            "schema",
+            "manifestSha256",
+            "scenarioSha256",
+            "clusterTarget",
+            "devnetGenesisHash",
+            "walletLedgerSha256",
+            "fundingAuthorizationSha256",
+            "funderAddress",
+            "wallets",
+            "totalTransferLamports",
+            "totalFundingFeeLamports",
+            "closedAt",
+            "stateSha256",
+        },
+        "funding closure",
+    )
+    genesis = (
+        DEVNET_GENESIS_HASH
+        if manifest.scenario.cluster_target == "devnet"
+        else manifest.scenario.genesis_hash
+    )
+    if (
+        value.get("schema") != FUNDING_CLOSURE_SCHEMA
+        or value.get("manifestSha256") != manifest.sha256
+        or value.get("scenarioSha256") != manifest.scenario.sha256
+        or value.get("clusterTarget") != manifest.scenario.cluster_target
+        or value.get("devnetGenesisHash") != genesis
+        or value.get("walletLedgerSha256") != sha256_file(wallet_paths(work)[2])
+    ):
+        raise Refusal("funding closure belongs to another run")
+    funding_authorization = value.get("fundingAuthorizationSha256")
+    if funding_authorization is not None:
+        digest_text(funding_authorization, "funding closure authorization digest")
+    funder = pubkey_text(value.get("funderAddress"), "funding closure funder")
+    rows, total_transfer, total_fee = funding_closure_rows(
+        manifest, work, funding_authorization, funder
+    )
+    if value.get("wallets") != rows:
+        raise Refusal("funding closure wallet rows changed")
+    if value.get("totalTransferLamports") != str(total_transfer):
+        raise Refusal("funding closure transfer total changed")
+    if value.get("totalFundingFeeLamports") != str(total_fee):
+        raise Refusal("funding closure fee total changed")
+    text(value.get("closedAt"), "funding closure timestamp", 64)
+    return value
 
 
 def adapter_journal_path(work: Path, adapter_id: str) -> Path:
@@ -1510,6 +1858,26 @@ def expanded_adapter(
     completion_path = Path(completion_text)
     if not completion_path.is_absolute() or completion_path.is_symlink():
         raise Refusal(f"adapter {adapter.adapter_id} completion must be an absolute non-symlink path")
+    if adapter.completion.schema == CAMPAIGN_REPORT_SCHEMA:
+        expected_pairs = {
+            "--plan": str(manifest.inputs["checked-release"]),
+            "--market": str(manifest.inputs["market"]),
+            "--evidence": str(completion_path),
+        }
+        for flag, expected in expected_pairs.items():
+            if argv.count(flag) != 1:
+                raise Refusal(
+                    f"campaign adapter {adapter.adapter_id} must name {flag} exactly once"
+                )
+            index = argv.index(flag)
+            if index + 1 >= len(argv) or argv[index + 1] != expected:
+                raise Refusal(
+                    f"campaign adapter {adapter.adapter_id} substitutes {flag}"
+                )
+        if argv.count("--execute") != 1:
+            raise Refusal(
+                f"campaign adapter {adapter.adapter_id} is not one exact executed campaign"
+            )
     return argv, completion_path
 
 
@@ -1607,11 +1975,20 @@ def token_amount_rows(transaction: Mapping[str, Any], field: str, keys: Sequence
     return output
 
 
-def transaction_evidence(transaction: Mapping[str, Any], signature: str, wallet_addresses: Mapping[str, str]) -> dict[str, Any]:
+def transaction_evidence(
+    transaction: Mapping[str, Any],
+    signature: str,
+    wallet_addresses: Mapping[str, str],
+    *,
+    require_success: bool = True,
+) -> dict[str, Any]:
     slot = transaction.get("slot")
     meta = exact_object(transaction.get("meta"), "transaction meta")
-    if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0 or meta.get("err") is not None:
-        raise Refusal(f"activity signature {signature} is failed or has another finalized slot")
+    error = meta.get("err")
+    if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0:
+        raise Refusal(f"activity signature {signature} has another finalized slot")
+    if require_success and error is not None:
+        raise Refusal(f"required activity signature {signature} failed")
     if signature not in transaction_signatures(transaction):
         raise Refusal(f"RPC transaction substitutes activity signature {signature}")
     fee = meta.get("fee")
@@ -1648,6 +2025,8 @@ def transaction_evidence(transaction: Mapping[str, Any], signature: str, wallet_
     return {
         "signature": signature,
         "slot": str(slot),
+        "succeeded": error is None,
+        "errorSha256": None if error is None else sha256_bytes(canonical_json(error)),
         "feeLamports": str(fee),
         "transactionSha256": sha256_bytes(canonical_json(transaction)),
         "walletLamportDeltas": wallet_deltas,
@@ -1673,15 +2052,88 @@ def inspect_completion(
     for required_pointer, expected in adapter.completion.required_values.items():
         if pointer(value, required_pointer, f"adapter {adapter.adapter_id} required value") != expected:
             raise Refusal(f"adapter {adapter.adapter_id} completion changed {required_pointer}")
-    signatures = [signature_text(pointer(value, item, f"adapter {adapter.adapter_id} signature"), f"adapter {adapter.adapter_id} signature") for item in adapter.completion.signature_pointers]
+    required_success_signatures = [
+        signature_text(
+            pointer(value, item, f"adapter {adapter.adapter_id} signature"),
+            f"adapter {adapter.adapter_id} signature",
+        )
+        for item in adapter.completion.signature_pointers
+    ]
+    signatures = list(required_success_signatures)
+    if adapter.completion.transaction_list_pointer is not None:
+        source = exact_object(value, f"adapter {adapter.adapter_id} campaign completion")
+        expected_cluster = (
+            "devnet"
+            if manifest.scenario.cluster_target == "devnet"
+            else "loopback"
+        )
+        if (
+            source.get("cluster") != expected_cluster
+            or source.get("mode") != "execute"
+            or pointer(
+                source,
+                "/execution/completed",
+                f"adapter {adapter.adapter_id} campaign completion",
+            )
+            is not True
+            or source.get("plan_sha256")
+            != sha256_file(manifest.inputs["checked-release"])
+            or source.get("market_sha256") != sha256_file(manifest.inputs["market"])
+        ):
+            raise Refusal(
+                f"adapter {adapter.adapter_id} campaign report changed cluster/mode/release/Market completion"
+            )
+        transaction_rows = exact_list(
+            pointer(
+                source,
+                adapter.completion.transaction_list_pointer,
+                f"adapter {adapter.adapter_id} transaction list",
+            ),
+            f"adapter {adapter.adapter_id} transaction list",
+        )
+        if not transaction_rows or len(transaction_rows) > manifest.scenario.limits.max_transactions:
+            raise Refusal(
+                f"adapter {adapter.adapter_id} transaction list is outside its scenario bound"
+            )
+        by_label: dict[str, str] = {}
+        signatures = []
+        for index, raw_row in enumerate(transaction_rows):
+            row = exact_object(raw_row, f"adapter {adapter.adapter_id} transaction row {index}")
+            label = text(
+                row.get("label"),
+                f"adapter {adapter.adapter_id} transaction label {index}",
+                512,
+            )
+            if label in by_label:
+                raise Refusal(f"adapter {adapter.adapter_id} repeats transaction label {label}")
+            signature = signature_text(
+                row.get("signature"),
+                f"adapter {adapter.adapter_id} transaction signature {index}",
+            )
+            by_label[label] = signature
+            signatures.append(signature)
+        for label in adapter.completion.required_transaction_labels:
+            if label not in by_label:
+                raise Refusal(
+                    f"adapter {adapter.adapter_id} omitted required transaction {label}"
+                )
+            required_success_signatures.append(by_label[label])
     if len(set(signatures)) != len(signatures):
         raise Refusal(f"adapter {adapter.adapter_id} completion repeats a signature")
+    required_success_set = set(required_success_signatures)
     transactions: list[dict[str, Any]] = []
     for signature in signatures:
         transaction = rpc.transaction(signature)
         if transaction is None:
             return None
-        transactions.append(transaction_evidence(transaction, signature, wallet_addresses))
+        transactions.append(
+            transaction_evidence(
+                transaction,
+                signature,
+                wallet_addresses,
+                require_success=signature in required_success_set,
+            )
+        )
     return sha256_file(completion_path), signatures, transactions
 
 
@@ -1785,7 +2237,33 @@ def dispatch_adapter(
         raise
 
 
-def require_finalized_funding(manifest: Manifest, work: Path, authorization_sha256: str | None = None) -> None:
+def prefunded_closure_digest(
+    manifest: Manifest,
+    live_authorization: Path | None,
+    *,
+    allow_expired: bool,
+) -> str | None:
+    if live_authorization is None or manifest.scenario.cluster_target != "devnet":
+        return None
+    value = authorization(live_authorization, manifest, allow_expired=allow_expired)
+    if value["schema"] != BOUNDED_AUTHORIZATION_SCHEMA:
+        return None
+    return digest_text(
+        value["prefundedWalletClosureSha256"],
+        "live authorization prefunded wallet closure digest",
+    )
+
+
+def require_finalized_funding(
+    manifest: Manifest,
+    work: Path,
+    authorization_sha256: str | None = None,
+    prefunded_closure_sha256: str | None = None,
+) -> dict[str, Any] | None:
+    if prefunded_closure_sha256 is not None:
+        return authenticate_funding_closure(
+            manifest, work, prefunded_closure_sha256
+        )
     for wallet in manifest.scenario.wallets:
         path = funding_journal_path(work, wallet.wallet_id)
         if not path.exists():
@@ -1793,6 +2271,7 @@ def require_finalized_funding(manifest: Manifest, work: Path, authorization_sha2
         journal = authenticated_state(path, f"funding journal {wallet.wallet_id}")
         if journal.get("phase") != "finalized" or journal.get("authorizationSha256") != authorization_sha256:
             raise Refusal(f"activity requires exact finalized funding for wallet {wallet.wallet_id}")
+    return None
 
 
 def activity_journal_phases(manifest: Manifest, work: Path) -> dict[str, str]:
@@ -1839,6 +2318,9 @@ def run_activity(
     authorization_sha256 = require_live_authorization(
         manifest, live_authorization, allow_expired=poll_only
     ) if any(item.mutation for item in manifest.adapters) else None
+    closure_sha256 = prefunded_closure_digest(
+        manifest, live_authorization, allow_expired=poll_only
+    )
     rpc = Rpc(manifest.rpc_url, minimum_interval_ms=manifest.scenario.limits.min_dispatch_interval_ms)
     authenticate_cluster(manifest, rpc)
     if poll_only and pending_funding_ids:
@@ -1853,7 +2335,9 @@ def run_activity(
         if keygen is None:
             raise Refusal("new activity dispatch requires solana-keygen wallet verification")
         private, public = load_wallet_indexes(manifest, work, keygen)
-    require_finalized_funding(manifest, work, authorization_sha256)
+    require_finalized_funding(
+        manifest, work, authorization_sha256, closure_sha256
+    )
     private_wallets = {row["id"]: exact_object(row, "private wallet") for row in exact_list(private["wallets"], "private wallets")}
     public_wallets = {row["id"]: exact_object(row, "public wallet") for row in exact_list(public["wallets"], "public wallets")}
     wallet_addresses = {wallet_id: pubkey_text(row.get("address"), f"wallet {wallet_id} address") for wallet_id, row in public_wallets.items()}
@@ -1997,7 +2481,17 @@ def reconcile_activity(
 ) -> dict[str, Any]:
     authorization_sha256 = require_live_authorization(manifest, live_authorization, allow_expired=True)
     private, public = unverified_wallet_indexes(manifest, work)
-    require_finalized_funding(manifest, work, authorization_sha256)
+    closure_sha256 = prefunded_closure_digest(
+        manifest, live_authorization, allow_expired=True
+    )
+    funding_closure = require_finalized_funding(
+        manifest, work, authorization_sha256, closure_sha256
+    )
+    funding_authorization_sha256 = (
+        authorization_sha256
+        if funding_closure is None
+        else funding_closure["fundingAuthorizationSha256"]
+    )
     private_wallets = {row["id"]: exact_object(row, "private wallet") for row in exact_list(private["wallets"], "private wallets")}
     public_wallets = {row["id"]: exact_object(row, "public wallet") for row in exact_list(public["wallets"], "public wallets")}
     wallet_addresses = {wallet_id: pubkey_text(row.get("address"), f"wallet {wallet_id} address") for wallet_id, row in public_wallets.items()}
@@ -2019,7 +2513,7 @@ def reconcile_activity(
 
     for wallet in manifest.scenario.wallets:
         journal = authenticated_state(funding_journal_path(work, wallet.wallet_id), f"funding journal {wallet.wallet_id}")
-        if journal.get("authorizationSha256") != authorization_sha256:
+        if journal.get("authorizationSha256") != funding_authorization_sha256:
             raise Refusal(f"funding journal {wallet.wallet_id} belongs to another live authorization")
         signature = signature_text(journal.get("signature"), f"funding {wallet.wallet_id} signature")
         if signature in seen_signatures:
@@ -2054,7 +2548,12 @@ def reconcile_activity(
             transaction = rpc.transaction(signature)
             if transaction is None:
                 raise Refusal(f"activity signature {signature} disappeared during reconciliation")
-            evidence = transaction_evidence(transaction, signature, wallet_addresses)
+            evidence = transaction_evidence(
+                transaction,
+                signature,
+                wallet_addresses,
+                require_success=False,
+            )
             if exact_object(captured_raw, f"adapter {adapter_id} captured transaction") != evidence:
                 raise Refusal(f"adapter {adapter_id} captured transaction changed on finalized RPC")
             seen_signatures.add(signature)
@@ -2116,7 +2615,6 @@ def reconcile_activity(
         history = {
             signature_text(row.get("signature"), f"wallet {wallet.wallet_id} history signature")
             for row in history_rows
-            if row.get("err") is None
         }
         if history != wallet_signature_sets[wallet.wallet_id]:
             raise Refusal(f"wallet {wallet.wallet_id} finalized history has missing or foreign signatures")
@@ -2168,12 +2666,23 @@ def supervisor_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evidence-dir", required=True)
     parser.add_argument("--accepted-harness-sha256", required=True)
     parser.add_argument("--accepted-harness-source-commit", required=True)
+    parser.add_argument("--scenario-sha256", required=True)
+    parser.add_argument("--checked-release", required=True)
+    parser.add_argument("--checked-release-sha256", required=True)
+    parser.add_argument("--market", required=True)
+    parser.add_argument("--market-sha256", required=True)
     parser.add_argument("--cycle-id", required=True)
     parser.add_argument("--dclutch-bin", required=True)
+    parser.add_argument("--accepted-dclutch-sha256", required=True)
     parser.add_argument("--successor-bin", required=True)
+    parser.add_argument("--accepted-successor-sha256", required=True)
+    parser.add_argument("--solana-keygen-bin", required=True)
+    parser.add_argument("--accepted-solana-keygen-sha256", required=True)
     parser.add_argument("--live-authorization")
     parser.add_argument("--live-authorization-sha256")
-    parser.add_argument("--no-send", action="store_true", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--no-send", action="store_true")
+    mode.add_argument("--live-send", action="store_true")
     parser.add_argument("--poll-only", action="store_true")
     return parser
 
@@ -2194,6 +2703,72 @@ def validate_supervisor_rpc_join(supervisor_rpc_url: str, manifest_rpc_url: str)
         raise Refusal("supervisor/manifest RPC spellings are not the one frozen devnet join")
 
 
+def reconciled_wallet_debit_lamports(value: Mapping[str, Any]) -> int:
+    if value.get("schema") != RECONCILIATION_SCHEMA:
+        raise Refusal("supervisor reconciliation has another schema")
+    debit = 0
+    for activity_index, raw_activity in enumerate(
+        exact_list(value.get("activity"), "reconciliation activity")
+    ):
+        activity_row = exact_object(
+            raw_activity, f"reconciliation activity {activity_index}"
+        )
+        for transaction_index, raw_transaction in enumerate(
+            exact_list(
+                activity_row.get("transactions"),
+                f"reconciliation activity {activity_index} transactions",
+            )
+        ):
+            transaction = exact_object(
+                raw_transaction,
+                f"reconciliation activity {activity_index} transaction {transaction_index}",
+            )
+            deltas = exact_object(
+                transaction.get("walletLamportDeltas"),
+                f"reconciliation activity {activity_index} transaction {transaction_index} wallet deltas",
+            )
+            for wallet_id, raw_delta in deltas.items():
+                stable_id(wallet_id, "reconciled wallet id")
+                delta = signed_decimal(
+                    raw_delta,
+                    f"reconciliation activity {activity_index} transaction {transaction_index} wallet {wallet_id} delta",
+                )
+                if delta < 0:
+                    debit += -delta
+                if debit > 2**64 - 1:
+                    raise Refusal("reconciled wallet debit exceeds u64")
+    return debit
+
+
+def reconciled_activity_fee_lamports(value: Mapping[str, Any]) -> int:
+    if value.get("schema") != RECONCILIATION_SCHEMA:
+        raise Refusal("supervisor reconciliation has another schema")
+    total = 0
+    for activity_index, raw_activity in enumerate(
+        exact_list(value.get("activity"), "reconciliation activity")
+    ):
+        activity_row = exact_object(
+            raw_activity, f"reconciliation activity {activity_index}"
+        )
+        for transaction_index, raw_transaction in enumerate(
+            exact_list(
+                activity_row.get("transactions"),
+                f"reconciliation activity {activity_index} transactions",
+            )
+        ):
+            transaction = exact_object(
+                raw_transaction,
+                f"reconciliation activity {activity_index} transaction {transaction_index}",
+            )
+            total += decimal(
+                transaction.get("feeLamports"),
+                f"reconciliation activity {activity_index} transaction {transaction_index} fee",
+            )
+            if total > 2**64 - 1:
+                raise Refusal("reconciled activity fees exceed u64")
+    return total
+
+
 def supervisor_cycle(arguments: argparse.Namespace) -> None:
     manifest_path = canonical_existing_file(arguments.manifest, "supervisor activity manifest")
     manifest_sha256 = digest_text(arguments.manifest_sha256, "supervisor manifest digest")
@@ -2204,6 +2779,9 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
         raise Refusal("supervisor-cycle-v1 is exact-devnet-only")
     if arguments.scenario_id != manifest.scenario.scenario_id:
         raise Refusal("supervisor scenario or RPC differs from the manifest")
+    scenario_sha256 = digest_text(arguments.scenario_sha256, "supervisor scenario digest")
+    if scenario_sha256 != manifest.scenario.sha256:
+        raise Refusal("supervisor scenario digest differs from the manifest")
     validate_supervisor_rpc_join(arguments.rpc_url, manifest.rpc_url)
     work = require_tank_path(Path(arguments.work), "supervisor work", directory=True)
     expected_work = Path("/tank/dclutch-activity/runs") / manifest.sha256
@@ -2219,16 +2797,58 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
     if COMMIT_RE.fullmatch(source_commit) is None:
         raise Refusal("accepted harness source commit must be one full lowercase Git commit")
     cycle_id = stable_id(arguments.cycle_id, "supervisor cycle id")
+    checked_release = canonical_existing_file(arguments.checked_release, "supervisor checked release")
+    checked_release_sha256 = digest_text(
+        arguments.checked_release_sha256, "supervisor checked release digest"
+    )
+    if sha256_file(checked_release) != checked_release_sha256:
+        raise Refusal("supervisor checked release digest changed")
+    market = canonical_existing_file(arguments.market, "supervisor Market artifact")
+    market_sha256 = digest_text(arguments.market_sha256, "supervisor Market digest")
+    if sha256_file(market) != market_sha256:
+        raise Refusal("supervisor Market artifact digest changed")
+    if (
+        manifest.inputs.get("checked-release") != checked_release
+        or manifest.inputs.get("market") != market
+    ):
+        raise Refusal(
+            "supervisor checked release/Market are not the exact manifest campaign inputs"
+        )
     dclutch_bin = canonical_existing_file(arguments.dclutch_bin, "supervisor dclutch CLI", executable=True)
     successor_bin = canonical_existing_file(arguments.successor_bin, "supervisor successor CLI", executable=True)
-    mode = "poll-only" if arguments.poll_only else "no-send"
+    keygen_bin = canonical_existing_file(
+        arguments.solana_keygen_bin, "supervisor solana-keygen", executable=True
+    )
+    dclutch_sha256 = digest_text(arguments.accepted_dclutch_sha256, "accepted dclutch digest")
+    successor_sha256 = digest_text(
+        arguments.accepted_successor_sha256, "accepted successor digest"
+    )
+    keygen_sha256 = digest_text(
+        arguments.accepted_solana_keygen_sha256, "accepted solana-keygen digest"
+    )
+    for path, expected, label in (
+        (dclutch_bin, dclutch_sha256, "dclutch CLI"),
+        (successor_bin, successor_sha256, "successor CLI"),
+        (keygen_bin, keygen_sha256, "solana-keygen"),
+    ):
+        if sha256_file(path) != expected:
+            raise Refusal(f"supervisor {label} differs from its accepted digest")
+    dispatch_mode = "live-send" if arguments.live_send else "no-send"
+    send_allowed = os.environ.get("DCLUTCH_ACTIVITY_SEND_ALLOWED")
+    if send_allowed != ("1" if arguments.live_send else "0"):
+        raise Refusal("supervisor explicit mode differs from DCLUTCH_ACTIVITY_SEND_ALLOWED")
+    mode = "poll-only" if arguments.poll_only else dispatch_mode
     request_state = authenticated_state(journal_path, "supervisor request journal")
     exact_keys(
         request_state,
         {
             "schema", "manifestSha256", "scenarioId", "workPath", "supervisorRpcUrl", "manifestRpcUrl", "devnetGenesisHash",
-            "acceptedHarnessSha256", "acceptedHarnessSourceCommit", "cycleId", "requestedAt", "mode",
-            "evidenceDirectory", "liveAuthorizationSha256", "stateSha256",
+            "acceptedHarnessSha256", "acceptedHarnessSourceCommit", "scenarioSha256",
+            "checkedReleaseSha256", "marketSha256", "dclutchSha256", "successorSha256",
+            "solanaKeygenSha256", "cycleId", "requestedAt", "mode", "dispatchMode",
+            "evidenceDirectory", "liveAuthorizationSha256", "authorizationMaxCycles",
+            "authorizationMaxSpendLamports", "authorizationMaxFeeLamports",
+            "prefundedWalletClosureSha256", "stateSha256",
         },
         "supervisor request journal",
     )
@@ -2238,6 +2858,41 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
         raise Refusal("supervisor live authorization path/digest must be both present or absent")
     if live_sha is not None and digest_text(arguments.live_authorization_sha256, "supervisor live authorization digest") != live_sha:
         raise Refusal("supervisor live authorization digest changed")
+    authorization_max_cycles = None
+    authorization_max_spend = None
+    authorization_max_fee = None
+    prefunded_wallet_closure_sha256 = None
+    if live_path is not None and arguments.live_send:
+        (
+            _,
+            authorization_max_cycles,
+            authorization_max_spend,
+            authorization_max_fee,
+            prefunded_wallet_closure_sha256,
+        ) = bounded_live_authorization(
+            live_path, manifest, allow_expired=arguments.poll_only
+        )
+        if authorization_max_cycles != 1:
+            raise Refusal("this lifecycle instance requires bounded authorization maxCycles 1")
+        live_value = authorization(
+            live_path, manifest, allow_expired=arguments.poll_only
+        )
+        authorization_pins = {
+            "checkedReleaseSha256": checked_release_sha256,
+            "marketSha256": market_sha256,
+            "acceptedHarnessSha256": harness_sha256,
+            "acceptedHarnessSourceCommit": source_commit,
+            "dclutchSha256": dclutch_sha256,
+            "successorSha256": successor_sha256,
+            "solanaKeygenSha256": keygen_sha256,
+        }
+        for key, expected in authorization_pins.items():
+            if live_value.get(key) != expected:
+                raise Refusal(f"bounded live authorization changed {key}")
+        assert prefunded_wallet_closure_sha256 is not None
+        authenticate_funding_closure(
+            manifest, work, prefunded_wallet_closure_sha256
+        )
     expected_request = {
         "schema": SUPERVISOR_REQUEST_SCHEMA,
         "manifestSha256": manifest.sha256,
@@ -2248,16 +2903,34 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
         "devnetGenesisHash": DEVNET_GENESIS_HASH,
         "acceptedHarnessSha256": harness_sha256,
         "acceptedHarnessSourceCommit": source_commit,
+        "scenarioSha256": scenario_sha256,
+        "checkedReleaseSha256": checked_release_sha256,
+        "marketSha256": market_sha256,
+        "dclutchSha256": dclutch_sha256,
+        "successorSha256": successor_sha256,
+        "solanaKeygenSha256": keygen_sha256,
         "cycleId": cycle_id,
         "mode": mode,
+        "dispatchMode": dispatch_mode,
         "evidenceDirectory": str(evidence_dir),
         "liveAuthorizationSha256": live_sha,
+        "authorizationMaxCycles": authorization_max_cycles,
+        "authorizationMaxSpendLamports": (
+            None if authorization_max_spend is None else str(authorization_max_spend)
+        ),
+        "authorizationMaxFeeLamports": (
+            None if authorization_max_fee is None else str(authorization_max_fee)
+        ),
+        "prefundedWalletClosureSha256": prefunded_wallet_closure_sha256,
     }
     for key, value in expected_request.items():
         if request_state.get(key) != value:
             raise Refusal(f"supervisor request journal changed {key}")
     text(request_state.get("requestedAt"), "supervisor request timestamp", 64)
 
+    new_dispatches = 0
+    reconciled_debit = None
+    reconciled_activity_fee = None
     if mode == "no-send":
         if live_path is None:
             raise Refusal("no-send readiness requires one current exact live authorization")
@@ -2267,6 +2940,42 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
         authenticate_cluster(manifest, rpc)
         reconciliation_sha256 = None
         status = "ready-no-send"
+    elif mode == "live-send":
+        if live_path is None:
+            raise Refusal("live-send requires one current exact bounded authorization")
+        bounded_live_authorization(live_path, manifest)
+        if stop_requested(work):
+            raise Refusal("activity STOP prevents live-send")
+        before = activity_journal_phases(manifest, work)
+        run_activity(
+            manifest,
+            work,
+            dclutch_bin,
+            successor_bin,
+            keygen_bin,
+            live_path,
+            poll_only=False,
+        )
+        reconciliation = reconcile_activity(
+            manifest, work, dclutch_bin, successor_bin, keygen_bin, live_path
+        )
+        reconciliation_sha256 = sha256_file(work / "public" / "reconciliation.json")
+        reconciled_debit = reconciled_wallet_debit_lamports(reconciliation)
+        reconciled_activity_fee = reconciled_activity_fee_lamports(reconciliation)
+        assert authorization_max_spend is not None
+        assert authorization_max_fee is not None
+        if reconciled_debit > authorization_max_spend:
+            raise Refusal("finalized reconciliation exceeds authorization maxSpendLamports")
+        if reconciled_activity_fee > authorization_max_fee:
+            raise Refusal("finalized reconciliation exceeds authorization maxFeeLamports")
+        after = activity_journal_phases(manifest, work)
+        new_dispatches = sum(
+            1
+            for adapter_id, phase in after.items()
+            if phase in {"dispatching", "finalized"}
+            and before.get(adapter_id) not in {"dispatching", "finalized"}
+        )
+        status = "complete-reconciled-live-send"
     else:
         phases = activity_journal_phases(manifest, work)
         submitted = {adapter_id for adapter_id, phase in phases.items() if phase in {"dispatching", "finalized"}}
@@ -2286,6 +2995,22 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
             if recovery == "complete":
                 reconcile_activity(manifest, work, dclutch_bin, successor_bin, None, live_path)
                 reconciliation_sha256 = sha256_file(work / "public" / "reconciliation.json")
+                reconciled_debit = reconciled_wallet_debit_lamports(
+                    authenticated_state(
+                        work / "public" / "reconciliation.json",
+                        "activity reconciliation",
+                    )
+                )
+                reconciled_activity_fee = reconciled_activity_fee_lamports(
+                    authenticated_state(
+                        work / "public" / "reconciliation.json",
+                        "activity reconciliation",
+                    )
+                )
+                if authorization_max_spend is not None and reconciled_debit > authorization_max_spend:
+                    raise Refusal("recovered reconciliation exceeds authorization maxSpendLamports")
+                if authorization_max_fee is not None and reconciled_activity_fee > authorization_max_fee:
+                    raise Refusal("recovered reconciliation exceeds authorization maxFeeLamports")
                 status = "complete-reconciled-poll-only"
             elif recovery == "pending-funding":
                 reconciliation_sha256 = None
@@ -2311,11 +3036,33 @@ def supervisor_cycle(arguments: argparse.Namespace) -> None:
         "status": status,
         "completedAt": utc_now(),
         "reconciliationSha256": reconciliation_sha256,
-        "newDispatches": "0",
+        "newDispatches": str(new_dispatches),
+        "authorizationMaxCycles": authorization_max_cycles,
+        "authorizationMaxSpendLamports": (
+            None if authorization_max_spend is None else str(authorization_max_spend)
+        ),
+        "authorizationMaxFeeLamports": (
+            None if authorization_max_fee is None else str(authorization_max_fee)
+        ),
+        "prefundedWalletClosureSha256": prefunded_wallet_closure_sha256,
+        "reconciledWalletDebitLamports": (
+            None if reconciled_debit is None else str(reconciled_debit)
+        ),
+        "reconciledActivityFeeLamports": (
+            None if reconciled_activity_fee is None else str(reconciled_activity_fee)
+        ),
     }
     if status_path.exists():
         prior = authenticated_state(status_path, "supervisor status")
-        for key in ("schema", "manifestSha256", "scenarioSha256", "scenarioId", "supervisorRequestSha256", "acceptedHarnessSha256", "acceptedHarnessSourceCommit", "cycleId", "mode", "status", "reconciliationSha256", "newDispatches"):
+        for key in (
+            "schema", "manifestSha256", "scenarioSha256", "scenarioId",
+            "supervisorRequestSha256", "acceptedHarnessSha256",
+            "acceptedHarnessSourceCommit", "cycleId", "mode", "status",
+            "reconciliationSha256", "newDispatches", "authorizationMaxCycles",
+            "authorizationMaxSpendLamports", "authorizationMaxFeeLamports",
+            "prefundedWalletClosureSha256", "reconciledWalletDebitLamports",
+            "reconciledActivityFeeLamports",
+        ):
             if prior.get(key) != result[key]:
                 raise Refusal("existing supervisor status belongs to another request or result")
         return

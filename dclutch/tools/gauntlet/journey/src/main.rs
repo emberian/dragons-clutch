@@ -45,6 +45,12 @@ mod campaign;
 #[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
 #[allow(dead_code)]
 mod cluster;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_market.rs"]
+#[allow(dead_code)]
+mod direct_market;
+#[path = "../../../local-validator/bootstrap/successor/src/local_mutable.rs"]
+#[allow(dead_code)]
+mod local_mutable;
 #[path = "../../../local-validator/bootstrap/successor/src/market.rs"]
 #[allow(dead_code)]
 mod market;
@@ -54,6 +60,9 @@ mod model;
 #[path = "../../../local-validator/bootstrap/successor/src/plan.rs"]
 #[allow(dead_code)]
 mod plan;
+#[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
+#[allow(dead_code)]
+mod relayed;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
@@ -63,6 +72,9 @@ mod runtime;
 #[path = "../../../local-validator/bootstrap/successor/src/seed.rs"]
 #[allow(dead_code)]
 mod seed;
+#[path = "../../../local-validator/bootstrap/successor/src/upgrade.rs"]
+#[allow(dead_code)]
+mod upgrade;
 
 // ------------------------------------------------------------- this campaign
 mod journey;
@@ -168,36 +180,18 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Render the demo Market's run-spec input.
+/// Refuse the retired standalone demo compiler.
 ///
-/// This is the producer's own `market::demo_market_input`, compiled into this
-/// binary along with the rest of it. The runner calls it here rather than
-/// building a second host binary to reach the same function.
-fn run_demo_market(arguments: Vec<String>) -> Result<()> {
-    let mut registry = None;
-    let mut iterator = arguments.into_iter();
-    while let Some(argument) = iterator.next() {
-        let value = iterator
-            .next()
-            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
-        let slot = match argument.as_str() {
-            "--registry-program-id" => &mut registry,
-            _ => {
-                return Err(Error::new(format!(
-                    "unknown demo-market argument: {argument}"
-                )));
-            }
-        };
-        if slot.replace(value).is_some() {
-            return Err(Error::new(format!("{argument} may be supplied only once")));
-        }
-    }
-    let registry = plan::pubkey(&required(registry, "--registry-program-id")?)?;
-    let input = market::demo_market_input(registry)?;
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
-    stdout.write_all(b"\n")?;
-    Ok(())
+/// Direct is deployment-bound now. A registry address alone cannot prove the
+/// checked five-role release set, so this compatibility command must not mint
+/// a fixture authority. The journey's `run` command instead accepts the full
+/// market-bearing spec emitted by the checked local planner.
+fn run_demo_market(_arguments: Vec<String>) -> Result<()> {
+    Err(Error::new(
+        "demo-market is retired: a standalone registry address cannot authenticate the checked \
+         local Direct deployment. Supply a market compiled by \
+         dclutch-local-successor-bootstrap local-private-validator-market-v1 to `run` instead",
+    ))
 }
 
 fn required(value: Option<String>, label: &str) -> Result<String> {
@@ -217,4 +211,21 @@ fn usage() {
         "Usage:\n  dclutch-journey-campaign run --spec ABSOLUTE_JSON --transcript ABSOLUTE_NEW_JSON [--holders N] [--keypair-seed 64_LOWERCASE_HEX]\n\nThe spec is a `dclutch-local-successor-run-spec-v2` document, exactly the one\nthe tier-1 bootstrap consumes: the journey reaches Open through that producer's\nown code, then keeps going on the same validator as the same in-memory founder.\nThe run-evidence document the census consumes is written to the spec's own\n`output` path and covers the WHOLE journey, founding transactions included.\n--transcript is the journey's own document: stages, gaps, and every\nconservation-ledger census.\n--holders is the load knob; it is the number of synthetic holders the founder\ndistributes collateral to. Default {default}.\n--keypair-seed is the producer's TEST-ONLY, LOOPBACK-ONLY determinism switch,\npassed straight through: it collapses the find_program_address bump-search\nnoise, which is what lets a conservation ledger's numbers be compared between\nruns at all. Read seed.rs before using it anywhere but here.\n\nNothing here signs with a persisted key, funds an external account, publishes,\nor deploys anywhere but a fresh localhost ledger on 127.0.0.1:20890.",
         default = journey::DEFAULT_HOLDER_COUNT
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn standalone_demo_market_refuses_to_invent_direct_authority() {
+        let error = super::run_demo_market(vec![
+            "--registry-program-id".into(),
+            "11111111111111111111111111111111".into(),
+        ])
+        .expect_err("standalone compiler must refuse");
+        assert!(
+            error
+                .0
+                .contains("cannot authenticate the checked local Direct deployment")
+        );
+    }
 }

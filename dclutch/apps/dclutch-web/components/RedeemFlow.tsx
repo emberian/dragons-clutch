@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
 
 import { type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import { inspectClaimsCustodyReplayV1, type ClaimsCustodyReplayRequestV1, type ClaimsCustodyReplayStateV1 } from '@/lib/claimsCustodyReplay';
@@ -28,8 +28,8 @@ import {
 import { SolanaRpcClient } from '@/lib/rpc';
 import {
   finalizeWalletTerminalPayoutV3,
-  parseWalletTerminalPayoutManifestV3,
-  prepareWalletTerminalPayoutV3,
+  importRustWalletTerminalPayoutArtifactV3,
+  prepareCheckedLiveDevnetWalletTerminalPayoutV3,
   walletTerminalPayoutSummaryV3,
   type PreparedWalletTerminalPayoutV3,
 } from '@/lib/walletTerminalPayoutV3';
@@ -69,6 +69,7 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
   const client = useMemo(() => new SolanaRpcClient(endpoint), [endpoint]);
   const [replay, setReplay] = useState<ReplayFlow>({ kind: 'idle' });
   const [manifestText, setManifestText] = useState('');
+  const [manifestSource, setManifestSource] = useState('');
   const [payout, setPayout] = useState<PayoutFlow>({ kind: 'idle' });
   const [recovery, setRecovery] = useState('');
   const wallet = directory.address;
@@ -184,7 +185,7 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
             setPayout({ kind: 'submitted', plan: restored.plan, journal: payoutJournal, signature: payoutJournal.signature!, confirmation: 'Resuming the exact saved signature and finalized verifier…' });
             void pollPayoutJournal(payoutJournal, restored.plan, () => current);
           } else {
-            const fresh = await prepareWalletTerminalPayoutV3(client, restored.manifest, wallet);
+            const fresh = await prepareCheckedLiveDevnetWalletTerminalPayoutV3(client, restored.manifest, wallet);
             await authenticateUnsignedTerminalPayoutJournalV1(payoutJournal, restored.manifest, fresh);
             if (current) setPayout({ kind: 'ready', plan: fresh, journal: payoutJournal });
           }
@@ -237,13 +238,31 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
     setPayout({ kind: 'preparing' });
     try {
       if (BigInt(availableQuantity) === 0n) throw new Error('this Position holds zero winning atoms, so there is nothing to redeem');
-      const manifest = parseWalletTerminalPayoutManifestV3(manifestText);
+      const manifest = importRustWalletTerminalPayoutArtifactV3(manifestText);
       if (manifest.request.market !== marketAddress || manifest.request.position !== positionAddress || manifest.request.owner !== wallet || manifest.request.claimIndex !== claimIndex) throw new Error('the payout plan names another Market, Position, owner, or winning claim');
       if (BigInt(manifest.request.quantity) > BigInt(availableQuantity)) throw new Error('the payout plan tries to redeem more winning atoms than this Position holds');
-      const plan = await prepareWalletTerminalPayoutV3(client, manifest, wallet); const scope = await operationScope(wallet);
+      const plan = await prepareCheckedLiveDevnetWalletTerminalPayoutV3(client, manifest, wallet); const scope = await operationScope(wallet);
       const journal = await writeUnsignedClientOperationJournalV1(browserStorage(), terminalPayoutJournalInputV1(scope, manifest, plan));
       setPayout({ kind: 'ready', plan, journal });
     } catch (error) { setPayout({ kind: 'refused', reason: errorMessage(error), journal: null }); }
+  }
+
+  async function importPayoutFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file === undefined) return;
+    setPayout({ kind: 'preparing' });
+    try {
+      if (file.size === 0 || file.size > 32_768) throw new Error('the payout plan file must contain 1..32768 bytes');
+      const text = await file.text();
+      const manifest = importRustWalletTerminalPayoutArtifactV3(text);
+      setManifestText(JSON.stringify(manifest, null, 2));
+      setManifestSource(`${file.name} · lookup table ${manifest.lookupTable}`);
+      setPayout({ kind: 'idle' });
+    } catch (error) {
+      setManifestSource('');
+      setPayout({ kind: 'refused', reason: errorMessage(error), journal: null });
+    }
   }
 
   async function signPayout() {
@@ -308,17 +327,22 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
     {replay.kind === 'confirmed' && <div className="portfolio-claim"><span>Payment record verified at finalized commitment</span><strong>revision {replay.nextRevision}</strong><p>{replay.signature === null ? 'The exact payment record is complete.' : <>Signature <code>{replay.signature}</code> is finalized.</>} The record at <code>{replay.replayAddress}</code> is ready.</p></div>}
     {replay.kind === 'ready' && replay.state.status === 'exists' && <p className="direct-status">Your payment record already exists at <code>{replay.state.replayAddress}</code> (revision {replay.state.nextRevision}), so no setup transaction is owed.</p>}
 
-    {replayExists && <details className="trade-v3-bytes" open={payout.kind !== 'idle'}>
+    <details className="trade-v3-bytes" open={payout.kind !== 'idle'}>
       <summary>Review and execute a payout plan</summary>
-      <p className="direct-status">Paste the payout plan produced for this exact Position. Before your wallet opens, the page reads the current finalized accounts again, checks every plan field and the one exact lookup table, and refuses a stale or substituted plan.</p>
+      <p className="direct-status">Import the exact JSON emitted by the Rust wallet-terminal payout producer, or paste those same bytes below. This browser never creates or completes a payout plan. Before your wallet opens, it proves Solana devnet genesis, the checked Program and ProgramData generation, the activation release, terminal Market and certificate, Registry records, your Position, your recipient token account, and the one exact lookup table from finalized chain state.</p>
+      <label><span>Rust payout plan file</span><input type="file" accept="application/json,.json" disabled={payoutUnsigned !== null || payout.kind === 'submitted'} onChange={(event) => void importPayoutFile(event)} /></label>
+      {manifestSource !== '' && <p className="direct-status" aria-live="polite">Imported {manifestSource}. No wallet action occurred.</p>}
       <label><span>Payout plan JSON</span><textarea rows={7} spellCheck={false} disabled={payoutUnsigned !== null || payout.kind === 'submitted'} value={manifestText} onChange={(event) => { setManifestText(event.target.value); setPayout({ kind: 'idle' }); }} /></label>
-      <div className="direct-actions"><button type="button" disabled={payout.kind === 'preparing' || payout.kind === 'signing' || payout.kind === 'submitted'} onClick={() => void preparePayout()}>{payout.kind === 'preparing' ? 'Checking payout plan…' : 'Check payout plan'}</button></div>
+      {!replayExists && <p className="direct-status">You can inspect or import the Rust artifact now. Checking it against devnet and asking your wallet remain disabled until the payment record above is verified.</p>}
+      <div className="direct-actions"><button type="button" disabled={!replayExists || payout.kind === 'preparing' || payout.kind === 'signing' || payout.kind === 'submitted'} onClick={() => void preparePayout()}>{payout.kind === 'preparing' ? 'Checking payout plan…' : 'Check payout plan'}</button></div>
       {payout.kind === 'refused' && <p className="market-refusal">Refused: {payout.reason}</p>}
       {summary !== null && <>
         <dl className="market-card-facts">
           <div><dt>Winning atoms burned</dt><dd>{readyPlan?.report.request.quantity}</dd></div>
           <div><dt>Collateral atoms paid</dt><dd>{summary.payout}</dd></div>
           <div><dt>Transaction</dt><dd>{readyPlan?.wireBytes.length} bytes · v0 · one signer</dd></div>
+          <div><dt>Checked release</dt><dd title={readyPlan?.report.request.releaseSet}>{readyPlan?.report.request.releaseSet.slice(0, 16)}…</dd></div>
+          <div><dt>Lookup table</dt><dd title={readyPlan?.lookupTable}>{readyPlan?.lookupTable.slice(0, 16)}…</dd></div>
           <div><dt>Request digest</dt><dd title={summary.requestDigest}>{summary.requestDigest.slice(0, 16)}…</dd></div>
         </dl>
         {(payout.kind === 'ready' || payout.kind === 'signing') && <div className="direct-actions"><button type="button" disabled={payout.kind === 'signing'} onClick={() => void signPayout()}>{payout.kind === 'signing' ? 'Waiting for your wallet…' : `Redeem ${readyPlan?.report.request.quantity} winning atoms`}</button></div>}
@@ -326,6 +350,6 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
       {payoutUnsigned !== null && <div className="direct-actions"><button type="button" className="secondary-action" onClick={() => void discardPayout(payoutUnsigned)}>Discard this unsigned saved plan</button></div>}
       {payout.kind === 'submitted' && <p className="direct-status" aria-live="polite">Submitted as <code>{payout.signature}</code>. {payout.confirmation}</p>}
       {payout.kind === 'confirmed' && <div className="portfolio-claim"><span>Payout verified at finalized slot {payout.observedSlot}</span><strong>{payout.payout} collateral atoms</strong><p>Signature <code>{payout.signature}</code>. The returned receipt, your claim debit, the payment record, the Market&apos;s collateral balance, and your recipient balance all match the same exact payout.</p></div>}
-    </details>}
+    </details>
   </div>;
 }

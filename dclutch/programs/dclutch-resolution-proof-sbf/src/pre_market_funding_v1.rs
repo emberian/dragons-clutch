@@ -7,11 +7,11 @@ use dclutch_capability_contract::{
     FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::{PROJECT_FOUND_RECEIPT_BYTES_V2, ProjectFoundReceiptV2};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
-    PRE_MARKET_FUNDING_REQUEST_BYTES_V1, PRE_MARKET_FUNDING_REQUEST_MAGIC_V1,
-    PreMarketFundingReceiptV1, PreMarketFundingRequestV1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    PRE_MARKET_FUNDING_REQUEST_BYTES_V2, PRE_MARKET_FUNDING_REQUEST_MAGIC_V2,
+    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
     pre_market_funding_prestate_digest_v1,
 };
 use solana_program::{
@@ -55,19 +55,19 @@ const FOUND_RENT: usize = 28;
 const FOUND_SYSTEM: usize = 29;
 
 /// Return whether bytes select the pre-Market subset-ledger initializer.
-pub fn is_pre_market_funding_v1(instruction_data: &[u8]) -> bool {
-    instruction_data.len() == PRE_MARKET_FUNDING_REQUEST_BYTES_V1
-        && instruction_data.get(..PRE_MARKET_FUNDING_REQUEST_MAGIC_V1.len())
-            == Some(PRE_MARKET_FUNDING_REQUEST_MAGIC_V1.as_slice())
+pub fn is_pre_market_funding_v2(instruction_data: &[u8]) -> bool {
+    instruction_data.len() == PRE_MARKET_FUNDING_REQUEST_BYTES_V2
+        && instruction_data.get(..PRE_MARKET_FUNDING_REQUEST_MAGIC_V2.len())
+            == Some(PRE_MARKET_FUNDING_REQUEST_MAGIC_V2.as_slice())
 }
 
 /// Project the exact future Market and initialize its Resolution-owned ledger.
-pub fn process_pre_market_funding_v1(
+pub fn process_pre_market_funding_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let request = PreMarketFundingRequestV1::decode(instruction_data)
+    let request = PreMarketFundingRequestV2::decode(instruction_data)
         .map_err(|_| ResolutionError::Instruction)?;
     authenticate_frame(program_id, accounts, request)?;
     let found = accounts
@@ -76,7 +76,10 @@ pub fn process_pre_market_funding_v1(
     let core_program = found
         .get(FOUND_CORE_PROGRAM)
         .ok_or(ResolutionError::AccountFrame)?;
-    let receipt = project_found(core_program, found, request)?;
+    let (receipt, project_found_receipt_digest) = project_found(core_program, found, request)?;
+    if project_found_receipt_digest != request.expected_project_found_receipt_digest {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
     let exact_found = request
         .project_found
         .found
@@ -120,11 +123,18 @@ pub fn process_pre_market_funding_v1(
     )?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
-    let canonical_mask = resolution_mask(manifest)?;
+    let (canonical_mask, native_principal) = resolution_funding_plan(manifest)?;
     if canonical_mask != request.selected_mask {
         return Err(ResolutionError::Funding.into());
     }
-    authenticate_release_and_caller(program_id, accounts, found, request, receipt)?;
+    authenticate_release_and_caller(
+        program_id,
+        accounts,
+        found,
+        instruction_data,
+        request,
+        receipt,
+    )?;
 
     let manifest_id =
         CapabilityContentId::new(request.manifest).map_err(|_| ResolutionError::Funding)?;
@@ -137,24 +147,8 @@ pub fn process_pre_market_funding_v1(
         request.selected_mask,
     )
     .map_err(|_| ResolutionError::Funding)?;
-    let ledger_view = FundingLedgerV2::decode(&ledger_bytes)
-        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
-        .map_err(|_| ResolutionError::Funding)?;
-    let native_principal = ledger_view
-        .remaining_native_lamports_total()
-        .map_err(|_| ResolutionError::Funding)?;
-    for entry_index in 0_u16..manifest.entry_count() {
-        if request.selected_mask & (1_u16 << entry_index) != 0
-            && manifest
-                .entry(entry_index)
-                .map_err(|_| ResolutionError::Funding)?
-                .funding_quote()
-                .realm_collateral()
-                .is_some()
-        {
-            return Err(ResolutionError::Funding.into());
-        }
-    }
+    let funding_ledger =
+        FundingLedgerV2::decode(&ledger_bytes).map_err(|_| ResolutionError::Funding)?;
     let exact_rent = rent.minimum_balance(width);
     let target = exact_rent
         .checked_add(native_principal)
@@ -163,21 +157,31 @@ pub fn process_pre_market_funding_v1(
         .get(FUNDING_SOURCE)
         .ok_or(ResolutionError::AccountFrame)?;
     let ledger = accounts.get(LEDGER).ok_or(ResolutionError::AccountFrame)?;
-    authenticate_vacant_ledger(ledger, request.ledger, request.prestate_digest)?;
-    require_funding_source(funding_source.lamports(), target)?;
-    invoke(
-        &transfer(funding_source.key, ledger.key, target),
-        &[funding_source.clone(), ledger.clone(), system.clone()],
-    )
-    .map_err(|_| ResolutionError::Funding)?;
+    let observed_dust =
+        authenticate_vacant_ledger(ledger, request.ledger, request.prestate_digest)?;
+    let (top_up, refund) = exact_dust_reconciliation(observed_dust, target);
+    require_funding_source(funding_source.lamports(), top_up)?;
+    if top_up != 0 {
+        invoke(
+            &transfer(funding_source.key, ledger.key, top_up),
+            &[funding_source.clone(), ledger.clone(), system.clone()],
+        )
+        .map_err(|_| ResolutionError::Funding)?;
+    }
+    let rent_credit = found
+        .get(FOUND_RENT_CREDIT)
+        .ok_or(ResolutionError::AccountFrame)?;
     initialize_ledger(
         program_id,
         ledger,
         receipt.market.to_bytes(),
         receipt.generation,
         manifest_id,
+        funding_ledger,
         &ledger_bytes,
         system,
+        rent_credit,
+        refund,
     )?;
     {
         let mut output = ledger
@@ -191,7 +195,7 @@ pub fn process_pre_market_funding_v1(
     if ledger.lamports() != target {
         return Err(ResolutionError::Funding.into());
     }
-    let receipt = PreMarketFundingReceiptV1 {
+    let receipt = PreMarketFundingReceiptV2 {
         market: receipt.market.to_bytes(),
         generation: receipt.generation,
         manifest: request.manifest,
@@ -203,11 +207,12 @@ pub fn process_pre_market_funding_v1(
         exact_native_principal: native_principal,
         found_request_digest: receipt.found_request_digest,
         funding_source: request.funding_source,
-        rent_credit: found
-            .get(FOUND_RENT_CREDIT)
-            .ok_or(ResolutionError::AccountFrame)?
-            .key
-            .to_bytes(),
+        rent_credit: rent_credit.key.to_bytes(),
+        project_found_receipt_digest,
+        observed_dust_lamports: observed_dust,
+        top_up_lamports: top_up,
+        refund_lamports: refund,
+        exact_post_lamports: target,
     };
     set_return_data(&receipt.encode().map_err(|_| ResolutionError::Instruction)?);
     Ok(())
@@ -216,7 +221,7 @@ pub fn process_pre_market_funding_v1(
 fn authenticate_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    request: PreMarketFundingRequestV1,
+    request: PreMarketFundingRequestV2,
 ) -> ProgramResult {
     if accounts.len() != PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1 {
         return Err(ResolutionError::AccountFrame.into());
@@ -288,23 +293,16 @@ fn authenticate_frame(
         .get(FOUND_START..)
         .ok_or(ResolutionError::AccountFrame)?;
     for (index, account) in found.iter().enumerate() {
-        let executable = matches!(
-            index,
-            FOUND_RENT_PROGRAM | FOUND_CORE_PROGRAM | FOUND_REGISTRY_PROGRAM | FOUND_SYSTEM
-        );
-        if account.is_signer || account.is_writable || account.executable != executable {
+        if !found_outer_flags_are_canonical(index, account) {
             return Err(ResolutionError::AccountFrame.into());
         }
     }
-    for (index, account) in found.iter().enumerate() {
-        if found
-            .iter()
-            .skip(index.checked_add(1).ok_or(ResolutionError::Arithmetic)?)
-            .any(|other| other.key == account.key)
-        {
-            return Err(ResolutionError::AccountFrame.into());
-        }
-    }
+    // Core's successful ProjectFound receipt is the semantic-owner proof that
+    // this exact Found37 slice has no internal aliases. Resolution must still
+    // own the outer flags because the CPI projection deliberately downgrades
+    // every child meta to readonly/non-signer. It also rejects every prefix
+    // alias and prefix-to-Found alias. Repeating Core's 666 internal pairwise
+    // comparisons here adds no independent authority.
     for prefix_index in 0..PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 {
         let prefix = accounts
             .get(prefix_index)
@@ -334,11 +332,20 @@ fn authenticate_frame(
     Ok(())
 }
 
+fn found_outer_flags_are_canonical(index: usize, account: &AccountInfo<'_>) -> bool {
+    let executable = matches!(
+        index,
+        FOUND_RENT_PROGRAM | FOUND_CORE_PROGRAM | FOUND_REGISTRY_PROGRAM | FOUND_SYSTEM
+    );
+    let writable = index == FOUND_RENT_CREDIT;
+    !account.is_signer && account.is_writable == writable && account.executable == executable
+}
+
 fn project_found(
     core_program: &AccountInfo<'_>,
     found: &[AccountInfo<'_>],
-    request: PreMarketFundingRequestV1,
-) -> Result<ProjectFoundReceiptV2, solana_program::program_error::ProgramError> {
+    request: PreMarketFundingRequestV2,
+) -> Result<(ProjectFoundReceiptV2, [u8; 32]), solana_program::program_error::ProgramError> {
     let metas: Vec<AccountMeta> = found
         .iter()
         .map(|account| AccountMeta::new_readonly(*account.key, false))
@@ -357,32 +364,44 @@ fn project_found(
     if producer != *core_program.key || bytes.len() != PROJECT_FOUND_RECEIPT_BYTES_V2 {
         return Err(ResolutionError::MarketAuthority.into());
     }
-    ProjectFoundReceiptV2::decode(&bytes).map_err(|_| ResolutionError::MarketAuthority.into())
+    let digest = hash(&bytes).to_bytes();
+    let receipt =
+        ProjectFoundReceiptV2::decode(&bytes).map_err(|_| ResolutionError::MarketAuthority)?;
+    Ok((receipt, digest))
 }
 
-fn resolution_mask(
+fn resolution_funding_plan(
     manifest: CapabilityManifestV1<'_>,
-) -> Result<u16, solana_program::program_error::ProgramError> {
+) -> Result<(u16, u64), solana_program::program_error::ProgramError> {
     let mut mask = 0_u16;
+    let mut native_principal = 0_u64;
     for entry_index in 0_u16..manifest.entry_count() {
         let entry = manifest
             .entry(entry_index)
             .map_err(|_| ResolutionError::Funding)?;
-        if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+        if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V6 {
+            let quote = entry.funding_quote();
+            if quote.realm_collateral().is_some() {
+                return Err(ResolutionError::Funding.into());
+            }
+            native_principal = native_principal
+                .checked_add(quote.native_lamports_total())
+                .ok_or(ResolutionError::Funding)?;
             mask |= 1_u16 << entry_index;
         }
     }
     if mask.count_ones() != 3 {
         return Err(ResolutionError::Funding.into());
     }
-    Ok(mask)
+    Ok((mask, native_principal))
 }
 
 fn authenticate_release_and_caller(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     found: &[AccountInfo<'_>],
-    request: PreMarketFundingRequestV1,
+    exact_request: &[u8],
+    request: PreMarketFundingRequestV2,
     receipt: ProjectFoundReceiptV2,
 ) -> ProgramResult {
     let cache = found
@@ -396,12 +415,11 @@ fn authenticate_release_and_caller(
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&data)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
+    // Successful Core ProjectFound already authenticated this exact read-only
+    // cache's Registry owner and PDA against the receipt's release-set ID.
+    // Resolution re-decodes the unchanged bytes because it owns the Trading
+    // and Resolution role projections, but a second PDA syscall adds no fact.
     if cache.owner != registry.key
-        || Pubkey::find_program_address(
-            &[ACTIVATION_PDA_DOMAIN_V1, &receipt.release_set.to_bytes()],
-            registry.key,
-        )
-        .0 != *cache.key
         || activated
             .execution_release_set_id()
             .map_err(|_| ResolutionError::ResolutionRelease)?
@@ -422,7 +440,7 @@ fn authenticate_release_and_caller(
     if trading.release().program().to_bytes() != caller_program.key.to_bytes()
         || resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
-            != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V6
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
@@ -446,7 +464,10 @@ fn authenticate_release_and_caller(
             resolution.release().programdata(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let digest = hash(&request.encode().map_err(|_| ResolutionError::Instruction)?).to_bytes();
+    // `decode` above accepts only the exact-width, canonical request encoding.
+    // Hash those caller-owned bytes directly: re-encoding here would duplicate
+    // validation and projection work without adding an independent fact.
+    let digest = hash(exact_request).to_bytes();
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         receipt.release_set.to_bytes(),
         receipt.market.to_bytes(),
@@ -483,17 +504,24 @@ fn authenticate_vacant_ledger(
     ledger: &AccountInfo<'_>,
     expected_key: [u8; 32],
     expected_digest: [u8; 32],
-) -> ProgramResult {
+) -> Result<u64, solana_program::program_error::ProgramError> {
     if ledger.key.to_bytes() != expected_key
         || ledger.owner != &system_program::ID
         || ledger.executable
         || ledger.data_len() != 0
-        || ledger.lamports() != 0
         || prestate_digest(ledger)? != expected_digest
     {
         return Err(ResolutionError::OutputState.into());
     }
-    Ok(())
+    Ok(ledger.lamports())
+}
+
+fn exact_dust_reconciliation(observed: u64, target: u64) -> (u64, u64) {
+    if observed < target {
+        (target - observed, 0)
+    } else {
+        (0, observed - target)
+    }
 }
 
 fn require_funding_source(observed_lamports: u64, exact_target: u64) -> ProgramResult {
@@ -504,34 +532,54 @@ fn require_funding_source(observed_lamports: u64, exact_target: u64) -> ProgramR
     }
 }
 
+#[inline(always)]
+fn authenticate_ledger_address(
+    program_id: &Pubkey,
+    components: &[&[u8]],
+    observed: &Pubkey,
+) -> Result<u8, solana_program::program_error::ProgramError> {
+    let (expected, bump) = Pubkey::find_program_address(components, program_id);
+    if expected != *observed {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(bump)
+}
+
 fn initialize_ledger<'info>(
     program_id: &Pubkey,
     output: &AccountInfo<'info>,
     market: [u8; 32],
     generation: u64,
     manifest_id: CapabilityContentId,
+    funding_ledger: FundingLedgerV2<'_>,
     ledger_bytes: &[u8],
     system: &AccountInfo<'info>,
+    rent_credit: &AccountInfo<'info>,
+    refund: u64,
 ) -> ProgramResult {
-    let ledger = FundingLedgerV2::decode(ledger_bytes).map_err(|_| ResolutionError::Funding)?;
     let derivation = CapabilityFundingLedgerDerivationV2::new(
         program_id.to_bytes(),
         market,
         generation,
         manifest_id,
-        ledger,
+        funding_ledger,
     )
     .map_err(|_| ResolutionError::Funding)?;
-    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0 != *output.key {
-        return Err(ResolutionError::OutputState.into());
-    }
-    let (_, bump) = Pubkey::find_program_address(&derivation.seed_components(), program_id);
     let components = derivation.seed_components();
+    let bump = authenticate_ledger_address(program_id, &components, output.key)?;
     let bump_seed = [bump];
     let [domain, controller, market, generation, manifest, mask] = components;
     let signer: [&[u8]; 7] = [
         domain, controller, market, generation, manifest, mask, &bump_seed,
     ];
+    if refund != 0 {
+        invoke_signed(
+            &transfer(output.key, rent_credit.key, refund),
+            &[output.clone(), rent_credit.clone(), system.clone()],
+            &[&signer],
+        )
+        .map_err(|_| ResolutionError::Funding)?;
+    }
     invoke_signed(
         &allocate(
             output.key,
@@ -557,7 +605,7 @@ mod tests {
 
     #[test]
     fn request_detector_is_version_and_width_exact() {
-        let request = PreMarketFundingRequestV1 {
+        let request = PreMarketFundingRequestV2 {
             project_found: ProjectFoundRequestV2::new(Request::administrative(
                 Action::Found,
                 7,
@@ -569,14 +617,71 @@ mod tests {
             funding_source: [3; 32],
             ledger: [4; 32],
             prestate_digest: [5; 32],
+            expected_project_found_receipt_digest: [6; 32],
         }
         .encode()
         .expect("request");
-        assert!(is_pre_market_funding_v1(&request));
-        assert!(!is_pre_market_funding_v1(&request[..request.len() - 1]));
+        let decoded = PreMarketFundingRequestV2::decode(&request).expect("canonical request");
+        assert_eq!(decoded.encode().expect("canonical re-encoding"), request);
+        assert_eq!(
+            hash(&decoded.encode().expect("canonical digest bytes")),
+            hash(&request)
+        );
+        assert!(is_pre_market_funding_v2(&request));
+        assert!(!is_pre_market_funding_v2(&request[..request.len() - 1]));
         let mut wrong = request;
         wrong[0] ^= 1;
-        assert!(!is_pre_market_funding_v1(&wrong));
+        assert!(!is_pre_market_funding_v2(&wrong));
+        let mut noncanonical = request;
+        noncanonical[10] = 1;
+        assert!(PreMarketFundingRequestV2::decode(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn ledger_address_substitution_refuses_without_a_second_derivation() {
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let first = [1_u8; 32];
+        let second = [2_u8; 8];
+        let components: [&[u8]; 3] = [b"dclutch/test-ledger", &first, &second];
+        let (expected, bump) = Pubkey::find_program_address(&components, &program_id);
+        assert_eq!(
+            authenticate_ledger_address(&program_id, &components, &expected),
+            Ok(bump)
+        );
+        let substituted = Pubkey::new_from_array([7; 32]);
+        assert_eq!(
+            authenticate_ledger_address(&program_id, &components, &substituted),
+            Err(ResolutionError::OutputState.into())
+        );
+    }
+
+    #[test]
+    fn outer_found_privilege_substitution_still_refuses_before_core_projection() {
+        let key = Pubkey::new_from_array([8; 32]);
+        let owner = Pubkey::new_from_array([7; 32]);
+        let mut lamports = 1_u64;
+        let mut data = [];
+        let mut account =
+            AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+        assert!(found_outer_flags_are_canonical(0, &account));
+        account.is_writable = true;
+        assert!(!found_outer_flags_are_canonical(0, &account));
+        account.is_writable = false;
+        account.is_signer = true;
+        assert!(!found_outer_flags_are_canonical(0, &account));
+        account.is_signer = false;
+        assert!(!found_outer_flags_are_canonical(
+            FOUND_CORE_PROGRAM,
+            &account
+        ));
+        account.is_writable = true;
+        account.executable = false;
+        assert!(found_outer_flags_are_canonical(FOUND_RENT_CREDIT, &account));
+        account.is_writable = false;
+        assert!(!found_outer_flags_are_canonical(
+            FOUND_RENT_CREDIT,
+            &account
+        ));
     }
 
     #[test]
@@ -589,7 +694,7 @@ mod tests {
         let digest = prestate_digest(&exact).expect("prestate digest");
         assert_eq!(
             authenticate_vacant_ledger(&exact, key.to_bytes(), digest),
-            Ok(())
+            Ok(0)
         );
         assert_eq!(
             authenticate_vacant_ledger(&exact, [2; 32], digest),
@@ -599,6 +704,9 @@ mod tests {
             require_funding_source(99, 100),
             Err(ResolutionError::Funding.into())
         );
+        assert_eq!(exact_dust_reconciliation(90, 100), (10, 0));
+        assert_eq!(exact_dust_reconciliation(100, 100), (0, 0));
+        assert_eq!(exact_dust_reconciliation(110, 100), (0, 10));
         assert_eq!(require_funding_source(100, 100), Ok(()));
 
         let occupied_key = Pubkey::new_from_array([3; 32]);

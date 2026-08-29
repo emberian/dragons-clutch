@@ -14,6 +14,8 @@ use core::convert::TryInto;
 
 /// Typed funding quotes, custody observations, PDA projections, and transitions.
 pub mod funding;
+/// Durable pre-Market controller-funding checkpoint contract.
+pub mod controller_funding_checkpoint;
 /// Lean-emitted byte coordinates for the `DCLTCAP1` manifest, the `DCLTFQ01`
 /// typed funding quote, the `DCLTCFS1` funding state, and the `DCLTMOR1`
 /// opening-readiness record.
@@ -31,6 +33,7 @@ pub mod readiness_instruction;
 pub mod template;
 
 pub use funding::*;
+pub use controller_funding_checkpoint::*;
 pub use template::*;
 
 pub use dclutch_core_contract::ContentId;
@@ -188,6 +191,12 @@ pub enum Error {
     UnknownFundingStatus,
     /// A FundingLedgerV2 slot status byte was unknown.
     UnknownFundingLedgerStatus,
+    /// A controller-funding checkpoint phase byte was unknown.
+    UnknownControllerFundingCheckpointPhase,
+    /// A controller-funding checkpoint transition or phase fact was invalid.
+    InvalidControllerFundingCheckpointTransition,
+    /// Expiry rollback was requested before the checkpoint's exact deadline elapsed.
+    ControllerFundingCheckpointNotExpired,
     /// Funding state did not bind to the supplied manifest entry.
     FundingBindingMismatch,
     /// Present observed native lamports did not equal remaining lamports.

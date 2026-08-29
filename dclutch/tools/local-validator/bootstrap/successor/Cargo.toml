@@ -16,6 +16,7 @@ bincode = "=1.3.3"
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
@@ -37,6 +38,7 @@ dclutch-representation-composition-v3-kernel = { path = "../../../../crates/dclu
 dclutch-representation-composition-v3-operator = { path = "../../../../crates/dclutch-representation-composition-v3-operator" }
 dclutch-relay-contract = { path = "../../../../crates/dclutch-relay-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-release-tool = { path = "../../../../crates/dclutch-release-tool" }
 dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }

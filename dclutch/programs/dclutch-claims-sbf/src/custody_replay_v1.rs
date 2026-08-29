@@ -38,19 +38,20 @@
 //!   [`CustodyReplaySeedsV1`] under the Custody program, and both Claims and
 //!   Custody derive it independently from the same request.
 //! - **Fully prepaid**: `rent_lamports` must equal the Rent sysvar's exact
-//!   minimum for the replay width, the payer signs for it, and the payer is
-//!   written into the replay as its immutable `rent_refund`, so `CloseReplay`
-//!   returns the rent to whoever advanced it.
+//!   minimum for the replay width and the payer signs for any shortfall. The
+//!   Core Market's immutable lifecycle RentCredit is the replay's
+//!   `rent_refund`; an arbitrary sponsor never owns protocol rent or hostile
+//!   dust recovered while the vacant PDA is normalized.
 //!
 //! # Nothing about the request is caller-chosen
 //!
 //! The wire is [`ClaimsCustodyReplayRequestV1`] and it carries ONE field, the
 //! Market, which addresses the aggregate. The Custody request is not submitted
 //! at all: [`expected_request_v1`] builds all twenty-two of its coordinates
-//! from the aggregate, the Rent sysvar and the payer account, so there is no
-//! byte for a caller to bend and no comparison for a guard to get wrong. The
-//! only thing a caller decides is which account pays the rent and receives the
-//! refund.
+//! from the aggregate, authenticated Core Market, Rent sysvar and payer
+//! account, so there is no byte for a caller to bend and no comparison for a
+//! guard to get wrong. The only thing a caller decides is which account pays a
+//! rent shortfall.
 //!
 //! Creation is therefore permissionless without being permissive: two callers
 //! submitting this route against one Market submit the same forty-eight bytes,
@@ -83,6 +84,8 @@ use dclutch_custody_contract::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
     CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, OperationV1,
 };
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
@@ -110,7 +113,7 @@ pub const CLAIMS_CUSTODY_REPLAY_PARENT_DOMAIN_V1: &[u8] =
     b"dclutch:claims-custody-replay-parent:v1";
 
 /// Exact account count for this route.
-pub const CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1: usize = 14;
+pub const CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1: usize = 15;
 
 /// Custody frame coordinate: release-pinned Claims caller authority.
 pub const CUSTODY_CALLER_AUTHORITY: usize = 0;
@@ -136,10 +139,12 @@ pub const PAYER: usize = 9;
 pub const SYSTEM_PROGRAM: usize = 10;
 /// Custody frame coordinate: Rent sysvar.
 pub const RENT_SYSVAR: usize = 11;
+/// Custody frame coordinate: immutable rent-refund beneficiary.
+pub const RENT_REFUND: usize = 12;
 /// The Custody program invoked by this route.
-pub const CUSTODY_PROGRAM: usize = 12;
+pub const CUSTODY_PROGRAM: usize = 13;
 /// The Claims aggregate that owns the Market's Custody namespace.
-pub const AGGREGATE: usize = 13;
+pub const AGGREGATE: usize = 14;
 
 /// The exact width of the Custody frame this route forwards, unchanged.
 const CUSTODY_FRAME_ACCOUNT_COUNT: usize =
@@ -160,6 +165,7 @@ pub fn expected_request_v1(
     aggregate: LiabilityBasisMarketViewV2,
     claims_program: [u8; 32],
     payer: [u8; 32],
+    rent_refund: [u8; 32],
     rent_lamports: u64,
 ) -> Result<CustodyRequestV1, ProgramError> {
     let parent_request_digest = hashv(&[
@@ -168,6 +174,7 @@ pub fn expected_request_v1(
         &aggregate.release_set,
         &aggregate.custody_context,
         &payer,
+        &rent_refund,
         &rent_lamports.to_le_bytes(),
     ])
     .to_bytes();
@@ -202,9 +209,9 @@ pub fn expected_request_v1(
         mint: [0; 32],
         token_program: [0; 32],
         payer,
-        // Whoever prepays owns the refund. The field is immutable once written,
-        // so this is the only moment it is decided.
-        rent_refund: payer,
+        // Core selected this lifecycle RentCredit when the Market was created.
+        // A transaction sponsor is never allowed to redirect protocol rent.
+        rent_refund,
         expected_revision: 0,
         resulting_revision: 1,
         amount: 0,
@@ -226,6 +233,7 @@ pub fn process(
     let named = ClaimsCustodyReplayRequestV1::decode(instruction_data)
         .map_err(|_| ClaimsSbfError::Instruction)?;
     let aggregate = authenticate_aggregate(program_id, accounts, named)?;
+    let rent_refund = authenticate_core_rent_refund(accounts, aggregate)?;
     let payer = account(accounts, PAYER)?;
     let rent_account = account(accounts, RENT_SYSVAR)?;
     if rent_account.key != &sysvar::rent::ID {
@@ -236,6 +244,7 @@ pub fn process(
         aggregate,
         program_id.to_bytes(),
         payer.key.to_bytes(),
+        rent_refund,
         rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
     )?;
     let request_bytes = request.to_bytes().map_err(|_| ClaimsSbfError::Identity)?;
@@ -245,6 +254,81 @@ pub fn process(
     authenticate_created_replay(accounts, request, request_digest)
 }
 
+/// Authenticate the sole rent-refund coordinate persisted by the Core Market.
+///
+/// This repeats the small Core/activation join before authoring the child
+/// request because the refund is an input to that request's digest. Custody
+/// independently authenticates the same Core Market and activation before it
+/// mutates anything; neither program accepts this projection on the other's
+/// word.
+#[inline(never)]
+fn authenticate_core_rent_refund(
+    accounts: &[AccountInfo<'_>],
+    aggregate: LiabilityBasisMarketViewV2,
+) -> Result<[u8; 32], ProgramError> {
+    let market = account(accounts, CORE_MARKET)?;
+    let cache = account(accounts, ACTIVATION_CACHE)?;
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, aggregate.release_set.as_slice()],
+        registry.key,
+    )
+    .0;
+    if registry.key.to_bytes() != aggregate.registry_program
+        || cache.key != &expected_cache
+        || cache.owner != registry.key
+        || market.key.to_bytes() != aggregate.logical_market
+        || market.data_len() != STATE_BYTES
+    {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    let core_program = {
+        let bytes = cache
+            .try_borrow_data()
+            .map_err(|_| ClaimsSbfError::Accounts)?;
+        let activated = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
+            .map_err(|_| ClaimsSbfError::Release)?;
+        if activated
+            .execution_release_set_id()
+            .map_err(|_| ClaimsSbfError::Release)?
+            .as_bytes()
+            != &aggregate.release_set
+        {
+            return Err(ClaimsSbfError::Release.into());
+        }
+        Pubkey::new_from_array(
+            *activated
+                .role(ExecutionRoleV1::Core)
+                .map_err(|_| ClaimsSbfError::Release)?
+                .release()
+                .program()
+                .as_bytes(),
+        )
+    };
+    if market.owner != &core_program {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    let bytes = market
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let state = CoreState::decode(&bytes).map_err(|_| ClaimsSbfError::Identity)?;
+    if Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
+        &core_program,
+    )
+    .0 != *market.key
+        || state.identity.market_id.to_bytes() != aggregate.logical_market
+        || state.identity.selected_release_set.to_bytes() != aggregate.release_set
+        || state.identity.registry_program.to_bytes() != aggregate.registry_program
+        || state.identity.realm_id.to_bytes() != aggregate.realm_id
+        || state.identity.generation != aggregate.generation
+    {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    Ok(state.rent_beneficiary.to_bytes())
+}
+
+#[inline(never)]
 fn authenticate_aggregate(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -279,6 +363,7 @@ fn authenticate_aggregate(
     Ok(view)
 }
 
+#[inline(never)]
 fn authenticate_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -290,6 +375,7 @@ fn authenticate_frame(
     let replay = account(accounts, CUSTODY_REPLAY)?;
     let payer = account(accounts, PAYER)?;
     let system = account(accounts, SYSTEM_PROGRAM)?;
+    let rent_refund = account(accounts, RENT_REFUND)?;
     let custody_program = account(accounts, CUSTODY_PROGRAM)?;
     if claims_program.key != program_id
         || !claims_program.executable
@@ -300,6 +386,8 @@ fn authenticate_frame(
         || !payer.is_writable
         || !replay.is_writable
         || replay.is_signer
+        || rent_refund.key.to_bytes() != request.rent_refund
+        || !rent_refund.is_writable
     {
         return Err(ClaimsSbfError::Accounts.into());
     }
@@ -328,6 +416,7 @@ fn authenticate_frame(
     Ok(())
 }
 
+#[inline(never)]
 fn invoke_custody(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -342,8 +431,9 @@ fn invoke_custody(
     for (index, info) in frame.iter().enumerate() {
         // The Custody frame's privileges, in Custody's own order: coordinate 0
         // is the readonly caller-authority signer this program signs for,
-        // coordinate 9 is the writable payer signer, and everything else is
-        // passed with the privileges it already declares.
+        // coordinate 9 is the writable payer signer, coordinate 12 is the
+        // writable immutable refund beneficiary, and everything else is passed
+        // with the privileges it already declares.
         let signer = index == CUSTODY_CALLER_AUTHORITY || info.is_signer;
         metas.push(if info.is_writable {
             AccountMeta::new(*info.key, signer)
@@ -381,6 +471,7 @@ fn invoke_custody(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_created_replay(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
@@ -451,28 +542,39 @@ mod tests {
     }
 
     #[test]
-    fn the_request_is_a_function_of_the_aggregate_the_payer_and_the_rent() {
-        let first = expected_request_v1(aggregate(), [8; 32], [9; 32], 1_000).expect("request");
-        let again = expected_request_v1(aggregate(), [8; 32], [9; 32], 1_000).expect("request");
+    fn the_request_is_a_function_of_the_aggregate_the_payer_refund_and_rent() {
+        let first =
+            expected_request_v1(aggregate(), [8; 32], [9; 32], [11; 32], 1_000).expect("request");
+        let again =
+            expected_request_v1(aggregate(), [8; 32], [9; 32], [11; 32], 1_000).expect("request");
         assert_eq!(first, again);
         assert_eq!(first.caller_role, CallerRoleV1::Claims);
         assert_eq!(first.context, aggregate().custody_context);
-        assert_eq!(first.rent_refund, [9; 32]);
+        assert_eq!(first.rent_refund, [11; 32]);
         assert_eq!(first.expected_revision, 0);
         assert_eq!(first.resulting_revision, 1);
 
         let other_payer =
-            expected_request_v1(aggregate(), [8; 32], [10; 32], 1_000).expect("request");
+            expected_request_v1(aggregate(), [8; 32], [10; 32], [11; 32], 1_000).expect("request");
         assert_ne!(first, other_payer);
         assert_ne!(
             first.semantic.parent_request_digest, other_payer.semantic.parent_request_digest,
             "the synthetic parent digest binds the payer it prepaid for"
         );
+
+        let other_refund =
+            expected_request_v1(aggregate(), [8; 32], [9; 32], [12; 32], 1_000).expect("request");
+        assert_ne!(first, other_refund);
+        assert_ne!(
+            first.semantic.parent_request_digest, other_refund.semantic.parent_request_digest,
+            "the synthetic parent digest binds the Core-selected refund"
+        );
     }
 
     #[test]
     fn the_namespace_is_never_the_market_address() {
-        let request = expected_request_v1(aggregate(), [8; 32], [9; 32], 1_000).expect("request");
+        let request =
+            expected_request_v1(aggregate(), [8; 32], [9; 32], [11; 32], 1_000).expect("request");
         assert_ne!(
             request.context, request.market,
             "decision 0008: the Market address is not a Custody namespace"
@@ -481,7 +583,8 @@ mod tests {
 
     #[test]
     fn the_claims_replay_is_not_the_trading_replay() {
-        let request = expected_request_v1(aggregate(), [8; 32], [9; 32], 1_000).expect("request");
+        let request =
+            expected_request_v1(aggregate(), [8; 32], [9; 32], [11; 32], 1_000).expect("request");
         let custody = Pubkey::new_from_array([0x3a; 32]);
         let claims = Pubkey::find_program_address(
             &CustodyReplaySeedsV1::from_request(request).as_slices(),

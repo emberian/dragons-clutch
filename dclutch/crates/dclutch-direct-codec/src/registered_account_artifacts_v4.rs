@@ -89,11 +89,11 @@ use crate::{
 /// First logical account of the Custody InitializeReplay frame.
 pub const DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4: u16 = 12;
 /// First logical account of the Custody OpenVault frame.
-pub const DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4: u16 = 24;
+pub const DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4: u16 = 25;
 /// First logical account of the delegated reserve-deposit frame.
-pub const DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4: u16 = 40;
+pub const DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4: u16 = 41;
 /// Exact fixed logical account count for registered Buy creation.
-pub const DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4: u16 = 55;
+pub const DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4: u16 = 56;
 /// Exact fixed logical account count for registered Sell creation.
 pub const DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4: u16 = 13;
 /// Maker collateral token account, the one coordinate a Sell adds to the prefix.
@@ -122,7 +122,7 @@ const _: () =
 /// three times and to Claims never, so unlike the inline-ordinary topology it
 /// had no frame-supplied program coordinate of any kind. Appended past every
 /// route range so that carrying it renumbers no frame.
-pub const DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4: u16 = 54;
+pub const DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4: u16 = 55;
 
 const _: () = assert!(
     DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4 + 1 == DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4
@@ -145,11 +145,11 @@ const FIXED_DATA_PREDICATES: usize = 9;
 const SYSTEM_PROGRAM_ACCOUNT: u16 = 11;
 const REALM_ACCOUNT: u16 = 18;
 const REPLAY_ACCOUNT: u16 = 20;
-const MINT_ACCOUNT: u16 = 33;
-const VAULT_ACCOUNT: u16 = 34;
-const CUSTODY_AUTHORITY_ACCOUNT: u16 = 35;
-const TOKEN_PROGRAM_ACCOUNT: u16 = 36;
-const SOURCE_ACCOUNT: u16 = 50;
+const MINT_ACCOUNT: u16 = 34;
+const VAULT_ACCOUNT: u16 = 35;
+const CUSTODY_AUTHORITY_ACCOUNT: u16 = 36;
+const TOKEN_PROGRAM_ACCOUNT: u16 = 37;
+const SOURCE_ACCOUNT: u16 = 51;
 const ROOT_BYTES: usize = CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1;
 const BASIS_PREFIX_BYTES: usize = BASIS_WIDTH_OFFSET_V3 + 4;
 
@@ -854,29 +854,33 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
         DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4 + 13,
         DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
     ),
+    (
+        DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4 + 12,
+        DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4,
+    ),
     (22, 11),
-    (25, 13),
-    (26, 14),
-    (27, 15),
-    (28, 16),
-    (29, 17),
-    (30, 18),
-    (31, 19),
-    (32, 20),
-    (38, 11),
-    (39, 23),
-    (41, 13),
-    (42, 14),
-    (43, 15),
-    (44, 16),
-    (45, 17),
-    (46, 18),
-    (47, 19),
-    (48, 20),
-    (49, 33),
-    (51, 34),
+    (26, 13),
+    (27, 14),
+    (28, 15),
+    (29, 16),
+    (30, 17),
+    (31, 18),
+    (32, 19),
+    (33, 20),
+    (39, 11),
+    (40, 23),
+    (42, 13),
+    (43, 14),
+    (44, 15),
+    (45, 16),
+    (46, 17),
+    (47, 18),
+    (48, 19),
+    (49, 20),
+    (50, 34),
     (52, 35),
     (53, 36),
+    (54, 37),
 ];
 
 /// The prefix widths both sides pin identically.
@@ -1340,7 +1344,7 @@ mod tests {
 
     #[test]
     fn profile14_round_trips_buy_routes_and_joins_lifecycle_v5() {
-        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 12);
+        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 13);
         assert_eq!(OPEN_VAULT_ACCOUNT_COUNT_V1, 16);
         assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 14);
         let bytes = emit();

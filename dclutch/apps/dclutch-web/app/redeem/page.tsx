@@ -1,5 +1,5 @@
-import RationalRepresentationWorkspace from '@/components/RationalRepresentationWorkspace';
+import PortfolioWorkspace from '@/components/PortfolioWorkspace';
 
 export default function RedeemPage() {
-  return <RationalRepresentationWorkspace />;
+  return <PortfolioWorkspace mode="redemption" />;
 }

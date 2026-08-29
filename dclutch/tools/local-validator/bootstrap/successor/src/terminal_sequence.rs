@@ -132,6 +132,9 @@ const OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1: &str =
     "dclutch-owned-loopback-terminal-sequence-journal-v1";
 const OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1: &str =
     "dclutch-owned-loopback-terminal-sequence-session-v1";
+const TERMINAL_COMPLETION_SCHEMA_V1: &str = "dclutch-devnet-terminal-sequence-completion-v1";
+const OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1: &str =
+    "dclutch-owned-loopback-terminal-sequence-completion-v1";
 const TERMINAL_FINALITY_WAIT: Duration = Duration::from_secs(300);
 
 const fn terminal_journal_schema_v1(expected: ExpectedClusterV1) -> &'static str {
@@ -145,6 +148,13 @@ const fn terminal_session_schema_v1(expected: ExpectedClusterV1) -> &'static str
     match expected {
         ExpectedClusterV1::Devnet => TERMINAL_SESSION_SCHEMA_V1,
         ExpectedClusterV1::OwnedLoopback => OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1,
+    }
+}
+
+const fn terminal_completion_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => TERMINAL_COMPLETION_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback => OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1,
     }
 }
 
@@ -216,8 +226,96 @@ struct TerminalSequenceArgumentsV1 {
     payer_keypair: PathBuf,
     session: PathBuf,
     journal_dir: PathBuf,
+    completion: PathBuf,
     supplied_lookup_table: Option<Pubkey>,
     execute: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TerminalCompletionInvocationV1 {
+    command: String,
+    rpc_url: String,
+    plan_path: String,
+    market_input_path: String,
+    evidence_path: String,
+    market: String,
+    fee_payer: String,
+    fee_payer_keypair_path: String,
+    session_path: String,
+    journal_directory: String,
+    completion_path: String,
+    supplied_lookup_table: Option<String>,
+    execute: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TerminalCompletionSessionV1 {
+    path: String,
+    sha256: String,
+    schema: String,
+    session_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TerminalCompletionJournalV1 {
+    path: String,
+    sha256: String,
+    schema: String,
+    mutation: TerminalCompletionMutationV1,
+    phase: StageJournalPhaseV1,
+    fee_payer: String,
+    signature: String,
+    finalized_slot: String,
+    compute_units_consumed: String,
+    transaction_fee_lamports: String,
+    protocol_lamport_deltas: Vec<TerminalCompletionLamportDeltaV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
+enum TerminalCompletionMutationV1 {
+    LookupCreate,
+    LookupExtend {
+        #[serde(rename = "prefixLen")]
+        prefix_len: String,
+    },
+    LookupFreeze,
+    ResolutionReceiptPrepay,
+    CoreBeginRetiring,
+    DirectBeginRetiring,
+    ResolutionCloseFund,
+    DirectCloseCapability,
+    RetirementReplayHandoff,
+    AggregateRetirement,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TerminalCompletionLamportDeltaV1 {
+    account_address: String,
+    delta_lamports: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TerminalSequenceCompletionV1 {
+    schema: String,
+    status: String,
+    cluster: String,
+    genesis_hash: String,
+    invocation: TerminalCompletionInvocationV1,
+    session: TerminalCompletionSessionV1,
+    journal_directory: String,
+    market: String,
+    payer: String,
+    lookup_table: String,
+    journals: Vec<TerminalCompletionJournalV1>,
+    finalized_slot: String,
+    transaction_fees_lamports: String,
+    compute_units_consumed: String,
 }
 
 /// The six protocol mutations in their sole admissible order.
@@ -6773,13 +6871,613 @@ fn run_terminal_sequence_with_expected_cluster_v1(
     )? {
         return Ok(());
     }
+    let completion = build_terminal_sequence_completion_v1(
+        &mut rpc,
+        &arguments,
+        &session,
+        lookup_table,
+        &lookup_addresses,
+        &rent,
+    )?;
+    write_or_authenticate_terminal_completion_v1(&arguments.completion, &completion)?;
     terminal_stdout_v1(json!({
         "status": "complete",
         "market": arguments.market.to_string(),
         "lookupTable": lookup_table.to_string(),
         "journalDirectory": arguments.journal_dir.display().to_string(),
+        "completion": arguments.completion.display().to_string(),
+        "completionSha256": sha256_hex(&fs::read(&arguments.completion)?),
         "message": "Every exact terminal journal reverified at finalized and the aggregate Market account is closed."
     }))
+}
+
+fn completion_mutation_v1(mutation: &DurableTerminalMutationV1) -> TerminalCompletionMutationV1 {
+    match mutation {
+        DurableTerminalMutationV1::LookupCreate => TerminalCompletionMutationV1::LookupCreate,
+        DurableTerminalMutationV1::LookupExtend { prefix_len } => {
+            TerminalCompletionMutationV1::LookupExtend {
+                prefix_len: prefix_len.to_string(),
+            }
+        }
+        DurableTerminalMutationV1::LookupFreeze => TerminalCompletionMutationV1::LookupFreeze,
+        DurableTerminalMutationV1::ResolutionReceiptPrepay => {
+            TerminalCompletionMutationV1::ResolutionReceiptPrepay
+        }
+        DurableTerminalMutationV1::Protocol { stage } => match stage {
+            TerminalStageV1::CoreBeginRetiring => TerminalCompletionMutationV1::CoreBeginRetiring,
+            TerminalStageV1::DirectBeginRetiring => {
+                TerminalCompletionMutationV1::DirectBeginRetiring
+            }
+            TerminalStageV1::ResolutionCloseFund => {
+                TerminalCompletionMutationV1::ResolutionCloseFund
+            }
+            TerminalStageV1::DirectCloseCapability => {
+                TerminalCompletionMutationV1::DirectCloseCapability
+            }
+            TerminalStageV1::RetirementReplayHandoff => {
+                TerminalCompletionMutationV1::RetirementReplayHandoff
+            }
+            TerminalStageV1::AggregateRetirement => {
+                TerminalCompletionMutationV1::AggregateRetirement
+            }
+        },
+    }
+}
+
+fn canonical_completion_relative_path_v1(
+    root: &Path,
+    path: &Path,
+    directory: bool,
+) -> Result<String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        Error::new(format!(
+            "terminal completion evidence {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink()
+        || (directory && !metadata.is_dir())
+        || (!directory && !metadata.is_file())
+    {
+        return Err(refusal(
+            "terminal completion evidence path was not an ordinary file/directory of its exact kind",
+        ));
+    }
+    let root = fs::canonicalize(root)
+        .map_err(|error| Error::new(format!("terminal completion evidence root: {error}")))?;
+    let path = fs::canonicalize(path)
+        .map_err(|error| Error::new(format!("canonical terminal completion evidence: {error}")))?;
+    let relative = path.strip_prefix(&root).map_err(|_| {
+        refusal("terminal completion evidence escaped its completion evidence root")
+    })?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(refusal(
+            "terminal completion evidence path was not a nonempty canonical relative path",
+        ));
+    }
+    let segments = relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(value) => value
+                .to_str()
+                .ok_or_else(|| refusal("terminal completion evidence path was not UTF-8")),
+            _ => Err(refusal(
+                "terminal completion evidence path was not canonical",
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(segments.join("/"))
+}
+
+fn terminal_completion_expected_journals_v1(
+    arguments: &TerminalSequenceArgumentsV1,
+    session: &TerminalSequenceSessionV1,
+    lookup_addresses: &[Pubkey],
+    rent: &Rent,
+) -> Result<Vec<(PathBuf, DurableTerminalMutationV1)>> {
+    let mut expected = Vec::new();
+    if !session.supplied_lookup_table {
+        let plan = plan_terminal_lookup_table_v1(
+            arguments.payer,
+            session.lookup_recent_slot,
+            lookup_addresses,
+            rent,
+        )?;
+        expected.extend(lookup_journal_sequence_v1(&plan, &arguments.journal_dir));
+    }
+    if session.receipt_initial_lamports < session.receipt_rent_lamports {
+        expected.push((
+            arguments
+                .journal_dir
+                .join("12-resolution-receipt-prepay.json"),
+            DurableTerminalMutationV1::ResolutionReceiptPrepay,
+        ));
+    }
+    expected.extend(TerminalStageV1::ORDERED.into_iter().map(|stage| {
+        (
+            arguments.journal_dir.join(stage_journal_name_v1(stage)),
+            DurableTerminalMutationV1::Protocol { stage },
+        )
+    }));
+    Ok(expected)
+}
+
+fn build_terminal_sequence_completion_v1(
+    rpc: &mut Rpc,
+    arguments: &TerminalSequenceArgumentsV1,
+    session: &TerminalSequenceSessionV1,
+    lookup_table: Pubkey,
+    lookup_addresses: &[Pubkey],
+    rent: &Rent,
+) -> Result<TerminalSequenceCompletionV1> {
+    if !arguments.execute {
+        return Err(refusal(
+            "terminal completion must be finalized by an explicit --execute reconciliation run",
+        ));
+    }
+    let evidence_root = arguments
+        .completion
+        .parent()
+        .ok_or_else(|| refusal("terminal completion needs an evidence-root parent"))?;
+    let session_source = fs::read(&arguments.session)?;
+    let journal_directory =
+        canonical_completion_relative_path_v1(evidence_root, &arguments.journal_dir, true)?;
+    let session_path =
+        canonical_completion_relative_path_v1(evidence_root, &arguments.session, false)?;
+    let expected =
+        terminal_completion_expected_journals_v1(arguments, session, lookup_addresses, rent)?;
+    let expected_paths = expected
+        .iter()
+        .map(|(path, _)| fs::canonicalize(path))
+        .collect::<std::io::Result<BTreeSet<_>>>()?;
+    let observed_paths = fs::read_dir(&arguments.journal_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|path| {
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(std::io::Error::other(
+                    "terminal journal directory contained a non-ordinary entry",
+                ));
+            }
+            fs::canonicalize(path)
+        })
+        .collect::<std::io::Result<BTreeSet<_>>>()?;
+    if observed_paths != expected_paths {
+        return Err(refusal(
+            "terminal completion journal directory was not the exact canonical mutating set",
+        ));
+    }
+
+    let mut journals = Vec::with_capacity(expected.len());
+    let mut finalized_slot = 0u64;
+    let mut total_fees = 0u64;
+    let mut total_compute_units = 0u64;
+    for (path, expected_mutation) in expected {
+        let source = fs::read(&path)?;
+        let journal = read_terminal_journal_v1(&path)?;
+        if journal.phase != StageJournalPhaseV1::Finalized
+            || journal.intent.mutation != expected_mutation
+            || terminal_journal_cluster_v1(&journal)? != arguments.expected_cluster
+        {
+            return Err(refusal(
+                "terminal completion journal was not the exact finalized typed predecessor",
+            ));
+        }
+        verify_persisted_terminal_finalization_v1(rpc, &journal)?;
+        let finalized = journal
+            .finalized
+            .as_ref()
+            .ok_or_else(|| refusal("terminal completion journal omitted finalization"))?;
+        let compute_units = finalized.compute_units_consumed.ok_or_else(|| {
+            refusal("terminal completion requires exact compute units for every mutation")
+        })?;
+        if finalized.slot == 0 {
+            return Err(refusal(
+                "terminal completion mutation finalized at the sentinel zero slot",
+            ));
+        }
+        finalized_slot = finalized_slot.max(finalized.slot);
+        total_fees = total_fees
+            .checked_add(journal.intent.transaction_fee_lamports)
+            .ok_or_else(|| refusal("terminal completion fee total overflowed"))?;
+        total_compute_units = total_compute_units
+            .checked_add(compute_units)
+            .ok_or_else(|| refusal("terminal completion compute total overflowed"))?;
+        let protocol_lamport_deltas = journal
+            .intent
+            .protocol_lamport_deltas
+            .iter()
+            .map(|(address, delta)| TerminalCompletionLamportDeltaV1 {
+                account_address: address.clone(),
+                delta_lamports: delta.to_string(),
+            })
+            .collect();
+        journals.push(TerminalCompletionJournalV1 {
+            path: canonical_completion_relative_path_v1(evidence_root, &path, false)?,
+            sha256: sha256_hex(&source),
+            schema: terminal_journal_schema_v1(arguments.expected_cluster).into(),
+            mutation: completion_mutation_v1(&journal.intent.mutation),
+            phase: journal.phase,
+            fee_payer: journal.intent.payer.clone(),
+            signature: finalized.signature.clone(),
+            finalized_slot: finalized.slot.to_string(),
+            compute_units_consumed: compute_units.to_string(),
+            transaction_fee_lamports: journal.intent.transaction_fee_lamports.to_string(),
+            protocol_lamport_deltas,
+        });
+    }
+    let genesis_hash = match arguments.expected_cluster {
+        ExpectedClusterV1::Devnet => DEVNET_GENESIS_HASH.into(),
+        ExpectedClusterV1::OwnedLoopback => session
+            .owned_loopback_genesis_hash
+            .clone()
+            .ok_or_else(|| refusal("owned-loopback terminal session omitted genesis hash"))?,
+    };
+    Ok(TerminalSequenceCompletionV1 {
+        schema: terminal_completion_schema_v1(arguments.expected_cluster).into(),
+        status: "finalized".into(),
+        cluster: match arguments.expected_cluster {
+            ExpectedClusterV1::Devnet => "devnet",
+            ExpectedClusterV1::OwnedLoopback => "owned-loopback",
+        }
+        .into(),
+        genesis_hash,
+        invocation: TerminalCompletionInvocationV1 {
+            command: terminal_sequence_command_v1(arguments.expected_cluster).into(),
+            rpc_url: arguments.origin.redacted_url(),
+            plan_path: arguments.plan.display().to_string(),
+            market_input_path: arguments.market_input.display().to_string(),
+            evidence_path: arguments.evidence.display().to_string(),
+            market: arguments.market.to_string(),
+            fee_payer: arguments.payer.to_string(),
+            fee_payer_keypair_path: arguments.payer_keypair.display().to_string(),
+            session_path: arguments.session.display().to_string(),
+            journal_directory: arguments.journal_dir.display().to_string(),
+            completion_path: arguments.completion.display().to_string(),
+            supplied_lookup_table: arguments
+                .supplied_lookup_table
+                .map(|value| value.to_string()),
+            execute: true,
+        },
+        session: TerminalCompletionSessionV1 {
+            path: session_path,
+            sha256: sha256_hex(&session_source),
+            schema: terminal_session_schema_v1(arguments.expected_cluster).into(),
+            session_sha256: session.session_sha256.clone(),
+        },
+        journal_directory,
+        market: arguments.market.to_string(),
+        payer: arguments.payer.to_string(),
+        lookup_table: lookup_table.to_string(),
+        journals,
+        finalized_slot: finalized_slot.to_string(),
+        transaction_fees_lamports: total_fees.to_string(),
+        compute_units_consumed: total_compute_units.to_string(),
+    })
+}
+
+fn write_or_authenticate_terminal_completion_v1(
+    path: &Path,
+    completion: &TerminalSequenceCompletionV1,
+) -> Result<()> {
+    authenticate_terminal_completion_v1(completion)?;
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(refusal(
+                "terminal completion output was not an ordinary nonsymlink file",
+            ));
+        }
+        let source = fs::read(path)?;
+        let _: UniqueJsonV1 = serde_json::from_slice(&source).map_err(|error| {
+            Error::new(format!(
+                "terminal completion JSON contains a duplicate key or malformed value: {error}"
+            ))
+        })?;
+        let existing: TerminalSequenceCompletionV1 = serde_json::from_slice(&source)?;
+        authenticate_terminal_completion_v1(&existing)?;
+        if &existing != completion {
+            return Err(refusal(
+                "persisted terminal completion differed from freshly reauthenticated final evidence",
+            ));
+        }
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| refusal("terminal completion needs a parent directory"))?;
+    if !parent.is_dir() {
+        return Err(refusal(
+            "terminal completion parent must be an existing evidence directory",
+        ));
+    }
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| refusal("terminal completion needs a UTF-8 file name"))?;
+    let lock = path.with_file_name(format!(".{name}.terminal-completion.lock"));
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)?;
+    lock_file.sync_all()?;
+    if path.exists() {
+        let _ = fs::remove_file(&lock);
+        return Err(refusal(
+            "terminal completion appeared concurrently; rerun and authenticate it",
+        ));
+    }
+    let temporary = path.with_file_name(format!(
+        ".{name}.terminal-completion-{}.tmp",
+        std::process::id()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(completion)?)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    drop(file);
+    fs::hard_link(&temporary, path).map_err(|error| {
+        Error::new(format!(
+            "atomically publish terminal completion {} without clobber: {error}",
+            path.display()
+        ))
+    })?;
+    fs::remove_file(&temporary)?;
+    OpenOptions::new()
+        .read(true)
+        .open(parent)
+        .and_then(|directory| directory.sync_all())?;
+    fs::remove_file(&lock)?;
+    Ok(())
+}
+
+fn is_lower_hex_digest_v1(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn canonical_relative_evidence_path_v1(value: &str) -> bool {
+    if value.is_empty() || !value.is_ascii() || value.contains('\\') {
+        return false;
+    }
+    let segments = Path::new(value)
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(segment) => segment.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    segments.is_some_and(|segments| segments.join("/") == value)
+}
+
+fn canonical_u64_v1(value: &str, allow_zero: bool) -> Result<u64> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| refusal("terminal completion quantity was not canonical decimal u64"))?;
+    if parsed.to_string() != value || (!allow_zero && parsed == 0) {
+        return Err(refusal(
+            "terminal completion quantity was not canonical decimal u64",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn canonical_i128_v1(value: &str) -> Result<i128> {
+    let parsed = value
+        .parse::<i128>()
+        .map_err(|_| refusal("terminal completion delta was not canonical decimal i128"))?;
+    if parsed.to_string() != value {
+        return Err(refusal(
+            "terminal completion delta was not canonical decimal i128",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn authenticate_terminal_completion_v1(completion: &TerminalSequenceCompletionV1) -> Result<()> {
+    let expected_cluster = match (completion.schema.as_str(), completion.cluster.as_str()) {
+        (TERMINAL_COMPLETION_SCHEMA_V1, "devnet")
+            if completion.genesis_hash == DEVNET_GENESIS_HASH =>
+        {
+            ExpectedClusterV1::Devnet
+        }
+        (OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1, "owned-loopback") => {
+            let genesis = Hash::from_str(&completion.genesis_hash)
+                .map_err(|error| Error::new(format!("terminal completion genesis: {error}")))?;
+            if genesis == Hash::default() || completion.genesis_hash == DEVNET_GENESIS_HASH {
+                return Err(refusal(
+                    "owned-loopback terminal completion used a public or sentinel genesis",
+                ));
+            }
+            ExpectedClusterV1::OwnedLoopback
+        }
+        _ => {
+            return Err(refusal(
+                "terminal completion schema, cluster, and genesis were not one admitted tuple",
+            ));
+        }
+    };
+    if completion.status != "finalized"
+        || completion.invocation.command != terminal_sequence_command_v1(expected_cluster)
+        || completion.invocation.market != completion.market
+        || completion.invocation.fee_payer != completion.payer
+        || !completion.invocation.execute
+        || !Path::new(&completion.invocation.plan_path).is_absolute()
+        || !Path::new(&completion.invocation.market_input_path).is_absolute()
+        || !Path::new(&completion.invocation.evidence_path).is_absolute()
+        || !Path::new(&completion.invocation.fee_payer_keypair_path).is_absolute()
+        || !Path::new(&completion.invocation.session_path).is_absolute()
+        || !Path::new(&completion.invocation.journal_directory).is_absolute()
+        || !Path::new(&completion.invocation.completion_path).is_absolute()
+        || completion.invocation.rpc_url.is_empty()
+        || completion.session.schema != terminal_session_schema_v1(expected_cluster)
+        || !is_lower_hex_digest_v1(&completion.session.sha256)
+        || !is_lower_hex_digest_v1(&completion.session.session_sha256)
+        || !canonical_relative_evidence_path_v1(&completion.session.path)
+        || !canonical_relative_evidence_path_v1(&completion.journal_directory)
+        || Pubkey::from_str(&completion.market).is_err()
+        || Pubkey::from_str(&completion.payer).is_err()
+        || Pubkey::from_str(&completion.lookup_table).is_err()
+        || completion
+            .invocation
+            .supplied_lookup_table
+            .as_deref()
+            .is_some_and(|value| value != completion.lookup_table)
+    {
+        return Err(refusal(
+            "terminal completion invocation, owner references, or identities were noncanonical",
+        ));
+    }
+    let journal_root = Path::new(&completion.journal_directory);
+    let mut seen_paths = BTreeSet::new();
+    let mut seen_signatures = BTreeSet::new();
+    let mut max_slot = 0u64;
+    let mut prior_slot = 0u64;
+    let mut total_fees = 0u64;
+    let mut total_compute = 0u64;
+    for journal in &completion.journals {
+        if journal.schema != terminal_journal_schema_v1(expected_cluster)
+            || journal.phase != StageJournalPhaseV1::Finalized
+            || journal.fee_payer != completion.payer
+            || !canonical_relative_evidence_path_v1(&journal.path)
+            || Path::new(&journal.path).strip_prefix(journal_root).is_err()
+            || !is_lower_hex_digest_v1(&journal.sha256)
+            || Pubkey::from_str(&journal.fee_payer).is_err()
+            || Signature::from_str(&journal.signature).is_err()
+            || !seen_paths.insert(journal.path.clone())
+            || !seen_signatures.insert(journal.signature.clone())
+        {
+            return Err(refusal(
+                "terminal completion journal identity, signature, path, or provenance changed",
+            ));
+        }
+        let slot = canonical_u64_v1(&journal.finalized_slot, false)?;
+        let compute = canonical_u64_v1(&journal.compute_units_consumed, false)?;
+        let fee = canonical_u64_v1(&journal.transaction_fee_lamports, false)?;
+        if slot < prior_slot {
+            return Err(refusal(
+                "terminal completion finalized slots regressed across predecessor order",
+            ));
+        }
+        prior_slot = slot;
+        max_slot = max_slot.max(slot);
+        total_fees = total_fees
+            .checked_add(fee)
+            .ok_or_else(|| refusal("terminal completion fee total overflowed"))?;
+        total_compute = total_compute
+            .checked_add(compute)
+            .ok_or_else(|| refusal("terminal completion compute total overflowed"))?;
+        let mut prior = None;
+        let mut delta_sum = 0i128;
+        for delta in &journal.protocol_lamport_deltas {
+            if Pubkey::from_str(&delta.account_address).is_err()
+                || prior
+                    .as_deref()
+                    .is_some_and(|value| value >= delta.account_address.as_str())
+            {
+                return Err(refusal(
+                    "terminal completion lamport deltas were not unique canonical address order",
+                ));
+            }
+            let amount = canonical_i128_v1(&delta.delta_lamports)?;
+            delta_sum = delta_sum
+                .checked_add(amount)
+                .ok_or_else(|| refusal("terminal completion delta total overflowed"))?;
+            prior = Some(delta.account_address.clone());
+        }
+        if delta_sum != 0 {
+            return Err(refusal(
+                "terminal completion protocol deltas did not conserve before fee",
+            ));
+        }
+    }
+
+    let mut index = 0usize;
+    if completion.invocation.supplied_lookup_table.is_none() {
+        if completion.journals.get(index).map(|row| &row.mutation)
+            != Some(&TerminalCompletionMutationV1::LookupCreate)
+        {
+            return Err(refusal(
+                "terminal completion omitted its first lookup-table create mutation",
+            ));
+        }
+        index += 1;
+        let mut prior_prefix = 0u64;
+        while let Some(TerminalCompletionMutationV1::LookupExtend { prefix_len }) =
+            completion.journals.get(index).map(|row| &row.mutation)
+        {
+            let prefix = canonical_u64_v1(prefix_len, false)?;
+            if prefix <= prior_prefix {
+                return Err(refusal(
+                    "terminal completion lookup extensions were not strict prefix order",
+                ));
+            }
+            prior_prefix = prefix;
+            index += 1;
+        }
+        if prior_prefix == 0
+            || completion.journals.get(index).map(|row| &row.mutation)
+                != Some(&TerminalCompletionMutationV1::LookupFreeze)
+        {
+            return Err(refusal(
+                "terminal completion omitted its ordered lookup-table extension/freeze mutations",
+            ));
+        }
+        index += 1;
+    } else if completion.journals.iter().any(|row| {
+        matches!(
+            row.mutation,
+            TerminalCompletionMutationV1::LookupCreate
+                | TerminalCompletionMutationV1::LookupExtend { .. }
+                | TerminalCompletionMutationV1::LookupFreeze
+        )
+    }) {
+        return Err(refusal(
+            "terminal completion created lookup infrastructure despite a supplied frozen table",
+        ));
+    }
+    if completion.journals.get(index).map(|row| &row.mutation)
+        == Some(&TerminalCompletionMutationV1::ResolutionReceiptPrepay)
+    {
+        index += 1;
+    }
+    let protocol_order = [
+        TerminalCompletionMutationV1::CoreBeginRetiring,
+        TerminalCompletionMutationV1::DirectBeginRetiring,
+        TerminalCompletionMutationV1::ResolutionCloseFund,
+        TerminalCompletionMutationV1::DirectCloseCapability,
+        TerminalCompletionMutationV1::RetirementReplayHandoff,
+        TerminalCompletionMutationV1::AggregateRetirement,
+    ];
+    if completion.journals.len() != index + protocol_order.len()
+        || completion.journals[index..]
+            .iter()
+            .map(|row| &row.mutation)
+            .ne(protocol_order.iter())
+    {
+        return Err(refusal(
+            "terminal completion journal mutations were not the exact predecessor sequence",
+        ));
+    }
+    if canonical_u64_v1(&completion.finalized_slot, false)? != max_slot
+        || canonical_u64_v1(&completion.transaction_fees_lamports, false)? != total_fees
+        || canonical_u64_v1(&completion.compute_units_consumed, false)? != total_compute
+    {
+        return Err(refusal(
+            "terminal completion aggregate slot, fee, or compute arithmetic changed",
+        ));
+    }
+    Ok(())
 }
 
 fn load_or_create_terminal_session_v1(
@@ -7930,6 +8628,7 @@ fn parse_terminal_sequence_arguments_v1(
     let mut payer_keypair = None;
     let mut session = None;
     let mut journal_dir = None;
+    let mut completion = None;
     let mut supplied_lookup_table = None;
     let mut execute = false;
     let mut iterator = arguments.into_iter();
@@ -7955,6 +8654,7 @@ fn parse_terminal_sequence_arguments_v1(
             "--fee-payer-keypair" => &mut payer_keypair,
             "--session" => &mut session,
             "--journal-dir" => &mut journal_dir,
+            "--completion" => &mut completion,
             "--lookup-table" => &mut supplied_lookup_table,
             _ => {
                 return Err(Error::new(format!(
@@ -7991,6 +8691,7 @@ fn parse_terminal_sequence_arguments_v1(
         payer_keypair: absolute(payer_keypair, "--fee-payer-keypair")?,
         session: absolute(session, "--session")?,
         journal_dir: absolute(journal_dir, "--journal-dir")?,
+        completion: absolute(completion, "--completion")?,
         supplied_lookup_table: supplied_lookup_table
             .map(|value| {
                 Pubkey::from_str(&value)
@@ -8014,6 +8715,7 @@ pub(crate) fn usage() -> &'static str {
      --market-input ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY \\
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\
      --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \\
+     --completion ABSOLUTE_JSON \\
      [--lookup-table PUBKEY] [--execute]\n\nWithout --execute this command performs bounded \
      finalized devnet reads and persists exactly one unsigned durable next action before any key \
      can be opened. With --execute it reauthenticates that Planned intent through its stage's \
@@ -8038,6 +8740,7 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
      --market-input ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY \
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \
      --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \
+     --completion ABSOLUTE_JSON \\
      [--lookup-table PUBKEY] [--execute]\n\nWithout --execute this command performs bounded \
      finalized reads from a validator launched and owned by the private lifecycle runner, then \
      persists exactly one unsigned durable next action before any key can be opened. With \
@@ -8350,7 +9053,72 @@ mod tests {
             "/tmp/session.json".into(),
             "--journal-dir".into(),
             "/tmp/journals".into(),
+            "--completion".into(),
+            "/tmp/completion.json".into(),
         ]
+    }
+
+    fn test_terminal_completion() -> TerminalSequenceCompletionV1 {
+        let mutations = [
+            TerminalCompletionMutationV1::CoreBeginRetiring,
+            TerminalCompletionMutationV1::DirectBeginRetiring,
+            TerminalCompletionMutationV1::ResolutionCloseFund,
+            TerminalCompletionMutationV1::DirectCloseCapability,
+            TerminalCompletionMutationV1::RetirementReplayHandoff,
+            TerminalCompletionMutationV1::AggregateRetirement,
+        ];
+        let journals = mutations
+            .into_iter()
+            .enumerate()
+            .map(|(index, mutation)| TerminalCompletionJournalV1 {
+                path: format!("journals/{index:02}.json"),
+                sha256: format!("{:02x}", index + 1).repeat(32),
+                schema: OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA_V1.into(),
+                mutation,
+                phase: StageJournalPhaseV1::Finalized,
+                fee_payer: key(1).to_string(),
+                signature: Signature::from([index as u8 + 1; 64]).to_string(),
+                finalized_slot: (100 + index as u64).to_string(),
+                compute_units_consumed: (10 + index as u64).to_string(),
+                transaction_fee_lamports: "5".into(),
+                protocol_lamport_deltas: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        TerminalSequenceCompletionV1 {
+            schema: OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA_V1.into(),
+            status: "finalized".into(),
+            cluster: "owned-loopback".into(),
+            genesis_hash: key(88).to_string(),
+            invocation: TerminalCompletionInvocationV1 {
+                command: "local-private-validator-terminal-sequence-v1".into(),
+                rpc_url: "http://127.0.0.1:20890/".into(),
+                plan_path: "/tmp/evidence/plan.json".into(),
+                market_input_path: "/tmp/evidence/market.json".into(),
+                evidence_path: "/tmp/evidence/campaign.json".into(),
+                market: key(3).to_string(),
+                fee_payer: key(1).to_string(),
+                fee_payer_keypair_path: "/tmp/evidence/payer.json".into(),
+                session_path: "/tmp/evidence/run/session.json".into(),
+                journal_directory: "/tmp/evidence/journals".into(),
+                completion_path: "/tmp/evidence/run/retirement.json".into(),
+                supplied_lookup_table: Some(key(5).to_string()),
+                execute: true,
+            },
+            session: TerminalCompletionSessionV1 {
+                path: "run/session.json".into(),
+                sha256: "11".repeat(32),
+                schema: OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA_V1.into(),
+                session_sha256: "22".repeat(32),
+            },
+            journal_directory: "journals".into(),
+            market: key(3).to_string(),
+            payer: key(1).to_string(),
+            lookup_table: key(5).to_string(),
+            journals,
+            finalized_slot: "105".into(),
+            transaction_fees_lamports: "30".into(),
+            compute_units_consumed: "75".into(),
+        }
     }
 
     fn observed_table(
@@ -9151,6 +9919,65 @@ mod tests {
             terminal_journal_cluster_v1(&journal).expect("loopback journal"),
             ExpectedClusterV1::OwnedLoopback
         );
+    }
+
+    #[test]
+    fn terminal_completion_is_exact_ordered_and_hostile_to_substitution() {
+        let completion = test_terminal_completion();
+        authenticate_terminal_completion_v1(&completion).expect("exact terminal completion");
+        let json = serde_json::to_value(&completion).expect("terminal completion JSON");
+        assert_eq!(
+            json.pointer("/journals/0/finalizedSlot")
+                .and_then(Value::as_str),
+            Some("100")
+        );
+        assert_eq!(
+            json.pointer("/journals/0/protocolLamportDeltas")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            json.pointer("/journals/5/mutation/kind")
+                .and_then(Value::as_str),
+            Some("aggregate-retirement")
+        );
+
+        let mut hostile = completion.clone();
+        hostile.journals.swap(0, 1);
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
+
+        let mut hostile = completion.clone();
+        hostile.journals[0].fee_payer = key(9).to_string();
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
+
+        let mut hostile = completion.clone();
+        hostile.journals[0].finalized_slot = "0100".into();
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
+
+        let mut hostile = completion.clone();
+        hostile.journals[0].path = "journals/../substituted.json".into();
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
+
+        let mut hostile = completion.clone();
+        hostile.journals[1].signature = hostile.journals[0].signature.clone();
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
+
+        let mut hostile = completion.clone();
+        hostile.journals[0].protocol_lamport_deltas = vec![TerminalCompletionLamportDeltaV1 {
+            account_address: key(7).to_string(),
+            delta_lamports: "1".into(),
+        }];
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
+
+        let mut hostile = completion.clone();
+        hostile.transaction_fees_lamports = "29".into();
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
+
+        let mut hostile = completion;
+        hostile.schema = TERMINAL_COMPLETION_SCHEMA_V1.into();
+        hostile.cluster = "devnet".into();
+        assert!(authenticate_terminal_completion_v1(&hostile).is_err());
     }
 
     #[test]

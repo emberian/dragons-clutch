@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
   core: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated.rs', root), 'utf8'),
+  foundFrame: readFileSync(new URL('crates/dclutch-market-core-codec/src/found_frame_v3.rs', root), 'utf8'),
   physical: readFileSync(new URL('crates/dclutch-market-core-codec/src/generated_physical.rs', root), 'utf8'),
   product: readFileSync(new URL('crates/dclutch-product-runtime-v2-admission/src/lib.rs', root), 'utf8'),
   realm: readFileSync(new URL('crates/dclutch-realm-contract/src/lib.rs', root), 'utf8'),
@@ -73,10 +74,11 @@ function array(name, values) {
 
 function foundAccountMetas() {
   const marker = sources.operator.indexOf('fn found_metas');
-  const start = sources.operator.indexOf('    vec![\n', marker);
-  const end = sources.operator.indexOf('    ]\n', start);
-  if (marker < 0 || start < 0 || end < 0) throw new Error('missing canonical Found account projection');
-  return sources.operator.slice(start + 10, end).split('\n')
+  const nextFunction = sources.operator.indexOf('\nfn ', marker + 1);
+  const body = marker < 0 ? '' : sources.operator.slice(marker, nextFunction < 0 ? undefined : nextFunction);
+  const projection = body.match(/let accounts = vec!\[\s*([\s\S]*?)\n\s*\];/);
+  if (!projection) throw new Error('missing canonical Found account projection');
+  return projection[1].split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
@@ -115,9 +117,13 @@ for (const name of [
   'CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2',
   'LIFECYCLE_RENT_SCHEMA_VERSION_V2',
 ]) output += `export const ${name} = ${scalar('lifecycleRent', name)} as const;\n`;
-output += `export const CORE_FOUND_ACCOUNT_COUNT_V3 = ${scalar('operator', 'FOUND_ACCOUNT_COUNT_V3')} as const;\n`;
+// The operator deliberately re-exports this frame width from the codec. Read
+// the defining module, not the re-export, so the generator follows the one
+// semantic owner and does not mistake a `pub use` for a numeric definition.
+const foundAccountCount = scalar('foundFrame', 'FOUND_ACCOUNT_COUNT_V3');
+output += `export const CORE_FOUND_ACCOUNT_COUNT_V3 = ${foundAccountCount} as const;\n`;
 const accountMetas = foundAccountMetas();
-if (accountMetas.length !== scalar('operator', 'FOUND_ACCOUNT_COUNT_V3')) throw new Error('Found account count and projection differ');
+if (accountMetas.length !== foundAccountCount) throw new Error('Found account count and projection differ');
 output += `export const CORE_FOUND_ACCOUNT_LABELS_V3 = Object.freeze(${JSON.stringify(accountMetas.map((meta) => foundAccountLabel(meta.field)))}) as ReadonlyArray<string>;\n`;
 output += `export const CORE_FOUND_ACCOUNT_ROLES_V3 = Object.freeze(${JSON.stringify(accountMetas.map(({ signer, writable }) => ({ signer, writable })))}) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;\n`;
 output += array('CORE_REQUEST_MAGIC', bytes('core', 'REQUEST_MAGIC'));

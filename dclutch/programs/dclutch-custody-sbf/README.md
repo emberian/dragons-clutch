@@ -41,8 +41,12 @@ Core-owned Realm copy.
 
 Suffixes are exact:
 
-- `InitializeReplay` (12 accounts): payer signer+writable, System program,
-  Rent sysvar.
+- `InitializeReplay` (13 accounts): payer signer+writable, System program,
+  Rent sysvar, and the canonical rent-refund beneficiary writable. A
+  system-owned, data-empty replay PDA may already carry lamports: the program
+  returns any excess above exact rent to that beneficiary, charges the payer
+  only the shortfall, then allocates and assigns the PDA at exact rent. Public
+  dust therefore cannot block replay creation or redirect value to the payer.
 - `OpenVault` (16): Mint readonly, vacant destination Vault writable, Custody
   authority readonly, Realm token program executable, payer signer+writable,
   System program, Rent sysvar.

@@ -15,7 +15,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_pyth_svm::local_validator_release_v1;
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_release_set_contract::{SourceSemanticRoleV1, source_semantic_release_preimage_v1};
+use dclutch_release_tool::{
+    CHECKED_MULTIPROGRAM_BYTES_V1, CheckedReleaseV1, RedeployedReleaseEvidenceV1,
+    SemanticPreimageKindV1, artifact_release_from_checked, build_checked_execution_release_set,
+    build_redeployed_checked_release, derive_execution_release_set,
+    verify_checked_execution_release_set,
+};
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_program::rent::Rent;
@@ -27,16 +37,23 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 use crate::{
     Error, Result,
-    model::{CheckedLocalMutableRolePinV1, CheckedLocalMutableSetPinV1, ProgramPin, SuccessorPlan},
+    model::{
+        CheckedLocalExecutionReleaseRolePinV1, CheckedLocalExecutionReleaseSetPinV1,
+        CheckedLocalMutableRolePinV1, CheckedLocalMutableSetPinV1, ProgramPin, SuccessorPlan,
+    },
     plan::{
-        PrepareArgs, RecordPublicationV1, RoleDeploymentInputV1, RoleDeploymentsV1, hex, hex32,
-        loader_programdata_bytes, pubkey,
+        LOCAL_PYTH_RECEIVER_ELF, LOCAL_PYTH_ROUTER_ELF, PrepareArgs, RecordPublicationV1,
+        RoleDeploymentInputV1, RoleDeploymentsV1, hex, hex32, loader_programdata_bytes, pubkey,
     },
     upgrade::{authenticate_checked_release_gate_role_for_local_v1, checked_semantic_release_id},
 };
 
 pub(crate) const CHECKED_LOCAL_MUTABLE_SET_SCHEMA_V1: &str = "dclutch-checked-local-mutable-set-v1";
+pub(crate) const CHECKED_LOCAL_EXECUTION_RELEASE_SET_SCHEMA_V1: &str =
+    "dclutch-checked-local-execution-release-set-v1";
 const SET_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/checked-local-mutable-set/v1";
+const EXECUTION_ROLE_ORDER_V1: [&str; 5] = ["core", "claims", "trading", "resolution", "custody"];
+const DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/release/direct-compiled-controller-v1";
 
 /// Operator-independent checked-gate facts supplied to local plan preparation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +70,7 @@ pub(crate) struct CheckedLocalMutableGateInputV1 {
 pub(crate) fn build_checked_local_mutable_set_v1(
     gate: &CheckedLocalMutableGateInputV1,
     retained_authority: Pubkey,
+    expected_execution_release_set_id: &str,
     roles: [(&str, &ProgramPin); 7],
 ) -> Result<CheckedLocalMutableSetPinV1> {
     if roles
@@ -75,6 +93,7 @@ pub(crate) fn build_checked_local_mutable_set_v1(
     let mut projected = Vec::with_capacity(crate::upgrade::CHECKED_ROLE_ORDER_V1.len());
     let mut programs = BTreeSet::new();
     let mut programdata = BTreeSet::new();
+    let mut execution_checked = BTreeMap::new();
     let mut solana_cli_version = None;
     for (ordinal, (role, pin)) in roles.into_iter().enumerate() {
         let validated = authenticate_checked_release_gate_role_for_local_v1(
@@ -138,6 +157,20 @@ pub(crate) fn build_checked_local_mutable_set_v1(
                 "checked local mutable Program or ProgramData identities are not pairwise distinct",
             ));
         }
+        if EXECUTION_ROLE_ORDER_V1.contains(&role) {
+            let (checked, encoded) = build_local_checked_release_v1(
+                role,
+                pin,
+                retained_authority,
+                &gate.source_revision,
+                &validated,
+            )?;
+            if execution_checked.insert(role, (checked, encoded)).is_some() {
+                return Err(Error::new(
+                    "checked local execution release projection duplicated a role",
+                ));
+            }
+        }
         projected.push(CheckedLocalMutableRolePinV1 {
             role: role.into(),
             program_id: pin.program_id.clone(),
@@ -151,6 +184,11 @@ pub(crate) fn build_checked_local_mutable_set_v1(
         });
     }
 
+    let execution_release_set = build_local_execution_release_set_pin_v1(
+        expected_execution_release_set_id,
+        &execution_checked,
+    )?;
+
     let mut set = CheckedLocalMutableSetPinV1 {
         schema: CHECKED_LOCAL_MUTABLE_SET_SCHEMA_V1.into(),
         checked_release_gate_path: gate_path.display().to_string(),
@@ -160,11 +198,321 @@ pub(crate) fn build_checked_local_mutable_set_v1(
         solana_cli_version: solana_cli_version
             .ok_or_else(|| Error::new("checked local release gate projected no roles"))?,
         retained_upgrade_authority: retained,
+        execution_release_set,
         set_sha256: String::new(),
         roles: projected,
     };
     set.set_sha256 = checked_local_set_digest_v1(&set)?;
     Ok(set)
+}
+
+fn build_local_checked_release_v1(
+    role: &str,
+    pin: &ProgramPin,
+    retained_authority: Pubkey,
+    source_revision: &str,
+    validated: &crate::upgrade::CheckedLocalGateRoleV1,
+) -> Result<(CheckedReleaseV1, Vec<u8>)> {
+    let basis = CheckedReleaseV1::decode(&validated.checked_build_manifest).map_err(|error| {
+        Error::new(format!(
+            "checked local {role} build basis is not CheckedReleaseV1: {error:?}"
+        ))
+    })?;
+    let expected_manifest_suffix = Path::new("evidence").join(role).join("checked.bin");
+    if hex(&Sha256::digest(&validated.checked_build_manifest))
+        != validated.checked_build_manifest_sha256
+        || hex(basis
+            .checked_release_id()
+            .map_err(release_error)?
+            .as_bytes())
+            != validated.checked_build_manifest_sha256
+        || !validated
+            .checked_build_manifest_path
+            .ends_with(expected_manifest_suffix)
+        || basis.semantic_kind() != SemanticPreimageKindV1::Unowned
+        || hex(&basis.artifact_digest()) != validated.raw_elf_sha256
+        || basis.loader_program_id() != bpf_loader_upgradeable::ID.to_bytes()
+        || basis.deployment_slot() != 0
+        || basis.upgrade_authority().is_some()
+        || hex(&basis.source_digest()) != validated.source_tree_sha256
+        || basis.source_revision() != source_revision
+        || basis.solana_version() != validated.solana_cli_version
+        || basis.target_triple() != "sbpf-solana-solana"
+        || basis.build_command() != checked_build_command_v1(role)?
+    {
+        return Err(Error::new(format!(
+            "checked local {role} build basis differs from its authenticated gate role"
+        )));
+    }
+
+    let elf = fs::read(&pin.checked_candidate_elf_path)?;
+    if hex(&Sha256::digest(&elf)) != pin.checked_candidate_elf_sha256
+        || pin.checked_candidate_elf_sha256 != validated.raw_elf_sha256
+    {
+        return Err(Error::new(format!(
+            "checked local {role} ELF changed after gate authentication"
+        )));
+    }
+    let program_id = pubkey(&pin.program_id)?;
+    let programdata_id = pubkey(&pin.programdata_id)?;
+    let mut program = [0_u8; 36];
+    program[..4].copy_from_slice(&2_u32.to_le_bytes());
+    program[4..].copy_from_slice(programdata_id.as_ref());
+    let programdata = loader_programdata_bytes(&elf, pin.deployment_slot, Some(retained_authority));
+    if hex(&Sha256::digest(&programdata)) != pin.programdata_sha256 {
+        return Err(Error::new(format!(
+            "checked local {role} reconstructed ProgramData differs from its exact plan evidence"
+        )));
+    }
+    let semantic_preimage = local_semantic_release_preimage_v1(role, source_revision)?;
+    if hex(&Sha256::digest(&semantic_preimage)) != pin.semantic_release_id {
+        return Err(Error::new(format!(
+            "checked local {role} semantic preimage differs from the plan's protocol owner"
+        )));
+    }
+    let mut assumptions = vec![
+        format!(
+            "artifact and build facts are inherited from checked release {} in the exact checked gate",
+            validated.checked_build_manifest_sha256
+        ),
+        "deployment slot and upgrade authority were hostile-decoded from the exact localhost Loader V3 ProgramData image".into(),
+        "Program and ProgramData identities are disposable localhost coordinates, not public-cluster deployment evidence".into(),
+        "semantic_kind is unowned because no first-party contract decodes a role-program release preimage".into(),
+    ];
+    assumptions.sort();
+    let checked = build_redeployed_checked_release(RedeployedReleaseEvidenceV1 {
+        build_basis: &basis,
+        elf: &elf,
+        semantic_preimage: &semantic_preimage,
+        program_id: program_id.to_bytes(),
+        programdata_id: programdata_id.to_bytes(),
+        program_account_data: &program,
+        programdata_account_data: &programdata,
+        deployment_assumptions: &assumptions,
+    })
+    .map_err(release_error)?;
+    let artifact = artifact_release_from_checked(&checked).map_err(release_error)?;
+    if hex(&Sha256::digest(artifact.to_bytes())) != pin.artifact_release_id
+        || checked.program_id() != program_id.to_bytes()
+        || checked.programdata_id() != programdata_id.to_bytes()
+        || checked.semantic_release_id().to_bytes() != hex32(&pin.semantic_release_id)?
+        || checked.deployment_slot() != pin.deployment_slot
+        || checked.upgrade_authority() != Some(retained_authority.to_bytes())
+    {
+        return Err(Error::new(format!(
+            "checked local {role} deployment manifest differs from its ArtifactRelease or Loader pin"
+        )));
+    }
+    let encoded = checked.encode().map_err(release_error)?;
+    Ok((checked, encoded))
+}
+
+fn build_local_execution_release_set_pin_v1(
+    expected_execution_release_set_id: &str,
+    checked: &BTreeMap<&str, (CheckedReleaseV1, Vec<u8>)>,
+) -> Result<CheckedLocalExecutionReleaseSetPinV1> {
+    let get = |role| {
+        checked
+            .get(role)
+            .ok_or_else(|| Error::new(format!("checked local execution projection omitted {role}")))
+    };
+    let core = get("core")?;
+    let claims = get("claims")?;
+    let trading = get("trading")?;
+    let resolution = get("resolution")?;
+    let custody = get("custody")?;
+    let checked_refs = [&core.0, &claims.0, &trading.0, &resolution.0, &custody.0];
+    let release_set = derive_execution_release_set(checked_refs).map_err(release_error)?;
+    let complete =
+        build_checked_execution_release_set(release_set, checked_refs).map_err(release_error)?;
+    let execution_release_set_id = hex(complete
+        .execution_release_set_id()
+        .map_err(release_error)?
+        .as_bytes());
+    if execution_release_set_id != expected_execution_release_set_id {
+        return Err(Error::new(
+            "deployment-bound checked manifests derive another execution release set",
+        ));
+    }
+    let roles = EXECUTION_ROLE_ORDER_V1
+        .into_iter()
+        .map(|role| {
+            let (_, encoded) = get(role)?;
+            let release = CheckedReleaseV1::decode(encoded).map_err(release_error)?;
+            Ok(CheckedLocalExecutionReleaseRolePinV1 {
+                role: role.into(),
+                checked_release_id: hex(release
+                    .checked_release_id()
+                    .map_err(release_error)?
+                    .as_bytes()),
+                checked_release_base64: BASE64.encode(encoded),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let pin = CheckedLocalExecutionReleaseSetPinV1 {
+        schema: CHECKED_LOCAL_EXECUTION_RELEASE_SET_SCHEMA_V1.into(),
+        checked_execution_release_set_id: hex(complete
+            .checked_execution_release_set_id()
+            .map_err(release_error)?
+            .as_bytes()),
+        execution_release_set_id,
+        checked_execution_release_set_base64: BASE64.encode(complete.encode()),
+        roles,
+    };
+    let _ =
+        authenticate_persisted_execution_release_set_v1(&pin, expected_execution_release_set_id)?;
+    Ok(pin)
+}
+
+fn authenticate_persisted_execution_release_set_v1(
+    pin: &CheckedLocalExecutionReleaseSetPinV1,
+    expected_execution_release_set_id: &str,
+) -> Result<[u8; CHECKED_MULTIPROGRAM_BYTES_V1]> {
+    if pin.schema != CHECKED_LOCAL_EXECUTION_RELEASE_SET_SCHEMA_V1
+        || pin.execution_release_set_id != expected_execution_release_set_id
+        || pin.roles.len() != EXECUTION_ROLE_ORDER_V1.len()
+        || pin
+            .roles
+            .iter()
+            .map(|role| role.role.as_str())
+            .ne(EXECUTION_ROLE_ORDER_V1)
+    {
+        return Err(Error::new(
+            "persisted checked local execution release set has another schema, identity, or role order",
+        ));
+    }
+    let bytes = BASE64
+        .decode(&pin.checked_execution_release_set_base64)
+        .map_err(|error| Error::new(format!("checked execution release set base64: {error}")))?;
+    if BASE64.encode(&bytes) != pin.checked_execution_release_set_base64 {
+        return Err(Error::new(
+            "checked execution release set base64 is not canonical",
+        ));
+    }
+    let bytes: [u8; CHECKED_MULTIPROGRAM_BYTES_V1] = bytes
+        .try_into()
+        .map_err(|_| Error::new("checked execution release set has the wrong width"))?;
+    let mut manifests = Vec::with_capacity(EXECUTION_ROLE_ORDER_V1.len());
+    for role in &pin.roles {
+        let manifest = BASE64
+            .decode(&role.checked_release_base64)
+            .map_err(|error| {
+                Error::new(format!("checked {} release base64: {error}", role.role))
+            })?;
+        if BASE64.encode(&manifest) != role.checked_release_base64 {
+            return Err(Error::new(format!(
+                "checked {} release base64 is not canonical",
+                role.role
+            )));
+        }
+        let checked = CheckedReleaseV1::decode(&manifest).map_err(release_error)?;
+        if hex(checked
+            .checked_release_id()
+            .map_err(release_error)?
+            .as_bytes())
+            != role.checked_release_id
+        {
+            return Err(Error::new(format!(
+                "checked {} release identity differs from its exact bytes",
+                role.role
+            )));
+        }
+        manifests.push(manifest);
+    }
+    let manifest_refs: [&[u8]; 5] = [
+        &manifests[0],
+        &manifests[1],
+        &manifests[2],
+        &manifests[3],
+        &manifests[4],
+    ];
+    let checked =
+        verify_checked_execution_release_set(&bytes, manifest_refs).map_err(release_error)?;
+    if hex(checked
+        .checked_execution_release_set_id()
+        .map_err(release_error)?
+        .as_bytes())
+        != pin.checked_execution_release_set_id
+        || hex(checked
+            .execution_release_set_id()
+            .map_err(release_error)?
+            .as_bytes())
+            != pin.execution_release_set_id
+    {
+        return Err(Error::new(
+            "persisted checked local execution envelope differs from its complete manifests or identities",
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Re-authenticate and return Direct's one canonical checked execution wire.
+/// The five complete deployment-bound manifests are re-decoded first; the
+/// compact envelope alone is never treated as checked-release authority.
+pub(crate) fn checked_execution_release_set_bytes_v1(
+    plan: &SuccessorPlan,
+) -> Result<[u8; CHECKED_MULTIPROGRAM_BYTES_V1]> {
+    authenticate_checked_local_mutable_plan_v1(plan)?;
+    let set = plan.checked_local_mutable_set.as_ref().ok_or_else(|| {
+        Error::new("mutable localhost plan omitted checked local release-set evidence")
+    })?;
+    authenticate_persisted_execution_release_set_v1(
+        &set.execution_release_set,
+        &plan.release_set_id,
+    )
+}
+
+fn local_semantic_release_preimage_v1(role: &str, source_revision: &str) -> Result<Vec<u8>> {
+    let preimage = match role {
+        "core" => source_semantic_release_preimage_v1(
+            SourceSemanticRoleV1::Core,
+            source_revision.as_bytes(),
+        )
+        .map_err(|_| Error::new("Core semantic source revision is not canonical"))?
+        .to_vec(),
+        "claims" => source_semantic_release_preimage_v1(
+            SourceSemanticRoleV1::Claims,
+            source_revision.as_bytes(),
+        )
+        .map_err(|_| Error::new("Claims semantic source revision is not canonical"))?
+        .to_vec(),
+        "custody" => source_semantic_release_preimage_v1(
+            SourceSemanticRoleV1::Custody,
+            source_revision.as_bytes(),
+        )
+        .map_err(|_| Error::new("Custody semantic source revision is not canonical"))?
+        .to_vec(),
+        "trading" => DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1.to_vec(),
+        "resolution" => RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5.to_vec(),
+        _ => {
+            return Err(Error::new(format!(
+                "role {role:?} is not an execution semantic owner"
+            )));
+        }
+    };
+    Ok(preimage)
+}
+
+fn checked_build_command_v1(role: &str) -> Result<String> {
+    let package = match role {
+        "core" => "dclutch-core-sbf",
+        "claims" => "dclutch-claims-sbf",
+        "trading" => "dclutch-trading-sbf",
+        "resolution" => "dclutch-resolution-proof-sbf",
+        "custody" => "dclutch-custody-sbf",
+        _ => {
+            return Err(Error::new(format!(
+                "role {role:?} has no checked execution build command"
+            )));
+        }
+    };
+    Ok(format!(
+        "cargo build-sbf --manifest-path programs/{package}/Cargo.toml -- --locked"
+    ))
+}
+
+fn release_error(error: dclutch_release_tool::Error) -> Error {
+    Error::new(format!("checked local release evidence: {error:?}"))
 }
 
 /// Re-authenticate a persisted local mutable plan before the campaign is
@@ -192,6 +540,7 @@ pub(crate) fn authenticate_checked_local_mutable_plan_v1(plan: &SuccessorPlan) -
     let rebuilt = build_checked_local_mutable_set_v1(
         &gate,
         authority,
+        &plan.release_set_id,
         [
             ("registry", &plan.registry),
             ("rent", &plan.rent_credit),
@@ -239,7 +588,11 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
         expected_labels.insert(format!("loader.{loader_label}.program"));
         expected_labels.insert(format!("loader.{loader_label}.programdata"));
     }
-    if plan.genesis_accounts.len() != 14
+    for role in ["pyth-receiver", "pyth-router"] {
+        expected_labels.insert(format!("loader.{role}.program"));
+        expected_labels.insert(format!("loader.{role}.programdata"));
+    }
+    if plan.genesis_accounts.len() != 18
         || plan
             .genesis_accounts
             .keys()
@@ -248,7 +601,7 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             != expected_labels
     {
         return Err(Error::new(
-            "checked local plan does not contain the exact fourteen Loader account pins",
+            "checked local plan does not contain the exact eighteen Loader account pins",
         ));
     }
 
@@ -346,9 +699,97 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             )));
         }
     }
-    if coordinates.len() != 14 {
+    let provider = local_validator_release_v1()
+        .map_err(|error| Error::new(format!("local Pyth release projection: {error:?}")))?;
+    let provider = provider.release();
+    for (role, program_key, programdata_key, deployment_slot, elf_sha256, elf) in [
+        (
+            "pyth-receiver",
+            Pubkey::new_from_array(provider.receiver_program()),
+            Pubkey::new_from_array(provider.receiver_programdata()),
+            provider.receiver_deployment_slot(),
+            provider.receiver_abi_id(),
+            LOCAL_PYTH_RECEIVER_ELF,
+        ),
+        (
+            "pyth-router",
+            Pubkey::new_from_array(provider.router_program()),
+            Pubkey::new_from_array(provider.router_programdata()),
+            provider.router_deployment_slot(),
+            provider.router_abi_id(),
+            LOCAL_PYTH_ROUTER_ELF,
+        ),
+    ] {
+        let program_label = format!("loader.{role}.program");
+        let programdata_label = format!("loader.{role}.programdata");
+        let program_pin = plan
+            .genesis_accounts
+            .get(&program_label)
+            .ok_or_else(|| Error::new(format!("checked local plan omitted {program_label}")))?;
+        let programdata_pin = plan
+            .genesis_accounts
+            .get(&programdata_label)
+            .ok_or_else(|| Error::new(format!("checked local plan omitted {programdata_label}")))?;
+        let program = crate::plan::authenticate_cli_account_file_v1(
+            &directory.join(format!("{}.json", program_pin.address)),
+            program_pin,
+        )?;
+        let programdata = crate::plan::authenticate_cli_account_file_v1(
+            &directory.join(format!("{}.json", programdata_pin.address)),
+            programdata_pin,
+        )?;
+        let derived_programdata =
+            Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let expected_programdata_body = loader_programdata_bytes(elf, 0, None);
+        let mut expected_program_body = [0_u8; 36];
+        expected_program_body[..4].copy_from_slice(&2_u32.to_le_bytes());
+        expected_program_body[4..].copy_from_slice(programdata_key.as_ref());
+        let program_view = ProgramV3View::parse(&program.data)
+            .map_err(|error| Error::new(format!("{role} Program: {error:?}")))?;
+        let programdata_view = ProgramDataV3View::parse(&programdata.data)
+            .map_err(|error| Error::new(format!("{role} ProgramData: {error:?}")))?;
+        for coordinate in [program_key, programdata_key] {
+            if coordinate == Pubkey::default()
+                || coordinate == system_program::ID
+                || coordinate == bpf_loader_upgradeable::ID
+                || !coordinates.insert(coordinate)
+            {
+                return Err(Error::new(
+                    "checked local provider Loader coordinates are aliased or reserved",
+                ));
+            }
+        }
+        if deployment_slot != 0
+            || programdata_key != derived_programdata
+            || hex(&Sha256::digest(elf)) != hex(&elf_sha256)
+            || program.pubkey != program_key
+            || program_pin.address != program_key.to_string()
+            || program.owner != bpf_loader_upgradeable::ID
+            || !program.executable
+            || program.rent_epoch != 0
+            || program.lamports != Rent::default().minimum_balance(program.data.len())
+            || program.data != expected_program_body
+            || program_view.programdata() != programdata_key.to_bytes()
+            || programdata.pubkey != programdata_key
+            || programdata_pin.address != programdata_key.to_string()
+            || programdata.owner != bpf_loader_upgradeable::ID
+            || programdata.executable
+            || programdata.rent_epoch != 0
+            || programdata.lamports != Rent::default().minimum_balance(programdata.data.len())
+            || programdata.data != expected_programdata_body
+            || programdata_view.deployment_slot() != 0
+            || programdata_view.upgrade_authority().is_some()
+            || hex(&Sha256::digest(programdata_view.elf())) != hex(&elf_sha256)
+            || programdata_pin.data_sha256 != hex(&Sha256::digest(&programdata.data))
+        {
+            return Err(Error::new(format!(
+                "checked local {role} Loader pair is not the exact immutable slot-zero fixture"
+            )));
+        }
+    }
+    if coordinates.len() != 18 {
         return Err(Error::new(
-            "checked local account directory does not close over fourteen distinct coordinates",
+            "checked local account directory does not close over eighteen distinct coordinates",
         ));
     }
     Ok(())
@@ -385,6 +826,30 @@ fn checked_local_set_digest_v1(set: &CheckedLocalMutableSetPinV1) -> Result<Stri
         set.retained_upgrade_authority.as_str(),
     ] {
         hash_text(&mut hasher, value)?;
+    }
+    for value in [
+        set.execution_release_set.schema.as_str(),
+        set.execution_release_set
+            .checked_execution_release_set_id
+            .as_str(),
+        set.execution_release_set.execution_release_set_id.as_str(),
+        set.execution_release_set
+            .checked_execution_release_set_base64
+            .as_str(),
+    ] {
+        hash_text(&mut hasher, value)?;
+    }
+    let execution_count = u64::try_from(set.execution_release_set.roles.len())
+        .map_err(|_| Error::new("checked local execution role count overflowed u64"))?;
+    hasher.update(execution_count.to_le_bytes());
+    for role in &set.execution_release_set.roles {
+        for value in [
+            role.role.as_str(),
+            role.checked_release_id.as_str(),
+            role.checked_release_base64.as_str(),
+        ] {
+            hash_text(&mut hasher, value)?;
+        }
     }
     let count = u64::try_from(set.roles.len())
         .map_err(|_| Error::new("checked local role count overflowed u64"))?;
@@ -861,6 +1326,103 @@ fn absolute_new_directory(value: String, label: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn test_checked_execution_pin_v1() -> (CheckedLocalExecutionReleaseSetPinV1, String) {
+        use dclutch_release_tool::{BuildMetadataV1, ReleaseEvidenceV1, build_checked_release};
+
+        let mut releases = Vec::new();
+        let mut manifests = Vec::new();
+        for (ordinal, role) in EXECUTION_ROLE_ORDER_V1.into_iter().enumerate() {
+            let seed = u8::try_from(ordinal).expect("test role ordinal") + 1;
+            let mut elf = vec![0_u8; 64];
+            elf[..4].copy_from_slice(b"\x7fELF");
+            elf[4] = 2;
+            elf[5] = 1;
+            elf[6] = 1;
+            elf[16..18].copy_from_slice(&3_u16.to_le_bytes());
+            elf[18..20].copy_from_slice(&263_u16.to_le_bytes());
+            elf[20..24].copy_from_slice(&1_u32.to_le_bytes());
+            elf[52..54].copy_from_slice(&64_u16.to_le_bytes());
+            elf[63] = seed;
+            let program_id = [seed; 32];
+            let programdata_id = [seed + 10; 32];
+            let loader = bpf_loader_upgradeable::ID.to_bytes();
+            let authority = [99; 32];
+            let mut program = [0_u8; 36];
+            program[..4].copy_from_slice(&2_u32.to_le_bytes());
+            program[4..].copy_from_slice(&programdata_id);
+            let mut programdata = vec![0_u8; 45];
+            programdata[..4].copy_from_slice(&3_u32.to_le_bytes());
+            programdata[4..12].copy_from_slice(&u64::from(seed).to_le_bytes());
+            programdata[12] = 1;
+            programdata[13..45].copy_from_slice(&authority);
+            programdata.extend_from_slice(&elf);
+            let semantic = format!("dclutch/test/local-checked/{role}/v1");
+            let metadata = BuildMetadataV1::parse(&format!(
+                "dclutch-release-metadata-v1\nsemantic_kind=unowned\nprogram_id={}\nprogramdata_id={}\nloader_program_id={}\nprogram_owner={}\nprogram_executable=true\nprogramdata_owner={}\nprogramdata_executable=false\nsource_digest={}\ncargo_lock_digest={}\nsource_revision=0123456789abcdef0123456789abcdef01234567\nrustc_version=rustc 1.89.0\nsolana_version=solana-cli 4.0.2\ncargo_build_sbf_version=cargo-build-sbf 4.0.2\ntarget_triple=sbpf-solana-solana\nbuild_command=cargo build-sbf --manifest-path programs/test/Cargo.toml -- --locked\nassumption=synthetic exact Loader evidence is scoped to this hostile unit test\n",
+                hex(&program_id),
+                hex(&programdata_id),
+                hex(&loader),
+                hex(&loader),
+                hex(&loader),
+                "44".repeat(32),
+                "55".repeat(32),
+            ))
+            .expect("canonical metadata");
+            let checked = build_checked_release(ReleaseEvidenceV1 {
+                elf: &elf,
+                semantic_preimage: semantic.as_bytes(),
+                program_account_data: &program,
+                programdata_account_data: &programdata,
+                metadata: &metadata,
+            })
+            .expect("checked test release");
+            manifests.push(checked.encode().expect("encode checked test release"));
+            releases.push(checked);
+        }
+        let refs = [
+            &releases[0],
+            &releases[1],
+            &releases[2],
+            &releases[3],
+            &releases[4],
+        ];
+        let release_set = derive_execution_release_set(refs).expect("derive test release set");
+        let complete = build_checked_execution_release_set(release_set, refs)
+            .expect("build checked test release set");
+        let execution_release_set_id = hex(complete
+            .execution_release_set_id()
+            .expect("execution release set ID")
+            .as_bytes());
+        let roles = EXECUTION_ROLE_ORDER_V1
+            .into_iter()
+            .zip(manifests)
+            .map(|(role, manifest)| {
+                let checked = CheckedReleaseV1::decode(&manifest).expect("decode checked role");
+                CheckedLocalExecutionReleaseRolePinV1 {
+                    role: role.into(),
+                    checked_release_id: hex(checked
+                        .checked_release_id()
+                        .expect("checked role ID")
+                        .as_bytes()),
+                    checked_release_base64: BASE64.encode(manifest),
+                }
+            })
+            .collect();
+        (
+            CheckedLocalExecutionReleaseSetPinV1 {
+                schema: CHECKED_LOCAL_EXECUTION_RELEASE_SET_SCHEMA_V1.into(),
+                checked_execution_release_set_id: hex(complete
+                    .checked_execution_release_set_id()
+                    .expect("checked set ID")
+                    .as_bytes()),
+                execution_release_set_id: execution_release_set_id.clone(),
+                checked_execution_release_set_base64: BASE64.encode(complete.encode()),
+                roles,
+            },
+            execution_release_set_id,
+        )
+    }
+
     #[test]
     fn local_launcher_uses_the_upgrade_role_owner_without_an_alias() {
         assert_eq!(crate::upgrade::CHECKED_ROLE_ORDER_V1.len(), 7);
@@ -911,11 +1473,63 @@ mod tests {
             source_tree_sha256: "33".repeat(32),
             solana_cli_version: "solana-cli 4.0.2".into(),
             retained_upgrade_authority: Pubkey::new_unique().to_string(),
+            execution_release_set: CheckedLocalExecutionReleaseSetPinV1 {
+                schema: CHECKED_LOCAL_EXECUTION_RELEASE_SET_SCHEMA_V1.into(),
+                checked_execution_release_set_id: "44".repeat(32),
+                execution_release_set_id: "55".repeat(32),
+                checked_execution_release_set_base64: String::new(),
+                roles: Vec::new(),
+            },
             set_sha256: "first value is ignored".into(),
             roles: Vec::new(),
         };
         let first = checked_local_set_digest_v1(&set).expect("digest");
         set.set_sha256 = "different ignored value".into();
         assert_eq!(first, checked_local_set_digest_v1(&set).expect("digest"));
+    }
+
+    #[test]
+    fn persisted_execution_set_refuses_role_manifest_and_envelope_substitution() {
+        let (pin, release_set_id) = test_checked_execution_pin_v1();
+        assert_eq!(
+            authenticate_persisted_execution_release_set_v1(&pin, &release_set_id)
+                .expect("canonical checked execution set")
+                .len(),
+            CHECKED_MULTIPROGRAM_BYTES_V1
+        );
+
+        let mut reordered = pin.clone();
+        reordered.roles.swap(0, 1);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&reordered, &release_set_id).is_err()
+        );
+
+        let mut replaced_id = pin.clone();
+        replaced_id.roles[2].checked_release_id = "66".repeat(32);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&replaced_id, &release_set_id).is_err()
+        );
+
+        let mut replaced_manifest = pin.clone();
+        let mut manifest = BASE64
+            .decode(&replaced_manifest.roles[3].checked_release_base64)
+            .expect("checked role base64");
+        *manifest.last_mut().expect("checked role byte") ^= 1;
+        replaced_manifest.roles[3].checked_release_base64 = BASE64.encode(manifest);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&replaced_manifest, &release_set_id)
+                .is_err()
+        );
+
+        let mut replaced_envelope = pin;
+        let mut envelope = BASE64
+            .decode(&replaced_envelope.checked_execution_release_set_base64)
+            .expect("checked set base64");
+        *envelope.last_mut().expect("checked set byte") ^= 1;
+        replaced_envelope.checked_execution_release_set_base64 = BASE64.encode(envelope);
+        assert!(
+            authenticate_persisted_execution_release_set_v1(&replaced_envelope, &release_set_id)
+                .is_err()
+        );
     }
 }

@@ -2,9 +2,15 @@
 # Fresh localhost successor release set + RentCredit + real-Pyth profile.
 set -euo pipefail
 
-readonly LAUNCHER_VERSION="2"
+readonly LAUNCHER_VERSION="3"
 readonly RECEIVER_ID="rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
+readonly RECEIVER_PROGRAMDATA_ID="3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX"
+readonly RECEIVER_PROGRAM_SHA256="ef37dd1cee22d731902a8c04ed2e13136a2b8aa7068d9db3aff2ed1ec7b634e5"
+readonly RECEIVER_PROGRAMDATA_SHA256="63d003102c1bd48be1be24706734813094747eee82edbe066c2042474f64004e"
 readonly ROUTER_ID="HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+readonly ROUTER_PROGRAMDATA_ID="9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x"
+readonly ROUTER_PROGRAM_SHA256="1ee590ae23d5ecbf775aba910f06a993dee8f77bfd7028790dbd349651c8034b"
+readonly ROUTER_PROGRAMDATA_SHA256="04c1327626a93e09c4c833aa43b316f472d697e2fff0e5c029aaf343b83252c4"
 
 # ------------------------------------------------------------------ the origin
 #
@@ -322,6 +328,14 @@ validate_plan() {
   local plan=$1 account_dir=$2 registry_id=$3 registry_elf=$4 registry_hash=$5 core_id=$6 core_elf=$7 core_hash=$8 claims_id=$9 claims_elf=${10} claims_hash=${11} trading_id=${12} trading_elf=${13} trading_hash=${14} resolution_id=${15} resolution_elf=${16} resolution_hash=${17} custody_id=${18} custody_elf=${19} custody_hash=${20} rent_credit_id=${21} rent_credit_elf=${22} rent_credit_hash=${23}
   jq -e \
     --arg account_dir "$account_dir" \
+    --arg receiver_id "$RECEIVER_ID" \
+    --arg receiver_programdata_id "$RECEIVER_PROGRAMDATA_ID" \
+    --arg receiver_program_sha256 "$RECEIVER_PROGRAM_SHA256" \
+    --arg receiver_programdata_sha256 "$RECEIVER_PROGRAMDATA_SHA256" \
+    --arg router_id "$ROUTER_ID" \
+    --arg router_programdata_id "$ROUTER_PROGRAMDATA_ID" \
+    --arg router_program_sha256 "$ROUTER_PROGRAM_SHA256" \
+    --arg router_programdata_sha256 "$ROUTER_PROGRAMDATA_SHA256" \
     --arg registry_id "$registry_id" \
     --arg registry_elf "$registry_elf" \
     --arg registry_hash "$registry_hash" \
@@ -385,19 +399,28 @@ validate_plan() {
      .rent_credit.elf_sha256 == $rent_credit_hash and
      .genesis_accounts["loader.rent-credit.program"].address == $rent_credit_id and
      .genesis_accounts["loader.rent-credit.programdata"].address == .rent_credit.programdata_id and
+     .genesis_accounts["loader.pyth-receiver.program"].address == $receiver_id and
+     .genesis_accounts["loader.pyth-receiver.program"].data_sha256 == $receiver_program_sha256 and
+     .genesis_accounts["loader.pyth-receiver.programdata"].address == $receiver_programdata_id and
+     .genesis_accounts["loader.pyth-receiver.programdata"].data_sha256 == $receiver_programdata_sha256 and
+     .genesis_accounts["loader.pyth-router.program"].address == $router_id and
+     .genesis_accounts["loader.pyth-router.program"].data_sha256 == $router_program_sha256 and
+     .genesis_accounts["loader.pyth-router.programdata"].address == $router_programdata_id and
+     .genesis_accounts["loader.pyth-router.programdata"].data_sha256 == $router_programdata_sha256 and
      .infrastructure_profile.registry_artifact_release_id == .registry.artifact_release_id and
      .infrastructure_profile.rent_artifact_release_id == .rent_credit.artifact_release_id and
      (.genesis_boundary | length == 2) and
      (.bootstrap_order | length == 5) and
      (.execution_blocker | type == "string" and length > 0) and
      (if .record_publication == "transaction" then
-        # The deployable shape: genesis holds the seven programs and nothing
-        # else, and every record body arrives by transaction. Assert the
-        # absence positively rather than merely counting.
-        (.genesis_accounts | length == 14) and
+        # The deployable shape: genesis holds the seven dClutch programs and
+        # two immutable provider programs, and every record body arrives by
+        # transaction. Assert the absence positively rather than merely
+        # counting.
+        (.genesis_accounts | length == 18) and
         (.genesis_accounts | keys | all(startswith("loader.")))
       elif .record_publication == "genesis" then
-        (.genesis_accounts | length == 23) and
+        (.genesis_accounts | length == 27) and
         .genesis_accounts["record.registry_artifact_release"].data_sha256 == .records.registry_artifact_release.content_sha256 and
         .genesis_accounts["record.rent_artifact_release"].data_sha256 == .records.rent_artifact_release.content_sha256
       else false end)' \
@@ -432,7 +455,7 @@ write_profile() {
     printf '  "ledger":'; json_string "$ledger"; printf ',\n'
     printf '  "account_dir":'; json_string "$account_dir"; printf ',\n'
     printf '  "genesis_plan":'; json_string "$plan"; printf ',\n'
-    printf '  "genesis_boundary":"Six immutable Loader-v3 programs, one authority-bearing pre-init Core, and finalized Registry record bodies are prepared. Init, Core revocation, activation, RentCredit, Found, Source, funding, and Resolution remain transactions.",\n'
+    printf '  "genesis_boundary":"Six immutable dClutch Loader-v3 programs, one authority-bearing pre-init Core, two exact immutable slot-zero Pyth provider Loader pairs, and any plan-selected finalized Registry record bodies are prepared. Init, Core revocation, activation, RentCredit, Found, Source, funding, and Resolution remain transactions.",\n'
     printf '  "key_policy":"No caller wallet/config is read; validator keys are ledger-scoped and bootstrap keys exist only in process memory.",\n'
     printf '  "validator":{"path":'; json_string "$validator"; printf ',"version":'; json_string "$version"; printf '},\n'
     printf '  "programs":[\n'
@@ -443,10 +466,10 @@ write_profile() {
     printf '    {"name":"resolution","program_id":"%s","elf_path":' "$resolution_id"; json_string "$resolution_elf"; printf ',"elf_sha256":"%s","attestation":' "$resolution_hash"; json_string "$resolution_attestation"; printf '},\n'
     printf '    {"name":"custody","program_id":"%s","elf_path":' "$custody_id"; json_string "$custody_elf"; printf ',"elf_sha256":"%s","attestation":' "$custody_hash"; json_string "$custody_attestation"; printf '},\n'
     printf '    {"name":"rent-credit","program_id":"%s","elf_path":' "$rent_credit_id"; json_string "$rent_credit_elf"; printf ',"elf_sha256":"%s","attestation":' "$rent_credit_hash"; json_string "$rent_credit_attestation"; printf '},\n'
-    printf '    {"name":"pyth-receiver","program_id":"%s","elf_sha256":"c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"},\n' "$RECEIVER_ID"
-    printf '    {"name":"pyth-router","program_id":"%s","elf_sha256":"f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb"}\n' "$ROUTER_ID"
+    printf '    {"name":"pyth-receiver","program_id":"%s","programdata_id":"%s","deployment_slot":0,"upgrade_authority":null,"programdata_sha256":"%s","elf_sha256":"c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"},\n' "$RECEIVER_ID" "$RECEIVER_PROGRAMDATA_ID" "$RECEIVER_PROGRAMDATA_SHA256"
+    printf '    {"name":"pyth-router","program_id":"%s","programdata_id":"%s","deployment_slot":0,"upgrade_authority":null,"programdata_sha256":"%s","elf_sha256":"f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb"}\n' "$ROUTER_ID" "$ROUTER_PROGRAMDATA_ID" "$ROUTER_PROGRAMDATA_SHA256"
     printf '  ],\n'
-    printf '  "loader_time_boundary":"Registry, Claims, Trading, Resolution, Custody, and Rent use exact slot-0 immutable Loader headers. Core alone starts with the plan-pinned ephemeral authority, must initialize the profile, and must revoke to the pinned tag-None fixed-offset poststate (including Loader-retained inactive authority bytes) before immutable release recognition. Current wall clock differs from the captured provider fixture."\n'
+    printf '  "loader_time_boundary":"Registry, Claims, Trading, Resolution, Custody, Rent, and both Pyth providers use exact prepared slot-0 immutable Loader headers. Core alone starts with the plan-pinned ephemeral authority, must initialize the profile, and must revoke to the pinned tag-None fixed-offset poststate (including Loader-retained inactive authority bytes) before immutable release recognition. Current wall clock differs from the captured provider fixture."\n'
     printf '}\n'
   } > "$ledger/$PROFILE_NAME"
 }
@@ -583,9 +606,7 @@ start() {
     --rpc-port "$RPC_PORT" \
     --faucet-port "$FAUCET_PORT" \
     --gossip-port "$GOSSIP_PORT" \
-    --dynamic-port-range "$DYNAMIC_PORT_RANGE" \
-    --upgradeable-program "$RECEIVER_ID" "$FIXTURE_DIR/receiver.so" none \
-    --upgradeable-program "$ROUTER_ID" "$FIXTURE_DIR/router.so" none
+    --dynamic-port-range "$DYNAMIC_PORT_RANGE"
   )
   if [[ "$foreground" -eq 1 ]]; then
     printf '%s\n' "$$" > "$ledger/$PID_NAME"

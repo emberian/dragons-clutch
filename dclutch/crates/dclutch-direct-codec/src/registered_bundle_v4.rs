@@ -46,9 +46,11 @@ use crate::{
         DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3,
     },
     registered_account_artifacts_v4::{
-        DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4, DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4,
-        DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4, DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4,
-        DirectRegisterBuyAccountProfileInputV4, DirectRegisteredCreationAccountProfileInputV4,
+        DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4, DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4,
+        DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4, DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4,
+        DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4, DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4,
+        DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4, DirectRegisterBuyAccountProfileInputV4,
+        DirectRegisteredCreationAccountProfileInputV4,
         encode_direct_register_buy_account_profile_v4_atomic,
         encode_direct_register_sell_account_profile_v4_atomic,
     },
@@ -325,9 +327,24 @@ pub fn validate_direct_register_buy_hot_bundle_v4(
         return Err(DirectRegisteredCreationHotBundleErrorV4::Geometry);
     }
     for (route, start, count, dependencies) in [
-        (0_u16, 12_u16, 12_u16, 0_u16),
-        (1, 24, 16, 1),
-        (2, 40, 14, 2),
+        (
+            0_u16,
+            DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4,
+            dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
+            0_u16,
+        ),
+        (
+            1,
+            DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4,
+            dclutch_custody_contract::OPEN_VAULT_ACCOUNT_COUNT_V1,
+            1,
+        ),
+        (
+            2,
+            DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4,
+            dclutch_custody_contract::TRANSFER_ACCOUNT_COUNT_V1,
+            2,
+        ),
     ] {
         let route = base
             .route(route)
@@ -690,34 +707,35 @@ mod tests {
             u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Trading");
         *output.get_mut(17).expect("ProgramData") = 1_024;
         *output.get_mut(18).expect("Realm") = u32::try_from(REALM_BYTES).expect("Realm");
-        *output.get_mut(23).expect("Custody program") = 17;
-        *output.get_mut(33).expect("mint") = 82;
-        *output.get_mut(36).expect("token program") = 36;
-        *output.get_mut(50).expect("source") = 165;
+        *output.get_mut(23).expect("Rent sysvar") = 17;
+        *output.get_mut(34).expect("mint") = 82;
+        *output.get_mut(37).expect("token program") = 36;
+        *output.get_mut(51).expect("source") = 165;
         for (account, representative) in [
             (22_usize, 11_usize),
-            (25, 13),
-            (26, 14),
-            (27, 15),
-            (28, 16),
-            (29, 17),
-            (30, 18),
-            (31, 19),
-            (32, 20),
-            (38, 11),
-            (39, 23),
-            (41, 13),
-            (42, 14),
-            (43, 15),
-            (44, 16),
-            (45, 17),
-            (46, 18),
-            (47, 19),
-            (48, 20),
-            (49, 33),
-            (51, 34),
+            (24, 7),
+            (26, 13),
+            (27, 14),
+            (28, 15),
+            (29, 16),
+            (30, 17),
+            (31, 18),
+            (32, 19),
+            (33, 20),
+            (39, 11),
+            (40, 23),
+            (42, 13),
+            (43, 14),
+            (44, 15),
+            (45, 16),
+            (46, 17),
+            (47, 18),
+            (48, 19),
+            (49, 20),
+            (50, 34),
             (52, 35),
             (53, 36),
+            (54, 37),
         ] {
             let value = *output.get(representative).expect("representative");
             *output.get_mut(account).expect("alias") = value;

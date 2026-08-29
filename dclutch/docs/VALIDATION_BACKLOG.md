@@ -26,12 +26,23 @@ The checkpoint must include:
 1. A fresh all-13 checked release build on hbox under `swarm-build`, with a
    separate frame-diagnostic build for every shipped link. Record the gate
    digest, exact source commit, all ELF digests, zero build diagnostics, deepest
-   frame per link, and immutable Cargo-lock closure.
+   frame per link, and immutable Cargo-lock closure. Reconfirm the compiled
+   DCLTGMF2 59-key and DCLTPCB2 62-key censuses, including the admitted
+   64-key/refused 65-key boundary.
 2. One fresh owned-loopback run through Founding and collateralized participant
    admission before Direct starts. Require the explicit partition of
    1,000,000,000 founding atoms plus 100,000,000 participant atoms, removed mint
    authority, the `direct-buyer` source account owned by `participant`, and both
-   participant transactions finalized.
+   participant transactions finalized. Require admission to join the exact
+   `founding_lifecycle_rent_credit` owned by the DCLTGMF2/Open-market generation;
+   the earlier Found37 `lifecycle_rent_credit`, an aliased coordinate, or a
+   missing founding label must refuse before any signer access. For the
+   owned-loopback SourceAbort lane, record the actual slot deltas across its
+   sixteen finalized pre-expiry barriers and both dispatch guards; require the
+   576-slot fixture policy to retain its 160-slot staging and 64-slot rollback
+   margins, preserve the pre-expiry fee-only whole-transaction rollback, and
+   complete DCLTPCA1 only after the real expiry slot. Public/devnet must still
+   select the prior 900-slot expiry and 64-slot staging margin.
 3. Direct setup and execution through the accepted caller: InitializeReplay,
    lookup-table creation/extensions/freeze/activation, capability seal, and Hot.
    Preserve every mutating signature, finalized slot, fee, compute measurement,
@@ -131,12 +142,24 @@ Run these rows at the same combined freeze as the private-validator checkpoint:
 1. Repair every stale Cargo graph from a detached copy, validate each result
    with `cargo metadata --locked --offline`, then atomically install only the
    exact generated `Cargo.lock` files. The last complete inventory found 45
-   workspaces and 60 tracked lockfiles, with 25 stale graphs.
+   workspaces and 60 tracked lockfiles. The 25 stale graphs were repaired
+   through `a0e4f695`; the final source-bound inventory must still prove the
+   whole set immutable.
 2. Populate the hbox Cargo cache with those exact locked graphs, then run
    `tools/release/check-all-workspaces.py` from fresh archived source under
    `swarm-build`. Require workspace pass count = workspace count and complete
-   lock immutability. The last baseline was 17/45; two additional reds were
-   hbox offline-cache misses (`spl-token-2022`, `lru 0.18.3`).
+   lock immutability. The last full exact-source census was 41/45 at
+   `400fcfca`: the two offline-cache misses were populated from the local
+   pinned Cargo cache without a network fetch, and their focused checks passed;
+   Journey and Relayed-vertical then passed focused locked/offline checks at
+   `d2724c2f` and `b18ac2da`. Those focused results are not a 45/45
+   source-bound census. The exact archived `2b0e6c29` checkpoint later passed
+   45/45 with all 60 locks immutable; its summary is
+   `/tank/dregg-build/dclutch-all-workspaces-2b0e6c29-run1/SUMMARY.txt`
+   (SHA-256
+   `5f790218ff76ae514dab2efe62c072697c4a9e5cb19adb59bb29e93e25f60b2f`).
+   That source failed the real founding runtime below, so rerun the enumerator
+   if the next accepted CU repair changes any workspace or lock graph.
 3. Run `tools/release/checked-release-candidate.sh` from that same commit in a
    new work root. Require all 13 shipped links freshly compiled, zero SBF frame
    diagnostics, every measured frame below 4,096 bytes, and an emitted checked
@@ -158,7 +181,7 @@ Run these rows at the same combined freeze as the private-validator checkpoint:
 7. Regenerate every affected browser ABI owner, then the route census, GENREF,
    SBOM, and notices through their temp-file/atomic-replace generators. Require
    the second generation/check pass to be byte-identical. The last known stale
-   route authority had 105 routes and 209 refusal codes.
+   route authority had 107 routes and 209 refusal codes.
 8. Produce the exact seven-row deployment disposition: Core, Claims, Trading,
    Resolution, and Custody are `Upgrade`; Registry and Rent are `CarryForward`.
    Bind each row to the checked gate and current finalized Loader observation.
@@ -169,6 +192,53 @@ Run these rows at the same combined freeze as the private-validator checkpoint:
 The final M-61 sweep must use the Trading ELF after Direct `InitializeReplay`
 and its caller freeze. Report pass count and the 20-seed mean beside the exact
 ELF SHA-256; do not report one draw or an observed minimum as a margin.
+
+## Current integrated build evidence
+
+- Source `2b0e6c29b9adea55b979585e20cfc024ea07816c` includes the Resolution
+  duplicate-work repair and Trading's authenticated duplicate-preplan removal.
+  Its exact archived-source gate is
+  `/tank/dregg-build/dclutch-checked-2b0e6c29-run1/work/CHECKED_UPGRADE_GATE.json`
+  (SHA-256
+  `ed013070f4f0194d84ec49a954cc64cc0184d5b0974aea4f65a93456145c2997`).
+  All 13 links were fresh, diagnostics were zero, and all 60 Cargo locks were
+  unchanged with before/after set SHA-256
+  `6e22305800897e66bb05e20d1c9e69b0690a7ac8aa4c32d0172cbf97576dc4b2`.
+  Trading measured 732 frames below 4,096 bytes, deepest 4,032 bytes. The exact
+  Trading ELF is 1,690,680 bytes with SHA-256
+  `675c9c45bde6089ef4b57daf770ece7d2bd33870a0043e42e5d0e2119c229d2a`.
+- The fresh immutable-substrate M-61 sweep for those exact Trading bytes passed
+  20/20 seeds with arithmetic mean 1,359,277 CU. Its summary is
+  `/tank/dregg-build/dclutch-m61-2b0e6c29-run1/summary-immutable.json`
+  (SHA-256
+  `af21319eb4a06af7371ae9b9b0eccc0ac013979da436145407c234ab1746dc70`).
+  This is compute evidence, not a private-validator lifecycle acceptance.
+- The exact one-seed participant-through runtime rejected this candidate during
+  honest founding: three Custody calls consumed 355,209, 98,172, and 113,313
+  CU, Core consumed 258,805 CU, Resolution exhausted at 623,608 of 623,664 CU,
+  and outer Trading exhausted at 1,399,494 of 1,399,550 CU. The transaction
+  consumed the 1,400,000-CU maximum and admitted no participant. Its summary is
+  `/tank/dregg-build/dclutch-private-participant-2b0e-run1/SUMMARY.json`
+  (SHA-256
+  `229cc903f1e99f83b0c2e272c72b3755cdc707540e9d89e631c682965c3e14ab`).
+  The Trading preplan removal still increased the allowance before the
+  Resolution child by an observed 58,709 CU, but post-child Trading work was
+  never reached. Preserve the gate, workspace census, and M-61 result as build
+  evidence only; a larger onchain CU repair and a fresh runtime candidate are
+  required.
+- Resolution descendant `68f6f7d6` collapsed the remaining duplicate
+  pre-Market authentication. In its fixed-payer focused harness, whole-caller
+  work fell from 861,269 to 813,778 CU (47,491 CU observed reduction) and
+  Resolution-exclusive work fell from 512,659 to 474,174 CU (38,485 CU
+  observed reduction). The evidence root is
+  `/tank/dregg-build/dclutch-resolution-cu2.WDJYpG`; host tests passed 4/4,
+  the compiled-SBF positive and Found37-alias rollback cases passed, and all
+  133 measured frames were below 4,096 bytes with a 1,920-byte pre-Market
+  maximum. This focused harness does not contain Trading's post-child work.
+  Direct and PRIVATE therefore selected a durable Prepared funding checkpoint
+  as required architecture; do not emit another gate for the old one-transaction
+  DCLTPCB2 shape. Run the next all-13/frame/M-61 gate only after that vertical
+  slice freezes.
 
 ## Other preserved intermediate evidence
 
@@ -182,3 +252,57 @@ ELF SHA-256; do not report one draw or an observed minimum as a margin.
 - The 1,399,700-CU “Resolution” activation was an invalid manual control using
   the orphaned 9 MB `dclutch_sbf.so` Source artifact. It is hostile oversized
   substitution evidence only, not Resolution evidence.
+- `cb4e93b5` removed duplicated pre-Market Resolution work after the
+  `400fcfca` private run exhausted its 561,958-CU nested budget at 561,902 CU.
+  Its focused hbox overlay used the `400fcfca` source plus the exact accepted
+  `pre_market_funding_v1.rs`; that overlay is not itself a checked candidate.
+  A separate exact-source all-13 build subsequently emitted the strict forensic
+  gate
+  `/tank/dregg-build/dclutch-checked-cb4e93b5-run1/work/CHECKED_UPGRADE_GATE.json`
+  (SHA-256
+  `013cf739b08c51f62ac98b9ed7a2555abb3dc55d555b6448dad7f056858b1b80`),
+  with zero diagnostics and immutable 60-lock closure. It is not the final
+  runtime candidate: full Hot remained under live test and the paired Trading
+  CU repair was still open. The optimized SBF build log is
+  `/tank/dregg-build/dclutch-resolution-cu.LKt6s0/logs/resolution-build.log`
+  (SHA-256 `75329d4c0e88de0aa047a9e1712c6969b955b5b1dea2229a91eb4805d59952fe`),
+  and the real-SVM success log is
+  `/tank/dregg-build/dclutch-resolution-cu.LKt6s0/logs/pre-market-svm.log`
+  (SHA-256 `165d126f5f19bbfbd7d52c54131615abd92fde00066344c30bff3b804bf2f23a`).
+  One paired randomized-caller draw reduced Resolution-exclusive work from
+  516,146 to 511,159 CU after subtracting nested Core, an observed 4,987-CU
+  reduction, not an M-61 margin. The emitted-stack object is
+  `/tank/dregg-build/dclutch-resolution-cu.LKt6s0/frame-target/sbpf-solana-solana/release/deps/dclutch_resolution_proof_sbf.o`
+  (SHA-256 `b7c44d70507446bd9079c29255afe346fb6455d3eef2eefd204b85069edd65dc`):
+  all 133 frames were below 4,096 bytes and the deepest pre-Market frame was
+  1,920 bytes. The exact-source one-seed private run then failed the honest
+  founding transaction before participant admission with the same 56-CU tail:
+  Resolution consumed 564,899 of 564,955 CU, outer Trading consumed 1,399,494
+  of 1,399,550 CU, and simulation reported 1,400,000 units consumed. Its
+  summary is
+  `/tank/dregg-build/dclutch-private-participant-cb4e-run1/SUMMARY.json`
+  (SHA-256
+  `cfdd565d27d4e3909ddba0d2a6a15bc8511afc3149b95ef32faf0ca19144c6d9`).
+  Preserve the strict gate and focused 4,987-CU draw as forensic evidence only;
+  the combined Trading duplicate-preplan repair, fresh gate, and production
+  runtime comparison remain required.
+
+## Public delivery checkpoint
+
+- After the final deployment facts are published, run the manual GitHub Pages
+  workflow from the exact wrapper commit and record its run ID, head SHA, and
+  successful deployment job. Recheck the public hostname independently; an
+  HTTP 200 alone is availability evidence, not an interactive browser result.
+- In a cold browser, open `/operate`, choose the checked live-devnet preset, and
+  prove it fills only the endpoint and six published roles. Market and Realm
+  must remain empty until chain discovery supplies real addresses. Require the
+  fresh finalized Loader/header and activation-cache checks to pass while the
+  page still states that route-specific release admission is unproven.
+- Exercise the public Market, trade, activity, portfolio, and redemption pages
+  against the real devnet addresses and finalized activity dossier. Verify
+  wallet connect, explicit signing prompts, Submitted-before-send recovery,
+  transaction links, refresh/reload recovery, and plain second-person refusal
+  copy. No static projection may be presented as onchain completion.
+- Redeploy the Sites mirror from the same accepted web source and repeat the
+  public navigation/smoke checks there. Record the project/deployment identity
+  separately from GitHub Pages; one host passing does not prove the other.

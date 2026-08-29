@@ -824,6 +824,7 @@ fn wrapper_instruction(
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false),
         ]),
         OperationV1::OpenVault => accounts.extend([
             AccountMeta::new_readonly(fixture.mint, false),

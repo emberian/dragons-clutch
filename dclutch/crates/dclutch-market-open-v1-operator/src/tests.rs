@@ -298,6 +298,7 @@ impl Fixture {
                 AccountMeta::new(payer, true),
                 AccountMeta::new_readonly(system_program::ID, false),
                 AccountMeta::new_readonly(sysvar::rent::ID, false),
+                AccountMeta::new(Pubkey::new_from_array(custody_request.rent_refund), false),
             ]);
         } else {
             let vault = Pubkey::new_from_array(custody_request.destination);

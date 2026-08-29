@@ -7,8 +7,8 @@ owned by the successor commands and their journals.
 
 The gate runs one clean baseline plus sixteen hostile cases:
 
-- process death after durable `Submitted` and exact upstream delivery, while
-  the RPC response is withheld, at founding,
+- process death at the native pre-send hook after durable `Dispatching` but
+  before any selected-stage `sendTransaction`, at founding,
   participant admission, ALT creation, capability seal, Direct Hot execution,
   Resolution, wallet payout, and retirement;
 - a lost RPC response, an exact injected duplicate `sendTransaction`, and a
@@ -19,9 +19,11 @@ The gate runs one clean baseline plus sixteen hostile cases:
 Every case starts from the same owned-loopback fixture. Successful recovery
 must end with the exact baseline account bytes and lamports. A refused case
 must preserve its independently observed pre-fault snapshot byte-for-byte.
-The RPC trace rejects a second client `sendTransaction` for one frozen journal
-intent; the deliberately duplicated request is marked as supervisor-injected,
-so it cannot disguise a caller retry.
+On restart, each killed owner must poll the frozen signature first and may then
+send only the identical packet and signature. The RPC trace rejects a second
+client `sendTransaction` for one frozen journal intent; the deliberately
+duplicated request is marked as supervisor-injected, so it cannot disguise a
+caller retry.
 
 For the expiry case the proxy records the exact recent blockhash and first
 signature from the frozen Solana wire, binds it to an observed
@@ -29,17 +31,19 @@ signature from the frozen Solana wire, binds it to an observed
 the returned last-valid height, and only then forwards the unchanged packet.
 The upstream must return `BlockhashNotFound`, and recovery must poll the exact
 wire signature without another client send. Every injected send is refused
-unless the selected owner projection is already durably `submitted`.
+unless the selected owner projection is already durably `dispatching`. A
+successful send advances to `submitted` only after the RPC call returns;
+`submitted` recovery remains poll-only.
 
 Refusal journal prefixes are exact. Corrupt/replaced evidence and wallet
 underfund/surplus expose no lifecycle stage. Expiry has founding, participant,
-ALT, and seal finalized, Hot submitted, and nothing later. Late-child refusal
+ALT, and seal finalized, Hot dispatching, and nothing later. Late-child refusal
 has every stage through payout finalized and no retirement projection at all.
 The shell rejects a merely ordered-looking result that advances past one of
 those boundaries.
 
-Expiry uses the same armed-boundary discipline as a refused child: after Hot
-is durably `submitted` but before its sole send, the driver writes
+Expiry uses the same armed-boundary discipline as a killed owner: after Hot is
+durably `dispatching` but before its sole send, the driver writes
 `FAULT_ARMED.json` and waits for `FAULT_GO.json`. The snapshot therefore owns
 the valid finalized prefix, and post-refusal equality does not pretend that
 founding through seal should be rolled back.
@@ -97,14 +101,41 @@ Each durable boundary is projected as `<journalDir>/<stage>.json`:
 {
   "schema": "dclutch-lifecycle-chaos-stage-projection-v1",
   "stage": "hot",
-  "phase": "submitted",
+  "phase": "dispatching",
   "intentSha256": "64 lowercase hex digits"
 }
 ```
 
 The projection is not a second journal. It is a four-field view of the
-semantic owner's already-fsynced journal. The driver must never advance it to
-`submitted` before its owner has durably persisted that phase.
+semantic owner's already-fsynced journal. Its exact phase vocabulary is
+`planned`, `prepared`, `dispatching`, `submitted`, and `finalized`.
+
+For each `kill-*` case, the accepted driver must enter the semantic owner's
+native post-fsync/pre-send callback, project `dispatching`, and write one exact
+`control/FAULT_ARMED.json`:
+
+```json
+{
+  "schema": "dclutch-lifecycle-chaos-control-v1",
+  "state": "fault-armed",
+  "fault": "kill-hot",
+  "stage": "hot",
+  "phase": "dispatching",
+  "intentSha256": "<64 lowercase hex>",
+  "signedPacketSha256": "<64 lowercase hex>",
+  "signature": "<canonical Solana signature>",
+  "dispatchingStateSha256": "<64 lowercase hex>"
+}
+```
+
+The callback blocks there. The supervisor proves no selected-stage send reached
+its proxy, kills the whole session process group, and writes a matching
+`FAULT_GO.json` before restart. Recovery must authenticate the persisted packet,
+poll its exact signature first, and, only when it is absent, send those identical
+bytes. The proxy independently decodes that send and requires its wire digest
+and signature to equal the armed owner facts. This native handshake is required
+because observing a file and racing a separate process kill would not prove a
+pre-send boundary.
 
 The observer prints sorted exact account rows with raw data, its SHA-256,
 owner, executable flag, and lamports under

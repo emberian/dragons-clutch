@@ -22,7 +22,7 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,6 +40,10 @@ use crate::{
 };
 
 pub(crate) const FIXTURE_PUBLISH_TIME: i64 = 1_787_431_680;
+pub(crate) const LOCAL_PYTH_RECEIVER_ELF: &[u8] =
+    include_bytes!("../../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver.so");
+pub(crate) const LOCAL_PYTH_ROUTER_ELF: &[u8] =
+    include_bytes!("../../../../../fixtures/pyth/local-upgraded-2026-08-22/router.so");
 
 #[derive(Debug)]
 pub(crate) struct PrepareArgs {
@@ -1022,7 +1026,7 @@ fn prepare_inner(
         trading_deployment.upgrade_authority,
     )?;
     let resolution_semantic = hex32(&args.resolution_semantic_release_id)?;
-    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V6 {
         return Err(Error::new(
             "Resolution semantic release ID does not match the selected executable contract",
         ));
@@ -1087,6 +1091,7 @@ fn prepare_inner(
         .map_err(|error| Error::new(format!("local Pyth release projection: {error:?}")))?;
     let provider_release_bytes = provider.release().to_bytes();
     let provider_release_id = sha256_bytes(&provider_release_bytes);
+    let provider = provider.release();
 
     let mut writer = PlanWriter::new(args.account_dir.clone())?;
     for (label, program, deployment) in [
@@ -1103,6 +1108,49 @@ fn prepare_inner(
         ("core", args.core_program, &core_deployment),
     ] {
         writer.upgradeable_program(label, program, &deployment.image)?;
+    }
+    for (label, program, expected_programdata, deployment_slot, expected_elf_sha256, elf) in [
+        (
+            "pyth-receiver",
+            Pubkey::new_from_array(provider.receiver_program()),
+            Pubkey::new_from_array(provider.receiver_programdata()),
+            provider.receiver_deployment_slot(),
+            provider.receiver_abi_id(),
+            LOCAL_PYTH_RECEIVER_ELF,
+        ),
+        (
+            "pyth-router",
+            Pubkey::new_from_array(provider.router_program()),
+            Pubkey::new_from_array(provider.router_programdata()),
+            provider.router_deployment_slot(),
+            provider.router_abi_id(),
+            LOCAL_PYTH_ROUTER_ELF,
+        ),
+    ] {
+        let derived_programdata = programdata(program);
+        if deployment_slot != 0
+            || expected_programdata != derived_programdata
+            || sha256_bytes(elf) != expected_elf_sha256
+        {
+            return Err(Error::new(format!(
+                "local {label} release does not own the exact slot-zero fixture Loader pair"
+            )));
+        }
+        let image = loader_programdata_bytes(elf, deployment_slot, None);
+        let view = ProgramDataV3View::parse(&image).map_err(|error| {
+            Error::new(format!(
+                "local {label} prepared ProgramData is not Loader-v3: {error:?}"
+            ))
+        })?;
+        if view.deployment_slot() != 0
+            || view.upgrade_authority().is_some()
+            || sha256_bytes(view.elf()) != expected_elf_sha256
+        {
+            return Err(Error::new(format!(
+                "local {label} prepared ProgramData is not exact slot-zero tag-None fixture evidence"
+            )));
+        }
+        writer.upgradeable_program(label, program, &image)?;
     }
 
     let publication = args.record_publication;
@@ -1166,6 +1214,7 @@ fn prepare_inner(
             crate::local_mutable::build_checked_local_mutable_set_v1(
                 gate,
                 args.core_bootstrap_upgrade_authority,
+                &hex(&release_set_id),
                 [
                     ("registry", &registry_pin),
                     ("rent", &rent_pin),
@@ -1183,16 +1232,16 @@ fn prepare_inner(
         schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
         genesis_boundary: if checked_local_mutable_gate.is_some() {
             vec![
-                "Genesis installs seven exact checked-release Loader-v3 Program/ProgramData pairs under one disposable retained authority at canonical local slots 1 through 7. Nothing else.".into(),
+                "Genesis installs seven exact checked-release Loader-v3 Program/ProgramData pairs under one disposable retained authority at canonical local slots 1 through 7, plus the two exact immutable slot-zero Pyth provider Loader pairs. Nothing else.".into(),
                 "Every infrastructure record body, activation, founding, participant, trade, resolution, payout, and retirement remains a real localhost transaction.".into(),
             ]
         } else { match publication {
             RecordPublicationV1::Genesis => vec![
-                "Genesis fixtures are six immutable Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and finalized Registry record bodies.".into(),
+                "Genesis fixtures are six immutable dClutch Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, two immutable slot-zero Pyth provider Loader pairs, and finalized Registry record bodies.".into(),
                 "Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution are not genesis-prepared.".into(),
             ],
             RecordPublicationV1::Transaction => vec![
-                "Genesis fixtures are six immutable Loader-v3 programs and one authority-bearing pre-init Core Loader-v3 program with the same exact ELF. Nothing else. No protocol state exists at genesis.".into(),
+                "Genesis fixtures are six immutable dClutch Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and two immutable slot-zero Pyth provider Loader pairs. Nothing else. No protocol state exists at genesis.".into(),
                 "Every infrastructure record body, Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution is a real transaction. This is the shape a cluster can reach.".into(),
             ],
         }},
@@ -1673,6 +1722,32 @@ mod tests {
     }
 
     #[test]
+    fn provider_genesis_bodies_are_slot_zero_tag_none_not_cli_none() {
+        for (elf, expected_immutable, expected_cli_none) in [
+            (
+                LOCAL_PYTH_RECEIVER_ELF,
+                "63d003102c1bd48be1be24706734813094747eee82edbe066c2042474f64004e",
+                "c9e4e286f11f86d95478bb5c89496f97d4fb4471a8b67c8dc372248ec0b45f82",
+            ),
+            (
+                LOCAL_PYTH_ROUTER_ELF,
+                "04c1327626a93e09c4c833aa43b316f472d697e2fff0e5c029aaf343b83252c4",
+                "ee21b7f378604d72d9412926650b12c6d9281f7559ed3fe671ce31bf1aeef9e0",
+            ),
+        ] {
+            let immutable = loader_programdata_bytes(elf, 0, None);
+            let cli_none = loader_programdata_bytes(elf, 0, Some(Pubkey::default()));
+            assert_eq!(hex(&sha256_bytes(&immutable)), expected_immutable);
+            assert_eq!(hex(&sha256_bytes(&cli_none)), expected_cli_none);
+            assert_eq!(immutable[12], 0);
+            assert_eq!(cli_none[12], 1);
+            assert!(immutable[13..45].iter().all(|byte| *byte == 0));
+            assert!(cli_none[13..45].iter().all(|byte| *byte == 0));
+            assert_ne!(immutable, cli_none);
+        }
+    }
+
+    #[test]
     fn checked_candidate_padding_accepts_only_an_exact_prefix_and_zero_suffix() {
         let candidate = b"\x7fELFchecked";
         assert_eq!(
@@ -1872,6 +1947,18 @@ mod tests {
         publication: RecordPublicationV1,
         deployments: RoleDeploymentsV1,
     ) -> (Result<SuccessorPlan>, PathBuf) {
+        prepared_plan_with_resolution_semantic(
+            publication,
+            deployments,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+        )
+    }
+
+    fn prepared_plan_with_resolution_semantic(
+        publication: RecordPublicationV1,
+        deployments: RoleDeploymentsV1,
+        resolution_semantic_release_id: [u8; 32],
+    ) -> (Result<SuccessorPlan>, PathBuf) {
         let root =
             std::env::temp_dir().join(format!("dclutch-successor-plan-{}", Pubkey::new_unique()));
         fs::create_dir(&root).expect("create test root");
@@ -1907,7 +1994,7 @@ mod tests {
             resolution_program: program(5),
             resolution_elf,
             resolution_sha256,
-            resolution_semantic_release_id: hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V5),
+            resolution_semantic_release_id: hex(&resolution_semantic_release_id),
             custody_program: program(6),
             custody_elf,
             custody_sha256,
@@ -1921,6 +2008,23 @@ mod tests {
             deployments,
         });
         (plan, root)
+    }
+
+    #[test]
+    fn resolution_v5_is_refused_after_the_v6_prepared_funding_migration() {
+        let (result, root) = prepared_plan_with_resolution_semantic(
+            RecordPublicationV1::Transaction,
+            RoleDeploymentsV1::default(),
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+        );
+        let error = result.expect_err("Resolution V5 must not author a V6 successor plan");
+        assert!(
+            error
+                .to_string()
+                .contains("Resolution semantic release ID does not match"),
+            "unexpected refusal: {error}"
+        );
+        fs::remove_dir_all(root).expect("remove scoped test root");
     }
 
     /// A ProgramData account body in the shape a real cluster leaves behind
@@ -2290,10 +2394,10 @@ mod tests {
     }
 
     #[test]
-    fn prepare_materializes_only_seven_loaders_and_nine_finalized_records() {
+    fn prepare_materializes_nine_loaders_and_nine_finalized_records() {
         let (plan, root) = prepared_plan(RecordPublicationV1::Genesis);
         assert_eq!(plan.record_publication, "genesis");
-        assert_eq!(plan.genesis_accounts.len(), 23);
+        assert_eq!(plan.genesis_accounts.len(), 27);
         assert_eq!(plan.records.len(), 9);
         assert!(
             !plan
@@ -2312,17 +2416,18 @@ mod tests {
         fs::remove_dir_all(&root).expect("remove scoped test root");
     }
 
-    /// The deployable shape: genesis carries the seven programs and nothing
-    /// else. Every record coordinate must be identical to the genesis-injected
-    /// plan's, because a record's address is a function of schema and content
-    /// and never of who wrote the bytes.
+    /// The deployable shape: genesis carries the seven dClutch programs plus
+    /// the two exact immutable provider programs and no protocol state. Every
+    /// record coordinate must be identical to the genesis-injected plan's,
+    /// because a record's address is a function of schema and content and
+    /// never of who wrote the bytes.
     #[test]
-    fn transaction_publication_leaves_genesis_holding_only_the_seven_programs() {
+    fn transaction_publication_leaves_genesis_holding_only_the_nine_programs() {
         let (genesis, genesis_root) = prepared_plan(RecordPublicationV1::Genesis);
         let (transaction, transaction_root) = prepared_plan(RecordPublicationV1::Transaction);
 
         assert_eq!(transaction.record_publication, "transaction");
-        assert_eq!(transaction.genesis_accounts.len(), 14);
+        assert_eq!(transaction.genesis_accounts.len(), 18);
         assert_eq!(transaction.records.len(), 9);
         assert!(
             transaction
@@ -2330,6 +2435,39 @@ mod tests {
                 .keys()
                 .all(|label| label.starts_with("loader."))
         );
+
+        for (role, program, programdata, expected_full_sha256, expected_elf_sha256) in [
+            (
+                "pyth-receiver",
+                "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+                "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+                "63d003102c1bd48be1be24706734813094747eee82edbe066c2042474f64004e",
+                "c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64",
+            ),
+            (
+                "pyth-router",
+                "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+                "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+                "04c1327626a93e09c4c833aa43b316f472d697e2fff0e5c029aaf343b83252c4",
+                "f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb",
+            ),
+        ] {
+            let program_pin = &transaction.genesis_accounts[&format!("loader.{role}.program")];
+            let programdata_pin =
+                &transaction.genesis_accounts[&format!("loader.{role}.programdata")];
+            assert_eq!(program_pin.address, program);
+            assert_eq!(programdata_pin.address, programdata);
+            assert_eq!(programdata_pin.data_sha256, expected_full_sha256);
+            let account = authenticate_cli_account_file_v1(
+                &Path::new(&transaction.account_dir).join(format!("{programdata}.json")),
+                programdata_pin,
+            )
+            .expect("provider ProgramData account authenticates");
+            let view = ProgramDataV3View::parse(&account.data).expect("provider Loader-v3 body");
+            assert_eq!(view.deployment_slot(), 0);
+            assert_eq!(view.upgrade_authority(), None);
+            assert_eq!(hex(&sha256_bytes(view.elf())), expected_elf_sha256);
+        }
 
         for (label, pair) in &transaction.records {
             let genesis_pair = genesis

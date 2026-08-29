@@ -1,4 +1,13 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    thread,
+    time::{Duration, Instant},
+};
+
+#[path = "founding_submission_journal.rs"]
+pub(crate) mod founding_submission_journal;
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityEntryV1,
@@ -105,9 +114,21 @@ use crate::{
     },
     model::{AccountEvidence, MarketRunInput, SuccessorPlan, TransactionEvidence},
     plan::{hex, hex32, pubkey},
-    rpc::{Rpc, RpcAccount, account_evidence, bounded_instructions},
+    rpc::{FOUNDING_HEAP_FRAME_BYTES, Rpc, RpcAccount, account_evidence, bounded_instructions},
     runtime::{PublishedRecord, decode_hex, publish_product_graph, publish_record, record},
     seed::{KeyForge, role},
+};
+
+use founding_submission_journal::{
+    FoundingFinalizationV1, FoundingPreSendProjectionV1, FoundingSubmissionBindingV1,
+    FoundingSubmissionJournalV1, FoundingSubmissionOperationV1, FoundingSubmissionPhaseV1,
+    FoundingSubmissionPlanV1, FoundingSubmissionRecoveryV1, authenticate_founding_packet_fresh_v1,
+    authenticate_founding_submission_v1, dispatch_founding_submission_v1,
+    finalize_founding_submission_v1, founding_submission_finalized_poststates_v1,
+    founding_submission_message_v1, founding_submission_packet_v1,
+    founding_submission_recovery_payload_v1, founding_submission_recovery_v1,
+    plan_founding_submission_v1, prepare_founding_submission_v1, submit_founding_submission_v1,
+    visit_founding_pre_send_boundary_v1,
 };
 
 /// The captured Pyth `PriceUpdateV2` account body this demo Market resolves
@@ -196,6 +217,600 @@ pub(crate) struct MarketExecutionCheckpointV1 {
         Option<LocalParticipantFixtureLiquidityEvidenceV1>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
     pub(crate) completed: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Dcltpcb2RecoveryPayloadV1 {
+    schema: String,
+    checkpoint: MarketExecutionCheckpointV1,
+    completion_accounts: BTreeMap<String, String>,
+}
+
+/// The campaign report owns the filesystem and its exclusive lease; this
+/// adapter lets the two founding sends advance their embedded journal without
+/// giving `market.rs` a second file format or lock implementation.
+pub(crate) struct FoundingSubmissionRecorderV1<'a> {
+    binding: FoundingSubmissionBindingV1,
+    journals: &'a mut BTreeMap<FoundingSubmissionOperationV1, FoundingSubmissionJournalV1>,
+    persist: &'a mut dyn FnMut(&[FoundingSubmissionJournalV1]) -> Result<()>,
+}
+
+impl<'a> FoundingSubmissionRecorderV1<'a> {
+    pub(crate) fn new(
+        binding: FoundingSubmissionBindingV1,
+        journals: &'a mut BTreeMap<FoundingSubmissionOperationV1, FoundingSubmissionJournalV1>,
+        persist: &'a mut dyn FnMut(&[FoundingSubmissionJournalV1]) -> Result<()>,
+    ) -> Result<Self> {
+        for journal in journals.values() {
+            authenticate_founding_submission_v1(&binding, journal)?;
+        }
+        Ok(Self {
+            binding,
+            journals,
+            persist,
+        })
+    }
+
+    fn current(
+        &self,
+        operation: FoundingSubmissionOperationV1,
+    ) -> Option<&FoundingSubmissionJournalV1> {
+        self.journals.get(&operation)
+    }
+
+    fn write(&mut self, journal: FoundingSubmissionJournalV1) -> Result<()> {
+        authenticate_founding_submission_v1(&self.binding, &journal)?;
+        self.journals.insert(journal.operation, journal);
+        let ordered = self.journals.values().cloned().collect::<Vec<_>>();
+        (self.persist)(&ordered)
+    }
+
+    fn post_fsync_pre_send(
+        &mut self,
+        journal: &FoundingSubmissionJournalV1,
+    ) -> Result<FoundingPreSendProjectionV1> {
+        visit_founding_pre_send_boundary_v1(&self.binding, journal, &mut |_| Ok(()))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_durable_founding_v1(
+    rpc: &mut Rpc,
+    label: &str,
+    operation: FoundingSubmissionOperationV1,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    observation: Observation,
+    tables: &[ObservedAccount],
+    resolved_accounts_sha256: String,
+    prestate_addresses: &[Pubkey],
+    completion_addresses: &[Pubkey],
+    recovery_payload: Vec<u8>,
+    recorder: &mut FoundingSubmissionRecorderV1<'_>,
+    authenticate_completion: &mut dyn FnMut(&mut Rpc) -> Result<()>,
+) -> Result<TransactionEvidence> {
+    let payer = signers
+        .first()
+        .ok_or_else(|| Error::new("durable founding submission omitted payer"))?;
+    let expected_signers = signers
+        .iter()
+        .map(|signer| signer.pubkey())
+        .collect::<Vec<_>>();
+    let expected_prestate = founding_account_set_digest_v1(rpc, prestate_addresses)?;
+    let completion_contract_sha256 =
+        founding_completion_contract_v1(operation, completion_addresses)?;
+
+    if recorder.current(operation).is_none() {
+        let latest = rpc.call(
+            "getLatestBlockhash",
+            &serde_json::json!([{"commitment":"finalized"}]),
+        )?;
+        let value = latest
+            .get("value")
+            .ok_or_else(|| Error::new("founding getLatestBlockhash omitted value"))?;
+        let blockhash = value
+            .get("blockhash")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| Error::new("founding getLatestBlockhash omitted blockhash"))?
+            .parse::<Hash>()
+            .map_err(|error| Error::new(format!("founding blockhash: {error}")))?;
+        let last_valid_block_height = value
+            .get("lastValidBlockHeight")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| Error::new("founding blockhash omitted last-valid height"))?;
+        let bounded = bounded_instructions(instructions, Some(FOUNDING_HEAP_FRAME_BYTES))
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let plan = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            observation,
+            tables,
+        )
+        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+        let message_bytes = plan.message.serialize();
+        let exact_fee_lamports = rpc
+            .call(
+                "getFeeForMessage",
+                &serde_json::json!([BASE64.encode(&message_bytes), {"commitment":"finalized"}]),
+            )?
+            .get("value")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| Error::new("founding getFeeForMessage omitted exact fee"))?;
+        let journal = plan_founding_submission_v1(
+            &recorder.binding,
+            FoundingSubmissionPlanV1 {
+                operation,
+                message: plan.message,
+                last_valid_block_height,
+                exact_fee_lamports,
+                expected_signers,
+                resolved_accounts_sha256,
+                prestate_accounts: prestate_addresses.to_vec(),
+                prestate_sha256: expected_prestate.clone(),
+                completion_accounts: completion_addresses.to_vec(),
+                completion_contract_sha256: completion_contract_sha256.clone(),
+                recovery_payload,
+            },
+        )?;
+        // Key-free, self-authenticated Planned review is durable first.
+        recorder.write(journal)?;
+    }
+
+    loop {
+        let current = recorder
+            .current(operation)
+            .cloned()
+            .ok_or_else(|| Error::new("durable founding journal disappeared"))?;
+        match founding_submission_recovery_v1(&recorder.binding, &current)? {
+            FoundingSubmissionRecoveryV1::SignOnce => {
+                if current.prestate_sha256
+                    != founding_account_set_digest_v1(rpc, prestate_addresses)?
+                {
+                    return Err(Error::new(format!(
+                        "{} prestate changed after Planned review and before signing",
+                        operation.label()
+                    )));
+                }
+                let height = rpc
+                    .call(
+                        "getBlockHeight",
+                        &serde_json::json!([{"commitment":"finalized"}]),
+                    )?
+                    .as_u64()
+                    .ok_or_else(|| Error::new("founding block height was not u64"))?;
+                authenticate_founding_packet_fresh_v1(&recorder.binding, &current, height)?;
+                let message = founding_submission_message_v1(&recorder.binding, &current)?;
+                let transaction =
+                    VersionedTransaction::try_new(message, signers).map_err(|error| {
+                        Error::new(format!("sign {} packet: {error}", operation.label()))
+                    })?;
+                let packet = bincode::serialize(&transaction).map_err(|error| {
+                    Error::new(format!("serialize {} packet: {error}", operation.label()))
+                })?;
+                let prepared =
+                    prepare_founding_submission_v1(&recorder.binding, &current, &packet)?;
+                // Exact packet bytes and signature are fsynced before first send.
+                recorder.write(prepared)?;
+            }
+            FoundingSubmissionRecoveryV1::BeginDispatch => {
+                let height = rpc
+                    .call(
+                        "getBlockHeight",
+                        &serde_json::json!([{"commitment":"finalized"}]),
+                    )?
+                    .as_u64()
+                    .ok_or_else(|| Error::new("founding block height was not u64"))?;
+                authenticate_founding_packet_fresh_v1(&recorder.binding, &current, height)?;
+                if current.prestate_sha256
+                    != founding_account_set_digest_v1(rpc, prestate_addresses)?
+                {
+                    return Err(Error::new(format!(
+                        "{} Prepared prestate changed before dispatch; do not send or re-sign",
+                        operation.label()
+                    )));
+                }
+                // Dispatching is fsynced before the native pre-send seam. A
+                // restart from it may use only the authenticated packet bytes.
+                let dispatching = dispatch_founding_submission_v1(&recorder.binding, &current)?;
+                recorder.write(dispatching)?;
+            }
+            FoundingSubmissionRecoveryV1::ResendIdenticalPacket => {
+                let signature = current
+                    .expected_signature
+                    .as_deref()
+                    .ok_or_else(|| Error::new("Dispatching founding journal omitted signature"))?
+                    .parse::<Signature>()
+                    .map_err(|error| {
+                        Error::new(format!("Dispatching founding signature: {error}"))
+                    })?;
+                if let Some(finalized) = rpc.finalized_signed_packet(label, signature, false)? {
+                    return finish_durable_founding_v1(
+                        rpc,
+                        finalized,
+                        current,
+                        recorder,
+                        authenticate_completion,
+                    );
+                }
+                let height = rpc
+                    .call(
+                        "getBlockHeight",
+                        &serde_json::json!([{"commitment":"finalized"}]),
+                    )?
+                    .as_u64()
+                    .ok_or_else(|| Error::new("founding block height was not u64"))?;
+                authenticate_founding_packet_fresh_v1(&recorder.binding, &current, height)?;
+                if current.prestate_sha256
+                    != founding_account_set_digest_v1(rpc, prestate_addresses)?
+                {
+                    return Err(Error::new(format!(
+                        "{} Dispatching recovery found changed prestate; poll the exact signature and do not resend",
+                        operation.label()
+                    )));
+                }
+                let packet = founding_submission_packet_v1(&recorder.binding, &current)?;
+                // Native crash-test seam: Dispatching is already fsynced. A kill
+                // here recovers by sending only these identical bytes/signature.
+                let projection = recorder.post_fsync_pre_send(&current)?;
+                if projection.signature != signature.to_string()
+                    || projection.signed_packet_sha256 != hex(&Sha256::digest(&packet))
+                {
+                    return Err(Error::new(
+                        "Dispatching founding pre-send projection changed packet or signature",
+                    ));
+                }
+                let returned = rpc.submit_signed_packet_once(label, &packet, signature, false)?;
+                let submitted = submit_founding_submission_v1(
+                    &recorder.binding,
+                    &current,
+                    &returned.to_string(),
+                )?;
+                // A kill after the exact send but before this fsync leaves
+                // Dispatching; recovery may duplicate only the same signature.
+                // Once Submitted is fsynced, recovery is strictly poll-only.
+                recorder.write(submitted)?;
+            }
+            FoundingSubmissionRecoveryV1::PollOnly => {
+                let signature = current
+                    .expected_signature
+                    .as_deref()
+                    .ok_or_else(|| Error::new("Submitted founding journal omitted signature"))?
+                    .parse::<Signature>()
+                    .map_err(|error| {
+                        Error::new(format!("Submitted founding signature: {error}"))
+                    })?;
+                let deadline = Instant::now() + Duration::from_secs(300);
+                while Instant::now() < deadline {
+                    if let Some(finalized) = rpc.finalized_signed_packet(label, signature, false)? {
+                        return finish_durable_founding_v1(
+                            rpc,
+                            finalized,
+                            current,
+                            recorder,
+                            authenticate_completion,
+                        );
+                    }
+                    thread::sleep(Duration::from_millis(250));
+                }
+                return Err(Error::new(format!(
+                    "{} Submitted signature {signature} is not finalized; recovery is poll-only and opens no key or send path",
+                    operation.label()
+                )));
+            }
+            FoundingSubmissionRecoveryV1::Complete => {
+                authenticate_completion(rpc)?;
+                return authenticate_completed_founding_submission_v1(
+                    rpc,
+                    label,
+                    &recorder.binding,
+                    &current,
+                );
+            }
+        }
+    }
+}
+
+fn finish_durable_founding_v1(
+    rpc: &mut Rpc,
+    finalized: crate::rpc::FinalizedSignedPacketV1,
+    submitted: FoundingSubmissionJournalV1,
+    recorder: &mut FoundingSubmissionRecorderV1<'_>,
+    authenticate_completion: &mut dyn FnMut(&mut Rpc) -> Result<()>,
+) -> Result<TransactionEvidence> {
+    if !matches!(
+        submitted.phase,
+        FoundingSubmissionPhaseV1::Dispatching | FoundingSubmissionPhaseV1::Submitted
+    ) {
+        return Err(Error::new(
+            "founding finalization did not start from an ambiguous durable packet",
+        ));
+    }
+    // A packet observed finalized from Dispatching is advanced through Submitted
+    // locally first. That preserves the one adjacent phase grammar without a
+    // second network send.
+    let submitted = if submitted.phase == FoundingSubmissionPhaseV1::Dispatching {
+        let signature = submitted
+            .expected_signature
+            .clone()
+            .ok_or_else(|| Error::new("Dispatching founding journal omitted signature"))?;
+        let next = submit_founding_submission_v1(&recorder.binding, &submitted, &signature)?;
+        recorder.write(next.clone())?;
+        next
+    } else {
+        submitted
+    };
+    authenticate_completion(rpc)?;
+    let poststates = capture_founding_poststates_v1(rpc, &submitted)?;
+    let packet_sha256 = hex(&Sha256::digest(&finalized.packet));
+    let fee_lamports = finalized
+        .evidence
+        .fee_lamports
+        .ok_or_else(|| Error::new("finalized founding transaction omitted fee"))?;
+    let compute_units_consumed = finalized
+        .evidence
+        .compute_units_consumed
+        .ok_or_else(|| Error::new("finalized founding transaction omitted compute units"))?;
+    let next = finalize_founding_submission_v1(
+        &recorder.binding,
+        &submitted,
+        FoundingFinalizationV1 {
+            signature: finalized.evidence.signature.clone(),
+            finalized_slot: finalized.evidence.slot,
+            transaction_sha256: packet_sha256,
+            fee_lamports,
+            compute_units_consumed,
+            completion_contract_sha256: submitted.completion_contract_sha256.clone(),
+            poststates,
+        },
+    )?;
+    recorder.write(next)?;
+    Ok(finalized.evidence)
+}
+
+fn finalize_existing_founding_submission_v1(
+    rpc: &mut Rpc,
+    label: &str,
+    operation: FoundingSubmissionOperationV1,
+    recorder: &mut FoundingSubmissionRecorderV1<'_>,
+    authenticate_completion: &mut dyn FnMut(&mut Rpc) -> Result<()>,
+) -> Result<Option<TransactionEvidence>> {
+    let Some(current) = recorder.current(operation).cloned() else {
+        return Ok(None);
+    };
+    match founding_submission_recovery_v1(&recorder.binding, &current)? {
+        FoundingSubmissionRecoveryV1::Complete => {
+            authenticate_completion(rpc)?;
+            authenticate_completed_founding_submission_v1(rpc, label, &recorder.binding, &current)
+                .map(Some)
+        }
+        FoundingSubmissionRecoveryV1::ResendIdenticalPacket
+        | FoundingSubmissionRecoveryV1::PollOnly => {
+            let signature = current
+                .expected_signature
+                .as_deref()
+                .ok_or_else(|| Error::new("ambiguous founding journal omitted signature"))?
+                .parse::<Signature>()
+                .map_err(|error| Error::new(format!("ambiguous founding signature: {error}")))?;
+            let finalized = rpc
+                .finalized_signed_packet(label, signature, false)?
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "{} signature {signature} remains ambiguous; recovery is exact-signature poll-only",
+                        operation.label()
+                    ))
+                })?;
+            finish_durable_founding_v1(rpc, finalized, current, recorder, authenticate_completion)
+                .map(Some)
+        }
+        FoundingSubmissionRecoveryV1::BeginDispatch => Err(Error::new(format!(
+            "{} recovery reached Prepared before any dispatch after chain completion",
+            operation.label()
+        ))),
+        FoundingSubmissionRecoveryV1::SignOnce => Err(Error::new(format!(
+            "{} recovery reached an unsigned Planned journal after chain completion",
+            operation.label()
+        ))),
+    }
+}
+
+fn capture_founding_poststates_v1(
+    rpc: &mut Rpc,
+    journal: &FoundingSubmissionJournalV1,
+) -> Result<Vec<AccountEvidence>> {
+    let mut addresses = journal
+        .completion_accounts
+        .iter()
+        .map(|value| {
+            value
+                .parse::<Pubkey>()
+                .map_err(|error| Error::new(format!("founding completion account: {error}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.len() != journal.completion_accounts.len() {
+        return Err(Error::new("founding completion account set was duplicated"));
+    }
+    addresses
+        .into_iter()
+        .map(|address| {
+            rpc.required_account(address, "founding finalized poststate")
+                .map(|account| account_evidence(address, &account))
+        })
+        .collect()
+}
+
+pub(crate) fn authenticate_completed_founding_submission_v1(
+    rpc: &mut Rpc,
+    label: &str,
+    binding: &FoundingSubmissionBindingV1,
+    journal: &FoundingSubmissionJournalV1,
+) -> Result<TransactionEvidence> {
+    let expected_poststates = founding_submission_finalized_poststates_v1(binding, journal)?;
+    let signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("Finalized founding journal omitted signature"))?
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("Finalized founding signature: {error}")))?;
+    let finalized = rpc
+        .finalized_signed_packet(label, signature, false)?
+        .ok_or_else(|| Error::new("persisted finalized founding transaction disappeared"))?;
+    let packet_sha256 = hex(&Sha256::digest(&finalized.packet));
+    if journal.finalized_slot != Some(finalized.evidence.slot)
+        || journal.transaction_sha256.as_deref() != Some(packet_sha256.as_str())
+        || journal.fee_lamports != finalized.evidence.fee_lamports
+        || journal.compute_units_consumed != finalized.evidence.compute_units_consumed
+    {
+        return Err(Error::new(
+            "persisted finalized founding slot, packet, fee, or compute units changed from chain",
+        ));
+    }
+    let observed_poststates = capture_founding_poststates_v1(rpc, journal)?;
+    if observed_poststates != expected_poststates {
+        return Err(Error::new(
+            "finalized founding poststates changed from chain-derived evidence",
+        ));
+    }
+    Ok(finalized.evidence)
+}
+
+pub(crate) fn founding_account_set_digest_v1(
+    rpc: &mut Rpc,
+    addresses: &[Pubkey],
+) -> Result<String> {
+    let mut keys = addresses.to_vec();
+    keys.sort_unstable();
+    keys.dedup();
+    if keys.len() != addresses.len() || keys.is_empty() {
+        return Err(Error::new(
+            "founding prestate account set was empty or duplicated",
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/founding-submission-prestate/v1");
+    for key in keys {
+        hasher.update(key.as_ref());
+        match rpc.account(key)? {
+            None => hasher.update([0]),
+            Some(account) => {
+                hasher.update([1]);
+                hasher.update(account.owner.as_ref());
+                hasher.update(account.lamports.to_le_bytes());
+                hasher.update([u8::from(account.executable)]);
+                hasher.update((account.data.len() as u64).to_le_bytes());
+                hasher.update(Sha256::digest(&account.data));
+            }
+        }
+    }
+    Ok(hex(&hasher.finalize()))
+}
+
+fn founding_completion_contract_v1(
+    operation: FoundingSubmissionOperationV1,
+    addresses: &[Pubkey],
+) -> Result<String> {
+    let mut keys = addresses.to_vec();
+    keys.sort_unstable();
+    keys.dedup();
+    if keys.len() != addresses.len() || keys.is_empty() {
+        return Err(Error::new(
+            "founding completion account set was empty or duplicated",
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/founding-submission-completion/v1");
+    hasher.update(operation.label().as_bytes());
+    for key in keys {
+        hasher.update(key.as_ref());
+    }
+    Ok(hex(&hasher.finalize()))
+}
+
+fn founding_instruction_account_digest_v1(payer: Pubkey, instruction: &Instruction) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/founding-submission-resolved-accounts/v1");
+    hasher.update(payer.as_ref());
+    hasher.update(instruction.program_id.as_ref());
+    for account in &instruction.accounts {
+        hasher.update(account.pubkey.as_ref());
+        hasher.update([u8::from(account.is_signer), u8::from(account.is_writable)]);
+    }
+    hex(&hasher.finalize())
+}
+
+/// Rebuild the already-finalized DCLTPCB2 checkpoint from its Planned payload
+/// and the exact accounts now visible on chain. The normal checkpoint resume
+/// subsequently re-derives every coordinate and runs the full projected-
+/// Custody verifier before DCLTGMF2 can be constructed.
+pub(crate) fn materialize_dcltpcb2_checkpoint_v1(
+    rpc: &mut Rpc,
+    binding: &FoundingSubmissionBindingV1,
+    journal: &FoundingSubmissionJournalV1,
+) -> Result<MarketExecutionCheckpointV1> {
+    authenticate_founding_submission_v1(binding, journal)?;
+    if journal.operation != FoundingSubmissionOperationV1::Dcltpcb2
+        || journal.phase == FoundingSubmissionPhaseV1::Planned
+    {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint recovery requires one exact ambiguous or finalized packet",
+        ));
+    }
+    let payload = founding_submission_recovery_payload_v1(binding, journal)?;
+    let mut payload: Dcltpcb2RecoveryPayloadV1 = serde_json::from_slice(&payload)
+        .map_err(|error| Error::new(format!("DCLTPCB2 recovery payload: {error}")))?;
+    if payload.schema != "dclutch-market-dcltpcb2-recovery-payload-v1"
+        || payload.completion_accounts.is_empty()
+    {
+        return Err(Error::new("DCLTPCB2 recovery payload identity changed"));
+    }
+    let mut unique = payload
+        .completion_accounts
+        .values()
+        .map(|value| {
+            value
+                .parse::<Pubkey>()
+                .map_err(|error| Error::new(format!("DCLTPCB2 recovery account: {error}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    unique.sort_unstable();
+    unique.dedup();
+    let mut journal_accounts = journal
+        .completion_accounts
+        .iter()
+        .map(|value| {
+            value
+                .parse::<Pubkey>()
+                .map_err(|error| Error::new(format!("DCLTPCB2 journal account: {error}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    journal_accounts.sort_unstable();
+    if unique != journal_accounts
+        || founding_completion_contract_v1(FoundingSubmissionOperationV1::Dcltpcb2, &unique)?
+            != journal.completion_contract_sha256
+    {
+        return Err(Error::new(
+            "DCLTPCB2 recovery account set changed from its completion contract",
+        ));
+    }
+    for (label, address) in payload.completion_accounts {
+        if payload.checkpoint.accounts.contains_key(&label) {
+            return Err(Error::new(format!(
+                "DCLTPCB2 recovery attempted to overwrite checkpoint label {label}"
+            )));
+        }
+        let address = address
+            .parse::<Pubkey>()
+            .map_err(|error| Error::new(format!("DCLTPCB2 recovery account: {error}")))?;
+        let account = rpc.required_account(address, &label)?;
+        payload
+            .checkpoint
+            .accounts
+            .insert(label, account_evidence(address, &account));
+    }
+    Ok(payload.checkpoint)
 }
 
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
@@ -469,9 +1084,16 @@ pub(crate) fn execute_found_market(
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<MarketExecutionEvidence> {
-    execute_found_market_with_checkpoint(rpc, plan, input, payer, forge, transactions, &mut |_| {
-        Ok(())
-    })
+    execute_found_market_with_checkpoint_and_journal(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        transactions,
+        &mut |_| Ok(()),
+        None,
+    )
 }
 
 pub(crate) fn execute_found_market_with_checkpoint(
@@ -482,6 +1104,29 @@ pub(crate) fn execute_found_market_with_checkpoint(
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
+) -> Result<MarketExecutionEvidence> {
+    execute_found_market_with_checkpoint_and_journal(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        transactions,
+        checkpoint,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_found_market_with_checkpoint_and_journal(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    transactions: &mut Vec<TransactionEvidence>,
+    checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
     validate_market_input(input)?;
     let registry = pubkey(&plan.registry.program_id)?;
@@ -789,6 +1434,7 @@ pub(crate) fn execute_found_market_with_checkpoint(
             &mut completed,
             local_participant_fixture_liquidity.as_ref(),
             checkpoint,
+            submission_recorder.as_deref_mut(),
         )?;
         if lane == PrestateLaneV1::Founding {
             founding_custody_context = Some(context);
@@ -1105,6 +1751,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
     let context = reconstruct_dcltpcb2_checkpoint_v1(
         rpc,
@@ -1128,6 +1775,32 @@ pub(crate) fn resume_found_market_from_checkpoint(
         context.mint,
         context.coordinates.lock.amount,
     )?;
+    if let Some(recorder) = submission_recorder.as_deref_mut() {
+        let coordinates = &context.coordinates;
+        let custody = pubkey(&plan.custody.program_id)?;
+        let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+        let mint = context.mint;
+        let principal = coordinates.lock.amount;
+        let mut completion = |rpc: &mut Rpc| {
+            authenticate_bootstrap_poststate(
+                rpc,
+                coordinates,
+                custody,
+                token_program,
+                mint,
+                principal,
+            )
+        };
+        if let Some(evidence) = finalize_existing_founding_submission_v1(
+            rpc,
+            "create projected custody and controller funding (DCLTPCB2)",
+            FoundingSubmissionOperationV1::Dcltpcb2,
+            recorder,
+            &mut completion,
+        )? {
+            transactions.push(evidence);
+        }
+    }
     let mut accounts = checkpoint.accounts.clone();
     let mut completed = checkpoint.completed.clone();
     execute_generic_market_founding(
@@ -1148,6 +1821,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
         transactions,
         &mut accounts,
         &mut completed,
+        submission_recorder.as_deref_mut(),
     )?;
     Ok(MarketExecutionEvidence {
         completed,
@@ -1172,6 +1846,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
+    submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
     let context = reconstruct_dcltpcb2_checkpoint_v1(
         rpc,
@@ -1198,6 +1873,35 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
         context.mint,
     )?;
+    if let Some(recorder) = submission_recorder {
+        let coordinates = &context.coordinates;
+        let core = pubkey(&plan.core.program_id)?;
+        let claims = pubkey(&plan.claims.program_id)?;
+        let custody = pubkey(&plan.custody.program_id)?;
+        let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+        let mint = context.mint;
+        let mut completion = |rpc: &mut Rpc| {
+            authenticate_open_market_poststate_v1(
+                rpc,
+                coordinates,
+                &poststate,
+                core,
+                claims,
+                custody,
+                token_program,
+                mint,
+            )
+        };
+        if let Some(evidence) = finalize_existing_founding_submission_v1(
+            rpc,
+            "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
+            FoundingSubmissionOperationV1::Dcltgmf2,
+            recorder,
+            &mut completion,
+        )? {
+            transactions.push(evidence);
+        }
+    }
     let mut accounts = checkpoint.accounts.clone();
     for (label, key) in [
         ("founding_market", context.coordinates.market),
@@ -2630,6 +3334,25 @@ struct CompiledMessageGeometryV1 {
     packet_bytes: usize,
 }
 
+fn dcltpcb2_completion_lines_v1(geometry: CompiledMessageGeometryV1) -> Vec<String> {
+    vec![
+        "derived one generic founding's complete coordinate set - Market, credit, action context, Custody compartments, capability root, and prepaid FundingState list - from the finalized record graph alone".into(),
+        "proved DCLTPCB2 admits only the terminal Lock request its founding determines".into(),
+        "proved a reordered controller-ledger pair refuses and rolls the whole bootstrap back to a fee-only debit".into(),
+        "executed DCLTPCB2: projected replay at SourceFunded, empty Hoard vault, funded source compartment, and exact Resolution and Trading FundingLedgerV2 accounts in one rollback domain".into(),
+        format!(
+            "compiled the exact bounded DCLTPCB2 transaction with payer, three ComputeBudget declarations, and its canonical address table: {} complete keys ({} static, {} writable loaded, {} readonly loaded), {} signatures, {} message bytes, and {} fully signed packet bytes; +2 distinct keys reaches 64 and +3 reaches the refused 65-key boundary",
+            geometry.complete_keys,
+            geometry.static_keys,
+            geometry.loaded_writable,
+            geometry.loaded_readonly,
+            geometry.required_signatures,
+            geometry.message_bytes,
+            geometry.packet_bytes,
+        ),
+    ]
+}
+
 /// Compile the exact bounded transaction shape used by the successor runner.
 ///
 /// This intentionally consumes the finished instruction rather than restating
@@ -3479,6 +4202,83 @@ fn require_published_record_matches_derivation_v1(
     Ok(())
 }
 
+/// Expiry geometry for the one SourceAbort proof lane.
+///
+/// Public/devnet keeps the shipped 900/64 policy byte-for-byte. The shorter
+/// policy is selected only by the exact 100,000,000-atom owned-loopback fixture
+/// marker that campaign admission already refuses on devnet. It budgets the
+/// observed 32-slot local finality window across all sixteen finalized
+/// transaction barriers before the pre-expiry refusal, plus two full windows:
+/// one staging reserve and one refusal-dispatch reserve. Runtime guards refuse
+/// safely if a loaded validator consumes either reserve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceAbortExpiryPolicyV1 {
+    PublicDevnet,
+    OwnedLoopback,
+}
+
+impl SourceAbortExpiryPolicyV1 {
+    const LOCAL_FINALITY_WINDOW_SLOTS_V1: u64 = 32;
+    const LOCAL_PRE_EXPIRY_FINALIZED_BARRIERS_V1: u64 = 16;
+    const LOCAL_RESERVE_WINDOWS_V1: u64 = 2;
+    const LOCAL_POST_STAGE_FINALIZED_BARRIERS_V1: u64 = 4;
+
+    fn from_input(input: &MarketRunInput) -> Result<Self> {
+        match input.local_participant_fixture_liquidity_atoms {
+            0 => Ok(Self::PublicDevnet),
+            LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1 => Ok(Self::OwnedLoopback),
+            _ => Err(Error::new(
+                "SourceAbort expiry policy received a noncanonical local fixture quantity",
+            )),
+        }
+    }
+
+    const fn expiry_slots(self) -> u64 {
+        match self {
+            Self::PublicDevnet => 900,
+            Self::OwnedLoopback => {
+                Self::LOCAL_FINALITY_WINDOW_SLOTS_V1
+                    * (Self::LOCAL_PRE_EXPIRY_FINALIZED_BARRIERS_V1
+                        + Self::LOCAL_RESERVE_WINDOWS_V1)
+            }
+        }
+    }
+
+    const fn minimum_staging_margin_slots(self) -> u64 {
+        match self {
+            Self::PublicDevnet => 64,
+            Self::OwnedLoopback => {
+                Self::LOCAL_FINALITY_WINDOW_SLOTS_V1
+                    * (Self::LOCAL_POST_STAGE_FINALIZED_BARRIERS_V1 + 1)
+            }
+        }
+    }
+
+    const fn minimum_pre_expiry_refusal_margin_slots(self) -> u64 {
+        match self {
+            Self::PublicDevnet => 0,
+            Self::OwnedLoopback => Self::LOCAL_FINALITY_WINDOW_SLOTS_V1 * 2,
+        }
+    }
+}
+
+fn require_expiry_margin_v1(
+    stage: &str,
+    current_slot: u64,
+    expiry_slot: u64,
+    minimum_margin_slots: u64,
+) -> Result<()> {
+    let guarded_slot = current_slot
+        .checked_add(minimum_margin_slots)
+        .ok_or_else(|| Error::new(format!("{stage} expiry-margin arithmetic overflowed")))?;
+    if guarded_slot >= expiry_slot {
+        return Err(Error::new(format!(
+            "{stage} reached slot {current_slot} with expiry at {expiry_slot}: fewer than the required {minimum_margin_slots} margin slots remain"
+        )));
+    }
+    Ok(())
+}
+
 /// What a staged projected-Custody prestate is being staged *for*.
 ///
 /// Both lanes run the identical four-stage `DCLTPCB2` ladder. They differ in
@@ -3521,21 +4321,25 @@ impl PrestateLaneV1 {
     /// once `current_slot > expiry_slot`, so the expiry must outlast staging;
     /// and every slot past that is dead waiting. Staging costs about thirteen
     /// transactions at roughly thirty-two slots of finality each, so ~420
-    /// slots; 900 leaves about another full staging interval as margin and
-    /// still expires promptly afterwards. The runner does not assume the arithmetic held - it
-    /// checks the margin before staging and waits for the real slot after.
-    const fn expiry_slots(self) -> u64 {
+    /// slots; public/devnet retains 900. Owned loopback uses the separately
+    /// authenticated fixture policy above so repeated private validation does
+    /// not spend hundreds of dead slots after the rollback proof. The runner
+    /// does not assume the arithmetic held: it checks both dispatch margins and
+    /// waits for the real slot after.
+    fn expiry_slots(self, input: &MarketRunInput) -> Result<u64> {
         match self {
-            Self::Founding => 500_000,
-            Self::SourceAbort => 900,
+            Self::Founding => Ok(500_000),
+            Self::SourceAbort => Ok(SourceAbortExpiryPolicyV1::from_input(input)?.expiry_slots()),
         }
     }
 
     /// Slots that must remain before expiry for staging to be worth attempting.
-    const fn minimum_staging_margin_slots(self) -> u64 {
+    fn minimum_staging_margin_slots(self, input: &MarketRunInput) -> Result<u64> {
         match self {
-            Self::Founding => 0,
-            Self::SourceAbort => 64,
+            Self::Founding => Ok(0),
+            Self::SourceAbort => {
+                Ok(SourceAbortExpiryPolicyV1::from_input(input)?.minimum_staging_margin_slots())
+            }
         }
     }
 
@@ -3590,6 +4394,7 @@ fn execute_projected_custody_bootstrap(
     completed: &mut Vec<String>,
     local_participant_fixture_liquidity: Option<&LocalParticipantFixtureLiquidityEvidenceV1>,
     checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<[u8; 32]> {
     let registry = pubkey(&plan.registry.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
@@ -3605,7 +4410,7 @@ fn execute_projected_custody_bootstrap(
     let market_rent = rpc.minimum_balance(STATE_BYTES)?;
     let expiry_slot = rpc
         .finalized_slot()?
-        .checked_add(lane.expiry_slots())
+        .checked_add(lane.expiry_slots(input)?)
         .ok_or_else(|| Error::new("founding expiry slot overflow"))?;
 
     let coordinates = derive_founding_coordinates(
@@ -3905,20 +4710,131 @@ fn execute_projected_custody_bootstrap(
     // Custody's `initialize` refuses outright. Say so here rather than let a
     // slow validator turn into an opaque refusal three transactions later.
     let staged_at = rpc.finalized_slot()?;
-    if staged_at.checked_add(lane.minimum_staging_margin_slots()) >= Some(expiry_slot) {
-        return Err(Error::new(format!(
-            "staging reached slot {staged_at} with expiry at {expiry_slot}: not enough margin left to create the prestate"
-        )));
-    }
+    require_expiry_margin_v1(
+        "projected-Custody staging",
+        staged_at,
+        expiry_slot,
+        lane.minimum_staging_margin_slots(input)?,
+    )?;
 
-    transactions.push(rpc.send_v0_on_founding_heap_with_signers(
-        lane.prestate_label(),
-        std::slice::from_ref(&bootstrap),
-        payer,
-        &[&beneficiary],
-        routing,
-        &tables,
-    )?);
+    let honest = if lane == PrestateLaneV1::Founding {
+        match submission_recorder.as_deref_mut() {
+            Some(recorder) => {
+                let mut prestate_addresses =
+                    created.iter().map(|(_, key)| *key).collect::<Vec<_>>();
+                prestate_addresses.extend(
+                    coordinates
+                        .funding_ledgers
+                        .iter()
+                        .map(|funding| funding.address),
+                );
+                let root = Pubkey::new_from_array(coordinates.found.capability_root().to_bytes());
+                let trading = pubkey(&plan.trading.program_id)?;
+                let trading_ledger = coordinates
+                    .funding_ledgers
+                    .iter()
+                    .find(|ledger| ledger.controller == trading)
+                    .ok_or_else(|| {
+                        Error::new("founding recovery omitted Trading FundingLedgerV2")
+                    })?;
+                let mut recovery_accounts = BTreeMap::new();
+                for (label, key) in created {
+                    recovery_accounts.insert(format!("founding_{label}"), key.to_string());
+                }
+                for (index, funding) in coordinates.funding_ledgers.iter().enumerate() {
+                    recovery_accounts.insert(
+                        format!("founding_funding_ledger_v2_{index}"),
+                        funding.address.to_string(),
+                    );
+                }
+                recovery_accounts.insert("direct_capability_root".into(), root.to_string());
+                recovery_accounts.insert(
+                    "direct_trading_funding_ledger".into(),
+                    trading_ledger.address.to_string(),
+                );
+                recovery_accounts.insert(
+                    "founding_lifecycle_rent_credit".into(),
+                    coordinates.credit.to_string(),
+                );
+                let mut completion_addresses = recovery_accounts
+                    .values()
+                    .map(|value| {
+                        value.parse::<Pubkey>().map_err(|error| {
+                            Error::new(format!("founding recovery account: {error}"))
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                completion_addresses.sort_unstable();
+                completion_addresses.dedup();
+                let mut recovery_completed = completed.clone();
+                recovery_completed.extend(dcltpcb2_completion_lines_v1(bootstrap_geometry));
+                let recovery_payload = serde_json::to_vec(&Dcltpcb2RecoveryPayloadV1 {
+                    schema: "dclutch-market-dcltpcb2-recovery-payload-v1".into(),
+                    checkpoint: MarketExecutionCheckpointV1 {
+                        schema: "dclutch-market-dcltpcb2-checkpoint-v1".into(),
+                        market: coordinates.market.to_string(),
+                        founding_custody_context: hex(&coordinates.context),
+                        direct_selected_manifest_entry_index: coordinates.capability_entry_index,
+                        direct_capability_root: root.to_string(),
+                        direct_trading_funding_ledger: trading_ledger.address.to_string(),
+                        expiry_slot,
+                        found_record: found_record.raw.to_string(),
+                        lock_record: lock_record.raw.to_string(),
+                        local_participant_fixture_liquidity: local_participant_fixture_liquidity
+                            .cloned(),
+                        accounts: accounts.clone(),
+                        completed: recovery_completed,
+                    },
+                    completion_accounts: recovery_accounts,
+                })?;
+                let resolved_accounts_sha256 =
+                    founding_instruction_account_digest_v1(payer.pubkey(), &bootstrap);
+                let mut completion = |rpc: &mut Rpc| {
+                    authenticate_bootstrap_poststate(
+                        rpc,
+                        &coordinates,
+                        custody,
+                        token_program,
+                        mint,
+                        principal,
+                    )
+                };
+                send_durable_founding_v1(
+                    rpc,
+                    lane.prestate_label(),
+                    FoundingSubmissionOperationV1::Dcltpcb2,
+                    std::slice::from_ref(&bootstrap),
+                    &[payer, &beneficiary],
+                    routing,
+                    &tables,
+                    resolved_accounts_sha256,
+                    &prestate_addresses,
+                    &completion_addresses,
+                    recovery_payload,
+                    recorder,
+                    &mut completion,
+                )?
+            }
+            None => rpc.send_v0_on_founding_heap_with_signers(
+                lane.prestate_label(),
+                std::slice::from_ref(&bootstrap),
+                payer,
+                &[&beneficiary],
+                routing,
+                &tables,
+            )?,
+        }
+    } else {
+        rpc.send_v0_on_founding_heap_with_signers(
+            lane.prestate_label(),
+            std::slice::from_ref(&bootstrap),
+            payer,
+            &[&beneficiary],
+            routing,
+            &tables,
+        )?
+    };
+    transactions.push(honest);
 
     authenticate_bootstrap_poststate(rpc, &coordinates, custody, token_program, mint, principal)?;
     let prefix = lane.evidence_prefix();
@@ -3958,28 +4874,7 @@ fn execute_projected_custody_bootstrap(
         format!("{prefix}_lifecycle_rent_credit"),
         account_evidence(coordinates.credit, &credit_account),
     );
-    completed.push(
-        "derived one generic founding's complete coordinate set - Market, credit, action context, Custody compartments, capability root, and prepaid FundingState list - from the finalized record graph alone".into(),
-    );
-    completed.push(
-        "proved DCLTPCB2 admits only the terminal Lock request its founding determines".into(),
-    );
-    completed.push(
-        "proved a reordered controller-ledger pair refuses and rolls the whole bootstrap back to a fee-only debit".into(),
-    );
-    completed.push(
-        "executed DCLTPCB2: projected replay at SourceFunded, empty Hoard vault, funded source compartment, and exact Resolution and Trading FundingLedgerV2 accounts in one rollback domain".into(),
-    );
-    completed.push(format!(
-        "compiled the exact bounded DCLTPCB2 transaction with payer, three ComputeBudget declarations, and its canonical address table: {} complete keys ({} static, {} writable loaded, {} readonly loaded), {} signatures, {} message bytes, and {} fully signed packet bytes; +2 distinct keys reaches 64 and +3 reaches the refused 65-key boundary",
-        bootstrap_geometry.complete_keys,
-        bootstrap_geometry.static_keys,
-        bootstrap_geometry.loaded_writable,
-        bootstrap_geometry.loaded_readonly,
-        bootstrap_geometry.required_signatures,
-        bootstrap_geometry.message_bytes,
-        bootstrap_geometry.packet_bytes,
-    ));
+    completed.extend(dcltpcb2_completion_lines_v1(bootstrap_geometry));
 
     // This checkpoint means DCLTPCB2 is COMPLETE, not merely intended. It is
     // written only after the exact SourceFunded prestate, both controller
@@ -4033,6 +4928,7 @@ fn execute_projected_custody_bootstrap(
             transactions,
             accounts,
             completed,
+            submission_recorder.as_deref_mut(),
         ),
         PrestateLaneV1::SourceAbort => execute_source_abort_v1(
             rpc,
@@ -4047,6 +4943,7 @@ fn execute_projected_custody_bootstrap(
             transactions,
             accounts,
             completed,
+            SourceAbortExpiryPolicyV1::from_input(input)?,
         ),
     }?;
     Ok(coordinates.context)
@@ -4084,6 +4981,7 @@ fn execute_source_abort_v1(
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
+    expiry_policy: SourceAbortExpiryPolicyV1,
 ) -> Result<()> {
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
@@ -4110,11 +5008,12 @@ fn execute_source_abort_v1(
     // funded principal may not be destroyed. A route that let anyone unwind a
     // live founding would be a worse bug than the one it fixes.
     let staged_at = rpc.finalized_slot()?;
-    if staged_at >= expiry_slot {
-        return Err(Error::new(format!(
-            "the prestate expired at {expiry_slot} before its pre-expiry refusal could be observed at {staged_at}"
-        )));
-    }
+    require_expiry_margin_v1(
+        "the pre-expiry DCLTPCA1 rollback probe",
+        staged_at,
+        expiry_slot,
+        expiry_policy.minimum_pre_expiry_refusal_margin_slots(),
+    )?;
 
     let rollback_recipient = crate::seed::fresh_probe_address();
     let refused = rpc.send_v0_expected_failure_with_signers(
@@ -4179,6 +5078,13 @@ fn execute_source_abort_v1(
     completed.push(
         "proved DCLTPCA1 refuses to unwind a funded source compartment while its founding is still satisfiable, and rolls the whole transaction back to a fee-only debit".into(),
     );
+    completed.push(format!(
+        "authenticated {:?} SourceAbort expiry geometry: {} slots from coordinate derivation, at least {} slots before staging, and at least {} slots before the pre-expiry rollback probe",
+        expiry_policy,
+        expiry_policy.expiry_slots(),
+        expiry_policy.minimum_staging_margin_slots(),
+        expiry_policy.minimum_pre_expiry_refusal_margin_slots(),
+    ));
     completed.push(
         "executed DCLTPCA1 after expiry: the source principal is back with the party that supplied it, and the source vault, source replay, empty Hoard vault, and projection are all closed to the lifecycle credit".into(),
     );
@@ -5336,6 +6242,7 @@ fn execute_generic_market_founding(
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
+    submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<()> {
     let registry = pubkey(&plan.registry.program_id)?;
     let core = pubkey(&plan.core.program_id)?;
@@ -5635,17 +6542,62 @@ fn execute_generic_market_founding(
         Err(error) => return Err(error),
     }
 
-    transactions.push(rpc.send_v0_on_founding_heap_with_signers(
-        "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
-        &[founding],
-        payer,
-        &[],
-        routing,
-        &tables,
-    )?);
-
     let poststate =
         derive_founding_poststate_expectation_v1(plan, coordinates, founder, claim_count)?;
+    let founding_label =
+        "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)";
+    let honest = match submission_recorder {
+        Some(recorder) => {
+            let mut prestate_addresses = created.iter().map(|(_, key)| *key).collect::<Vec<_>>();
+            prestate_addresses.extend([coordinates.source_vault, coordinates.projected_replay]);
+            let completion_addresses = vec![
+                coordinates.market,
+                outer.permit,
+                outer.aggregate,
+                outer.position,
+                outer.admission,
+                coordinates.hoard_vault,
+                coordinates.projected_replay,
+            ];
+            let mut completion = |rpc: &mut Rpc| {
+                authenticate_open_market_poststate_v1(
+                    rpc,
+                    coordinates,
+                    &poststate,
+                    core,
+                    claims_program,
+                    custody,
+                    token_program,
+                    mint,
+                )
+            };
+            send_durable_founding_v1(
+                rpc,
+                founding_label,
+                FoundingSubmissionOperationV1::Dcltgmf2,
+                std::slice::from_ref(&founding),
+                &[payer],
+                routing,
+                &tables,
+                hex(&founding_census.key_privilege_digest),
+                &prestate_addresses,
+                &completion_addresses,
+                b"dclutch-market-dcltgmf2-recovery-payload-v1".to_vec(),
+                recorder,
+                &mut completion,
+            )?
+        }
+        None => rpc.send_v0_on_founding_heap_with_signers(
+            founding_label,
+            &[founding],
+            payer,
+            &[],
+            routing,
+            &tables,
+        )?,
+    };
+    transactions.push(honest);
+
     authenticate_open_market_poststate_v1(
         rpc,
         coordinates,
@@ -6432,6 +7384,83 @@ fn pyth_market_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_abort_expiry_policy_is_exactly_owned_loopback_only() {
+        let registry = Pubkey::new_unique();
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let mut input = demo_market_input(registry, direct.compiler()).expect("local market");
+        let local = SourceAbortExpiryPolicyV1::from_input(&input).expect("local policy");
+        assert_eq!(local, SourceAbortExpiryPolicyV1::OwnedLoopback);
+        assert_eq!(local.expiry_slots(), 576);
+        assert_eq!(local.minimum_staging_margin_slots(), 160);
+        assert_eq!(local.minimum_pre_expiry_refusal_margin_slots(), 64);
+
+        input.local_participant_fixture_liquidity_atoms = 0;
+        let public = SourceAbortExpiryPolicyV1::from_input(&input).expect("public policy");
+        assert_eq!(public, SourceAbortExpiryPolicyV1::PublicDevnet);
+        assert_eq!(public.expiry_slots(), 900);
+        assert_eq!(public.minimum_staging_margin_slots(), 64);
+        assert_eq!(public.minimum_pre_expiry_refusal_margin_slots(), 0);
+
+        input.local_participant_fixture_liquidity_atoms =
+            LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1 - 1;
+        assert!(SourceAbortExpiryPolicyV1::from_input(&input).is_err());
+    }
+
+    #[test]
+    fn owned_loopback_source_abort_preserves_both_pre_expiry_dispatch_margins() {
+        let policy = SourceAbortExpiryPolicyV1::OwnedLoopback;
+        let start = 1_000;
+        let expiry = start + policy.expiry_slots();
+
+        // Twelve finalized barriers precede DCLTPCB2 staging. Four more carry
+        // the stage, the DCLTPCA1 table, and the hostile rollback proof to
+        // finality. Both boundaries retain one full 32-slot reserve window.
+        let before_stage = start + 12 * SourceAbortExpiryPolicyV1::LOCAL_FINALITY_WINDOW_SLOTS_V1;
+        require_expiry_margin_v1(
+            "staging",
+            before_stage,
+            expiry,
+            policy.minimum_staging_margin_slots(),
+        )
+        .expect("measured local staging budget");
+        let before_refusal = start + 15 * SourceAbortExpiryPolicyV1::LOCAL_FINALITY_WINDOW_SLOTS_V1;
+        require_expiry_margin_v1(
+            "rollback probe",
+            before_refusal,
+            expiry,
+            policy.minimum_pre_expiry_refusal_margin_slots(),
+        )
+        .expect("measured local refusal-dispatch budget");
+
+        assert!(
+            require_expiry_margin_v1(
+                "staging",
+                expiry - policy.minimum_staging_margin_slots(),
+                expiry,
+                policy.minimum_staging_margin_slots(),
+            )
+            .is_err()
+        );
+        assert!(
+            require_expiry_margin_v1(
+                "rollback probe",
+                expiry - policy.minimum_pre_expiry_refusal_margin_slots(),
+                expiry,
+                policy.minimum_pre_expiry_refusal_margin_slots(),
+            )
+            .is_err()
+        );
+        assert!(require_expiry_margin_v1("overflow", u64::MAX, expiry, 1).is_err());
+
+        assert!(require_expiry_margin_v1("public", expiry - 1, expiry, 0).is_ok());
+        assert!(require_expiry_margin_v1("public", expiry, expiry, 0).is_err());
+    }
 
     fn direct_controller_manifest(
         direct_index: Option<usize>,

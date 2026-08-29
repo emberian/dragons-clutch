@@ -52,13 +52,15 @@ import {
   TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
 } from './generated/walletTerminalPayoutV3';
 import { deriveClaimsAggregateAddressV2, deriveClaimsPositionAddressV2 } from './marketCoreV2';
-import { type RpcAccount, type TransactionMetaObservation } from './rpc';
+import { type RpcAccount, type SolanaRpcClient, type TransactionMetaObservation } from './rpc';
 import {
+  authenticateCheckedLiveDevnetPayoutPlanV3,
   buildWalletTerminalPayoutV3,
   canonicalWalletTerminalPayoutLookupAddressesV3,
   compileWalletTerminalPayoutV0,
   encodeWalletTerminalPayoutRequestV3,
   finalizeWalletTerminalPayoutV3,
+  importRustWalletTerminalPayoutArtifactV3,
   parseWalletTerminalPayoutManifestV3,
   verifyWalletTerminalPayoutPostconditionV3,
   verifyFinalizedWalletTerminalPayoutTransactionV3,
@@ -178,6 +180,17 @@ async function report(): Promise<WalletTerminalPayoutReportV3> {
   return buildWalletTerminalPayoutV3(input);
 }
 
+async function manifestText(): Promise<string> {
+  const input = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
+  input.signedPacket.set(await sha256(input.__requestBytes), 80);
+  return JSON.stringify({
+    format: 'dclutch-wallet-terminal-payout-v3', route: input.route,
+    custodyContext: input.custodyContext, request: input.request,
+    signedPacketBase64: btoa(String.fromCharCode(...input.signedPacket)),
+    payout: input.payout, lookupTable: key(241),
+  });
+}
+
 describe('wallet terminal payout v3', () => {
   it('hostile-decodes the bounded payout manifest and refuses unknown authority', async () => {
     const input = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
@@ -198,6 +211,18 @@ describe('wallet terminal payout v3', () => {
       ...manifest,
       route: { ...rest, terminalCoordinateRaw: key(201), terminalCoordinateStaging: key(202) },
     }))).toThrow('missing or unknown');
+  });
+
+  it('imports only the exact Rust artifact and refuses non-devnet before account acquisition', async () => {
+    const source = await manifestText();
+    const manifest = importRustWalletTerminalPayoutArtifactV3(source);
+    expect(manifest.lookupTable).toBe(key(241));
+    expect(() => importRustWalletTerminalPayoutArtifactV3(JSON.stringify({ manifest }))).toThrow('missing or unknown');
+    const client = Object.freeze({
+      assertMutationCluster: async () => { throw new Error('mutation refused: the endpoint reports Solana mainnet-beta genesis'); },
+    }) as unknown as SolanaRpcClient;
+    await expect(authenticateCheckedLiveDevnetPayoutPlanV3(client, manifest, manifest.request.owner))
+      .rejects.toThrow('mainnet-beta genesis');
   });
 
   it('emits the exact 640-byte Claims request vector and 36-account certificate frame', async () => {

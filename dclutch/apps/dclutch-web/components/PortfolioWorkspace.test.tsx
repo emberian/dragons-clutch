@@ -57,3 +57,23 @@ describe('Portfolio route', () => {
     expect(withoutWalletContract).not.toContain('Submit');
   });
 });
+
+describe('Redemption route', () => {
+  const html = renderToStaticMarkup(<PortfolioWorkspace mode="redemption" />);
+
+  it('starts with the connected wallet and the live Market set instead of the representation console', () => {
+    expect(html).toContain('Redeem your winning claims');
+    expect(html).toContain('find and redeem your winning claims');
+    expect(html).toContain('every current-compatible Market');
+    expect(html).not.toContain('Or paste any owner address');
+    expect(html).not.toContain('Authenticate exact transfer route');
+  });
+
+  it('states every boundary that remains before a payout can reach a wallet', () => {
+    expect(html).toContain('permanently refuses Solana mainnet, testnet, and unknown non-local chains');
+    expect(html).toContain('The payout plan is still produced outside this browser');
+    expect(html).toContain('does not invent one from partial state');
+    expect(html).toContain('Rust-authored payout plan');
+    expect(html).toContain('exact Market, Position, owner, winning claim, recipient, programs, and lookup table');
+  });
+});

@@ -8,10 +8,14 @@
 //! flagship-resolution executor is the sole owner of `PostUpdate` and every
 //! subsequent protocol transaction.
 
+#[path = "owned_loopback_capture.rs"]
+pub(crate) mod owned_loopback_capture;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::Write as _,
+    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     str::FromStr as _,
     thread,
@@ -45,12 +49,16 @@ use solana_system_interface::instruction::{create_account, transfer};
 use crate::{
     Error, Result, campaign,
     cluster::{ClusterOriginV1, ExpectedClusterV1},
-    plan::{hex, pubkey},
+    model::SuccessorPlan,
+    plan::{LOCAL_PYTH_RECEIVER_ELF, LOCAL_PYTH_ROUTER_ELF, account_sha256_v1, hex, pubkey},
     rpc::{Rpc, RpcAccount, WritePolicyV1, parse_json_without_duplicate_keys_v1},
 };
+use owned_loopback_capture::{CaptureRefV1, DeploymentSlotPolicyV1};
 
 const JOURNAL_SCHEMA_V1: &str = "dclutch-owned-loopback-pyth-prerequisite-transaction-v1";
 const FACTS_SCHEMA_V1: &str = "dclutch-flagship-pyth-update-facts-v1";
+pub(crate) const PROVIDER_CLOSURE_SCHEMA_V1: &str =
+    "dclutch-owned-loopback-pyth-provider-closure-v1";
 const WRITE_CHUNK_BYTES_V1: usize = 600;
 const PACKET_BYTES_V1: usize = 1_232;
 const VERIFY_COMPUTE_UNIT_LIMIT_V1: u32 = 400_000;
@@ -70,7 +78,6 @@ const RECEIVER_POST_UPDATE: &[u8] = include_bytes!(
 const RECEIVER_CONFIG: &[u8] = include_bytes!(
     "../../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-config.account"
 );
-
 const ROUTER_INITIALIZE_SHA256_V1: &str =
     "3667940a4428a8f2411a0ff11157ecc4ba1076c3c61273a108da6405c51e0b0b";
 const RECEIVER_INITIALIZE_SHA256_V1: &str =
@@ -230,6 +237,102 @@ struct ProducerPythFactsV1 {
     post_update_body_base64: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderSourceRefV1 {
+    path: String,
+    sha256: String,
+    schema: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProviderClosureProgramV1 {
+    pub(crate) role: String,
+    pub(crate) program_id: String,
+    pub(crate) program_data_address: String,
+    pub(crate) deployment_slot: String,
+    pub(crate) elf_sha256: String,
+    pub(crate) genesis_program_data_sha256: String,
+    pub(crate) upgrade_authority: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProviderClosureReceiptV1 {
+    pub(crate) schema: String,
+    pub(crate) cluster: String,
+    pub(crate) genesis_hash: String,
+    pub(crate) status: String,
+    pub(crate) finalized_observation_slot: String,
+    plan: ProviderSourceRefV1,
+    local_validator_profile: ProviderSourceRefV1,
+    pub(crate) finalized_capture: CaptureRefV1,
+    pub(crate) provider_programs: Vec<ProviderClosureProgramV1>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalValidatorProfileV1 {
+    schema: String,
+    launcher_version: String,
+    network: LocalValidatorNetworkV1,
+    ledger: String,
+    account_dir: String,
+    genesis_plan: String,
+    genesis_boundary: String,
+    key_policy: String,
+    validator: LocalValidatorBinaryV1,
+    programs: Vec<Value>,
+    loader_time_boundary: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalValidatorNetworkV1 {
+    bind_address: String,
+    rpc_url: String,
+    faucet_port: u16,
+    gossip_port: u16,
+    dynamic_port_range: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalValidatorBinaryV1 {
+    path: String,
+    version: String,
+}
+
+#[derive(Clone, Debug)]
+struct ProviderExpectedV1 {
+    role: &'static str,
+    program_id: Pubkey,
+    program_data_address: Pubkey,
+    elf_sha256: String,
+    program_data_sha256: String,
+    program_bytes: Vec<u8>,
+    program_data_bytes: Vec<u8>,
+    program_lamports: u64,
+    program_account_sha256: String,
+    program_data_lamports: u64,
+    program_data_account_sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProviderClosureArgumentsV1 {
+    origin: ClusterOriginV1,
+    plan: PathBuf,
+    local_validator_profile: PathBuf,
+    finalized_capture: PathBuf,
+    output: PathBuf,
+}
+
+const PROVIDER_PLAN_SCHEMA_V1: &str = "dclutch-local-successor-infrastructure-plan-v2";
+const PROVIDER_PROFILE_SCHEMA_V1: &str = "dclutch-successor-local-validator-profile-v1";
+const MAX_PROVIDER_SOURCE_BYTES_V1: u64 = 32 * 1024 * 1024;
+const PROVIDER_RECEIPT_MODE_V1: u32 = 0o600;
+
 #[derive(Clone)]
 struct SnapshotV1 {
     slot: u64,
@@ -260,6 +363,699 @@ struct AddressesV1 {
     guardian: Pubkey,
     bridge: Pubkey,
     fee_collector: Pubkey,
+}
+
+pub(crate) fn run_provider_closure(arguments: Vec<String>) -> Result<()> {
+    let arguments = parse_provider_closure_arguments_v1(arguments)?;
+    ExpectedClusterV1::OwnedLoopback.authenticate(&arguments.origin)?;
+    let (plan_ref, profile_ref, expected) = authenticate_provider_sources_v1(
+        &arguments.plan,
+        &arguments.local_validator_profile,
+        &arguments.origin,
+    )?;
+    let (capture_ref, capture_genesis_hash, capture_slot, captured_snapshot) =
+        authenticate_provider_capture_v1(&arguments.finalized_capture, &expected)?;
+    let captured_programs =
+        provider_closure_programs_from_snapshot_v1(&captured_snapshot, &expected)?;
+    let mut rpc = Rpc::connect_cluster(&arguments.origin, WritePolicyV1::ReadsOnly)?;
+    let live_genesis_hash = rpc
+        .call("getGenesisHash", &json!([]))?
+        .as_str()
+        .ok_or_else(|| Error::new("owned-loopback getGenesisHash omitted a string"))?
+        .to_owned();
+    Hash::from_str(&live_genesis_hash)
+        .map_err(|error| Error::new(format!("owned-loopback genesis hash: {error}")))?;
+    if live_genesis_hash != capture_genesis_hash {
+        return Err(Error::new(
+            "live owned-loopback genesis hash differs from the finalized capture",
+        ));
+    }
+    let keys = expected
+        .iter()
+        .flat_map(|row| [row.program_id, row.program_data_address])
+        .collect::<Vec<_>>();
+    let (live_slot, accounts) = rpc.finalized_accounts(&keys, capture_slot)?;
+    let live_snapshot = SnapshotV1 {
+        slot: live_slot,
+        accounts: keys.into_iter().zip(accounts).collect(),
+    };
+    if provider_closure_programs_from_snapshot_v1(&live_snapshot, &expected)? != captured_programs {
+        return Err(Error::new(
+            "live finalized provider Loader pairs differ from their singular capture owner",
+        ));
+    }
+    let receipt = ProviderClosureReceiptV1 {
+        schema: PROVIDER_CLOSURE_SCHEMA_V1.into(),
+        cluster: "owned-loopback".into(),
+        genesis_hash: capture_genesis_hash,
+        status: "finalized".into(),
+        finalized_observation_slot: capture_slot.to_string(),
+        plan: plan_ref,
+        local_validator_profile: profile_ref,
+        finalized_capture: capture_ref,
+        provider_programs: captured_programs,
+    };
+    write_provider_closure_receipt_v1(&arguments.output, &receipt)?;
+    let authenticated = authenticate_provider_closure_receipt_v1(&arguments.output)?;
+    print_provider_receipt_v1(&authenticated)
+}
+
+fn parse_provider_closure_arguments_v1(
+    arguments: Vec<String>,
+) -> Result<ProviderClosureArgumentsV1> {
+    let mut rpc_url = None;
+    let mut plan = None;
+    let mut local_validator_profile = None;
+    let mut finalized_capture = None;
+    let mut output = None;
+    let mut values = arguments.into_iter();
+    while let Some(flag) = values.next() {
+        let value = values
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} requires a value")))?;
+        let slot = match flag.as_str() {
+            "--rpc-url" => &mut rpc_url,
+            "--plan" => &mut plan,
+            "--local-validator-profile" => &mut local_validator_profile,
+            "--finalized-capture" => &mut finalized_capture,
+            "--output" => &mut output,
+            _ => {
+                return Err(Error::new(format!(
+                    "unknown local provider closure argument: {flag}"
+                )));
+            }
+        };
+        if slot.replace(value).is_some() {
+            return Err(Error::new(format!("{flag} may be supplied only once")));
+        }
+    }
+    Ok(ProviderClosureArgumentsV1 {
+        origin: ClusterOriginV1::parse(&required(rpc_url, "--rpc-url")?, None)?,
+        plan: absolute(required(plan, "--plan")?, "--plan")?,
+        local_validator_profile: absolute(
+            required(local_validator_profile, "--local-validator-profile")?,
+            "--local-validator-profile",
+        )?,
+        finalized_capture: absolute(
+            required(finalized_capture, "--finalized-capture")?,
+            "--finalized-capture",
+        )?,
+        output: absolute(required(output, "--output")?, "--output")?,
+    })
+}
+
+fn authenticate_provider_sources_v1(
+    plan_path: &Path,
+    profile_path: &Path,
+    origin: &ClusterOriginV1,
+) -> Result<(
+    ProviderSourceRefV1,
+    ProviderSourceRefV1,
+    Vec<ProviderExpectedV1>,
+)> {
+    let (plan_path, plan_bytes) = read_provider_source_v1(plan_path, "successor plan")?;
+    let plan_value = parse_json_without_duplicate_keys_v1(&plan_bytes)
+        .map_err(|error| Error::new(format!("successor plan JSON: {error}")))?;
+    let plan: SuccessorPlan = serde_json::from_value(plan_value)?;
+    let (profile_path, profile_bytes) =
+        read_provider_source_v1(profile_path, "local-validator profile")?;
+    let profile_value = parse_json_without_duplicate_keys_v1(&profile_bytes)
+        .map_err(|error| Error::new(format!("local-validator profile JSON: {error}")))?;
+    let profile: LocalValidatorProfileV1 = serde_json::from_value(profile_value)?;
+
+    let expected_plan_labels = [
+        "registry",
+        "core",
+        "claims",
+        "trading",
+        "resolution",
+        "custody",
+        "rent-credit",
+        "pyth-receiver",
+        "pyth-router",
+    ]
+    .into_iter()
+    .flat_map(|role| {
+        [
+            format!("loader.{role}.program"),
+            format!("loader.{role}.programdata"),
+        ]
+    })
+    .collect::<BTreeSet<_>>();
+    if plan.schema != PROVIDER_PLAN_SCHEMA_V1
+        || plan.record_publication != "transaction"
+        || plan.genesis_accounts.len() != 18
+        || plan
+            .genesis_accounts
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != expected_plan_labels
+    {
+        return Err(Error::new(
+            "provider closure requires the exact transaction-publication 18-account successor plan v2",
+        ));
+    }
+    if profile.schema != PROVIDER_PROFILE_SCHEMA_V1
+        || profile.launcher_version != "3"
+        || profile.network.bind_address != "127.0.0.1"
+        || profile.genesis_boundary.is_empty()
+        || profile.key_policy.is_empty()
+        || profile.loader_time_boundary.is_empty()
+        || profile.ledger.is_empty()
+        || profile.validator.path.is_empty()
+        || profile.validator.version.is_empty()
+    {
+        return Err(Error::new(
+            "local-validator profile schema, launcher, containment, or boundary text changed",
+        ));
+    }
+    let profile_origin = ClusterOriginV1::parse(&profile.network.rpc_url, None)?;
+    if &profile_origin != origin {
+        return Err(Error::new(
+            "local-validator profile RPC origin differs from --rpc-url",
+        ));
+    }
+    let port = origin
+        .loopback_port()
+        .ok_or_else(|| Error::new("provider closure requires one loopback port"))?;
+    if profile.network.faucet_port != port.saturating_add(2)
+        || profile.network.gossip_port != port.saturating_add(3)
+        || profile.network.dynamic_port_range
+            != format!("{}-{}", port.saturating_add(10), port.saturating_add(41))
+    {
+        return Err(Error::new(
+            "local-validator profile port block differs from its RPC base",
+        ));
+    }
+    let profile_plan =
+        canonical_provider_regular_v1(Path::new(&profile.genesis_plan), "profile genesis plan")?;
+    let account_dir = canonical_provider_directory_v1(
+        Path::new(&profile.account_dir),
+        "profile account directory",
+    )?;
+    let plan_account_dir =
+        canonical_provider_directory_v1(Path::new(&plan.account_dir), "plan account directory")?;
+    let ledger = canonical_provider_directory_v1(Path::new(&profile.ledger), "profile ledger")?;
+    if profile_plan != plan_path
+        || account_dir != plan_account_dir
+        || profile_path.parent() != Some(ledger.as_path())
+    {
+        return Err(Error::new(
+            "local-validator profile does not bind the exact plan, account directory, and ledger",
+        ));
+    }
+    let expected = provider_expected_from_sources_v1(&plan, &profile)?;
+    Ok((
+        ProviderSourceRefV1 {
+            path: provider_path_text_v1(&plan_path, "successor plan")?,
+            sha256: sha256_hex_v1(&plan_bytes),
+            schema: plan.schema,
+        },
+        ProviderSourceRefV1 {
+            path: provider_path_text_v1(&profile_path, "local-validator profile")?,
+            sha256: sha256_hex_v1(&profile_bytes),
+            schema: profile.schema,
+        },
+        expected,
+    ))
+}
+
+fn provider_expected_from_sources_v1(
+    plan: &SuccessorPlan,
+    profile: &LocalValidatorProfileV1,
+) -> Result<Vec<ProviderExpectedV1>> {
+    let local = local_validator_release_v1()
+        .map_err(|error| Error::new(format!("compiled local Pyth release: {error:?}")))?;
+    let release = local.release();
+    if plan.provider_release_id != sha256_hex_v1(&release.to_bytes()) {
+        return Err(Error::new(
+            "successor plan provider release digest differs from the compiled semantic owner",
+        ));
+    }
+    let names = profile
+        .programs
+        .iter()
+        .map(|row| {
+            row.get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::new("local-validator profile program omitted its name"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if names
+        != [
+            "registry",
+            "core",
+            "claims",
+            "trading",
+            "resolution",
+            "custody",
+            "rent-credit",
+            "pyth-receiver",
+            "pyth-router",
+        ]
+    {
+        return Err(Error::new(
+            "local-validator profile program order or membership changed",
+        ));
+    }
+    let specifications = [
+        (
+            "pyth-receiver",
+            Pubkey::new_from_array(release.receiver_program()),
+            Pubkey::new_from_array(release.receiver_programdata()),
+            release.receiver_abi_id(),
+            LOCAL_PYTH_RECEIVER_ELF,
+        ),
+        (
+            "pyth-router",
+            Pubkey::new_from_array(release.router_program()),
+            Pubkey::new_from_array(release.router_programdata()),
+            release.router_abi_id(),
+            LOCAL_PYTH_ROUTER_ELF,
+        ),
+    ];
+    let mut expected = Vec::with_capacity(2);
+    for (index, (role, program_id, program_data_address, release_abi, elf)) in
+        specifications.into_iter().enumerate()
+    {
+        if Pubkey::find_program_address(&[program_id.as_ref()], &bpf_loader_upgradeable::ID).0
+            != program_data_address
+            || Sha256::digest(elf).as_slice() != release_abi.as_slice()
+        {
+            return Err(Error::new(format!(
+                "compiled {role} ProgramData link or ELF release digest changed"
+            )));
+        }
+        let mut program_bytes = vec![0_u8; 36];
+        program_bytes[..4].copy_from_slice(&2_u32.to_le_bytes());
+        program_bytes[4..].copy_from_slice(program_data_address.as_ref());
+        let mut program_data_bytes = vec![0_u8; 45];
+        program_data_bytes[..4].copy_from_slice(&3_u32.to_le_bytes());
+        program_data_bytes.extend_from_slice(elf);
+        let elf_sha256 = sha256_hex_v1(elf);
+        let program_data_sha256 = sha256_hex_v1(&program_data_bytes);
+        let program_pin = plan
+            .genesis_accounts
+            .get(&format!("loader.{role}.program"))
+            .ok_or_else(|| Error::new(format!("successor plan omitted {role} Program pin")))?;
+        let program_data_pin = plan
+            .genesis_accounts
+            .get(&format!("loader.{role}.programdata"))
+            .ok_or_else(|| Error::new(format!("successor plan omitted {role} ProgramData pin")))?;
+        let program_account_sha256 = account_sha256_v1(
+            bpf_loader_upgradeable::ID,
+            program_pin.lamports,
+            true,
+            0,
+            &program_bytes,
+        )?;
+        let program_data_account_sha256 = account_sha256_v1(
+            bpf_loader_upgradeable::ID,
+            program_data_pin.lamports,
+            false,
+            0,
+            &program_data_bytes,
+        )?;
+        if program_pin.address != program_id.to_string()
+            || program_pin.owner != bpf_loader_upgradeable::ID.to_string()
+            || program_pin.data_len != program_bytes.len()
+            || program_pin.data_sha256 != sha256_hex_v1(&program_bytes)
+            || program_pin.account_sha256 != program_account_sha256
+            || program_data_pin.address != program_data_address.to_string()
+            || program_data_pin.owner != bpf_loader_upgradeable::ID.to_string()
+            || program_data_pin.data_len != program_data_bytes.len()
+            || program_data_pin.data_sha256 != program_data_sha256
+            || program_data_pin.account_sha256 != program_data_account_sha256
+        {
+            return Err(Error::new(format!(
+                "successor plan {role} Loader pins differ from the compiled immutable provider"
+            )));
+        }
+        authenticate_provider_profile_row_v1(
+            &profile.programs[index + 7],
+            role,
+            program_id,
+            program_data_address,
+            &program_data_sha256,
+            &elf_sha256,
+        )?;
+        expected.push(ProviderExpectedV1 {
+            role,
+            program_id,
+            program_data_address,
+            elf_sha256,
+            program_data_sha256,
+            program_bytes,
+            program_data_bytes,
+            program_lamports: program_pin.lamports,
+            program_account_sha256,
+            program_data_lamports: program_data_pin.lamports,
+            program_data_account_sha256,
+        });
+    }
+    Ok(expected)
+}
+
+fn authenticate_provider_profile_row_v1(
+    value: &Value,
+    role: &str,
+    program_id: Pubkey,
+    program_data_address: Pubkey,
+    program_data_sha256: &str,
+    elf_sha256: &str,
+) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| Error::new(format!("profile {role} program row is not an object")))?;
+    let keys = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if keys
+        != BTreeSet::from([
+            "deployment_slot",
+            "elf_sha256",
+            "name",
+            "program_id",
+            "programdata_id",
+            "programdata_sha256",
+            "upgrade_authority",
+        ])
+        || object.get("name").and_then(Value::as_str) != Some(role)
+        || object.get("program_id").and_then(Value::as_str) != Some(program_id.to_string().as_str())
+        || object.get("programdata_id").and_then(Value::as_str)
+            != Some(program_data_address.to_string().as_str())
+        || object.get("deployment_slot").and_then(Value::as_u64) != Some(0)
+        || object
+            .get("upgrade_authority")
+            .is_none_or(|authority| !authority.is_null())
+        || object.get("programdata_sha256").and_then(Value::as_str) != Some(program_data_sha256)
+        || object.get("elf_sha256").and_then(Value::as_str) != Some(elf_sha256)
+    {
+        return Err(Error::new(format!(
+            "profile {role} row differs from its exact immutable Loader closure"
+        )));
+    }
+    Ok(())
+}
+
+fn provider_closure_programs_from_snapshot_v1(
+    snapshot: &SnapshotV1,
+    expected: &[ProviderExpectedV1],
+) -> Result<Vec<ProviderClosureProgramV1>> {
+    let exact_keys = expected
+        .iter()
+        .flat_map(|row| [row.program_id, row.program_data_address])
+        .collect::<BTreeSet<_>>();
+    if snapshot.accounts.keys().copied().collect::<BTreeSet<_>>() != exact_keys {
+        return Err(Error::new(
+            "provider finalized snapshot did not contain exactly four Loader accounts",
+        ));
+    }
+    let mut rows = Vec::with_capacity(expected.len());
+    for row in expected {
+        let program = snapshot.required(row.program_id, &format!("{} Program", row.role))?;
+        let program_data = snapshot.required(
+            row.program_data_address,
+            &format!("{} ProgramData", row.role),
+        )?;
+        let program_view = ProgramV3View::parse(&program.data)
+            .map_err(|error| Error::new(format!("{} Program: {error:?}", row.role)))?;
+        let program_data_view = ProgramDataV3View::parse(&program_data.data)
+            .map_err(|error| Error::new(format!("{} ProgramData: {error:?}", row.role)))?;
+        if program.owner != bpf_loader_upgradeable::ID
+            || !program.executable
+            || program.rent_epoch != 0
+            || program.lamports != row.program_lamports
+            || program.data != row.program_bytes
+            || program_view.programdata() != row.program_data_address.to_bytes()
+            || account_sha256_v1(
+                program.owner,
+                program.lamports,
+                program.executable,
+                program.rent_epoch,
+                &program.data,
+            )? != row.program_account_sha256
+            || program_data.owner != bpf_loader_upgradeable::ID
+            || program_data.executable
+            || program_data.rent_epoch != 0
+            || program_data.lamports != row.program_data_lamports
+            || program_data.data != row.program_data_bytes
+            || program_data_view.deployment_slot() != 0
+            || program_data_view.upgrade_authority().is_some()
+            || program_data.data.get(12) != Some(&0)
+            || !program_data
+                .data
+                .get(13..45)
+                .is_some_and(|inactive| inactive.iter().all(|byte| *byte == 0))
+            || sha256_hex_v1(&program_data.data) != row.program_data_sha256
+            || sha256_hex_v1(program_data_view.elf()) != row.elf_sha256
+            || account_sha256_v1(
+                program_data.owner,
+                program_data.lamports,
+                program_data.executable,
+                program_data.rent_epoch,
+                &program_data.data,
+            )? != row.program_data_account_sha256
+        {
+            return Err(Error::new(format!(
+                "finalized {} Loader pair differs from plan/profile slot-zero immutable bytes",
+                row.role
+            )));
+        }
+        rows.push(provider_closure_program_v1(row));
+    }
+    Ok(rows)
+}
+
+fn authenticate_provider_capture_v1(
+    path: &Path,
+    expected: &[ProviderExpectedV1],
+) -> Result<(CaptureRefV1, String, u64, SnapshotV1)> {
+    let capture = owned_loopback_capture::authenticate_v1(path)?;
+    let mut accounts = BTreeMap::new();
+    for row in expected {
+        let pair = capture.loader_pair_v1(
+            row.role,
+            row.program_id,
+            Some(row.program_data_address),
+            DeploymentSlotPolicyV1::ExactZeroImmutable,
+        )?;
+        for account in [pair.program, pair.program_data] {
+            if accounts
+                .insert(
+                    account.address,
+                    Some(RpcAccount {
+                        lamports: account.lamports,
+                        owner: account.owner,
+                        executable: account.executable,
+                        rent_epoch: account.rent_epoch,
+                        data: account.data,
+                    }),
+                )
+                .is_some()
+            {
+                return Err(Error::new("captured provider Loader accounts alias"));
+            }
+        }
+    }
+    let reference = capture.reference_v1()?;
+    let genesis_hash = capture.genesis_hash.clone();
+    let finalized_slot = capture.finalized_slot;
+    Ok((
+        reference,
+        genesis_hash,
+        finalized_slot,
+        SnapshotV1 {
+            slot: finalized_slot,
+            accounts,
+        },
+    ))
+}
+
+fn authenticate_provider_receipt_capture_v1(
+    receipt: &ProviderClosureReceiptV1,
+    expected: &[ProviderExpectedV1],
+) -> Result<()> {
+    let (capture_ref, capture_genesis, capture_slot, capture_snapshot) =
+        authenticate_provider_capture_v1(Path::new(&receipt.finalized_capture.path), expected)?;
+    let captured_programs =
+        provider_closure_programs_from_snapshot_v1(&capture_snapshot, expected)?;
+    if receipt.finalized_capture != capture_ref
+        || receipt.genesis_hash != capture_genesis
+        || receipt.finalized_observation_slot != capture_slot.to_string()
+        || receipt.provider_programs != captured_programs
+    {
+        return Err(Error::new(
+            "provider closure capture reference, cluster boundary, or captured Loader rows changed",
+        ));
+    }
+    Ok(())
+}
+
+fn provider_closure_program_v1(expected: &ProviderExpectedV1) -> ProviderClosureProgramV1 {
+    ProviderClosureProgramV1 {
+        role: expected.role.into(),
+        program_id: expected.program_id.to_string(),
+        program_data_address: expected.program_data_address.to_string(),
+        deployment_slot: "0".into(),
+        elf_sha256: expected.elf_sha256.clone(),
+        genesis_program_data_sha256: expected.program_data_sha256.clone(),
+        upgrade_authority: None,
+    }
+}
+
+pub(crate) fn authenticate_provider_closure_receipt_v1(
+    path: &Path,
+) -> Result<ProviderClosureReceiptV1> {
+    let (path, bytes) = read_provider_source_v1(path, "provider closure receipt")?;
+    if fs::metadata(&path)?.permissions().mode() & 0o777 != PROVIDER_RECEIPT_MODE_V1 {
+        return Err(Error::new(
+            "provider closure receipt mode must be exactly 0600",
+        ));
+    }
+    let value = parse_json_without_duplicate_keys_v1(&bytes)
+        .map_err(|error| Error::new(format!("provider closure receipt JSON: {error}")))?;
+    let receipt: ProviderClosureReceiptV1 = serde_json::from_value(value)?;
+    if receipt.schema != PROVIDER_CLOSURE_SCHEMA_V1
+        || receipt.cluster != "owned-loopback"
+        || receipt.status != "finalized"
+    {
+        return Err(Error::new(
+            "provider closure schema, cluster, or completion status changed",
+        ));
+    }
+    Hash::from_str(&receipt.genesis_hash)
+        .map_err(|error| Error::new(format!("provider closure genesis hash: {error}")))?;
+    let slot = receipt
+        .finalized_observation_slot
+        .parse::<u64>()
+        .map_err(|error| Error::new(format!("provider closure observation slot: {error}")))?;
+    if slot.to_string() != receipt.finalized_observation_slot {
+        return Err(Error::new(
+            "provider closure observation slot is not canonical decimal",
+        ));
+    }
+    let profile_path = Path::new(&receipt.local_validator_profile.path);
+    let (_, profile_bytes) = read_provider_source_v1(profile_path, "local-validator profile")?;
+    if sha256_hex_v1(&profile_bytes) != receipt.local_validator_profile.sha256 {
+        return Err(Error::new(
+            "provider closure profile reference digest changed",
+        ));
+    }
+    let profile_value = parse_json_without_duplicate_keys_v1(&profile_bytes)?;
+    let profile: LocalValidatorProfileV1 = serde_json::from_value(profile_value)?;
+    let origin = ClusterOriginV1::parse(&profile.network.rpc_url, None)?;
+    ExpectedClusterV1::OwnedLoopback.authenticate(&origin)?;
+    let (plan_ref, profile_ref, expected) =
+        authenticate_provider_sources_v1(Path::new(&receipt.plan.path), profile_path, &origin)?;
+    if receipt.plan != plan_ref || receipt.local_validator_profile != profile_ref {
+        return Err(Error::new(
+            "provider closure source references or ordered program rows changed",
+        ));
+    }
+    authenticate_provider_receipt_capture_v1(&receipt, &expected)?;
+    Ok(receipt)
+}
+
+fn read_provider_source_v1(path: &Path, label: &str) -> Result<(PathBuf, Vec<u8>)> {
+    let path = canonical_provider_regular_v1(path, label)?;
+    let metadata = fs::metadata(&path)?;
+    if metadata.len() == 0 || metadata.len() > MAX_PROVIDER_SOURCE_BYTES_V1 {
+        return Err(Error::new(format!(
+            "{label} must contain one through 32 MiB"
+        )));
+    }
+    Ok((path.clone(), fs::read(path)?))
+}
+
+fn canonical_provider_regular_v1(path: &Path, label: &str) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(Error::new(format!("{label} path must be absolute")));
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    let canonical = fs::canonicalize(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || canonical != path {
+        return Err(Error::new(format!(
+            "{label} must be one canonical regular non-symlink file"
+        )));
+    }
+    Ok(canonical)
+}
+
+fn canonical_provider_directory_v1(path: &Path, label: &str) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(Error::new(format!("{label} path must be absolute")));
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    let canonical = fs::canonicalize(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() || canonical != path {
+        return Err(Error::new(format!(
+            "{label} must be one canonical non-symlink directory"
+        )));
+    }
+    Ok(canonical)
+}
+
+fn provider_path_text_v1(path: &Path, label: &str) -> Result<String> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new(format!("{label} path is not UTF-8")))
+}
+
+fn write_provider_closure_receipt_v1(
+    path: &Path,
+    receipt: &ProviderClosureReceiptV1,
+) -> Result<()> {
+    if !path.is_absolute() || fs::symlink_metadata(path).is_ok() {
+        return Err(Error::new(
+            "provider closure --output must be one absent absolute path",
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("provider closure output omitted its parent"))?;
+    let parent = canonical_provider_directory_v1(parent, "provider closure output parent")?;
+    if path.parent() != Some(parent.as_path()) {
+        return Err(Error::new(
+            "provider closure output parent is not canonical",
+        ));
+    }
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::new("provider closure output omitted a UTF-8 name"))?;
+    let temporary = parent.join(format!(".{name}.{}.publish.tmp", std::process::id()));
+    let mut bytes = serde_json::to_vec_pretty(receipt)?;
+    bytes.push(b'\n');
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(PROVIDER_RECEIPT_MODE_V1)
+        .open(&temporary)
+        .map_err(|error| Error::new(format!("create provider closure temporary: {error}")))?;
+    file.set_permissions(fs::Permissions::from_mode(PROVIDER_RECEIPT_MODE_V1))?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    match fs::hard_link(&temporary, path) {
+        Ok(()) => {
+            fs::remove_file(&temporary)?;
+            fs::File::open(&parent)?.sync_all()?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(Error::new(format!(
+                "publish provider closure receipt: {error}"
+            )))
+        }
+    }
+}
+
+fn print_provider_receipt_v1<T: Serialize>(receipt: &T) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(&serde_json::to_vec_pretty(receipt)?)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
 }
 
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
@@ -498,10 +1294,16 @@ fn authenticate_release_v1(
             || data.owner != bpf_loader_upgradeable::ID
             || data.executable
             || data_view.deployment_slot() != 0
+            || data_view.upgrade_authority().is_some()
+            || data.data.get(12) != Some(&0)
+            || !data
+                .data
+                .get(13..45)
+                .is_some_and(|inactive| inactive.iter().all(|byte| *byte == 0))
             || Sha256::digest(data_view.elf()).as_slice() != expected_elf
         {
             return Err(Error::new(format!(
-                "owned-loopback {label} Program/ProgramData link, zero slot, owner, privilege, or ELF digest refused"
+                "owned-loopback {label} Program/ProgramData link, zero slot, null authority, owner, privilege, or ELF digest refused"
             )));
         }
     }
@@ -1821,7 +2623,171 @@ pub(crate) fn usage() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
+
+    static PROVIDER_TEST_NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct ProviderTestRoot(PathBuf);
+
+    impl ProviderTestRoot {
+        fn new() -> Self {
+            let path = fs::canonicalize(std::env::temp_dir())
+                .expect("canonical temp")
+                .join(format!(
+                    "dclutch-provider-closure-test-{}-{}",
+                    std::process::id(),
+                    PROVIDER_TEST_NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+            fs::create_dir(&path).expect("create test root");
+            Self(path)
+        }
+
+        fn write_capture(
+            &self,
+            name: &str,
+            expected: &[ProviderExpectedV1],
+            genesis: &str,
+            slot: u64,
+        ) -> PathBuf {
+            let mut accounts = serde_json::Map::new();
+            for row in expected {
+                for (address, data, executable, lamports) in [
+                    (
+                        row.program_id,
+                        &row.program_bytes,
+                        true,
+                        row.program_lamports,
+                    ),
+                    (
+                        row.program_data_address,
+                        &row.program_data_bytes,
+                        false,
+                        row.program_data_lamports,
+                    ),
+                ] {
+                    accounts.insert(
+                        address.to_string(),
+                        json!({
+                            "contextSlot": slot.to_string(),
+                            "value": {
+                                "lamports": lamports,
+                                "owner": bpf_loader_upgradeable::ID.to_string(),
+                                "data": [BASE64.encode(data), "base64"],
+                                "executable": executable,
+                                "rentEpoch": 0,
+                                "space": data.len(),
+                            }
+                        }),
+                    );
+                }
+            }
+            let capture = json!({
+                "schema": owned_loopback_capture::SCHEMA_V1,
+                "genesisHash": genesis,
+                "commitment": "finalized",
+                "finalizedSlot": slot.to_string(),
+                "transactions": {},
+                "accounts": accounts,
+            });
+            let path = self.0.join(name);
+            let mut bytes = serde_json::to_vec_pretty(&capture).expect("capture JSON");
+            bytes.push(b'\n');
+            fs::write(&path, bytes).expect("write capture");
+            path
+        }
+    }
+
+    impl Drop for ProviderTestRoot {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).expect("remove scoped test root");
+        }
+    }
+
+    fn provider_test_expected() -> Vec<ProviderExpectedV1> {
+        let local = local_validator_release_v1().expect("local release");
+        let release = local.release();
+        [
+            (
+                "pyth-receiver",
+                Pubkey::new_from_array(release.receiver_program()),
+                Pubkey::new_from_array(release.receiver_programdata()),
+                LOCAL_PYTH_RECEIVER_ELF,
+            ),
+            (
+                "pyth-router",
+                Pubkey::new_from_array(release.router_program()),
+                Pubkey::new_from_array(release.router_programdata()),
+                LOCAL_PYTH_ROUTER_ELF,
+            ),
+        ]
+        .into_iter()
+        .map(|(role, program_id, program_data_address, elf)| {
+            let mut program_bytes = vec![0_u8; 36];
+            program_bytes[..4].copy_from_slice(&2_u32.to_le_bytes());
+            program_bytes[4..].copy_from_slice(program_data_address.as_ref());
+            let mut program_data_bytes = vec![0_u8; 45];
+            program_data_bytes[..4].copy_from_slice(&3_u32.to_le_bytes());
+            program_data_bytes.extend_from_slice(elf);
+            let program_lamports = Rent::default().minimum_balance(program_bytes.len());
+            let program_data_lamports = Rent::default().minimum_balance(program_data_bytes.len());
+            ProviderExpectedV1 {
+                role,
+                program_id,
+                program_data_address,
+                elf_sha256: sha256_hex_v1(elf),
+                program_data_sha256: sha256_hex_v1(&program_data_bytes),
+                program_account_sha256: account_sha256_v1(
+                    bpf_loader_upgradeable::ID,
+                    program_lamports,
+                    true,
+                    0,
+                    &program_bytes,
+                )
+                .expect("Program account digest"),
+                program_data_account_sha256: account_sha256_v1(
+                    bpf_loader_upgradeable::ID,
+                    program_data_lamports,
+                    false,
+                    0,
+                    &program_data_bytes,
+                )
+                .expect("ProgramData account digest"),
+                program_bytes,
+                program_data_bytes,
+                program_lamports,
+                program_data_lamports,
+            }
+        })
+        .collect()
+    }
+
+    fn provider_test_receipt(
+        path: &Path,
+        expected: &[ProviderExpectedV1],
+    ) -> ProviderClosureReceiptV1 {
+        let capture = owned_loopback_capture::authenticate_v1(path).expect("capture");
+        ProviderClosureReceiptV1 {
+            schema: PROVIDER_CLOSURE_SCHEMA_V1.into(),
+            cluster: "owned-loopback".into(),
+            genesis_hash: capture.genesis_hash.clone(),
+            status: "finalized".into(),
+            finalized_observation_slot: capture.finalized_slot.to_string(),
+            plan: ProviderSourceRefV1 {
+                path: "/unused-plan".into(),
+                sha256: "00".repeat(32),
+                schema: PROVIDER_PLAN_SCHEMA_V1.into(),
+            },
+            local_validator_profile: ProviderSourceRefV1 {
+                path: "/unused-profile".into(),
+                sha256: "00".repeat(32),
+                schema: PROVIDER_PROFILE_SCHEMA_V1.into(),
+            },
+            finalized_capture: capture.reference_v1().expect("capture ref"),
+            provider_programs: expected.iter().map(provider_closure_program_v1).collect(),
+        }
+    }
 
     #[test]
     fn captured_local_provider_fixtures_and_facts_shape_are_exact() {
@@ -1879,6 +2845,149 @@ mod tests {
                 .filter(|action| action.needs_encoded_signer())
                 .count()
                 == 1
+        );
+    }
+
+    #[test]
+    fn provider_receipt_reopens_capture_and_refuses_static_or_raw_substitution() {
+        let root = ProviderTestRoot::new();
+        let expected = provider_test_expected();
+        let genesis = Pubkey::new_unique().to_string();
+        let capture_path = root.write_capture("capture.json", &expected, &genesis, 10);
+        let receipt = provider_test_receipt(&capture_path, &expected);
+        authenticate_provider_receipt_capture_v1(&receipt, &expected).expect("exact capture");
+
+        let mut hostile = receipt.clone();
+        hostile.finalized_capture.sha256 = "00".repeat(32);
+        assert!(authenticate_provider_receipt_capture_v1(&hostile, &expected).is_err());
+        let mut hostile = receipt.clone();
+        hostile.finalized_capture.finalized_slot = "11".into();
+        assert!(authenticate_provider_receipt_capture_v1(&hostile, &expected).is_err());
+        let mut hostile = receipt.clone();
+        hostile.finalized_observation_slot = "11".into();
+        assert!(authenticate_provider_receipt_capture_v1(&hostile, &expected).is_err());
+        let mut hostile = receipt.clone();
+        hostile.genesis_hash = Pubkey::new_unique().to_string();
+        assert!(authenticate_provider_receipt_capture_v1(&hostile, &expected).is_err());
+        let substitute = root.write_capture("substitute.json", &expected, &genesis, 12);
+        let mut hostile = receipt.clone();
+        hostile.finalized_capture.path = substitute.display().to_string();
+        assert!(authenticate_provider_receipt_capture_v1(&hostile, &expected).is_err());
+
+        for (index, mutation) in ["tag", "slot", "link", "elf", "full", "substitute"]
+            .into_iter()
+            .enumerate()
+        {
+            let mutated = expected.clone();
+            let path = root.write_capture(&format!("raw-{index}.json"), &mutated, &genesis, 10);
+            let mut capture_value: Value =
+                serde_json::from_slice(&fs::read(&path).expect("capture bytes"))
+                    .expect("capture value");
+            let receiver = &expected[0];
+            let encoded = capture_value["accounts"]
+                [receiver.program_data_address.to_string()]["value"]["data"][0]
+                .as_str()
+                .expect("ProgramData base64");
+            let mut bytes = BASE64.decode(encoded).expect("ProgramData bytes");
+            match mutation {
+                "tag" => {
+                    bytes[12] = 1;
+                    bytes[13..45].copy_from_slice(system_program::ID.as_ref());
+                }
+                "slot" => bytes[4] = 1,
+                "elf" => *bytes.last_mut().expect("ELF") ^= 1,
+                "full" => bytes[13] = 1,
+                "substitute" => bytes = expected[1].program_data_bytes.clone(),
+                "link" => {
+                    let encoded =
+                        capture_value["accounts"][receiver.program_id.to_string()]["value"]["data"]
+                            [0]
+                        .as_str()
+                        .expect("Program base64");
+                    let mut program = BASE64.decode(encoded).expect("Program bytes");
+                    program[4] ^= 1;
+                    capture_value["accounts"][receiver.program_id.to_string()]["value"]["data"]
+                        [0] = json!(BASE64.encode(program));
+                }
+                _ => unreachable!(),
+            }
+            if mutation != "link" {
+                capture_value["accounts"][receiver.program_data_address.to_string()]["value"]["data"]
+                    [0] = json!(BASE64.encode(&bytes));
+                capture_value["accounts"][receiver.program_data_address.to_string()]["value"]["space"] =
+                    json!(bytes.len());
+            }
+            fs::write(
+                &path,
+                serde_json::to_vec_pretty(&capture_value).expect("hostile capture"),
+            )
+            .expect("rewrite hostile capture");
+            let hostile = provider_test_receipt(&path, &expected);
+            assert!(
+                authenticate_provider_receipt_capture_v1(&hostile, &expected).is_err(),
+                "{mutation} capture substitution was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn prerequisite_release_auth_refuses_some_authority_even_with_same_elf() {
+        let expected = provider_test_expected();
+        let addresses = addresses_v1().expect("addresses");
+        let payer = Pubkey::new_unique();
+        let mut accounts = BTreeMap::new();
+        for row in &expected {
+            accounts.insert(
+                row.program_id,
+                Some(RpcAccount {
+                    lamports: row.program_lamports,
+                    owner: bpf_loader_upgradeable::ID,
+                    executable: true,
+                    rent_epoch: 0,
+                    data: row.program_bytes.clone(),
+                }),
+            );
+            accounts.insert(
+                row.program_data_address,
+                Some(RpcAccount {
+                    lamports: row.program_data_lamports,
+                    owner: bpf_loader_upgradeable::ID,
+                    executable: false,
+                    rent_epoch: 0,
+                    data: row.program_data_bytes.clone(),
+                }),
+            );
+        }
+        let receiver_data = accounts
+            .get_mut(&addresses.receiver_programdata)
+            .and_then(Option::as_mut)
+            .expect("Receiver ProgramData");
+        receiver_data.data[12] = 1;
+        receiver_data.data[13..45].copy_from_slice(system_program::ID.as_ref());
+        accounts.insert(
+            payer,
+            Some(RpcAccount {
+                lamports: 1,
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+                data: Vec::new(),
+            }),
+        );
+        let arguments = ArgumentsV1 {
+            origin: ClusterOriginV1::parse("http://127.0.0.1:20890/", None).expect("origin"),
+            payer,
+            encoded_vaa: Pubkey::new_unique(),
+            update_account: Pubkey::new_unique(),
+            journal_dir: PathBuf::from("/unused"),
+            facts_output: PathBuf::from("/unused-facts"),
+            payer_keypair: PathBuf::from("/unused-payer"),
+            encoded_vaa_keypair: PathBuf::from("/unused-vaa"),
+            execute: false,
+        };
+        assert!(
+            authenticate_release_v1(&SnapshotV1 { slot: 10, accounts }, &arguments, &addresses)
+                .is_err()
         );
     }
 }

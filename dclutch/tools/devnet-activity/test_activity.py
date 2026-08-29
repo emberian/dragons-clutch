@@ -38,6 +38,7 @@ WALLET = "2" * 32
 SIGNATURE = "3" * 64
 ACTIVITY_SIGNATURE = "4" * 64
 SUBSTITUTED_SIGNATURE = "5" * 64
+FAILED_ACTIVITY_SIGNATURE = "6" * 64
 SECRET_MARKER = "THIS_IS_TEST_SECRET_KEY_MATERIAL"
 
 
@@ -177,6 +178,8 @@ def manifest_value(scenario: Path, target: str = "owned-loopback", rpc_url: str 
                     "path": "{{work}}/receipts/private-lifecycle.json",
                     "schema": "dclutch-local-private-validator-lifecycle-v1",
                     "signaturePointers": ["/signature"],
+                    "transactionListPointer": None,
+                    "requiredTransactionLabels": [],
                     "requiredValues": {"/completed": True},
                 },
             }
@@ -295,6 +298,7 @@ class RpcState:
         self.genesis = "loopback-test-genesis"
         self.transactions: dict[str, dict[str, object]] = {}
         self.signatures: list[str] = []
+        self.signature_errors: dict[str, object] = {}
         self.balances: dict[str, int] = {}
 
 
@@ -315,7 +319,14 @@ def rpc_server(state: RpcState):
             elif method == "getTransaction":
                 result = state.transactions.get(body["params"][0])
             elif method == "getSignaturesForAddress":
-                result = [{"signature": signature, "err": None, "slot": 99} for signature in state.signatures]
+                result = [
+                    {
+                        "signature": signature,
+                        "err": state.signature_errors.get(signature),
+                        "slot": 99,
+                    }
+                    for signature in state.signatures
+                ]
             else:
                 result = None
             encoded = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode()
@@ -415,6 +426,16 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(key_path.stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.work / "private").stat().st_mode & 0o777, 0o700)
 
+        substituted = self.work / "private" / "not-a-scenario-wallet.json"
+        substituted.write_text(SECRET_MARKER, encoding="utf-8")
+        substituted.chmod(0o600)
+        private_path = self.work / "private" / "wallet-index.json"
+        private = activity.authenticated_state(private_path, "private wallet index")
+        private["wallets"][0]["keypair"] = str(substituted)
+        activity.atomic_write_json(private_path, private)
+        with self.assertRaisesRegex(activity.Refusal, "exact disposable scenario path"):
+            activity.prepare_wallets(manifest, self.work, self.keygen)
+
     def test_funding_finalizes_exact_transaction_arithmetic(self) -> None:
         state = RpcState()
         with rpc_server(state) as rpc_url:
@@ -482,6 +503,146 @@ class ActivityTests(unittest.TestCase):
             activity.validate_supervisor_rpc_join(
                 "https://api.devnet.solana.com:443/",
                 "https://api.devnet.solana.com:443/",
+            )
+
+    def test_bounded_live_authorization_caps_the_exact_wallet_bankroll(self) -> None:
+        manifest = self.parsed()
+        devnet = dataclasses.replace(
+            manifest,
+            scenario=dataclasses.replace(manifest.scenario, cluster_target="devnet"),
+            rpc_url=activity.DEVNET_MANIFEST_RPC_URL,
+            devnet_genesis_hash=activity.DEVNET_GENESIS_HASH,
+        )
+        now = dt.datetime.now(dt.timezone.utc)
+        path = self.root / "bounded-live-authorization.json"
+        value = {
+            "schema": activity.BOUNDED_AUTHORIZATION_SCHEMA,
+            "manifestSha256": devnet.sha256,
+            "scenarioSha256": devnet.scenario.sha256,
+            "devnetGenesisHash": activity.DEVNET_GENESIS_HASH,
+            "marketRef": devnet.scenario.market_ref,
+            "notBefore": (now - dt.timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+            "expiresAt": (now + dt.timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            "maxCycles": 1,
+            "maxSpendLamports": "10000",
+            "maxFeeLamports": "5000",
+            "prefundedWalletClosureSha256": "2" * 64,
+            "checkedReleaseSha256": "3" * 64,
+            "marketSha256": "4" * 64,
+            "acceptedHarnessSha256": "5" * 64,
+            "acceptedHarnessSourceCommit": "6" * 40,
+            "dclutchSha256": "7" * 64,
+            "successorSha256": "8" * 64,
+            "solanaKeygenSha256": "9" * 64,
+            "authorization": "authorize-bounded-devnet-activity-live-send",
+        }
+        write_json(path, value)
+        self.assertEqual(
+            activity.bounded_live_authorization(path, devnet),
+            (digest(path), 1, 10_000, 5_000, "2" * 64),
+        )
+        value["maxSpendLamports"] = "10001"
+        write_json(path, value)
+        with self.assertRaisesRegex(activity.Refusal, "exceeds scenario wallet bankroll"):
+            activity.bounded_live_authorization(path, devnet)
+        value["maxSpendLamports"] = "10000"
+        value["maxCycles"] = 0
+        write_json(path, value)
+        with self.assertRaisesRegex(activity.Refusal, "maxCycles"):
+            activity.bounded_live_authorization(path, devnet)
+
+    def test_supervisor_mode_is_explicit_and_mutually_exclusive(self) -> None:
+        parser = activity.supervisor_parser()
+        required = [
+            "--manifest", "/tmp/manifest",
+            "--manifest-sha256", "1" * 64,
+            "--scenario-id", "scenario",
+            "--work", "/tank/dclutch-activity/runs/" + "1" * 64,
+            "--rpc-url", activity.DEVNET_SUPERVISOR_RPC_URL,
+            "--i-mean-devnet", activity.DEVNET_GENESIS_HASH,
+            "--journal", "/tank/dclutch-activity/request.json",
+            "--evidence-dir", "/tank/dclutch-activity/evidence",
+            "--accepted-harness-sha256", "2" * 64,
+            "--accepted-harness-source-commit", "3" * 40,
+            "--scenario-sha256", "4" * 64,
+            "--checked-release", "/tmp/release",
+            "--checked-release-sha256", "5" * 64,
+            "--market", "/tmp/market",
+            "--market-sha256", "6" * 64,
+            "--cycle-id", "cycle",
+            "--dclutch-bin", "/tmp/dclutch",
+            "--accepted-dclutch-sha256", "7" * 64,
+            "--successor-bin", "/tmp/successor",
+            "--accepted-successor-sha256", "8" * 64,
+            "--solana-keygen-bin", "/tmp/keygen",
+            "--accepted-solana-keygen-sha256", "9" * 64,
+        ]
+        with self.assertRaises(SystemExit):
+            parser.parse_args(required)
+        with self.assertRaises(SystemExit):
+            parser.parse_args([*required, "--no-send", "--live-send"])
+        self.assertTrue(parser.parse_args([*required, "--live-send"]).live_send)
+
+    def test_reconciled_wallet_debit_is_exact_and_bounded(self) -> None:
+        value = {
+            "schema": activity.RECONCILIATION_SCHEMA,
+            "activity": [
+                {
+                    "transactions": [
+                        {"walletLamportDeltas": {"alice": "-42", "bob": "7"}},
+                        {"walletLamportDeltas": {"alice": "20", "bob": "-8"}},
+                    ]
+                },
+            ],
+        }
+        self.assertEqual(activity.reconciled_wallet_debit_lamports(value), 50)
+        value["activity"][0]["transactions"][0]["walletLamportDeltas"]["alice"] = "-0"
+        with self.assertRaisesRegex(activity.Refusal, "canonical signed"):
+            activity.reconciled_wallet_debit_lamports(value)
+
+        fee_value = {
+            "schema": activity.RECONCILIATION_SCHEMA,
+            "activity": [
+                {"transactions": [{"feeLamports": "5000"}, {"feeLamports": "7000"}]},
+                {"transactions": [{"feeLamports": "3"}]},
+            ],
+        }
+        self.assertEqual(activity.reconciled_activity_fee_lamports(fee_value), 12_003)
+        fee_value["activity"][0]["transactions"][0]["feeLamports"] = "05000"
+        with self.assertRaisesRegex(activity.Refusal, "canonical unsigned decimal"):
+            activity.reconciled_activity_fee_lamports(fee_value)
+
+    def test_finalized_funding_closure_is_distinct_and_substitution_hostile(self) -> None:
+        manifest = self.parsed()
+        activity.prepare_wallets(manifest, self.work, self.keygen)
+        funding_authorization = "a" * 64
+        journal = activity.new_funding_journal(
+            manifest, "alice", WALLET, FUNDER, 10_000, funding_authorization
+        )
+        final = activity.verify_funding_transaction(
+            funding_transaction(memo=journal["memo"]), journal, SIGNATURE
+        )
+        journal_path = activity.funding_journal_path(self.work, "alice")
+        activity.atomic_write_json(journal_path, final)
+        closure = activity.write_funding_closure(
+            manifest,
+            self.work,
+            manifest.scenario.genesis_hash,
+            funding_authorization,
+            FUNDER,
+        )
+        closure_path = activity.funding_closure_path(self.work)
+        self.assertEqual(closure["schema"], activity.FUNDING_CLOSURE_SCHEMA)
+        self.assertEqual(closure["totalTransferLamports"], "10000")
+        self.assertEqual(closure["wallets"][0]["journalSha256"], digest(journal_path))
+        activity.authenticate_funding_closure(
+            manifest, self.work, digest(closure_path)
+        )
+        final["feeLamports"] = "1"
+        activity.atomic_write_json(journal_path, final)
+        with self.assertRaisesRegex(activity.Refusal, "wallet rows changed"):
+            activity.authenticate_funding_closure(
+                manifest, self.work, digest(closure_path)
             )
 
     def test_cleanup_requires_final_journal_and_removes_only_secret_keys(self) -> None:
@@ -684,6 +845,152 @@ class ActivityTests(unittest.TestCase):
             state.transactions[ACTIVITY_SIGNATURE] = activity_transaction(embedded_signature=SUBSTITUTED_SIGNATURE)
             with self.assertRaisesRegex(activity.Refusal, "substitutes activity signature"):
                 activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+
+    def test_campaign_completion_binds_full_transaction_list_and_failed_fees(self) -> None:
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {"checked": True})
+        write_json(market, {"market": "bound"})
+        manifest = self.parsed()
+        completion = activity.CompletionSpec(
+            path="{{work}}/receipts/campaign.json",
+            schema=activity.CAMPAIGN_REPORT_SCHEMA,
+            signature_pointers=(),
+            transaction_list_pointer="/execution/transactions",
+            required_transaction_labels=("found the market",),
+            required_values={},
+        )
+        adapter = dataclasses.replace(
+            manifest.adapters[0],
+            argv=(
+                "campaign",
+                "--rpc-url",
+                "{{rpc}}",
+                "--plan",
+                "{{input.checked-release}}",
+                "--market",
+                "{{input.market}}",
+                "--evidence",
+                "{{work}}/receipts/campaign.json",
+                "--execute",
+            ),
+            completion=completion,
+        )
+        manifest = dataclasses.replace(
+            manifest,
+            inputs={"checked-release": checked_release, "market": market},
+            adapters=(adapter,),
+        )
+        argv, completion_path = activity.expanded_adapter(
+            adapter,
+            manifest,
+            self.work,
+            {"alice": {"keypair": str(self.work / "private/wallets/alice.json")}},
+            {"alice": {"address": WALLET}},
+        )
+        self.assertEqual(argv[argv.index("--market") + 1], str(market))
+        completion_path.parent.mkdir(parents=True)
+        write_json(
+            completion_path,
+            {
+                "schema": activity.CAMPAIGN_REPORT_SCHEMA,
+                "cluster": "loopback",
+                "mode": "execute",
+                "plan_sha256": digest(checked_release),
+                "market_sha256": digest(market),
+                "execution": {
+                    "completed": True,
+                    "transactions": [
+                        {"label": "hostile refusal", "signature": FAILED_ACTIVITY_SIGNATURE},
+                        {"label": "found the market", "signature": ACTIVITY_SIGNATURE},
+                    ],
+                },
+            },
+        )
+        failed = activity_transaction(FAILED_ACTIVITY_SIGNATURE)
+        failed["meta"]["err"] = {"InstructionError": [0, "Custom"]}  # type: ignore[index]
+        state = RpcState()
+        state.transactions[FAILED_ACTIVITY_SIGNATURE] = failed
+        state.transactions[ACTIVITY_SIGNATURE] = activity_transaction()
+        with rpc_server(state) as rpc_url:
+            observed = activity.inspect_completion(
+                dataclasses.replace(manifest, rpc_url=rpc_url),
+                adapter,
+                completion_path,
+                activity.Rpc(rpc_url),
+                {"alice": WALLET},
+            )
+        assert observed is not None
+        _, signatures, transactions = observed
+        self.assertEqual(signatures, [FAILED_ACTIVITY_SIGNATURE, ACTIVITY_SIGNATURE])
+        self.assertEqual([row["succeeded"] for row in transactions], [False, True])
+        self.assertEqual(sum(int(row["feeLamports"]) for row in transactions), 2_000)
+
+        substituted = json.loads(completion_path.read_text())
+        substituted["market_sha256"] = "7" * 64
+        write_json(completion_path, substituted)
+        with rpc_server(state) as rpc_url:
+            with self.assertRaisesRegex(activity.Refusal, "release/Market"):
+                activity.inspect_completion(
+                    dataclasses.replace(manifest, rpc_url=rpc_url),
+                    adapter,
+                    completion_path,
+                    activity.Rpc(rpc_url),
+                    {"alice": WALLET},
+                )
+
+    def test_campaign_completion_refuses_omitted_required_stage_and_substituted_input(self) -> None:
+        parsed = self.parsed()
+        with self.assertRaisesRegex(activity.Refusal, "exact shape"):
+            activity.parse_completion(
+                {
+                    "path": "/tmp/report.json",
+                    "schema": activity.CAMPAIGN_REPORT_SCHEMA,
+                    "signaturePointers": [],
+                    "transactionListPointer": "/transactions",
+                    "requiredTransactionLabels": ["DCLTCFQ1"],
+                    "requiredValues": {},
+                },
+                "founding",
+            )
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {})
+        write_json(market, {})
+        adapter = dataclasses.replace(
+            parsed.adapters[0],
+            argv=(
+                "campaign",
+                "--plan",
+                "{{input.checked-release}}",
+                "--market",
+                "{{input.checked-release}}",
+                "--evidence",
+                "{{work}}/campaign.json",
+                "--execute",
+            ),
+            completion=activity.CompletionSpec(
+                path="{{work}}/campaign.json",
+                schema=activity.CAMPAIGN_REPORT_SCHEMA,
+                signature_pointers=(),
+                transaction_list_pointer="/execution/transactions",
+                required_transaction_labels=("DCLTCFQ1", "DCLTPCB2", "DCLTGMF2"),
+                required_values={},
+            ),
+        )
+        manifest = dataclasses.replace(
+            parsed,
+            inputs={"checked-release": checked_release, "market": market},
+            adapters=(adapter,),
+        )
+        with self.assertRaisesRegex(activity.Refusal, "substitutes --market"):
+            activity.expanded_adapter(
+                adapter,
+                manifest,
+                self.work,
+                {"alice": {"keypair": str(self.work / "private/wallets/alice.json")}},
+                {"alice": {"address": WALLET}},
+            )
 
     def test_expired_capability_allows_only_original_journal_recovery(self) -> None:
         manifest = self.parsed()

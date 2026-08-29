@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import http.server
 import importlib.util
 import json
@@ -40,6 +41,7 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
         with self.server.lock:
             self.server.methods.append(method)
         if method == "sendTransaction":
+            _wire, signature, _blockhash = MODULE.frozen_transaction(call)
             if self.server.block_height > self.server.last_valid_block_height:
                 response: dict[str, object] = {
                     "jsonrpc": "2.0",
@@ -51,16 +53,31 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
                     },
                 }
             else:
+                with self.server.lock:
+                    self.server.accepted_signatures.add(signature)
                 response = {
                     "jsonrpc": "2.0",
                     "id": call["id"],
-                    "result": MODULE.base58_encode(b"\0" * 64),
+                    "result": signature,
                 }
         elif method == "getSignatureStatuses":
+            values = call.get("params", [[]])[0]
+            with self.server.lock:
+                accepted = set(self.server.accepted_signatures)
             response = {
                 "jsonrpc": "2.0",
                 "id": call["id"],
-                "result": {"context": {"slot": 9}, "value": [{"confirmationStatus": "finalized"}]},
+                "result": {
+                    "context": {"slot": 9},
+                    "value": [
+                        (
+                            {"confirmationStatus": "finalized"}
+                            if signature in accepted
+                            else None
+                        )
+                        for signature in values
+                    ],
+                },
             }
         elif method == "getLatestBlockhash":
             response = {
@@ -99,6 +116,7 @@ class _RpcUpstream(http.server.ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.block_height = 0
         self.last_valid_block_height = 2
+        self.accepted_signatures: set[str] = set()
 
 
 @contextlib.contextmanager
@@ -156,7 +174,10 @@ def write_spec(root: Path, rpc_url: str) -> Path:
 
 class LifecycleChaosTests(unittest.TestCase):
     def test_full_campaign_kills_every_boundary_and_runs_all_hostiles(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text, upstream() as (server, rpc_url):
+        with tempfile.TemporaryDirectory() as root_text, upstream() as (
+            server,
+            rpc_url,
+        ):
             root = Path(root_text)
             spec_path = write_spec(root, rpc_url)
             spec = MODULE.parse_spec(spec_path)
@@ -165,20 +186,58 @@ class LifecycleChaosTests(unittest.TestCase):
             self.assertEqual(summary["status"], "passed")
             self.assertEqual(summary["passCount"], len(MODULE.ALL_CASES))
             self.assertEqual(summary["caseCount"], len(MODULE.ALL_CASES))
-            self.assertEqual([row["case"] for row in summary["cases"]], list(MODULE.ALL_CASES))
+            self.assertEqual(
+                [row["case"] for row in summary["cases"]], list(MODULE.ALL_CASES)
+            )
             for boundary in MODULE.BOUNDARIES:
-                row = next(row for row in summary["cases"] if row["case"] == f"kill-{boundary}")
-                self.assertEqual(row["killedIntentSha256"], MODULE.sha256_bytes(f"fake-intent:{boundary}".encode()))
-                self.assertTrue((work / "cases" / f"kill-{boundary}" / "attempt-1-killed").is_dir())
-                self.assertTrue((work / "cases" / f"kill-{boundary}" / "attempt-2-resumed").is_dir())
+                row = next(
+                    row for row in summary["cases"] if row["case"] == f"kill-{boundary}"
+                )
+                self.assertEqual(
+                    row["killedIntentSha256"],
+                    MODULE.sha256_bytes(f"fake-intent:{boundary}".encode()),
+                )
+                self.assertEqual(
+                    row["recoveryPolicy"],
+                    "dispatching-poll-then-identical-send",
+                )
+                self.assertEqual(len(row["killedSignedPacketSha256"]), 64)
+                self.assertEqual(len(row["killedDispatchingStateSha256"]), 64)
+                self.assertTrue(row["killedSignature"])
+                self.assertTrue(
+                    (work / "cases" / f"kill-{boundary}" / "attempt-1-killed").is_dir()
+                )
+                self.assertTrue(
+                    (work / "cases" / f"kill-{boundary}" / "attempt-2-resumed").is_dir()
+                )
+                trace = MODULE.read_unique_json(
+                    work / "cases" / f"kill-{boundary}" / "RPC_TRACE.json",
+                    "kill trace",
+                )["rows"]
+                client = [row for row in trace if row["source"] == "client"]
+                send_index = next(
+                    index
+                    for index, item in enumerate(client)
+                    if item["method"] == "sendTransaction" and item["stage"] == boundary
+                )
+                self.assertTrue(
+                    any(
+                        item["method"] == "getSignatureStatuses"
+                        for item in client[:send_index]
+                    )
+                )
             for case in MODULE.ALL_CASES:
-                self.assertTrue((work / "cases" / case / "teardown" / "receipt.json").is_file())
+                self.assertTrue(
+                    (work / "cases" / case / "teardown" / "receipt.json").is_file()
+                )
             refusal_rows = [row for row in summary["cases"] if row["expectedRefusal"]]
             self.assertEqual(
                 {row["case"] for row in refusal_rows},
                 {*MODULE.REFUSAL_CASES, "blockhash-expiry"},
             )
-            baseline = next(row for row in summary["cases"] if row["case"] == "baseline")
+            baseline = next(
+                row for row in summary["cases"] if row["case"] == "baseline"
+            )
             for row in summary["cases"]:
                 if not row["expectedRefusal"]:
                     self.assertEqual(row["snapshotSha256"], baseline["snapshotSha256"])
@@ -186,18 +245,34 @@ class LifecycleChaosTests(unittest.TestCase):
                 work / "cases" / "rpc-timeout" / "RPC_TRACE.json", "timeout trace"
             )
             self.assertEqual(
-                [row["method"] for row in timeout_trace["rows"] if row["source"] == "client"],
+                [
+                    row["method"]
+                    for row in timeout_trace["rows"]
+                    if row["source"] == "client"
+                ],
                 ["getLatestBlockhash", "sendTransaction", "getSignatureStatuses"],
             )
             duplicate_trace = MODULE.read_unique_json(
                 work / "cases" / "duplicate-send" / "RPC_TRACE.json", "duplicate trace"
             )
             self.assertEqual(
-                len([row for row in duplicate_trace["rows"] if row["source"] == "client"]),
+                len(
+                    [
+                        row
+                        for row in duplicate_trace["rows"]
+                        if row["source"] == "client"
+                    ]
+                ),
                 2,
             )
             self.assertEqual(
-                len([row for row in duplicate_trace["rows"] if row["source"] == "injected-forward"]),
+                len(
+                    [
+                        row
+                        for row in duplicate_trace["rows"]
+                        if row["source"] == "injected-forward"
+                    ]
+                ),
                 2,
             )
             self.assertGreaterEqual(server.methods.count("sendTransaction"), 3)
@@ -205,10 +280,20 @@ class LifecycleChaosTests(unittest.TestCase):
                 work / "cases" / "blockhash-expiry" / "RPC_TRACE.json", "expiry trace"
             )
             expired = next(
-                row for row in expiry_trace["rows"] if row["source"] == "injected-expired-forward"
+                row
+                for row in expiry_trace["rows"]
+                if row["source"] == "injected-expired-forward"
             )
-            self.assertGreater(expired["observedBlockHeight"], expired["lastValidBlockHeight"])
-            self.assertEqual(expired["transactionSignature"], MODULE.base58_encode(b"\0" * 64))
+            self.assertGreater(
+                expired["observedBlockHeight"], expired["lastValidBlockHeight"]
+            )
+            signature_digest = hashlib.sha256(
+                b"fake-signature:blockhash-expiry:hot"
+            ).digest()
+            self.assertEqual(
+                expired["transactionSignature"],
+                MODULE.base58_encode(signature_digest + signature_digest),
+            )
             late = work / "cases" / "late-child-refusal"
             MODULE.write_json_new(
                 late / "journals" / "retire.json",
@@ -241,8 +326,13 @@ class LifecycleChaosTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.Refusal, "order"):
             MODULE.validate_snapshot(json.dumps(hostile).encode(), "hostile")
 
-    def test_spec_refuses_external_rpc_reordered_boundaries_and_unknown_fields(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text, upstream() as (_server, rpc_url):
+    def test_spec_refuses_external_rpc_reordered_boundaries_and_unknown_fields(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root_text, upstream() as (
+            _server,
+            rpc_url,
+        ):
             root = Path(root_text)
             path = write_spec(root, rpc_url)
             value = json.loads(path.read_text())
@@ -279,7 +369,7 @@ class LifecycleChaosTests(unittest.TestCase):
                 "intentSha256": "a" * 64,
             },
         ]
-        with self.assertRaisesRegex(MODULE.Refusal, "instead of polling"):
+        with self.assertRaisesRegex(MODULE.Refusal, "more than once"):
             MODULE.validate_poll_only(trace, "hostile")
 
         wrong_signature = [
@@ -292,6 +382,8 @@ class LifecycleChaosTests(unittest.TestCase):
             {
                 "source": "injected-forward",
                 "method": "sendTransaction",
+                "stage": "hot",
+                "intentSha256": "a" * 64,
                 "transactionSignature": "expected-signature",
             },
             {
@@ -302,6 +394,79 @@ class LifecycleChaosTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(MODULE.Refusal, "another signature"):
             MODULE.validate_poll_only(wrong_signature, "rpc-timeout")
+
+        selected_after_earlier_stage = [
+            {
+                "source": "client",
+                "method": "sendTransaction",
+                "stage": "founding",
+                "intentSha256": "1" * 64,
+            },
+            {
+                "source": "client",
+                "method": "getSignatureStatuses",
+                "stage": "participant",
+                "intentSha256": "2" * 64,
+                "signatureStatusValues": ["participant-signature"],
+            },
+            {
+                "source": "client",
+                "method": "sendTransaction",
+                "stage": "participant",
+                "intentSha256": "2" * 64,
+            },
+            {
+                "source": "injected-forward",
+                "method": "sendTransaction",
+                "stage": "participant",
+                "intentSha256": "2" * 64,
+                "transactionSignature": "participant-signature",
+            },
+        ]
+        MODULE.validate_poll_only(selected_after_earlier_stage, "kill-participant")
+
+    def test_journal_projection_refuses_non_lowercase_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            path = Path(root_text) / "hot.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": MODULE.STAGE_JOURNAL_SCHEMA,
+                        "stage": "hot",
+                        "phase": "dispatching",
+                        "intentSha256": "A" * 64,
+                    }
+                )
+            )
+            with self.assertRaisesRegex(MODULE.Refusal, "malformed"):
+                MODULE.stable_journal(path, "hot")
+
+    def test_kill_boundary_binds_packet_signature_state_and_owner(self) -> None:
+        intent = "1" * 64
+        canonical = {
+            "schema": MODULE.CONTROL_SCHEMA,
+            "state": "fault-armed",
+            "fault": "kill-hot",
+            "stage": "hot",
+            "phase": "dispatching",
+            "intentSha256": intent,
+            "signedPacketSha256": "2" * 64,
+            "signature": MODULE.base58_encode(b"\x03" * 64),
+            "dispatchingStateSha256": "4" * 64,
+        }
+        facts = MODULE.authenticate_kill_boundary(canonical, "kill-hot", "hot", intent)
+        self.assertEqual(facts.signed_packet_sha256, "2" * 64)
+        self.assertEqual(facts.dispatching_state_sha256, "4" * 64)
+        for field, replacement, refusal in (
+            ("fault", "kill-seal", "owner identity"),
+            ("signedPacketSha256", "A" * 64, "SHA-256"),
+            ("signature", "not-base58-0", "signature"),
+            ("dispatchingStateSha256", "5" * 63, "SHA-256"),
+        ):
+            hostile = dict(canonical)
+            hostile[field] = replacement
+            with self.assertRaisesRegex(MODULE.Refusal, refusal):
+                MODULE.authenticate_kill_boundary(hostile, "kill-hot", "hot", intent)
 
     def test_wire_parser_binds_legacy_and_v0_signature_and_blockhash(self) -> None:
         signature = bytes(range(64))
@@ -320,8 +485,11 @@ class LifecycleChaosTests(unittest.TestCase):
             self.assertEqual(actual_signature, MODULE.base58_encode(signature))
             self.assertEqual(actual_blockhash, MODULE.base58_encode(blockhash))
 
-    def test_proxy_refuses_send_before_durable_submitted(self) -> None:
-        with tempfile.TemporaryDirectory() as root_text, upstream() as (_server, rpc_url):
+    def test_proxy_refuses_send_outside_durable_dispatching(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text, upstream() as (
+            _server,
+            rpc_url,
+        ):
             root = Path(root_text)
             journal = root / "hot.json"
             journal.write_text(
@@ -329,7 +497,7 @@ class LifecycleChaosTests(unittest.TestCase):
                     {
                         "schema": MODULE.STAGE_JOURNAL_SCHEMA,
                         "stage": "hot",
-                        "phase": "signed-not-submitted",
+                        "phase": "prepared",
                         "intentSha256": "a" * 64,
                     }
                 )
@@ -361,7 +529,7 @@ class LifecycleChaosTests(unittest.TestCase):
                 deadline = time.monotonic() + 1
                 while proxy.state.failure is None and time.monotonic() < deadline:
                     time.sleep(0.01)
-                self.assertIn("before durable Submitted", proxy.state.failure)
+                self.assertIn("outside durable Dispatching", proxy.state.failure)
 
 
 if __name__ == "__main__":

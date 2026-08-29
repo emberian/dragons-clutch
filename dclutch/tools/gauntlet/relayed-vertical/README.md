@@ -1,5 +1,17 @@
 # DEMO-VERT — the relayed graduation market, end to end, on a local rehearsal
 
+> **Parked:** `run` currently refuses before reading inputs or starting a
+> validator. Direct market capability is now bound to an authenticated live
+> deployment, while this older campaign compiled its replacement market before
+> a checked local plan or live loopback substrate existed. Keeping that order
+> would require invented Direct identities, so the runner refuses instead.
+>
+> Restore it as one two-phase campaign: prepare the checked mutable substrate,
+> authenticate the live loopback accounts, call
+> `DirectMarketCompilerOwnedV1::load_local`, compile the relayed market, and
+> only then found and relay. The full vertical source remains compiled so drift
+> in the successor compiler is still caught.
+
 One journey-shaped campaign for the `RelayedMainnetStateV1` family
 (`docs/design/MAINNET_STATE_RELAY.md`): a zero-cut graduation Product founded
 with **no recovery policy**, resolved end to end on a local devnet rehearsal —

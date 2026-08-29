@@ -11,9 +11,9 @@ The current lifecycle tools persist operation-scoped evidence. A small adapter
 projects the exact facts owned by those journals into the cluster-specific
 reconcile manifest. Every projected event carries the SHA-256 digest of its
 source journal. The reconciler does not trust a static client as a source of
-chain truth. The owned-loopback producer remains gated on the accepted PRIVATE
-session and Direct completion schemas; a synthetic test receipt proves the
-parser, not a completed protocol lifecycle.
+chain truth. The owned-loopback producer remains gated on the frozen Direct
+completion schema and a successful full private-validator run. Synthetic
+receipt tests prove the parser, not a completed protocol lifecycle.
 
 ## What is checked
 
@@ -34,6 +34,10 @@ parser, not a completed protocol lifecycle.
 - every Direct fill's gross quote with no unnamed rounding, then an independent floor of
   `gross * 50 / 10_000` on each side;
 - exact `LiabilityBasisPositionV2` identity, geometry, revision, and balances;
+- for owned-loopback Hot evidence, exact ordered seller and buyer Position
+  pre/post states, distinct accounts and owners, and one conserved outcome
+  transfer equal to the fill; the public-devnet manifest does not admit this
+  private-only field;
 - exact hostile decoding and market binding of `ResolutionCertificateV2`;
 - every payout's claim burns and equal Hoard-principal debit / recipient credit;
 - retirement closure observations and exact positive refund deltas;
@@ -98,14 +102,35 @@ uses `dclutch-owned-loopback-activity-dossier-v1`. Public devnet and mainnet
 genesis hashes refuse on all three local inputs. The receipt SHA-256 is an
 independent required argument, so changing an ELF, ProgramData genesis digest,
 journal, capture, or receipt after PRIVATE publishes its digest refuses.
+The owned-loopback `--out` path must be absent and absolute beneath an existing
+canonical ordinary parent directory. The dossier is published without
+clobbering at mode `0600`; an existing file, output symlink, or symlinked parent
+refuses.
 
 The receipt carries one clean source commit, checked-release digest, the exact
 ordered seven dClutch plus Pyth Receiver/Router program closure, each Program
 and ProgramData identity, deployment slot, ELF digest, and genesis ProgramData
-digest. It also binds the exact manifest bytes, finalized capture and slot,
-canonical ordered source-journal set, and one finalized complete PRIVATE
-session. Missing programs or journals, substituted bytes, provisional evidence,
-and partial lifecycle stage sets refuse before reconciliation.
+digest. It separately reopens the immutable local Pyth provider closure, its
+checked successor plan and local-validator profile, and the same singular
+finalized capture. It also binds the exact manifest bytes, canonical ordered
+source-journal set, one finalized eight-stage PRIVATE activity session, and one
+separately typed eight-stage chaos session. Every activity-stage source is
+reopened by path, SHA-256, schema, completion pointer, and finalized value;
+`stageSetSha256` is recomputed. Missing programs or journals, substituted bytes,
+provisional evidence, nested session completion substitutions, and partial
+lifecycle or chaos stage sets refuse before reconciliation.
+
+The receipt must include exactly one
+`dclutch-owned-loopback-terminal-sequence-completion-v1` journal. The reconciler
+does not stop at its `/status`: it reopens the terminal session and every
+ordered internal mutation journal, checks their SHA-256 values, and compares
+the completion projection with the persisted mutation, fee payer, signature,
+slot, fee, compute units, and canonical protocol-lamport deltas. It requires
+the exact lookup create/strict-prefix extends/freeze sequence when the caller
+created a table, at most one receipt prepay, and the six retirement mutations
+in their sole order. Aggregate slot, fee, and compute arithmetic is recomputed;
+self-consistent edits to the completion that disagree with a source journal
+refuse.
 
 Each journal row names an exact RFC6901 `completionPointer` and requires the
 pointed value to be `"finalized"`. This admits Direct's nested Hot journal
@@ -119,8 +144,9 @@ capture. The consumer hostile-decodes each Loader-v3 Program link and
 ProgramData header, then recomputes the full ProgramData and ELF-tail digests.
 It also decodes the ProgramData upgrade-authority option: the seven dClutch
 programs must share one non-null retained disposable authority, while Pyth
-Receiver and Router must be immutable. Receipt strings alone are not Loader
-evidence.
+Receiver and Router must be immutable slot-zero genesis programs. A slot-zero
+dClutch deployment or a mutable local provider refuses. Receipt strings alone
+are not Loader evidence.
 
 ## Adapter and capture shapes
 
@@ -152,8 +178,9 @@ symlink escapes, non-JSON journals, and digest substitutions refuse before any
 RPC read.
 
 The owned-loopback capture additionally carries `commitment: "finalized"` and
-one `finalizedSlot`. Every captured transaction and final account observation
-must be at or below that boundary. Its dossier says
+one `finalizedSlot`. Every account row must have that exact `contextSlot`; a
+mixture of individually finalized account reads is not a singular capture.
+Every captured transaction must be at or below that boundary. Its dossier says
 `owned-loopback-local-evidence-not-public-devnet-or-live-observation` and uses
 `owned-loopback-captured-finalized-rpc-replay` provenance.
 

@@ -33,7 +33,6 @@ BOUNDARIES = (
     "retire",
 )
 EVIDENCE = b'{"schema":"fake-canonical-evidence-v1","market":"one"}\n'
-SIGNATURE = b"\0" * 64
 RECENT_BLOCKHASH = b"\x07" * 32
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -48,11 +47,16 @@ def base58_encode(value: bytes) -> str:
     return "1" * zeroes + encoded
 
 
-def fake_transaction() -> str:
+def signature_bytes(stage: str, case: str) -> bytes:
+    digest = hashlib.sha256(f"fake-signature:{case}:{stage}".encode()).digest()
+    return digest + digest
+
+
+def fake_transaction(stage: str, case: str) -> str:
     # One signature plus the smallest well-formed legacy message: one account,
     # one recent blockhash, and zero instructions.
     message = b"\x01\x00\x00\x01" + b"\0" * 32 + RECENT_BLOCKHASH + b"\x00"
-    return base64.b64encode(b"\x01" + SIGNATURE + message).decode()
+    return base64.b64encode(b"\x01" + signature_bytes(stage, case) + message).decode()
 
 
 def write_atomic(path: Path, value: object) -> None:
@@ -92,9 +96,15 @@ def journal(path: Path, stage: str, phase: str) -> None:
 
 
 def rpc(url: str, method: str, params: list[object]) -> dict[str, object]:
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    request = urlrequest.Request(url, data=body, headers={"content-type": "application/json"})
-    with urlrequest.urlopen(request, timeout=0.25) as response:  # noqa: S310 test loopback
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    ).encode()
+    request = urlrequest.Request(
+        url, data=body, headers={"content-type": "application/json"}
+    )
+    with urlrequest.urlopen(
+        request, timeout=0.25
+    ) as response:  # noqa: S310 test loopback
         return json.load(response)
 
 
@@ -141,26 +151,25 @@ def run_session(case_work: Path, rpc_url: str) -> int:
             current = json.loads(path.read_text())
         except (FileNotFoundError, json.JSONDecodeError):
             current = None
+        resumed_dispatching = (
+            current is not None and current.get("phase") == "dispatching"
+        )
         resumed_submitted = current is not None and current.get("phase") == "submitted"
-        if not resumed_submitted:
+        frozen_signature = base58_encode(signature_bytes(stage, case))
+        frozen_packet = fake_transaction(stage, case)
+        frozen_packet_sha256 = hashlib.sha256(
+            base64.b64decode(frozen_packet, validate=True)
+        ).hexdigest()
+        dispatching_state_sha256 = hashlib.sha256(
+            f"fake-dispatching:{case}:{stage}".encode()
+        ).hexdigest()
+        if not resumed_dispatching and not resumed_submitted:
             journal(path, stage, "planned")
-            journal(path, stage, "signed-not-submitted")
-            journal(path, stage, "submitted")
-            # The real commands remain in Submitted while polling finality.  This
-            # window makes the process-death test deterministic without adding a
-            # supervisor-specific pause to a semantic owner.
-            time.sleep(0.15)
-        else:
-            # A restart at Submitted polls the frozen intent.  It never sends it.
-            time.sleep(0.01)
-
-        if case == f"kill-{stage}":
-            if resumed_submitted:
-                try:
-                    rpc(rpc_url, "getSignatureStatuses", [[base58_encode(SIGNATURE)]])
-                except Exception:
-                    return 27
-            else:
+            journal(path, stage, "prepared")
+            if case == f"kill-{stage}" or (
+                stage == "hot"
+                and case in {"rpc-timeout", "duplicate-send", "blockhash-expiry"}
+            ):
                 latest = rpc(
                     url=rpc_url,
                     method="getLatestBlockhash",
@@ -168,56 +177,112 @@ def run_session(case_work: Path, rpc_url: str) -> int:
                 )
                 if latest.get("result") is None:
                     return 28
+            journal(path, stage, "dispatching")
+
+        if case == f"kill-{stage}":
+            if not resumed_dispatching:
+                write_atomic(
+                    control / "FAULT_ARMED.json",
+                    {
+                        "schema": CONTROL_SCHEMA,
+                        "state": "fault-armed",
+                        "fault": case,
+                        "stage": stage,
+                        "phase": "dispatching",
+                        "intentSha256": intent(stage),
+                        "signedPacketSha256": frozen_packet_sha256,
+                        "signature": frozen_signature,
+                        "dispatchingStateSha256": dispatching_state_sha256,
+                    },
+                )
+                wait_for(control / "FAULT_GO.json")
+            fault_go = json.loads((control / "FAULT_GO.json").read_text())
+            if fault_go != {
+                "schema": CONTROL_SCHEMA,
+                "state": "fault-go",
+                "fault": case,
+                "stage": stage,
+                "phase": "dispatching",
+                "intentSha256": intent(stage),
+                "signedPacketSha256": frozen_packet_sha256,
+                "signature": frozen_signature,
+                "dispatchingStateSha256": dispatching_state_sha256,
+            }:
+                return 37
+            try:
+                status = rpc(
+                    rpc_url,
+                    "getSignatureStatuses",
+                    [[frozen_signature]],
+                )
+            except Exception:
+                return 27
+            values = status.get("result", {}).get("value")
+            if values == [None]:
                 try:
                     rpc(
                         url=rpc_url,
                         method="sendTransaction",
                         params=[
-                            fake_transaction(),
+                            frozen_packet,
                             {"encoding": "base64", "maxRetries": 0},
                         ],
                     )
                 except Exception:
                     return 29
+            elif not (
+                isinstance(values, list)
+                and len(values) == 1
+                and isinstance(values[0], dict)
+                and values[0].get("confirmationStatus") == "finalized"
+            ):
                 return 30
+            journal(path, stage, "submitted")
 
-        if stage == "hot" and case in {"rpc-timeout", "duplicate-send", "blockhash-expiry"}:
+        if stage == "hot" and case in {
+            "rpc-timeout",
+            "duplicate-send",
+            "blockhash-expiry",
+        }:
             if case == "blockhash-expiry":
                 write_atomic(
                     control / "FAULT_ARMED.json",
                     {"schema": CONTROL_SCHEMA, "state": "fault-armed", "fault": case},
                 )
                 wait_for(control / "FAULT_GO.json")
-            latest = rpc(
-                url=rpc_url,
-                method="getLatestBlockhash",
-                params=[{"commitment": "finalized"}],
-            )
-            if latest.get("result") is None:
-                return 31
-            packet = fake_transaction()
             try:
                 response = rpc(
                     url=rpc_url,
                     method="sendTransaction",
-                    params=[packet, {"encoding": "base64", "maxRetries": 0}],
+                    params=[frozen_packet, {"encoding": "base64", "maxRetries": 0}],
                 )
             except Exception:
                 if case != "rpc-timeout":
                     return 32
                 # Unknown send result: recover by status polling only.
                 try:
-                    rpc(rpc_url, "getSignatureStatuses", [[base58_encode(SIGNATURE)]])
+                    rpc(rpc_url, "getSignatureStatuses", [[frozen_signature]])
                 except Exception:
                     return 33
+                journal(path, stage, "submitted")
                 journal(path, stage, "finalized")
                 continue
             if response.get("error") is not None:
                 try:
-                    rpc(rpc_url, "getSignatureStatuses", [[base58_encode(SIGNATURE)]])
+                    rpc(rpc_url, "getSignatureStatuses", [[frozen_signature]])
                 except Exception:
                     return 34
                 return 35
+            journal(path, stage, "submitted")
+
+        if not resumed_submitted and not (
+            case == f"kill-{stage}"
+            or (
+                stage == "hot"
+                and case in {"rpc-timeout", "duplicate-send", "blockhash-expiry"}
+            )
+        ):
+            journal(path, stage, "submitted")
 
         journal(path, stage, "finalized")
         if stage == "payout" and case == "late-child-refusal":
@@ -268,7 +333,10 @@ def observe(case_work: Path) -> int:
 
 def main(argv: list[str]) -> int:
     if len(argv) != 3 or argv[0] not in {"session", "observe", "teardown"}:
-        print("usage: fake_session.py session|observe|teardown CASE_WORK RPC_URL", file=sys.stderr)
+        print(
+            "usage: fake_session.py session|observe|teardown CASE_WORK RPC_URL",
+            file=sys.stderr,
+        )
         return 2
     case_work = Path(argv[1])
     if argv[0] == "observe":

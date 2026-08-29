@@ -248,7 +248,7 @@ fn encode_base_atomic(
     let routes = [
         route(
             DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4,
-            12,
+            dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
             &initialize,
         ),
         route(DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4, 16, &open),

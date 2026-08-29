@@ -82,7 +82,10 @@ fn now_unix() -> Result<i64> {
 }
 
 /// The whole vertical.
-pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
+pub(crate) fn execute(
+    request: VerticalRequestV1,
+    direct: &crate::direct_market::DirectMarketCompilerOwnedV1,
+) -> Result<serde_json::Value> {
     std::fs::create_dir_all(&request.work)?;
     let mut stages: Vec<StageV1> = Vec::new();
     let start_unix = now_unix()?;
@@ -131,8 +134,12 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             .ok_or_else(|| Error::new("the spec template names no registry program id"))?,
     )?;
     let window_choice = input::window_choice(start_unix, request.walk == WalkV1::Success);
-    let facts =
-        input::relayed_market_input(registry, attestation.pubkey().to_bytes(), &window_choice)?;
+    let facts = input::relayed_market_input(
+        registry,
+        attestation.pubkey().to_bytes(),
+        &window_choice,
+        direct.compiler(),
+    )?;
 
     let mut spec_value = template;
     spec_value["market"] = serde_json::to_value(&facts.input)?;

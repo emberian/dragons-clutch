@@ -55,7 +55,7 @@ const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 /// Chain-derived: agave's `MAX_HEAP_FRAME_BYTES`. The adapter refuses anything
 /// outside `[32 KiB, 256 KiB]` or not a multiple of 1 KiB, which are the same
 /// bounds `sanitize_requested_heap_size` enforces.
-const FOUNDING_HEAP_FRAME_BYTES: u32 = 256 * 1024;
+pub(crate) const FOUNDING_HEAP_FRAME_BYTES: u32 = 256 * 1024;
 
 /// ComputeBudget program instruction discriminant for `RequestHeapFrame(u32)`.
 const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
@@ -373,6 +373,12 @@ enum ConfirmOutcomeV1 {
     Dropped,
 }
 
+/// One exact finalized transaction recovered without any submission attempt.
+pub(crate) struct FinalizedSignedPacketV1 {
+    pub(crate) evidence: TransactionEvidence,
+    pub(crate) packet: Vec<u8>,
+}
+
 impl Rpc {
     pub(crate) fn connect(value: &str) -> Result<Self> {
         let url = validate_loopback_url(value)?;
@@ -441,10 +447,174 @@ impl Rpc {
     /// failure.
     ///
     /// A durable exterior uses this only after the exact signed packet and its
-    /// expected signature are fsynced in a Submitted journal. Retrying at this
+    /// expected signature are fsynced in a Dispatching journal. Retrying at this
     /// layer would bypass that exterior's poll-only recovery state machine.
     pub(crate) fn call_once(&mut self, method: &str, params: &Value) -> Result<Value> {
         self.call_with_transport_attempt_limit(method, params, 1)
+    }
+
+    /// Submit exactly one already-authenticated signed packet.
+    ///
+    /// The caller must have fsynced the packet and signature before entering
+    /// this method. A transport error is intentionally not retried here: the
+    /// durable exterior retains its Dispatching phase and may only resend these
+    /// identical bytes on recovery.
+    pub(crate) fn submit_signed_packet_once(
+        &mut self,
+        label: &str,
+        packet: &[u8],
+        expected_signature: Signature,
+        skip_preflight: bool,
+    ) -> Result<Signature> {
+        let returned = self
+            .call_once(
+                "sendTransaction",
+                &json!([BASE64.encode(packet), {
+                    "encoding":"base64",
+                    "skipPreflight":skip_preflight,
+                    "preflightCommitment":"confirmed",
+                    "maxRetries":8
+                }]),
+            )
+            .map_err(|error| Error::new(format!("{label}: {error}")))?
+            .as_str()
+            .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
+            .parse::<Signature>()
+            .map_err(|error| Error::new(format!("transaction signature: {error}")))?;
+        if returned != expected_signature {
+            return Err(Error::new(format!(
+                "{label}: sendTransaction returned {returned}, not durable signature {expected_signature}"
+            )));
+        }
+        Ok(returned)
+    }
+
+    /// Poll one exact signature and, only when finalized, authenticate and
+    /// return the chain's complete signed packet and transaction metadata.
+    /// No key and no send method is reachable from this path.
+    pub(crate) fn finalized_signed_packet(
+        &mut self,
+        label: &str,
+        signature: Signature,
+        expect_failure: bool,
+    ) -> Result<Option<FinalizedSignedPacketV1>> {
+        let result = self.call(
+            "getSignatureStatuses",
+            &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
+        )?;
+        let Some(status) = result
+            .get("value")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .filter(|value| !value.is_null())
+        else {
+            return Ok(None);
+        };
+        if status.get("confirmationStatus").and_then(Value::as_str) != Some("finalized") {
+            return Ok(None);
+        }
+        let status_error = status.get("err").cloned().filter(|value| !value.is_null());
+        if expect_failure != status_error.is_some() {
+            return Err(Error::new(format!(
+                "{label} finalized status contradicted expectation: {}",
+                status.get("err").unwrap_or(&Value::Null)
+            )));
+        }
+        let transaction = self.call(
+            "getTransaction",
+            &json!([signature.to_string(), {
+                "encoding":"base64",
+                "commitment":"finalized",
+                "maxSupportedTransactionVersion":0
+            }]),
+        )?;
+        if transaction.is_null() {
+            return Ok(None);
+        }
+        let slot = transaction
+            .get("slot")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::new(format!("{label} transaction omitted slot")))?;
+        let meta = transaction
+            .get("meta")
+            .ok_or_else(|| Error::new(format!("{label} transaction omitted meta")))?;
+        let meta_error = meta.get("err").cloned().filter(|value| !value.is_null());
+        if meta_error != status_error {
+            return Err(Error::new(format!(
+                "{label} status and transaction errors differ"
+            )));
+        }
+        let packet_base64 = transaction
+            .get("transaction")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new(format!("{label} transaction omitted base64 packet")))?;
+        let packet = BASE64
+            .decode(packet_base64)
+            .map_err(|error| Error::new(format!("{label} finalized packet base64: {error}")))?;
+        if BASE64.encode(&packet) != packet_base64 {
+            return Err(Error::new(format!(
+                "{label} finalized packet was not canonical base64"
+            )));
+        }
+        let decoded: VersionedTransaction = bincode::deserialize(&packet)
+            .map_err(|error| Error::new(format!("{label} finalized packet: {error}")))?;
+        decoded
+            .verify_and_hash_message()
+            .map_err(|error| Error::new(format!("{label} finalized packet signature: {error}")))?;
+        if decoded.signatures.first() != Some(&signature)
+            || bincode::serialize(&decoded)
+                .map_err(|error| Error::new(format!("{label} packet reencode: {error}")))?
+                != packet
+        {
+            return Err(Error::new(format!(
+                "{label} finalized packet signature or canonical bytes changed"
+            )));
+        }
+        let fee_lamports = u64_field(meta, "fee")?;
+        let compute_units_consumed = meta.get("computeUnitsConsumed").and_then(Value::as_u64);
+        let fee_only_balance_change = (|| {
+            let pre = meta.get("preBalances")?.as_array()?;
+            let post = meta.get("postBalances")?.as_array()?;
+            if pre.len() != post.len() || pre.is_empty() {
+                return None;
+            }
+            let payer_pre = pre.first()?.as_u64()?;
+            let payer_post = post.first()?.as_u64()?;
+            let others_unmoved = pre
+                .iter()
+                .zip(post.iter())
+                .skip(1)
+                .all(|(before, after)| before.as_u64() == after.as_u64());
+            Some(payer_post.checked_add(fee_lamports)? == payer_pre && others_unmoved)
+        })();
+        let logs = meta
+            .get("logMessages")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.read_floor = self.read_floor.max(slot);
+        Ok(Some(FinalizedSignedPacketV1 {
+            evidence: TransactionEvidence {
+                label: label.into(),
+                signature: signature.to_string(),
+                slot,
+                transaction_metadata_available: true,
+                fee_lamports: Some(fee_lamports),
+                fee_only_balance_change,
+                compute_units_consumed,
+                error: meta_error,
+                logs,
+            },
+            packet,
+        }))
     }
 
     fn call_with_transport_attempt_limit(

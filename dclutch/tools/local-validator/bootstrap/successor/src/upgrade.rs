@@ -37,7 +37,7 @@ use dclutch_release_set_contract::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
     SourceSemanticRoleV1, source_semantic_release_preimage_v1,
 };
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5;
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
@@ -456,6 +456,9 @@ struct ValidatedUpgradeGateV1 {
     solana_cli_version: String,
     raw_elf: Vec<u8>,
     raw_elf_sha256: String,
+    checked_build_manifest_path: PathBuf,
+    checked_build_manifest_sha256: String,
+    checked_build_manifest: Vec<u8>,
 }
 
 /// Key-free projection of one checked-release role for a localhost mutable
@@ -468,6 +471,9 @@ pub(crate) struct CheckedLocalGateRoleV1 {
     pub(crate) source_tree_sha256: String,
     pub(crate) solana_cli_version: String,
     pub(crate) raw_elf_sha256: String,
+    pub(crate) checked_build_manifest_path: PathBuf,
+    pub(crate) checked_build_manifest_sha256: String,
+    pub(crate) checked_build_manifest: Vec<u8>,
 }
 
 struct CheckedReleaseGateSelectionV1<'a> {
@@ -3003,7 +3009,7 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
 pub(crate) fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
     let fixed = match role {
         "trading" => Some(COMPILED_DIRECT_RELEASE_ID_V1),
-        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
+        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V6),
         _ => None,
     };
     if let Some(release_id) = fixed {
@@ -5247,6 +5253,9 @@ pub(crate) fn authenticate_checked_release_gate_role_for_local_v1(
         source_tree_sha256: validated.source_tree_sha256,
         solana_cli_version: validated.solana_cli_version,
         raw_elf_sha256: validated.raw_elf_sha256,
+        checked_build_manifest_path: validated.checked_build_manifest_path,
+        checked_build_manifest_sha256: validated.checked_build_manifest_sha256,
+        checked_build_manifest: validated.checked_build_manifest,
     })
 }
 
@@ -5425,6 +5434,7 @@ fn validate_checked_release_gate_selection(
     }
 
     let mut selected = None;
+    let mut selected_manifest = None;
     for link in &gate.links {
         if link.sbf_diagnostics_count != 0
             || link.frame_count == 0
@@ -5468,7 +5478,11 @@ fn validate_checked_release_gate_selection(
         .1;
         validate_frame_report(link, &frame_report)?;
         if let Some(manifest) = &link.checked_manifest {
-            verify_gate_file(&root, manifest, &format!("{} checked manifest", link.label))?;
+            let (canonical, bytes) =
+                verify_gate_file(&root, manifest, &format!("{} checked manifest", link.label))?;
+            if link.label == args.role {
+                selected_manifest = Some((canonical, manifest.sha256.clone(), bytes));
+            }
         }
         if let Some(elf) = &link.elf {
             let (canonical, raw_elf) =
@@ -5504,6 +5518,13 @@ fn validate_checked_release_gate_selection(
             args.role
         ))
     })?;
+    let (checked_build_manifest_path, checked_build_manifest_sha256, checked_build_manifest) =
+        selected_manifest.ok_or_else(|| {
+            Error::new(format!(
+                "checked-release gate carries no checked build manifest for selected role {}",
+                args.role
+            ))
+        })?;
     Ok(ValidatedUpgradeGateV1 {
         gate_sha256,
         source_revision: gate.source_revision,
@@ -5511,6 +5532,9 @@ fn validate_checked_release_gate_selection(
         solana_cli_version: gate.solana_cli_version,
         raw_elf,
         raw_elf_sha256,
+        checked_build_manifest_path,
+        checked_build_manifest_sha256,
+        checked_build_manifest,
     })
 }
 
@@ -10103,7 +10127,7 @@ mod tests {
         );
         assert_eq!(
             pin.roles[3].semantic_release_id,
-            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V5)
+            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V6)
         );
         let mut substituted = pin;
         substituted.roles[0].semantic_release_id = "11".repeat(32);

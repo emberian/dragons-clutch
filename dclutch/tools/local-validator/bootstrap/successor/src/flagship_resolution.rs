@@ -94,15 +94,15 @@ use crate::{
 
 const INPUT_FORMAT: &str = "dclutch-flagship-resolution-input-v1";
 const LOCAL_INPUT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-input-v1";
-const CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-checkpoint-v1";
-const LOCAL_CHECKPOINT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-checkpoint-v1";
+const CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-checkpoint-v2";
+const LOCAL_CHECKPOINT_FORMAT: &str = "dclutch-owned-loopback-flagship-resolution-checkpoint-v2";
 const PRODUCER_FACTS_FORMAT: &str = "dclutch-flagship-pyth-update-facts-v1";
 const PRODUCER_CHECKPOINT_FORMAT: &str = "dclutch-flagship-resolution-producer-v1";
 const LOCAL_PRODUCER_CHECKPOINT_FORMAT: &str =
     "dclutch-owned-loopback-flagship-resolution-producer-v1";
-const TABLE_PROVISION_JOURNAL_FORMAT: &str = "dclutch-flagship-resolution-alt-journal-v1";
+const TABLE_PROVISION_JOURNAL_FORMAT: &str = "dclutch-flagship-resolution-alt-journal-v2";
 const LOCAL_TABLE_PROVISION_JOURNAL_FORMAT: &str =
-    "dclutch-owned-loopback-flagship-resolution-alt-journal-v1";
+    "dclutch-owned-loopback-flagship-resolution-alt-journal-v2";
 const CAMPAIGN_FORMAT: &str = "dclutch-successor-campaign-report-v1";
 const PLAN_FORMAT: &str = "dclutch-local-successor-infrastructure-plan-v2";
 /// Provisional operator delay after the terminal window. It is not a protocol
@@ -415,6 +415,7 @@ struct TableProvisionReceiptV1 {
     signature: String,
     slot: u64,
     fee_lamports: u64,
+    compute_units_consumed: u64,
     payer_pre_lamports: u64,
     payer_post_lamports: u64,
     table_pre_lamports: u64,
@@ -2112,6 +2113,7 @@ struct StageReceiptV1 {
     signature: String,
     slot: u64,
     fee_lamports: u64,
+    compute_units_consumed: u64,
     transfer_fee_lamports: u64,
     arithmetic: ArithmeticPlanV1,
     signed_transaction_sha256: String,
@@ -2576,13 +2578,7 @@ fn load_table_journal(
         }
     };
     let journal: TableProvisionJournalV1 = serde_json::from_slice(&bytes)?;
-    if journal.format != table_journal_format(expected_cluster)
-        || journal.producer_identity_sha256 != producer_identity_sha256
-    {
-        return Err(Error::new(
-            "table journal format or immutable producer identity changed",
-        ));
-    }
+    authenticate_table_journal_identity(&journal, producer_identity_sha256, expected_cluster)?;
     let intent_shape = match journal.phase {
         DurablePhaseV1::Planned => {
             journal.intent.is_some()
@@ -2643,6 +2639,21 @@ fn load_table_journal(
         ));
     }
     Ok(journal)
+}
+
+fn authenticate_table_journal_identity(
+    journal: &TableProvisionJournalV1,
+    producer_identity_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    if journal.format != table_journal_format(expected_cluster)
+        || journal.producer_identity_sha256 != producer_identity_sha256
+    {
+        return Err(Error::new(
+            "table journal format or immutable producer identity changed",
+        ));
+    }
+    Ok(())
 }
 
 fn lookup_creation_slots(
@@ -3574,8 +3585,15 @@ enum TableTransactionStatusV1 {
     Finalized {
         slot: u64,
         fee_lamports: u64,
+        compute_units_consumed: u64,
         post_balances: Vec<u64>,
     },
+}
+
+fn finalized_compute_units(meta: &Value, label: &str) -> Result<u64> {
+    meta.get("computeUnitsConsumed")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::new(format!("finalized {label} omitted computeUnitsConsumed")))
 }
 
 fn table_transaction_status(
@@ -3628,6 +3646,7 @@ fn table_transaction_status(
             .get("fee")
             .and_then(Value::as_u64)
             .ok_or_else(|| Error::new("finalized table transaction omitted fee"))?;
+        let compute_units_consumed = finalized_compute_units(meta, "table transaction")?;
         let pre_balances = meta
             .get("preBalances")
             .and_then(Value::as_array)
@@ -3662,6 +3681,7 @@ fn table_transaction_status(
         return Ok(TableTransactionStatusV1::Finalized {
             slot,
             fee_lamports,
+            compute_units_consumed,
             post_balances,
         });
     }
@@ -3705,6 +3725,7 @@ fn finish_table_submission(
     journal: &TableProvisionJournalV1,
     slot: u64,
     fee_lamports: u64,
+    compute_units_consumed: u64,
     post_balances: Vec<u64>,
 ) -> Result<TableProvisionReceiptV1> {
     let submission = journal
@@ -3779,6 +3800,7 @@ fn finish_table_submission(
         signature: journal.expected_signature.clone().unwrap_or_default(),
         slot,
         fee_lamports,
+        compute_units_consumed,
         payer_pre_lamports: submission.payer_pre_lamports,
         payer_post_lamports: payer_post,
         table_pre_lamports: submission.table_pre_lamports,
@@ -3942,6 +3964,7 @@ fn reconcile_table_attempt(
         TableTransactionStatusV1::Finalized {
             slot,
             fee_lamports,
+            compute_units_consumed,
             post_balances,
         } => {
             let receipt = finish_table_submission(
@@ -3951,6 +3974,7 @@ fn reconcile_table_attempt(
                 journal,
                 slot,
                 fee_lamports,
+                compute_units_consumed,
                 post_balances,
             )?;
             if let Some(prior) = &journal.finalized
@@ -4849,6 +4873,7 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
 struct ProviderFinalizedTransactionV1 {
     slot: u64,
     fee_lamports: u64,
+    compute_units_consumed: u64,
     post_balances: Vec<u64>,
     return_data_base64: String,
 }
@@ -4892,6 +4917,7 @@ fn provider_transaction_status(
         .get("fee")
         .and_then(Value::as_u64)
         .ok_or_else(|| Error::new("finalized provider transaction omitted fee"))?;
+    let compute_units_consumed = finalized_compute_units(meta, "provider transaction")?;
     let parse_balances = |label: &str| -> Result<Vec<u64>> {
         meta.get(label)
             .and_then(Value::as_array)
@@ -4960,6 +4986,7 @@ fn provider_transaction_status(
             .and_then(Value::as_u64)
             .ok_or_else(|| Error::new("finalized provider transaction omitted slot"))?,
         fee_lamports,
+        compute_units_consumed,
         post_balances,
         return_data_base64,
     }))
@@ -5294,6 +5321,7 @@ fn finish_provider_stage(
         signature: plan.expected_signature.clone().unwrap_or_default(),
         slot: finalized.slot,
         fee_lamports: finalized.fee_lamports,
+        compute_units_consumed: finalized.compute_units_consumed,
         transfer_fee_lamports: 0,
         arithmetic: plan.arithmetic.clone(),
         signed_transaction_sha256: plan.signed_transaction_sha256.clone().unwrap_or_default(),
@@ -5553,13 +5581,7 @@ fn load_checkpoint(
         }
     };
     let checkpoint: CheckpointV1 = serde_json::from_slice(&bytes)?;
-    if checkpoint.format != checkpoint_format(expected_cluster)
-        || checkpoint.input_sha256 != input_sha256
-    {
-        return Err(Error::new(
-            "checkpoint format or input digest differs; cross-market resume refused",
-        ));
-    }
+    authenticate_checkpoint_identity(&checkpoint, input_sha256, expected_cluster)?;
     if let Some(plan) = &checkpoint.stage_plan {
         plan.validate()?;
     }
@@ -5573,6 +5595,21 @@ fn load_checkpoint(
         ));
     }
     Ok(checkpoint)
+}
+
+fn authenticate_checkpoint_identity(
+    checkpoint: &CheckpointV1,
+    input_sha256: &str,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    if checkpoint.format != checkpoint_format(expected_cluster)
+        || checkpoint.input_sha256 != input_sha256
+    {
+        return Err(Error::new(
+            "checkpoint format or input digest differs; cross-market resume refused",
+        ));
+    }
+    Ok(())
 }
 
 fn write_checkpoint(path: &Path, checkpoint: &CheckpointV1) -> Result<()> {
@@ -6514,6 +6551,150 @@ mod tests {
             checkpoint_format(ExpectedClusterV1::Devnet),
             checkpoint_format(ExpectedClusterV1::OwnedLoopback)
         );
+    }
+
+    #[test]
+    fn resolution_v2_receipts_require_exact_finalized_compute_units() {
+        assert_eq!(
+            finalized_compute_units(&json!({"computeUnitsConsumed": 123}), "fixture")
+                .expect("finalized CU"),
+            123
+        );
+        for hostile in [
+            json!({}),
+            json!({"computeUnitsConsumed": null}),
+            json!({"computeUnitsConsumed": "123"}),
+            json!({"computeUnitsConsumed": -1}),
+        ] {
+            assert!(finalized_compute_units(&hostile, "fixture").is_err());
+        }
+
+        let stage_receipt = StageReceiptV1 {
+            stage: StageV1::Submit,
+            signature: Pubkey::new_from_array([1; 32]).to_string(),
+            slot: 7,
+            fee_lamports: 5_000,
+            compute_units_consumed: 123,
+            transfer_fee_lamports: 0,
+            arithmetic: ArithmeticPlanV1::default(),
+            signed_transaction_sha256: "11".repeat(32),
+            resolved_account_keys: vec![Pubkey::new_from_array([2; 32]).to_string()],
+            pre_balances: vec![10_000],
+            post_balances: vec![5_000],
+            return_data_base64: BASE64.encode([3]),
+            return_data_sha256: hex(&Sha256::digest([3])),
+        };
+        let checkpoint = CheckpointV1 {
+            format: CHECKPOINT_FORMAT.into(),
+            input_sha256: "22".repeat(32),
+            stage_plan: None,
+            receipts: vec![stage_receipt.clone()],
+            verified_terminal: false,
+        };
+        let mut omitted_checkpoint =
+            serde_json::to_value(&checkpoint).expect("checkpoint JSON fixture");
+        omitted_checkpoint["receipts"][0]
+            .as_object_mut()
+            .expect("receipt object")
+            .remove("computeUnitsConsumed");
+        assert!(serde_json::from_value::<CheckpointV1>(omitted_checkpoint).is_err());
+        let mut substituted_checkpoint =
+            serde_json::to_value(&checkpoint).expect("checkpoint JSON fixture");
+        substituted_checkpoint["receipts"][0]["computeUnitsConsumed"] = json!(124);
+        let substituted_checkpoint: CheckpointV1 =
+            serde_json::from_value(substituted_checkpoint).expect("substituted CU shape");
+        assert_ne!(substituted_checkpoint.receipts[0], stage_receipt);
+
+        let table_receipt = TableProvisionReceiptV1 {
+            stage: StageV1::Submit,
+            action: TableProvisionActionV1::Create,
+            lookup_table: Pubkey::new_from_array([4; 32]).to_string(),
+            signature: Pubkey::new_from_array([5; 32]).to_string(),
+            slot: 8,
+            fee_lamports: 5_000,
+            compute_units_consumed: 456,
+            payer_pre_lamports: 10_000,
+            payer_post_lamports: 5_000,
+            table_pre_lamports: 0,
+            table_post_lamports: 0,
+            table_post_account_sha256: "33".repeat(32),
+            signed_transaction_sha256: "44".repeat(32),
+            resolved_account_keys: vec![Pubkey::new_from_array([6; 32]).to_string()],
+            pre_balances: vec![10_000],
+            post_balances: vec![5_000],
+            post_route: LookupTableRouteV1::Complete {
+                last_extended_slot: 7,
+                account_sha256: "55".repeat(32),
+            },
+        };
+        let journal = TableProvisionJournalV1 {
+            format: TABLE_PROVISION_JOURNAL_FORMAT.into(),
+            producer_identity_sha256: "66".repeat(32),
+            phase: DurablePhaseV1::Finalized,
+            intent: None,
+            intent_sha256: None,
+            signed_transaction_base64: None,
+            signed_transaction_sha256: None,
+            expected_signature: None,
+            finalized: None,
+            receipts: vec![table_receipt.clone()],
+        };
+        let mut omitted_journal = serde_json::to_value(&journal).expect("table journal fixture");
+        omitted_journal["receipts"][0]
+            .as_object_mut()
+            .expect("receipt object")
+            .remove("computeUnitsConsumed");
+        assert!(serde_json::from_value::<TableProvisionJournalV1>(omitted_journal).is_err());
+        let mut substituted_journal =
+            serde_json::to_value(&journal).expect("table journal fixture");
+        substituted_journal["receipts"][0]["computeUnitsConsumed"] = json!(457);
+        let substituted_journal: TableProvisionJournalV1 =
+            serde_json::from_value(substituted_journal).expect("substituted CU shape");
+        assert_ne!(substituted_journal.receipts[0], table_receipt);
+    }
+
+    #[test]
+    fn resolution_v2_headers_refuse_every_old_v1_checkpoint_and_alt_journal() {
+        for (expected_cluster, old_checkpoint, old_journal) in [
+            (
+                ExpectedClusterV1::Devnet,
+                "dclutch-flagship-resolution-checkpoint-v1",
+                "dclutch-flagship-resolution-alt-journal-v1",
+            ),
+            (
+                ExpectedClusterV1::OwnedLoopback,
+                "dclutch-owned-loopback-flagship-resolution-checkpoint-v1",
+                "dclutch-owned-loopback-flagship-resolution-alt-journal-v1",
+            ),
+        ] {
+            let checkpoint = CheckpointV1 {
+                format: old_checkpoint.into(),
+                input_sha256: "77".repeat(32),
+                stage_plan: None,
+                receipts: Vec::new(),
+                verified_terminal: false,
+            };
+            assert!(
+                authenticate_checkpoint_identity(&checkpoint, &"77".repeat(32), expected_cluster,)
+                    .is_err()
+            );
+            let journal = TableProvisionJournalV1 {
+                format: old_journal.into(),
+                producer_identity_sha256: "88".repeat(32),
+                phase: DurablePhaseV1::Finalized,
+                intent: None,
+                intent_sha256: None,
+                signed_transaction_base64: None,
+                signed_transaction_sha256: None,
+                expected_signature: None,
+                finalized: None,
+                receipts: Vec::new(),
+            };
+            assert!(
+                authenticate_table_journal_identity(&journal, &"88".repeat(32), expected_cluster,)
+                    .is_err()
+            );
+        }
     }
 
     #[test]

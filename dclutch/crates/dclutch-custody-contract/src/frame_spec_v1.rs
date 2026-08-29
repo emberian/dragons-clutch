@@ -9,7 +9,7 @@ use crate::OperationV1;
 /// Exact common Custody prefix width.
 pub const CUSTODY_COMMON_ACCOUNT_COUNT_V1: u16 = 9;
 /// Exact `InitializeReplay` frame width.
-pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: u16 = 12;
+pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: u16 = 13;
 /// Exact `OpenVault` frame width.
 pub const OPEN_VAULT_ACCOUNT_COUNT_V1: u16 = 16;
 /// Exact `Transfer` frame width.
@@ -210,6 +210,9 @@ impl CustodyFrameSpecV1 {
             (OperationV1::InitializeReplay, 11) => {
                 account(CustodyFrameRoleV1::RentSysvar, READONLY)
             }
+            (OperationV1::InitializeReplay, 12) => {
+                account(CustodyFrameRoleV1::RentRefund, WRITABLE)
+            }
             (OperationV1::OpenVault, 9) => account(CustodyFrameRoleV1::Mint, READONLY),
             (OperationV1::OpenVault, 10) => account(CustodyFrameRoleV1::Vault, WRITABLE),
             (OperationV1::OpenVault, 11) => account(CustodyFrameRoleV1::CustodyAuthority, READONLY),
@@ -307,7 +310,7 @@ mod tests {
     #[test]
     fn every_operation_has_one_exact_total_frame() {
         for (operation, count) in [
-            (OperationV1::InitializeReplay, 12),
+            (OperationV1::InitializeReplay, 13),
             (OperationV1::OpenVault, 16),
             (OperationV1::Transfer, 14),
             (OperationV1::CloseVault, 14),

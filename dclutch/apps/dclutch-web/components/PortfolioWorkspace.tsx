@@ -120,12 +120,18 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
   </article>;
 }
 
-export default function PortfolioWorkspace() {
+export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mode?: 'portfolio' | 'redemption' }>) {
   const deployment = useDeploymentV1();
   const directory = useWalletDirectoryV1();
+  const redemption = mode === 'redemption';
   const [owner, setOwner] = useState('');
   const [pasted, setPasted] = useState('');
-  const [state, setState] = useState<State>({ kind: 'idle', message: 'Connect a wallet — or paste any owner address — and this surface reads its Positions across every Market of the active deployment. Reading a derived address requires no authority at all.' });
+  const [state, setState] = useState<State>({
+    kind: 'idle',
+    message: redemption
+      ? 'Connect your wallet. This page then reads its Positions across every current-compatible Market of the active deployment and shows a redemption control only for an exact winning balance.'
+      : 'Connect a wallet — or paste any owner address — and this surface reads its Positions across every Market of the active deployment. Reading a derived address requires no authority at all.',
+  });
   const portfolio = state.kind === 'ready' ? state.portfolio : null;
 
   const read = useCallback(async (ownerAddress: string) => {
@@ -162,40 +168,45 @@ export default function PortfolioWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <Nav current="/portfolio" status={`${deployment.label} · finalized reads`} />
+    <Nav current={redemption ? '/redeem' : '/portfolio'} status={`${deployment.label} · ${redemption ? 'wallet redemption' : 'finalized reads'}`} />
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Portfolio · derived addresses, no index</p>
-        <h1>Your claims, derived.<br /><em>Never looked up.</em></h1>
-        <p>dClutch runs no indexer and this browser will not pretend to be one. A Position lives at the program-derived address of the Position seed domain plus the exact Market and owner keys, so an owner identity is enough: the Markets come from the deployment&apos;s own Core program, and every Position address is derived from them. A derived address that holds no account is reported as exactly that, which is the honest chain state.</p>
+        <p className="eyebrow">{redemption ? 'Redeem · connected wallet, exact Positions' : 'Portfolio · derived addresses, no index'}</p>
+        <h1>{redemption ? <>Redeem your winning claims.<br /><em>Only when the chain says you can.</em></> : <>Your claims, derived.<br /><em>Never looked up.</em></>}</h1>
+        <p>{redemption
+          ? <>Connect your wallet and this page reads every current-compatible Market from the deployment&apos;s Core program, derives your exact Claims Position under the selected Claims program, and offers redemption only when finalized Market state names a winner and your Position holds that winning claim. No Market, Position, balance, or eligibility comes from browser storage.</>
+          : <>dClutch runs no indexer and this browser will not pretend to be one. A Position lives at the program-derived address of the Position seed domain plus the exact Market and owner keys, so an owner identity is enough: the Markets come from the deployment&apos;s own Core program, and every Position address is derived from them. A derived address that holds no account is reported as exactly that, which is the honest chain state.</>}</p>
       </div>
       <aside>
         <span>The one input</span>
-        <strong>An owner identity</strong>
-        <p>Connecting a wallet reads a public address and nothing else — no signature, no approval. Pasting any address reads the same finalized state for that owner, because reading a derived address requires no authority at all.</p>
+        <strong>{redemption ? 'Your wallet identity' : 'An owner identity'}</strong>
+        <p>{redemption
+          ? 'Connecting first reads only your public address. A signature is a later, separate action that appears only after the chain and a Rust-authored payout plan agree on the exact Market, Position, owner, winning claim, recipient, programs, and lookup table.'
+          : 'Connecting a wallet reads a public address and nothing else — no signature, no approval. Pasting any address reads the same finalized state for that owner, because reading a derived address requires no authority at all.'}</p>
       </aside>
     </section>
 
     <section className="trade-v3-card route-card">
-      <header><span>01</span><div><h2>Whose Positions?</h2><p>Everything else — endpoint, Core authority, Claims program, the Market list — comes from the active {deployment.label} deployment. This surface asks only who you are.</p></div></header>
-      <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={connected} />
-      <form className="portfolio-owner-row" onSubmit={readPasted}>
+      <header><span>01</span><div><h2>{redemption ? 'Connect your wallet' : 'Whose Positions?'}</h2><p>Everything else — endpoint, Core authority, Claims program, the Market list — comes from the active {deployment.label} deployment. This surface asks only who you are.</p></div></header>
+      <WalletDirectory directory={directory} purpose={redemption ? 'find and redeem your winning claims' : 'read one owner identity'} onConnected={connected} />
+      {!redemption && <form className="portfolio-owner-row" onSubmit={readPasted}>
         <label><span>Or paste any owner address</span><input value={pasted} onChange={(event) => setPasted(event.target.value.trim())} spellCheck={false} placeholder="an owner’s public address" /></label>
         <div className="direct-actions">
           <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Read this owner’s Positions'}</button>
           {owner !== '' && state.kind !== 'loading' && <button type="button" className="secondary-action" onClick={() => void read(owner)}>Re-read</button>}
         </div>
-      </form>
+      </form>}
+      {redemption && <p className="direct-status">This wallet path permanently refuses Solana mainnet, testnet, and unknown non-local chains before it asks for a signature. On devnet it still signs nothing until the current Market, your derived Position, every named program and account, and the exact payout plan all pass finalized preflight. The payout plan is still produced outside this browser; this page does not invent one from partial state.</p>}
       <p className="direct-status" aria-live="polite">{state.message}</p>
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Derived Positions</h2><p>One entry per Market of the deployment. Every entry states the address that was derived, whether an account exists there, and what the balances found admit under the Market&apos;s own phase and settlement.</p></div></header>
+      <header><span>02</span><div><h2>{redemption ? 'Your redeemable Positions' : 'Derived Positions'}</h2><p>One entry per Market of the deployment. Every entry states the address that was derived, whether an account exists there, and what the balances found admit under the Market&apos;s own phase and settlement.</p></div></header>
       {portfolio === null && <p className="market-empty">No finalized Position state has been read yet. Until an owner identity arrives and the endpoint answers, this surface stays empty rather than showing placeholder holdings.</p>}
       {portfolio !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
-          <article><span>Owner</span><strong>{shortAddressV1(portfolio.owner, 6)}</strong><small>identity only; nothing is signed here</small></article>
+          <article><span>Owner</span><strong>{shortAddressV1(portfolio.owner, 6)}</strong><small>{redemption ? 'connected wallet; signing remains a separate action' : 'identity only; nothing is signed here'}</small></article>
           <article><span>Finalized floor</span><strong>{portfolio.floorSlot}</strong><small>one observation epoch for every entry</small></article>
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
           <article><span>Derived addresses</span><strong>{portfolio.entries.length}</strong><small>one per Market of the deployment</small></article>
@@ -207,8 +218,8 @@ export default function PortfolioWorkspace() {
     </section>
 
     <footer className="product-footer">
-      <span>Derived addresses · finalized reads · explicit refusals</span>
-      <span>No index · no inferred holdings · raw u64 atoms</span>
+      <span>{redemption ? 'Connected owner · finalized preflight · recoverable submission' : 'Derived addresses · finalized reads · explicit refusals'}</span>
+      <span>{redemption ? 'No mainnet · no invented plan · no ambiguous replay' : 'No index · no inferred holdings · raw u64 atoms'}</span>
     </footer>
   </main>;
 }

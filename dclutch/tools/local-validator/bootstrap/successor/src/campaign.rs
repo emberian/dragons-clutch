@@ -64,6 +64,7 @@
 //! and printed; it is not silently assumed.
 
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::{ErrorKind, Write as _},
@@ -119,6 +120,7 @@ const MAX_CAMPAIGN_REPORT_BYTES_V1: usize = 16 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub(crate) struct CampaignTerminalEvidenceV1 {
     pub(crate) plan_sha256: String,
+    pub(crate) market_sha256: String,
     pub(crate) founding_custody_context: String,
     pub(crate) direct_selected_manifest_entry_index: u16,
     pub(crate) accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
@@ -298,6 +300,12 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
         .ok_or_else(|| Error::new("campaign report omitted plan_sha256"))?
         .to_owned();
     hex32(&plan_sha256)?;
+    let market_sha256 = report
+        .get("market_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("campaign report omitted market_sha256"))?
+        .to_owned();
+    hex32(&market_sha256)?;
     let execution: TerminalExecutionV1 = serde_json::from_value(
         report
             .get("execution")
@@ -395,6 +403,7 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
     }
     Ok(CampaignTerminalEvidenceV1 {
         plan_sha256,
+        market_sha256,
         founding_custody_context: market.founding_custody_context,
         direct_selected_manifest_entry_index: market.direct_selected_manifest_entry_index,
         accounts: market.accounts,
@@ -1325,6 +1334,10 @@ fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
 
 struct PriorCampaignEvidenceV1 {
     checkpoint: Option<crate::market::MarketExecutionCheckpointV1>,
+    founding_submission_journals: BTreeMap<
+        crate::market::founding_submission_journal::FoundingSubmissionOperationV1,
+        crate::market::founding_submission_journal::FoundingSubmissionJournalV1,
+    >,
     terminal_consumable_source: Option<Vec<u8>>,
 }
 
@@ -1340,6 +1353,7 @@ fn load_prior_campaign_evidence(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PriorCampaignEvidenceV1 {
                 checkpoint: None,
+                founding_submission_journals: BTreeMap::new(),
                 terminal_consumable_source: None,
             });
         }
@@ -1372,6 +1386,30 @@ fn load_prior_campaign_evidence(
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| Error::new(format!("prior founding checkpoint: {error}")))?;
+    let founding_submission_rows = prior
+        .get("foundingSubmissionJournals")
+        .cloned()
+        .map(
+            serde_json::from_value::<
+                Vec<crate::market::founding_submission_journal::FoundingSubmissionJournalV1>,
+            >,
+        )
+        .transpose()
+        .map_err(|error| Error::new(format!("prior founding submission journals: {error}")))?
+        .unwrap_or_default();
+    let mut founding_submission_journals = BTreeMap::new();
+    for journal in founding_submission_rows {
+        let operation = journal.operation;
+        if founding_submission_journals
+            .insert(operation, journal)
+            .is_some()
+        {
+            return Err(Error::new(format!(
+                "prior founding evidence duplicated {} journal owner",
+                operation.label()
+            )));
+        }
+    }
     let terminal_consumable_source = match prior.get("execution") {
         None => None,
         Some(execution) => {
@@ -1395,6 +1433,7 @@ fn load_prior_campaign_evidence(
     };
     Ok(PriorCampaignEvidenceV1 {
         checkpoint,
+        founding_submission_journals,
         terminal_consumable_source,
     })
 }
@@ -2418,6 +2457,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let prior = match &args.evidence_path {
         None => PriorCampaignEvidenceV1 {
             checkpoint: None,
+            founding_submission_journals: BTreeMap::new(),
             terminal_consumable_source: None,
         },
         Some(path) => load_prior_campaign_evidence(
@@ -2437,7 +2477,8 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         stdout.write_all(b"\n")?;
         return Ok(());
     }
-    let compatible_checkpoint = prior.checkpoint;
+    let mut compatible_checkpoint = prior.checkpoint;
+    let mut founding_submission_journals = prior.founding_submission_journals;
     let policy = if args.execute {
         WritePolicyV1::Writes
     } else {
@@ -2548,6 +2589,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "observed": detail,
         })).collect::<Vec<_>>()),
         "founding_targets": Value::Null,
+        "foundingSubmissionJournals": founding_submission_journals.values().cloned().collect::<Vec<_>>(),
         "deploy_ladder": deploy_ladder(&plan, &args.origin),
         "transport_policy": "driver traffic: paced RPC (SMOKE-0 §6.4 -- the founding ladder and \
                              life are RPC-shaped end to end). Buffer writes: TPU, via the solana \
@@ -2567,6 +2609,177 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
         stdout.write_all(b"\n")?;
         return Ok(());
+    }
+
+    // Recover an ambiguous founding packet before opening any key file. A
+    // Prepared advances only to durable Dispatching. Dispatching may resend
+    // only its already-signed bytes after exact prestate reauthentication; a
+    // Submitted journal is strictly poll-only.
+    if !founding_submission_journals.is_empty() {
+        let payer = founding_submission_journals
+            .values()
+            .next()
+            .ok_or_else(|| Error::new("founding journal set disappeared"))?
+            .payer
+            .parse::<Pubkey>()
+            .map_err(|error| Error::new(format!("founding journal payer: {error}")))?;
+        let evidence_path = args
+            .evidence_path
+            .as_deref()
+            .ok_or_else(|| Error::new("founding journal recovery omitted evidence path"))?;
+        let market_digest = market_sha256
+            .as_deref()
+            .ok_or_else(|| Error::new("founding journal recovery omitted Market digest"))?;
+        let binding = crate::market::founding_submission_journal::FoundingSubmissionBindingV1::new(
+            evidence_path,
+            args.origin.redacted_url(),
+            plan_sha256.clone(),
+            market_digest,
+            payer,
+        )?;
+        let operations = founding_submission_journals
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for operation in operations {
+            let mut journal = founding_submission_journals
+                .get(&operation)
+                .cloned()
+                .ok_or_else(|| Error::new("founding recovery journal disappeared"))?;
+            let mut action =
+                crate::market::founding_submission_journal::founding_submission_recovery_v1(
+                    &binding, &journal,
+                )?;
+            let finalized = match action {
+                crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::SignOnce
+                | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch => false,
+                crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::Complete => {
+                    crate::market::authenticate_completed_founding_submission_v1(
+                        &mut rpc,
+                        operation.label(),
+                        &binding,
+                        &journal,
+                    )?;
+                    true
+                }
+                crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::ResendIdenticalPacket
+                | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::PollOnly => {
+                    let signature = journal
+                        .expected_signature
+                        .as_deref()
+                        .ok_or_else(|| Error::new("ambiguous founding journal omitted signature"))?
+                        .parse::<solana_sdk::signature::Signature>()
+                        .map_err(|error| Error::new(format!("ambiguous founding signature: {error}")))?;
+                    rpc.finalized_signed_packet(operation.label(), signature, false)?.is_some()
+                }
+            };
+            if finalized {
+                if operation == crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltpcb2
+                    && compatible_checkpoint.is_none()
+                {
+                    let checkpoint = crate::market::materialize_dcltpcb2_checkpoint_v1(
+                        &mut rpc,
+                        &binding,
+                        &journal,
+                    )?;
+                    report["foundingCheckpoint"] = serde_json::to_value(&checkpoint)?;
+                    compatible_checkpoint = Some(checkpoint);
+                    write_evidence_atomically(evidence_path, &report)?;
+                }
+                continue;
+            }
+            if action
+                == crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch
+                && args.execute
+            {
+                authenticate_founding_dispatch_ready_v1(&mut rpc, &binding, &journal)?;
+                let dispatching = crate::market::founding_submission_journal::dispatch_founding_submission_v1(
+                    &binding,
+                    &journal,
+                )?;
+                founding_submission_journals.insert(operation, dispatching.clone());
+                report["foundingSubmissionJournals"] = serde_json::to_value(
+                    founding_submission_journals.values().cloned().collect::<Vec<_>>(),
+                )?;
+                // Dispatching, including the exact packet/signature, is
+                // atomically replaced and fsynced before the native pre-send hook.
+                write_evidence_atomically(evidence_path, &report)?;
+                journal = dispatching;
+                action = crate::market::founding_submission_journal::founding_submission_recovery_v1(
+                    &binding,
+                    &journal,
+                )?;
+            }
+            match action {
+                crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::ResendIdenticalPacket
+                    if args.execute =>
+                {
+                    authenticate_founding_dispatch_ready_v1(&mut rpc, &binding, &journal)?;
+                    let packet = crate::market::founding_submission_journal::founding_submission_packet_v1(
+                        &binding,
+                        &journal,
+                    )?;
+                    let signature = journal
+                        .expected_signature
+                        .as_deref()
+                        .ok_or_else(|| Error::new("Dispatching founding journal omitted signature"))?
+                        .parse::<solana_sdk::signature::Signature>()
+                        .map_err(|error| Error::new(format!("Dispatching founding signature: {error}")))?;
+                    let projection = crate::market::founding_submission_journal::founding_pre_send_projection_v1(
+                        &binding,
+                        &journal,
+                    )?;
+                    if projection.signature != signature.to_string() {
+                        return Err(Error::new(
+                            "Dispatching recovery pre-send projection changed signature",
+                        ));
+                    }
+                    // Dispatching, including the exact packet/signature, was
+                    // fsynced in the native campaign report before this sole
+                    // send. A kill here or before Submitted is persisted may
+                    // retry only the identical signature; Submitted is poll-only.
+                    let returned = rpc.submit_signed_packet_once(
+                        operation.label(),
+                        &packet,
+                        signature,
+                        false,
+                    )?;
+                    let submitted = crate::market::founding_submission_journal::submit_founding_submission_v1(
+                        &binding,
+                        &journal,
+                        &returned.to_string(),
+                    )?;
+                    founding_submission_journals.insert(operation, submitted);
+                    report["foundingSubmissionJournals"] = serde_json::to_value(
+                        founding_submission_journals.values().cloned().collect::<Vec<_>>(),
+                    )?;
+                    write_evidence_atomically(evidence_path, &report)?;
+                    let mut stdout = std::io::stdout();
+                    stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+                    stdout.write_all(b"\n")?;
+                    return Ok(());
+                }
+                crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch
+                | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::ResendIdenticalPacket => {
+                    let mut stdout = std::io::stdout();
+                    stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+                    stdout.write_all(b"\n")?;
+                    return Ok(());
+                }
+                crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::PollOnly => {
+                    let mut stdout = std::io::stdout();
+                    stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+                    stdout.write_all(b"\n")?;
+                    return Ok(());
+                }
+                crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::SignOnce => {
+                    // A persisted Planned recovery reauthenticates expiry and
+                    // exact prestate before the campaign may reopen key files.
+                    authenticate_founding_dispatch_ready_v1(&mut rpc, &binding, &journal)?;
+                }
+                _ => {}
+            }
+        }
     }
 
     // This is the first private-key read in the campaign. Every parser,
@@ -2643,13 +2856,48 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         stdout.write_all(b"\n")?;
         return Ok(());
     }
+    let report_cell = RefCell::new(report);
     let execution = {
         let mut checkpoint = |value: &crate::market::MarketExecutionCheckpointV1| -> Result<()> {
+            let mut report = report_cell.borrow_mut();
             report["foundingCheckpoint"] = serde_json::to_value(value)?;
             if let Some(path) = &args.evidence_path {
                 write_evidence_atomically(path, &report)?;
             }
             Ok(())
+        };
+        let mut persist_journals = |journals: &[crate::market::founding_submission_journal::FoundingSubmissionJournalV1]| -> Result<()> {
+            let mut report = report_cell.borrow_mut();
+            report["foundingSubmissionJournals"] = serde_json::to_value(journals)?;
+            if let Some(path) = &args.evidence_path {
+                write_evidence_atomically(path, &report)?;
+            }
+            Ok(())
+        };
+        let mut recorder = match &args.origin {
+            ClusterOriginV1::AcknowledgedDevnet { .. } => {
+                let evidence_path = args
+                    .evidence_path
+                    .as_deref()
+                    .ok_or_else(|| Error::new("devnet founding execution omitted evidence path"))?;
+                let market_sha256 = market_sha256
+                    .as_deref()
+                    .ok_or_else(|| Error::new("devnet founding execution omitted Market digest"))?;
+                let binding =
+                    crate::market::founding_submission_journal::FoundingSubmissionBindingV1::new(
+                        evidence_path,
+                        args.origin.redacted_url(),
+                        plan_sha256.clone(),
+                        market_sha256,
+                        authority.pubkey(),
+                    )?;
+                Some(crate::market::FoundingSubmissionRecorderV1::new(
+                    binding,
+                    &mut founding_submission_journals,
+                    &mut persist_journals,
+                )?)
+            }
+            ClusterOriginV1::Loopback { .. } => None,
         };
         execute_stages(
             &mut rpc,
@@ -2662,8 +2910,10 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             args.through,
             compatible_checkpoint.as_ref(),
             &mut checkpoint,
+            recorder.as_mut(),
         )?
     };
+    let mut report = report_cell.into_inner();
     let local_participant_fixture_liquidity = execution
         .market
         .as_ref()
@@ -2685,6 +2935,38 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
     stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+fn authenticate_founding_dispatch_ready_v1(
+    rpc: &mut Rpc,
+    binding: &crate::market::founding_submission_journal::FoundingSubmissionBindingV1,
+    journal: &crate::market::founding_submission_journal::FoundingSubmissionJournalV1,
+) -> Result<()> {
+    let height = rpc
+        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+        .as_u64()
+        .ok_or_else(|| Error::new("founding recovery block height was not u64"))?;
+    crate::market::founding_submission_journal::authenticate_founding_packet_fresh_v1(
+        binding, journal, height,
+    )?;
+    let prestate_accounts = journal
+        .prestate_accounts
+        .iter()
+        .map(|value| {
+            value
+                .parse::<Pubkey>()
+                .map_err(|error| Error::new(format!("founding prestate account: {error}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if crate::market::founding_account_set_digest_v1(rpc, &prestate_accounts)?
+        != journal.prestate_sha256
+    {
+        return Err(Error::new(format!(
+            "{} recovery found changed prestate; poll the exact signature and do not dispatch or resend",
+            journal.operation.label()
+        )));
+    }
     Ok(())
 }
 
@@ -2711,6 +2993,7 @@ fn execute_stages(
     through: StageV1,
     compatible_checkpoint: Option<&crate::market::MarketExecutionCheckpointV1>,
     checkpoint: &mut dyn FnMut(&crate::market::MarketExecutionCheckpointV1) -> Result<()>,
+    mut submission_recorder: Option<&mut crate::market::FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<CampaignExecutionEvidenceV1> {
     for (stage, state) in states {
         if let StageStateV1::Conflict(detail) = state {
@@ -2757,6 +3040,7 @@ fn execute_stages(
                     forge,
                     &mut transactions,
                     saved,
+                    submission_recorder.as_deref_mut(),
                 )?);
                 eprintln!(
                     "campaign stage founding: reconstructed exact Open poststate from durable DCLTPCB2 checkpoint"
@@ -2821,6 +3105,7 @@ fn execute_stages(
                             forge,
                             &mut transactions,
                             saved,
+                            submission_recorder.as_deref_mut(),
                         )?
                     }
                     StageStateV1::Absent if compatible_checkpoint.is_some() => {
@@ -2828,15 +3113,18 @@ fn execute_stages(
                             "a compatible DCLTPCB2 checkpoint exists but the chain detector reads founding Absent; the journal and live chain disagree",
                         ));
                     }
-                    StageStateV1::Absent => crate::market::execute_found_market_with_checkpoint(
-                        rpc,
-                        plan,
-                        input,
-                        authority,
-                        forge,
-                        &mut transactions,
-                        checkpoint,
-                    )?,
+                    StageStateV1::Absent => {
+                        crate::market::execute_found_market_with_checkpoint_and_journal(
+                            rpc,
+                            plan,
+                            input,
+                            authority,
+                            forge,
+                            &mut transactions,
+                            checkpoint,
+                            submission_recorder.as_deref_mut(),
+                        )?
+                    }
                     StageStateV1::Complete | StageStateV1::Conflict(_) => {
                         return Err(Error::new(
                             "founding stage changed state after the campaign preflight",
@@ -3419,6 +3707,42 @@ mod tests {
                 },
             },
         })
+    }
+
+    #[test]
+    fn terminal_campaign_evidence_authenticates_exact_market_digest() {
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-campaign-terminal-market-digest-{}.json",
+            Pubkey::new_unique()
+        ));
+        let report = terminal_consumable_report(&path, checkpoint_value());
+        let encoded = serde_json::to_vec(&report).expect("terminal report JSON");
+        let evidence = parse_campaign_terminal_evidence_v1(&encoded)
+            .expect("exact Market digest is terminal-consumable");
+        assert_eq!(evidence.market_sha256, "22".repeat(32));
+
+        let mut missing = report.clone();
+        missing
+            .as_object_mut()
+            .expect("report object")
+            .remove("market_sha256");
+        let refusal = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&missing).expect("missing digest JSON"),
+        )
+        .expect_err("missing Market digest must refuse");
+        assert!(refusal.0.contains("omitted market_sha256"), "{}", refusal.0);
+
+        let mut malformed = report;
+        malformed["market_sha256"] = json!("22".repeat(31));
+        let refusal = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&malformed).expect("malformed digest JSON"),
+        )
+        .expect_err("malformed Market digest must refuse");
+        assert!(
+            refusal.0.contains("expected 64 lowercase hex characters"),
+            "{}",
+            refusal.0
+        );
     }
 
     #[test]
