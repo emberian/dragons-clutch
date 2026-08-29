@@ -141,6 +141,27 @@ The checkpoint must include:
   M-61. Report pass count and the exact 20-seed arithmetic mean for every named
   mutation; no single focused draw is an M-61 result.
 
+## Activity V3 devnet convergence
+
+- With one accepted V3 manifest, checked release, Market, harness digest, CLI
+  digest, and at-most-six-hour `maxCycles=1` authorization, externally fund
+  only the disposable campaign payer. Authenticate the payer-only initial
+  funding closure, then run the exact founding -> post-init funding ->
+  participant -> Direct -> resolution -> payout -> retirement lifecycle.
+- Retain finalized post-init journals, the post-init closure, the combined
+  funding-lifecycle fact, reconciliation output, and supervisor status.
+  Exercise one interrupted `Dispatching`/`Submitted` restart in poll-only
+  recovery and prove `Prepared` never dispatches without the signer-owning
+  command.
+- Require every `getFeeForMessage` quote to equal the finalized fee. Enforce
+  separate post-init transfer/fee caps and campaign gross-debit/activity-fee
+  caps, one global signature set, exact per-wallet finalized histories, and
+  exact final balances without counting internal wallet redistribution as a
+  second external bankroll debit.
+- Public evidence may contain addresses and path digests, but never private
+  paths, packet bytes, or permanent deployer/funder material. No funding row
+  may be projected as Direct economics.
+
 ## Provider genesis and closure
 
 - Generate Receiver and Router Program plus ProgramData JSON accounts into the

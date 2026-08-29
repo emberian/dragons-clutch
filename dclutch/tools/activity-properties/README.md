@@ -11,7 +11,8 @@ so it cannot support the same exact asset-conservation claim.
 For every dossier it checks:
 
 - the canonical dossier self-digest, exact six-phase order, source-digest
-  projection, predecessor chain, and final-state continuity;
+  projection, predecessor chain, exact per-transaction compute units and total,
+  and final-state continuity;
 - exact transaction lamport conservation: all observed changes sum to the
   negative finalized transaction fee, including account creation rent;
 - exact retirement closure rent and refund equality, with each closed account

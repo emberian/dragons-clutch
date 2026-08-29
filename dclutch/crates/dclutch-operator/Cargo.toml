@@ -20,6 +20,7 @@ dclutch-bearer-v2-operator = { path = "../dclutch-bearer-v2-operator" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
+dclutch-dealer-codec = { path = "../dclutch-dealer-codec" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 dclutch-economic-slice-kernel = { path = "../dclutch-economic-slice-kernel" }
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }

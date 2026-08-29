@@ -321,6 +321,7 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
     prior_slot = -1
     predecessor: str | None = None
     fee_total = 0
+    compute_total = 0
     protocol_fee_total = 0
     principal_total = 0
     closed_rent_total = 0
@@ -385,7 +386,7 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
             event,
             {
                 "id", "kind", "operation", "predecessor", "signature", "slot", "feePayer",
-                "transactionFeeLamports", "lamportDeltas", "tokenDeltas", "sourceSha256",
+                "transactionFeeLamports", "computeUnitsConsumed", "lamportDeltas", "tokenDeltas", "sourceSha256",
                 "lamportObservations", "tokenObservations",
             },
             {"direct", "positions", "position", "certificate", "payout", "retirement"},
@@ -412,6 +413,9 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
             refuse(f"event {event_id} fee payer is not a declared wallet")
         payer_addresses.add(accounts[fee_ref]["address"])
         fee = reconcile.decimal(event["transactionFeeLamports"], f"event {event_id} transaction fee")
+        compute = reconcile.decimal(event["computeUnitsConsumed"], f"event {event_id} compute units")
+        if compute == 0:
+            refuse(f"event {event_id} compute units must be positive")
         lamport_deltas = _delta_rows(event["lamportDeltas"], accounts=accounts, amount_field="lamports", label=f"event {event_id} lamportDeltas")
         token_deltas = _delta_rows(event["tokenDeltas"], accounts=accounts, amount_field="atoms", label=f"event {event_id} tokenDeltas")
         lamport_observations = _observation_rows(event, accounts, token=False)
@@ -486,6 +490,7 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
         elif "retirement" in event:
             refuse("retirement facts belong only to retirement transactions")
         fee_total += fee
+        compute_total += compute
         signatures.append(signature)
         seen_ids.add(event_id)
         seen_signatures.add(signature)
@@ -527,12 +532,14 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
             refuse(f"final Position {ref} advanced outside the lifecycle")
     totals = reconcile.exact_keys(
         dossier["totals"],
-        {"transactionFeesLamports", "protocolFeesAtoms", "hoardPrincipalPaidAtoms", "hoardPrincipalClassification"},
+        {"transactionFeesLamports", "computeUnitsConsumed", "protocolFeesAtoms", "hoardPrincipalPaidAtoms", "hoardPrincipalClassification"},
         set(),
         "activity dossier totals",
     )
     if reconcile.decimal(totals["transactionFeesLamports"], "dossier transaction fees") != fee_total:
         refuse("dossier transaction-fee total differs from exact event fees")
+    if reconcile.decimal(totals["computeUnitsConsumed"], "dossier compute units") != compute_total:
+        refuse("dossier compute-unit total differs from exact event history")
     if reconcile.decimal(totals["protocolFeesAtoms"], "dossier protocol fees") != protocol_fee_total:
         refuse("dossier protocol-fee total differs from exact Direct side-floor fees")
     if reconcile.decimal(totals["hoardPrincipalPaidAtoms"], "dossier Hoard principal") != principal_total:
@@ -546,6 +553,7 @@ def validate_lifecycle(dossier: Any) -> dict[str, Any]:
         "genesisHash": genesis,
         "transactionCount": len(events),
         "transactionFeesLamports": fee_total,
+        "computeUnitsConsumed": compute_total,
         "protocolFeesAtoms": protocol_fee_total,
         "hoardPrincipalPaidAtoms": principal_total,
         "closedRentLamports": closed_rent_total,
@@ -635,6 +643,7 @@ def validate_many(dossiers: list[Any]) -> dict[str, Any]:
         ],
         "totals": {
             "transactionFeesLamports": str(sum(result["transactionFeesLamports"] for result in results)),
+            "computeUnitsConsumed": str(sum(result["computeUnitsConsumed"] for result in results)),
             "protocolFeesAtoms": str(sum(result["protocolFeesAtoms"] for result in results)),
             "hoardPrincipalPaidAtoms": str(sum(result["hoardPrincipalPaidAtoms"] for result in results)),
             "closedRentLamports": str(sum(result["closedRentLamports"] for result in results)),

@@ -105,7 +105,8 @@ class ActivityPropertiesTest(unittest.TestCase):
     def test_exact_whole_lifecycle_conservation_holds(self):
         report = properties.validate_many([fixture_dossier()])
         self.assertEqual(report["status"], "holds")
-        self.assertEqual(report["totals"]["transactionFeesLamports"], "30000")
+        self.assertEqual(report["totals"]["transactionFeesLamports"], "45000")
+        self.assertEqual(report["totals"]["computeUnitsConsumed"], "900000")
         self.assertEqual(report["totals"]["protocolFeesAtoms"], "20")
         self.assertEqual(report["totals"]["hoardPrincipalPaidAtoms"], "50")
         self.assertEqual(report["totals"]["closedRentLamports"], "10000")
@@ -173,7 +174,7 @@ class ActivityPropertiesTest(unittest.TestCase):
         report = properties.validate_many([first, second])
         self.assertEqual(report["multiwallet"]["status"], "holds")
         self.assertEqual(len(report["multiwallet"]["payerAddresses"]), 2)
-        self.assertEqual(report["totals"]["transactionFeesLamports"], "60000")
+        self.assertEqual(report["totals"]["transactionFeesLamports"], "90000")
 
     def test_duplicate_direct_semantic_owner_refuses(self):
         first = fixture_dossier()

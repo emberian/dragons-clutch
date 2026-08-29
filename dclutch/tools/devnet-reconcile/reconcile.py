@@ -54,6 +54,12 @@ OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA = (
     "dclutch-owned-loopback-terminal-sequence-session-v1"
 )
 EVENT_KINDS = ("founding", "participant", "direct", "resolution", "payout", "retirement")
+RESOLUTION_OPERATIONS_V7 = (
+    "resolution-submit",
+    "resolution-provider-execute-v1",
+    "core-terminal-accept-v1",
+    "resolution-reclaim",
+)
 OWNED_LOOPBACK_COMPLETED_STAGES = (
     "founding", "participant", "alt", "seal", "direct", "resolution", "payout", "retirement",
 )
@@ -536,7 +542,7 @@ def validate_manifest_for(
     if cluster_kind == "owned-loopback":
         optional_event_fields.add("positions")
     for index, event in enumerate(events):
-        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "lamportDeltas", "tokenDeltas", "sourcePath", "sourceSha256"}, optional_event_fields, f"events[{index}]")
+        event = exact_keys(event, {"id", "kind", "operation", "predecessor", "signature", "slot", "feePayer", "feeLamports", "computeUnitsConsumed", "lamportDeltas", "tokenDeltas", "sourcePath", "sourceSha256"}, optional_event_fields, f"events[{index}]")
         event_id = text(event["id"], "event id")
         text(event["operation"], f"event {event_id} operation")
         signature = text(event["signature"], f"event {event_id} signature")
@@ -557,6 +563,8 @@ def validate_manifest_for(
         if fee_ref not in accounts or accounts[fee_ref]["kind"] != "wallet":
             refuse(f"event {event_id} fee payer is not a declared wallet")
         decimal(event["feeLamports"], f"event {event_id} fee")
+        if decimal(event["computeUnitsConsumed"], f"event {event_id} compute units") == 0:
+            refuse(f"event {event_id} compute units must be positive")
         source_path = text(event["sourcePath"], f"event {event_id} sourcePath")
         parts = pathlib.PurePosixPath(source_path)
         if parts.is_absolute() or source_path != parts.as_posix() or any(part in ("", ".", "..") for part in parts.parts):
@@ -567,6 +575,14 @@ def validate_manifest_for(
         ids.add(event_id); signatures.add(signature); previous = event_id; prior_slot = slot
     if seen_kinds != set(EVENT_KINDS):
         refuse("activity event chain does not cover every required lifecycle kind")
+    resolution_events = [event for event in events if event["kind"] == "resolution"]
+    if tuple(event["operation"] for event in resolution_events) != RESOLUTION_OPERATIONS_V7:
+        refuse("Resolution activity is not exact submit, provider execute, Core accept, then reclaim")
+    if any(
+        decimal(left["slot"], "Resolution slot") >= decimal(right["slot"], "Resolution slot")
+        for left, right in zip(resolution_events, resolution_events[1:])
+    ):
+        refuse("Resolution activity slots are not strictly ordered")
     source_set = [{"event": event["id"], "sha256": event["sourceSha256"]} for event in events]
     if sha256_bytes(canonical_bytes(source_set)) != manifest["sourceSetSha256"]:
         refuse("sourceSetSha256 does not bind the ordered operation evidence")
@@ -578,6 +594,9 @@ def validate_manifest_for(
         owners = [event for event in events if field in event]
         if len(owners) < minimum or (maximum is not None and len(owners) > maximum) or any(event["kind"] != owner_kind for event in owners):
             refuse(f"activity has an invalid number or owner of {field} facts")
+    certificate_owners = [event for event in resolution_events if "certificate" in event]
+    if certificate_owners != [resolution_events[1]]:
+        refuse("ResolutionCertificateV2 belongs only to provider execute before Core accept")
     if cluster_kind == "owned-loopback":
         hot = [event for event in events if "direct" in event]
         position_sets = [event for event in events if "positions" in event]
@@ -705,6 +724,11 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     fee = meta.get("fee")
     if not isinstance(fee, int) or fee != decimal(event["feeLamports"], "event fee"):
         refuse(f"transaction {event['signature']} has a substituted fee")
+    compute = meta.get("computeUnitsConsumed")
+    if not isinstance(compute, int) or compute != decimal(
+        event["computeUnitsConsumed"], "event compute units"
+    ):
+        refuse(f"transaction {event['signature']} has substituted compute units")
     transaction = result.get("transaction")
     signatures = transaction.get("signatures") if isinstance(transaction, dict) else None
     if not isinstance(signatures, list) or not signatures or signatures[0] != event["signature"]:
@@ -761,7 +785,8 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     projection: dict[str, Any] = {
         "id": event["id"], "kind": event["kind"], "operation": event["operation"], "predecessor": event["predecessor"],
         "signature": event["signature"], "slot": event["slot"], "feePayer": event["feePayer"],
-        "transactionFeeLamports": event["feeLamports"], "lamportDeltas": event["lamportDeltas"],
+        "transactionFeeLamports": event["feeLamports"], "computeUnitsConsumed": event["computeUnitsConsumed"],
+        "lamportDeltas": event["lamportDeltas"],
         "tokenDeltas": event["tokenDeltas"], "sourceSha256": event["sourceSha256"],
         "lamportObservations": [
             {"account": ref, "beforeLamports": str(observed_lamport_states[ref][0]), "afterLamports": str(observed_lamport_states[ref][1]), "deltaLamports": str(observed_lamports[ref])}
@@ -1005,6 +1030,7 @@ def reconcile_for(
         if ref in last_positions and observed.get("position") != last_positions[ref]:
             refuse(f"final Position {ref} advanced outside the activity chain")
     transaction_fees = sum(int(event["feeLamports"]) for event in events)
+    compute_units = sum(int(event["computeUnitsConsumed"]) for event in events)
     directs = [item["direct"] for item in projections if "direct" in item]
     payouts = [item["payout"] for item in projections if "payout" in item]
     source_digests = [{"event": event["id"], "sha256": event["sourceSha256"]} for event in events]
@@ -1021,6 +1047,7 @@ def reconcile_for(
         "accounts": manifest["accounts"], "events": projections, "finalAccounts": final,
         "totals": {
             "transactionFeesLamports": str(transaction_fees),
+            "computeUnitsConsumed": str(compute_units),
             "protocolFeesAtoms": str(sum(int(direct["feeRecipientAtoms"]) for direct in directs)),
             "hoardPrincipalPaidAtoms": str(sum(int(payout["principalAtoms"]) for payout in payouts)),
             "hoardPrincipalClassification": "collateral-principal-not-fee-bounty-rent-reserve-or-treasury",

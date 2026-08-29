@@ -1,163 +1,57 @@
-//! Canonical full-chain fixture for Dealer selector 9.
+//! Canonical Dealer selector-9 unsplit topology evidence.
 //!
-//! This fixture starts from the shared Product graph generator used by the
-//! executable Direct campaign, then rebuilds every Market, Claims, Dealer,
-//! capability, strategy, and physical-account fact that is owned by selector
-//! 9.  Its output is one ordinary Trading Hot instruction; the real Trading
-//! ELF must authenticate the frame and CPI the real Dealer accelerator ELF.
-#![expect(
-    dead_code,
-    unused_imports,
-    reason = "staged for the joined dealer chain campaign"
-)]
+//! The semantic owner in `dclutch-operator::dealer_scenario_hot_v4` replays the
+//! exact scenario transition, derives all nine Profile13 span widths, validates
+//! the physical account geometry, and emits the canonical
+//! `fixed(39) ++ admitted extras(8) ++ caller authorities ++ runtime suffix`
+//! instruction. Its 121-lock canonical scenario is deliberately not submitted:
+//! devnet's 64-lock limit is unchanged by an address lookup table. This module
+//! owns only topology installation and rollback classification while the
+//! durable preparation/commit split is built. It does not restate a span,
+//! route bitmap, privilege, or account order.
 
 use std::vec::Vec;
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
-use dclutch_capability_contract::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    CompartmentFundingV1, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
-};
-use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-    hot_v3::{
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
-        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_ENVELOPE_BYTES_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
-        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
-        HOT_PRODUCT_STAGING_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
-        HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
-        HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
-        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
-        HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
-        HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-        HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+use dclutch_capability_program_contract::hot_v3::HOT_ROOT_ACCOUNT_V3;
+use dclutch_direct_hot_program_test_support::chain::DirectHotInstallAccountV5;
+use dclutch_operator::{
+    dealer_scenario_hot_v4::{
+        DealerScenarioHotMetaErrorV4, DealerScenarioHotMetaReportV4, DealerScenarioHotMetaStateV4,
+        DealerScenarioSemanticStateV4, project_dealer_scenario_unsplit_topology_v4,
     },
-    set_v1::{CapabilityProgramSetV1, CapabilityProgramSetV1 as _},
-    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-    v3::{
-        CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3,
-        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V3,
-    },
-    v4::{
-        CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
-        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
-    },
-};
-use dclutch_claims_svm::{
-    frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3},
-    liability_basis_state_v2::{
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
-        LiabilityBasisMarketViewV2, LiabilityBasisPositionInputV2, LiabilityBasisPositionViewV2,
-        encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
-    },
-    protocol_position_v2::ProtocolPositionSeedsV2,
-};
-use dclutch_core_contract::{ContentId, MarketRoot};
-use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1, ContextV1,
-    CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1, CustodyReplayV1,
-    CustodyRequestV1, CustodyVaultSeedsV1, DelegatedCustodyRequestV2, OperationV1,
-};
-use dclutch_dealer_codec::{
-    config_v4::DealerConfigV4, root_tail::ROOT_TAIL_BYTES, scenario::ClaimsInventoryObservation,
-};
-use dclutch_direct_hot_program_test_support::{
-    DirectHotDeploymentWidthsV5,
-    chain::DirectHotInstallAccountV5,
-    fixture::{DirectHotChainInputV5, build_direct_hot_chain_fixture_v5},
-};
-use dclutch_execution_strategy_contract::v2::{
-    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
-    ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
-};
-use dclutch_market_core_codec::{
-    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
-};
-use dclutch_product_runtime_v2_admission::ProductRecordV2;
-use dclutch_realm_contract::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
-};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
-use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1, ProgramIdentityV1,
-};
-use dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID;
-use dclutch_trading_sbf::{
-    admitted_composition_v3::admitted_caller_authority_count_v3,
-    dealer::{
-        DEALER_KIND_PREIMAGE_V2, DEALER_ROOT_SCHEMA_PREIMAGE_V2,
-        v3_composer::{ScenarioCollateralFrameV3, ScenarioComposerContextV3},
-        v3_multi_lp::MultiLpCustodyRequestV3,
-        v3_obligation::{
-            DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3,
-            ObligationAccountObservationV3, ObligationOpenInputV3, obligation_account_bytes_v3,
-            prepare_obligation_open_v3,
-        },
-        v3_release::{
-            DEALER_GLOBAL_SELECTOR_COUNT_V3, DEALER_SCENARIO_TRADE_REQUEST_SCHEMA_PREIMAGE_V3,
-            dealer_request_schema_v3,
-        },
-        v3_trade::{
-            ScenarioTradeChainProjectionV3, ScenarioTradeDirectionV3, ScenarioTradeIntentV3,
-            build_scenario_trade_request_v3, scenario_trade_max_request_bytes_v3,
-        },
-        v3_trade_artifacts::{
-            DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4, DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
-            DEALER_SCENARIO_REQUEST_PROFILE_BYTES_V4, DEALER_SCENARIO_TRANSITION_BYTES_V4,
-            dealer_scenario_base_effect_program_bytes_v4, dealer_scenario_effect_program_bytes_v4,
-            encode_dealer_scenario_base_effect_program_v4,
-            encode_dealer_scenario_effect_program_v4, encode_dealer_scenario_request_profile_v4,
-            encode_dealer_scenario_transition_v4, project_dealer_scenario_hot_registers_v4,
-        },
-        v3_trade_profile::{
-            DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DealerScenarioAccountProfileInputV4,
-            dealer_scenario_logical_frame_v4, encode_dealer_scenario_account_profile_v4_atomic,
-        },
-        v4_scenario_release::{
-            DEALER_GLOBAL_PROGRAM_SET_BYTES_V4, DEALER_SCENARIO_EMPTY_LIFECYCLE_BYTES_V5,
-            DealerDescriptorRecordV4, DealerScenarioFinalizedArtifactsV4,
-            encode_dealer_global_program_set_v4, encode_dealer_scenario_empty_lifecycle_v5,
-            finalize_dealer_scenario_descriptor_v4,
-        },
-    },
+    direct_inline_v3::ObservedAccountMetaV3,
 };
 use solana_account::Account;
-use solana_program::{
-    hash::hash,
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-    rent::Rent,
-};
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_program::{instruction::Instruction, pubkey::Pubkey};
 
-const WIDTH: usize = 3;
-const WIDTH_U32: u32 = 3;
-const GENERATION: u64 = 9;
-const CURRENT_SLOT: u64 = 1;
-const CLAIMS_REVISION: u64 = 8;
-const DEALER_REVISION: u64 = 9;
-const COUNTERPARTY_REVISION: u64 = 10;
-const CUSTODY_REVISION: u64 = 7;
+/// One same-finalized Dealer bundle input.
+///
+/// `fixed_accounts`, `strategy_accounts`, and `runtime_suffix_accounts` are
+/// chain observations, not free-form transaction metas. The operator derives
+/// and authenticates their privileges and account order before this module
+/// converts them into installable ProgramTest accounts.
+#[derive(Clone, Copy)]
+pub struct DealerScenarioChainInputV4<'a> {
+    /// Exact common Hot39 observations in ABI order.
+    pub fixed_accounts: &'a [ObservedAccountMetaV3],
+    /// Eight admitted-AOT evidence observations followed by caller authorities.
+    pub strategy_accounts: &'a [ObservedAccountMetaV3],
+    /// Packed Profile13 suffix after the five fixed injected coordinates.
+    pub runtime_suffix_accounts: &'a [ObservedAccountMetaV3],
+    /// Same-observation semantic chain state.
+    pub semantic: DealerScenarioSemanticStateV4<'a>,
+    /// Exact selector-9 family request.
+    pub family_request: &'a [u8],
+    /// Accounts installed by the enclosing release-waist ProgramTest.
+    pub externally_installed_keys: &'a [Pubkey],
+}
 
-/// One canonical Dealer chain fixture before Registry continuation wrapping.
+/// One canonical Dealer chain topology before any durable split.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DealerScenarioChainFixtureV4 {
-    /// Trading Hot instruction which must invoke the accelerator itself.
+pub struct DealerScenarioUnsplitChainTopologyV4 {
+    /// Unsplit Hot instruction retained only for topology analysis.
     pub hot_instruction: Instruction,
-    /// All fixed, strategy, and packed runtime account bodies.
+    /// All distinct fixed, strategy, and packed runtime account bodies.
     pub accounts: Vec<DirectHotInstallAccountV5>,
     /// Accounts installed externally by the release-waist harness.
     pub externally_installed_keys: Vec<Pubkey>,
@@ -167,44 +61,183 @@ pub struct DealerScenarioChainFixtureV4 {
     pub root: Pubkey,
     /// Canonical Trading-owned obligation PDA.
     pub obligation: Pubkey,
+    /// Operator-authenticated semantic and physical projection.
+    pub report: DealerScenarioHotMetaReportV4,
+    /// Total instruction account-meta entries.
+    pub account_meta_count: usize,
+    /// Exact distinct instruction locks, including the Trading program id.
+    ///
+    /// The eventual transaction payer is outside this unsigned fixture.
+    pub unique_account_lock_count: usize,
 }
 
 /// Stable fixture-construction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerScenarioChainErrorV4 {
-    /// A semantic-owner encoder rejected the requested fixture.
-    Encoding,
-    /// Finalized artifact generation or selection did not join exactly.
-    Artifacts,
-    /// Runtime account packing differed from Profile13.
-    Profile,
-    /// Checked integer or byte arithmetic failed.
-    Arithmetic,
+    /// The semantic or physical operator refused the same-finalized view.
+    Projection(DealerScenarioHotMetaErrorV4),
+    /// One key carried two different observed account bodies.
+    DuplicateAccountConflict,
+    /// A declared externally installed key was absent from the bundle.
+    MissingExternalAccount,
+    /// A required fixed or semantic coordinate was absent.
+    AccountGeometry,
 }
 
-#[derive(Clone, Debug)]
-struct Finalized {
-    raw: Pubkey,
-    staging: Pubkey,
-    bytes: Vec<u8>,
-    digest: [u8; 32],
-    schema: [u8; 32],
+impl From<DealerScenarioHotMetaErrorV4> for DealerScenarioChainErrorV4 {
+    fn from(value: DealerScenarioHotMetaErrorV4) -> Self {
+        Self::Projection(value)
+    }
 }
 
-#[derive(Clone, Debug)]
-struct ChainAccount {
-    key: Pubkey,
-    account: Account,
-    meta: AccountMeta,
-    snapshot: bool,
+/// Project one exact unsplit selector-9 Hot topology.
+///
+/// This is deliberately the sole public constructor in the Dealer chain
+/// fixture. Callers provide observations and semantic state; the operator
+/// supplies every account meta, protected-span count, admitted page count, and
+/// lock census. No signing or submission may occur.
+pub fn project_dealer_scenario_unsplit_chain_topology_v4(
+    input: DealerScenarioChainInputV4<'_>,
+) -> Result<DealerScenarioUnsplitChainTopologyV4, DealerScenarioChainErrorV4> {
+    let state = DealerScenarioHotMetaStateV4 {
+        fixed_accounts: input.fixed_accounts,
+        strategy_accounts: input.strategy_accounts,
+        runtime_suffix_accounts: input.runtime_suffix_accounts,
+    };
+    let built =
+        project_dealer_scenario_unsplit_topology_v4(state, input.semantic, input.family_request)?;
+    let root = input
+        .fixed_accounts
+        .get(HOT_ROOT_ACCOUNT_V3)
+        .ok_or(DealerScenarioChainErrorV4::AccountGeometry)?
+        .account
+        .key;
+    let obligation = Pubkey::new_from_array(input.semantic.chain.obligation_address);
+
+    let mut accounts = Vec::new();
+    for observed in input
+        .fixed_accounts
+        .iter()
+        .chain(input.strategy_accounts)
+        .chain(input.runtime_suffix_accounts)
+    {
+        install_observation(&mut accounts, observed)?;
+    }
+    let rollback_snapshot_keys = built
+        .instruction
+        .accounts
+        .iter()
+        .filter(|meta| meta.is_writable)
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    let externally_installed_keys = input
+        .externally_installed_keys
+        .iter()
+        .map(|key| {
+            accounts
+                .iter()
+                .any(|account| account.key == *key)
+                .then_some(*key)
+                .ok_or(DealerScenarioChainErrorV4::MissingExternalAccount)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(DealerScenarioUnsplitChainTopologyV4 {
+        hot_instruction: built.instruction,
+        accounts,
+        externally_installed_keys,
+        rollback_snapshot_keys,
+        root,
+        obligation,
+        report: built.report,
+        account_meta_count: built.account_meta_count,
+        unique_account_lock_count: built.unique_account_lock_count,
+    })
 }
 
-impl ChainAccount {
-    fn install(self) -> DirectHotInstallAccountV5 {
-        DirectHotInstallAccountV5 {
-            key: self.key,
-            account: self.account,
-            snapshot_for_rollback: self.snapshot,
+fn install_observation(
+    accounts: &mut Vec<DirectHotInstallAccountV5>,
+    observed: &ObservedAccountMetaV3,
+) -> Result<(), DealerScenarioChainErrorV4> {
+    let candidate = DirectHotInstallAccountV5 {
+        key: observed.account.key,
+        account: Account {
+            lamports: observed.account.lamports,
+            data: observed.account.data.clone(),
+            owner: observed.account.owner,
+            executable: observed.account.executable,
+            rent_epoch: 0,
+        },
+        snapshot_for_rollback: observed.is_writable,
+    };
+    if let Some(existing) = accounts
+        .iter_mut()
+        .find(|existing| existing.key == candidate.key)
+    {
+        if existing.account != candidate.account {
+            return Err(DealerScenarioChainErrorV4::DuplicateAccountConflict);
         }
+        existing.snapshot_for_rollback |= candidate.snapshot_for_rollback;
+    } else {
+        accounts.push(candidate);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_operator::{Finality, Observation, ObservedAccount};
+
+    fn observed(key: u8, data: u8, writable: bool) -> ObservedAccountMetaV3 {
+        ObservedAccountMetaV3 {
+            account: ObservedAccount {
+                observation: Observation {
+                    slot: 7,
+                    unix_timestamp: 8,
+                    finality: Finality::Finalized,
+                },
+                key: Pubkey::new_from_array([key; 32]),
+                owner: Pubkey::new_from_array([9; 32]),
+                lamports: 10,
+                executable: false,
+                data: vec![data; 4],
+            },
+            is_signer: false,
+            is_writable: writable,
+        }
+    }
+
+    #[test]
+    fn identical_aliases_install_once_and_keep_rollback_classification() {
+        let mut accounts = Vec::new();
+        install_observation(&mut accounts, &observed(1, 2, false)).expect("first");
+        install_observation(&mut accounts, &observed(1, 2, true)).expect("alias");
+        assert_eq!(accounts.len(), 1);
+        assert!(
+            accounts
+                .first()
+                .expect("one installed account")
+                .snapshot_for_rollback
+        );
+    }
+
+    #[test]
+    fn same_key_with_a_substituted_body_refuses() {
+        let mut accounts = Vec::new();
+        install_observation(&mut accounts, &observed(1, 2, false)).expect("first");
+        assert_eq!(
+            install_observation(&mut accounts, &observed(1, 3, false)),
+            Err(DealerScenarioChainErrorV4::DuplicateAccountConflict)
+        );
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(
+            accounts
+                .first()
+                .expect("first account remains")
+                .account
+                .data,
+            vec![2; 4]
+        );
     }
 }

@@ -1,0 +1,733 @@
+//! Chain-authenticated planning for the post-founding Resolution readiness walk.
+//!
+//! This module does not own Market or funding semantics. It acquires one
+//! finalized account snapshot, supplies it to the canonical Resolution Core V3
+//! builders, and routes only combinations those builders authenticate. The
+//! reports remain the semantic owners of instruction and economic facts.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use dclutch_market_core_codec::{CoreState, Phase, Readiness};
+use dclutch_resolution_core_v3_operator::{
+    Finality, Observation, ObservedAccount, ResolutionActivateFundReportV1,
+    ResolutionActivateFundSnapshotV1, ResolutionCoreOperatorErrorV3, ResolutionCreateFundReportV3,
+    ResolutionCreateFundSnapshotV3, ResolutionVerifyFundReadyReportV3,
+    ResolutionVerifyFundReadySnapshotV3, build_resolution_activate_fund_v1,
+    build_resolution_create_fund_v3, build_resolution_verify_fund_ready_v3,
+    validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
+};
+use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
+use solana_sdk_ids::{system_program, sysvar};
+
+use crate::{
+    Error, Result,
+    model::SuccessorPlan,
+    plan::pubkey,
+    rpc::{Rpc, RpcAccount},
+};
+
+/// One finalized Registry record pair used by the readiness builders.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FundingReadinessRecordCoordinatesV1 {
+    pub(crate) raw: Pubkey,
+    pub(crate) staging: Pubkey,
+}
+
+/// Explicit Market-owned coordinates that are not derivable from the release plan.
+///
+/// Program, ProgramData, activation-cache, System, and sysvar addresses come
+/// from `SuccessorPlan` or canonical SDK constants. `recovery_policy` is absent
+/// only when SourceMaterial carries no recovery walk; in that case the
+/// canonical builders deliberately reuse the SourceMaterial pair in the two
+/// omitted-policy snapshot positions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FundingReadinessCoordinatesV1 {
+    pub(crate) market: Pubkey,
+    pub(crate) source_material: FundingReadinessRecordCoordinatesV1,
+    pub(crate) capability_manifest: FundingReadinessRecordCoordinatesV1,
+    pub(crate) recovery_policy: Option<FundingReadinessRecordCoordinatesV1>,
+    pub(crate) source_state: Pubkey,
+    pub(crate) funding_ledger: Pubkey,
+    pub(crate) beneficiary: Pubkey,
+    pub(crate) activation_receipt: Pubkey,
+}
+
+/// Exact optional System prepayment required before one protocol instruction.
+///
+/// The caller supplies the fee payer when it composes the transfer. A zero
+/// amount means no transfer instruction is emitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FundingReadinessPrepayV1 {
+    pub(crate) destination: Pubkey,
+    pub(crate) lamports: u64,
+}
+
+/// Exact account sets a durable exterior uses around one readiness mutation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FundingReadinessAccountSetsV1 {
+    /// Accounts writable in the canonical protocol instruction, in frame order.
+    pub(crate) protocol_writable: Vec<Pubkey>,
+    /// Minimal ordered poststate set that selects the next readiness route.
+    pub(crate) completion: Vec<Pubkey>,
+}
+
+/// Exact unsigned instruction geometry, excluding an as-yet-unselected payer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FundingReadinessGeometryV1 {
+    pub(crate) protocol_account_count: usize,
+    pub(crate) protocol_unique_account_count: usize,
+    pub(crate) protocol_writable_count: usize,
+    pub(crate) protocol_signer_count: usize,
+    pub(crate) protocol_data_len: usize,
+    pub(crate) transaction_instruction_count_without_compute_budget: usize,
+    /// Program, frame accounts, and prepay destination, but not the unknown payer.
+    pub(crate) transaction_lock_count_without_payer: usize,
+}
+
+/// One authenticated instruction and the exact facts needed to journal it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FundingReadinessInstructionPlanV1<T> {
+    pub(crate) report: T,
+    pub(crate) prepay: Option<FundingReadinessPrepayV1>,
+    pub(crate) accounts: FundingReadinessAccountSetsV1,
+    pub(crate) geometry: FundingReadinessGeometryV1,
+}
+
+/// The next honest action selected by one finalized chain snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FundingReadinessPlanV1 {
+    Create(FundingReadinessInstructionPlanV1<ResolutionCreateFundReportV3>),
+    Activate(FundingReadinessInstructionPlanV1<ResolutionActivateFundReportV1>),
+    Accept(FundingReadinessInstructionPlanV1<ResolutionVerifyFundReadyReportV3>),
+    /// Founding/Ready is durably visible on chain. The embedded idempotent
+    /// report reauthenticates all completion facts without inventing a second DTO.
+    Complete(FundingReadinessInstructionPlanV1<ResolutionVerifyFundReadyReportV3>),
+}
+
+impl FundingReadinessPlanV1 {
+    pub(crate) fn route_name(&self) -> &'static str {
+        match self {
+            Self::Create(_) => "create",
+            Self::Activate(_) => "activate",
+            Self::Accept(_) => "accept",
+            Self::Complete(_) => "complete",
+        }
+    }
+}
+
+/// Acquire and route one bounded, same-finalized readiness snapshot.
+pub(crate) fn plan_funding_readiness_from_rpc_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    coordinates: FundingReadinessCoordinatesV1,
+    minimum_slot: u64,
+) -> Result<FundingReadinessPlanV1> {
+    let frame = FundingReadinessFrameV1::from_plan(plan, coordinates)?;
+    let addresses = frame.distinct_observation_addresses()?;
+    let (slot, accounts) = rpc.finalized_accounts(&addresses, minimum_slot)?;
+    let observation = Observation {
+        slot,
+        unix_timestamp: rpc.block_time(slot)?,
+        finality: Finality::Finalized,
+    };
+    let snapshot = FundingReadinessObservationV1::new(observation, addresses, accounts)?;
+    plan_funding_readiness_from_observation_v1(frame, &snapshot)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FundingReadinessFrameV1 {
+    coordinates: FundingReadinessCoordinatesV1,
+    activation_cache: Pubkey,
+    registry_program: Pubkey,
+    core_program: Pubkey,
+    core_programdata: Pubkey,
+    resolution_program: Pubkey,
+    resolution_programdata: Pubkey,
+}
+
+impl FundingReadinessFrameV1 {
+    fn from_plan(plan: &SuccessorPlan, coordinates: FundingReadinessCoordinatesV1) -> Result<Self> {
+        let frame = Self {
+            coordinates,
+            activation_cache: pubkey(&plan.activation)?,
+            registry_program: pubkey(&plan.registry.program_id)?,
+            core_program: pubkey(&plan.core.program_id)?,
+            core_programdata: pubkey(&plan.core.programdata_id)?,
+            resolution_program: pubkey(&plan.resolution.program_id)?,
+            resolution_programdata: pubkey(&plan.resolution.programdata_id)?,
+        };
+        frame.distinct_observation_addresses()?;
+        Ok(frame)
+    }
+
+    fn distinct_observation_addresses(&self) -> Result<Vec<Pubkey>> {
+        let coordinates = self.coordinates;
+        let mut addresses = vec![
+            coordinates.market,
+            self.activation_cache,
+            self.registry_program,
+            self.core_program,
+            self.core_programdata,
+            self.resolution_program,
+            self.resolution_programdata,
+            coordinates.source_material.raw,
+            coordinates.source_material.staging,
+            coordinates.capability_manifest.raw,
+            coordinates.capability_manifest.staging,
+            coordinates.source_state,
+            coordinates.funding_ledger,
+            coordinates.beneficiary,
+            coordinates.activation_receipt,
+            sysvar::clock::ID,
+            sysvar::rent::ID,
+            system_program::ID,
+        ];
+        if let Some(recovery) = coordinates.recovery_policy {
+            addresses.push(recovery.raw);
+            addresses.push(recovery.staging);
+        }
+        let distinct = addresses.iter().copied().collect::<BTreeSet<_>>();
+        if distinct.len() != addresses.len() {
+            return Err(refusal(
+                "funding-readiness coordinates aliased two semantic frame positions",
+            ));
+        }
+        if addresses.len() > 20 {
+            return Err(refusal(
+                "funding-readiness observation exceeded its measured 20-account bound",
+            ));
+        }
+        Ok(addresses)
+    }
+
+    fn recovery_pair(self) -> FundingReadinessRecordCoordinatesV1 {
+        self.coordinates
+            .recovery_policy
+            .unwrap_or(self.coordinates.source_material)
+    }
+}
+
+struct FundingReadinessObservationV1 {
+    observation: Observation,
+    accounts: BTreeMap<Pubkey, ObservedAccount>,
+}
+
+impl FundingReadinessObservationV1 {
+    fn new(
+        observation: Observation,
+        addresses: Vec<Pubkey>,
+        accounts: Vec<Option<RpcAccount>>,
+    ) -> Result<Self> {
+        if observation.finality != Finality::Finalized || addresses.len() != accounts.len() {
+            return Err(refusal(
+                "funding-readiness RPC snapshot was not one complete finalized observation",
+            ));
+        }
+        let accounts = addresses
+            .into_iter()
+            .zip(accounts)
+            .map(|(key, account)| {
+                let account = account.unwrap_or_else(vacant_rpc_account_v1);
+                (
+                    key,
+                    ObservedAccount {
+                        observation,
+                        key,
+                        owner: account.owner,
+                        lamports: account.lamports,
+                        executable: account.executable,
+                        data: account.data,
+                    },
+                )
+            })
+            .collect();
+        Ok(Self {
+            observation,
+            accounts,
+        })
+    }
+
+    fn account(&self, key: Pubkey) -> Result<ObservedAccount> {
+        self.accounts
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| refusal(format!("funding-readiness snapshot omitted {key}")))
+    }
+}
+
+fn vacant_rpc_account_v1() -> RpcAccount {
+    RpcAccount {
+        lamports: 0,
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+        data: Vec::new(),
+    }
+}
+
+fn plan_funding_readiness_from_observation_v1(
+    frame: FundingReadinessFrameV1,
+    snapshot: &FundingReadinessObservationV1,
+) -> Result<FundingReadinessPlanV1> {
+    let coordinates = frame.coordinates;
+    let recovery = frame.recovery_pair();
+    let verify_snapshot = ResolutionVerifyFundReadySnapshotV3 {
+        market: snapshot.account(coordinates.market)?,
+        activation_cache: snapshot.account(frame.activation_cache)?,
+        registry_program: snapshot.account(frame.registry_program)?,
+        core_program: snapshot.account(frame.core_program)?,
+        core_programdata: snapshot.account(frame.core_programdata)?,
+        resolution_program: snapshot.account(frame.resolution_program)?,
+        resolution_programdata: snapshot.account(frame.resolution_programdata)?,
+        source_material: snapshot.account(coordinates.source_material.raw)?,
+        source_material_staging: snapshot.account(coordinates.source_material.staging)?,
+        capability_manifest: snapshot.account(coordinates.capability_manifest.raw)?,
+        capability_manifest_staging: snapshot.account(coordinates.capability_manifest.staging)?,
+        source_state: snapshot.account(coordinates.source_state)?,
+        funding_ledger: snapshot.account(coordinates.funding_ledger)?,
+        beneficiary: snapshot.account(coordinates.beneficiary)?,
+        clock_sysvar: snapshot.account(sysvar::clock::ID)?,
+        rent_sysvar: snapshot.account(sysvar::rent::ID)?,
+        activation_receipt: snapshot.account(coordinates.activation_receipt)?,
+        recovery_policy: snapshot.account(recovery.raw)?,
+        recovery_policy_staging: snapshot.account(recovery.staging)?,
+    };
+    let create_snapshot = ResolutionCreateFundSnapshotV3 {
+        market: verify_snapshot.market.clone(),
+        activation_cache: verify_snapshot.activation_cache.clone(),
+        registry_program: verify_snapshot.registry_program.clone(),
+        core_program: verify_snapshot.core_program.clone(),
+        core_programdata: verify_snapshot.core_programdata.clone(),
+        resolution_program: verify_snapshot.resolution_program.clone(),
+        resolution_programdata: verify_snapshot.resolution_programdata.clone(),
+        source_material: verify_snapshot.source_material.clone(),
+        source_material_staging: verify_snapshot.source_material_staging.clone(),
+        capability_manifest: verify_snapshot.capability_manifest.clone(),
+        capability_manifest_staging: verify_snapshot.capability_manifest_staging.clone(),
+        source_destination: verify_snapshot.source_state.clone(),
+        funding_ledger: verify_snapshot.funding_ledger.clone(),
+        rent_sysvar: verify_snapshot.rent_sysvar.clone(),
+        system_program: snapshot.account(system_program::ID)?,
+        recovery_policy: verify_snapshot.recovery_policy.clone(),
+        recovery_policy_staging: verify_snapshot.recovery_policy_staging.clone(),
+    };
+
+    let market = CoreState::decode(&verify_snapshot.market.data)
+        .map_err(|error| refusal(format!("funding-readiness Market: {error:?}")))?;
+    let create = build_resolution_create_fund_v3(&create_snapshot);
+    let activate = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot.clone(),
+        system_program: snapshot.account(system_program::ID)?,
+    });
+    let accept = build_resolution_verify_fund_ready_v3(&verify_snapshot);
+    let selection = select_authenticated_route_v1(
+        market.phase,
+        market.readiness,
+        create.is_ok(),
+        activate.as_ref().ok().map(activation_shape_v1),
+        accept.is_ok(),
+    )?;
+
+    match selection {
+        AuthenticatedRouteV1::Create => {
+            let report = create.map_err(|error| operator_refusal("CreateFund", error))?;
+            validate_resolution_create_fund_report_v3(&report)
+                .map_err(|error| operator_refusal("CreateFund validation", error))?;
+            let prepay = FundingReadinessPrepayV1 {
+                destination: coordinates.source_state,
+                lamports: report.source_top_up_lamports,
+            };
+            let instruction = report.instruction.clone();
+            Ok(FundingReadinessPlanV1::Create(instruction_plan_v1(
+                &instruction,
+                report,
+                Some(prepay),
+                vec![
+                    coordinates.market,
+                    coordinates.source_state,
+                    coordinates.funding_ledger,
+                ],
+            )))
+        }
+        AuthenticatedRouteV1::Activate => {
+            let report = activate.map_err(|error| operator_refusal("ActivateFund", error))?;
+            let prepay = FundingReadinessPrepayV1 {
+                destination: coordinates.activation_receipt,
+                lamports: report.receipt_top_up_lamports,
+            };
+            let instruction = report.instruction.clone();
+            Ok(FundingReadinessPlanV1::Activate(instruction_plan_v1(
+                &instruction,
+                report,
+                Some(prepay),
+                vec![
+                    coordinates.source_state,
+                    coordinates.funding_ledger,
+                    coordinates.beneficiary,
+                    coordinates.activation_receipt,
+                ],
+            )))
+        }
+        AuthenticatedRouteV1::Accept => {
+            let report = accept.map_err(|error| operator_refusal("VerifyFundReady", error))?;
+            validate_resolution_verify_fund_ready_report_v3(&report)
+                .map_err(|error| operator_refusal("VerifyFundReady validation", error))?;
+            let instruction = report.instruction.clone();
+            Ok(FundingReadinessPlanV1::Accept(instruction_plan_v1(
+                &instruction,
+                report,
+                None,
+                completion_accounts_v1(coordinates),
+            )))
+        }
+        AuthenticatedRouteV1::Complete => {
+            let report = accept.map_err(|error| operator_refusal("Ready completion", error))?;
+            validate_resolution_verify_fund_ready_report_v3(&report)
+                .map_err(|error| operator_refusal("Ready completion validation", error))?;
+            let instruction = report.instruction.clone();
+            Ok(FundingReadinessPlanV1::Complete(instruction_plan_v1(
+                &instruction,
+                report,
+                None,
+                completion_accounts_v1(coordinates),
+            )))
+        }
+    }
+}
+
+fn completion_accounts_v1(coordinates: FundingReadinessCoordinatesV1) -> Vec<Pubkey> {
+    vec![
+        coordinates.market,
+        coordinates.source_state,
+        coordinates.funding_ledger,
+        coordinates.activation_receipt,
+        coordinates.beneficiary,
+    ]
+}
+
+fn instruction_plan_v1<T>(
+    instruction: &Instruction,
+    report: T,
+    prepay: Option<FundingReadinessPrepayV1>,
+    completion: Vec<Pubkey>,
+) -> FundingReadinessInstructionPlanV1<T> {
+    let protocol_writable = instruction
+        .accounts
+        .iter()
+        .filter(|account| account.is_writable)
+        .map(|account| account.pubkey)
+        .collect::<Vec<_>>();
+    let geometry = instruction_geometry_v1(instruction, prepay);
+    FundingReadinessInstructionPlanV1 {
+        report,
+        prepay,
+        accounts: FundingReadinessAccountSetsV1 {
+            protocol_writable,
+            completion,
+        },
+        geometry,
+    }
+}
+
+fn instruction_geometry_v1(
+    instruction: &Instruction,
+    prepay: Option<FundingReadinessPrepayV1>,
+) -> FundingReadinessGeometryV1 {
+    let protocol_keys = instruction
+        .accounts
+        .iter()
+        .map(|account| account.pubkey)
+        .chain(core::iter::once(instruction.program_id))
+        .collect::<BTreeSet<_>>();
+    let mut transaction_keys = protocol_keys.clone();
+    let has_prepay = prepay.is_some_and(|value| value.lamports != 0);
+    if let Some(prepay) = prepay {
+        transaction_keys.insert(prepay.destination);
+    }
+    FundingReadinessGeometryV1 {
+        protocol_account_count: instruction.accounts.len(),
+        protocol_unique_account_count: protocol_keys.len(),
+        protocol_writable_count: instruction
+            .accounts
+            .iter()
+            .filter(|account| account.is_writable)
+            .count(),
+        protocol_signer_count: instruction
+            .accounts
+            .iter()
+            .filter(|account| account.is_signer)
+            .count(),
+        protocol_data_len: instruction.data.len(),
+        transaction_instruction_count_without_compute_budget: 1 + usize::from(has_prepay),
+        transaction_lock_count_without_payer: transaction_keys.len(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActivationShapeV1 {
+    Fresh,
+    Replay,
+}
+
+fn activation_shape_v1(report: &ResolutionActivateFundReportV1) -> ActivationShapeV1 {
+    if report.receipt_top_up_lamports == 0 && report.expected_beneficiary_credit_lamports == 0 {
+        ActivationShapeV1::Replay
+    } else {
+        ActivationShapeV1::Fresh
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuthenticatedRouteV1 {
+    Create,
+    Activate,
+    Accept,
+    Complete,
+}
+
+fn select_authenticated_route_v1(
+    phase: Phase,
+    readiness: Readiness,
+    create: bool,
+    activate: Option<ActivationShapeV1>,
+    accept: bool,
+) -> Result<AuthenticatedRouteV1> {
+    let route = match (phase, readiness, create, activate, accept) {
+        (
+            Phase::Founding | Phase::Open,
+            Readiness::Prepaid | Readiness::Consumed,
+            true,
+            None,
+            false,
+        ) => AuthenticatedRouteV1::Create,
+        (
+            Phase::Founding | Phase::Open,
+            Readiness::Prepaid | Readiness::Consumed,
+            false,
+            Some(ActivationShapeV1::Fresh),
+            false,
+        ) => AuthenticatedRouteV1::Activate,
+        (
+            Phase::Founding | Phase::Open,
+            Readiness::Prepaid | Readiness::Consumed,
+            false,
+            Some(ActivationShapeV1::Replay),
+            true,
+        ) => AuthenticatedRouteV1::Accept,
+        (Phase::Founding, Readiness::Ready, false, None, true) => AuthenticatedRouteV1::Complete,
+        _ => {
+            return Err(refusal(format!(
+                "funding-readiness account states were mixed or did not select one adjacent route: phase={phase:?} readiness={readiness:?} create={create} activate={activate:?} accept={accept}",
+            )));
+        }
+    };
+    Ok(route)
+}
+
+fn operator_refusal(label: &str, error: ResolutionCoreOperatorErrorV3) -> Error {
+    refusal(format!("{label} chain authentication refused: {error:?}"))
+}
+
+fn refusal(message: impl Into<String>) -> Error {
+    Error::new(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key() -> Pubkey {
+        Pubkey::new_unique()
+    }
+
+    fn coordinates() -> FundingReadinessCoordinatesV1 {
+        FundingReadinessCoordinatesV1 {
+            market: key(),
+            source_material: FundingReadinessRecordCoordinatesV1 {
+                raw: key(),
+                staging: key(),
+            },
+            capability_manifest: FundingReadinessRecordCoordinatesV1 {
+                raw: key(),
+                staging: key(),
+            },
+            recovery_policy: Some(FundingReadinessRecordCoordinatesV1 {
+                raw: key(),
+                staging: key(),
+            }),
+            source_state: key(),
+            funding_ledger: key(),
+            beneficiary: key(),
+            activation_receipt: key(),
+        }
+    }
+
+    fn frame() -> FundingReadinessFrameV1 {
+        FundingReadinessFrameV1 {
+            coordinates: coordinates(),
+            activation_cache: key(),
+            registry_program: key(),
+            core_program: key(),
+            core_programdata: key(),
+            resolution_program: key(),
+            resolution_programdata: key(),
+        }
+    }
+
+    #[test]
+    fn adjacent_state_routes_cover_vacant_primary_active_and_ready() {
+        for (phase, readiness) in [
+            (Phase::Founding, Readiness::Prepaid),
+            (Phase::Open, Readiness::Consumed),
+        ] {
+            assert_eq!(
+                select_authenticated_route_v1(phase, readiness, true, None, false).unwrap(),
+                AuthenticatedRouteV1::Create,
+            );
+            assert_eq!(
+                select_authenticated_route_v1(
+                    phase,
+                    readiness,
+                    false,
+                    Some(ActivationShapeV1::Fresh),
+                    false,
+                )
+                .unwrap(),
+                AuthenticatedRouteV1::Activate,
+            );
+            assert_eq!(
+                select_authenticated_route_v1(
+                    phase,
+                    readiness,
+                    false,
+                    Some(ActivationShapeV1::Replay),
+                    true,
+                )
+                .unwrap(),
+                AuthenticatedRouteV1::Accept,
+            );
+        }
+        assert_eq!(
+            select_authenticated_route_v1(Phase::Founding, Readiness::Ready, false, None, true,)
+                .unwrap(),
+            AuthenticatedRouteV1::Complete,
+        );
+    }
+
+    #[test]
+    fn consumed_accept_remains_explicit_until_a_durable_journal_finalizes_it() {
+        assert_eq!(
+            select_authenticated_route_v1(
+                Phase::Open,
+                Readiness::Consumed,
+                false,
+                Some(ActivationShapeV1::Replay),
+                true,
+            )
+            .unwrap(),
+            AuthenticatedRouteV1::Accept,
+        );
+        assert!(
+            select_authenticated_route_v1(Phase::Open, Readiness::Consumed, false, None, true,)
+                .is_err(),
+            "an unchanged atomic Market cannot prove a no-write Accept finalized",
+        );
+    }
+
+    #[test]
+    fn mixed_and_nonadjacent_builder_successes_refuse() {
+        let mixed = [
+            (true, Some(ActivationShapeV1::Fresh), false),
+            (true, None, true),
+            (false, Some(ActivationShapeV1::Fresh), true),
+            (false, Some(ActivationShapeV1::Replay), false),
+            (false, None, false),
+        ];
+        for (create, activate, accept) in mixed {
+            assert!(
+                select_authenticated_route_v1(
+                    Phase::Founding,
+                    Readiness::Prepaid,
+                    create,
+                    activate,
+                    accept,
+                )
+                .is_err(),
+            );
+        }
+        assert!(
+            select_authenticated_route_v1(Phase::Founding, Readiness::Ready, true, None, true,)
+                .is_err(),
+        );
+    }
+
+    #[test]
+    fn every_observed_semantic_position_is_nonaliased_and_bounded() {
+        let with_recovery = frame();
+        assert_eq!(
+            with_recovery
+                .distinct_observation_addresses()
+                .unwrap()
+                .len(),
+            20,
+        );
+        let mut without_recovery = frame();
+        without_recovery.coordinates.recovery_policy = None;
+        assert_eq!(
+            without_recovery
+                .distinct_observation_addresses()
+                .unwrap()
+                .len(),
+            18,
+        );
+
+        let mut aliased = frame();
+        aliased.coordinates.activation_receipt = aliased.coordinates.source_state;
+        assert!(aliased.distinct_observation_addresses().is_err());
+        let mut program_alias = frame();
+        program_alias.resolution_programdata = program_alias.core_programdata;
+        assert!(program_alias.distinct_observation_addresses().is_err());
+    }
+
+    #[test]
+    fn geometry_counts_protocol_locks_without_smuggling_in_a_payer() {
+        let program = key();
+        let readonly = key();
+        let writable = key();
+        let instruction = Instruction {
+            program_id: program,
+            accounts: vec![
+                solana_sdk::instruction::AccountMeta::new_readonly(readonly, false),
+                solana_sdk::instruction::AccountMeta::new(writable, false),
+            ],
+            data: vec![1, 2, 3],
+        };
+        let zero = instruction_geometry_v1(
+            &instruction,
+            Some(FundingReadinessPrepayV1 {
+                destination: writable,
+                lamports: 0,
+            }),
+        );
+        assert_eq!(zero.protocol_account_count, 2);
+        assert_eq!(zero.protocol_unique_account_count, 3);
+        assert_eq!(zero.protocol_writable_count, 1);
+        assert_eq!(zero.protocol_signer_count, 0);
+        assert_eq!(zero.protocol_data_len, 3);
+        assert_eq!(zero.transaction_instruction_count_without_compute_budget, 1);
+        assert_eq!(zero.transaction_lock_count_without_payer, 3);
+
+        let funded = instruction_geometry_v1(
+            &instruction,
+            Some(FundingReadinessPrepayV1 {
+                destination: key(),
+                lamports: 1,
+            }),
+        );
+        assert_eq!(
+            funded.transaction_instruction_count_without_compute_budget,
+            2
+        );
+        assert_eq!(funded.transaction_lock_count_without_payer, 4);
+    }
+}

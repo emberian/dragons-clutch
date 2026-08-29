@@ -16,6 +16,8 @@ pub mod config_v4;
 
 /// Runtime-width finite-scenario collateral planning for the V2 successor.
 pub mod scenario;
+/// Durable lock-bounded preparation checkpoint for Dealer scenario commits.
+pub mod scenario_checkpoint_v1;
 
 #[rustfmt::skip]
 mod generated_dealer_liquidity;

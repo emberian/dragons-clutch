@@ -24,7 +24,8 @@ receipt tests prove the parser, not a completed protocol lifecycle.
   balance, and Position touched more than once, joined to the current finalized
   token/Position state so individually valid transactions cannot be spliced;
 - the exact devnet genesis hash and finalized transaction signature, slot,
-  status, transaction fee, account vector, lamport deltas, and raw token atoms;
+  status, transaction fee, compute units, account vector, lamport deltas, and
+  raw token atoms;
 - all changed lamport and token accounts are declared—an unexplained balance
   change refuses;
 - every token account bound to its declared mint, authority, token-program
@@ -39,13 +40,17 @@ receipt tests prove the parser, not a completed protocol lifecycle.
   transfer equal to the fill; the public-devnet manifest does not admit this
   private-only field;
 - exact hostile decoding and market binding of `ResolutionCertificateV2`;
+- the exact V7 terminal Resolution history: submit, provider execute, Core
+  terminal accept, then reclaim, each with its own signature, strictly ordered
+  slot, fee, and compute-unit fact; the certificate belongs only to provider
+  execute, and payout cannot follow a partial execute without Core accept;
 - every payout's claim burns and equal Hoard-principal debit / recipient credit;
 - retirement closure observations and exact positive refund deltas;
 - current finalized raw account bytes, owner, lamports, Token-2022 base fields,
   or vacancy, at a slot no earlier than the activity.
 
-Hoard principal, protocol fees, and transaction fees are reported as three
-different quantities. The dossier has `signatureScheme: "none"`; its public
+Hoard principal, protocol fees, transaction fees, and aggregate compute units
+are reported as distinct quantities. The dossier has `signatureScheme: "none"`; its public
 transaction signatures are evidence identifiers, not a signature over the
 dossier. `evidence.rpc.mode` distinguishes a reproducible captured-RPC replay
 from a live finalized RPC observation. The former binds the exact capture-file
