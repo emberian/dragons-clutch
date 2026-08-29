@@ -35,7 +35,7 @@ describe('the deployment manifest', () => {
     // this and the manifest together. Pinned here so the value cannot change
     // without a reviewer seeing it — but it is a HINT the session follows past,
     // so a cohort making it stale costs a reader accuracy, not a session.
-    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('77PrN82TY4rrQwUjyKBM14A1n3qxktHrN8vd2RcacovK');
+    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('69d1MKP4PaPVDFankLfnzeHBugoVBjPCDm7PEHParRF6');
     expect(DEVNET_DEPLOYMENT_V1.genesisHash).toBe('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(DEVNET_DEPLOYMENT_V1.endpoint).toBe('https://api.devnet.solana.com');
   });

@@ -103,10 +103,10 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   //
   // The one cache of those the Registry owns whose five pinned deployment
   // slots equalled the five live ProgramData slots in a single reading.
-  // Release set 094336271db1146f09f6ff419488af2d3174da762d3b2b468fac635754aa862d,
-  // pinning Core at deployment slot 489926024.
+  // Release set d5aaadea2435978604d93c0e48af0e44547ec54b69681585f47f185ef530a2fa,
+  // pinning Core at deployment slot 490106442.
   // A session follows past this when it ages out; a reader cannot.
-  activationCache: '77PrN82TY4rrQwUjyKBM14A1n3qxktHrN8vd2RcacovK',
+  activationCache: '69d1MKP4PaPVDFankLfnzeHBugoVBjPCDm7PEHParRF6',
   provenance: 'DEPLOY-1’s permanent devnet substrate, deployed 2026-08-27 and byte-verified (docs/evidence/DEPLOY_1.md §2).',
 });
 
