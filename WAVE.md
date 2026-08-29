@@ -1159,3 +1159,20 @@ Queued, scoped-not-spawned: Lean as single author of seam contracts (extend
 formal/ generation); Series prepare/expire through Trading; split-route live
 run; reaffirm implementation (approved, waits for quiet upgrade.rs);
 sccache/workspace consolidation (waits for cold gates).
+- **RULING — ShadowAot certificate self-reference (ORCH, 2026-08-29 ~18:30 EDT):
+  APPROVED: the certificate binds `semantic_release_id` (source-derived, the
+  identity ERA proved stable across cohorts and that
+  `authenticate_role_semantic_release` already refuses on on-chain), NOT
+  `elf_digest`. The ELF digest stays bound where it already lives — the
+  ArtifactReleaseV1 record — so the end-to-end guarantee is two facts with
+  one author each instead of one self-referential fact. IMPLEMENTATION SHAPE:
+  the field is shared with AdmittedAot — the implementer reads ALL consumers
+  and picks the narrower change: if every consumer tolerates semantic binding,
+  change the shared field; otherwise version the certificate struct (ShadowAot
+  V2 semantic, AdmittedAot keeps V1). Wrong-certificate hostiles at the
+  evaluator AND on-chain verifier levels ship with it (SER-ACCEL's exist only
+  at the generator). Cohort-7 scope. ALSO QUEUED with it:
+  checked-release-candidate.sh sets DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE
+  when a selected release exists (every checked release to date shipped the
+  empty fail-closed series-shadow ELF as a signed artifact) — post-freeze,
+  with the seam-audit gate wire-in.
