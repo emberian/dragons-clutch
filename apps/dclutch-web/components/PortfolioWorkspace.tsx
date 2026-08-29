@@ -173,9 +173,9 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">{redemption ? 'Redeem · connected wallet, exact Positions' : 'Portfolio · derived addresses, no index'}</p>
-        <h1>{redemption ? <>Redeem your winning claims.<br /><em>Only when the chain says you can.</em></> : <>Your claims, derived.<br /><em>Never looked up.</em></>}</h1>
+        <h1>{redemption ? <>Your winning claims.<br /><em>Payout is not open yet.</em></> : <>Your claims, derived.<br /><em>Never looked up.</em></>}</h1>
         <p>{redemption
-          ? <>Connect your wallet and this page reads every current-compatible Market from the deployment&apos;s Core program, derives your exact Claims Position under the selected Claims program, and offers redemption only when finalized Market state names a winner and your Position holds that winning claim. No Market, Position, balance, or eligibility comes from browser storage.</>
+          ? <>Connect your wallet and this page finds every claim it holds, reading the markets straight from the deployment&apos;s own programs and working out where your claims live from your address alone. Paying winning claims out is not available yet: when a market resolves and you hold the winning side, this is where you will do it. Nothing here — no market, no balance, no eligibility — comes from browser storage.</>
           : <>dClutch runs no indexer and this browser will not pretend to be one. A Position lives at the program-derived address of the Position seed domain plus the exact Market and owner keys, so an owner identity is enough: the Markets come from the deployment&apos;s own Core program, and every Position address is derived from them. A derived address that holds no account is reported as exactly that, which is the honest chain state.</>}</p>
       </div>
       <aside>
@@ -189,7 +189,7 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
 
     <section className="trade-v3-card route-card">
       <header><span>01</span><div><h2>{redemption ? 'Connect your wallet' : 'Whose Positions?'}</h2><p>Everything else — endpoint, Core authority, Claims program, the Market list — comes from the active {deployment.label} deployment. This surface asks only who you are.</p></div></header>
-      <WalletDirectory directory={directory} purpose={redemption ? 'find and redeem your winning claims' : 'read one owner identity'} onConnected={connected} />
+      <WalletDirectory directory={directory} purpose={redemption ? 'find the winning claims you hold' : 'read one owner identity'} onConnected={connected} />
       {!redemption && <form className="portfolio-owner-row" onSubmit={readPasted}>
         <label><span>Or paste any owner address</span><input value={pasted} onChange={(event) => setPasted(event.target.value.trim())} spellCheck={false} placeholder="an owner’s public address" /></label>
         <div className="direct-actions">

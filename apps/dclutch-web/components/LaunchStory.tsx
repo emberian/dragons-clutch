@@ -13,12 +13,15 @@ import {
   type PublicCutActivityStepV1,
 } from '@/lib/publicCutStaging';
 
+// Steps 01-03 are the chain that works today; a reader can do all three. 04 and
+// 05 are written in the future tense on purpose -- they are a later release, and
+// a numbered rail of five imperatives reads as five things you can do now.
 const LIFECYCLE = [
-  ['01', 'Found', 'Lock collateral and publish the market.', 'found'],
-  ['02', 'Join', 'Choose an outcome and enter with a real Position.', 'join'],
-  ['03', 'Trade', 'Exchange claims through a signed Direct route.', 'trade'],
-  ['04', 'Resolve', 'Read the named oracle path after the deadline.', 'resolve'],
-  ['05', 'Redeem', 'Burn winning claims and release their collateral.', 'redeem'],
+  ['01', 'Found', 'Lock up the collateral and publish the market.', 'found'],
+  ['02', 'Join', 'Pick an outcome and put up collateral to hold claims on it.', 'join'],
+  ['03', 'Trade', 'Buy and sell claims with a transaction your own wallet signs.', 'trade'],
+  ['04', 'Resolve', 'Not yet. After the deadline, the oracle the market named will settle it.', 'resolve'],
+  ['05', 'Redeem', 'Not yet. Winning claims will burn and release the collateral behind them.', 'redeem'],
 ] as const;
 
 function short(address: string): string {
@@ -35,13 +38,13 @@ export default function LaunchStory() {
   const opened = cut.market !== null;
   const marketHref = publicCutMarketHrefV1(cut);
   return <main className="product-shell launch-shell">
-    <Nav current="/live" status="public devnet · live" />
+    <Nav current="/live" status={opened ? 'public devnet · market open' : 'public devnet · programs deployed'} />
 
     <section className="launch-hero launch-shot">
       <div className="launch-hero-copy">
         <p className="eyebrow"><span className="launch-live-dot" />Dragon&apos;s Clutch · public devnet</p>
-        <h1>Markets that<br />resolve <em>in public.</em></h1>
-        <p className="launch-deck">dClutch turns a bounded real-world question into fully collateralized Solana claims. {opened ? 'You can inspect this market, trade on devnet, and watch its steps settle on chain.' : 'You can inspect the deployed programs now. This page will link one checked public market and its transactions when it opens.'}</p>
+        <h1>Markets you can<br />check <em>yourself.</em></h1>
+        <p className="launch-deck">dClutch turns a real-world question with a definite answer into fully collateralized Solana claims. {opened ? 'You can read this market, join it, and trade on devnet — every step from the chain itself, not from us.' : 'You can read the deployed programs right now. When a market opens, this page links to it and to its transactions.'}</p>
         <div className="launch-actions">
           <Anchor className="launch-primary" href={marketHref}>{opened ? 'Enter the live market' : 'Explore the deployment'} <span>↗</span></Anchor>
           <Anchor className="launch-secondary" href={publicCutExplorerHrefV1(cut)}>{opened ? 'Watch this market on chain' : 'Watch the chain'}</Anchor>
@@ -58,8 +61,8 @@ export default function LaunchStory() {
         </div>
         <div className="launch-terminal">
           <span>release / current</span>
-          <code>FOUND → DIRECT → RESOLVE → REDEEM</code>
-          <p><i /> public cluster reachable</p>
+          <code>FOUND → JOIN → TRADE</code>
+          <p><i /> resolve and redeem come later</p>
         </div>
       </aside>
     </section>
@@ -67,8 +70,8 @@ export default function LaunchStory() {
     <section className="launch-rail launch-shot" aria-labelledby="launch-lifecycle">
       <header>
         <p className="eyebrow">One market · one visible lifecycle</p>
-        <h2 id="launch-lifecycle">Follow the whole thing.</h2>
-        <p>{opened ? 'These links lead to real devnet transactions, not a replay rendered from fixtures. Open the explorer at any point and inspect the accounts yourself.' : 'No public market is named yet. When one opens, this same checked manifest supplies its Market and transaction links; until then, no lifecycle activity is invented.'}</p>
+        <h2 id="launch-lifecycle">Follow the three steps that work today.</h2>
+        <p>{opened ? 'These links open real devnet transactions, not a replay. Open the explorer at any point and read the accounts yourself.' : 'No market is open yet. When one opens, its links appear here. Until then this page shows you nothing it cannot back up.'}</p>
       </header>
       <ol>
         {LIFECYCLE.map(([number, title, detail, step]) => <li key={title}>
@@ -83,13 +86,13 @@ export default function LaunchStory() {
     <section className="launch-grid">
       <article className="launch-card launch-card-wide">
         <p className="eyebrow">What changed</p>
-        <h2>{opened ? 'The whole route fits devnet now.' : 'The public route is staged.'}</h2>
-        <p>{opened ? 'Founding stays within Solana\'s 64-account lock limit. Direct trade uses signed, portable tickets. Resolution can use the sponsored SOL/USD Pyth account without a paid API key. Redemption returns collateral through the same public market.' : 'The deployment is public, but no current-compatible Market is named by this cut. Opening it will be one checked manifest update, not a fixture replay or a marketing-only address list.'}</p>
+        <h2>{opened ? 'Found, join and trade fit devnet now.' : 'Deployed, not yet open.'}</h2>
+        <p>{opened ? 'Founding a market stays inside Solana\'s 64-account limit. A trade is a portable ticket your own wallet signs. Resolving a market and redeeming winning claims are not open yet — when they are, they run on this same public market.' : 'The seven programs are live on devnet and you can read them yourself. No market is open on them yet. When one opens, this page links to it and to its transactions.'}</p>
         <div className="launch-tags"><span>≤64 accounts</span><span>sponsored Pyth</span><span>portable Direct tickets</span><span>full collateral</span></div>
       </article>
 
       <article className="launch-card launch-card-acid">
-        <span className="launch-card-index">LIVE / 01</span>
+        <span className="launch-card-index">DEVNET / 01</span>
         <h2>No token.<br />No presale.<br />Just the protocol.</h2>
         <p>Devnet SOL and devnet collateral are test assets. Use them, break things, and tell us where the edges feel wrong.</p>
         <Anchor href="/portfolio">Connect a devnet wallet →</Anchor>
@@ -109,10 +112,10 @@ export default function LaunchStory() {
 
     <section className="launch-finale">
       <p className="eyebrow">The demo is the network</p>
-      <h2>Don&apos;t take our word for it.<br /><em>Open the market.</em></h2>
+      <h2>Don&apos;t take our word for it.<br /><em>{opened ? 'Open the market.' : 'Read the chain.'}</em></h2>
       <div className="launch-actions">
         <Anchor className="launch-primary" href={marketHref}>{opened ? 'Open the market' : 'Explore markets'} <span>↗</span></Anchor>
-        <Anchor className="launch-secondary" href="/trade">Prepare a Direct trade</Anchor>
+        <Anchor className="launch-secondary" href="/trade">See how a trade is built</Anchor>
         <Anchor className="launch-secondary" href="/smoke">Read the public run</Anchor>
       </div>
       <p className="launch-fineprint">Public Solana devnet preview. Test assets have no monetary value. This is low-assurance software under active development, not a financial product.</p>

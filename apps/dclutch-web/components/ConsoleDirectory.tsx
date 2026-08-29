@@ -44,13 +44,13 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/liquidity',
     name: 'Liquidity',
     blurb:
-      'For dealers: contribute or redeem dealer equity through a chain-checked route, and download the unsigned transaction for it.',
+      'For dealers: build and download an unsigned transaction for adding or withdrawing dealer equity, checked against the chain first. You sign and send it yourself, elsewhere.',
   },
   {
     href: '/redeem',
-    name: 'Wallet redemption',
+    name: 'Wallet redemption (not open yet)',
     blurb:
-      'Connect your wallet, derive its Claims Positions across the live deployment, and redeem only an exact terminal winning balance with a Rust-authored payout plan.',
+      'Connect your wallet and see the claims it holds across the deployment. Paying out winning claims is not available yet; this is where it will happen, and the page tells you so rather than offering a button that cannot work.',
   },
   {
     href: '/resolution',
@@ -62,7 +62,7 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/general',
     name: 'General clearing',
     blurb:
-      'For operators running settlement: paste a clearing plan produced by the operator program, let the browser re-check every field, and download the unsigned packet.',
+      'For operators: paste a clearing plan produced by the operator program, have the browser re-check every field against the chain, and download the unsigned transaction. Nothing is sent from here.',
   },
   {
     href: '/release',
