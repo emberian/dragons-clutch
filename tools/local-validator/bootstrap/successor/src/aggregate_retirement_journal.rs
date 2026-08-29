@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_compute_budget_interface::ID as COMPUTE_BUDGET_PROGRAM_ID;
 use solana_program::{instruction::Instruction, pubkey::Pubkey};
-use solana_sdk::{message::VersionedMessage, transaction::VersionedTransaction};
+use solana_sdk::{
+    message::VersionedMessage, signature::Signature, transaction::VersionedTransaction,
+};
 use solana_sdk_ids::system_program;
 
 use crate::{Error, Result, rpc::SignedVersionedPacketV1};
@@ -69,6 +71,15 @@ impl AggregateRetirementOperationV1 {
             Self::CloseVault => "aggregate-retirement-close-vault",
             Self::CloseReplay => "aggregate-retirement-close-replay",
             Self::Finish => "aggregate-retirement-finish",
+        }
+    }
+
+    pub(crate) const fn completion_name(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::CloseVault => "close-vault",
+            Self::CloseReplay => "close-replay",
+            Self::Finish => "finish",
         }
     }
 
@@ -1052,7 +1063,109 @@ pub(crate) fn build_aggregate_retirement_conservation_receipt_v1(
         receipt_sha256: String::new(),
     };
     receipt.receipt_sha256 = conservation_receipt_digest_v1(&receipt)?;
+    authenticate_aggregate_retirement_conservation_receipt_v1(&receipt)?;
     Ok(receipt)
+}
+
+pub(crate) fn authenticate_aggregate_retirement_conservation_receipt_v1(
+    receipt: &AggregateRetirementConservationReceiptV1,
+) -> Result<()> {
+    if receipt.schema != AGGREGATE_RETIREMENT_COMPLETION_SCHEMA_V1
+        || receipt.status != "finalized"
+        || receipt.journals.len() != AggregateRetirementOperationV1::ORDERED.len()
+        || receipt
+            .journals
+            .iter()
+            .map(|journal| journal.operation)
+            .ne(AggregateRetirementOperationV1::ORDERED)
+    {
+        return Err(refusal(
+            "retirement completion identity, status, or operation order changed",
+        ));
+    }
+    for value in [&receipt.campaign_sha256, &receipt.receipt_sha256] {
+        require_sha256(value, "retirement completion digest")?;
+    }
+    let market = parse_pubkey(&receipt.market, "retirement completion Market")?;
+    let checkpoint = parse_pubkey(&receipt.checkpoint, "retirement completion checkpoint")?;
+    let rent_credit = parse_pubkey(&receipt.rent_credit, "retirement completion RentCredit")?;
+    let refund_wallet = parse_pubkey(
+        &receipt.refund_wallet,
+        "retirement completion refund wallet",
+    )?;
+    let payer = parse_pubkey(&receipt.payer, "retirement completion payer")?;
+    if [market, checkpoint, rent_credit, refund_wallet]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != 4
+        || payer == Pubkey::default()
+        || (payer != refund_wallet && [market, checkpoint, rent_credit].contains(&payer))
+    {
+        return Err(refusal("retirement completion account identities aliased"));
+    }
+    let classified = &receipt.classified_lamports;
+    let classified_sum = classified
+        .market
+        .checked_add(classified.rent_credit)
+        .and_then(|value| value.checked_add(classified.claims_refund))
+        .and_then(|value| value.checked_add(classified.custody_replay))
+        .and_then(|value| value.checked_add(classified.hoard_vault))
+        .ok_or_else(|| refusal("retirement completion classified lamports overflowed"))?;
+    if classified_sum != classified.expected_refund_delta {
+        return Err(refusal(
+            "retirement completion conservation classification changed",
+        ));
+    }
+    let mut signatures = BTreeSet::new();
+    let mut total_fees = 0u64;
+    for journal in &receipt.journals {
+        for value in [
+            &journal.journal_sha256,
+            &journal.packet_sha256,
+            &journal.poststate_sha256,
+        ] {
+            require_sha256(value, "retirement completion journal digest")?;
+        }
+        let signature = journal
+            .signature
+            .parse::<Signature>()
+            .map_err(|error| Error::new(format!("retirement completion signature: {error}")))?;
+        if signature.to_string() != journal.signature
+            || !signatures.insert(journal.signature.clone())
+            || journal.finalized_slot == 0
+            || journal.compute_units_consumed == 0
+        {
+            return Err(refusal(
+                "retirement completion repeated or malformed finalized transaction facts",
+            ));
+        }
+        total_fees = total_fees
+            .checked_add(journal.fee_lamports)
+            .ok_or_else(|| refusal("retirement completion fee total overflowed"))?;
+    }
+    let expected_terminal = classified
+        .refund_wallet_before
+        .checked_add(classified.expected_refund_delta)
+        .and_then(|value| {
+            if payer == refund_wallet {
+                value.checked_sub(total_fees)
+            } else {
+                Some(value)
+            }
+        })
+        .ok_or_else(|| refusal("retirement completion refund arithmetic underflowed"))?;
+    if receipt.total_transaction_fees_lamports != total_fees
+        || receipt.terminal_refund_wallet_lamports != expected_terminal
+    {
+        return Err(refusal(
+            "retirement completion fee or refund conservation changed",
+        ));
+    }
+    if receipt.receipt_sha256 != conservation_receipt_digest_v1(receipt)? {
+        return Err(refusal("retirement completion digest changed"));
+    }
+    Ok(())
 }
 
 pub(crate) fn authenticate_aggregate_retirement_journal_v1(
@@ -1698,6 +1811,47 @@ mod tests {
         value
     }
 
+    fn completion_receipt() -> AggregateRetirementConservationReceiptV1 {
+        let campaign = campaign();
+        let journals = AggregateRetirementOperationV1::ORDERED
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, operation)| AggregateRetirementCompletionJournalV1 {
+                    operation,
+                    journal_sha256: format!("{:02x}", index + 1).repeat(32),
+                    signature: Signature::new_unique().to_string(),
+                    finalized_slot: 100 + index as u64,
+                    fee_lamports: 5_000,
+                    compute_units_consumed: 200 + index as u64,
+                    packet_sha256: format!("{:02x}", index + 5).repeat(32),
+                    poststate_sha256: format!("{:02x}", index + 9).repeat(32),
+                },
+            )
+            .collect::<Vec<_>>();
+        let mut receipt = AggregateRetirementConservationReceiptV1 {
+            schema: AGGREGATE_RETIREMENT_COMPLETION_SCHEMA_V1.into(),
+            status: "finalized".into(),
+            campaign_sha256: campaign.campaign_sha256,
+            market: campaign.market.address,
+            checkpoint: campaign.checkpoint.address,
+            rent_credit: campaign.rent_credit.address,
+            refund_wallet: campaign.refund_wallet.address,
+            payer: campaign.payer,
+            classified_lamports: campaign.classified_lamports,
+            total_transaction_fees_lamports: 20_000,
+            terminal_refund_wallet_lamports: 1_150,
+            journals,
+            receipt_sha256: String::new(),
+        };
+        receipt.receipt_sha256 = conservation_receipt_digest_v1(&receipt).expect("receipt digest");
+        receipt
+    }
+
+    fn refresh_completion_receipt(receipt: &mut AggregateRetirementConservationReceiptV1) {
+        receipt.receipt_sha256 = conservation_receipt_digest_v1(receipt).expect("receipt digest");
+    }
+
     #[test]
     fn campaign_binds_four_exact_packet_and_key_shapes() {
         let campaign = campaign();
@@ -1789,5 +1943,44 @@ mod tests {
         let mut retargeted = journal;
         retargeted.operation = AggregateRetirementOperationV1::Finish;
         assert!(authenticate_aggregate_retirement_journal_v1(&campaign, &retargeted).is_err());
+    }
+
+    #[test]
+    fn completion_authenticator_refuses_singleton_reorder_and_conservation_theater() {
+        let receipt = completion_receipt();
+        authenticate_aggregate_retirement_conservation_receipt_v1(&receipt)
+            .expect("exact completion");
+
+        let mut old_singleton = receipt.clone();
+        old_singleton.journals.truncate(1);
+        refresh_completion_receipt(&mut old_singleton);
+        assert!(authenticate_aggregate_retirement_conservation_receipt_v1(&old_singleton).is_err());
+
+        let mut reordered = receipt.clone();
+        reordered.journals.swap(1, 2);
+        refresh_completion_receipt(&mut reordered);
+        assert!(authenticate_aggregate_retirement_conservation_receipt_v1(&reordered).is_err());
+
+        let mut replayed = receipt.clone();
+        replayed.journals[3].signature = replayed.journals[2].signature.clone();
+        refresh_completion_receipt(&mut replayed);
+        assert!(authenticate_aggregate_retirement_conservation_receipt_v1(&replayed).is_err());
+
+        let mut fee_theater = receipt.clone();
+        fee_theater.total_transaction_fees_lamports += 1;
+        refresh_completion_receipt(&mut fee_theater);
+        assert!(authenticate_aggregate_retirement_conservation_receipt_v1(&fee_theater).is_err());
+
+        let mut refund_theater = receipt.clone();
+        refund_theater.terminal_refund_wallet_lamports += 1;
+        refresh_completion_receipt(&mut refund_theater);
+        assert!(
+            authenticate_aggregate_retirement_conservation_receipt_v1(&refund_theater).is_err()
+        );
+
+        let mut old_schema = receipt;
+        old_schema.schema = "dclutch-owned-loopback-terminal-sequence-completion-v1".into();
+        refresh_completion_receipt(&mut old_schema);
+        assert!(authenticate_aggregate_retirement_conservation_receipt_v1(&old_schema).is_err());
     }
 }
