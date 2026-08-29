@@ -671,7 +671,17 @@ pub fn build_resolution_verify_fund_ready_v3(
         &rent,
         false,
     )?;
-    if active_entries != entries {
+    // The records-derived entry list arrives in record-traversal order while
+    // the ledger derives its list from the mask's ascending bits; the sets are
+    // the fact being compared, and the composed founding's first execution
+    // proved the two authors disagree on order ([3,2,1] vs [1,2,3]) while
+    // agreeing on membership. CreateFund already compares order-insensitively
+    // by folding entries into the mask.
+    let mut canonical_entries = entries;
+    canonical_entries.sort_unstable();
+    let mut canonical_active = active_entries;
+    canonical_active.sort_unstable();
+    if canonical_active != canonical_entries {
         eprintln!("verify-fund-ready refused: entries {entries:?} != active {active_entries:?}");
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
