@@ -26,6 +26,11 @@ describe('the smoke story and bounty pages speak to the reader', () => {
     expect(smoke).toContain('None of these three smoke markets exists yet');
     expect(smoke).not.toContain('nothing is deployed to any network');
     expect(bounty).toContain('No such market is live on any public network today');
+    // The offer used to land nine lines before its correction, with a
+    // runnable-looking command in between; a skimmer took away "get paid".
+    // The correction now sits with the offer on both pages.
+    expect(bounty).toContain('You cannot do this today.');
+    expect(smoke).toContain('none of these markets is open yet');
   });
 
   it('translates every refusal into a human sentence with the code beside it', () => {
