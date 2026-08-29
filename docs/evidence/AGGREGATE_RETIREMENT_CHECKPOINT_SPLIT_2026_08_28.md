@@ -111,25 +111,29 @@ The focused real-SBF run emitted diagnostic per-transaction compute
 observations, but no M-61 compute margin is claimed. A margin requires the
 20-seed pass count and arithmetic mean for each exact final ELF.
 
-The final focused log is
-`/tank/dregg-build/dclutch-aggregate-retirement-cd46-evidence/log-lifecycle-final.txt`
+The final focused campaign was rebuilt from a clean `git archive` of program
+source `adef965048b80d7d671cc538ba841db5d10942ad`, whose parent is mainline
+`6d1a9bc857fc7678f7f5470bddd34c9e7e4d4009`. It includes the converged
+Resolution V7 Accept/direct-close fixture as well as checkpointed retirement.
+Its log is
+`/tank/dregg-build/dclutch-aggregate-retirement-adef9650-evidence/log-lifecycle.txt`
 (SHA-256
-`78e423338eed900f9646d22f60716a17fd97cf41a7377bcceabcc6dcc16cd6e3`).
+`3e79b3f3b3f6abc63b63703ec9d4cc9f00ed2560e428f61b666386991940ed08`).
 The exact tested changed ELFs were:
 
 | Program | Bytes | SHA-256 |
 | --- | ---: | --- |
-| Core | 1,095,600 | `504c3995f0d6d414ce7ddce155921e713624ee67396b69eb993c8b1e44212758` |
+| Core | 1,045,856 | `2b2cf2e8cac9881cd4c4387651ba550c812ab020b62087a1f5be4da3881e1d43` |
 | Claims | 1,023,632 | `d24120ce9b87b1956e7bc113d43c3240605dca746039f3a9358e45c606f70f8b` |
 | Rent | 138,072 | `c28a3827c512148f89843b67e2ac8f4e1c59aac9c61987c72527951f459db16b` |
 
 Fresh emitted-stack measurement builds produced zero stack-frame-overwrite
-diagnostics for every changed link. Core measured 244 frames with a 3,968-byte
+diagnostics for every changed link. Core measured 235 frames with a 3,968-byte
 deepest frame, Claims measured 181 frames with a 3,904-byte deepest frame, and
 Rent measured 24 frames with a 1,344-byte deepest frame. The reports are
-`frame-final-core.txt`, `frame-final-claims.txt`, and `frame-final-rent.txt`
+`frame-core.txt`, `frame-claims.txt`, and `frame-rent.txt`
 under the same evidence root, with SHA-256 values
-`a8fe173648619f7abe61bea64f582ae6a0ed4a4e7f3b948a9e429112290b001b`,
+`5349bd2924ce288e710f10fbb312fc6a756bb9a64cb99df27b3e3d96391ed692`,
 `7defea258bd718770eaa2f5c659389cf389ab6ba222cd28c1353324662f34f58`,
 and `96ce71f62115a935e52a28a0613ceacd43cfde3cd59d2e555dbdd2fc9f5d805e`.
 These frame-measurement objects are evidence artifacts and are not substituted
