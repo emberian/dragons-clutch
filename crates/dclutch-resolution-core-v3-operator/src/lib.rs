@@ -926,7 +926,16 @@ pub fn build_resolution_activate_fund_v1(
             pending.funding_ledger.lamports,
             &pending.funding_ledger.data,
         );
-        if active_entries != entries
+        // Same two-authors order fact 0c26bba0 fixed at verify-fund-ready:
+        // the ledger derives ascending mask bits, the records arrive in
+        // traversal order, and membership is the fact under comparison. This
+        // inequality is why a completed activation could never shape its
+        // zero-lamport Replay witness and the Accept route stayed unreachable.
+        let mut canonical_entries = entries;
+        canonical_entries.sort_unstable();
+        let mut canonical_active = active_entries;
+        canonical_active.sort_unstable();
+        if canonical_active != canonical_entries
             || receipt.release_set != market.identity.selected_release_set.to_bytes()
             || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
             || receipt.market != pending.market.key.to_bytes()
