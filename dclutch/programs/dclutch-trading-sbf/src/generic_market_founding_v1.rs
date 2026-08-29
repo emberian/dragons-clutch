@@ -200,7 +200,8 @@ pub fn process_generic_market_founding_v3(
     authenticate_request_join(
         program_id, &frame, &found, &lock, &realize, &claims, &lock_raw,
     )?;
-    let staged = authenticate_staged_checkpoint_v1(program_id, &frame, &found, &lock, &lock_raw)?;
+    let staged =
+        authenticate_staged_checkpoint_v1(program_id, &frame, &found, &found_raw, &lock, &lock_raw)?;
 
     let lock_receipt = execute_lock(program_id, &frame, &lock, &lock_raw, caller_bumps.lock())?;
     let found_ack = execute_core_found(
@@ -364,6 +365,7 @@ fn authenticate_staged_checkpoint_v1(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     found: &GenericFoundingRequestV1,
+    found_raw: &[u8],
     lock: &ProjectedCustodyRequestV1,
     lock_raw: &[u8],
 ) -> Result<ControllerFundingCheckpointV1, ProgramError> {
@@ -388,7 +390,16 @@ fn authenticate_staged_checkpoint_v1(
         || input.market != found.market().to_bytes()
         || input.generation != found.generation()
         || input.funding_list != found.funding_list_id().to_bytes()
-        || input.funding_source != found.funding_source().to_bytes()
+        // The checkpoint's funding_source is the DCLTCFQ1 lamport payer - a
+        // transaction signer the bootstrap REQUIRES to be absent from the
+        // projected Found frame - while the request's funding_source is the
+        // Token-2022 collateral source vault. They name different actors and
+        // can never be equal; equating them refused every founding. The
+        // checkpoint instead binds the WHOLE selected Found request by digest,
+        // which the bootstrap staged from the same content-addressed bytes
+        // this route carries readonly at FOUND_RAW - a strictly stronger join
+        // than any single repeated field.
+        || input.found_request_digest != hash(found_raw).to_bytes()
         || input.rent_credit != lock.rent_credit
         || input.lock_request_digest != hash(lock_raw).to_bytes()
         || input.project_found_receipt_digest != lock.projection_receipt_digest
