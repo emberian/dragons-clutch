@@ -6,6 +6,37 @@ Scope: all seven permanent programs and the externally reachable successor
 paths. This is an architecture audit, not a checked release or deployment
 record.
 
+## Post-audit implementation status
+
+This report's measurements and source topology remain bound to the audited
+commit named above. Later accepted work changed several of its open rows; it
+does not retroactively change the evidence in the report:
+
+- Controller funding now has exact `DCLTCFQ1 -> DCLTPCB2 -> DCLTGMF2`
+  callers with 51, 60, and 60 compiled unique keys. Prepared/staged cleanup is
+  32, 19, and 19 keys. Each route's compiler test admits a padded 64 and
+  refuses 65. Both canonical cleanup orders passed the focused real-SBF
+  functional harness 6/6. A final source-bound 20-seed M-61 result is still
+  required before any margin claim.
+- Resolution V7 now separates direct funding activation, no-CPI Core Accept,
+  and direct close through an immutable activation receipt. The sponsored
+  Pyth transport and V7 activation/close are accepted on main at `bb405b12`
+  and `a34ff595`. The provider-terminal duplicate-CPI removal, exact caller
+  insertion, formatted SBF controls, and final M-61 evidence remain active
+  work at the time of this addendum.
+- The existing AggregateRetirement body was subsequently measured at 2,152
+  instruction-data bytes before transaction framing. It cannot fit Solana's
+  1,232-byte transaction limit even with an ALT. A resumable retirement
+  checkpoint is therefore required independently of its eventual CU result.
+- The first complete Dealer Accepted caller topology contained 121 distinct
+  instruction locks. An ALT cannot lift the 64-lock devnet limit. Dealer
+  evaluation must be paged into an authenticated durable checkpoint before a
+  separate <=64-key final liability mutation can be admitted.
+
+These rows are progress notes, not release evidence. The final checked source
+must rebuild every shipped ELF, run frame diagnostics, and report M-61 only as
+the exact 20-seed pass count and arithmetic mean.
+
 ## Executive result
 
 The protocol does not have one protocol-wide compute problem. It has three
