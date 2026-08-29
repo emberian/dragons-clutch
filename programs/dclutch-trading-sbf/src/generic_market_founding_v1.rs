@@ -38,11 +38,11 @@ use dclutch_custody_contract::{
     ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
 };
 use dclutch_market_core_codec::{
-    GENERIC_FOUNDING_ACK_BYTES_V1, GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
+    Action, GENERIC_FOUNDING_ACK_BYTES_V1, GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
     GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
     GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1,
     GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingAckV1, GenericFoundingRequestV1,
-    GenericFoundingStageV1,
+    GenericFoundingStageV1, ProjectFoundRequestV2, Request,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -200,8 +200,7 @@ pub fn process_generic_market_founding_v3(
     authenticate_request_join(
         program_id, &frame, &found, &lock, &realize, &claims, &lock_raw,
     )?;
-    let staged =
-        authenticate_staged_checkpoint_v1(program_id, &frame, &found, &found_raw, &lock, &lock_raw)?;
+    let staged = authenticate_staged_checkpoint_v1(program_id, &frame, &found, &lock, &lock_raw)?;
 
     let lock_receipt = execute_lock(program_id, &frame, &lock, &lock_raw, caller_bumps.lock())?;
     let found_ack = execute_core_found(
@@ -360,12 +359,35 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
     }
 }
 
+/// Reproduce the exact ProjectFound request digest the bootstrap staged.
+///
+/// `ControllerFundingCheckpointInputV1::found_request_digest` is the hash of
+/// the administrative Core ProjectFound `Request` encoding - the bootstrap
+/// writes `hash(project_found.found.encode())` and its abort route replays the
+/// identical construction. Both inputs come from fields the selected DCLTGFQ1
+/// request already binds, so this is a pure recomputation, not a new fact.
+#[inline(never)]
+fn staged_project_found_digest_v1(
+    found: &GenericFoundingRequestV1,
+) -> Result<[u8; 32], ProgramError> {
+    let project_found = ProjectFoundRequestV2::new(Request::administrative(
+        Action::Found,
+        found.generation(),
+        found.market(),
+    ))
+    .map_err(|_| TradingSbfError::Content)?;
+    let bytes = project_found
+        .found
+        .encode()
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(hash(&bytes).to_bytes())
+}
+
 #[inline(never)]
 fn authenticate_staged_checkpoint_v1(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     found: &GenericFoundingRequestV1,
-    found_raw: &[u8],
     lock: &ProjectedCustodyRequestV1,
     lock_raw: &[u8],
 ) -> Result<ControllerFundingCheckpointV1, ProgramError> {
@@ -395,11 +417,14 @@ fn authenticate_staged_checkpoint_v1(
         // projected Found frame - while the request's funding_source is the
         // Token-2022 collateral source vault. They name different actors and
         // can never be equal; equating them refused every founding. The
-        // checkpoint instead binds the WHOLE selected Found request by digest,
-        // which the bootstrap staged from the same content-addressed bytes
-        // this route carries readonly at FOUND_RAW - a strictly stronger join
-        // than any single repeated field.
-        || input.found_request_digest != hash(found_raw).to_bytes()
+        // checkpoint instead re-binds its found_request_digest, which the
+        // bootstrap staged as the hash of the administrative Core ProjectFound
+        // Request it authenticated the projection under - NOT of the DCLTGFQ1
+        // artifact bytes, despite the field's name. This route reproduces that
+        // exact encoding from the generation and Market the selected request
+        // itself carries, byte-for-byte the same construction the bootstrap's
+        // own abort route replays (authenticate_prepared_request_digests_v1).
+        || input.found_request_digest != staged_project_found_digest_v1(found)?
         || input.rent_credit != lock.rent_credit
         || input.lock_request_digest != hash(lock_raw).to_bytes()
         || input.project_found_receipt_digest != lock.projection_receipt_digest
