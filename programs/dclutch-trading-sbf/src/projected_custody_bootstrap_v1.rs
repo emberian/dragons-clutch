@@ -565,7 +565,7 @@ fn authenticate_expired_checkpoint_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let input = checkpoint.input();
+    let input = checkpoint.input_ref();
     if checkpoint_account.key.to_bytes()
         != Pubkey::find_program_address(
             &ControllerFundingCheckpointDerivationV1::new(
@@ -606,7 +606,7 @@ fn close_controller_funding_v1(
     accounts: &[AccountInfo<'_>],
     checkpoint: ControllerFundingCheckpointV1,
 ) -> Result<(), ProgramError> {
-    let input = checkpoint.input();
+    let input = checkpoint.input_ref();
     if input.trading_mask.trailing_zeros() < input.resolution_mask.trailing_zeros() {
         close_trading_pending_ledger_v1(program_id, accounts, checkpoint)?;
         invoke_resolution_funding_abort_v1(program_id, accounts, checkpoint)?;
@@ -1132,7 +1132,7 @@ fn authenticate_prepared_checkpoint_v1(
         .map_err(|_| TradingSbfError::Content)?;
     let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_data)
         .map_err(|_| TradingSbfError::Content)?;
-    let input = checkpoint.input();
+    let input = checkpoint.input_ref();
     if checkpoint.phase() != ControllerFundingCheckpointPhaseV1::Prepared
         || input.release_set != facts.release_set
         || input.market != facts.market
@@ -1163,19 +1163,7 @@ fn authenticate_prepared_checkpoint_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let lock_bytes = lock.encode().map_err(|_| TradingSbfError::Content)?;
-    let found = ProjectFoundRequestV2::new(Request::administrative(
-        Action::Found,
-        facts.generation,
-        Identity::new(facts.market).map_err(|_| TradingSbfError::Content)?,
-    ))
-    .map_err(|_| TradingSbfError::Content)?;
-    let found_bytes = found.found.encode().map_err(|_| TradingSbfError::Content)?;
-    if input.lock_request_digest != hash(&lock_bytes).to_bytes()
-        || input.found_request_digest != hash(&found_bytes).to_bytes()
-    {
-        return Err(TradingSbfError::Content.into());
-    }
+    authenticate_prepared_request_digests_v1(lock, facts, input)?;
     let manifest_account = account(
         frame.initialize,
         INITIALIZE_FOUND_START + FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
@@ -1232,6 +1220,36 @@ fn authenticate_prepared_checkpoint_v1(
         return Err(TradingSbfError::Content.into());
     }
     Ok(checkpoint)
+}
+
+/// Authenticate the two large request encodings in their own verifier frame.
+///
+/// The projected-Custody request is 768 bytes. It does not need to coexist
+/// with the decoded manifest, activated release set, Rent, and two live-ledger
+/// authenticators in `authenticate_prepared_checkpoint_v1`; only its digest is
+/// persisted. Keeping this exact computation behind a non-inlined boundary
+/// preserves the same byte commitment while staying below SBF's 4 KiB frame.
+#[inline(never)]
+fn authenticate_prepared_request_digests_v1(
+    lock: &ProjectedCustodyRequestV1,
+    facts: &FoundingFundingFactsV1,
+    input: &dclutch_capability_contract::controller_funding_checkpoint::ControllerFundingCheckpointInputV1,
+) -> Result<(), ProgramError> {
+    let lock_bytes = lock.encode().map_err(|_| TradingSbfError::Content)?;
+    if input.lock_request_digest != hash(&lock_bytes).to_bytes() {
+        return Err(TradingSbfError::Content.into());
+    }
+    let found = ProjectFoundRequestV2::new(Request::administrative(
+        Action::Found,
+        facts.generation,
+        Identity::new(facts.market).map_err(|_| TradingSbfError::Content)?,
+    ))
+    .map_err(|_| TradingSbfError::Content)?;
+    let found_bytes = found.found.encode().map_err(|_| TradingSbfError::Content)?;
+    if input.found_request_digest != hash(&found_bytes).to_bytes() {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -1555,10 +1573,7 @@ fn authenticate_resolution_ledger_poststate_v2(
     selected_mask: u16,
     rent: &Rent,
 ) -> Result<AuthenticatedResolutionLedgerPoststateV2, ProgramError> {
-    if target.owner != resolution_program
-        || target.is_signer
-        || target.executable
-    {
+    if target.owner != resolution_program || target.is_signer || target.executable {
         return Err(TradingSbfError::Transition.into());
     }
     let data = target

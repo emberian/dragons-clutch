@@ -383,6 +383,16 @@ impl ControllerFundingCheckpointV1 {
         self.input
     }
 
+    /// Borrow all immutable preparation facts without copying the fixed-width
+    /// checkpoint body.
+    ///
+    /// SBF adapters use this accessor while authenticating a live checkpoint:
+    /// keeping the 384-byte input in its semantic owner's storage avoids a
+    /// second stack-resident copy at the verifier boundary.
+    pub const fn input_ref(&self) -> &ControllerFundingCheckpointInputV1 {
+        &self.input
+    }
+
     /// Return the ordered four-account Custody ladder digest, or zero while Prepared.
     pub const fn custody_ladder_digest(self) -> [u8; 32] {
         self.custody_ladder_digest
