@@ -392,6 +392,24 @@ enum ConfirmOutcomeV1 {
 pub(crate) struct FinalizedSignedPacketV1 {
     pub(crate) evidence: TransactionEvidence,
     pub(crate) packet: Vec<u8>,
+    /// Exact top-level program return data when the finalized transaction
+    /// published it. Durable family callers authenticate this at the same
+    /// boundary as the signed packet rather than accepting a log projection.
+    ///
+    /// A log line is a projection the validator is free to truncate; the
+    /// `returnData` field is the datum the program actually set. A family ACK
+    /// is commit-last evidence, so reading it from anywhere but here would let
+    /// a truncated log silently weaken the strongest claim the caller makes.
+    pub(crate) return_data: Option<FinalizedReturnDataV1>,
+}
+
+/// Canonical finalized transaction return-data projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FinalizedReturnDataV1 {
+    /// Program that called `set_return_data` last.
+    pub(crate) program: Pubkey,
+    /// Canonically decoded base64 payload.
+    pub(crate) data: Vec<u8>,
 }
 
 impl Rpc {
@@ -615,6 +633,48 @@ impl Rpc {
                     .collect()
             })
             .unwrap_or_default();
+        // Absent and JSON null both mean the transaction published no return
+        // data. Anything present must be the canonical `[base64, "base64"]`
+        // pair; a noncanonical encoding is refused rather than coerced,
+        // because the bytes it decodes to are what a family ACK is checked
+        // against and a lenient decode would admit two spellings of one ACK.
+        let return_data = match meta.get("returnData") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let program = value
+                    .get("programId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::new(format!("{label} return data omitted programId")))?
+                    .parse::<Pubkey>()
+                    .map_err(|error| {
+                        Error::new(format!("{label} return data programId: {error}"))
+                    })?;
+                let pair = value
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| Error::new(format!("{label} return data omitted data pair")))?;
+                if pair.len() != 2 || pair.get(1).and_then(Value::as_str) != Some("base64") {
+                    return Err(Error::new(format!(
+                        "{label} return data encoding was not canonical base64"
+                    )));
+                }
+                let encoded = pair
+                    .first()
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        Error::new(format!("{label} return data payload was not a string"))
+                    })?;
+                let data = BASE64
+                    .decode(encoded)
+                    .map_err(|error| Error::new(format!("{label} return data base64: {error}")))?;
+                if BASE64.encode(&data) != encoded {
+                    return Err(Error::new(format!(
+                        "{label} return data was not canonical base64"
+                    )));
+                }
+                Some(FinalizedReturnDataV1 { program, data })
+            }
+        };
         self.read_floor = self.read_floor.max(slot);
         Ok(Some(FinalizedSignedPacketV1 {
             evidence: TransactionEvidence {
@@ -629,6 +689,7 @@ impl Rpc {
                 logs,
             },
             packet,
+            return_data,
         }))
     }
 
