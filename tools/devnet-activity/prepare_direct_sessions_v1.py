@@ -97,7 +97,9 @@ def producer_state_sha256(value: Mapping[str, Any]) -> str:
 
 
 def finalize(producer: Mapping[str, Any], label: str) -> None:
-    journal_path, journal_sha = accepted_file(producer["producerJournal"], f"{label} producer journal")
+    journal_path = output_path(producer["producerJournal"], f"{label} producer journal")
+    if not journal_path.exists():
+        raise Refusal(f"{label} producer did not create its durable journal")
     value = exact_object(activity.read_exact_json(journal_path, f"{label} producer journal"), f"{label} producer journal")
     if value.get("schema") != JOURNAL_SCHEMA or value.get("phase") != "finalized":
         raise Refusal(f"{label} producer journal is not Finalized")
@@ -107,8 +109,6 @@ def finalize(producer: Mapping[str, Any], label: str) -> None:
     session_sha = activity.sha256_file(session)
     if value.get("privateSession") != str(session) or value.get("privateSessionSha256") != session_sha:
         raise Refusal(f"{label} Finalized journal does not bind its produced session")
-    if journal_sha != activity.sha256_file(journal_path):
-        raise Refusal(f"{label} producer journal changed after acceptance")
 
 
 def prepare(path: Path, expected_sha256: str) -> None:
@@ -129,7 +129,12 @@ def prepare(path: Path, expected_sha256: str) -> None:
             producer = exact_object(raw, f"preparation producer {cycle_index}/{index}")
             exact_keys(producer, {"publicManifest", "plan", "marketInput", "sellerParticipant", "buyerParticipant", "payerKeypair", "journalDir", "evidenceFile", "session", "producerJournal"}, f"preparation producer {cycle_index}/{index}")
             files = {key: accepted_file(producer[key], f"preparation {key}") for key in ("publicManifest", "plan", "marketInput", "sellerParticipant", "buyerParticipant")}
-            payer = output_path(producer["payerKeypair"], "preparation payer keypair")
+            try:
+                payer = activity.canonical_existing_file(
+                    producer["payerKeypair"], "preparation payer keypair"
+                )
+            except activity.Refusal as error:
+                raise Refusal(str(error)) from error
             # The producer authenticates the runtime key path but does not open it.
             journal_dir = Path(producer["journalDir"])
             if not journal_dir.is_absolute() or journal_dir.is_symlink() or not journal_dir.parent.is_dir():
