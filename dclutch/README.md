@@ -13,8 +13,9 @@ holds. The most you can ever lose is what you paid.
 
 The seven programs are live on Solana devnet, but there is no current open
 Market, nothing to buy, and no value at risk. Devnet is a public test network
-whose tokens have no real value. The current Upgrade and opening cycle is still
-in progress; the original deployment is recorded byte-for-byte in
+whose tokens have no real value. The programs were updated in place this week,
+keeping the same addresses; opening the first market is what is happening now.
+The original deployment is recorded byte-for-byte in
 [the deployment record](docs/evidence/DEPLOY_1.md). Everything below also runs
 on a local test chain you can run yourself.
 
@@ -33,9 +34,9 @@ on a local test chain you can run yourself.
   harness, at the real compute and memory limits. None of the three has
   been driven on a validator yet, and winding a market all the way down
   to retired has not run anywhere yet.
-- After the required prestates finalize, one compact atomic transaction locks
-  the collateral, creates the market, and opens trading — or rolls the whole
-  thing back.
+- Once the setup transactions have finalized, a single transaction locks the
+  collateral, creates the market, and opens it for trading — or rolls the
+  whole thing back, leaving nothing half-made.
 - Range and tail protection ("pays out if SOL ends below X") is just a
   bundle of cell claims, so its price is exactly the sum of the cell
   prices. No extra machinery, nothing to liquidate.
@@ -115,7 +116,9 @@ harnesses.
 - [`formal/`](formal) — the Lean definitions that generate the record
   layouts and wire formats used by both the chain and the web app.
 - [`tools/gauntlet/`](tools/gauntlet) — the campaign runner: builds the
-  programs, boots a local validator, and runs markets through their lives.
+  programs and enumerates every route they accept. Founding a market on a
+  local chain and joining it lives in
+  [`tools/release/private-validator-lifecycle/`](tools/release/private-validator-lifecycle).
 - [`apps/dclutch-web`](apps/dclutch-web) — the web app.
 - [`docs/decisions/`](docs/decisions) — why the architecture is the way it
   is.
@@ -163,8 +166,8 @@ repository runs on.
 
 ## Where this is going
 
-The next milestone is the first current-compatible open devnet Market and its
-exterior lifecycle, resolving markets about the state of Solana mainnet. Pyth's devnet feeds carry the
+The next milestone is the first open market on devnet, asking a question
+about the state of Solana mainnet and resolving it in public. Pyth's devnet feeds carry the
 major prices directly, and a disclosed relayer carries everything else.
 dClutch grew out of Dragon's Clutch; the first generation lives in the
 neighboring `dragons-clutch` repository as an archive.
