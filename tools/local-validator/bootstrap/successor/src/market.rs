@@ -3980,7 +3980,11 @@ fn projected_found_snapshot_keys_v2(
         pubkey(&plan.core.program_id)?,
         pubkey(&plan.core.programdata_id)?,
         pubkey(&plan.registry.program_id)?,
-        sysvar::rent::ID,
+        // The runtime-owned Rent sysvar is elided from the PROJECTED frame:
+        // Core's `FoundAccounts::parse_project` (rent_elided) reads 24
+        // accounts with registry_program followed directly by system.
+        // Including it here made the assembled generic founding frame one
+        // account wider than the 125-pinned spec and refused every founding.
         system_program::ID,
         pubkey(&plan.infrastructure_profile.address)?,
         registry_artifact.0,
