@@ -80,6 +80,14 @@ use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
+use spl_token_2022_interface::{
+    extension::{
+        BaseStateWithExtensionsMut, ExtensionType, StateWithExtensionsMut,
+        mint_close_authority::MintCloseAuthority,
+        permissioned_burn::PermissionedBurnConfig,
+    },
+    state::Mint as Token2022Mint,
+};
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
 const CLAIMS: Pubkey = Pubkey::new_from_array([0xe1; 32]);
@@ -555,6 +563,43 @@ fn economic_data(
     (aggregate, custody_positions, actor_position)
 }
 
+/// The exact bytes the Claims lifecycle writes for a receipt or shard Mint.
+///
+/// Built by the official Token-2022 library rather than assembled by hand, and
+/// sized by that library's own account-length calculation. This fixture used to
+/// be `mint_data` -- a bare 82-byte legacy-layout Mint -- which is why the
+/// wallet-side builder could parse at 82 bytes and stay green while refusing
+/// every Mint the chain actually holds. Each side had invented the bytes the
+/// other side would never send.
+fn behavior_mint_data(controller: Pubkey, supply: u64) -> Vec<u8> {
+    let width = ExtensionType::try_calculate_account_len::<Token2022Mint>(&[
+        ExtensionType::MintCloseAuthority,
+        ExtensionType::PermissionedBurn,
+    ])
+    .expect("Mint extension width");
+    let mut output = vec![0; width];
+    let mut state = StateWithExtensionsMut::<Token2022Mint>::unpack_uninitialized(&mut output)
+        .expect("official extension state");
+    state.base = Token2022Mint {
+        mint_authority: COption::Some(controller),
+        supply,
+        decimals: 0,
+        is_initialized: true,
+        freeze_authority: COption::None,
+    };
+    let close = state
+        .init_extension::<MintCloseAuthority>(false)
+        .expect("close authority");
+    close.close_authority = Some(controller).try_into().expect("nonzero controller");
+    let burn = state
+        .init_extension::<PermissionedBurnConfig>(false)
+        .expect("permissioned burn");
+    burn.authority = Some(controller).try_into().expect("nonzero controller");
+    state.init_account_type().expect("Mint account type");
+    state.pack_base();
+    output
+}
+
 fn mint_data(authority: COption<Pubkey>, supply: u64, decimals: u8) -> Vec<u8> {
     let mut output = vec![0; SplMint::LEN];
     SplMint::pack(
@@ -834,10 +879,9 @@ impl Fixture {
                 custody_position_key: value.2,
                 custody_position: positions.get(index).expect("custody Position").clone(),
                 shard_mint_key: value.3,
-                shard_mint: mint_data(
-                    COption::Some(representation_authority),
+                shard_mint: behavior_mint_data(
+                    representation_authority,
                     *SHARD_SUPPLIES.get(index).expect("shard supply"),
-                    0,
                 ),
                 actor_shard_key: value.4,
                 actor_shard: token_data(
@@ -901,7 +945,7 @@ impl Fixture {
             replay_key,
             replay,
             receipt_mint_key,
-            receipt_mint: mint_data(COption::Some(representation_authority), RECEIPT_SUPPLY, 0),
+            receipt_mint: behavior_mint_data(representation_authority, RECEIPT_SUPPLY),
             actor_receipt_key,
             actor_receipt: token_data(receipt_mint_key, ACTOR, 4),
             assets,
@@ -1107,6 +1151,66 @@ fn assert_meta(meta: &AccountMeta, key: Pubkey, signer: bool, writable: bool) {
     assert_eq!(meta.pubkey, key);
     assert_eq!(meta.is_signer, signer);
     assert_eq!(meta.is_writable, writable);
+}
+
+/// The wallet-side fix is load-bearing: the shape it replaced is refused.
+///
+/// Both halves run on the same fixture, because a builder that refused
+/// everything would satisfy the negative half alone. The negative bytes are the
+/// canonical Mint with its extension storage cut off, which is byte-for-byte
+/// the 82-byte legacy shape the old `Mint::parse` reader required -- so this
+/// asserts against the exact thing that used to be here rather than against a
+/// newly invented wrong Mint.
+#[test]
+fn every_builder_refuses_the_82_byte_mint_shape_the_old_reader_required() {
+    let good = Fixture::new(false);
+    let good_assets = good.asset_observations();
+    construct_issue_structured(
+        good.observation(&good_assets, Mode::Structured),
+        StructuredActionInputV2 { quantity: 2 },
+    )
+    .expect("the shape the chain actually holds builds a transaction");
+    construct_denominate(
+        good.observation(good_assets.get(1..2).expect("selected asset"), Mode::Selected),
+        SelectedActionInputV2 {
+            outcome: WINNER,
+            quantity: 2,
+        },
+    )
+    .expect("the shape the chain actually holds builds a transaction");
+
+    let mut receipt = Fixture::new(false);
+    receipt.receipt_mint.truncate(SplMint::LEN);
+    assert_eq!(receipt.receipt_mint.len(), 82);
+    let receipt_assets = receipt.asset_observations();
+    assert_eq!(
+        construct_issue_structured(
+            receipt.observation(&receipt_assets, Mode::Structured),
+            StructuredActionInputV2 { quantity: 2 },
+        )
+        .expect_err("82-byte receipt Mint"),
+        Error::InvalidToken
+    );
+
+    let mut shard = Fixture::new(false);
+    shard
+        .assets
+        .get_mut(1)
+        .expect("selected asset")
+        .shard_mint
+        .truncate(SplMint::LEN);
+    let shard_assets = shard.asset_observations();
+    assert_eq!(
+        construct_denominate(
+            shard.observation(shard_assets.get(1..2).expect("selected asset"), Mode::Selected),
+            SelectedActionInputV2 {
+                outcome: WINNER,
+                quantity: 2,
+            },
+        )
+        .expect_err("82-byte shard Mint"),
+        Error::InvalidToken
+    );
 }
 
 #[test]

@@ -59,7 +59,9 @@ use dclutch_representation_composition_v3_kernel::{
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
-use dclutch_token_svm::{AccountState, COption, Mint, TokenAccount, TokenProgram};
+use dclutch_token_svm::{
+    AccountState, COption, Mint, Token2022BehaviorProfileV2, TokenAccount, TokenProgram,
+};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -1139,6 +1141,26 @@ fn authenticate_actor_receipt(common: CommonV2<'_>) -> Result<()> {
     .map(|_| ())
 }
 
+/// Authenticate one receipt or shard Mint exactly as the chain will.
+///
+/// This used to call `Mint::parse`, which admits exactly 82 bytes. Both Mints
+/// it is ever handed carry the two required lifecycle extensions and are 238
+/// bytes, so 82 and 238 were disjoint and every builder behind this function
+/// refused before it could construct a transaction. A builder that cannot read
+/// the account the program reads is not stricter than the program; it is
+/// unreachable.
+///
+/// It now reads through the same profile the on-chain route uses
+/// (`rational_representation_v2::parse_behavior_mint`), so the wallet side and
+/// the program side admit the same bytes by construction rather than by two
+/// descriptions agreeing.
+///
+/// It reads the supply rather than pinning it, and that is the honest shape
+/// here: this builder is what *discovers* the supply and stages it into
+/// `expected_receipt_supply`, which the program then pins. An expected supply
+/// at this call could only be the number just read from these same bytes.
+/// `decimals` stays pinned locally because the behavior profile admits the full
+/// display-decimal domain while this family's claim Mints are whole units.
 fn authenticate_mint(
     observed: ObservedAccountV2<'_>,
     expected_key: Pubkey,
@@ -1148,12 +1170,15 @@ fn authenticate_mint(
     if observed.key != expected_key || observed.owner != token_program || observed.executable {
         return Err(Error::InvalidToken);
     }
-    let mint = Mint::parse(observed.data).map_err(|_| Error::InvalidToken)?;
-    if !mint.is_initialized
-        || mint.mint_authority != COption::Some(authority.to_bytes())
-        || mint.decimals != 0
-        || mint.freeze_authority != COption::None
-    {
+    let mint = Token2022BehaviorProfileV2::read_mint(
+        token_program.to_bytes(),
+        expected_key.to_bytes(),
+        observed.data,
+        authority.to_bytes(),
+    )
+    .map_err(|_| Error::InvalidToken)?
+    .mint();
+    if mint.decimals != 0 {
         return Err(Error::InvalidToken);
     }
     Ok(mint)

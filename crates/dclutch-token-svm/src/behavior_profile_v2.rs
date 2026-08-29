@@ -131,13 +131,50 @@ impl Token2022BehaviorProfileV2 {
     }
 
     /// Authenticate one representation Mint against the complete V2 behavior
-    /// profile.
+    /// profile, including its exact expected base supply.
+    ///
+    /// This is the profile an on-chain program wants. A caller that already
+    /// knows what the supply must be — because a request header, a record or a
+    /// prior transition states it — must use this and not [`Self::read_mint`],
+    /// so that the claim is checked against the chain rather than taken from
+    /// it.
     pub fn check_mint(
         program_id: Address,
         mint_key: Address,
         mint_data: &[u8],
         expected_controller: Address,
         expected_base_supply: u64,
+    ) -> Result<Token2022BehaviorMintFactsV2> {
+        let facts = Self::read_mint(program_id, mint_key, mint_data, expected_controller)?;
+        if facts.base_supply() != expected_base_supply {
+            return Err(Error::MintSupplyMismatch);
+        }
+        Ok(facts)
+    }
+
+    /// Authenticate one representation Mint against every part of the V2
+    /// behavior profile except its supply, and report the supply observed.
+    ///
+    /// Identity, ownership, controller, freeze absence, base-state shape and
+    /// the exact required extension set are all authenticated here; only the
+    /// supply is reported rather than pinned. Everything [`Self::check_mint`]
+    /// refuses, this refuses too.
+    ///
+    /// It exists for the one caller class that legitimately cannot pin it: a
+    /// transaction builder that must *discover* the current supply from chain
+    /// state in order to stage it into a request the on-chain program will then
+    /// pin. For that caller an expected supply would have to be the value it
+    /// just read from these same bytes, and comparing a value to itself
+    /// authenticates nothing — a vacuous assertion that would read like a check.
+    /// The real check happens on-chain, against the number the builder staged.
+    ///
+    /// Any caller that has an independent expectation of the supply is not that
+    /// caller and must use [`Self::check_mint`].
+    pub fn read_mint(
+        program_id: Address,
+        mint_key: Address,
+        mint_data: &[u8],
+        expected_controller: Address,
     ) -> Result<Token2022BehaviorMintFactsV2> {
         if program_id != TOKEN_2022_PROGRAM_ID {
             return Err(Error::ProfileProgramMismatch);
@@ -170,9 +207,6 @@ impl Token2022BehaviorProfileV2 {
         }
         if base.freeze_authority != COption::None {
             return Err(Error::FreezeAuthorityPresent);
-        }
-        if base.supply != expected_base_supply {
-            return Err(Error::MintSupplyMismatch);
         }
 
         let mut cursor = TlvCursor::new(
@@ -360,7 +394,7 @@ mod tests {
     };
     use spl_token_metadata_interface::state::TokenMetadata;
 
-    use crate::{ACCOUNT_BYTES, state::fixtures::put};
+    use crate::{ACCOUNT_BYTES, LEGACY_TOKEN_PROGRAM_ID, state::fixtures::put};
 
     use super::*;
 
@@ -487,6 +521,124 @@ mod tests {
             CONTROLLER,
             11,
         )
+    }
+
+    fn read(bytes: &[u8]) -> Result<Token2022BehaviorMintFactsV2> {
+        Token2022BehaviorProfileV2::read_mint(TOKEN_2022_PROGRAM_ID, MINT_KEY, bytes, CONTROLLER)
+    }
+
+    /// Base-Mint supply offset, for moving the one field these two entry
+    /// points disagree about.
+    const SUPPLY_OFFSET: usize = 36;
+
+    /// The weaker entry point differs from `check_mint` on exactly one axis.
+    ///
+    /// `read_mint` reports whatever supply the account holds; `check_mint`
+    /// admits only the supply its caller named. Asserting both directions on
+    /// the same bytes is what keeps "weaker" from quietly becoming "weaker in
+    /// some other way too".
+    #[test]
+    fn read_mint_reports_the_supply_that_check_mint_pins() {
+        let canonical = mint(0, false);
+        for supply in [0_u64, 1, 11, u64::MAX] {
+            let mut bytes = canonical.clone();
+            put(&mut bytes, SUPPLY_OFFSET, &supply.to_le_bytes());
+
+            let observed = read(&bytes).expect("read admits every supply");
+            assert_eq!(observed.base_supply(), supply);
+            assert_eq!(observed.controller(), CONTROLLER);
+            assert_eq!(observed.metadata(), InertMetadataV2::Absent);
+
+            assert_eq!(
+                Token2022BehaviorProfileV2::check_mint(
+                    TOKEN_2022_PROGRAM_ID,
+                    MINT_KEY,
+                    &bytes,
+                    CONTROLLER,
+                    supply,
+                ),
+                Ok(observed),
+                "check admits the true supply"
+            );
+            assert_eq!(
+                Token2022BehaviorProfileV2::check_mint(
+                    TOKEN_2022_PROGRAM_ID,
+                    MINT_KEY,
+                    &bytes,
+                    CONTROLLER,
+                    supply.wrapping_add(1),
+                ),
+                Err(Error::MintSupplyMismatch),
+                "check refuses any other supply"
+            );
+        }
+    }
+
+    /// What `read_mint` refuses is the extension SET, not the account's size.
+    ///
+    /// The distinction is the whole point of the wallet-side fix: a builder
+    /// that refused by length would refuse the correct Mint and admit a
+    /// wrong-but-same-length one. So the control is two Mints of DIFFERENT
+    /// lengths and one of IDENTICAL length, all refused for the same reason.
+    #[test]
+    fn read_mint_refuses_on_the_extension_set_and_never_on_the_length() {
+        let canonical = mint(0, false);
+        let base = canonical
+            .get(..TLV_START_OFFSET)
+            .expect("base account bytes")
+            .to_vec();
+        read(&canonical).expect("the shape the lifecycle writes is admitted");
+
+        // Shorter, and wrong: the exact pre-fix 202-byte close-only Mint.
+        let mut close_only = base.clone();
+        put_tlv(&mut close_only, MINT_CLOSE_AUTHORITY_EXTENSION, &CONTROLLER);
+        assert_eq!(close_only.len(), 202);
+        assert_eq!(read(&close_only), Err(Error::InvalidExtensionLayout));
+
+        // IDENTICAL length to the canonical Mint, and still wrong: the burn
+        // extension replaced by a second close extension. A length check
+        // cannot tell this from the real thing; the walk can.
+        let mut same_length_wrong_set = base.clone();
+        put_tlv(
+            &mut same_length_wrong_set,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &CONTROLLER,
+        );
+        put_tlv(
+            &mut same_length_wrong_set,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &CONTROLLER,
+        );
+        assert_eq!(same_length_wrong_set.len(), canonical.len());
+        assert_eq!(
+            read(&same_length_wrong_set),
+            Err(Error::InvalidExtensionLayout)
+        );
+
+        // Longer, and wrong: both required extensions plus one nobody admits.
+        let mut extra = canonical.clone();
+        put_tlv(&mut extra, PERMISSIONED_BURN_EXTENSION, &CONTROLLER);
+        assert_eq!(read(&extra), Err(Error::InvalidExtensionLayout));
+
+        // The new entry point is not a hole in the program pin either.
+        assert_eq!(
+            Token2022BehaviorProfileV2::read_mint(
+                LEGACY_TOKEN_PROGRAM_ID,
+                MINT_KEY,
+                &canonical,
+                CONTROLLER,
+            ),
+            Err(Error::ProfileProgramMismatch)
+        );
+        assert_eq!(
+            Token2022BehaviorProfileV2::read_mint(
+                TOKEN_2022_PROGRAM_ID,
+                MINT_KEY,
+                &canonical,
+                HOLDER,
+            ),
+            Err(Error::AuthorityMismatch)
+        );
     }
 
     #[test]

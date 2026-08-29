@@ -31,6 +31,7 @@ spl-associated-token-account-interface = { version = "=2.0.0", default-features 
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
+spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 spl-token-interface = "=3.0.0"
 
 [lints]
