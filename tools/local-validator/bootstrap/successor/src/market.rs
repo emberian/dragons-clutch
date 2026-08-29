@@ -4352,13 +4352,18 @@ fn authenticate_cleanup_compiled_census_v1(
     instruction: &Instruction,
     base: CompiledMessageGeometryV1,
 ) -> Result<()> {
+    // The padding is derived from the two pinned numbers so the exact
+    // lock-limit proof (base + padding == 64, one more refuses) cannot lag
+    // the frame the way a literal did when the funding source was
+    // de-aliased (5ca145e8: 19 distinct keys became 18).
+    let padding = DEVNET_ACCOUNT_LOCK_LIMIT_V1 - CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1;
     let admitted = projected_bootstrap_compiled_geometry_v2(
         payer,
-        &append_distinct_census_accounts_v1(instruction, 45),
+        &append_distinct_census_accounts_v1(instruction, padding),
     )?;
     let refused = projected_bootstrap_compiled_geometry_v2(
         payer,
-        &append_distinct_census_accounts_v1(instruction, 46),
+        &append_distinct_census_accounts_v1(instruction, padding + 1),
     )?;
     if base.complete_keys != CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1
         || admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
@@ -6569,7 +6574,9 @@ const CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1: usize = 17;
 const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize =
     PROJECTED_CUSTODY_ABORT_PREFIX_ACCOUNTS_V1 + CONTROLLER_FUNDING_ABORT_ACCOUNTS_V1;
 const PROJECTED_CUSTODY_ABORT_COMPLETE_KEYS_V1: usize = 33;
-const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 19;
+// 19 until 5ca145e8 de-aliased the DCLTCFQ1 funding source into the payer,
+// removing one distinct key from the cleanup frame.
+const CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1: usize = 18;
 const CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1: [u8; 8] = *b"DCLTCF1A";
 const CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1: [u8; 8] = *b"DCLTCF2A";
 
@@ -11167,6 +11174,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
         accounts[1].pubkey = program_id;
+        // The funding source is the payer since 5ca145e8 de-aliased it: one
+        // coordinate references an already-counted key, so the frame carries
+        // 18 distinct complete keys, not 19.
+        accounts[11] = AccountMeta::new(payer, true);
         (
             payer,
             Instruction {
@@ -11542,7 +11553,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_cleanup_compiler_census_pins_both_19_64_65_walls() {
+    fn controller_cleanup_compiler_census_pins_both_18_64_65_walls() {
         for data in [
             CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
             CONTROLLER_FUNDING_CLEANUP_STEP2_MAGIC_V1,
@@ -11552,13 +11563,13 @@ mod tests {
                 .expect("cleanup base census");
             authenticate_cleanup_compiled_census_v1(payer, &instruction, base)
                 .expect("cleanup boundary census");
-            assert_eq!(base.complete_keys, 19);
+            assert_eq!(base.complete_keys, CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1);
             assert_eq!(base.required_signatures, 1);
             assert_eq!(base.static_keys, 3);
             assert_eq!(base.loaded_writable, 5);
-            assert_eq!(base.loaded_readonly, 11);
-            assert_eq!(base.message_bytes, 241);
-            assert_eq!(base.packet_bytes, 306);
+            assert_eq!(base.loaded_readonly, 10);
+            assert_eq!(base.message_bytes, 240);
+            assert_eq!(base.packet_bytes, 305);
         }
     }
 

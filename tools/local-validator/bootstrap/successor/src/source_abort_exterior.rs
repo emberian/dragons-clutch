@@ -1788,7 +1788,9 @@ mod tests {
         assert_eq!(
             SourceAbortRecoveryOperationV1::ORDERED
                 .map(SourceAbortRecoveryOperationV1::expected_complete_keys),
-            [33, 19, 19]
+            // Controller cleanup census is 18 since 5ca145e8 de-aliased the
+            // DCLTCFQ1 funding source into the payer.
+            [33, 18, 18]
         );
         assert_eq!(
             SourceAbortRecoveryOperationV1::ControllerTerminal.successor(),
