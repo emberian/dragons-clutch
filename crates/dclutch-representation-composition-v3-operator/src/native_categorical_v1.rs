@@ -284,7 +284,10 @@ pub fn compile_native_categorical_composition_v1(
         })
         .collect::<Result<Vec<_>>>()?;
     ordered_leaves.sort_unstable_by_key(|(id, _)| *id);
-    if ordered_leaves.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+    if ordered_leaves
+        .windows(2)
+        .any(|pair| matches!(pair, [(left, _), (right, _)] if left == right))
+    {
         return Err(Error::Composition);
     }
 

@@ -274,9 +274,17 @@ impl FractionalSelectedPublicationV4 {
         let mut output = [0_u8; FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4];
         output[..8].copy_from_slice(&FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4);
         output[8..10].copy_from_slice(&PUBLICATION_VERSION.to_le_bytes());
-        for (index, identity) in self.identities().iter().enumerate() {
-            let start = IDENTITY_START + index * 32;
-            output[start..start + 32].copy_from_slice(identity);
+        // SCALAR_START is defined as IDENTITY_START + IDENTITY_COUNT * 32 and
+        // `identities` returns exactly IDENTITY_COUNT of them, so the
+        // identities tile IDENTITY_START..SCALAR_START by construction and the
+        // per-field offset was only ever that fact restated. Both halves of the
+        // tiling are type-level here, so there is nothing left for an assert to
+        // catch.
+        for (slot, identity) in output[IDENTITY_START..SCALAR_START]
+            .chunks_exact_mut(32)
+            .zip(self.identities().iter())
+        {
+            slot.copy_from_slice(identity);
         }
         output[SCALAR_START..SCALAR_START + 8].copy_from_slice(&self.denominator.to_le_bytes());
         output[SCALAR_START + 8..SCALAR_START + 12]
@@ -406,7 +414,13 @@ pub fn fractional_selected_release_v4(
     let profile = widths.profile();
     let mut bundles = Vec::with_capacity(FRACTIONAL_SELECTED_ACTION_COUNT_V4);
     let mut descriptors = [[0_u8; 32]; FRACTIONAL_SELECTED_ACTION_COUNT_V4];
-    for (index, action) in FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied().enumerate() {
+    // `descriptors` and FRACTIONAL_SELECTED_ACTIONS_V4 are both
+    // [_; FRACTIONAL_SELECTED_ACTION_COUNT_V4], so walking them together visits
+    // exactly the same pairs the index did, and the lengths cannot disagree.
+    for (slot, action) in descriptors
+        .iter_mut()
+        .zip(FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied())
+    {
         let frame = fractional_claims_frame_spec_v4(action, input.terms, widths)?;
         let bundle = build_fractional_selected_bundle_v4(FractionalSelectedBundleInputV4 {
             action,
@@ -415,7 +429,7 @@ pub fn fractional_selected_release_v4(
             claims_frame: &frame,
         })
         .map_err(|_| FractionalSelectedReleaseErrorV4::Bundle)?;
-        descriptors[index] = digest(&bundle.descriptor);
+        *slot = digest(&bundle.descriptor);
         bundles.push(bundle);
     }
     let entries = program_set_entries(&descriptors)?;
@@ -478,7 +492,13 @@ pub fn validate_fractional_selected_release_v4(
         return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
     }
     let mut descriptors = [[0_u8; 32]; FRACTIONAL_SELECTED_ACTION_COUNT_V4];
-    for (index, action) in FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied().enumerate() {
+    // Same fixed pairing as the builder. `index` stays because the bundles are
+    // a Vec that this function still refuses by position rather than by type.
+    for (index, (slot, action)) in descriptors
+        .iter_mut()
+        .zip(FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied())
+        .enumerate()
+    {
         let bundle = release
             .bundles
             .get(index)
@@ -501,7 +521,7 @@ pub fn validate_fractional_selected_release_v4(
         if expected != *bundle {
             return Err(FractionalSelectedReleaseErrorV4::Bundle);
         }
-        descriptors[index] = digest(&bundle.descriptor);
+        *slot = digest(&bundle.descriptor);
     }
     let expected_entries = program_set_entries(&descriptors)?;
     let set = CapabilityProgramSetV2::decode(&release.program_set)
@@ -713,15 +733,22 @@ fn program_set_entries(
         [CapabilityProgramSetEntryV2::new(0, CapabilityDescriptorReferenceV2::new(schema, schema));
             FRACTIONAL_SELECTED_ACTION_COUNT_V4];
     let mut prior: Option<u32> = None;
-    for (index, action) in FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied().enumerate() {
+    // All three of `entries`, FRACTIONAL_SELECTED_ACTIONS_V4 and `descriptors`
+    // are [_; FRACTIONAL_SELECTED_ACTION_COUNT_V4], so the one index served
+    // only to re-derive a correspondence the types already fix.
+    for ((slot, action), descriptor) in entries
+        .iter_mut()
+        .zip(FRACTIONAL_SELECTED_ACTIONS_V4.iter().copied())
+        .zip(descriptors.iter().copied())
+    {
         let selector = u32::from(action.byte());
         if prior.is_some_and(|value| value >= selector) {
             return Err(FractionalSelectedReleaseErrorV4::ProgramSet);
         }
         prior = Some(selector);
-        entries[index] = CapabilityProgramSetEntryV2::new(
+        *slot = CapabilityProgramSetEntryV2::new(
             selector,
-            CapabilityDescriptorReferenceV2::new(schema, content(descriptors[index])?),
+            CapabilityDescriptorReferenceV2::new(schema, content(descriptor)?),
         );
     }
     Ok(entries)
