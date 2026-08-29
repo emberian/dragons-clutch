@@ -424,6 +424,17 @@ shape the program test already builds, then
 `cargo test -p dclutch-rational-representation-v2-operator --test operator`.
 Pure Rust, no SBF build.
 
+**RESOLVED 2026-08-29 (`d9018470`) — see
+`docs/evidence/TOKEN_2022_MINT_EXTENSION_2026_08_29.md`.** The probe above was
+run and taken further: the fixture is now built by the official Token-2022
+library rather than restated by hand. `authenticate_mint` reads through
+`Token2022BehaviorProfileV2::read_mint`, a new entry point that authenticates
+everything `check_mint` does except the supply, which this caller legitimately
+discovers and stages for the program to pin. The control is two-sided — the real
+shape builds all five actions, the truncated 82-byte shape is refused by every
+builder — and the sweep found this was the tree's only wrong `Mint::parse`
+caller; every other one is a collateral Mint or already slices to `MINT_BYTES`.
+
 ---
 
 <a name="5"></a>
