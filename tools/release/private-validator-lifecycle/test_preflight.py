@@ -158,10 +158,20 @@ class OfflinePreflightTests(unittest.TestCase):
         self.assert_refuses("exceeds devnet's 64-key limit")
 
     def test_founding_route_rename_without_runner_join_refuses(self) -> None:
+        market = f"{preflight.SUCCESSOR}/market.rs"
+        source = (self.repo / market).read_text()
+        match = preflight.re.search(
+            r'const GENERIC_MARKET_FOUNDING_MAGIC_V\d+: \[u8; 8\] = \*b"(DCLTGMF\d+)";',
+            source,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        magic = match.group(1)
+        replacement = "DCLTGMF9" if magic != "DCLTGMF9" else "DCLTGMF8"
         self.mutate(
             preflight.RUNNER,
-            "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
-            "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF9)",
+            f"found the Market atomically: Lock, Found, Realize, Claims, Open ({magic})",
+            f"found the Market atomically: Lock, Found, Realize, Claims, Open ({replacement})",
         )
         self.assert_refuses("mutation/journal vocabulary differs")
 
