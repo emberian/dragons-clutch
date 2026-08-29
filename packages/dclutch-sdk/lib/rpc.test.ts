@@ -58,6 +58,16 @@ describe('bounded finalized RPC client', () => {
     });
   });
 
+  it('reads the finalized block height against the caller-selected context floor', async () => {
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getBlockHeight');
+      expect(request.params).toEqual([{ commitment: 'finalized', minContextSlot: 44 }]);
+      return response(71);
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).blockHeight('44')).resolves.toBe('71');
+  });
+
   it('checks chain identity before acquiring a mutation blockhash', async () => {
     const blockhash = '11111111111111111111111111111111';
     const methods: string[] = [];

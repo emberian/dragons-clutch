@@ -47,17 +47,19 @@ describe('the market-detail trade panel', () => {
     }
   });
 
-  it('keeps public Direct execution fail-closed until its canonical route and finalizer exist', () => {
-    expect(html).toContain('does not accept a pasted route or ask for a signature');
+  it('exposes wallet preparation while keeping submission and execution fail-closed', () => {
+    expect(html).toContain('can authenticate both participants');
+    expect(html).toContain('checked Hot route');
+    expect(html).toContain('frozen lookup table');
+    expect(html).toContain('both replay nonces');
+    expect(html).toContain('If the connected wallet is the route payer');
+    expect(html).toContain('If an operator is the payer');
+    expect(html).toContain('There is no submit button here');
+    expect(html).toContain('signed packet is never described as an executed trade');
     expect(html).toContain('A Claims Position holds claim balances');
     expect(html).toContain('never used as your collateral account');
-    expect(html).toContain('authenticate your participant accounts');
-    expect(html).toContain('calculate an unsigned crossing');
-    expect(html).toContain('canonical public route manifest');
-    expect(html).toContain('exact finalized receipt and poststate');
     expect(html).toContain('Browser data is an untrusted projection');
     expect(html).not.toContain('taker collateral account and Position derive under it');
-    expect(html).not.toContain('Route manifest JSON');
     expect(html).not.toContain('Build, sign as payer, and submit');
   });
 });

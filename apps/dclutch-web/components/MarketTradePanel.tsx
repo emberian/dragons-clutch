@@ -4,8 +4,11 @@ import Anchor from '@/components/Anchor';
 import { useMemo, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
-import { type SignedDirectIntentV3 } from '@/lib/directInlineV3';
-import { decodeDirectIntentTicketV1 } from '@/lib/directTicket';
+import {
+  encodeCompactIntentSigningMessageV2,
+  type SignedDirectIntentV3,
+} from '@/lib/directInlineV3';
+import { decodeDirectIntentTicketV1, encodeDirectIntentTicketV1 } from '@/lib/directTicket';
 import {
   admitDirectParticipantCrossingV1,
   inspectDirectParticipantReadinessV1,
@@ -16,10 +19,24 @@ import {
   inspectDirectTradeSpineV1,
   type DirectTradeSpineV1,
 } from '@/lib/directTradeSpine';
+import { transactionSignatureV1 } from '@/lib/clientOperationJournal';
 import { type MarketLiabilityV1 } from '@/lib/marketDiscovery';
-import { SolanaRpcClient } from '@/lib/rpc';
-import { inspectDirectMakerNonceV1 } from '@dclutch/sdk/directMakerReplay';
+import {
+  requestWalletMessageSignatureV1,
+  requestWalletTransactionSignatureV1,
+} from '@/lib/walletHandoff';
+import { inspectDirectHotRouteManifestJsonV3 } from '@dclutch/sdk/directHotRouteManifest';
+import {
+  inspectDirectMakerNoncePairV1,
+  inspectDirectMakerNonceV1,
+} from '@dclutch/sdk/directMakerReplay';
+import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { planDirectCrossingV1, type DirectCrossingPlanV1 } from '@dclutch/sdk/directTicket';
+import {
+  prepareDirectWalletTransactionV1,
+  type DirectWalletChainContextV1,
+  type DirectWalletPreparationV1,
+} from '@dclutch/sdk/directWalletPreparationV1';
 
 /**
  * The trader's face of one Market: pick an outcome, size it, cross one
@@ -33,8 +50,8 @@ import { planDirectCrossingV1, type DirectCrossingPlanV1 } from '@dclutch/sdk/di
  * derived by the same builders the byte-level tests pin. Preview arithmetic
  * needs no route; EXECUTION needs the operator-published route manifest and
  * lookup table, which the advanced drawer accepts in exactly the /trade
- * workspace's format. This panel deliberately stops before signing until a
- * canonical public manifest and exact finalized completion verifier exist.
+ * workspace's format. This panel may prepare and wallet-sign exact bytes, but
+ * deliberately stops before any submission or execution claim.
  */
 
 type TicketState =
@@ -53,6 +70,35 @@ type ExecutionState =
     replaySlot: string;
   }>;
 
+type WalletPreparationState =
+  | Readonly<{ kind: 'idle' }>
+  | Readonly<{ kind: 'working'; message: string }>
+  | Readonly<{ kind: 'refused'; reason: string }>
+  | Readonly<{
+    kind: 'wallet-preparable';
+    preparation: Extract<DirectWalletPreparationV1, { status: 'wallet-preparable' }>;
+    takerTicket: string;
+  }>
+  | Readonly<{
+    kind: 'operator-required';
+    payer: string;
+    reason: string;
+    takerTicket: string;
+    routeObservedSlot: string;
+    lastValidBlockHeight: string;
+  }>
+  | Readonly<{
+    kind: 'wallet-signed';
+    signature: string;
+    signedWireBase64: string;
+    messageBase64: string;
+    wireBytes: number;
+    routeObservedSlot: string;
+    blockhashObservedSlot: string;
+    lastValidBlockHeight: string;
+    lookupTable: string;
+  }>;
+
 function positiveU64(text: string, fallback: bigint): bigint {
   if (text === '') return fallback;
   if (!/^[1-9][0-9]*$/.test(text)) throw new Error('your size must be one positive whole number of claim atoms');
@@ -63,6 +109,29 @@ function positiveU64(text: string, fallback: bigint): bigint {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'the step refused without a usable reason';
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 8_192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8_192));
+  }
+  return btoa(binary);
+}
+
+function chainContext(
+  admission: Readonly<{ endpoint: string; genesisHash: string }>,
+): DirectWalletChainContextV1 {
+  return Object.freeze({ rpcEndpoint: admission.endpoint, genesisHash: admission.genesisHash });
+}
+
+function sameChain(
+  left: Readonly<{ endpoint: string; genesisHash: string }>,
+  right: Readonly<{ endpoint: string; genesisHash: string }>,
+): void {
+  if (left.endpoint !== right.endpoint || left.genesisHash !== right.genesisHash) {
+    throw new Error('RPC endpoint or genesis changed while the Direct route was being authenticated');
+  }
 }
 
 export default function MarketTradePanel({
@@ -94,7 +163,9 @@ export default function MarketTradePanel({
   const [outcome, setOutcome] = useState<number | null>(null);
   const [desired, setDesired] = useState('');
   const [ticketText, setTicketText] = useState('');
+  const [routeText, setRouteText] = useState('');
   const [execution, setExecution] = useState<ExecutionState>({ kind: 'idle' });
+  const [walletPreparation, setWalletPreparation] = useState<WalletPreparationState>({ kind: 'idle' });
 
   const inspected = spine !== null && spine.status === 'inspected' ? spine : null;
 
@@ -112,6 +183,7 @@ export default function MarketTradePanel({
 
   function invalidatePreview(): void {
     setExecution({ kind: 'idle' });
+    setWalletPreparation({ kind: 'idle' });
   }
 
   function invalidateWalletState(): void {
@@ -122,7 +194,7 @@ export default function MarketTradePanel({
 
   async function inspect() {
     setSpineStatus('Reading the Market, its manifest, the Direct program set, descriptor, and config at one finalized floor…');
-    setSpine(null); setParticipant(null); setExecution({ kind: 'idle' });
+    setSpine(null); setParticipant(null); setExecution({ kind: 'idle' }); setWalletPreparation({ kind: 'idle' });
     if (registryProgramId === null || registryProgramId === '') {
       setSpine(Object.freeze({ status: 'refused' as const, reason: 'the Registry program is required: the Direct capability lives in Registry-finalized records' }));
       setSpineStatus('Refused before any read.');
@@ -212,6 +284,211 @@ export default function MarketTradePanel({
     }
   }
 
+  async function prepareWalletIntent() {
+    if (ticketState.kind !== 'ready' || execution.kind !== 'ready' || wallets.address === null) return;
+    if (ticketState.ticket.intent.side !== 0) {
+      setWalletPreparation({
+        kind: 'refused',
+        reason: 'Wallet preparation V1 accepts a portable sell ticket and your connected wallet as buyer. This buy ticket remains a valid read-only preview, but this caller will not silently reverse its participant roles.',
+      });
+      return;
+    }
+    if (routeText.trim() === '') {
+      setWalletPreparation({ kind: 'refused', reason: 'Paste the operator-published Direct Hot route manifest before asking your wallet to sign.' });
+      return;
+    }
+    if (registryProgramId === null || claimsProgramId === null || tradingProgramId === null
+        || custodyProgramId === null || rentProgramId === null) {
+      setWalletPreparation({ kind: 'refused', reason: 'This deployment does not name every program needed to authenticate both participants.' });
+      return;
+    }
+    const connectedWallet = wallets.address;
+    const client = new SolanaRpcClient(endpoint);
+    const participantRequest = (owner: string) => Object.freeze({
+      market: marketAddress,
+      owner,
+      coreProgram: coreProgramId,
+      registryProgram: registryProgramId,
+      claimsProgram: claimsProgramId,
+      tradingProgram: tradingProgramId,
+      custodyProgram: custodyProgramId,
+      rentProgram: rentProgramId,
+    });
+    try {
+      setWalletPreparation({ kind: 'working', message: 'Authenticating the route, both participants, and both replay nonces before asking for your intent signature…' });
+      const planningAdmission = await client.assertMutationCluster();
+      const initialRoute = await inspectDirectHotRouteManifestJsonV3(client, routeText);
+      const initialRouteAdmission = await client.assertMutationCluster();
+      sameChain(planningAdmission, initialRouteAdmission);
+      if (initialRoute.route.market !== marketAddress || initialRoute.route.tradingProgram !== tradingProgramId) {
+        throw new Error('route manifest authenticates another Market or Trading program');
+      }
+      const initialSeller = await inspectDirectParticipantReadinessV1(client, participantRequest(ticketState.ticket.maker));
+      const initialTaker = await inspectDirectParticipantReadinessV1(client, participantRequest(connectedWallet));
+      if (initialSeller.status !== 'ready' || initialTaker.status !== 'ready') {
+        throw new Error(`both participants must be ready before signing: seller is ${initialSeller.status}; you are ${initialTaker.status}`);
+      }
+      const initialNonces = await inspectDirectMakerNoncePairV1(client, [
+        {
+          tradingProgram: initialRoute.route.tradingProgram,
+          market: initialRoute.route.market,
+          generation: initialRoute.route.generation,
+          maker: ticketState.ticket.maker,
+        },
+        {
+          tradingProgram: initialRoute.route.tradingProgram,
+          market: initialRoute.route.market,
+          generation: initialRoute.route.generation,
+          maker: connectedWallet,
+        },
+      ]);
+      const crossingPlan = planDirectCrossingV1({
+        route: initialRoute.route,
+        ticket: ticketState.ticket,
+        takerAddress: connectedWallet,
+        takerReplay: initialNonces[1],
+        takerCollateralAccount: initialTaker.coordinates.collateral,
+        desiredFill: positiveU64(desired, ticketState.ticket.intent.maximumFill),
+        clockSlot: BigInt(initialNonces[1].observedSlot),
+      });
+      if (initialSeller.positionBalances[crossingPlan.taker.outcome] === undefined
+          || initialSeller.positionBalances[crossingPlan.taker.outcome]! < crossingPlan.fill) {
+        throw new Error('the ticket seller’s finalized Position does not cover this fill');
+      }
+      admitDirectParticipantCrossingV1(initialTaker, crossingPlan);
+      setWalletPreparation({ kind: 'working', message: 'The chain checks passed. Your wallet will now sign only your detached Direct intent; this is not a transaction or submission.' });
+      const takerSignature = await requestWalletMessageSignatureV1(
+        client,
+        wallets.handoff(endpoint),
+        connectedWallet,
+        encodeCompactIntentSigningMessageV2(crossingPlan.taker),
+      );
+      const signedTaker: SignedDirectIntentV3 = Object.freeze({
+        maker: connectedWallet,
+        signature: takerSignature,
+        intent: crossingPlan.taker,
+      });
+
+      setWalletPreparation({ kind: 'working', message: 'Intent signed. Reacquiring the route, both participants, and both nonces before compiling anything…' });
+      const routeBefore = await client.assertMutationCluster();
+      const routeInspection = await inspectDirectHotRouteManifestJsonV3(client, routeText);
+      const routeAfter = await client.assertMutationCluster();
+      sameChain(routeBefore, routeAfter);
+      sameChain(planningAdmission, routeAfter);
+      const sellerContextAdmission = await client.assertMutationCluster();
+      const sellerParticipant = await inspectDirectParticipantReadinessV1(client, participantRequest(ticketState.ticket.maker));
+      const takerContextAdmission = await client.assertMutationCluster();
+      const takerParticipant = await inspectDirectParticipantReadinessV1(client, participantRequest(connectedWallet));
+      const nonceContextAdmission = await client.assertMutationCluster();
+      const noncePair = await inspectDirectMakerNoncePairV1(client, [
+        {
+          tradingProgram: routeInspection.route.tradingProgram,
+          market: routeInspection.route.market,
+          generation: routeInspection.route.generation,
+          maker: ticketState.ticket.maker,
+        },
+        {
+          tradingProgram: routeInspection.route.tradingProgram,
+          market: routeInspection.route.market,
+          generation: routeInspection.route.generation,
+          maker: connectedWallet,
+        },
+      ]);
+      const currentAdmission = await client.assertMutationCluster();
+      for (const admission of [sellerContextAdmission, takerContextAdmission, nonceContextAdmission, currentAdmission]) {
+        sameChain(planningAdmission, admission);
+      }
+      const currentFinalizedSlot = BigInt(await client.finalizedSlot());
+      const currentBlockHeight = BigInt(await client.blockHeight(currentFinalizedSlot.toString()));
+      const prepared = prepareDirectWalletTransactionV1({
+        routeInspection,
+        ticketInspection: ticketState.ticket,
+        crossingPlan,
+        sellerParticipant,
+        takerParticipant,
+        noncePair,
+        signedSeller: ticketState.ticket,
+        signedTaker,
+        context: Object.freeze({
+          route: chainContext(routeAfter),
+          sellerParticipant: chainContext(sellerContextAdmission),
+          takerParticipant: chainContext(takerContextAdmission),
+          noncePair: chainContext(nonceContextAdmission),
+          planning: Object.freeze({ ...chainContext(planningAdmission), connectedWallet }),
+          current: Object.freeze({
+            ...chainContext(currentAdmission),
+            connectedWallet,
+            finalizedSlot: currentFinalizedSlot,
+            blockHeight: currentBlockHeight,
+          }),
+        }),
+      });
+      const takerTicket = encodeDirectIntentTicketV1(signedTaker);
+      if (prepared.status === 'operator-required') {
+        setWalletPreparation({
+          kind: 'operator-required',
+          payer: prepared.payer,
+          reason: prepared.reason,
+          takerTicket,
+          routeObservedSlot: prepared.binding.routeObservedSlot,
+          lastValidBlockHeight: prepared.binding.lastValidBlockHeight.toString(),
+        });
+        return;
+      }
+      setWalletPreparation({ kind: 'wallet-preparable', preparation: prepared, takerTicket });
+    } catch (error) {
+      setWalletPreparation({ kind: 'refused', reason: errorMessage(error) });
+    }
+  }
+
+  async function signPreparedTransaction() {
+    if (walletPreparation.kind !== 'wallet-preparable') return;
+    const prepared = walletPreparation.preparation;
+    try {
+      if (wallets.address !== prepared.binding.connectedWallet) throw new Error('connected wallet changed after Direct preparation');
+      const client = new SolanaRpcClient(endpoint);
+      const admission = await client.assertMutationCluster();
+      if (admission.endpoint !== prepared.binding.rpcEndpoint || admission.genesisHash !== prepared.binding.genesisHash) {
+        throw new Error('RPC endpoint or genesis changed after Direct preparation');
+      }
+      const blockHeight = BigInt(await client.blockHeight(prepared.binding.currentFinalizedSlot.toString()));
+      if (blockHeight > prepared.binding.lastValidBlockHeight) {
+        throw new Error(`prepared Direct blockhash expired at block height ${prepared.binding.lastValidBlockHeight}`);
+      }
+      setWalletPreparation({ kind: 'working', message: 'Asking your wallet to sign the exact 1,159-byte v0 packet. The page will not submit it.' });
+      const signed = await requestWalletTransactionSignatureV1(
+        client,
+        wallets.handoff(endpoint),
+        prepared.transactionPlan.transaction,
+        prepared.payer,
+      );
+      if (!signed.complete) throw new Error('wallet did not complete the sole required payer signature');
+      const after = await client.assertMutationCluster();
+      if (after.endpoint !== prepared.binding.rpcEndpoint || after.genesisHash !== prepared.binding.genesisHash) {
+        throw new Error('RPC endpoint or genesis changed while the wallet signed');
+      }
+      const afterHeight = BigInt(await client.blockHeight(prepared.binding.currentFinalizedSlot.toString()));
+      if (afterHeight > prepared.binding.lastValidBlockHeight) {
+        throw new Error(`signed Direct packet expired at block height ${prepared.binding.lastValidBlockHeight}; it must not be submitted`);
+      }
+      const lookupTable = prepared.transactionPlan.transaction.message.addressTableLookups[0]?.accountKey.toBase58();
+      if (lookupTable === undefined) throw new Error('prepared Direct packet omitted its authenticated lookup table');
+      setWalletPreparation({
+        kind: 'wallet-signed',
+        signature: transactionSignatureV1(signed.transaction.signatures[0]!),
+        signedWireBase64: base64(signed.wireBytes),
+        messageBase64: base64(signed.transaction.message.serialize()),
+        wireBytes: signed.wireBytes.length,
+        routeObservedSlot: prepared.binding.routeObservedSlot,
+        blockhashObservedSlot: prepared.binding.blockhashObservedSlot.toString(),
+        lastValidBlockHeight: prepared.binding.lastValidBlockHeight.toString(),
+        lookupTable,
+      });
+    } catch (error) {
+      setWalletPreparation({ kind: 'refused', reason: errorMessage(error) });
+    }
+  }
+
   const supplies = liability !== null && liability.status === 'bound' ? liability.supplyAtoms : null;
 
   return <section className="trade-v3-card">
@@ -222,7 +499,7 @@ export default function MarketTradePanel({
       <Anchor className="secondary-action" href="/trade">Advanced: full route workbench →</Anchor>
     </div>
     <p className="direct-status" aria-live="polite">{spineStatus}</p>
-    <p className="direct-status">This page can authenticate your participant accounts and calculate an unsigned crossing from a portable ticket. It does not accept a pasted route or ask for a signature, and it does not submit a trade yet. Execution stays unavailable until this Market publishes one canonical public route manifest and the page can verify the exact finalized receipt and poststate. A Claims Position holds claim balances; it is never used as your collateral account. Browser data is an untrusted projection; the onchain programs remain authoritative.</p>
+    <p className="direct-status">This page can authenticate both participants, the checked Hot route, its frozen lookup table, and both replay nonces. If the connected wallet is the route payer, it can prepare and ask your wallet to sign the exact v0 packet. If an operator is the payer, it names that next actor instead. There is no submit button here, and a signed packet is never described as an executed trade. A Claims Position holds claim balances; it is never used as your collateral account. Browser data is an untrusted projection; the onchain programs remain authoritative.</p>
     <p className="direct-status" aria-live="polite">{participantStatus}</p>
 
     {spine !== null && spine.status === 'refused' && <p className="market-refusal">Refused: {spine.reason}</p>}
@@ -275,7 +552,7 @@ export default function MarketTradePanel({
         <article><span>Your fee</span><strong>{(execution.plan.takerSide === 'buy' ? execution.plan.preview.buyerFee : execution.plan.preview.sellerFee).toString()}</strong><small>{inspected.feeBasisPoints} bps, rounded at the protocol boundary</small></article>
         <article><span>Asset check</span><strong>{execution.admission.requiredAtoms.toString()} / {execution.admission.availableAtoms.toString()}</strong><small>{execution.admission.resource}, finalized through slot {execution.replaySlot}</small></article>
       </div>}
-      {execution.kind === 'ready' && <p className="direct-status">This is an unsigned preview, not a submitted trade. The page has not asked your wallet to sign anything.</p>}
+      {execution.kind === 'ready' && <p className="direct-status">This is an unsigned preview, not a submitted trade. Your wallet has not signed this intent unless you explicitly continue below.</p>}
 
       <h3 className="detail-subhead">What stands between this preview and a real trade</h3>
       {inspected.walls.length === 0
@@ -285,11 +562,40 @@ export default function MarketTradePanel({
         ))}</ul>}
 
       <details className="trade-v3-bytes">
-        <summary>Why Direct execution is not available here yet</summary>
-        <p className="direct-status">This public page does not accept a pasted route or ask for a signature. It will execute only after the participant-admission semantic owner supplies the distinct chain-derived Token-2022 account, this Market publishes one canonical public route manifest, and the client can authenticate that exact manifest at finalized commitment, save the exact chain, Market, owner, operation digest, intent, plan, and signed transaction id before submission, and verify the exact finalized receipt and poststate after submission.</p>
-        <p className="direct-status">Browser data is an untrusted projection. The onchain programs still refuse substituted accounts, nonces, instructions, and resource state.</p>
-        {execution.kind === 'working' && <p className="direct-status" aria-live="polite">{execution.message}</p>}
-        {execution.kind === 'refused' && <p className="market-refusal">Refused: {execution.reason}</p>}
+        <summary>Prepare the exact wallet handoff</summary>
+        <p className="direct-status">Paste the operator-published <code>dclutch-direct-hot-route-manifest-v3</code>. The reader hostile-decodes the bounded JSON, reacquires the 39 named accounts plus the frozen lookup table, authenticates its checked release and capability seal, and then rechecks both participants and both nonces after your detached intent signature.</p>
+        <label><span>Checked Direct Hot route manifest · JSON</span><textarea rows={7} spellCheck={false} value={routeText} onChange={(event) => { setRouteText(event.target.value); setWalletPreparation({ kind: 'idle' }); }} /></label>
+        <div className="direct-actions">
+          <button
+            type="button"
+            disabled={execution.kind !== 'ready' || walletPreparation.kind === 'working'}
+            onClick={() => void prepareWalletIntent()}
+          >Sign my intent, then authenticate the packet</button>
+        </div>
+        {walletPreparation.kind === 'working' && <p className="direct-status" aria-live="polite">{walletPreparation.message}</p>}
+        {walletPreparation.kind === 'refused' && <p className="market-refusal">Refused: {walletPreparation.reason}</p>}
+        {walletPreparation.kind === 'operator-required' && <div className="portfolio-claim">
+          <span>Your intent is signed. Nothing has executed.</span>
+          <strong>Route payer {walletPreparation.payer}</strong>
+          <p>{walletPreparation.reason} The authenticated route was observed at slot {walletPreparation.routeObservedSlot}; its blockhash expires at block height {walletPreparation.lastValidBlockHeight}. Give the exact signed taker ticket below to that payer. This page has not built, signed, or submitted a transaction.</p>
+          <label><span>Your signed taker ticket</span><textarea readOnly rows={7} value={walletPreparation.takerTicket} /></label>
+        </div>}
+        {walletPreparation.kind === 'wallet-preparable' && <div className="portfolio-claim">
+          <span>Wallet-preparable · not signed as a transaction</span>
+          <strong>{walletPreparation.preparation.transactionPlan.wireBytes.length} bytes · {walletPreparation.preparation.transactionPlan.loadedAddresses} LUT addresses · 61 unique keys</strong>
+          <p>Route slot {walletPreparation.preparation.binding.routeObservedSlot}; blockhash slot {walletPreparation.preparation.binding.blockhashObservedSlot.toString()}; expires at block height {walletPreparation.preparation.binding.lastValidBlockHeight.toString()}. Frozen table {walletPreparation.preparation.transactionPlan.transaction.message.addressTableLookups[0]?.accountKey.toBase58()}.</p>
+          <label><span>Exact unsigned v0 message · base64</span><textarea readOnly rows={5} value={base64(walletPreparation.preparation.transactionPlan.transaction.message.serialize())} /></label>
+          <div className="direct-actions"><button type="button" onClick={() => void signPreparedTransaction()}>Ask my wallet to sign this exact packet</button></div>
+          <p>This request still does not submit. Your wallet must preserve the exact message bytes; any rewrite is refused.</p>
+        </div>}
+        {walletPreparation.kind === 'wallet-signed' && <div className="portfolio-claim">
+          <span>Wallet signed · prepared, not submitted</span>
+          <strong>{walletPreparation.signature}</strong>
+          <p>{walletPreparation.wireBytes} bytes. Route slot {walletPreparation.routeObservedSlot}; blockhash slot {walletPreparation.blockhashObservedSlot}; expires at block height {walletPreparation.lastValidBlockHeight}. Frozen table {walletPreparation.lookupTable}. Nothing has been sent to RPC.</p>
+          <label><span>Exact signed packet · base64</span><textarea readOnly rows={6} value={walletPreparation.signedWireBase64} /></label>
+          <label><span>Exact v0 message · base64</span><textarea readOnly rows={5} value={walletPreparation.messageBase64} /></label>
+        </div>}
+        <p className="direct-status">The next protocol step after a prepared packet is an explicitly authorized durable submit/finalization caller. This page does not pretend that boundary has occurred.</p>
       </details>
     </>}
   </section>;
