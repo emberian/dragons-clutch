@@ -139,7 +139,8 @@ use crate::{
 use founding_submission_journal::{
     FoundingFinalizationV1, FoundingPreSendProjectionV1, FoundingSubmissionBindingV1,
     FoundingSubmissionJournalV1, FoundingSubmissionOperationV1, FoundingSubmissionPhaseV1,
-    FoundingSubmissionPlanV1, FoundingSubmissionRecoveryV1, authenticate_founding_packet_fresh_v1,
+    FoundingSubmissionPlanV1, FoundingSubmissionRecoveryV1,
+    authenticate_bound_founding_submission_prefix_v1, authenticate_founding_packet_fresh_v1,
     authenticate_founding_submission_v1, dispatch_founding_submission_v1,
     finalize_founding_submission_v1, founding_submission_finalized_poststates_v1,
     founding_submission_message_v1, founding_submission_packet_v1,
@@ -314,9 +315,8 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
         journals: &'a mut BTreeMap<FoundingSubmissionOperationV1, FoundingSubmissionJournalV1>,
         persist: &'a mut dyn FnMut(&[FoundingSubmissionJournalV1]) -> Result<()>,
     ) -> Result<Self> {
-        for journal in journals.values() {
-            authenticate_founding_submission_v1(&binding, journal)?;
-        }
+        let ordered = journals.values().cloned().collect::<Vec<_>>();
+        authenticate_bound_founding_submission_prefix_v1(&binding, &ordered)?;
         Ok(Self {
             binding,
             journals,
@@ -333,8 +333,16 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
 
     fn write(&mut self, journal: FoundingSubmissionJournalV1) -> Result<()> {
         authenticate_founding_submission_v1(&self.binding, &journal)?;
+        let mut ordered = self
+            .journals
+            .values()
+            .filter(|existing| existing.operation != journal.operation)
+            .cloned()
+            .collect::<Vec<_>>();
+        ordered.push(journal.clone());
+        ordered.sort_by_key(|row| row.operation);
+        authenticate_bound_founding_submission_prefix_v1(&self.binding, &ordered)?;
         self.journals.insert(journal.operation, journal);
-        let ordered = self.journals.values().cloned().collect::<Vec<_>>();
         (self.persist)(&ordered)
     }
 
@@ -344,6 +352,147 @@ impl<'a> FoundingSubmissionRecorderV1<'a> {
     ) -> Result<FoundingPreSendProjectionV1> {
         visit_founding_pre_send_boundary_v1(&self.binding, journal, &mut |_| Ok(()))
     }
+}
+
+fn compile_current_founding_message_v1(
+    label: &str,
+    payer: Pubkey,
+    instructions: &[Instruction],
+    observation: Observation,
+    tables: &[ObservedAccount],
+    heap_frame_bytes: Option<u32>,
+    blockhash: Hash,
+) -> Result<VersionedMessage> {
+    let bounded = bounded_instructions(instructions, heap_frame_bytes)
+        .map_err(|error| Error::new(format!("{label}: {error}")))?;
+    let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+        payer,
+        &bounded,
+        solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+        observation,
+        tables,
+    )
+    .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+    Ok(plan.message)
+}
+
+fn authenticate_resolved_founding_message_v1(
+    operation: FoundingSubmissionOperationV1,
+    message: &VersionedMessage,
+    tables: &[ObservedAccount],
+) -> Result<()> {
+    let mut resolved = std::collections::BTreeSet::new();
+    let (static_keys, lookups) = match message {
+        VersionedMessage::Legacy(message) => (message.account_keys.as_slice(), &[][..]),
+        VersionedMessage::V0(message) => (
+            message.account_keys.as_slice(),
+            message.address_table_lookups.as_slice(),
+        ),
+    };
+    if static_keys.iter().any(|key| !resolved.insert(*key)) {
+        return Err(Error::new(
+            "founding compiled message duplicated a static account",
+        ));
+    }
+    let mut used_tables = std::collections::BTreeSet::new();
+    for lookup in lookups {
+        if !used_tables.insert(lookup.account_key) {
+            return Err(Error::new(
+                "founding compiled message duplicated a lookup table",
+            ));
+        }
+        let table = tables
+            .iter()
+            .find(|table| table.key == lookup.account_key)
+            .ok_or_else(|| Error::new("founding compiled message omitted its lookup body"))?;
+        let decoded = AddressLookupTable::deserialize(&table.data)
+            .map_err(|error| Error::new(format!("founding lookup table: {error:?}")))?;
+        for index in lookup
+            .writable_indexes
+            .iter()
+            .chain(&lookup.readonly_indexes)
+        {
+            let address = decoded
+                .addresses
+                .get(usize::from(*index))
+                .ok_or_else(|| Error::new("founding lookup index exceeded its exact body"))?;
+            if !resolved.insert(*address) {
+                return Err(Error::new(
+                    "founding resolved accounts aliased a static or loaded account",
+                ));
+            }
+        }
+    }
+    if resolved.len() != operation.exact_unique_accounts() {
+        return Err(Error::new(format!(
+            "{} resolved account count changed: expected {}, observed {}",
+            operation.label(),
+            operation.exact_unique_accounts(),
+            resolved.len()
+        )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_current_founding_intent_v1(
+    label: &str,
+    operation: FoundingSubmissionOperationV1,
+    instructions: &[Instruction],
+    expected_signers: &[Pubkey],
+    observation: Observation,
+    tables: &[ObservedAccount],
+    resolved_accounts_sha256: &str,
+    prestate_addresses: &[Pubkey],
+    completion_addresses: &[Pubkey],
+    recovery_payload: &[u8],
+    heap_frame_bytes: Option<u32>,
+    binding: &FoundingSubmissionBindingV1,
+    current: &FoundingSubmissionJournalV1,
+) -> Result<()> {
+    let persisted = founding_submission_message_v1(binding, current)?;
+    let blockhash = match &persisted {
+        VersionedMessage::Legacy(message) => message.recent_blockhash,
+        VersionedMessage::V0(message) => message.recent_blockhash,
+    };
+    let recomputed = compile_current_founding_message_v1(
+        label,
+        binding.payer,
+        instructions,
+        observation,
+        tables,
+        heap_frame_bytes,
+        blockhash,
+    )?;
+    authenticate_resolved_founding_message_v1(operation, &recomputed, tables)?;
+    let expected_signers = expected_signers
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let expected_prestate_accounts = prestate_addresses
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let expected_completion_accounts = completion_addresses
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if current.operation != operation
+        || recomputed.serialize() != persisted.serialize()
+        || current.expected_signers != expected_signers
+        || current.resolved_accounts_sha256 != resolved_accounts_sha256
+        || current.prestate_accounts != expected_prestate_accounts
+        || current.completion_accounts != expected_completion_accounts
+        || current.completion_contract_sha256
+            != founding_completion_contract_v1(operation, completion_addresses)?
+        || founding_submission_recovery_payload_v1(binding, current)? != recovery_payload
+    {
+        return Err(Error::new(format!(
+            "{} durable journal does not match the freshly derived instruction, routing, signer, prestate, completion, or recovery intent",
+            operation.label()
+        )));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -392,17 +541,17 @@ fn send_durable_founding_v1(
             .get("lastValidBlockHeight")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| Error::new("founding blockhash omitted last-valid height"))?;
-        let bounded = bounded_instructions(instructions, heap_frame_bytes)
-            .map_err(|error| Error::new(format!("{label}: {error}")))?;
-        let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+        let message = compile_current_founding_message_v1(
+            label,
             payer.pubkey(),
-            &bounded,
-            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            instructions,
             observation,
             tables,
-        )
-        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
-        let message_bytes = plan.message.serialize();
+            heap_frame_bytes,
+            blockhash,
+        )?;
+        authenticate_resolved_founding_message_v1(operation, &message, tables)?;
+        let message_bytes = message.serialize();
         let exact_fee_lamports = rpc
             .call(
                 "getFeeForMessage",
@@ -415,21 +564,40 @@ fn send_durable_founding_v1(
             &recorder.binding,
             FoundingSubmissionPlanV1 {
                 operation,
-                message: plan.message,
+                message,
                 last_valid_block_height,
                 exact_fee_lamports,
-                expected_signers,
-                resolved_accounts_sha256,
+                expected_signers: expected_signers.clone(),
+                resolved_accounts_sha256: resolved_accounts_sha256.clone(),
                 prestate_accounts: prestate_addresses.to_vec(),
                 prestate_sha256: expected_prestate.clone(),
                 completion_accounts: completion_addresses.to_vec(),
                 completion_contract_sha256: completion_contract_sha256.clone(),
-                recovery_payload,
+                recovery_payload: recovery_payload.clone(),
             },
         )?;
         // Key-free, self-authenticated Planned review is durable first.
         recorder.write(journal)?;
     }
+
+    let current = recorder
+        .current(operation)
+        .ok_or_else(|| Error::new("durable founding journal disappeared before intent join"))?;
+    authenticate_current_founding_intent_v1(
+        label,
+        operation,
+        instructions,
+        &expected_signers,
+        observation,
+        tables,
+        &resolved_accounts_sha256,
+        prestate_addresses,
+        completion_addresses,
+        &recovery_payload,
+        heap_frame_bytes,
+        &recorder.binding,
+        current,
+    )?;
 
     loop {
         let current = recorder
@@ -8035,6 +8203,7 @@ fn authenticate_funding_readiness_compiled_geometry_v1(
             operation.label()
         ))
     })?;
+    authenticate_resolved_founding_message_v1(operation, &compiled.message, routing_tables)?;
     let plus_one = funding_readiness_compiled_geometry_v1(
         payer,
         &append_distinct_funding_readiness_accounts_v1(instructions, 1)?,
@@ -10290,6 +10459,122 @@ mod tests {
             assert_eq!(geometry.message_bytes, expected_message_bytes);
             assert_eq!(geometry.packet_bytes, expected_packet_bytes);
         }
+    }
+
+    #[test]
+    fn durable_recovery_rejoins_fresh_instruction_routing_and_completion_intent() {
+        let operation = FoundingSubmissionOperationV1::CoreFundingCreateV1;
+        let (payer, instruction) =
+            funding_readiness_census_fixture_v1(18, 4, Some(15), &[1_usize, 12], 72 + 280 + 224);
+        let destination = instruction.accounts[12].pubkey;
+        let instructions = funding_readiness_instructions_v1(
+            payer,
+            instruction,
+            Some(FundingReadinessPrepayV1 {
+                destination,
+                lamports: 1,
+            }),
+        );
+        let table = frozen_funding_readiness_table_v1(payer, &instructions);
+        let blockhash = Hash::new_from_array([0x73; 32]);
+        let message = compile_current_founding_message_v1(
+            operation.label(),
+            payer,
+            &instructions,
+            table.observation,
+            std::slice::from_ref(&table),
+            None,
+            blockhash,
+        )
+        .expect("current message");
+        let binding = FoundingSubmissionBindingV1::new(
+            "devnet",
+            crate::cluster::DEVNET_GENESIS_HASH,
+            std::path::Path::new("/tmp/dclutch-readiness-intent.json"),
+            "https://api.devnet.solana.com/",
+            "11".repeat(32),
+            "22".repeat(32),
+            payer,
+        )
+        .expect("binding");
+        let resolved_digest = "33".repeat(32);
+        let prestate = vec![destination];
+        let completion = vec![destination];
+        let recovery = b"exact readiness recovery".to_vec();
+        let journal = plan_founding_submission_v1(
+            &binding,
+            FoundingSubmissionPlanV1 {
+                operation,
+                message,
+                last_valid_block_height: 900,
+                exact_fee_lamports: 5_000,
+                expected_signers: vec![payer],
+                resolved_accounts_sha256: resolved_digest.clone(),
+                prestate_accounts: prestate.clone(),
+                prestate_sha256: "44".repeat(32),
+                completion_accounts: completion.clone(),
+                completion_contract_sha256: founding_completion_contract_v1(operation, &completion)
+                    .expect("completion"),
+                recovery_payload: recovery.clone(),
+            },
+        )
+        .expect("journal");
+        let authenticate = |instructions: &[Instruction],
+                            resolved: &str,
+                            completion: &[Pubkey],
+                            recovery: &[u8]| {
+            authenticate_current_founding_intent_v1(
+                operation.label(),
+                operation,
+                instructions,
+                &[payer],
+                table.observation,
+                std::slice::from_ref(&table),
+                resolved,
+                &prestate,
+                completion,
+                recovery,
+                None,
+                &binding,
+                &journal,
+            )
+        };
+        authenticate(&instructions, &resolved_digest, &completion, &recovery)
+            .expect("exact current intent");
+
+        let mut changed_instruction = instructions.clone();
+        changed_instruction
+            .last_mut()
+            .expect("protocol instruction")
+            .data[0] ^= 1;
+        assert!(
+            authenticate(
+                &changed_instruction,
+                &resolved_digest,
+                &completion,
+                &recovery
+            )
+            .is_err()
+        );
+        assert!(authenticate(&instructions, &"55".repeat(32), &completion, &recovery).is_err());
+        assert!(
+            authenticate(
+                &instructions,
+                &resolved_digest,
+                &[Pubkey::new_unique()],
+                &recovery
+            )
+            .is_err()
+        );
+        assert!(
+            authenticate(
+                &instructions,
+                &resolved_digest,
+                &completion,
+                b"substituted recovery"
+            )
+            .is_err()
+        );
     }
 
     #[test]

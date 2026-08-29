@@ -38,6 +38,15 @@ pub(crate) enum FoundingSubmissionOperationV1 {
 }
 
 impl FoundingSubmissionOperationV1 {
+    pub(crate) const ORDER: [Self; 6] = [
+        Self::Dcltcfq1,
+        Self::Dcltpcb2,
+        Self::Dcltgmf2,
+        Self::CoreFundingCreateV1,
+        Self::ResolutionFundingActivateV1,
+        Self::CoreFundingAcceptV1,
+    ];
+
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Dcltcfq1 => "DCLTCFQ1",
@@ -70,6 +79,43 @@ impl FoundingSubmissionOperationV1 {
             | Self::CoreFundingAcceptV1 => 1,
         }
     }
+}
+
+/// Authenticate the campaign-owned collection, not only each row. A durable
+/// run may contain exactly one canonical prefix of the six mutation owners.
+/// Every row before the tail must already be Finalized; only the tail may be
+/// armed or ambiguous. This makes a missing/reordered predecessor a refusal at
+/// load time rather than relying on a later live-state detector to notice it.
+pub(crate) fn authenticate_founding_submission_prefix_v1(
+    journals: &[FoundingSubmissionJournalV1],
+) -> Result<()> {
+    if journals.len() > FoundingSubmissionOperationV1::ORDER.len() {
+        return Err(refusal("founding journal collection exceeded six rows"));
+    }
+    for (index, journal) in journals.iter().enumerate() {
+        if journal.operation != FoundingSubmissionOperationV1::ORDER[index] {
+            return Err(refusal(
+                "founding journals were not one exact canonical operation prefix",
+            ));
+        }
+        if index + 1 != journals.len() && journal.phase != FoundingSubmissionPhaseV1::Finalized {
+            return Err(refusal(
+                "a nonterminal founding journal predecessor was not Finalized",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn authenticate_bound_founding_submission_prefix_v1(
+    binding: &FoundingSubmissionBindingV1,
+    journals: &[FoundingSubmissionJournalV1],
+) -> Result<()> {
+    authenticate_founding_submission_prefix_v1(journals)?;
+    for journal in journals {
+        authenticate_founding_submission_v1(binding, journal)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1403,5 +1449,26 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn journal_collection_is_one_canonical_finalized_prefix() {
+        let payer = Keypair::new();
+        let witness = Keypair::new();
+        let (_, mut first) = planned(&[&payer, &witness], FoundingSubmissionOperationV1::Dcltcfq1);
+        let (_, second) = planned(&[&payer, &witness], FoundingSubmissionOperationV1::Dcltpcb2);
+        first.phase = FoundingSubmissionPhaseV1::Finalized;
+        assert!(
+            authenticate_founding_submission_prefix_v1(&[first.clone(), second.clone()]).is_ok()
+        );
+
+        let mut nonfinal_predecessor = first.clone();
+        nonfinal_predecessor.phase = FoundingSubmissionPhaseV1::Dispatching;
+        assert!(
+            authenticate_founding_submission_prefix_v1(&[nonfinal_predecessor, second.clone()])
+                .is_err()
+        );
+        assert!(authenticate_founding_submission_prefix_v1(std::slice::from_ref(&second)).is_err());
+        assert!(authenticate_founding_submission_prefix_v1(&[second, first]).is_err());
     }
 }

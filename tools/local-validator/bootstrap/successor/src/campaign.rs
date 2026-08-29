@@ -88,6 +88,7 @@ use serde::{
 };
 use serde_json::{Value, json};
 use solana_sdk::{
+    hash::Hash,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
@@ -95,7 +96,9 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::{
     Error, Result,
-    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
+    cluster::{
+        ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, MAINNET_BETA_GENESIS_HASH,
+    },
     model::{
         CheckedDeploymentDispositionV1, CheckedLocalMutableRolePinV1, CheckedUpgradeRolePinV1,
         ProgramPin, SuccessorPlan,
@@ -293,6 +296,24 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
                 "terminal evidence requires an executed owned loopback campaign; external and preflight reports are non-consumable"
             }
         }));
+    }
+    let genesis_hash = report
+        .get("genesis_hash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("campaign report omitted genesis_hash"))?;
+    let parsed_genesis = genesis_hash
+        .parse::<Hash>()
+        .map_err(|error| Error::new(format!("campaign genesis_hash: {error}")))?;
+    if parsed_genesis == Hash::default()
+        || genesis_hash == MAINNET_BETA_GENESIS_HASH
+        || match expected_cluster {
+            crate::cluster::ExpectedClusterV1::Devnet => genesis_hash != DEVNET_GENESIS_HASH,
+            crate::cluster::ExpectedClusterV1::OwnedLoopback => false,
+        }
+    {
+        return Err(Error::new(
+            "campaign report genesis_hash does not match its admitted cluster identity",
+        ));
     }
     let plan_sha256 = report
         .get("plan_sha256")
@@ -1418,6 +1439,9 @@ fn load_prior_campaign_evidence(
         .transpose()
         .map_err(|error| Error::new(format!("prior founding submission journals: {error}")))?
         .unwrap_or_default();
+    crate::market::founding_submission_journal::authenticate_founding_submission_prefix_v1(
+        &founding_submission_rows,
+    )?;
     let mut founding_submission_journals = BTreeMap::new();
     for journal in founding_submission_rows {
         let operation = journal.operation;
@@ -4137,6 +4161,7 @@ mod tests {
         json!({
             "schema": "dclutch-successor-campaign-report-v1",
             "cluster": "devnet",
+            "genesis_hash": DEVNET_GENESIS_HASH,
             "rpc_url": "https://api.devnet.solana.com/",
             "mode": "execute",
             "plan_sha256": "11".repeat(32),
@@ -4178,6 +4203,14 @@ mod tests {
         let evidence = parse_campaign_terminal_evidence_v1(&encoded)
             .expect("exact Market digest is terminal-consumable");
         assert_eq!(evidence.market_sha256, "22".repeat(32));
+
+        let mut wrong_genesis = report.clone();
+        wrong_genesis["genesis_hash"] = json!(Hash::new_unique().to_string());
+        let refusal = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&wrong_genesis).expect("wrong genesis JSON"),
+        )
+        .expect_err("terminal devnet evidence must bind the exact devnet genesis");
+        assert!(refusal.0.contains("genesis_hash"), "{}", refusal.0);
 
         let mut missing = report.clone();
         missing
