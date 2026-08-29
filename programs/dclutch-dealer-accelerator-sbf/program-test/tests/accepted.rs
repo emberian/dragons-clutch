@@ -20,7 +20,13 @@
 use std::{env, vec::Vec};
 
 use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
+use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+use dclutch_capability_program_contract::hot_v3::{
+    HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_MARKET_ACCOUNT_V3,
+    HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+};
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
+use dclutch_custody_contract::{CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
     scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1,
@@ -50,7 +56,11 @@ use dclutch_operator::{
         derive_dealer_scenario_evaluation_receipt_v1,
         project_dealer_scenario_canonical_membership_pages_v1,
     },
-    dealer_scenario_hot_v4::{DealerScenarioHotMetaStateV4, SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1},
+    dealer_scenario_hot_v4::{
+        DealerScenarioHotMetaStateV4, DealerScenarioSemanticStateV4,
+        SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1, dealer_hot_frame_projection_v4,
+        project_dealer_scenario_hot_semantics_v4, project_dealer_scenario_unsplit_topology_v4,
+    },
     direct_inline_v3::ObservedAccountMetaV3,
 };
 use dclutch_registry_activation_auth_v1::activation_cache_address_v1;
@@ -66,6 +76,11 @@ use dclutch_release_set_contract::{
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use dclutch_core_contract::ContentId;
 use dclutch_trading_sbf::dealer::{
+    v3_composer::{ScenarioCollateralFrameV3, ScenarioComposerContextV3},
+    v3_trade_profile::{
+        DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DEALER_SCENARIO_PROFILE_SPANS_V4,
+        DealerScenarioAccountProfileInputV4, encode_dealer_scenario_account_profile_v4_atomic,
+    },
     v3_obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
         DEALER_OBLIGATION_PDA_DOMAIN_V3, DEALER_OBLIGATION_VERSION_V3,
@@ -294,27 +309,106 @@ fn release_waist_for(custody_seed: u8) -> ReleaseWaist {
     }
 }
 
+/// Encode the canonical Dealer account profile for one set of common widths.
+fn canonical_profile(common_data_lengths: [u32; 5]) -> Vec<u8> {
+    let mut scratch = vec![0; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+    let mut output = vec![0; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+    encode_dealer_scenario_account_profile_v4_atomic(
+        DealerScenarioAccountProfileInputV4 {
+            common_data_lengths,
+        },
+        &mut scratch,
+        &mut output,
+    )
+    .expect("canonical account profile");
+    output
+}
+
+/// One frame observation at a canonical coordinate.
+fn frame_meta(
+    index: usize,
+    bytes: usize,
+    signer: bool,
+    writable: bool,
+    executable: bool,
+) -> ObservedAccountMetaV3 {
+    ObservedAccountMetaV3 {
+        account: ObservedAccount {
+            observation: observation(),
+            key: Pubkey::new_from_array([u8::try_from(index + 1).expect("small coordinate"); 32]),
+            owner: Pubkey::new_from_array([200; 32]),
+            lamports: 1,
+            executable,
+            data: vec![0; bytes],
+        },
+        is_signer: signer,
+        is_writable: writable,
+    }
+}
+
+/// Derive the physical Dealer frame for one runtime width and span set.
+///
+/// Every coordinate, width and privilege here comes from the account profile
+/// and from the supported frame projection. The campaign states none of them.
+fn physical_frame(
+    tail_count: u32,
+    span_counts: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
+) -> (Vec<ObservedAccountMetaV3>, Vec<ObservedAccountMetaV3>) {
+    let projection = dealer_hot_frame_projection_v4();
+    let common_lengths = [32_u32, 128, 48, 56, 64];
+    let profile_bytes = canonical_profile(common_lengths);
+    let profile = AccountProfileV2::decode(&profile_bytes).expect("decode profile");
+    let physical_count = profile
+        .physical_account_count_with_dynamic_spans(tail_count, &span_counts)
+        .expect("physical count");
+    let mut fixed_accounts = (0..projection.fixed_account_count)
+        .map(|index| frame_meta(index, 0, false, index == HOT_ROOT_ACCOUNT_V3, false))
+        .collect::<Vec<_>>();
+    fixed_accounts
+        .get_mut(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3)
+        .expect("profile coordinate")
+        .account
+        .data = profile_bytes.clone();
+    for (length, index) in common_lengths
+        .into_iter()
+        .zip(projection.injected_physical_indices)
+    {
+        fixed_accounts
+            .get_mut(index)
+            .expect("injected coordinate")
+            .account
+            .data = vec![0; usize::try_from(length).expect("common width")];
+    }
+    let mut suffix = Vec::new();
+    for ordinal in projection.injected_account_count..physical_count {
+        let geometry = profile
+            .physical_account_geometry_with_dynamic_spans(tail_count, &span_counts, ordinal)
+            .expect("physical geometry");
+        let privileges = geometry.privileges();
+        let bytes = match geometry.data() {
+            PhysicalAccountDataGeometryV2::Exact { bytes }
+            | PhysicalAccountDataGeometryV2::VacantOrExact { live_bytes: bytes } => bytes,
+            PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable { minimum_bytes } => {
+                minimum_bytes
+            }
+            PhysicalAccountDataGeometryV2::Opaque => 7,
+        };
+        suffix.push(frame_meta(
+            projection.fixed_account_count + ordinal,
+            bytes,
+            privileges.signer(),
+            privileges.writable(),
+            privileges.executable(),
+        ));
+    }
+    (fixed_accounts, suffix)
+}
+
 fn observation() -> Observation {
     Observation {
         slot: 20,
         unix_timestamp: 12,
         finality: Finality::Finalized,
-    }
-}
-
-/// One membership observation. Only its identity reaches the manifest.
-fn membership_meta(key: Pubkey) -> ObservedAccountMetaV3 {
-    ObservedAccountMetaV3 {
-        account: ObservedAccount {
-            observation: observation(),
-            key,
-            owner: Pubkey::new_from_array([200; 32]),
-            lamports: 1,
-            executable: false,
-            data: Vec::new(),
-        },
-        is_signer: false,
-        is_writable: false,
     }
 }
 
@@ -387,6 +481,8 @@ struct Scenario {
     manifest_bytes: Vec<u8>,
     pages: [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1],
     membership: Vec<Pubkey>,
+    frame_accounts: Vec<(Pubkey, Account)>,
+    unsplit_account_lock_count: usize,
     waist: ReleaseWaist,
 }
 
@@ -464,44 +560,125 @@ fn scenario() -> Scenario {
     // The membership transcript is the complete physical Dealer frame for this
     // scenario after alias de-duplication. Its width is the reason the split
     // exists: one instruction naming all of it cannot be submitted.
-    // The checkpoint, the clock and the manifest are fixed page accounts, so
-    // they are never members of the transcript the pages carry.
-    let mut membership = vec![
-        CHILD_ROOT,
-        obligation,
-        REQUEST,
-        MARKET,
-        TRADING,
-        COUNTERPARTY,
-        COUNTERPARTY_ACCOUNT,
-        BENEFICIARY,
-    ];
-    let mut filler = 0_u32;
-    while membership.len() < 121 {
-        let mut seed = [0_u8; 32];
-        seed[..4].copy_from_slice(&filler.to_le_bytes());
-        seed[31] = 0xef;
-        let key = Pubkey::new_from_array(seed);
-        if !membership.contains(&key)
-            && key != checkpoint
-            && key != membership_manifest
-            && key != sysvar::clock::ID
-        {
-            membership.push(key);
-        }
-        filler += 1;
-    }
-    let metas = membership
-        .iter()
-        .copied()
-        .map(membership_meta)
-        .collect::<Vec<_>>();
-    let canonical = project_dealer_scenario_canonical_membership_pages_v1(
-        DealerScenarioHotMetaStateV4 {
-            fixed_accounts: &metas,
-            strategy_accounts: &[],
-            runtime_suffix_accounts: &[],
+    // The physical frame is derived, not chosen. The semantic projection fixes
+    // the span widths and the caller-authority count; the account profile fixes
+    // every coordinate and privilege; and the unsplit topology below is the
+    // proof that what the pages carry really is the 121-lock scenario the split
+    // exists to make submittable.
+    let vault = |context, compartment| {
+        Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new(market, waist.release_set_id, context, compartment)
+                .as_slices(),
+            &waist.custody_program,
+        )
+        .0
+        .to_bytes()
+    };
+    let semantic = DealerScenarioSemanticStateV4 {
+        chain,
+        context: ScenarioComposerContextV3 {
+            trading_program: TRADING.to_bytes(),
+            custody_program: waist.custody_program.to_bytes(),
+            release_set: waist.release_set_id,
+            market,
+            realm: [0xb6; 32],
+            child_root: child,
+            obligation_account: obligation.to_bytes(),
+            mint: [0xb7; 32],
+            token_program: [0xb8; 32],
+            parent_request_digest: request_digest,
+            generation: 17,
+            custody_replay_revision: 7,
+            locked_capital_floor: 0,
         },
+        collateral: ScenarioCollateralFrameV3 {
+            principal_vault: vault(child, CompartmentV1::TradingPrincipal),
+            principal_balance: 100,
+            fee_vault: vault(child, CompartmentV1::FeeVault),
+            fee_balance: 9,
+            hoard_vault: vault(market, CompartmentV1::HoardPrincipal),
+            hoard_balance: 100,
+            counterparty_account: COUNTERPARTY_ACCOUNT.to_bytes(),
+            counterparty_owner: COUNTERPARTY.to_bytes(),
+            counterparty_external_delegate: Pubkey::find_program_address(
+                &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &market, &waist.release_set_id],
+                &waist.custody_program,
+            )
+            .0
+            .to_bytes(),
+            counterparty_external_delegated_amount: 11,
+            counterparty_balance: 100,
+        },
+    };
+    let projected = project_dealer_scenario_hot_semantics_v4(semantic, &request_bytes)
+        .expect("semantic projection");
+    let (mut fixed_accounts, suffix) =
+        physical_frame(WIDTH, projected.dynamic_span_counts);
+    let frame = dealer_hot_frame_projection_v4();
+    fixed_accounts
+        .get_mut(HOT_MARKET_ACCOUNT_V3)
+        .expect("market coordinate")
+        .account
+        .key = MARKET;
+    fixed_accounts
+        .get_mut(HOT_ROOT_ACCOUNT_V3)
+        .expect("root coordinate")
+        .account
+        .key = CHILD_ROOT;
+    fixed_accounts
+        .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+        .expect("trading coordinate")
+        .account
+        .key = TRADING;
+    let mut strategy_accounts = (0..frame.admitted_evidence_count + projected.caller_authority_count)
+        .map(|index| frame_meta(200 + index, 0, false, false, index == 6))
+        .collect::<Vec<_>>();
+    strategy_accounts
+        .get_mut(6)
+        .expect("accelerator coordinate")
+        .account
+        .executable = true;
+    let state = DealerScenarioHotMetaStateV4 {
+        fixed_accounts: &fixed_accounts,
+        strategy_accounts: &strategy_accounts,
+        runtime_suffix_accounts: &suffix,
+    };
+    let unsplit = project_dealer_scenario_unsplit_topology_v4(state, semantic, &request_bytes)
+        .expect("unsplit topology");
+    // The frame aliases some coordinates, and the canonical partition sorts and
+    // deduplicates once across the whole set, so the membership transcript is
+    // the frame's distinct identities.
+    let mut membership = fixed_accounts
+        .iter()
+        .chain(strategy_accounts.iter())
+        .chain(suffix.iter())
+        .map(|meta| meta.account.key)
+        .collect::<Vec<_>>();
+    membership.sort_unstable_by_key(Pubkey::to_bytes);
+    membership.dedup();
+    let mut frame_accounts = fixed_accounts
+        .iter()
+        .chain(strategy_accounts.iter())
+        .chain(suffix.iter())
+        .map(|meta| {
+            (
+                meta.account.key,
+                Account {
+                    lamports: Rent::default()
+                        .minimum_balance(meta.account.data.len())
+                        .max(1),
+                    data: meta.account.data.clone(),
+                    owner: meta.account.owner,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    frame_accounts.sort_by_key(|(key, _)| key.to_bytes());
+    frame_accounts.dedup_by_key(|(key, _)| *key);
+    let canonical = project_dealer_scenario_canonical_membership_pages_v1(
+        state,
         MANIFEST_PRODUCER,
         checkpoint,
         request_digest,
@@ -519,6 +696,8 @@ fn scenario() -> Scenario {
         manifest_bytes,
         pages: canonical.pages,
         membership,
+        frame_accounts,
+        unsplit_account_lock_count: unsplit.unique_account_lock_count,
         waist,
     }
 }
@@ -569,24 +748,31 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         scenario.waist.activation_cache,
         data_account(scenario.waist.registry, scenario.waist.cache_body.clone()),
     );
-    for key in &scenario.membership {
-        if *key == TRADING
-            || *key == scenario.waist.registry
-            || *key == scenario.waist.custody_program
-            || *key == scenario.waist.custody_programdata
-            || *key == scenario.waist.activation_cache
-            || *key == REQUEST
-            || *key == CHILD_ROOT
-            || *key == scenario.obligation
-            || *key == scenario.membership_manifest
-            || *key == COUNTERPARTY
-            || *key == COUNTERPARTY_ACCOUNT
-            || *key == MARKET
-            || *key == BENEFICIARY
-        {
+    // Install the frame exactly as the projection observed it: same identities,
+    // same owners, same widths. The pages carry these accounts, so what the
+    // campaign pages is the frame itself and not a stand-in for it.
+    let reserved = [
+        TRADING,
+        REQUEST,
+        CHILD_ROOT,
+        scenario.obligation,
+        scenario.membership_manifest,
+        scenario.waist.registry,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+        MANIFEST_PRODUCER,
+        UNACTIVATED_PRODUCER,
+        BENEFICIARY,
+        COUNTERPARTY,
+        COUNTERPARTY_ACCOUNT,
+        MARKET,
+    ];
+    for (key, account) in &scenario.frame_accounts {
+        if reserved.contains(key) {
             continue;
         }
-        test.add_account(*key, data_account(system_program::ID, vec![0x11]));
+        test.add_account(*key, account.clone());
     }
     test.add_account(MARKET, data_account(system_program::ID, vec![0x22; 32]));
     test
@@ -720,10 +906,14 @@ async fn real_trading_elf_executes_the_accepted_transition_through_reservation()
         journal.checkpoint, scenario.checkpoint,
         "the durable journal and the campaign name one checkpoint"
     );
-    assert_eq!(
-        scenario.membership.len(),
-        121,
-        "the unsplit form of this scenario is the 121-account frame the split exists to carry"
+    // The exact width is a property of this scenario's spans, not a constant,
+    // so what is pinned is the thing that matters: the unsplit form is over the
+    // ceiling and therefore unsubmittable, and the split carries the same frame.
+    assert!(
+        scenario.unsplit_account_lock_count > SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "the unsplit form must be unsubmittable, which is the whole reason this campaign exists: \
+         observed {} locks against a {SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1}-lock ceiling",
+        scenario.unsplit_account_lock_count
     );
 
     let payer = context.payer.pubkey();
@@ -794,7 +984,7 @@ async fn real_trading_elf_executes_the_accepted_transition_through_reservation()
     assert_eq!(
         carried,
         scenario.membership.len(),
-        "every member of the frame was carried exactly once"
+        "every member of the derived physical frame was carried exactly once"
     );
     // The evaluator seals what it read. Both prestate digests fold the complete
     // ordered transcript the checkpoint now carries, so this receipt could not

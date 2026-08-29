@@ -51,7 +51,10 @@ use solana_program::{
 
 const ADMITTED_AOT_FIXED_EXTRAS_V3: usize = 8;
 const ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3: usize = 6;
-const DEALER_HOT_INJECTED_ACCOUNTS_V4: usize = 5;
+/// Number of fixed Hot coordinates a Dealer scenario injects ahead of its
+/// packed runtime suffix.
+pub const DEALER_HOT_INJECTED_ACCOUNTS_V4: usize = 5;
+
 const DEALER_HOT_INJECTED_PHYSICAL_INDICES_V4: [usize; DEALER_HOT_INJECTED_ACCOUNTS_V4] = [
     HOT_ROOT_ACCOUNT_V3,
     HOT_CONFIG_RAW_ACCOUNT_V3,
@@ -59,6 +62,38 @@ const DEALER_HOT_INJECTED_PHYSICAL_INDICES_V4: [usize; DEALER_HOT_INJECTED_ACCOU
     HOT_PORTFOLIO_RAW_ACCOUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
 ];
+
+/// Exact fixed geometry of one Dealer scenario Hot frame.
+///
+/// This is the supported way to consume the frame's shape. A campaign, a
+/// producer, or a durable caller that needs to enumerate the physical frame
+/// reads it from here rather than restating coordinates of its own, which is
+/// the same doctrine the derived-not-supplied frames elsewhere in the tree
+/// already follow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerHotFrameProjectionV4 {
+    /// Exact common Hot frame width every Dealer scenario restates.
+    pub fixed_account_count: usize,
+    /// Number of injected physical accounts ahead of the packed runtime suffix.
+    pub injected_account_count: usize,
+    /// The exact fixed Hot coordinates those injected accounts occupy, in the
+    /// canonical order the account profile packs them.
+    pub injected_physical_indices: [usize; DEALER_HOT_INJECTED_ACCOUNTS_V4],
+    /// Exact admitted-AOT evidence width between the fixed frame and the
+    /// caller authorities.
+    pub admitted_evidence_count: usize,
+}
+
+/// Borrow the one canonical Dealer scenario Hot frame projection.
+#[must_use]
+pub const fn dealer_hot_frame_projection_v4() -> DealerHotFrameProjectionV4 {
+    DealerHotFrameProjectionV4 {
+        fixed_account_count: HOT_FIXED_ACCOUNT_COUNT_V3,
+        injected_account_count: DEALER_HOT_INJECTED_ACCOUNTS_V4,
+        injected_physical_indices: DEALER_HOT_INJECTED_PHYSICAL_INDICES_V4,
+        admitted_evidence_count: ADMITTED_AOT_FIXED_EXTRAS_V3,
+    }
+}
 
 /// Account-lock ceiling currently active on Solana devnet.
 ///
