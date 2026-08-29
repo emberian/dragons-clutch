@@ -286,7 +286,9 @@ use crate::resolution_composition_v3::{
     feature = "dealer-family"
 ))]
 use crate::{
-    claims_composition_v3::{ClaimsRouteReceiptV3, execute_claims_route_v3},
+    claims_composition_v3::{
+        ClaimsRouteReceiptV3, SparsePostResourceVerificationV3, execute_claims_route_v3,
+    },
     custody_composition_v3::{
         CustodyCompositionParentV3, execute_custody_route_v3, preflight_custody_route_v3,
     },
@@ -3012,6 +3014,11 @@ fn execute_prepared_child_routes_v3(
         prepared.selected_program.to_bytes(),
         prepared.child_walk,
         caller_bumps,
+        if prepared.direct_crosscheck.is_some() {
+            SparsePostResourceVerificationV3::DirectFinalization
+        } else {
+            SparsePostResourceVerificationV3::Immediate
+        },
     )
 }
 
@@ -7824,6 +7831,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     // See `crate::child_authority_v4`: this walk reproduces those addresses
     // instead of searching for them a second time.
     caller_bumps: &ChildCallerBumpsV4,
+    sparse_post_resource_verification: SparsePostResourceVerificationV3,
 ) -> Result<[u8; 32], ProgramError> {
     // The preflight walk's derivations, read back in the order it produced
     // them. See `ChildCallerBumpsV4`.
@@ -8034,6 +8042,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 prior_receipt,
                                 buffers,
                                 claims_program.ok_or(TradingSbfError::Release)?,
+                                sparse_post_resource_verification,
                             )?,
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )
@@ -8837,6 +8846,7 @@ fn execute_claims_route_digest_v3<'info>(
     prior_receipt: Option<&[u8]>,
     buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
+    sparse_post_resource_verification: SparsePostResourceVerificationV3,
 ) -> Result<[u8; 32], ProgramError> {
     claims_receipt_digest_v3(execute_claims_route_v3(
         program_id,
@@ -8852,6 +8862,7 @@ fn execute_claims_route_digest_v3<'info>(
         prior_receipt,
         buffers,
         claims_program,
+        sparse_post_resource_verification,
     )?)
 }
 
