@@ -10,6 +10,7 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+#[cfg(test)]
 use dclutch_capability_contract::ContentId;
 use dclutch_claims_svm::{
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
@@ -17,9 +18,11 @@ use dclutch_claims_svm::{
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
-    CustodyReplaySeedsV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1,
+    CustodyReplaySeedsV1, CustodyVaultSeedsV1,
 };
+#[cfg(test)]
+use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
@@ -43,7 +46,9 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_activation_auth_v1::{
     activation_cache_address_v1, authenticate_activated_role_v1,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+#[cfg(test)]
+use dclutch_release_set_contract::CallerAuthoritySeedsV1;
+use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
     COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, RecordAdmissionV3,
