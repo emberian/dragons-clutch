@@ -119,20 +119,54 @@ pub const DEALER_SCENARIO_ACTIVATION_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTDAC1";
 /// Shared schema version.
 pub const DEALER_SCENARIO_CUSTODY_STATE_VERSION_V1: u16 = 1;
 
+/// Solana's maximum length for a single program-derived-address seed.
+///
+/// A seed longer than this cannot be used at all: the address is not merely
+/// unusual, it is underivable, and every call naming it fails. This crate is
+/// `no_std` and does not depend on the SDK, so the limit is restated here and
+/// enforced against every domain below.
+pub const MAX_PDA_SEED_BYTES_V1: usize = 32;
+
 /// Custody-owned reservation batch PDA domain.
-pub const DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1: &[u8] =
-    b"dclutch:dealer-reservation-batch:v1";
+pub const DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-batch:v1";
 /// Custody-owned per-effect state PDA domain.
 pub const DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1: &[u8] =
-    b"dclutch:dealer-reservation-state:v1";
+    b"dclutch:dealer-reserve-state:v1";
 /// Token-program-owned per-effect escrow PDA domain under Custody.
-pub const DEALER_SCENARIO_RESERVATION_ESCROW_PDA_DOMAIN_V1: &[u8] =
-    b"dclutch:dealer-reservation-escrow:v1";
+pub const DEALER_SCENARIO_RESERVATION_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-escrow:v1";
 /// Domain for one request-specific Trading caller authority.
-pub const DEALER_SCENARIO_RESERVATION_CALL_DOMAIN_V1: &[u8] = b"dclutch:dealer-reservation-call:v1";
+pub const DEALER_SCENARIO_RESERVATION_CALL_DOMAIN_V1: &[u8] = b"dclutch:dealer-call:v1";
 /// Custody-owned durable activation-receipt PDA domain.
 pub const DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1: &[u8] =
-    b"dclutch:dealer-activation-receipt:v1";
+    b"dclutch:dealer-activation:v1";
+
+// These four domains were each 35 or 36 bytes, so every address in the Custody
+// reservation, escrow and activation families was underivable by construction:
+// Custody could not sign one into existence and Trading could not authenticate
+// one. Nothing on any cluster can depend on the old spellings, because no
+// account at those addresses can ever have been created. The assertions are the
+// actual fix -- a shorter string is only a shorter string until something stops
+// the next one from growing.
+const _: () = assert!(
+    DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the reservation batch domain must be a usable PDA seed"
+);
+const _: () = assert!(
+    DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the reservation state domain must be a usable PDA seed"
+);
+const _: () = assert!(
+    DEALER_SCENARIO_RESERVATION_ESCROW_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the reservation escrow domain must be a usable PDA seed"
+);
+const _: () = assert!(
+    DEALER_SCENARIO_RESERVATION_CALL_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the reservation caller-authority domain must be a usable PDA seed"
+);
+const _: () = assert!(
+    DEALER_SCENARIO_ACTIVATION_RECEIPT_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the activation receipt domain must be a usable PDA seed"
+);
 
 const VERSION_OFFSET: usize = 8;
 const TAG_OFFSET: usize = 10;

@@ -27,6 +27,12 @@ pub const DEALER_SCENARIO_CHECKPOINT_MAGIC_V1: [u8; 8] = *b"DCLTDSC1";
 pub const DEALER_SCENARIO_CHECKPOINT_VERSION_V1: u16 = 1;
 /// Trading PDA domain for one request-scoped checkpoint.
 pub const DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-checkpoint:v1";
+
+const _: () = assert!(
+    DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1.len()
+        <= crate::scenario_custody_reservation_v1::MAX_PDA_SEED_BYTES_V1,
+    "the checkpoint domain must be a usable PDA seed"
+);
 /// Domain for one page receipt over an exact checkpoint prestate.
 pub const DEALER_SCENARIO_PAGE_RECEIPT_DOMAIN_V1: &[u8] = b"dclutch:dealer-scenario-page:v1";
 /// Domain for the joined Claims prestate used by preparation and commit.
