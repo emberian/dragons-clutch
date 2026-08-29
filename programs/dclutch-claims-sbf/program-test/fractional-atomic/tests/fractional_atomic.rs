@@ -1131,6 +1131,12 @@ const CUSTODY_EXPECTED_REVISION: u64 = 1;
 const TERMINAL_SHARDS: u64 = WRAP_NATIVE_CLAIMS * DENOMINATOR;
 /// A coordinate that is not the winner, so its terminal payout is exactly zero.
 const LOSING_COORDINATE: u32 = 1;
+/// Representation width the terminal campaign runs at.
+///
+/// The terminal route translates every Product result coordinate onto every
+/// Claims representation root, so its compute cost grows with the width in a
+/// way the open-market actions' does not. See the ceiling campaign below.
+const TERMINAL_WIDTH: usize = 8;
 
 /// Base Token-2022 Mint with no mint or freeze authority.
 ///
@@ -1169,7 +1175,11 @@ struct TerminalFixture {
 /// `winner` selects the terminal outcome, which is what separates the two
 /// terminal actions: burning shards at the winner redeems collateral, burning
 /// them anywhere else pays exactly zero. Everything else is identical.
-fn terminal_fixture(winner: u32, action: FractionalExposureActionV2) -> (ProgramTest, TerminalFixture) {
+fn terminal_fixture(
+    width: usize,
+    winner: u32,
+    action: FractionalExposureActionV2,
+) -> (ProgramTest, TerminalFixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1222,7 +1232,7 @@ fn terminal_fixture(winner: u32, action: FractionalExposureActionV2) -> (Program
     };
     let compile = |reserve_owner: Pubkey| {
         compile_narrow_fixture_v2(NarrowFixtureInputV2 {
-            outcome_count: FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2,
+            outcome_count: width,
             registry_program: REGISTRY_PROGRAM_ID,
             core_program: CORE_PROGRAM_ID,
             claims_program: CLAIMS_PROGRAM_ID,
@@ -1245,7 +1255,7 @@ fn terminal_fixture(winner: u32, action: FractionalExposureActionV2) -> (Program
     let probe = compile(Pubkey::new_from_array([0xef; 32]));
     let core_market = probe.core_market;
 
-    let shard_mints: Vec<[u8; 32]> = (0..FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2)
+    let shard_mints: Vec<[u8; 32]> = (0..width)
         .map(|index| {
             let mut bytes = [0x77_u8; 32];
             let index = u32::try_from(index).expect("representation coordinate");
@@ -1662,7 +1672,117 @@ async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &Termi
 #[tokio::test]
 async fn the_claims_role_custody_replay_is_created_by_the_real_route() {
     let (test, fixture) =
-        terminal_fixture(OUTCOME, FractionalExposureActionV2::TerminalRedeem);
+        terminal_fixture(TERMINAL_WIDTH, OUTCOME, FractionalExposureActionV2::TerminalRedeem);
     let mut context = test.start_with_context().await;
     create_custody_replay(&mut context, &fixture).await;
+}
+
+fn terminal_observe(fixture: &TerminalFixture) -> [Pubkey; 5] {
+    [
+        fixture.shard_mint,
+        fixture.holder_token,
+        fixture.shared.reserve_position.account,
+        fixture.hoard,
+        RECIPIENT_TOKEN,
+    ]
+}
+
+/// A losing coordinate burns its shards and pays exactly nothing.
+///
+/// TerminalZeroBurn is the settlement of a representation that resolved
+/// worthless. The whole Custody composition is still authenticated -- replay,
+/// Hoard, authority, realm, certificate -- but no Custody CPI fires, so the
+/// replay revision must not move and no collateral may leave the Hoard. Claims
+/// refuses the action outright if the payout is nonzero, so this is also what
+/// pins the action to the economics rather than to the caller's say-so.
+#[tokio::test]
+async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
+    let (test, fixture) = terminal_fixture(
+        TERMINAL_WIDTH,
+        LOSING_COORDINATE,
+        FractionalExposureActionV2::TerminalZeroBurn,
+    );
+    let mut context = test.start_with_context().await;
+    create_custody_replay(&mut context, &fixture).await;
+
+    let keys = terminal_observe(&fixture);
+    let before = observe5(&mut context, keys).await;
+    let replay_before = account(&mut context, fixture.custody_replay).await;
+    assert_eq!(mint_supply(&before[0]), TERMINAL_SHARDS);
+    assert_eq!(token_amount(&before[1]), TERMINAL_SHARDS);
+    assert_eq!(balance(&before[2], OUTCOME as usize), WRAP_NATIVE_CLAIMS);
+
+    let (accepted, logs, units, result) =
+        submit(&mut context, terminal_instruction(&fixture, false)).await;
+    assert!(accepted, "the zero-payout terminal burn must commit: {result:?}");
+    assert!(
+        logs.iter()
+            .any(|line| line.contains(&CLAIMS_PROGRAM_ID.to_string())
+                && line.contains("invoke [2]"))
+    );
+    assert!(units > 30_000, "{units} compute units");
+
+    let after = observe5(&mut context, keys).await;
+    // The shards are gone and the locked native Claims are released.
+    assert_eq!(mint_supply(&after[0]), 0, "every shard is burned");
+    assert_eq!(token_amount(&after[1]), 0);
+    assert_eq!(balance(&after[2], OUTCOME as usize), 0);
+    // Not one collateral atom moved, in either direction.
+    assert_eq!(token_amount(&after[3]), HOARD_ATOMS, "the Hoard is untouched");
+    assert_eq!(token_amount(&after[4]), RECIPIENT_ATOMS);
+    // And the Custody replay did not advance, because Custody never ran.
+    let replay_after = account(&mut context, fixture.custody_replay).await;
+    assert_eq!(
+        CustodyReplayV1::decode(&replay_after.data)
+            .expect("replay decodes")
+            .next_revision,
+        CUSTODY_EXPECTED_REVISION,
+        "a zero payout fires no Custody CPI, so its cursor must not move"
+    );
+    assert_eq!(replay_before.data, replay_after.data);
+}
+
+async fn observe5(context: &mut ProgramTestContext, keys: [Pubkey; 5]) -> [Account; 5] {
+    let mut observed = Vec::with_capacity(keys.len());
+    for key in keys {
+        observed.push(account(context, key).await);
+    }
+    observed.try_into().expect("five observed accounts")
+}
+
+/// A paying redemption needs the derived Custody caller, not the Claims program.
+///
+/// On the zero-payout path coordinate 23 must literally BE the Claims program,
+/// because no Custody CPI is signed for. The moment the payout is nonzero that
+/// same coordinate must instead be the `CallerAuthoritySeedsV1` PDA under Claims
+/// whose seeds commit to the exact CustodyRequestV1 -- and therefore to the
+/// payout and the signed-delta packet. The two paths want different accounts at
+/// one coordinate, which is worth pinning: passing the zero-payout shape into a
+/// paying redemption is refused rather than paying out under a caller nobody
+/// derived.
+///
+/// Deriving that address host-side is the remaining step for a committed
+/// Fractional redemption; the settlement itself is proven by the zero-payout
+/// campaign above, which authenticates the identical 44-account frame.
+#[tokio::test]
+async fn a_paying_redemption_refuses_the_zero_payout_custody_caller() {
+    let (test, fixture) =
+        terminal_fixture(TERMINAL_WIDTH, OUTCOME, FractionalExposureActionV2::TerminalRedeem);
+    let mut context = test.start_with_context().await;
+    create_custody_replay(&mut context, &fixture).await;
+
+    let keys = terminal_observe(&fixture);
+    let before = observe5(&mut context, keys).await;
+    let (accepted, _logs, _units, result) =
+        submit(&mut context, terminal_instruction(&fixture, false)).await;
+    assert!(!accepted);
+    assert_eq!(
+        custom_refusal(&result),
+        Some(0x5002),
+        "ClaimsSbfError::Identity: the paying path derives its own Custody caller"
+    );
+
+    // And nothing moved: a refused redemption pays nobody.
+    let after = observe5(&mut context, keys).await;
+    assert_eq!(before, after);
 }
