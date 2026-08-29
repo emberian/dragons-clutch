@@ -219,20 +219,27 @@ class Simulator:
         trade = self.config["trade"]
         if self.config["cluster"]["label"] == "local":
             local = trade["local"]
+            participant_report = local["participant_report"]
+            key_dir = local["key_dir"]
+            pair = self.pair_for_cycle(cycle)
+            if pair:
+                participant_report = pair.get("participant_report", participant_report)
+                key_dir = pair.get("key_dir", key_dir)
             argv = [
                 self.boot(), "local-private-validator-direct-trade-produce-v1",
                 "--rpc-url", self.config["cluster"]["rpc_url"],
                 "--plan", local["plan"],
                 "--market-input", local["market_input"],
                 "--campaign-report", local["campaign_report"],
-                "--participant-report", local["participant_report"],
-                "--key-dir", local["key_dir"],
+                "--participant-report", participant_report,
+                "--key-dir", key_dir,
                 "--output-dir", str(out),
             ]
         else:
             dev = trade["devnet"]
-            pairs = dev["pairs"]
-            pair = pairs[cycle % len(pairs)]
+            pair = self.pair_for_cycle(cycle)
+            if pair is None:
+                raise Refusal("devnet trade config needs at least one ticket pair")
             argv = [self.boot(), "devnet-direct-trade-produce-v1", *self.cluster_args()]
             for flag, key in (
                 ("--plan", "plan"),
@@ -385,6 +392,16 @@ class Simulator:
 
     # ---------- the loop ----------
 
+    def pair_for_cycle(self, cycle: int) -> Optional[dict]:
+        trade = self.config["trade"]
+        if self.config["cluster"]["label"] == "local":
+            pairs = (trade.get("local") or {}).get("pairs") or []
+        else:
+            pairs = (trade.get("devnet") or {}).get("pairs") or []
+        if not pairs:
+            return None
+        return pairs[(cycle - 1) % len(pairs)]
+
     def cycle_plan(self, cycle: int) -> dict:
         return {
             "cycle": cycle,
@@ -393,6 +410,7 @@ class Simulator:
             "market": self.config.get("market_address"),
             "mode": "execute" if self.execute else "preflight",
             "trade_mode": self.config["cluster"]["label"],
+            "pair": self.pair_for_cycle(cycle),
         }
 
     def write_status(self, cycles_run: int, recon: Optional[dict], stopping: bool = False,
