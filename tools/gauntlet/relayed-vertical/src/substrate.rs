@@ -245,27 +245,29 @@ pub(crate) fn found_market(
     evidence_path: &Path,
 ) -> Result<FoundingYieldV1> {
     let report = &substrate.report;
-    // The campaign never airdrops; the driver funds. Only the roles this
-    // fixture-liquidity-free founding actually signs with are funded and
-    // handed to the campaign — the prepare report also derives the two fixture
-    // roles, which `campaign --founding-only` refuses as outside this mode.
+    // The campaign never airdrops; the driver funds. ONLY the campaign payer
+    // is funded — the other five founding roles are protocol-created and MUST
+    // be vacant, or the founding reads a pre-funded system account at the
+    // collateral-mint address as a started-and-unresumable founding (the
+    // lifecycle driver pins exactly this: PROTOCOL_CREATED_KEY_ROLES stay
+    // vacant, only campaign-payer gets the bankroll). The campaign still needs
+    // every role's key FILE to sign, so all six paths are handed through; the
+    // two fixture roles the prepare report also derives are excluded, since
+    // this fixture-liquidity-free founding refuses them as outside its mode.
     let mut founding_keys: BTreeMap<String, PathBuf> = BTreeMap::new();
     for role in FOUNDING_ROLES_V1 {
         let path = report
             .campaign_founding_keypairs
             .get(*role)
             .ok_or_else(|| Error::new(format!("prepare report omits founding role {role}")))?;
-        let keypair = load_keypair(Path::new(path))?;
-        let lamports = if *role == "campaign-payer" {
-            500_000_000_000
-        } else {
-            20_000_000_000
-        };
-        rpc.airdrop(
-            &format!("relayed vertical: fund founding role {role}"),
-            keypair.pubkey(),
-            lamports,
-        )?;
+        if *role == "campaign-payer" {
+            let keypair = load_keypair(Path::new(path))?;
+            rpc.airdrop(
+                "relayed vertical: fund the campaign payer",
+                keypair.pubkey(),
+                500_000_000_000,
+            )?;
+        }
         founding_keys.insert((*role).to_owned(), PathBuf::from(path));
     }
     let founder = report
