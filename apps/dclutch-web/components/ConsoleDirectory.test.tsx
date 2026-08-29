@@ -16,7 +16,8 @@ describe('the console index', () => {
     expect(html).toContain('does not update programs');
     expect(html).toContain('does not mean its mutation route is live');
     expect(html).toContain('For market authors');
-    expect(html).toContain('No current devnet market can use them');
+    expect(html).toContain('Wallet redemption');
+    expect(html).toContain('Rust-authored payout plan');
     // Names the provenance answer key and its standard.
     expect(html).toContain('The artifacts, and where they come from');
     expect(html).toContain('a bug in the console');

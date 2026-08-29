@@ -48,9 +48,9 @@ const ENTRIES: readonly ConsoleEntry[] = [
   },
   {
     href: '/redeem',
-    name: 'Representation',
+    name: 'Wallet redemption',
     blurb:
-      'Inspect claim transfer and redemption constructors for local or compatible custom chains. No current devnet market can use them.',
+      'Connect your wallet, derive its Claims Positions across the live deployment, and redeem only an exact terminal winning balance with a Rust-authored payout plan.',
   },
   {
     href: '/resolution',
