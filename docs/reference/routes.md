@@ -18,7 +18,7 @@ stands:
 - **NEVER-EXECUTED** -- no campaign has run it and no reason is recorded
   yet.
 
-Currently **46** of **138**
+Currently **48** of **140**
 routes are in that last group.
 
 ## claims
@@ -202,27 +202,29 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:333` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:325` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:285` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:301` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:293` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:309` |
-| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:317` |
-| `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:348` |
-| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:356` |
-| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:364` |
-| `trading/generic_market_founding_v1::process_generic_market_founding_v3` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:376` |
-| `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:452` |
-| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: No gauntlet campaign drives this route yet. | `programs/dclutch-trading-sbf/src/lib.rs:455` |
-| `trading/outer::process_capability_lifecycle#else` | entry | fallthrough `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:457` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:340` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:332` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:292` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:308` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:300` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:316` |
+| `trading/dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:324` |
+| `trading/direct_begin_retiring_v1::process_direct_begin_retiring_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:355` |
+| `trading/direct_replay_setup_v1::process_direct_replay_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:363` |
+| `trading/direct_token_setup_v1::process_direct_token_setup_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:371` |
+| `trading/generic_founding_stages_v1::process_generic_found_and_permit_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:395` |
+| `trading/generic_founding_stages_v1::process_generic_market_open_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:407` |
+| `trading/generic_market_founding_v1::process_generic_market_founding_v3` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:383` |
+| `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:483` |
+| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: No gauntlet campaign drives this route yet. | `programs/dclutch-trading-sbf/src/lib.rs:486` |
+| `trading/outer::process_capability_lifecycle#else` | entry | fallthrough `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:488` |
 | `trading/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:1` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:429` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:441` |
-| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:400` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:417` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:388` |
-| `trading/user_position_admission_v1::process_user_position_admission_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:340` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:460` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:472` |
+| `trading/projected_custody_bootstrap_v1::process_controller_funding_prepare_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:431` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:448` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:419` |
+| `trading/user_position_admission_v1::process_user_position_admission_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:347` |
 
 ## Campaign records naming routes the code does not
 

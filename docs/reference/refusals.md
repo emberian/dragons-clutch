@@ -96,16 +96,16 @@ from the source code's own documentation.
 | `0x5165` | `AffineBatchSbfErrorV2::Candidate` | An exact delta overflowed, underflowed, or selected an invalid coordinate. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:111` |
 | `0x5166` | `AffineBatchSbfErrorV2::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:113` |
 | `0x5167` | `AffineBatchSbfErrorV2::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:115` |
-| `0x5180` | `ClaimsFoundingSbfErrorV5::Instruction` | Instruction bytes did not decode as the sole FoundingV5 ABI. | `programs/dclutch-claims-sbf/src/founding_v5.rs:107` |
-| `0x5181` | `ClaimsFoundingSbfErrorV5::Accounts` | Account count, privileges, executable flags, or aliases refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:109` |
-| `0x5182` | `ClaimsFoundingSbfErrorV5::Release` | Core caller authority or current release selection refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:111` |
-| `0x5183` | `ClaimsFoundingSbfErrorV5::Custody` | Custody source, Hoard, or replay post-observations refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:113` |
-| `0x5184` | `ClaimsFoundingSbfErrorV5::ProductBasis` | Product graph, linked basis, or Founding Core Market refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:115` |
-| `0x5185` | `ClaimsFoundingSbfErrorV5::ClaimsState` | Claims aggregate, Position, or admission PDA/vacancy refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:117` |
-| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:119` |
-| `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:121` |
-| `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:123` |
-| `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:125` |
+| `0x5180` | `ClaimsFoundingSbfErrorV5::Instruction` | Instruction bytes did not decode as the sole FoundingV5 ABI. | `programs/dclutch-claims-sbf/src/founding_v5.rs:104` |
+| `0x5181` | `ClaimsFoundingSbfErrorV5::Accounts` | Account count, privileges, executable flags, or aliases refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:106` |
+| `0x5182` | `ClaimsFoundingSbfErrorV5::Release` | Core caller authority or current release selection refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:108` |
+| `0x5183` | `ClaimsFoundingSbfErrorV5::Custody` | Custody source, Hoard, or replay post-observations refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:110` |
+| `0x5184` | `ClaimsFoundingSbfErrorV5::ProductBasis` | Product graph, linked basis, or Founding Core Market refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:112` |
+| `0x5185` | `ClaimsFoundingSbfErrorV5::ClaimsState` | Claims aggregate, Position, or admission PDA/vacancy refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:114` |
+| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:116` |
+| `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:118` |
+| `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:120` |
+| `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:122` |
 | `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:105` |
 | `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:107` |
 | `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:109` |
@@ -114,15 +114,15 @@ from the source code's own documentation.
 | `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:115` |
 | `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:117` |
 | `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:119` |
-| `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:117` |
-| `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:119` |
-| `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:121` |
-| `0x5213` | `RationalLifecycleSbfErrorV2::Descriptor` | Finalized descriptor or a derived resource identity refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:123` |
-| `0x5214` | `RationalLifecycleSbfErrorV2::Market` | Core Market or canonical Claims aggregate refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:125` |
-| `0x5215` | `RationalLifecycleSbfErrorV2::Rent` | Prepaid or reclaimed native rent accounting refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:127` |
-| `0x5216` | `RationalLifecycleSbfErrorV2::Token` | Token-2022 resource state or effect refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:129` |
-| `0x5217` | `RationalLifecycleSbfErrorV2::Position` | Canonical protocol Position lifecycle refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:131` |
-| `0x5218` | `RationalLifecycleSbfErrorV2::Receipt` | Final resource observation or typed receipt refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:133` |
+| `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:120` |
+| `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:122` |
+| `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:124` |
+| `0x5213` | `RationalLifecycleSbfErrorV2::Descriptor` | Finalized descriptor or a derived resource identity refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:126` |
+| `0x5214` | `RationalLifecycleSbfErrorV2::Market` | Core Market or canonical Claims aggregate refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:128` |
+| `0x5215` | `RationalLifecycleSbfErrorV2::Rent` | Prepaid or reclaimed native rent accounting refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:130` |
+| `0x5216` | `RationalLifecycleSbfErrorV2::Token` | Token-2022 resource state or effect refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:132` |
+| `0x5217` | `RationalLifecycleSbfErrorV2::Position` | Canonical protocol Position lifecycle refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:134` |
+| `0x5218` | `RationalLifecycleSbfErrorV2::Receipt` | Final resource observation or typed receipt refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:136` |
 | `0x5260` | `SparseNativeTransferSbfErrorV1::Instruction` | Request bytes refused the canonical fixed codec. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:80` |
 | `0x5261` | `SparseNativeTransferSbfErrorV1::Accounts` | Account count, privilege, owner, or alias refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:82` |
 | `0x5262` | `SparseNativeTransferSbfErrorV1::Release` | Registry current-role or caller authority refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:84` |
@@ -312,14 +312,14 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:167` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:169` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:171` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:173` |
-| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:175` |
-| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:177` |
-| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:179` |
-| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:187` |
+| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:174` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:176` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:178` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:180` |
+| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:182` |
+| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:184` |
+| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:186` |
+| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:194` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |
