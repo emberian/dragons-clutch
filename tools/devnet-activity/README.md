@@ -44,7 +44,7 @@ rewrite a devnet fixture to create one.
   at least one second between dispatches, and a separate at-most-six-hour live
   authorization bound to the exact manifest, scenario, and Market.
 - The service-capable authorization additionally binds a finalized funding
-  closure, checked release, Market artifact, harness source/bytes, all three
+  closure, checked release, Market artifact, harness source/bytes, all four
   executable digests, one lifecycle, a total wallet-debit ceiling, and a
   separate activity-transaction-fee ceiling.
 - An ordinary run requires that authorization to be current. Poll-only recovery
@@ -59,12 +59,17 @@ The activity manifest consumes the exact envelope
 digest. The authoritative generator and field contract are in
 `tools/devnet-scenarios/README.md`.
 
-The activity manifest schema is `dclutch-devnet-activity-manifest-v2` with
+The public activity manifest schema is `dclutch-devnet-activity-manifest-v3` with
 exact top-level fields:
 
 ```text
-schema, scenario, target, inputs, addressBindings, adapters
+schema, scenario, target, inputs, addressBindings, adapters, campaign
 ```
+
+Version 2 is evidence-only and refuses public devnet execution. Version 3 owns
+the exact eight-role founding identity partition, payer-only initial funding,
+five fresh zero-lamport campaign signers, and named post-founding wallet
+funding. A prefunded campaign-created role is unsupported and refused.
 
 - `scenario` is `{path, sha256}` using absolute immutable bytes.
 - `target` is `{kind, rpcUrl, devnetGenesisHash}`. Ordinary manifests require
@@ -115,8 +120,56 @@ python3 tools/devnet-activity/activity.py \
   --dclutch-bin /absolute/bin/dclutch \
   --successor-bin /absolute/bin/dclutch-local-successor-bootstrap \
   --solana-keygen /absolute/bin/solana-keygen \
+  --solana-bin /absolute/bin/solana \
   --live-authorization /private/authorization.json
 ```
+
+## Root-owned artifact bundle
+
+Before you enable the service, validate one bundle with schema
+`dclutch-devnet-activity-artifact-bundle-v1`. It replaces a loose collection
+of release, Market, authorization, scenario, and executable arguments with one
+state-digested join. It has the exact top-level fields:
+
+```text
+schema, stage, cluster, artifacts, binaries, ensemble, bindings, stateSha256
+```
+
+- `stage` is exactly `template`, `ready`, or `reconciled`.
+- `artifacts` binds the Activity-v3 manifest, scenario, checked release,
+  Market, installed harness bytes/source commit, live authorization, public
+  wallet ledger, and terminal reconciliation. The last three are absent in a
+  template; reconciliation is absent until the run finishes.
+- `binaries` has exactly four ordered rows: `dclutch`, `successor`,
+  `solana-keygen`, and `solana`. Every row binds an absolute executable path
+  and SHA-256. The validator also requires the v3 authorization to carry the
+  same four digests.
+- `ensemble` is not free-form. The validator derives it from the exact
+  scenario and manifest: wallet roles and funding phases, every economic
+  action in predecessor order, the six reader-facing event kinds, every
+  completion source, the scenario's exact fee fraction and integer-floor
+  rounding rule, and the reconciliation invariants.
+- `bindings.walletAddresses` is null in a template, then must match the
+  authenticated public wallet ledger exactly. `bindings.activitySignatures`
+  is empty until reconciliation, then must match the ordered adapter/signature
+  rows in the authenticated reconciliation exactly. These are injected
+  values, not another semantic owner.
+
+Validation is offline and key-free. It does not construct an RPC client, open
+a wallet file, or start the service:
+
+```sh
+python3 tools/devnet-activity/activity.py activity-artifact-bundle-v1 \
+  --bundle /absolute/activity-artifact-bundle.json \
+  --require-stage ready
+```
+
+The deterministic reconciliation contract requires finalized evidence for
+every listed transaction, successful required completion transactions, global
+funding/activity signature uniqueness, nonregressing slots, exact wallet and
+token/Position continuity, declared changed accounts, scenario-owned observed
+deltas and fee rounding, separate hoard-principal classification, closed
+post-init transfer-plus-fee arithmetic, and terminal raw account closure.
 
 Funding is a separate authority boundary. `fund` is run once outside the
 supervisor with the authorized development funder. After every wallet transfer
