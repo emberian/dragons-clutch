@@ -747,7 +747,6 @@ pub(crate) const fn pinned_deployment_refusal(
 /// Program-to-ProgramData link, deployment slot, and upgrade authority. The
 /// shared adapter reuses the admitted digest only after all of those facts
 /// match, and names a moved exact-authority deployment as superseded.
-#[inline(never)]
 pub(crate) fn cached_deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
