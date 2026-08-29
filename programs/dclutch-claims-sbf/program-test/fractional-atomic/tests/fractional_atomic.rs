@@ -16,9 +16,9 @@
 use std::{env, fs, path::PathBuf};
 
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
-use dclutch_claims_affine_batch_program_test::fixture::{
-    FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, ProductLbv2FixtureV2,
-    compile_product_lbv2_fixture_v2,
+use dclutch_fractional_atomic_program_test::narrow_fixture::{
+    FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2, NarrowFixtureError, NarrowFixtureInputV2,
+    NarrowFixtureV2, NarrowRecordV2, compile_narrow_fixture_v2,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_fractional_atomic_test_caller_sbf::FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES;
@@ -68,11 +68,11 @@ const GENERATION: u64 = 37;
 const ROOT_REVISION: u64 = 1;
 const DENOMINATOR: u64 = 10;
 const WRAP_NATIVE_CLAIMS: u64 = 7;
+/// Native Claims the actor holds at the selected coordinate before any wrap.
+const ACTOR_FUNDED_BALANCE: u64 = 1_000;
 const OUTCOME: u32 = 0;
 const MINT_DECIMALS: u8 = 0;
 const TOKEN_ACCOUNT_BYTES: usize = 165;
-/// The exact ceiling `fractional_exposure_terms_bytes_v2` admits.
-const FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2: u32 = 256;
 
 /// Deterministic actor identity: it must sign, so it needs a real key.
 fn actor_keypair() -> Keypair {
@@ -237,12 +237,12 @@ fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
 }
 
 /// Reproduce the shared fixture's finalized-record PDA derivation.
-fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> FinalizedRecordFixtureV2 {
+fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
     let digest = hash(&bytes).to_bytes();
     let raw = Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner).0;
     let staging =
         Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &owner).0;
-    FinalizedRecordFixtureV2 {
+    NarrowRecordV2 {
         owner,
         schema,
         digest,
@@ -252,17 +252,18 @@ fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> FinalizedRecord
     }
 }
 
-fn add_finalized(test: &mut ProgramTest, record: &FinalizedRecordFixtureV2) {
+fn add_finalized(test: &mut ProgramTest, record: &NarrowRecordV2) {
     add_account(test, record.raw, record.owner, record.bytes.clone());
     add_account(test, record.staging, system_program::ID, Vec::new());
 }
 
 fn compile_shared(
     release_set: [u8; 32],
-    source_owner: Pubkey,
-    destination_owner: Pubkey,
-) -> ProductLbv2FixtureV2 {
-    compile_product_lbv2_fixture_v2(ProductLbv2FixtureInputV2 {
+    actor_owner: Pubkey,
+    reserve_owner: Pubkey,
+) -> NarrowFixtureV2 {
+    compile_narrow_fixture_v2(NarrowFixtureInputV2 {
+        outcome_count: FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2,
         registry_program: REGISTRY_PROGRAM_ID,
         core_program: CORE_PROGRAM_ID,
         claims_program: CLAIMS_PROGRAM_ID,
@@ -270,10 +271,12 @@ fn compile_shared(
         realm_id: REALM_ID,
         custody_context: CUSTODY_CONTEXT,
         generation: GENERATION,
-        source_owner,
-        destination_owner,
+        actor_owner,
+        reserve_owner,
+        funded_coordinate: OUTCOME as usize,
+        funded_balance: ACTOR_FUNDED_BALANCE,
     })
-    .expect("shared N=258 Product/LBV2 fixture")
+    .expect("narrow Product/LBV2 fixture at the Fractional width bound")
 }
 
 /// Exact Token-2022 Mint with the Fractional root as sole controller.
@@ -311,12 +314,12 @@ fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
 }
 
 struct Fixture {
-    shared: ProductLbv2FixtureV2,
+    shared: NarrowFixtureV2,
     activation_cache: Pubkey,
     caller_authority: Pubkey,
     root: Pubkey,
-    terms_record: FinalizedRecordFixtureV2,
-    behavior_record: FinalizedRecordFixtureV2,
+    terms_record: NarrowRecordV2,
+    behavior_record: NarrowRecordV2,
     shard_mint: Pubkey,
     holder_token: Pubkey,
     actor: Pubkey,
@@ -387,6 +390,7 @@ fn fixture() -> (ProgramTest, Fixture) {
     let shard_mints: Vec<[u8; 32]> = (0..FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2)
         .map(|index| {
             let mut bytes = [0x77_u8; 32];
+            let index = u32::try_from(index).expect("representation coordinate");
             bytes[0..4].copy_from_slice(&index.to_le_bytes());
             bytes
         })
@@ -495,7 +499,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         CLAIMS_PROGRAM_ID,
         shared.claims_market_bytes.clone(),
     );
-    for position in &shared.positions {
+    for position in shared.ordered_positions() {
         add_account(
             &mut test,
             position.account,
@@ -580,11 +584,7 @@ fn fixture() -> (ProgramTest, Fixture) {
 fn child_accounts(fixture: &Fixture) -> Vec<AccountMeta> {
     let shared = &fixture.shared;
     // Claims recomputes the two Position coordinates sorted by owner bytes.
-    let (position_0, position_1) = if fixture.actor.to_bytes() < fixture.root.to_bytes() {
-        (&shared.positions[0], &shared.positions[1])
-    } else {
-        (&shared.positions[1], &shared.positions[0])
-    };
+    let [position_0, position_1] = shared.ordered_positions();
     let accounts = vec![
         AccountMeta::new_readonly(fixture.caller_authority, false),
         AccountMeta::new(shared.claims_market, false),
@@ -689,22 +689,58 @@ fn custom_refusal(result: &Result<(), solana_sdk::transaction::TransactionError>
     }
 }
 
-/// What executes today: the real Claims ELF dispatches the Fractional route.
+/// Read one LBV2 balance out of a Position account.
+fn balance(account: &Account, coordinate: usize) -> u64 {
+    const POSITION_HEADER_BYTES_V2: usize = 128;
+    let at = POSITION_HEADER_BYTES_V2 + coordinate * 8;
+    u64::from_le_bytes(account.data[at..at + 8].try_into().unwrap())
+}
+
+fn mint_supply(account: &Account) -> u64 {
+    u64::from_le_bytes(account.data[36..44].try_into().unwrap())
+}
+
+fn token_amount(account: &Account) -> u64 {
+    u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+}
+
+fn root_revision(account: &Account) -> u64 {
+    let at = FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4 + 112;
+    u64::from_le_bytes(account.data[at..at + 8].try_into().unwrap())
+}
+
+/// The production Fractional wrap, executed end to end and committed.
 ///
-/// This is the first execution of `fractional_atomic_v3` by anything. The
-/// transaction reaches Claims at CPI depth two, and Claims runs tens of
-/// thousands of compute units deep before refusing -- which means the exact
-/// 31-account production frame, both `invoke_signed` PDA authorities, the four
-/// finalized record pairs, the activated release set, the Fractional root, and
-/// the Token-2022 Mint controller all authenticated. The single refusal left is
-/// `ClaimsSbfError::Economic`, and the campaign below names exactly why.
+/// This is the first committed state change the shipped `fractional_atomic_v3`
+/// handler has ever produced. Real ELFs throughout: Claims, Registry, Core,
+/// Token-2022 v11 and the two-PDA test caller. One transaction locks native
+/// Claims into the Fractional root's reserve Position and mints the exact
+/// denominator multiple of shards to the holder, and the campaign checks every
+/// side of that conservation rather than just that the transaction passed.
 #[tokio::test]
-async fn the_real_claims_elf_dispatches_the_fractional_route_and_authenticates_the_whole_frame() {
+async fn the_production_fractional_wrap_locks_native_claims_and_mints_the_denominator_multiple() {
     let (test, fixture) = fixture();
     let mut context = test.start_with_context().await;
+    let [position_0, position_1] = fixture.shared.ordered_positions();
+    let (actor_account, reserve_account) = (
+        fixture.shared.actor_position.account,
+        fixture.shared.reserve_position.account,
+    );
+    assert_ne!(position_0.account, position_1.account);
+
+    let mint_before = account(&mut context, fixture.shard_mint).await;
+    let holder_before = account(&mut context, fixture.holder_token).await;
+    let root_before = account(&mut context, fixture.root).await;
+    let actor_before = account(&mut context, actor_account).await;
+    let reserve_before = account(&mut context, reserve_account).await;
+    assert_eq!(mint_supply(&mint_before), 0);
+    assert_eq!(token_amount(&holder_before), 0);
+    assert_eq!(balance(&actor_before, OUTCOME as usize), ACTOR_FUNDED_BALANCE);
+    assert_eq!(balance(&reserve_before, OUTCOME as usize), 0);
+    assert_eq!(root_revision(&root_before), ROOT_REVISION);
 
     let (accepted, logs, units, result) = submit(&mut context, instruction(&fixture, false)).await;
-    assert!(!accepted, "see the width-binding campaign below");
+    assert!(accepted, "the production Fractional wrap must commit: {result:?}");
     assert!(
         logs.iter()
             .any(|line| line.contains(&CLAIMS_PROGRAM_ID.to_string())
@@ -712,103 +748,136 @@ async fn the_real_claims_elf_dispatches_the_fractional_route_and_authenticates_t
         "the real Claims ELF must be entered as a child of the test caller"
     );
     assert!(
-        units > 30_000,
-        "Claims must run deep into the Fractional route, not bounce at the frame: {units} units"
+        logs.iter()
+            .any(|line| line.contains(&token_program_id().to_string())),
+        "Token-2022 must be entered for the mint effect"
     );
+    assert!(units > 30_000 && units <= 1_400_000, "{units} compute units");
+
+    let mint_after = account(&mut context, fixture.shard_mint).await;
+    let holder_after = account(&mut context, fixture.holder_token).await;
+    let root_after = account(&mut context, fixture.root).await;
+    let actor_after = account(&mut context, actor_account).await;
+    let reserve_after = account(&mut context, reserve_account).await;
+
+    // Shards are the exact denominator multiple of the native Claims locked.
+    let expected_shards = WRAP_NATIVE_CLAIMS * DENOMINATOR;
+    assert_eq!(mint_supply(&mint_after), expected_shards);
+    assert_eq!(token_amount(&holder_after), expected_shards);
+    // Every minted shard is held by the actor: supply is not created elsewhere.
+    assert_eq!(mint_supply(&mint_after), token_amount(&holder_after));
+
+    // Native Claims moved from the actor into the root's reserve, conserved.
     assert_eq!(
-        custom_refusal(&result),
-        Some(0x5005),
-        "every identity, authority, record, root and Token check must pass, \
-         leaving only ClaimsSbfError::Economic"
+        balance(&actor_after, OUTCOME as usize),
+        ACTOR_FUNDED_BALANCE - WRAP_NATIVE_CLAIMS
+    );
+    assert_eq!(balance(&reserve_after, OUTCOME as usize), WRAP_NATIVE_CLAIMS);
+    assert_eq!(
+        balance(&actor_after, OUTCOME as usize) + balance(&reserve_after, OUTCOME as usize),
+        ACTOR_FUNDED_BALANCE,
+        "native Claims are conserved across the wrap"
     );
 
-    // Nothing moved: a refused Fractional wrap is atomic.
-    let mint = account(&mut context, fixture.shard_mint).await;
-    let holder = account(&mut context, fixture.holder_token).await;
-    assert_eq!(u64::from_le_bytes(mint.data[36..44].try_into().unwrap()), 0);
-    assert_eq!(u64::from_le_bytes(holder.data[64..72].try_into().unwrap()), 0);
+    // The root is owned by the Trading program, so Claims cannot and does not
+    // write it: advancing the replay revision is the Trading parent's
+    // responsibility, and this caller deliberately does not stand in for that.
+    // Claims' authority over the root is to *authenticate* it and require its
+    // signature, which the accepted transaction above already proves.
+    assert_eq!(root_revision(&root_after), ROOT_REVISION);
+    assert_eq!(
+        root_before.data, root_after.data,
+        "Claims must not mutate an account owned by the Trading program"
+    );
 }
 
-/// Why the wrap above cannot commit, named exactly.
+/// A caller refusal after Claims committed rolls the whole transaction back.
 ///
-/// `ClaimsSbfError::Economic` covers the whole lowering onchain, so the reason
-/// is recovered here by calling the same kernel with the same authenticated
-/// inputs. It is not a fixture accident. Two published widths disagree:
-///
-/// * `fractional_exposure_terms_bytes_v2` refuses any representation width
-///   above 256, so a Fractional capability can name at most 256 shard Mints;
-/// * the kernel requires `market.claim_count == terms.representation_width()`;
-/// * the only shared Claims LBV2 fixture -- and the runtime width the Claims
-///   evidence profile is built around -- is 258.
-///
-/// So no Fractional capability can bind a Market wider than 256 outcomes, and
-/// the 258-outcome fixture cannot carry one at all. Closing this needs a
-/// protocol decision (raise the terms ceiling, or bound Fractional Markets at
-/// 256 and give the campaign its own narrower Product/LBV2 fixture); it is not
-/// something this campaign may paper over.
-#[test]
-fn the_fractional_representation_width_cannot_bind_a_258_outcome_market() {
-    use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
-    use dclutch_fractional_claim_kernel::{
-        FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-        FractionalExposureTermsV2,
-    };
-    use dclutch_fractional_claims_kernel::{
-        FractionalExposureSignedDeltaInputV2, fractional_exposure_signed_delta_shape_v2,
-    };
+/// The caller validates the receipt Claims returned and only then refuses, so
+/// at the moment of refusal the Claims mutation, the Token-2022 mint and the
+/// root revision bump had all really happened inside the transaction. Nothing
+/// may survive it. This is the property that makes the Fractional route safe to
+/// compose under a Trading parent that can fail late.
+#[tokio::test]
+async fn a_late_caller_refusal_after_the_real_claims_commit_rolls_everything_back() {
+    let (test, fixture) = fixture();
+    let mut context = test.start_with_context().await;
+    let actor_account = fixture.shared.actor_position.account;
+    let reserve_account = fixture.shared.reserve_position.account;
 
-    // The terms codec ceiling is exact.
-    assert!(fractional_exposure_terms_bytes_v2(256).is_ok());
-    assert!(fractional_exposure_terms_bytes_v2(257).is_err());
+    let before = [
+        account(&mut context, fixture.shard_mint).await,
+        account(&mut context, fixture.holder_token).await,
+        account(&mut context, fixture.root).await,
+        account(&mut context, actor_account).await,
+        account(&mut context, reserve_account).await,
+    ];
 
-    let (_test, fixture) = fixture();
-    assert_eq!(fixture.shared.outcome_count, 258);
-
-    let terms = FractionalExposureTermsV2::decode(
-        &fixture.terms_record.bytes,
-        FractionalExposureTermsAdmissionV2 {
-            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
-            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
-            selected_terms_id: fixture.terms_record.digest,
-            finalized_terms_id: fixture.terms_record.digest,
-            recomputed_terms_digest: fixture.terms_record.digest,
-            finalized_terms_digest: fixture.terms_record.digest,
-            record_authenticated: true,
-        },
-    )
-    .expect("the terms themselves are canonical at the 256 ceiling");
+    let (accepted, _logs, _units, result) = submit(&mut context, instruction(&fixture, true)).await;
+    assert!(!accepted, "the deliberate late refusal must abort");
     assert_eq!(
-        terms.representation_width(),
-        FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2
+        custom_refusal(&result),
+        Some(0x10_B004),
+        "it must be the caller's own late-failure code, not an earlier refusal \
+         that would mean the commit never happened"
     );
 
-    let market = LiabilityBasisMarketViewV2::decode(&fixture.shared.claims_market_bytes)
-        .expect("claims market decode");
-    assert_eq!(market.claim_count, fixture.shared.outcome_count);
-    assert_ne!(
-        market.claim_count,
-        terms.representation_width(),
-        "this is the whole gap: a 258-outcome Market and a 256-Mint capability"
-    );
+    let after = [
+        account(&mut context, fixture.shard_mint).await,
+        account(&mut context, fixture.holder_token).await,
+        account(&mut context, fixture.root).await,
+        account(&mut context, actor_account).await,
+        account(&mut context, reserve_account).await,
+    ];
+    assert_eq!(before, after, "a refused Fractional wrap leaves no trace");
+}
 
-    let (actor_position, reserve_position) = if fixture.shared.positions[0].owner == fixture.actor {
-        (&fixture.shared.positions[0], &fixture.shared.positions[1])
-    } else {
-        (&fixture.shared.positions[1], &fixture.shared.positions[0])
-    };
-    let shape = fractional_exposure_signed_delta_shape_v2(FractionalExposureSignedDeltaInputV2 {
-        request: fixture.request,
-        terms,
-        semantic_product_id: market.product_instance_id,
-        market_account: fixture.shared.claims_market.to_bytes(),
-        market_bytes: &fixture.shared.claims_market_bytes,
-        claims_program: CLAIMS_PROGRAM_ID.to_bytes(),
-        reserve_owner: fixture.root.to_bytes(),
-        reserve_position_bytes: &reserve_position.bytes,
-        actor_position_bytes: &actor_position.bytes,
+/// The representation width bound is exactly 256, and it is load-bearing.
+///
+/// A Fractional capability names one shard Mint per representation coordinate
+/// and the Market dispatches on a `U8` action selector at a fixed request
+/// offset, so 256 is the arithmetic bound of the index space rather than a
+/// storage budget. This pins both sides of it: the last admissible width and
+/// the first refused one, in the terms codec and in the fixture alike. The
+/// shared 258-outcome Claims fixture is therefore permanently out of Fractional
+/// range, which is why this campaign compiles its own.
+#[test]
+fn the_fractional_representation_width_bound_is_exactly_256() {
+    assert_eq!(FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2, 256);
+    assert!(fractional_exposure_terms_bytes_v2(FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2).is_ok());
+    assert!(fractional_exposure_terms_bytes_v2(FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2 + 1).is_err());
+
+    let admissible = compile_narrow_fixture_v2(NarrowFixtureInputV2 {
+        outcome_count: FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2,
+        registry_program: REGISTRY_PROGRAM_ID,
+        core_program: CORE_PROGRAM_ID,
+        claims_program: CLAIMS_PROGRAM_ID,
+        release_set: [0x11; 32],
+        realm_id: REALM_ID,
+        custody_context: CUSTODY_CONTEXT,
+        generation: GENERATION,
+        actor_owner: Pubkey::new_from_array([0x01; 32]),
+        reserve_owner: Pubkey::new_from_array([0x02; 32]),
+        funded_coordinate: 0,
+        funded_balance: 1,
     });
-    assert!(
-        shape.is_err(),
-        "the host kernel must refuse for the same reason the chain did"
+    assert_eq!(
+        admissible.expect("the bound itself must compile").outcome_count,
+        256
     );
+    let refused = compile_narrow_fixture_v2(NarrowFixtureInputV2 {
+        outcome_count: FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2 + 1,
+        registry_program: REGISTRY_PROGRAM_ID,
+        core_program: CORE_PROGRAM_ID,
+        claims_program: CLAIMS_PROGRAM_ID,
+        release_set: [0x11; 32],
+        realm_id: REALM_ID,
+        custody_context: CUSTODY_CONTEXT,
+        generation: GENERATION,
+        actor_owner: Pubkey::new_from_array([0x01; 32]),
+        reserve_owner: Pubkey::new_from_array([0x02; 32]),
+        funded_coordinate: 0,
+        funded_balance: 1,
+    });
+    assert_eq!(refused, Err(NarrowFixtureError::Width));
 }

@@ -17,6 +17,11 @@ dclutch-fractional-atomic-test-caller-sbf = { path = "../../test-programs/fracti
 dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
 dclutch-fractional-claims-kernel = { path = "../../../../crates/dclutch-fractional-claims-kernel" }
+dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
+dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
+dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product-runtime-v2-operator = { path = "../../../../crates/dclutch-product-runtime-v2-operator" }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
