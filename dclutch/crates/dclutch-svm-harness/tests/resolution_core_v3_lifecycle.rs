@@ -28,7 +28,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    Readiness, Request,
+    REQUEST_BYTES, Readiness, Request,
 };
 use dclutch_market_open_v1_operator::{
     RegistryOpenMarketContinuationStateV1, build_registry_open_market_continuation_v1,
@@ -2150,6 +2150,34 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     assert!(
         build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
         "before ExecuteProvider the Market is Open but Source is Primary and the standalone terminal-admission family must refuse"
+    );
+
+    let before_missing_caller_signature =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    let direct_resolution_without_core_caller = Instruction {
+        program_id: RESOLUTION_PROGRAM_ID,
+        accounts: provider_execute.instruction.accounts.clone(),
+        data: provider_execute
+            .instruction
+            .data
+            .get(REQUEST_BYTES..)
+            .expect("provider body after Core request")
+            .to_vec(),
+    };
+    assert!(
+        pyth_provider::submit(
+            &mut context,
+            &[direct_resolution_without_core_caller],
+            &[&resolver],
+        )
+        .await
+        .is_err(),
+        "a top-level Resolution invocation cannot substitute for Core's program-signed caller PDA"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_missing_caller_signature,
+        "the missing program-signed caller PDA rolls back every provider and Market write"
     );
 
     let before_late_substitution =

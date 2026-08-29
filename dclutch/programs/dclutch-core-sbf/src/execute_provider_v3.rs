@@ -3,13 +3,13 @@
 //! Provider submission remains a Resolution action. This route consumes an
 //! already submitted update, derives the current Core caller PDA, invokes the
 //! Registry-selected Resolution program, checks its immediate receipt and
-//! terminal poststate, then admits that exact certificate into the Market.
+//! terminal poststate. A later standalone Core `AdmitTerminal` consumes that
+//! durable certificate and commits the Market transition.
 
 use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_market_core_codec::{
-    Action, CoreState, Phase, Product, Readiness, Request, Role, STATE_BYTES, TerminalReceipt,
-    admit_terminal,
+    Action, CoreState, Phase, Product, Readiness, Request, Role, STATE_BYTES,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -40,7 +40,7 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     CoreSbfError,
-    fixed_role::{authenticate_market, persist_state, read_market_bytes},
+    fixed_role::{authenticate_market, read_market_bytes},
     frame::require_distinct,
     product_runtime_v2::{authenticate_selected_runtime_v2, project_core_product_v2},
     release::{RoleDeploymentAccounts, authenticate_roles},
@@ -71,7 +71,12 @@ const UPDATE: usize = PROVIDER_RESOLUTION_CORE_TAIL_START_V3;
 const RENT: usize = PROVIDER_RESOLUTION_CORE_TAIL_START_V3 + 7;
 const SYSTEM: usize = PROVIDER_RESOLUTION_CORE_TAIL_START_V3 + 8;
 
-/// Execute one provider request and commit the corresponding terminal Market last.
+/// Invoke one provider request under Core's request-bound caller PDA.
+///
+/// Resolution persists the durable Source, certificate, and provider lifecycle
+/// in this transaction. The Market remains read-only and Open so the separate
+/// `AdmitTerminal` action can authenticate that finalized poststate and commit
+/// the terminal Core transition without another Resolution CPI.
 #[inline(never)]
 pub(crate) fn process(
     program_id: &Pubkey,
@@ -93,16 +98,16 @@ pub(crate) fn process(
     let state =
         Box::new(CoreState::decode(state_bytes.as_ref()).map_err(|_| CoreSbfError::Market)?);
     authenticate_market(program_id, account(accounts, MARKET)?, *state, request)?;
-    authenticate_parent(
+    let caller_bump = authenticate_parent(
         program_id,
         accounts,
         request,
         request_bytes,
-        *state,
-        *provider,
+        &state,
+        &provider,
     )?;
 
-    let admissions = authenticate_roles(
+    authenticate_roles(
         account(accounts, ACTIVATION)?,
         account(accounts, REGISTRY)?,
         state.identity.registry_program,
@@ -120,43 +125,21 @@ pub(crate) fn process(
             ),
         ],
     )?;
-    let resolution_admission = Box::new(admissions.admission(Role::Resolution)?);
 
     let rent = read_rent(account(accounts, RENT)?)?;
-    let product = Box::new(authenticate_product(accounts, *state, *provider, &rent)?);
+    let product = Box::new(authenticate_product(accounts, &state, &provider, &rent)?);
 
     invoke_resolution(
-        program_id,
         accounts,
         provider_request_bytes,
         post_body,
-        *provider,
+        &provider,
+        caller_bump,
     )?;
     require_unchanged_market(account(accounts, MARKET)?, &state_bytes)?;
-    let receipt = boxed_immediate_receipt(account(accounts, RESOLUTION_PROGRAM)?, *provider)?;
-    authenticate_terminal_poststate(accounts, *state, *provider, *receipt, *product, &rent)?;
-
-    let mut candidate = Box::new(*state);
-    let semantic_request =
-        Request::administrative(Action::AdmitTerminal, request.generation, request.market);
-    admit_terminal(
-        semantic_request,
-        &mut candidate,
-        *resolution_admission,
-        *product,
-        true,
-        TerminalReceipt {
-            receipt_id: identity(provider.certificate_account)?,
-            market_id: state.identity.market_id,
-            resolution_policy: state.identity.resolution_policy,
-            product_id: state.identity.product_id,
-            generation: state.identity.generation,
-            selector: receipt.selector,
-            authenticated: true,
-        },
-    )
-    .map_err(|_| CoreSbfError::Transition)?;
-    persist_state(account(accounts, MARKET)?, *candidate)
+    let receipt = boxed_immediate_receipt(account(accounts, RESOLUTION_PROGRAM)?, &provider)?;
+    authenticate_terminal_poststate(accounts, &state, &provider, &receipt, &product, &rent)?;
+    Ok(())
 }
 
 #[inline(never)]
@@ -169,7 +152,7 @@ fn boxed_provider_request(bytes: &[u8]) -> Result<Box<ProviderExecutionRequestV3
 #[inline(never)]
 fn boxed_immediate_receipt(
     resolution_program: &AccountInfo<'_>,
-    request: ProviderExecutionRequestV3,
+    request: &ProviderExecutionRequestV3,
 ) -> Result<Box<ProviderExecutionReceiptV3>, CoreSbfError> {
     Ok(Box::new(immediate_receipt(resolution_program, request)?))
 }
@@ -180,9 +163,9 @@ fn authenticate_parent(
     accounts: &[AccountInfo<'_>],
     request: Request,
     request_bytes: &[u8],
-    state: CoreState,
-    provider: ProviderExecutionRequestV3,
-) -> Result<(), CoreSbfError> {
+    state: &CoreState,
+    provider: &ProviderExecutionRequestV3,
+) -> Result<u8, CoreSbfError> {
     if request.action != Action::ExecuteProvider
         || state.phase != Phase::Open
         || state.readiness != Readiness::Consumed
@@ -210,21 +193,20 @@ fn authenticate_parent(
         provider.parent_request_digest,
     )
     .map_err(|_| CoreSbfError::CallerAuthority)?;
-    if Pubkey::find_program_address(&seeds.as_slices(), program_id).0
-        != *account(accounts, CALLER_AUTHORITY)?.key
-    {
+    let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    if expected != *account(accounts, CALLER_AUTHORITY)?.key {
         return Err(CoreSbfError::CallerAuthority);
     }
-    Ok(())
+    Ok(bump)
 }
 
 #[inline(never)]
 fn invoke_resolution<'info>(
-    program_id: &Pubkey,
     accounts: &[AccountInfo<'info>],
     request_bytes: &[u8],
     post_body: &[u8],
-    request: ProviderExecutionRequestV3,
+    request: &ProviderExecutionRequestV3,
+    caller_bump: u8,
 ) -> Result<(), ProgramError> {
     let mut data = Vec::with_capacity(request_bytes.len().saturating_add(post_body.len()));
     data.extend_from_slice(request_bytes);
@@ -253,9 +235,8 @@ fn invoke_resolution<'info>(
         request.parent_request_digest,
     )
     .map_err(|_| CoreSbfError::CallerAuthority)?;
-    let (_, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
     let [domain, release, market, role, context, digest] = seeds.as_slices();
-    let bump_seed = [bump];
+    let bump_seed = [caller_bump];
     let signer: [&[u8]; 7] = [domain, release, market, role, context, digest, &bump_seed];
     let mut infos = Vec::with_capacity(accounts.len().saturating_add(1));
     infos.extend(accounts.iter().cloned());
@@ -265,7 +246,7 @@ fn invoke_resolution<'info>(
 
 fn immediate_receipt(
     resolution_program: &AccountInfo<'_>,
-    request: ProviderExecutionRequestV3,
+    request: &ProviderExecutionRequestV3,
 ) -> Result<ProviderExecutionReceiptV3, CoreSbfError> {
     let (producer, bytes) = get_return_data().ok_or(CoreSbfError::ChildAck)?;
     if producer != *resolution_program.key || bytes.len() != PROVIDER_EXECUTION_RECEIPT_BYTES_V3 {
@@ -301,8 +282,8 @@ fn immediate_receipt(
 
 fn authenticate_product(
     accounts: &[AccountInfo<'_>],
-    state: CoreState,
-    request: ProviderExecutionRequestV3,
+    state: &CoreState,
+    request: &ProviderExecutionRequestV3,
     rent: &Rent,
 ) -> Result<Product, CoreSbfError> {
     let runtime = authenticate_selected_runtime_v2(
@@ -327,10 +308,10 @@ fn authenticate_product(
 
 fn authenticate_terminal_poststate(
     accounts: &[AccountInfo<'_>],
-    state: CoreState,
-    request: ProviderExecutionRequestV3,
-    receipt: ProviderExecutionReceiptV3,
-    product: Product,
+    state: &CoreState,
+    request: &ProviderExecutionRequestV3,
+    receipt: &ProviderExecutionReceiptV3,
+    product: &Product,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     if receipt.outcome_count != product.outcome_count || receipt.selector >= product.outcome_count {
@@ -382,8 +363,8 @@ fn authenticate_terminal_poststate(
 
 fn authenticate_lifecycle(
     accounts: &[AccountInfo<'_>],
-    request: ProviderExecutionRequestV3,
-    receipt: ProviderExecutionReceiptV3,
+    request: &ProviderExecutionRequestV3,
+    receipt: &ProviderExecutionReceiptV3,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let resolution_program = account(accounts, RESOLUTION_PROGRAM)?.key;
@@ -442,10 +423,10 @@ fn authenticate_lifecycle(
 
 fn authenticate_certificate(
     accounts: &[AccountInfo<'_>],
-    state: CoreState,
-    request: ProviderExecutionRequestV3,
-    receipt: ProviderExecutionReceiptV3,
-    product: Product,
+    state: &CoreState,
+    request: &ProviderExecutionRequestV3,
+    receipt: &ProviderExecutionReceiptV3,
+    product: &Product,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let resolution_program = account(accounts, RESOLUTION_PROGRAM)?.key;
@@ -510,7 +491,7 @@ fn validate_outer_frame(
     require_distinct(accounts)?;
     for (index, value) in accounts.iter().enumerate() {
         let signer = index == RESOLVER;
-        let writable = matches!(index, SOURCE_STATE | CERTIFICATE | MARKET | LIFECYCLE);
+        let writable = matches!(index, SOURCE_STATE | CERTIFICATE | LIFECYCLE);
         let executable = matches!(
             index,
             REGISTRY | CORE_PROGRAM | 13 | RESOLUTION_PROGRAM | 39 | 42 | SYSTEM
@@ -570,10 +551,6 @@ fn read_exact<const N: usize>(
 ) -> Result<[u8; N], CoreSbfError> {
     let data = account.try_borrow_data().map_err(|_| error)?;
     data.as_ref().try_into().map_err(|_| error)
-}
-
-fn identity(bytes: [u8; 32]) -> Result<dclutch_market_core_codec::Identity, CoreSbfError> {
-    dclutch_market_core_codec::Identity::new(bytes).map_err(|_| CoreSbfError::Reference)
 }
 
 fn account<'accounts, 'info>(

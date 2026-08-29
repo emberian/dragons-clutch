@@ -355,10 +355,24 @@ pub(crate) fn parse_finalized_direct_participant_evidence_v1(
     bytes: &[u8],
     rpc: &mut Rpc,
 ) -> Result<FinalizedDirectParticipantEvidenceV1> {
-    let projected = parse_finalized_direct_participant_evidence_offline_v1(
+    parse_finalized_direct_participant_evidence_for_cluster_v1(
         bytes,
+        rpc,
         ExpectedClusterV1::OwnedLoopback,
-    )?;
+    )
+}
+
+/// Reopen both finalized participant transactions for the already-admitted
+/// cluster before exposing one Direct-facing projection. Public devnet and an
+/// owned loopback use the same report/history semantic owner; only their
+/// schema, origin, genesis, and fee policy differ.
+pub(crate) fn parse_finalized_direct_participant_evidence_for_cluster_v1(
+    bytes: &[u8],
+    rpc: &mut Rpc,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<FinalizedDirectParticipantEvidenceV1> {
+    let projected =
+        parse_finalized_direct_participant_evidence_offline_v1(bytes, expected_cluster)?;
     let value = parse_json_without_duplicate_keys_v1(bytes)
         .map_err(|error| Error::new(format!("Direct participant evidence {error}")))?;
     let report: ReportV1 = serde_json::from_value(value)
