@@ -32,6 +32,7 @@ mod ledger;
 mod market;
 mod model;
 mod plan;
+mod rational_market;
 mod private_activity;
 mod private_lifecycle;
 mod pyth_vaa_provisioning;

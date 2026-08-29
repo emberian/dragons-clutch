@@ -1350,10 +1350,38 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
             registry,
             recipient,
         )?,
+        // Rational needs one fact General does not: its config record binds
+        // the immutable Realm, and the Realm is RealmV1 over the collateral
+        // Mint. That is an ORDERING constraint rather than a fixed point --
+        // mint -> realm -> config -> manifest -> market runs strictly one way,
+        // and the Realm is itself a Market-PDA seed -- but it does mean the
+        // Mint must be chosen BEFORE this input is compiled, while the local
+        // founding pipeline creates it from the run's own key forge partway
+        // through. Until the founding driver can be told which Mint to use,
+        // the Mint is named here and the caller is responsible for founding
+        // over that exact one.
+        Ok(family) if family == "rational" => {
+            let mint = std::env::var("DCLUTCH_RATIONAL_COLLATERAL_MINT").map_err(|_| {
+                Error::new(
+                    "DCLUTCH_MARKET_CAPABILITY=rational also requires \
+                     DCLUTCH_RATIONAL_COLLATERAL_MINT=BASE58_MINT. Rational's config record \
+                     binds the immutable Realm, and the Realm is derived from the collateral \
+                     Mint, so the Mint must be chosen before the capability closure is \
+                     compiled. This is an ordering constraint, not a cycle: the Realm is a \
+                     seed of the Market PDA, never an output of it.",
+                )
+            })?;
+            let mint = mint
+                .parse::<solana_sdk::pubkey::Pubkey>()
+                .map_err(|_| Error::new("DCLUTCH_RATIONAL_COLLATERAL_MINT must be base58"))?;
+            crate::rational_market::demo_rational_market_input(
+                &plan_path, &rpc_url, registry, mint,
+            )?
+        }
         Ok(family) if family != "direct" => {
             return Err(Error::new(format!(
                 "DCLUTCH_MARKET_CAPABILITY={family} names no selectable capability compiler; \
-                 this command compiles direct (default) or general"
+                 this command compiles direct (default), general or rational"
             )));
         }
         _ => {
