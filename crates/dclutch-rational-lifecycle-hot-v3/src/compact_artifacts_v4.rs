@@ -1101,6 +1101,16 @@ mod tests {
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_MAGIC_V3, DESCRIPTOR_SCHEMA_VERSION_V3,
         DescriptorAdmissionV2,
     };
+
+    /// Market coordinate inside a descriptor preimage.
+    ///
+    /// The kernel keeps its offset table private, so this is a local claim --
+    /// and it is never trusted as one: `descriptor_bytes_for_market` writes
+    /// here and the test then requires the DECODED `market_id()` to be the
+    /// value written, which is what actually establishes that this is the
+    /// Market field. The surrounding fixture writes the same coordinate as a
+    /// bare `112`.
+    const FIXTURE_DESCRIPTOR_MARKET_OFFSET: usize = 112;
     use dclutch_request_profile_contract::RequestProfileV1;
     use dclutch_transition_vm::v3::{
         ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
@@ -1159,6 +1169,41 @@ mod tests {
             .expect("coefficient");
         }
         output
+    }
+
+    /// `descriptor_bytes` with the Market coordinate chosen by the caller.
+    ///
+    /// The default fixture pins every identity, which is right for the
+    /// geometry tests but cannot ask whether an artifact moves with the
+    /// Market. This varies exactly one 32-byte field.
+    fn descriptor_bytes_for_market(coefficients: &[u64; 5], market: [u8; 32]) -> Vec<u8> {
+        let mut output = descriptor_bytes(coefficients);
+        put(&mut output, FIXTURE_DESCRIPTOR_MARKET_OFFSET, &market).expect("market coordinate");
+        output
+    }
+
+    /// Decode a descriptor whose admission identity is the SHA-256 its own
+    /// bytes hash to, rather than a fixture constant.
+    ///
+    /// `validate_descriptor_admission` requires
+    /// `selected_descriptor_id == recomputed_descriptor_digest` on chain, so
+    /// this is the only admission shape a real finalized record can present --
+    /// and it is what makes the identity move when the Market moves.
+    fn self_identified_descriptor(bytes: &[u8]) -> RepresentationDescriptorV2<'_> {
+        let digest = hash(bytes).to_bytes();
+        RepresentationDescriptorV2::decode(
+            bytes,
+            DescriptorAdmissionV2 {
+                selected_descriptor_id: digest,
+                finalized_descriptor_id: digest,
+                recomputed_descriptor_digest: digest,
+                finalized_descriptor_digest: digest,
+                record_authenticated: true,
+                derived_representation_authority: id(22),
+                authority_derivation_authenticated: true,
+            },
+        )
+        .expect("self-identified descriptor")
     }
 
     fn descriptor<'a>(bytes: &'a [u8]) -> RepresentationDescriptorV2<'a> {
@@ -1411,6 +1456,126 @@ mod tests {
             ),
             Err(Error::AccountObservation)
         );
+    }
+
+    /// The counterpart `selected_bundle_v6` has for the three fixed-cardinality
+    /// actions, asked here for the fourth -- and ANSWERED THE OTHER WAY.
+    ///
+    /// Three of the four compact artifacts are already market-neutral. The
+    /// EFFECT is not, and this pins the single mechanism that makes it so:
+    /// [`child_template`] bakes one custody-owner PDA per support row, seeded
+    /// by `descriptor_id`, and `descriptor_id` is the SHA-256 of a descriptor
+    /// preimage that carries the Core Market. So the effect bytes move when
+    /// the Market moves.
+    ///
+    /// WHY THIS MATTERS BEYOND THIS ENCODER: the effect digest is named by the
+    /// CapabilityV4 descriptor, whose digest is a ProgramSet entry, whose
+    /// SHA-256 is the capability manifest entry's `release_id`, and the
+    /// manifest digest is a Market-PDA seed. A compact RetireReceipt in a
+    /// selectable release therefore closes a SHA-256 loop through the Market
+    /// address -- the Fractional fixed point, reached through `release_id`
+    /// rather than `config_id`. That is why the four-action set cannot be
+    /// compiled before founding while this holds.
+    ///
+    /// This test asserts the wall rather than wishing it away. A compact V6
+    /// that projects the custody owner from the authenticated descriptor at
+    /// runtime instead of baking it flips the `assert_ne!` below to
+    /// `assert_eq!`, and that flip is the proof it worked.
+    #[test]
+    fn the_compact_retire_receipt_effect_is_the_one_market_dependent_artifact() {
+        let basis = basis();
+        let first_bytes = descriptor_bytes_for_market(&[0, 7, 5, 0, 9], id(71));
+        let second_bytes = descriptor_bytes_for_market(&[0, 7, 5, 0, 9], id(72));
+        // The two preimages differ in the Market coordinate and nowhere else.
+        assert_ne!(first_bytes, second_bytes);
+        assert_eq!(
+            first_bytes.len(),
+            second_bytes.len(),
+            "the Market substitution must not change the descriptor width"
+        );
+        let differing = first_bytes
+            .iter()
+            .zip(second_bytes.iter())
+            .enumerate()
+            .filter(|(_, (left, right))| left != right)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            differing,
+            (FIXTURE_DESCRIPTOR_MARKET_OFFSET..FIXTURE_DESCRIPTOR_MARKET_OFFSET + 32)
+                .collect::<Vec<_>>(),
+            "only one 32-byte coordinate may differ between the two preimages"
+        );
+
+        let first = self_identified_descriptor(&first_bytes);
+        let second = self_identified_descriptor(&second_bytes);
+        // This is what proves the coordinate written above IS the Market, so
+        // the offset is established by the decoder rather than asserted here.
+        assert_eq!(first.market_id(), id(71));
+        assert_eq!(second.market_id(), id(72));
+        // The identities really do move with the Market, so an equality below
+        // is market-neutrality rather than two descriptors that were the same.
+        assert_ne!(first.descriptor_id(), second.descriptor_id());
+
+        let lengths = lengths(basis.len(), first_bytes.len(), 3);
+        let claims_program = Pubkey::new_from_array(id(31));
+        let artifacts = |descriptor| {
+            encode_rational_lifecycle_compact_artifacts_v4(
+                RationalLifecycleCompactArtifactInputV4 {
+                    logical_data_lengths: &lengths,
+                    product_basis: &basis,
+                    descriptor,
+                    claims_program,
+                },
+            )
+            .expect("compact artifacts")
+        };
+        let left = artifacts(first);
+        let right = artifacts(second);
+
+        // Three of four artifacts do not observe the Market at all.
+        assert_eq!(left.support_count, right.support_count);
+        assert_eq!(left.account_profile, right.account_profile);
+        assert_eq!(left.request_profile, right.request_profile);
+        assert_eq!(left.transition, right.transition);
+
+        // The fourth does.
+        assert_ne!(
+            left.effect, right.effect,
+            "if the effect has become market-neutral, this test's job is done -- \
+             flip it to assert_eq! and delete the wall it documents"
+        );
+
+        // And this is WHY, named rather than inferred: every custody owner the
+        // effect bakes is a PDA seeded by the market-bearing descriptor
+        // identity, so each one appears in its own effect and in neither the
+        // other's. Support rows for coefficients [0, 7, 5, 0, 9] are outcomes
+        // 1, 2 and 4 -- the nonzero ones.
+        for outcome in [1_u32, 2, 4] {
+            let owner_of = |descriptor: RepresentationDescriptorV2<'_>| {
+                Pubkey::find_program_address(
+                    &[
+                        RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
+                        descriptor.descriptor_id().as_slice(),
+                        &outcome.to_le_bytes(),
+                    ],
+                    &claims_program,
+                )
+                .0
+                .to_bytes()
+            };
+            let left_owner = owner_of(first);
+            let right_owner = owner_of(second);
+            assert_ne!(left_owner, right_owner);
+            assert!(contains(&left.effect, &left_owner));
+            assert!(!contains(&left.effect, &right_owner));
+            assert!(contains(&right.effect, &right_owner));
+            assert!(!contains(&right.effect, &left_owner));
+        }
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8; 32]) -> bool {
+        haystack.windows(32).any(|window| window == needle.as_slice())
     }
 
     #[test]
