@@ -4,6 +4,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECKER="$HERE/check_sbf_build_freshness.py"
 RUNNER="$HERE/checked-release-candidate.sh"
+PROVENANCE="$HERE/artifact_provenance.py"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-release-freshness.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 
@@ -144,7 +145,8 @@ fi
 
 if grep -Fq 'rm -f "$link_target/deploy/$stem.so"' "$RUNNER" \
     && grep -Fq 'artifact_provenance.py' "$RUNNER" \
-    && grep -Fq 'artifact_provenance": evidence(f"provenance/{label}.json")' "$RUNNER" \
+    && grep -Fq 'emit-gate' "$RUNNER" \
+    && grep -Fq '"artifact_provenance": evidence(' "$PROVENANCE" \
     && grep -Fq -- '--frame-object "frame-target-$label/$TARGET_TRIPLE/release/deps/$object_stem.o"' "$RUNNER"; then
     ok "each gate link binds a newly emitted ELF to exact source/build/frame provenance"
 else
