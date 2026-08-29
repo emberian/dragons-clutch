@@ -27,6 +27,7 @@ fn claims_frame() -> [FractionalClaimsAccountRuleV1; 1] {
         writable: false,
         executable: true,
         data_length: 0,
+        opaque_data: false,
     }]
 }
 

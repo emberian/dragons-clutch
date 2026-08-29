@@ -17,6 +17,7 @@ mod composition;
 mod exposure_action_v2;
 mod hot_v2;
 mod records;
+mod selected_release_v4;
 mod token2022;
 mod topology_v3;
 
@@ -90,6 +91,13 @@ pub use records::{
     FractionalArtifactRecordSnapshotV1, FractionalChainArtifactSnapshotV1,
     FractionalPreparedChainArtifactsV1, authenticate_fractional_chain_artifacts_v1,
     prepare_fractional_chain_artifacts_v1,
+};
+pub use selected_release_v4::{
+    FRACTIONAL_SELECTED_ACTION_COUNT_V4, FRACTIONAL_SELECTED_ACTIONS_V4,
+    FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4, FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4,
+    FractionalFrameWidthsV4, FractionalSelectedPublicationV4, FractionalSelectedReleaseErrorV4,
+    FractionalSelectedReleaseInputV4, FractionalSelectedReleaseV4, fractional_claims_frame_spec_v4,
+    fractional_selected_release_v4, validate_fractional_selected_release_v4,
 };
 pub use token2022::{
     FractionalDenominatorExecutionV1, FractionalLifecycleRentClosePlanV2, FractionalMintSnapshotV1,
