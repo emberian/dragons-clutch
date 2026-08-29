@@ -518,8 +518,7 @@ def cmd_mint_wallets(args: argparse.Namespace) -> int:
     if config["cluster"]["label"] != "devnet":
         raise Refusal("mint-wallets is devnet-only; local participants come from the probe fixtures")
     work = Path(config["work_dir"]) / "minted-wallets"
-    script = Path(config.get("activity_sh", str(
-        Path(config["bootstrap_bin"]).resolve().parents[4] / "release" / "devnet-activity.sh")))
+    script = Path(config.get("activity_sh", str(HERE.parent / "release" / "devnet-activity.sh")))
     if not script.is_file():
         raise Refusal(f"activity harness not found at {script}; set activity_sh in config")
     argv = [
