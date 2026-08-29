@@ -411,6 +411,14 @@ fn plan_funding_readiness_from_observation_v1(
         system_program: snapshot.account(system_program::ID)?,
     });
     let accept = build_resolution_verify_fund_ready_v3(&verify_snapshot);
+    if create.is_err() && activate.is_err() && accept.is_err() {
+        eprintln!(
+            "funding-readiness builders all refused: create={:?} activate={:?} accept={:?}",
+            create.as_ref().err(),
+            activate.as_ref().err(),
+            accept.as_ref().err()
+        );
+    }
     let selection = select_authenticated_route_v1(
         market.phase,
         market.readiness,
