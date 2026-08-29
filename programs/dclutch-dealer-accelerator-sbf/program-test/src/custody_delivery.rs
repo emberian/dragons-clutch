@@ -346,6 +346,11 @@ pub fn token_account_amount(bytes: &[u8]) -> u64 {
     SplAccount::unpack(bytes).expect("canonical token account").amount
 }
 
+/// Read the issued supply out of a staged or observed Mint.
+pub fn mint_total_supply(bytes: &[u8]) -> u64 {
+    SplMint::unpack(bytes).expect("canonical mint").supply
+}
+
 /// Read the owner out of a staged or observed token account.
 pub fn token_account_owner(bytes: &[u8]) -> Pubkey {
     SplAccount::unpack(bytes).expect("canonical token account").owner

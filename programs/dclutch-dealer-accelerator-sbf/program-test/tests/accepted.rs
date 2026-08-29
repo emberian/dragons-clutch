@@ -39,8 +39,8 @@ use dclutch_custody_contract::{
 };
 use dclutch_dealer_accelerator_program_test::custody_delivery::{
     DealerDeliveryInputV1, DealerDeliveryRealmV1, DealerDeliveryV1,
-    dealer_delivery_realm_v1, dealer_delivery_token_account_bytes, stage_dealer_delivery_v1,
-    token_account_amount,
+    dealer_delivery_realm_v1, dealer_delivery_token_account_bytes, mint_total_supply,
+    stage_dealer_delivery_v1, token_account_amount,
 };
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
@@ -3567,6 +3567,12 @@ async fn the_delivery_moves_the_locked_collateral_and_closes_its_escrow() {
     let source_before = account_body(&mut context, delivery.source)
         .await
         .expect("the source vault exists");
+    let source_before_bytes = source_before.clone();
+    let mint_supply = mint_total_supply(
+        &account_body(&mut context, delivery.mint)
+            .await
+            .expect("the collateral Mint exists"),
+    );
     let escrow_rent = account_lamports(&mut context, delivery.escrow).await;
     let beneficiary_before = account_lamports(&mut context, BENEFICIARY).await;
     assert_eq!(token_account_amount(&escrow_before), DELIVERY_AMOUNT);
@@ -3625,6 +3631,24 @@ async fn the_delivery_moves_the_locked_collateral_and_closes_its_escrow() {
             .checked_add(escrow_rent)
             .expect("refunded rent"),
         "every lamport of escrow rent reaches the beneficiary fixed at reservation"
+    );
+    // The whole claim in one line: no collateral was created and none was
+    // destroyed. Every atom the Mint issued is still held by an account this
+    // scenario names, before and after.
+    let held_before = DELIVERY_SOURCE_AFTER
+        .checked_add(DELIVERY_AMOUNT)
+        .and_then(|value| value.checked_add(DELIVERY_DESTINATION_BEFORE))
+        .expect("collateral held before delivery");
+    let held_after = token_account_amount(&source_before_bytes)
+        .checked_add(token_account_amount(&destination_after))
+        .expect("collateral held after delivery");
+    assert_eq!(
+        held_before, held_after,
+        "delivery moves collateral between accounts and creates none"
+    );
+    assert_eq!(
+        held_after, mint_supply,
+        "and every atom the Mint issued is still held by an account this scenario names"
     );
 
     // The replay cursor advanced exactly once, and the batch is terminal.
