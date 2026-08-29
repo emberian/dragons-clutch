@@ -355,6 +355,28 @@ pub(crate) fn parse_finalized_direct_participant_evidence_v1(
     bytes: &[u8],
     rpc: &mut Rpc,
 ) -> Result<FinalizedDirectParticipantEvidenceV1> {
+    let projected = parse_finalized_direct_participant_evidence_offline_v1(
+        bytes,
+        ExpectedClusterV1::OwnedLoopback,
+    )?;
+    let value = parse_json_without_duplicate_keys_v1(bytes)
+        .map_err(|error| Error::new(format!("Direct participant evidence {error}")))?;
+    let report: ReportV1 = serde_json::from_value(value)
+        .map_err(|error| Error::new(format!("Direct participant evidence shape: {error}")))?;
+    verify_persisted_admission_history(rpc, &report)?;
+    verify_persisted_collateral(rpc, &report)?;
+    Ok(projected)
+}
+
+/// Hostile-decode one finalized participant report without opening a wallet or
+/// contacting RPC. This is the producer-side half of the trust boundary: it
+/// authenticates the report's exact persisted envelopes and projects the
+/// existing Direct evidence type. The Direct executor still reopens current
+/// finalized account state before it can build or submit anything.
+pub(crate) fn parse_finalized_direct_participant_evidence_offline_v1(
+    bytes: &[u8],
+    expected_cluster: ExpectedClusterV1,
+) -> Result<FinalizedDirectParticipantEvidenceV1> {
     let value = parse_json_without_duplicate_keys_v1(bytes)
         .map_err(|error| Error::new(format!("Direct participant evidence {error}")))?;
     let report: ReportV1 = serde_json::from_value(value.clone())
@@ -370,18 +392,16 @@ pub(crate) fn parse_finalized_direct_participant_evidence_v1(
         Error::new("Direct participant evidence omitted finalized collateral preparation")
     })?;
     authenticate_collateral_intent_digest(collateral)?;
-    if report.schema != LOCAL_REPORT_SCHEMA_V1
-        || report.cluster != ExpectedClusterV1::OwnedLoopback.evidence_label()
+    if report.schema != report_schema_v1(expected_cluster)
+        || report.cluster != expected_cluster.evidence_label()
         || !report.authorized_mutation
         || report.phase != PhaseV1::Finalized
         || collateral.phase != CollateralPhaseV1::Finalized
     {
         return Err(Error::new(
-            "Direct participant evidence was not one finalized authorized owned-loopback report",
+            "Direct participant evidence was not one finalized authorized report for the selected cluster",
         ));
     }
-    verify_persisted_admission_history(rpc, &report)?;
-    verify_persisted_collateral(rpc, &report)?;
     project_finalized_direct_participant_evidence_v1(&report)
 }
 
@@ -5286,8 +5306,14 @@ mod tests {
     }
 
     fn admission_exactness_fixture() -> (ReportV1, VersionedTransaction) {
-        let fee_payer = Keypair::new();
         let position_owner = Keypair::new();
+        admission_exactness_fixture_for(&position_owner)
+    }
+
+    fn admission_exactness_fixture_for(
+        position_owner: &Keypair,
+    ) -> (ReportV1, VersionedTransaction) {
+        let fee_payer = Keypair::new();
         let position = Pubkey::new_unique();
         let admission = Pubkey::new_unique();
         let claims_program = Pubkey::new_unique();
@@ -5386,7 +5412,7 @@ mod tests {
         ));
         let transaction = VersionedTransaction::try_new(
             message,
-            &[&fee_payer as &dyn Signer, &position_owner as &dyn Signer],
+            &[&fee_payer as &dyn Signer, position_owner as &dyn Signer],
         )
         .expect("signed admission fixture");
         let message_bytes = transaction.message.serialize();
@@ -5761,8 +5787,17 @@ mod tests {
     }
 
     fn collateral_intent_fixture() -> (CollateralIntentV1, Vec<u8>) {
+        let participant = Keypair::new();
+        let (intent, delegated, _) = collateral_intent_and_packet_fixture(&participant, [1; 32]);
+        (intent, delegated)
+    }
+
+    fn collateral_intent_and_packet_fixture(
+        participant_keypair: &Keypair,
+        admission_intent_digest: [u8; 32],
+    ) -> (CollateralIntentV1, Vec<u8>, VersionedTransaction) {
         let mint = Pubkey::new_unique();
-        let participant = Pubkey::new_unique();
+        let participant = participant_keypair.pubkey();
         let market = Pubkey::new_unique();
         let release_set = [4; 32];
         let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
@@ -5781,8 +5816,10 @@ mod tests {
             Pubkey::create_with_seed(&participant, &participant_seed, &token_program)
                 .expect("participant token derivation");
         let source = Pubkey::new_unique();
-        let source_owner = Pubkey::new_unique();
-        let fee_payer = Pubkey::new_unique();
+        let source_owner_keypair = Keypair::new();
+        let source_owner = source_owner_keypair.pubkey();
+        let fee_payer_keypair = Keypair::new();
+        let fee_payer = fee_payer_keypair.pubkey();
         let quantity = 0x0807_0605_0403_0201;
         let base = TokenAccount::initialized_base_bytes(mint.to_bytes(), participant.to_bytes())
             .expect("initialized base");
@@ -5953,7 +5990,7 @@ mod tests {
             account_state(activation.programdata, Some(&custody_programdata_rpc)),
         );
         let mut intent = CollateralIntentV1 {
-            admission_intent_sha256: hex(&[1; 32]),
+            admission_intent_sha256: hex(&admission_intent_digest),
             observation_slot: 1,
             observation_unix_timestamp: 1,
             minimum_finalized_slot: 1,
@@ -6016,12 +6053,22 @@ mod tests {
             &[],
         )
         .expect("compile message");
-        let message = compiled.message.serialize();
-        intent.wire_bytes = compiled.wire_bytes;
+        let transaction = VersionedTransaction::try_new(
+            compiled.message.clone(),
+            &[
+                &fee_payer_keypair as &dyn Signer,
+                participant_keypair as &dyn Signer,
+                &source_owner_keypair as &dyn Signer,
+            ],
+        )
+        .expect("signed collateral fixture");
+        let wire = bincode::serialize(&transaction).expect("collateral packet");
+        let message = transaction.message.serialize();
+        intent.wire_bytes = wire.len();
         intent.message_base64 = BASE64.encode(&message);
         intent.message_sha256 = sha256_hex(&message);
         intent.instructions = instructions.iter().map(instruction_evidence).collect();
-        (intent, delegated.to_vec())
+        (intent, delegated.to_vec(), transaction)
     }
 
     #[test]
@@ -6096,6 +6143,104 @@ mod tests {
             .expect("collateral")
             .finalized = None;
         assert!(project_finalized_direct_participant_evidence_v1(&missing_history).is_err());
+    }
+
+    #[test]
+    fn offline_direct_projection_authenticates_exact_devnet_packets_and_cluster() {
+        let participant = Keypair::new();
+        let (mut report, _) = admission_exactness_fixture_for(&participant);
+        let admission_digest: [u8; 32] =
+            Sha256::digest(serde_json::to_vec(&report.intent).expect("serialize admission intent"))
+                .into();
+        let (collateral_intent, _, collateral_transaction) =
+            collateral_intent_and_packet_fixture(&participant, admission_digest);
+        let collateral_wire =
+            bincode::serialize(&collateral_transaction).expect("collateral packet");
+
+        report.phase = PhaseV1::Finalized;
+        let admission_signature = report
+            .expected_signature
+            .clone()
+            .expect("admission signature");
+        report.finalized = Some(FinalizedEvidenceV1 {
+            signature: admission_signature,
+            slot: 41,
+            fee_lamports: 1,
+            compute_units_consumed: Some(2),
+            return_data_producer: Pubkey::new_unique().to_string(),
+            return_data_sha256: hex(&[0x41; 32]),
+            poststate: BTreeMap::new(),
+        });
+        let collateral_signature = collateral_transaction.signatures[0].to_string();
+        report.collateral = Some(CollateralReportV1 {
+            phase: CollateralPhaseV1::Finalized,
+            intent_sha256: sha256_hex(
+                &serde_json::to_vec(&collateral_intent).expect("serialize collateral intent"),
+            ),
+            envelope_sha256: String::new(),
+            intent: collateral_intent.clone(),
+            signed_packet_base64: Some(BASE64.encode(&collateral_wire)),
+            signed_packet_sha256: Some(sha256_hex(&collateral_wire)),
+            expected_signature: Some(collateral_signature.clone()),
+            finalized: Some(CollateralFinalizedEvidenceV1 {
+                signature: collateral_signature,
+                slot: 42,
+                fee_lamports: 3,
+                compute_units_consumed: Some(4),
+                return_data: None,
+                poststate: BTreeMap::new(),
+            }),
+        });
+        refresh_report_envelope_digests(&mut report).expect("phase envelope digests");
+
+        let bytes = serde_json::to_vec(&report).expect("participant report");
+        let projected = parse_finalized_direct_participant_evidence_offline_v1(
+            &bytes,
+            ExpectedClusterV1::Devnet,
+        )
+        .expect("authenticated key-free devnet projection");
+        assert_eq!(projected.owner, participant.pubkey());
+        assert_eq!(
+            projected.market,
+            pubkey(&collateral_intent.market).expect("Market")
+        );
+        assert_eq!(projected.admission_slot, 41);
+        assert_eq!(projected.collateral_slot, 42);
+
+        assert!(
+            parse_finalized_direct_participant_evidence_offline_v1(
+                &bytes,
+                ExpectedClusterV1::OwnedLoopback,
+            )
+            .is_err()
+        );
+
+        let mut foreign = report.clone();
+        foreign.intent.position_owner = Pubkey::new_unique().to_string();
+        foreign.intent_sha256 = sha256_hex(
+            &serde_json::to_vec(&foreign.intent).expect("serialize hostile admission intent"),
+        );
+        refresh_report_envelope_digests(&mut foreign).expect("hostile envelope digests");
+        assert!(
+            parse_finalized_direct_participant_evidence_offline_v1(
+                &serde_json::to_vec(&foreign).expect("hostile participant report"),
+                ExpectedClusterV1::Devnet,
+            )
+            .is_err()
+        );
+
+        let mut unknown = serde_json::to_value(&report).expect("participant value");
+        unknown
+            .as_object_mut()
+            .expect("participant object")
+            .insert("secretKeyPath".into(), Value::String("forbidden".into()));
+        assert!(
+            parse_finalized_direct_participant_evidence_offline_v1(
+                &serde_json::to_vec(&unknown).expect("unknown-field participant report"),
+                ExpectedClusterV1::Devnet,
+            )
+            .is_err()
+        );
     }
 
     #[test]

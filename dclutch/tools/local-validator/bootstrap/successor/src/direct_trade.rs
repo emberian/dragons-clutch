@@ -9,6 +9,7 @@
 //! public exact `HotExecutionAckV3` and complete poststate owner.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write as _,
     path::{Path, PathBuf},
@@ -54,6 +55,7 @@ use dclutch_operator::{
         build_direct_inline_hot_v4, compile_direct_inline_request_v3,
     },
 };
+use dclutch_release_tool::CheckedExecutionReleaseSetV1;
 use dclutch_token_svm::TokenAccount;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -97,7 +99,7 @@ use crate::{
     cluster::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
     },
-    model::SuccessorPlan,
+    model::{MarketRunInput, ProgramPin, SuccessorPlan},
     plan::pubkey,
     rpc::{Rpc, RpcAccount, WritePolicyV1, parse_json_without_duplicate_keys_v1},
     terminal_lifecycle::finalized_snapshot,
@@ -553,6 +555,38 @@ struct ValidatedManifestV1 {
     buyer: SignedDirectIntentV3,
 }
 
+/// Key-free projection of an exact public Direct manifest after the manifest,
+/// its signed tickets, its plan/Market digests, and the permanent checked
+/// deployment evidence have all been reauthenticated. The producer persists
+/// this projection only in its write-ahead journal; the executor still owns
+/// current chain authentication and never accepts it as account authority.
+#[derive(Clone, Debug)]
+pub(crate) struct AuthenticatedDevnetDirectSessionSourceV1 {
+    pub(crate) public_manifest_sha256: String,
+    pub(crate) plan_sha256: String,
+    pub(crate) market_input_sha256: String,
+    pub(crate) checked_execution_release_sha256: String,
+    pub(crate) payer: Pubkey,
+    pub(crate) market: Pubkey,
+    pub(crate) seller: Pubkey,
+    pub(crate) buyer: Pubkey,
+    pub(crate) claims_market: Pubkey,
+    pub(crate) seller_position: Pubkey,
+    pub(crate) buyer_position: Pubkey,
+    pub(crate) seller_collateral: Pubkey,
+    pub(crate) buyer_collateral: Pubkey,
+    pub(crate) custody_authority: Pubkey,
+    pub(crate) mint: Pubkey,
+    pub(crate) token_program: Pubkey,
+    pub(crate) seller_replay: Pubkey,
+    pub(crate) buyer_replay: Pubkey,
+    pub(crate) seller_nonce: u64,
+    pub(crate) buyer_nonce: u64,
+    pub(crate) seller_ticket_sha256: String,
+    pub(crate) buyer_ticket_sha256: String,
+    pub(crate) checked_binaries: BTreeMap<String, ProgramPin>,
+}
+
 struct DirectTradePlanningV1 {
     route: DirectInlineAuthenticatedRouteV3,
     provision: DirectInlineLookupTableProvisionV3,
@@ -842,6 +876,141 @@ fn load_and_validate_manifests(
         plan,
         seller,
         buyer,
+    })
+}
+
+/// Reauthenticate one immutable devnet public source entirely offline. This is
+/// intentionally narrower than executor preflight: it proves source bytes and
+/// checked binary provenance, while the executor remains responsible for one
+/// current finalized RPC snapshot before any transaction can be prepared.
+pub(crate) fn authenticate_devnet_direct_session_source_v1(
+    public_bytes: &[u8],
+    plan_bytes: &[u8],
+    market_bytes: &[u8],
+) -> Result<AuthenticatedDevnetDirectSessionSourceV1> {
+    require_unique_json_v1(public_bytes, "Direct public manifest")?;
+    require_unique_json_v1(plan_bytes, "Direct successor plan")?;
+    require_unique_json_v1(market_bytes, "Direct Market input")?;
+    let public: DirectTradePublicManifestV1 = serde_json::from_slice(public_bytes)
+        .map_err(|error| Error::new(format!("Direct public manifest: {error}")))?;
+    if public.schema != PUBLIC_MANIFEST_SCHEMA_V1
+        || public.cluster != ExpectedClusterV1::Devnet.evidence_label()
+        || public.genesis_hash != DEVNET_GENESIS_HASH
+    {
+        return Err(refusal(
+            "Direct session producer source is not one exact public-devnet manifest",
+        ));
+    }
+    let plan_sha256 = sha256_hex(plan_bytes);
+    let market_input_sha256 = sha256_hex(market_bytes);
+    if public.plan_sha256 != plan_sha256 || public.market_input_sha256 != market_input_sha256 {
+        return Err(refusal(
+            "Direct public manifest changed its checked plan or Market input bytes",
+        ));
+    }
+    let plan: SuccessorPlan = serde_json::from_slice(plan_bytes)?;
+    let market: MarketRunInput = serde_json::from_slice(market_bytes)?;
+    crate::market::validate_market_input(&market)?;
+    if market.generation != public.context.generation {
+        return Err(refusal(
+            "Direct public manifest changed the authenticated Market generation",
+        ));
+    }
+    let seller = decode_signed_intent(&public.seller, 0, &public)?;
+    let buyer = decode_signed_intent(&public.buyer, 1, &public)?;
+    if seller.maker == buyer.maker {
+        return Err(refusal("Direct seller and buyer identities are equal"));
+    }
+    validate_public_facts(&public, seller, buyer)?;
+    let set = plan.checked_upgrade_set.as_ref().ok_or_else(|| {
+        refusal("devnet Direct plan omitted its authenticated permanent checked deployment set")
+    })?;
+    if plan.checked_local_mutable_set.is_some() || set.devnet_genesis_hash != DEVNET_GENESIS_HASH {
+        return Err(refusal(
+            "devnet Direct session producer refuses localhost or another genesis provenance",
+        ));
+    }
+    crate::upgrade::reauthenticate_checked_deployment_set_pin(set)?;
+    let checked_bytes = decode_canonical_base64_v1(
+        &public.checked_execution_release_set_base64,
+        "checked Direct execution release",
+    )?;
+    let checked = CheckedExecutionReleaseSetV1::decode(&checked_bytes)
+        .map_err(|error| Error::new(format!("checked Direct execution release: {error:?}")))?;
+    if checked
+        .execution_release_set_id()
+        .map_err(|error| Error::new(format!("checked Direct execution identity: {error:?}")))?
+        .as_bytes()
+        != &hex32(&plan.release_set_id, "Direct release set")?
+    {
+        return Err(refusal(
+            "checked Direct execution release selected another release set",
+        ));
+    }
+    let role_pins: [(&str, &ProgramPin); 5] = [
+        ("core", &plan.core),
+        ("claims", &plan.claims),
+        ("trading", &plan.trading),
+        ("resolution", &plan.resolution),
+        ("custody", &plan.custody),
+    ];
+    let artifacts = checked.artifacts();
+    let mut checked_binaries = BTreeMap::new();
+    for ((role, pin), artifact) in role_pins.into_iter().zip(artifacts) {
+        let program = pubkey(&pin.program_id)?;
+        let programdata = pubkey(&pin.programdata_id)?;
+        if artifact.program().to_bytes() != program.to_bytes()
+            || artifact.programdata() != programdata.to_bytes()
+            || artifact.elf_digest() != hex32(&pin.live_elf_sha256, "Direct live ELF digest")?
+            || artifact.semantic_release_id().to_bytes()
+                != hex32(&pin.semantic_release_id, "Direct semantic release")?
+            || artifact.deployment_slot() != pin.deployment_slot
+            || sha256_hex(&artifact.to_bytes()) != pin.artifact_release_id
+        {
+            return Err(refusal(format!(
+                "checked Direct {role} artifact differs from the accepted program, binary, semantic release, or deployment slot",
+            )));
+        }
+        if checked_binaries.insert(role.into(), pin.clone()).is_some() {
+            return Err(refusal("checked Direct execution role appeared twice"));
+        }
+    }
+    let ticket_sha256 = |value: &SignedIntentManifestV1| -> Result<String> {
+        Ok(sha256_hex(&serde_json::to_vec(value)?))
+    };
+    Ok(AuthenticatedDevnetDirectSessionSourceV1 {
+        public_manifest_sha256: sha256_hex(public_bytes),
+        plan_sha256,
+        market_input_sha256,
+        checked_execution_release_sha256: sha256_hex(&checked_bytes),
+        payer: parse_key(&public.payer, "Direct payer")?,
+        market: parse_key(&public.market, "Direct Market")?,
+        seller: seller.maker,
+        buyer: buyer.maker,
+        claims_market: parse_key(&public.route.claims.aggregate, "Direct Claims aggregate")?,
+        seller_position: parse_key(
+            &public.route.claims.seller_position,
+            "Direct seller Position",
+        )?,
+        buyer_position: parse_key(&public.route.claims.buyer_position, "Direct buyer Position")?,
+        seller_collateral: parse_key(
+            &public.route.custody.seller_token,
+            "Direct seller collateral",
+        )?,
+        buyer_collateral: parse_key(&public.route.custody.buyer_token, "Direct buyer collateral")?,
+        custody_authority: parse_key(
+            &public.route.custody.custody_authority,
+            "Direct Custody authority",
+        )?,
+        mint: parse_key(&public.route.custody.mint, "Direct collateral Mint")?,
+        token_program: parse_key(&public.route.custody.token_program, "Direct token program")?,
+        seller_replay: parse_key(&public.route.seller_maker, "Direct seller replay")?,
+        buyer_replay: parse_key(&public.route.buyer_maker, "Direct buyer replay")?,
+        seller_nonce: public.context.seller_next_nonce,
+        buyer_nonce: public.context.buyer_next_nonce,
+        seller_ticket_sha256: ticket_sha256(&public.seller)?,
+        buyer_ticket_sha256: ticket_sha256(&public.buyer)?,
+        checked_binaries,
     })
 }
 

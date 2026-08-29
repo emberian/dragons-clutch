@@ -327,33 +327,45 @@ impl DealerScenarioCheckpointV1 {
 
     /// Encode one exact checkpoint body.
     pub fn to_bytes(self) -> CheckpointResultV1<[u8; DEALER_SCENARIO_CHECKPOINT_BYTES_V1]> {
-        self.validate()?;
         let mut bytes = [0_u8; DEALER_SCENARIO_CHECKPOINT_BYTES_V1];
-        put(&mut bytes, 0, &DEALER_SCENARIO_CHECKPOINT_MAGIC_V1)?;
+        self.encode_into(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Encode into one caller-owned exact-width checkpoint body.
+    pub fn encode_into(&self, bytes: &mut [u8]) -> CheckpointResultV1<()> {
+        self.validate()?;
+        if bytes.len() != DEALER_SCENARIO_CHECKPOINT_BYTES_V1 {
+            return Err(DealerScenarioCheckpointErrorV1::Codec(
+                CodecError::InvalidLength,
+            ));
+        }
+        bytes.fill(0);
+        put(bytes, 0, &DEALER_SCENARIO_CHECKPOINT_MAGIC_V1)?;
         put(
-            &mut bytes,
+            bytes,
             VERSION_OFFSET,
             &DEALER_SCENARIO_CHECKPOINT_VERSION_V1.to_le_bytes(),
         )?;
-        put_byte(&mut bytes, PHASE_OFFSET, self.phase as u8)?;
+        put_byte(bytes, PHASE_OFFSET, self.phase as u8)?;
         put_byte(
-            &mut bytes,
+            bytes,
             PAGE_COUNT_OFFSET,
             u8::try_from(DEALER_SCENARIO_PREPARATION_PAGES_V1)
                 .map_err(|_| DealerScenarioCheckpointErrorV1::Arithmetic)?,
         )?;
-        put_byte(&mut bytes, NEXT_PAGE_OFFSET, self.next_page)?;
+        put_byte(bytes, NEXT_PAGE_OFFSET, self.next_page)?;
         put_byte(
-            &mut bytes,
+            bytes,
             EFFECT_COUNT_OFFSET,
             self.evaluation.custody_effect_count,
         )?;
-        put_byte(&mut bytes, RESERVATION_COUNT_OFFSET, self.reservation_count)?;
-        put_byte(&mut bytes, ROLLBACK_COUNT_OFFSET, self.rollback_count)?;
-        put_u64(&mut bytes, REVISION_OFFSET, self.revision)?;
-        put_u64(&mut bytes, GENERATION_OFFSET, self.input.generation)?;
-        put_u64(&mut bytes, CREATED_SLOT_OFFSET, self.input.created_slot)?;
-        put_u64(&mut bytes, EXPIRES_AT_OFFSET, self.input.expires_at)?;
+        put_byte(bytes, RESERVATION_COUNT_OFFSET, self.reservation_count)?;
+        put_byte(bytes, ROLLBACK_COUNT_OFFSET, self.rollback_count)?;
+        put_u64(bytes, REVISION_OFFSET, self.revision)?;
+        put_u64(bytes, GENERATION_OFFSET, self.input.generation)?;
+        put_u64(bytes, CREATED_SLOT_OFFSET, self.input.created_slot)?;
+        put_u64(bytes, EXPIRES_AT_OFFSET, self.input.expires_at)?;
         for (offset, value) in [
             (RELEASE_SET_OFFSET, self.input.release_set),
             (MARKET_OFFSET, self.input.market),
@@ -401,19 +413,19 @@ impl DealerScenarioCheckpointV1 {
             (EFFECTS_DIGEST_OFFSET, self.evaluation.effects_digest),
             (LAST_MEMBERSHIP_KEY_OFFSET, self.last_membership_key),
         ] {
-            put(&mut bytes, offset, &value)?;
+            put(bytes, offset, &value)?;
         }
         for (index, digest) in self.page_receipt_digests.iter().enumerate() {
-            put(&mut bytes, PAGE_RECEIPT_DIGESTS_OFFSET + index * 32, digest)?;
+            put(bytes, PAGE_RECEIPT_DIGESTS_OFFSET + index * 32, digest)?;
         }
         for (index, digest) in self.reservation_receipt_digests.iter().enumerate() {
             put(
-                &mut bytes,
+                bytes,
                 RESERVATION_RECEIPT_DIGESTS_OFFSET + index * 32,
                 digest,
             )?;
         }
-        Ok(bytes)
+        Ok(())
     }
 
     /// Append the next authenticated page receipt.
@@ -608,11 +620,11 @@ impl DealerScenarioCheckpointV1 {
 
     /// Require that a final atomic commit still observes the prepared world.
     ///
-    /// Success does not persist a `Committed` phase. The adapter must execute
-    /// every child effect, verify immediate receipts and poststates, write the
-    /// obligation last, then close this checkpoint in the same transaction.
+    /// Success authorizes, but does not itself persist, the `Committed` phase.
+    /// The adapter must execute and verify Claims, write the obligation, then
+    /// persist the checkpoint transition last in the same transaction.
     pub fn admit_commit(
-        self,
+        &self,
         current_slot: u64,
         evidence: DealerScenarioCommitEvidenceV1,
     ) -> CheckpointResultV1<()> {
@@ -644,7 +656,7 @@ impl DealerScenarioCheckpointV1 {
     /// same Solana transaction. Custody delivery is a later permissionless,
     /// resumable effect and may complete after the preparation expiry.
     pub fn commit(
-        self,
+        mut self,
         current_slot: u64,
         checkpoint_prestate_digest: [u8; 32],
         evidence: DealerScenarioCommitEvidenceV1,
@@ -653,15 +665,35 @@ impl DealerScenarioCheckpointV1 {
         if checkpoint_prestate_digest == [0; 32] {
             return Err(DealerScenarioCheckpointErrorV1::Coordinate);
         }
-        let mut next = self;
-        next.phase = DealerScenarioCheckpointPhaseV1::Committed;
-        next.last_checkpoint_prestate_digest = checkpoint_prestate_digest;
-        next.revision = next
+        self.phase = DealerScenarioCheckpointPhaseV1::Committed;
+        self.last_checkpoint_prestate_digest = checkpoint_prestate_digest;
+        self.revision = self
             .revision
             .checked_add(1)
             .ok_or(DealerScenarioCheckpointErrorV1::Arithmetic)?;
-        next.validate()?;
-        Ok(next)
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Persist the commit transition directly into caller-owned bytes.
+    pub fn commit_into(
+        mut self,
+        current_slot: u64,
+        checkpoint_prestate_digest: [u8; 32],
+        evidence: DealerScenarioCommitEvidenceV1,
+        output: &mut [u8],
+    ) -> CheckpointResultV1<()> {
+        self.admit_commit(current_slot, evidence)?;
+        if checkpoint_prestate_digest == [0; 32] {
+            return Err(DealerScenarioCheckpointErrorV1::Coordinate);
+        }
+        self.phase = DealerScenarioCheckpointPhaseV1::Committed;
+        self.last_checkpoint_prestate_digest = checkpoint_prestate_digest;
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(DealerScenarioCheckpointErrorV1::Arithmetic)?;
+        self.encode_into(output)
     }
 
     /// Admit permissionless cleanup only after the checkpoint expires.

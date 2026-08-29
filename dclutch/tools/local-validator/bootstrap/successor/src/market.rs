@@ -78,6 +78,7 @@ use dclutch_product_runtime_v2_operator::{
     lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
     publication::{RecordPublicationContentV1, derive_record_addresses_v1},
 };
+use dclutch_pyth_svm::{PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PythSponsoredPushReleaseV1};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
@@ -93,10 +94,12 @@ use dclutch_resolution_codec::{
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
-    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
-    RecoveryPolicyV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
+    PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
+    SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
-    SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1, WINDOW_SPEC_SCHEMA_ID_V1,
+    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
+    WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use dclutch_token_svm::{
     ACCOUNT_BYTES, AccountState, CollateralAdapterReleaseV1, MINT_BYTES, Mint,
@@ -1284,6 +1287,114 @@ pub(crate) fn materialize_dcltpcb2_checkpoint_v1(
     )
 }
 
+/// Publication facts selected by one already-authenticated Source graph.
+///
+/// This is the one semantic join used by both input validation and Registry
+/// publication. In particular, the sponsored release is not a second caller
+/// DTO: the SourceSpec selects the access profile, the ProviderRelease names
+/// the release body, and this join proves all four immutable provider links
+/// before the publisher can create any record.
+struct SourcePublicationContractV1 {
+    adapter_config_schema: [u8; 32],
+    sponsored_release: Option<Vec<u8>>,
+}
+
+fn authenticate_source_publication_v1(
+    input: &MarketRunInput,
+) -> Result<SourcePublicationContractV1> {
+    let source_spec_bytes = decode_hex(&input.source_spec_hex)?;
+    let source_spec = SourceSpecV1::decode(&source_spec_bytes)
+        .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
+    if source_spec.to_bytes().as_slice() != source_spec_bytes {
+        return Err(Error::new("SourceSpecV1 input was not canonical"));
+    }
+    let provider_release_bytes = decode_hex(&input.provider_release_hex)?;
+    let adapter_config_bytes = decode_hex(&input.pyth_adapter_config_hex)?;
+    if record_identity(&provider_release_bytes) != source_spec.provider_release_id().to_bytes() {
+        return Err(Error::new(
+            "the provider release body is not the one the source spec names",
+        ));
+    }
+    if record_identity(&adapter_config_bytes) != source_spec.adapter_config_id().to_bytes() {
+        return Err(Error::new(
+            "the Pyth adapter configuration body is not the one the source spec names",
+        ));
+    }
+
+    let sponsored_release_bytes = decode_hex(&input.pyth_sponsored_push_release_hex)?;
+    match source_spec.access_profile() {
+        SourceAccessProfile::PythTerminalOneTransaction => {
+            if !sponsored_release_bytes.is_empty() {
+                return Err(Error::new(
+                    "a terminal Pyth source must not carry a sponsored push release",
+                ));
+            }
+            Ok(SourcePublicationContractV1 {
+                adapter_config_schema: PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+                sponsored_release: None,
+            })
+        }
+        SourceAccessProfile::RelayedObservationRecord => {
+            if !sponsored_release_bytes.is_empty() {
+                return Err(Error::new(
+                    "a relayed source must not carry a sponsored push release",
+                ));
+            }
+            Ok(SourcePublicationContractV1 {
+                adapter_config_schema: dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                sponsored_release: None,
+            })
+        }
+        SourceAccessProfile::PythSponsoredPushSnapshot => {
+            if sponsored_release_bytes.is_empty() {
+                return Err(Error::new(
+                    "a sponsored push source must carry its exact release body",
+                ));
+            }
+            let provider_release = ProviderReleaseV1::decode(&provider_release_bytes)
+                .map_err(|error| Error::new(format!("ProviderReleaseV1: {error:?}")))?;
+            if provider_release.to_bytes().as_slice() != provider_release_bytes {
+                return Err(Error::new("ProviderReleaseV1 input was not canonical"));
+            }
+            let sponsored_release = PythSponsoredPushReleaseV1::decode(&sponsored_release_bytes)
+                .map_err(|error| Error::new(format!("PythSponsoredPushReleaseV1: {error:?}")))?;
+            if sponsored_release.to_bytes().as_slice() != sponsored_release_bytes {
+                return Err(Error::new(
+                    "PythSponsoredPushReleaseV1 input was not canonical",
+                ));
+            }
+            let adapter_config = PythAdapterConfigV1::decode(&adapter_config_bytes)
+                .map_err(|error| Error::new(format!("PythAdapterConfigV1: {error:?}")))?;
+            if adapter_config.to_bytes().as_slice() != adapter_config_bytes {
+                return Err(Error::new("PythAdapterConfigV1 input was not canonical"));
+            }
+            if provider_release.provider_deployment_release_id().to_bytes()
+                != record_identity(&sponsored_release_bytes)
+                || provider_release.provider_family_id().to_bytes()
+                    != sponsored_release.provider_family_id()
+                || provider_release.adapter_release_id().to_bytes()
+                    != sponsored_release.adapter_id()
+                || provider_release.decoding_rules_id().to_bytes()
+                    != sponsored_release.price_update_codec_id()
+                || provider_release.transport_profile_id().to_bytes()
+                    != sponsored_release.transport_profile_id()
+                || adapter_config.provider_feed_id() != sponsored_release.feed_id()
+            {
+                return Err(Error::new(
+                    "the Source/Provider/adapter/sponsored release join changed",
+                ));
+            }
+            Ok(SourcePublicationContractV1 {
+                adapter_config_schema: PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+                sponsored_release: Some(sponsored_release_bytes),
+            })
+        }
+        SourceAccessProfile::SharedObservationChild => Err(Error::new(
+            "the source spec names an access profile this publisher has no adapter-config schema for: SharedObservationChild",
+        )),
+    }
+}
+
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
     if input.initial_collateral_atoms == 0
         || input.cut_denominator == 0
@@ -1370,23 +1481,7 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
             )));
         }
     }
-    {
-        let source_spec =
-            dclutch_source_contract::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
-                .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
-        let provider_release = decode_hex(&input.provider_release_hex)?;
-        let adapter_config = decode_hex(&input.pyth_adapter_config_hex)?;
-        if record_identity(&provider_release) != source_spec.provider_release_id().to_bytes() {
-            return Err(Error::new(
-                "the provider release body is not the one the source spec names",
-            ));
-        }
-        if record_identity(&adapter_config) != source_spec.adapter_config_id().to_bytes() {
-            return Err(Error::new(
-                "the Pyth adapter configuration body is not the one the source spec names",
-            ));
-        }
-    }
+    let _ = authenticate_source_publication_v1(input)?;
     let recovery_bytes = decode_hex(&input.recovery_policy_hex)?;
     // Empty means the material carries NO recovery policy: the deliberate
     // section-12.8 demo shape, admitted on chain at e5b6923 and decided in
@@ -1499,6 +1594,7 @@ struct MarketRecords {
     statistic_spec: PublishedRecord,
     provider_release: PublishedRecord,
     adapter_config: PublishedRecord,
+    sponsored_push_release: Option<PublishedRecord>,
     /// Exact Registry closure selected by the manifest's Direct entry.
     direct: BTreeMap<&'static str, PublishedRecord>,
     principal_cap_sets: u64,
@@ -1850,6 +1946,13 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
     ] {
         let account = rpc.required_account(key, label)?;
         accounts.insert(label.into(), account_evidence(key, &account));
+    }
+    if let Some(record) = records.sponsored_push_release {
+        let account = rpc.required_account(record.raw, "Pyth sponsored push release record")?;
+        accounts.insert(
+            "pyth_sponsored_push_release_record".into(),
+            account_evidence(record.raw, &account),
+        );
     }
     if let Some(fixture) = &local_participant_fixture_liquidity {
         let source = fixture
@@ -2982,6 +3085,7 @@ fn publish_market_records(
     payer: &Keypair,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(MarketRecords, ProductContentId)> {
+    let source_publication = authenticate_source_publication_v1(input)?;
     let outcome_count = input
         .cuts
         .len()
@@ -3146,51 +3250,27 @@ fn publish_market_records(
         None,
         transactions,
     )?;
-    // Which schema the adapter-config body publishes under is the SOURCE
-    // SPEC's access profile: the Pyth terminal profile names a
-    // PythAdapterConfigV1; the relayed profile names the VENUE's
-    // ArtifactReleaseV1 (MAINNET_STATE_RELAY.md section 12.4). Any other
-    // profile is refused because no adapter-config schema is known for it.
-    //
-    // It USED to switch on `ProviderReleaseV1.adapter_release_id`, against the
-    // provider-extension constants. That reading of the field is
-    // `PythProviderAdapterObligationV1::from_material_view`'s, and it is not
-    // the one the live V3 provider route enforces:
-    // `authenticate_provider_release` requires that same field to equal the
-    // published Pyth release's `adapter_id`, and the two values differ, so a
-    // release cannot satisfy both. Switching here on the access profile asks
-    // the question this code actually has -- which provider extension is this
-    // -- of a field whose meaning nothing else contests, and one that
-    // `PythProviderAdapterObligationV2::from_authenticated_records` pins for
-    // the same graph it consumes.
-    let adapter_config_schema = {
-        let source_spec =
-            dclutch_source_contract::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
-                .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
-        match source_spec.access_profile() {
-            dclutch_source_contract::SourceAccessProfile::PythTerminalOneTransaction => {
-                PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1
-            }
-            dclutch_source_contract::SourceAccessProfile::RelayedObservationRecord => {
-                dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1
-            }
-            other => {
-                return Err(Error::new(format!(
-                    "the source spec names an access profile this publisher has no adapter-config \
-                     schema for: {other:?}"
-                )));
-            }
-        }
-    };
     let adapter_config = publish_record(
         rpc,
         registry,
         payer,
-        adapter_config_schema,
+        source_publication.adapter_config_schema,
         &decode_hex(&input.pyth_adapter_config_hex)?,
         None,
         transactions,
     )?;
+    let sponsored_push_release = match source_publication.sponsored_release {
+        Some(body) => Some(publish_record(
+            rpc,
+            registry,
+            payer,
+            PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1,
+            &body,
+            None,
+            transactions,
+        )?),
+        None => None,
+    };
     // Founding reads the liability basis the Product declares. Both of the
     // record's links are checked against the graph that was just compiled, so
     // a basis belonging to a different Product cannot be published as this
@@ -3238,6 +3318,7 @@ fn publish_market_records(
             statistic_spec,
             provider_release,
             adapter_config,
+            sponsored_push_release,
             direct,
             principal_cap_sets,
         },
@@ -9854,9 +9935,84 @@ pub(crate) fn demo_id(role: &str, parts: &[&[u8]]) -> [u8; 32] {
 /// synthetic release, a window ending at the frozen fixture publication) and
 /// the devnet flagship (the committed devnet row, a live window), so the two
 /// cannot drift in graph shape — only in the facts this struct names.
+#[derive(Clone, Copy)]
+enum PythMarketProviderV1<'a> {
+    Pull(&'a dclutch_pyth_svm::PythReleaseV1),
+    Sponsored(PythSponsoredPushReleaseV1),
+}
+
+impl PythMarketProviderV1<'_> {
+    fn adapter_id(self) -> [u8; 32] {
+        match self {
+            Self::Pull(release) => release.adapter_id(),
+            Self::Sponsored(release) => release.adapter_id(),
+        }
+    }
+
+    fn provider_family_id(self) -> [u8; 32] {
+        match self {
+            // Preserve the established terminal/relayed provider family byte
+            // for byte. Sponsored releases own their provider family inside
+            // the canonical release body.
+            Self::Pull(_) => demo_id("provider-family/pyth", &[]),
+            Self::Sponsored(release) => release.provider_family_id(),
+        }
+    }
+
+    fn deployment_release_bytes(self) -> Vec<u8> {
+        match self {
+            Self::Pull(release) => release.to_bytes().to_vec(),
+            Self::Sponsored(release) => release.to_bytes().to_vec(),
+        }
+    }
+
+    fn price_update_codec_id(self) -> [u8; 32] {
+        match self {
+            Self::Pull(release) => release.price_update_codec_id(),
+            Self::Sponsored(release) => release.price_update_codec_id(),
+        }
+    }
+
+    fn transport_profile_id(self) -> [u8; 32] {
+        match self {
+            Self::Pull(release) => release.router_abi_id(),
+            Self::Sponsored(release) => release.transport_profile_id(),
+        }
+    }
+
+    const fn access_profile(self) -> SourceAccessProfile {
+        match self {
+            Self::Pull(_) => SourceAccessProfile::PythTerminalOneTransaction,
+            Self::Sponsored(_) => SourceAccessProfile::PythSponsoredPushSnapshot,
+        }
+    }
+
+    fn sponsored_release_hex(self) -> String {
+        match self {
+            Self::Pull(_) => String::new(),
+            Self::Sponsored(release) => hex(&release.to_bytes()),
+        }
+    }
+
+    fn authenticate_price_update(self, update: &dclutch_pyth_svm::FullPriceUpdateV2) -> Result<()> {
+        if let Self::Sponsored(release) = self
+            && (update.write_authority() != release.price_account()
+                || update.feed_id() != release.feed_id()
+                || update.publish_time() <= 0
+                || update.posted_slot() == 0
+                || update.prev_publish_time() > update.publish_time())
+        {
+            return Err(Error::new(
+                "sponsored price body did not authenticate against the compiled release",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct PythMarketParamsV1<'a> {
     pub(crate) registry: Pubkey,
-    pub(crate) release: &'a dclutch_pyth_svm::release::PythReleaseV1,
+    release: PythMarketProviderV1<'a>,
     /// Domain-separation label folded into every demo-id: the synthetic
     /// fixture's local label for the lab, the cluster identity for devnet.
     pub(crate) label: [u8; 32],
@@ -9919,7 +10075,7 @@ pub(crate) fn demo_market_input(
     pyth_market_input(
         PythMarketParamsV1 {
             registry,
-            release: fixture.release(),
+            release: PythMarketProviderV1::Pull(fixture.release()),
             label: fixture.local_label(),
             product_name: "product/sol-usd-range-protection",
             coordinate_domain_name: "coordinate-domain/usd-cents-per-sol",
@@ -9979,25 +10135,13 @@ pub(crate) fn devnet_market_input(
     spec: DevnetPythMarketSpecV1<'_>,
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<MarketRunInput> {
-    if spec.window_width_seconds < DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS {
-        return Err(Error::new(format!(
-            "devnet terminal window width {} s is below the measured floor \
-             {DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS} s (four cadences of the measured 313 s SOL/USD \
-             p50, ~98% coverage). A narrower window is a market that fails for provider reasons; \
-             it is refused here rather than founded.",
-            spec.window_width_seconds
-        )));
-    }
+    let window_end = devnet_window_end_v1(&spec)?;
     let release = dclutch_pyth_svm::devnet_release_v1()
         .map_err(|error| Error::new(format!("devnet Pyth release row: {error:?}")))?;
-    let window_end = spec
-        .window_start
-        .checked_add(i64::from(spec.window_width_seconds))
-        .ok_or_else(|| Error::new("terminal window end overflowed"))?;
     pyth_market_input(
         PythMarketParamsV1 {
             registry: spec.registry,
-            release: &release,
+            release: PythMarketProviderV1::Pull(&release),
             // The cluster identity is the devnet label: a devnet market's ids can
             // never collide with the lab's, whose label is the synthetic fixture's.
             label: release.cluster_id(),
@@ -10022,6 +10166,56 @@ pub(crate) fn devnet_market_input(
     )
 }
 
+/// The credential-free devnet flagship. The update is a finalized read of the
+/// official sponsored SOL/USD push account; no Hermes request or bearer token
+/// participates in this graph. The compiled release binds the two programs,
+/// both ProgramData accounts and slots, the Receiver config, feed, and exact
+/// price account before the ordinary market compiler sees the body.
+pub(crate) fn devnet_sponsored_market_input(
+    spec: DevnetPythMarketSpecV1<'_>,
+    direct: DirectMarketCompilerInputV1<'_>,
+) -> Result<MarketRunInput> {
+    let window_end = devnet_window_end_v1(&spec)?;
+    let release = dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
+        .map_err(|error| Error::new(format!("devnet sponsored Pyth release row: {error:?}")))?;
+    pyth_market_input(
+        PythMarketParamsV1 {
+            registry: spec.registry,
+            release: PythMarketProviderV1::Sponsored(release),
+            label: release.cluster_id(),
+            product_name: spec.product_name,
+            coordinate_domain_name: spec.coordinate_domain_name,
+            feed_label: spec.feed_label,
+            price_update: spec.price_update,
+            window_start: spec.window_start,
+            window_end,
+            max_age_seconds: spec.max_age_seconds,
+            max_confidence_bps: 500,
+            cut_denominator: spec.cut_denominator,
+            cuts: spec.cuts,
+            coefficients: spec.coefficients,
+            generation: spec.generation,
+            local_participant_fixture_liquidity_atoms: 0,
+        },
+        direct,
+    )
+}
+
+fn devnet_window_end_v1(spec: &DevnetPythMarketSpecV1<'_>) -> Result<i64> {
+    if spec.window_width_seconds < DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS {
+        return Err(Error::new(format!(
+            "devnet terminal window width {} s is below the measured floor \
+             {DEVNET_MINIMUM_WINDOW_WIDTH_SECONDS} s (four cadences of the measured 313 s SOL/USD \
+             p50, ~98% coverage). A narrower window is a market that fails for provider reasons; \
+             it is refused here rather than founded.",
+            spec.window_width_seconds
+        )));
+    }
+    spec.window_start
+        .checked_add(i64::from(spec.window_width_seconds))
+        .ok_or_else(|| Error::new("terminal window end overflowed"))
+}
+
 /// The shared Pyth range-protection graph compiler. See the two callers for
 /// what each fact means in its context.
 fn pyth_market_input(
@@ -10037,8 +10231,8 @@ fn pyth_market_input(
     use dclutch_source_contract::{
         CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
         RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-        SourceAccessProfile, SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1,
-        WindowKind, WindowSpecV1,
+        SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind,
+        WindowSpecV1,
     };
 
     let local_label = params.label;
@@ -10070,6 +10264,7 @@ fn pyth_market_input(
     // carries `linked_basis_hex` rather than an opaque digest.
     let update = FullPriceUpdateV2::parse(params.price_update)
         .map_err(|error| Error::new(format!("Pyth price update body: {error:?}")))?;
+    params.release.authenticate_price_update(&update)?;
     let capacity = SourceCapacityProfileV1::new(
         CapacityEnvelope::Measured,
         1,
@@ -10082,7 +10277,7 @@ fn pyth_market_input(
     .map_err(|error| Error::new(format!("demo source capacity: {error:?}")))?;
     let capacity_id = source_content(record_identity(&capacity.to_bytes()))?;
 
-    let pyth_release_bytes = params.release.to_bytes();
+    let pyth_release_bytes = params.release.deployment_release_bytes();
     // `adapter_release_id` is the PUBLISHED PYTH RELEASE's own `adapter_id`,
     // and getting here took two chain refusals and a contradiction worth
     // recording, because TWO LIVE READERS OF THIS ONE FIELD DISAGREE ABOUT WHAT
@@ -10111,11 +10306,11 @@ fn pyth_market_input(
     // on the source spec's access profile instead, which is a real extension
     // discriminator and is pinned by the same obligation that consumes it.
     let provider_release = ProviderReleaseV1::new(
-        source_content(demo_id("provider-family/pyth", &[]))?,
+        source_content(params.release.provider_family_id())?,
         source_content(adapter)?,
         source_content(record_identity(&pyth_release_bytes))?,
         source_content(params.release.price_update_codec_id())?,
-        source_content(params.release.router_abi_id())?,
+        source_content(params.release.transport_profile_id())?,
     );
     let provider_release_bytes = provider_release.to_bytes();
     let provider_release_id = record_identity(&provider_release_bytes);
@@ -10139,7 +10334,7 @@ fn pyth_market_input(
         source_content(coordinate_domain)?,
         source_content(source_unit)?,
         source_content(provider_release_id)?,
-        SourceAccessProfile::PythTerminalOneTransaction,
+        params.release.access_profile(),
         source_content(adapter_config_id)?,
         capacity_id,
     );
@@ -10404,6 +10599,7 @@ fn pyth_market_input(
         statistic_spec_hex: hex(&statistic_bytes),
         provider_release_hex: hex(&provider_release_bytes),
         pyth_adapter_config_hex: hex(&adapter_config_bytes),
+        pyth_sponsored_push_release_hex: params.release.sponsored_release_hex(),
         recovery_policy_hex: hex(&recovery_bytes),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
@@ -10417,6 +10613,147 @@ fn pyth_market_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sponsored_price_update_for_test() -> Vec<u8> {
+        let release = dclutch_pyth_svm::devnet_sponsored_sol_usd_release_v1()
+            .expect("compiled sponsored release");
+        let mut body = FIXTURE_PRICE_UPDATE.to_vec();
+        body[8..40].copy_from_slice(&release.price_account());
+        body[41..73].copy_from_slice(&release.feed_id());
+        body
+    }
+
+    fn sponsored_market_for_test() -> MarketRunInput {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let price = sponsored_price_update_for_test();
+        let update = dclutch_pyth_svm::FullPriceUpdateV2::parse(&price).expect("price update");
+        devnet_sponsored_market_input(
+            DevnetPythMarketSpecV1 {
+                registry,
+                price_update: &price,
+                product_name: "product/sol-usd-sponsored-range-protection",
+                coordinate_domain_name: "coordinate-domain/usd-cents-per-sol",
+                feed_label: b"sol-usd-sponsored",
+                window_start: update.publish_time() - 1_800,
+                window_width_seconds: 1_800,
+                max_age_seconds: 7_200,
+                cut_denominator: 100,
+                cuts: vec![12_000, 18_000],
+                coefficients: vec![1, 0, 1, 0],
+                generation: 1,
+            },
+            direct.compiler(),
+        )
+        .expect("sponsored market input")
+    }
+
+    #[test]
+    fn sponsored_market_compiles_one_exact_source_provider_release_graph() {
+        let input = sponsored_market_for_test();
+        validate_market_input(&input).expect("canonical sponsored input");
+        let publication = authenticate_source_publication_v1(&input).expect("publication contract");
+        assert_eq!(
+            publication.adapter_config_schema,
+            PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1
+        );
+        assert_eq!(
+            publication.sponsored_release.as_deref(),
+            Some(
+                decode_hex(&input.pyth_sponsored_push_release_hex)
+                    .expect("published release")
+                    .as_slice()
+            )
+        );
+        let source = SourceSpecV1::decode(&decode_hex(&input.source_spec_hex).expect("source hex"))
+            .expect("source");
+        let provider = ProviderReleaseV1::decode(
+            &decode_hex(&input.provider_release_hex).expect("provider hex"),
+        )
+        .expect("provider");
+        let release_bytes =
+            decode_hex(&input.pyth_sponsored_push_release_hex).expect("sponsored release hex");
+        let release =
+            PythSponsoredPushReleaseV1::decode(&release_bytes).expect("sponsored release");
+        assert_eq!(
+            source.access_profile(),
+            SourceAccessProfile::PythSponsoredPushSnapshot
+        );
+        assert_eq!(
+            provider.provider_deployment_release_id().to_bytes(),
+            record_identity(&release_bytes)
+        );
+        assert_eq!(
+            provider.provider_family_id().to_bytes(),
+            release.provider_family_id()
+        );
+        assert_eq!(
+            provider.adapter_release_id().to_bytes(),
+            release.adapter_id()
+        );
+        assert_eq!(
+            provider.decoding_rules_id().to_bytes(),
+            release.price_update_codec_id()
+        );
+        assert_eq!(
+            provider.transport_profile_id().to_bytes(),
+            release.transport_profile_id()
+        );
+    }
+
+    #[test]
+    fn sponsored_market_refuses_absent_or_substituted_release_facts() {
+        let canonical = sponsored_market_for_test();
+
+        let mut absent = canonical.clone();
+        absent.pyth_sponsored_push_release_hex.clear();
+        assert!(validate_market_input(&absent).is_err());
+
+        // These offsets are semantic fields of the fixed-layout release, not
+        // fuzz bytes: Receiver ProgramData, push deployment slot, and feed.
+        for (offset, label) in [(80, "ProgramData"), (568, "slot"), (272, "feed")] {
+            let mut substituted = canonical.clone();
+            let mut release =
+                decode_hex(&substituted.pyth_sponsored_push_release_hex).expect("release hex");
+            release[offset] ^= 1;
+            substituted.pyth_sponsored_push_release_hex = hex(&release);
+            assert!(
+                validate_market_input(&substituted).is_err(),
+                "substituted {label} must refuse"
+            );
+        }
+    }
+
+    #[test]
+    fn sponsored_market_refuses_source_profile_substitution_and_terminal_stays_legacy() {
+        let mut substituted = sponsored_market_for_test();
+        let mut source = decode_hex(&substituted.source_spec_hex).expect("source hex");
+        source[10] = SourceAccessProfile::PythTerminalOneTransaction as u8;
+        substituted.source_spec_hex = hex(&source);
+        substituted.primary_source_spec_id = hex(&record_identity(&source));
+        assert!(validate_market_input(&substituted).is_err());
+
+        let registry = Pubkey::new_from_array([0x42; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let terminal = demo_market_input(registry, direct.compiler()).expect("terminal input");
+        assert!(terminal.pyth_sponsored_push_release_hex.is_empty());
+        assert!(
+            serde_json::to_value(&terminal)
+                .expect("terminal JSON")
+                .get("pyth_sponsored_push_release_hex")
+                .is_none(),
+            "the optional sponsored field must not change legacy serialized inputs"
+        );
+        validate_market_input(&terminal).expect("legacy terminal input");
+    }
 
     #[test]
     fn source_abort_expiry_policy_is_exactly_owned_loopback_only() {

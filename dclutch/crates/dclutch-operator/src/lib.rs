@@ -39,6 +39,8 @@ pub mod direct_successor;
 pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.
 pub mod general_hot_v3;
+/// Durable content-addressed caller construction over executable General V3.
+pub mod general_invocation_v1;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
 /// Shared authentication of Rent, Clock, and finalized-record observations.

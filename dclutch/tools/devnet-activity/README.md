@@ -21,13 +21,101 @@ rewrite a devnet fixture to create one.
 
 The committed public Direct and terminal-sequence callers are progressive:
 each invocation advances exactly one durable action and a later invocation
-reauthenticates the child journal before continuing. The harness adapter ABI is
-currently one-shot: after one child invocation it only polls terminal
-completion. Offline `validate` and the pre-wallet caller probe therefore refuse
-`devnet-direct-trade-v1` and `devnet-terminal-sequence-v1` as activity adapters.
-They remain valid standalone callers; admitting them here requires a distinct
-progressive-adapter journal and recovery contract, not a manifest spelling
-change.
+reauthenticates the child journal before continuing. An adapter using either
+caller must carry an exact `progressive` contract. The harness writes one
+fsynced journal before every child invocation, polls the terminal completion,
+and invokes the same authenticated child again when an earlier invocation
+exited or its RPC answer was lost. Every step binds the accepted manifest,
+scenario, Market, caller-source, private-session, binary, argv, and completion
+spec SHA-256. `maxSteps` is a hard bound in `1..256`; exhaustion refuses instead
+of turning an unfinished lifecycle into success. `resume` remains poll-only and
+never invokes a child.
+
+## Finite ongoing run envelope
+
+`ongoing_v1.py` adds a separate finite supervisor rung without changing the
+V1--V3 manifest, authorization, or `supervisor-cycle-v1` bytes. In particular,
+the old child supervisor still refuses `maxCycles != 1`. The ongoing manifest
+schema is `dclutch-devnet-activity-ongoing-manifest-v1` and has exact fields:
+
+```text
+schema, runId, workBase, maxCycles, economicAuthority,
+acceptedHarness, binaries, cycles
+```
+
+`maxCycles` is one explicit integer in `1..72` and must equal the exact cycle
+list length. Every cycle binds one distinct Activity-v3 manifest and one
+distinct `dclutch-devnet-activity-cycle-rent-envelope-v1`. Child manifest paths
+and bytes, Rent-envelope paths, progressive private-session paths and bytes,
+derived work paths, wallet key-slot ids, and session-slot ids must be globally
+unique. Reusing the economic scenario, checked Market, or accepted caller
+source is permitted; these are shared authorities, not disposable state.
+
+The Rent envelope is deliberately separate from the economic fixture. It binds
+the child manifest/scenario/devnet, an observed slot, exact Rent-sysvar digest,
+ordered account/lamport rows, and their exact sum. The planner never calls the
+fixture's guaranteed residual “rent.” Instead it derives each maximum payer
+debit as:
+
+```text
+maxSpendLamports                 (post-init principal + post-init fee cap)
++ maxFeeLamports                (activity transaction fee cap)
++ exact cycle Rent envelope
+```
+
+That total must fit inside the fixture-owned `360000000` payer funding. All
+payer funding, post-init principal, both fee ceilings, Rent, maximum debit, and
+minimum residual are then checked-added across the finite cycle count. The
+planner imports the economic ledger's existing authenticator and accepts only
+the repository `activity-v3-canonical.json`; it does not own a second economic
+quantity table.
+
+Live preparation uses schema
+`dclutch-devnet-activity-live-authorization-v4`. Its canonical signed body binds
+the ongoing manifest and derived plan SHA-256, a fresh 32-byte run nonce,
+deterministic run-envelope id/work root, exact finite count, aggregate monetary
+envelope, devnet genesis, economic authority, harness source/bytes, four
+binary paths/digests, accepted authorization signer, accepted verifier digest,
+and an ordered at-most-six-hour window. The signature is detached Ed25519 over
+the canonical sorted compact JSON body.
+
+`dclutch-verify-ed25519` is a verifier-only binary exposing the relayer's
+existing `keys::verify_detached` / `ed25519-dalek::verify_strict` owner. It has
+no signing or key-file command. `verify-and-prepare` hashes the installed
+verifier, invokes it with the exact canonical body bytes, requires its exact
+success document, and only then creates the deterministic run root and
+write-ahead journal. A different nonce requires a new signature and produces a
+different root; replaying the same authorization resumes its exact journal.
+
+```sh
+python3 tools/devnet-activity/ongoing_v1.py \
+  --manifest /absolute/ongoing.json --manifest-sha256 HEX64 \
+  plan --output /absolute/ongoing-plan.json
+
+python3 tools/devnet-activity/ongoing_v1.py \
+  --manifest /absolute/ongoing.json --manifest-sha256 HEX64 \
+  verify-and-prepare \
+  --live-authorization /absolute/signed-v4.json \
+  --verifier /absolute/bin/dclutch-verify-ed25519 \
+  --accepted-signer-public-key BASE58
+```
+
+The run journal permits at most one active lifecycle. `begin_or_resume_cycle`
+writes `active` before materializing that cycle's work marker; after a crash it
+returns the same cycle and work path, never the next one. Immediately after
+wallet preparation and before funding/mutation, `admit_active_wallet_ledger`
+joins the public wallet ids/addresses to the derived key slots and refuses any
+address seen in a completed cycle. Only a child V3 supervisor status with exact
+reconciled completion plus the same admitted wallet ledger and reconciliation
+can close the cycle and expose its successor.
+
+This rung does not itself sign, generate keys, call RPC, fund, or invoke the
+child supervisor. A one-command live ongoing campaign still requires the
+accepted launcher to connect these journal transitions to the existing
+single-cycle child ABI and requires real per-cycle Direct private-session
+artifacts. Until that handoff exists, the correct live-readiness statement is
+“finite signed plan and recovery contract accepted; live ongoing dispatch not
+yet connected,” not “ongoing devnet activity ready.”
 
 ## Safety properties
 
@@ -44,6 +132,11 @@ change.
   binds its full ordered `execution.transactions` list and names the labels
   that must have succeeded. Every listed signature, including a fee-paying
   failed hostile probe, is reconciled and included in both spend caps.
+- Direct and terminal completions can expose their whole child-owned mutation
+  journal as a transaction list. The completion spec names relative label and
+  signature pointers and must set `requireAllTransactionsSuccessful: true`;
+  reconciliation then captures every listed signature rather than only the
+  final Hot or aggregate-retirement transaction.
 - The scheduler preserves the scenario dependency graph, enforces the exact
   involved wallet set, never runs two adapters sharing a wallet concurrently,
   honors `maxConcurrency`, and spaces dispatches by
@@ -92,7 +185,8 @@ funding. A prefunded campaign-created role is unsupported and refused.
   `{kind: input-json, inputId, pointer}`. These bindings join logical token
   accounts/Mints to physical addresses for reconciliation.
 - `adapters[]` is
-  `{id, covers, caller, argv, dependsOn, wallets, mutation, completion}`.
+  `{id, covers, caller, argv, dependsOn, wallets, mutation, completion}` or that
+  exact object plus `progressive` for the two stepwise successor callers.
   `caller` is `dclutch-cli` or `successor`; `argv` omits the executable.
   Completion is `{path, schema, signaturePointers, transactionListPointer,
   requiredTransactionLabels, requiredValues}`. Simple receipts set the two
@@ -102,9 +196,48 @@ funding. A prefunded campaign-created role is unsupported and refused.
   is required for semantic completion. Its exact `checked-release` and
   `market` manifest inputs must also be the campaign's `--plan` and `--market`,
   and its completion path must be the campaign's `--evidence` path.
+- `progressive` is exactly `{maxSteps, sourceInput, sessionInput, marketInput}`.
+  All three ids name immutable manifest inputs. Direct completion must join its
+  public-manifest and private-session SHA-256; terminal completion must join its
+  session SHA-256 and exact plan/session/Market-input paths.
+- A non-campaign transaction-list completion additionally names
+  `transactionLabelPointer`, `transactionSignaturePointer`, and
+  `requireAllTransactionsSuccessful`. Direct uses `/mutations` with `/kind`
+  and `/signature`; terminal uses `/journals` with `/mutation/kind` and
+  `/signature`.
 
 Templates are limited to `{{rpc}}`, `{{devnetGenesis}}`, `{{work}}`,
 `{{input.ID}}`, `{{wallet.ID.address}}`, and `{{wallet.ID.keypair}}`.
+
+### Canonical Activity-v3 producer
+
+`produce_v3.py` is the only scenario/manifest producer in this directory. It
+requires accepted SHA-256 values for both
+`tools/economic-lifecycle-ledger/fixtures/activity-v3-canonical.json` and the
+flagship economic operation ensemble. It derives, rather than accepts through
+bindings, the ten-wallet partition, the exact `360000000` payer bankroll, four
+post-init transfers of `50000000`, and all 25 truthful mutating expectations.
+It authenticates the result with the economic ledger before publishing.
+
+The bindings document has schema
+`dclutch-devnet-activity-v3-producer-bindings-v1` and exact fields
+`schema,target,inputs,addressBindings,adapters,campaignIdentities,permanentAuthorityRef,foundingAdapter`.
+It supplies checked deployment/caller/session artifacts and no monetary field.
+The producer refuses existing output paths and validates the emitted manifest
+with this harness. Production still requires real, externally produced Direct
+private sessions; this producer never synthesizes operator authority or reads a
+key.
+
+```sh
+python3 tools/devnet-activity/produce_v3.py \
+  --economic-fixture /absolute/activity-v3-canonical.json \
+  --economic-fixture-sha256 HEX64 \
+  --base-scenario /absolute/flagship.json \
+  --base-scenario-sha256 HEX64 \
+  --bindings /absolute/activity-v3-bindings.json \
+  --scenario-out /absolute/activity-v3-scenario.json \
+  --manifest-out /absolute/activity-v3-manifest.json
+```
 
 ## Lifecycle commands
 
@@ -332,5 +465,10 @@ the public wallet ledger and cleanup receipt.
 ## Offline test
 
 ```sh
-python3 -m unittest -v tools/devnet-activity/test_activity.py
+python3 -m unittest -v \
+  tools/devnet-activity/test_activity.py \
+  tools/devnet-activity/test_ongoing_v1.py
+
+cargo test --manifest-path tools/relayer/Cargo.toml \
+  --bin dclutch-verify-ed25519
 ```

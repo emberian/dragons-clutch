@@ -10,6 +10,7 @@
 //! input and are rechecked by the onchain child route.
 
 mod artifacts;
+mod artifacts_v4;
 mod atomic_v3;
 mod claims;
 mod composition;
@@ -44,6 +45,12 @@ pub use artifacts::{
     FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
     FractionalFinalizedArtifactBundleV1, build_fractional_composed_artifact_bundle_v1,
     build_fractional_finalized_artifact_bundle_v1,
+};
+pub use artifacts_v4::{
+    FRACTIONAL_COMMON_IDENTITIES_V4, FRACTIONAL_COMMON_SCALARS_V4,
+    FRACTIONAL_HOT_INJECTED_ACCOUNT_COUNT_V4, FractionalSelectedArtifactErrorV4,
+    FractionalSelectedBundleInputV4, FractionalSelectedBundleV4, FractionalSelectedProfileInputV4,
+    build_fractional_selected_bundle_v4, validate_fractional_selected_bundle_v4,
 };
 pub use atomic_v3::{
     build_fractional_atomic_claims_instruction_v3,

@@ -7,6 +7,7 @@
 //! identities and sign the two exact `CompactIntentV2` preimages.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write as _,
     path::{Path, PathBuf},
@@ -54,9 +55,14 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     Error, Result, campaign,
-    cluster::{ClusterOriginV1, ExpectedClusterV1},
+    cluster::{
+        ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
+    },
+    direct_trade::{
+        AuthenticatedDevnetDirectSessionSourceV1, authenticate_devnet_direct_session_source_v1,
+    },
     local_mutable,
-    model::{MarketRunInput, RecordPair, SuccessorPlan},
+    model::{MarketRunInput, ProgramPin, RecordPair, SuccessorPlan},
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
     terminal_lifecycle::finalized_snapshot,
@@ -69,6 +75,12 @@ pub(crate) const OWNED_PRIVATE_SESSION_SCHEMA_V1: &str =
     "dclutch-owned-loopback-direct-trade-private-session-v1";
 pub(crate) const OWNED_PRODUCER_RECEIPT_SCHEMA_V1: &str =
     "dclutch-owned-loopback-direct-trade-producer-receipt-v1";
+pub(crate) const DEVNET_PRIVATE_SESSION_SCHEMA_V1: &str =
+    "dclutch-devnet-direct-trade-private-session-v1";
+pub(crate) const DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1: &str =
+    "dclutch-devnet-direct-trade-session-producer-journal-v1";
+pub(crate) const DEVNET_SESSION_PRODUCER_COMMAND_V1: &str =
+    "devnet-direct-trade-session-produce-v1";
 
 const FILL_ATOMS_V1: u64 = 100_000_000;
 const EXECUTION_PRICE_V1: u64 = 500_000;
@@ -85,6 +97,78 @@ pub(crate) struct OwnedLoopbackDirectProducerArgumentsV1 {
     pub(crate) participant_report: PathBuf,
     pub(crate) key_dir: PathBuf,
     pub(crate) output_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DevnetDirectSessionProducerArgumentsV1 {
+    public_manifest: PathBuf,
+    expected_public_manifest_sha256: String,
+    plan: PathBuf,
+    expected_plan_sha256: String,
+    market_input: PathBuf,
+    expected_market_input_sha256: String,
+    seller_participant: PathBuf,
+    expected_seller_participant_sha256: String,
+    buyer_participant: PathBuf,
+    expected_buyer_participant_sha256: String,
+    payer_keypair: PathBuf,
+    journal_dir: PathBuf,
+    evidence_file: PathBuf,
+    session: PathBuf,
+    producer_journal: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum DevnetDirectSessionProducerPhaseV1 {
+    Prepared,
+    Finalized,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DevnetDirectParticipantSourceV1 {
+    report: String,
+    report_sha256: String,
+    owner: String,
+    position: String,
+    collateral: String,
+    collateral_quantity_atoms: u64,
+    replay: String,
+    nonce: u64,
+    admission_signature: String,
+    admission_slot: u64,
+    collateral_signature: String,
+    collateral_slot: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct DevnetDirectSessionProducerJournalV1 {
+    schema: String,
+    phase: DevnetDirectSessionProducerPhaseV1,
+    cluster: String,
+    genesis_hash: String,
+    public_manifest: String,
+    public_manifest_sha256: String,
+    plan: String,
+    plan_sha256: String,
+    market_input: String,
+    market_input_sha256: String,
+    checked_execution_release_sha256: String,
+    checked_binaries: BTreeMap<String, ProgramPin>,
+    payer: String,
+    payer_keypair: String,
+    seller: DevnetDirectParticipantSourceV1,
+    buyer: DevnetDirectParticipantSourceV1,
+    seller_ticket_sha256: String,
+    buyer_ticket_sha256: String,
+    journal_dir: String,
+    evidence_file: String,
+    private_session: String,
+    private_session_sha256: Option<String>,
+    previous_state_sha256: Option<String>,
+    state_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -645,6 +729,207 @@ pub(crate) fn usage() -> &'static str {
      --market-input ABSOLUTE_MARKET_JSON --campaign-report ABSOLUTE_CAMPAIGN_JSON \
      --participant-report ABSOLUTE_PARTICIPANT_JSON --key-dir ABSOLUTE_KEYS \
      --output-dir ABSOLUTE_EMPTY_OUTPUT_DIRECTORY"
+}
+
+pub(crate) fn devnet_session_usage() -> &'static str {
+    "dclutch-local-successor-bootstrap devnet-direct-trade-session-produce-v1 \
+     --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+     --public-manifest ABSOLUTE_JSON --expected-public-manifest-sha256 HEX64 \
+     --plan ABSOLUTE_JSON --expected-plan-sha256 HEX64 \
+     --market-input ABSOLUTE_JSON --expected-market-input-sha256 HEX64 \
+     --seller-participant ABSOLUTE_JSON --expected-seller-participant-sha256 HEX64 \
+     --buyer-participant ABSOLUTE_JSON --expected-buyer-participant-sha256 HEX64 \
+     --payer-keypair ABSOLUTE_RUNTIME_KEYPAIR_JSON --journal-dir ABSOLUTE_DIR \
+     --evidence-file ABSOLUTE_JSON --session ABSOLUTE_JSON \
+     --producer-journal ABSOLUTE_JSON"
+}
+
+/// Produce only the existing devnet Direct private-session wire. The caller
+/// supplies already signed tickets through the immutable public manifest and a
+/// freshly created payer-keypair path; this function never opens that path and
+/// performs no RPC, signing, or submission.
+pub(crate) fn run_devnet_session(arguments: Vec<String>) -> Result<()> {
+    let parsed = parse_devnet_session_arguments_v1(arguments)?;
+    let journal = produce_devnet_direct_session_v1(parsed)?;
+    let mut stdout = std::io::stdout();
+    serde_json::to_writer_pretty(&mut stdout, &journal)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+fn produce_devnet_direct_session_v1(
+    arguments: DevnetDirectSessionProducerArgumentsV1,
+) -> Result<DevnetDirectSessionProducerJournalV1> {
+    let public_manifest = accepted_regular_v1(
+        &arguments.public_manifest,
+        &arguments.expected_public_manifest_sha256,
+        "Direct public manifest",
+    )?;
+    let plan = accepted_regular_v1(
+        &arguments.plan,
+        &arguments.expected_plan_sha256,
+        "Direct successor plan",
+    )?;
+    let market_input = accepted_regular_v1(
+        &arguments.market_input,
+        &arguments.expected_market_input_sha256,
+        "Direct Market input",
+    )?;
+    let seller_participant = accepted_regular_v1(
+        &arguments.seller_participant,
+        &arguments.expected_seller_participant_sha256,
+        "Direct seller participant report",
+    )?;
+    let buyer_participant = accepted_regular_v1(
+        &arguments.buyer_participant,
+        &arguments.expected_buyer_participant_sha256,
+        "Direct buyer participant report",
+    )?;
+    let payer_keypair = canonical_runtime_keypair_path_v1(&arguments.payer_keypair)?;
+    let session = canonical_output_path_v1(&arguments.session, "Direct private session")?;
+    let producer_journal =
+        canonical_output_path_v1(&arguments.producer_journal, "Direct producer journal")?;
+    let journal_dir =
+        canonical_directory_target_v1(&arguments.journal_dir, "Direct journal directory")?;
+    let evidence_file = canonical_output_path_v1(&arguments.evidence_file, "Direct evidence file")?;
+    if session == producer_journal
+        || session == evidence_file
+        || producer_journal == evidence_file
+        || journal_dir == session
+        || journal_dir == producer_journal
+        || journal_dir == evidence_file
+    {
+        return Err(refusal("Direct session producer output paths alias"));
+    }
+    let public_bytes = fs::read(&public_manifest)?;
+    let plan_bytes = fs::read(&plan)?;
+    let market_bytes = fs::read(&market_input)?;
+    let source =
+        authenticate_devnet_direct_session_source_v1(&public_bytes, &plan_bytes, &market_bytes)?;
+    if source.public_manifest_sha256 != arguments.expected_public_manifest_sha256
+        || source.plan_sha256 != arguments.expected_plan_sha256
+        || source.market_input_sha256 != arguments.expected_market_input_sha256
+    {
+        return Err(refusal(
+            "Direct session producer source digests changed during authentication",
+        ));
+    }
+    let seller_bytes = fs::read(&seller_participant)?;
+    let buyer_bytes = fs::read(&buyer_participant)?;
+    let seller = user_position_admission::parse_finalized_direct_participant_evidence_offline_v1(
+        &seller_bytes,
+        ExpectedClusterV1::Devnet,
+    )?;
+    let buyer = user_position_admission::parse_finalized_direct_participant_evidence_offline_v1(
+        &buyer_bytes,
+        ExpectedClusterV1::Devnet,
+    )?;
+    authenticate_devnet_direct_participant_pair_v1(&source, &seller, &buyer)?;
+    let payer = source.payer.to_string();
+    let participant = |path: &Path,
+                       digest: &str,
+                       evidence: &user_position_admission::FinalizedDirectParticipantEvidenceV1,
+                       replay: Pubkey,
+                       nonce: u64| {
+        DevnetDirectParticipantSourceV1 {
+            report: path.display().to_string(),
+            report_sha256: digest.into(),
+            owner: evidence.owner.to_string(),
+            position: evidence.position.to_string(),
+            collateral: evidence.collateral_account.to_string(),
+            collateral_quantity_atoms: evidence.collateral_quantity_atoms,
+            replay: replay.to_string(),
+            nonce,
+            admission_signature: evidence.admission_signature.clone(),
+            admission_slot: evidence.admission_slot,
+            collateral_signature: evidence.collateral_signature.clone(),
+            collateral_slot: evidence.collateral_slot,
+        }
+    };
+    let mut prepared = DevnetDirectSessionProducerJournalV1 {
+        schema: DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1.into(),
+        phase: DevnetDirectSessionProducerPhaseV1::Prepared,
+        cluster: ExpectedClusterV1::Devnet.evidence_label().into(),
+        genesis_hash: DEVNET_GENESIS_HASH.into(),
+        public_manifest: public_manifest.display().to_string(),
+        public_manifest_sha256: source.public_manifest_sha256.clone(),
+        plan: plan.display().to_string(),
+        plan_sha256: source.plan_sha256.clone(),
+        market_input: market_input.display().to_string(),
+        market_input_sha256: source.market_input_sha256.clone(),
+        checked_execution_release_sha256: source.checked_execution_release_sha256.clone(),
+        checked_binaries: source.checked_binaries.clone(),
+        payer,
+        payer_keypair: payer_keypair.display().to_string(),
+        seller: participant(
+            &seller_participant,
+            &arguments.expected_seller_participant_sha256,
+            &seller,
+            source.seller_replay,
+            source.seller_nonce,
+        ),
+        buyer: participant(
+            &buyer_participant,
+            &arguments.expected_buyer_participant_sha256,
+            &buyer,
+            source.buyer_replay,
+            source.buyer_nonce,
+        ),
+        seller_ticket_sha256: source.seller_ticket_sha256,
+        buyer_ticket_sha256: source.buyer_ticket_sha256,
+        journal_dir: journal_dir.display().to_string(),
+        evidence_file: evidence_file.display().to_string(),
+        private_session: session.display().to_string(),
+        private_session_sha256: None,
+        previous_state_sha256: None,
+        state_sha256: String::new(),
+    };
+    prepared.state_sha256 = devnet_session_producer_state_sha256_v1(&prepared)?;
+    let existing = load_devnet_session_producer_journal_v1(&producer_journal)?;
+    match existing {
+        None => {
+            write_create_new_durable_v1(&producer_journal, &pretty_json_bytes_v1(&prepared)?)?;
+        }
+        Some(existing) => {
+            authenticate_devnet_session_producer_recovery_v1(&prepared, &existing)?;
+            if existing.phase == DevnetDirectSessionProducerPhaseV1::Finalized {
+                authenticate_devnet_private_session_output_v1(&session, &existing)?;
+                return Ok(existing);
+            }
+        }
+    }
+    create_or_authenticate_session_journal_directory_v1(&journal_dir)?;
+    let mut private = ProducedDirectTradePrivateSessionV1 {
+        schema: DEVNET_PRIVATE_SESSION_SCHEMA_V1.into(),
+        public_manifest: public_manifest.display().to_string(),
+        public_manifest_sha256: source.public_manifest_sha256,
+        plan: plan.display().to_string(),
+        market_input: market_input.display().to_string(),
+        payer_keypair: payer_keypair.display().to_string(),
+        journal_dir: journal_dir.display().to_string(),
+        evidence_file: evidence_file.display().to_string(),
+        session_sha256: String::new(),
+    };
+    private.session_sha256 = private_session_sha256_v1(&private)?;
+    let private_bytes = pretty_json_bytes_v1(&private)?;
+    let private_file_sha256 = sha256_hex(&private_bytes);
+    if session.exists() {
+        let bytes = fs::read(&session)?;
+        if bytes != private_bytes {
+            return Err(refusal(
+                "existing Direct private session differs from the prepared write-ahead intent",
+            ));
+        }
+    } else {
+        write_create_new_durable_v1(&session, &private_bytes)?;
+    }
+    let mut finalized = prepared.clone();
+    finalized.phase = DevnetDirectSessionProducerPhaseV1::Finalized;
+    finalized.private_session_sha256 = Some(private_file_sha256);
+    finalized.previous_state_sha256 = Some(prepared.state_sha256.clone());
+    finalized.state_sha256 = devnet_session_producer_state_sha256_v1(&finalized)?;
+    replace_json_durable_v1(&producer_journal, &prepared, &finalized)?;
+    Ok(finalized)
 }
 
 struct ValidatedPathsV1 {
@@ -1619,6 +1904,322 @@ fn parse_arguments_v1(arguments: Vec<String>) -> Result<OwnedLoopbackDirectProdu
     })
 }
 
+fn parse_devnet_session_arguments_v1(
+    arguments: Vec<String>,
+) -> Result<DevnetDirectSessionProducerArgumentsV1> {
+    let mut values = std::collections::BTreeMap::<String, String>::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if !matches!(
+            argument.as_str(),
+            DEVNET_ACKNOWLEDGMENT_FLAG
+                | "--public-manifest"
+                | "--expected-public-manifest-sha256"
+                | "--plan"
+                | "--expected-plan-sha256"
+                | "--market-input"
+                | "--expected-market-input-sha256"
+                | "--seller-participant"
+                | "--expected-seller-participant-sha256"
+                | "--buyer-participant"
+                | "--expected-buyer-participant-sha256"
+                | "--payer-keypair"
+                | "--journal-dir"
+                | "--evidence-file"
+                | "--session"
+                | "--producer-journal"
+        ) {
+            return Err(Error::new(format!(
+                "unknown devnet Direct session producer argument: {argument}",
+            )));
+        }
+        if values.insert(argument.clone(), value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let take = |label: &str| {
+        values
+            .get(label)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("{label} is required")))
+    };
+    if take(DEVNET_ACKNOWLEDGMENT_FLAG)? != DEVNET_GENESIS_HASH {
+        return Err(refusal(
+            "devnet Direct session producer requires the exact public-devnet genesis acknowledgment",
+        ));
+    }
+    Ok(DevnetDirectSessionProducerArgumentsV1 {
+        public_manifest: PathBuf::from(take("--public-manifest")?),
+        expected_public_manifest_sha256: take("--expected-public-manifest-sha256")?,
+        plan: PathBuf::from(take("--plan")?),
+        expected_plan_sha256: take("--expected-plan-sha256")?,
+        market_input: PathBuf::from(take("--market-input")?),
+        expected_market_input_sha256: take("--expected-market-input-sha256")?,
+        seller_participant: PathBuf::from(take("--seller-participant")?),
+        expected_seller_participant_sha256: take("--expected-seller-participant-sha256")?,
+        buyer_participant: PathBuf::from(take("--buyer-participant")?),
+        expected_buyer_participant_sha256: take("--expected-buyer-participant-sha256")?,
+        payer_keypair: PathBuf::from(take("--payer-keypair")?),
+        journal_dir: PathBuf::from(take("--journal-dir")?),
+        evidence_file: PathBuf::from(take("--evidence-file")?),
+        session: PathBuf::from(take("--session")?),
+        producer_journal: PathBuf::from(take("--producer-journal")?),
+    })
+}
+
+fn authenticate_devnet_direct_participant_pair_v1(
+    source: &AuthenticatedDevnetDirectSessionSourceV1,
+    seller: &user_position_admission::FinalizedDirectParticipantEvidenceV1,
+    buyer: &user_position_admission::FinalizedDirectParticipantEvidenceV1,
+) -> Result<()> {
+    if source.seller == source.buyer
+        || source.seller_replay == source.buyer_replay
+        || seller.owner != source.seller
+        || buyer.owner != source.buyer
+        || seller.market != source.market
+        || buyer.market != source.market
+        || seller.claims_market != source.claims_market
+        || buyer.claims_market != source.claims_market
+        || seller.position != source.seller_position
+        || buyer.position != source.buyer_position
+        || seller.collateral_account != source.seller_collateral
+        || buyer.collateral_account != source.buyer_collateral
+        || seller.custody_authority != source.custody_authority
+        || buyer.custody_authority != source.custody_authority
+        || seller.mint != source.mint
+        || buyer.mint != source.mint
+        || seller.token_program != source.token_program
+        || buyer.token_program != source.token_program
+        || seller.collateral_quantity_atoms == 0
+        || buyer.collateral_quantity_atoms == 0
+        || seller.admission_signature.is_empty()
+        || buyer.admission_signature.is_empty()
+        || seller.collateral_signature.is_empty()
+        || buyer.collateral_signature.is_empty()
+        || seller.admission_slot == 0
+        || buyer.admission_slot == 0
+        || seller.collateral_slot < seller.admission_slot
+        || buyer.collateral_slot < buyer.admission_slot
+    {
+        return Err(refusal(
+            "Direct public route/tickets and seller/buyer participant snapshots do not form one exact Market, replay, Position, collateral, Mint, and Custody closure",
+        ));
+    }
+    require_distinct_v1(&[
+        source.seller,
+        source.buyer,
+        source.seller_replay,
+        source.buyer_replay,
+        source.seller_position,
+        source.buyer_position,
+        source.seller_collateral,
+        source.buyer_collateral,
+    ])?;
+    Ok(())
+}
+
+fn accepted_regular_v1(path: &Path, expected_sha256: &str, label: &str) -> Result<PathBuf> {
+    hex32(expected_sha256)?;
+    let path = canonical_regular_v1(path, label)?;
+    if sha256_hex(&fs::read(&path)?) != expected_sha256 {
+        return Err(refusal(format!(
+            "{label} changed from its accepted SHA-256"
+        )));
+    }
+    Ok(path)
+}
+
+fn canonical_runtime_keypair_path_v1(path: &Path) -> Result<PathBuf> {
+    // Deliberately metadata-only: session production must not read or parse
+    // the runtime-created wallet file. The executor opens it only at its
+    // separately authorized signing boundary.
+    canonical_regular_v1(path, "Direct runtime payer keypair")
+}
+
+fn canonical_output_path_v1(path: &Path, label: &str) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(refusal(format!("{label} path is not absolute")));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| refusal(format!("{label} has no parent directory")))?;
+    let canonical_parent = canonical_directory_v1(parent, &format!("{label} parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| refusal(format!("{label} has no file name")))?;
+    let canonical = canonical_parent.join(name);
+    if canonical != path {
+        return Err(refusal(format!("{label} path is not canonical")));
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&canonical) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(refusal(format!("{label} is not one regular file")));
+        }
+    }
+    Ok(canonical)
+}
+
+fn canonical_directory_target_v1(path: &Path, label: &str) -> Result<PathBuf> {
+    if path.exists() {
+        return canonical_directory_v1(path, label);
+    }
+    if !path.is_absolute() {
+        return Err(refusal(format!("{label} path is not absolute")));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| refusal(format!("{label} has no parent directory")))?;
+    let canonical_parent = canonical_directory_v1(parent, &format!("{label} parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| refusal(format!("{label} has no directory name")))?;
+    let canonical = canonical_parent.join(name);
+    if canonical != path {
+        return Err(refusal(format!("{label} path is not canonical")));
+    }
+    Ok(canonical)
+}
+
+fn devnet_session_producer_state_sha256_v1(
+    journal: &DevnetDirectSessionProducerJournalV1,
+) -> Result<String> {
+    let mut canonical = journal.clone();
+    canonical.state_sha256.clear();
+    Ok(sha256_hex(&serde_json::to_vec(&canonical)?))
+}
+
+fn load_devnet_session_producer_journal_v1(
+    path: &Path,
+) -> Result<Option<DevnetDirectSessionProducerJournalV1>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path)?;
+    require_unique_json_v1(&bytes, "Direct producer journal")?;
+    let journal: DevnetDirectSessionProducerJournalV1 = serde_json::from_slice(&bytes)?;
+    if journal.schema != DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1
+        || journal.cluster != ExpectedClusterV1::Devnet.evidence_label()
+        || journal.genesis_hash != DEVNET_GENESIS_HASH
+        || journal.state_sha256 != devnet_session_producer_state_sha256_v1(&journal)?
+    {
+        return Err(refusal(
+            "Direct producer journal identity or state digest changed",
+        ));
+    }
+    Ok(Some(journal))
+}
+
+fn authenticate_devnet_session_producer_recovery_v1(
+    prepared: &DevnetDirectSessionProducerJournalV1,
+    existing: &DevnetDirectSessionProducerJournalV1,
+) -> Result<()> {
+    let recovered_prepared = match existing.phase {
+        DevnetDirectSessionProducerPhaseV1::Prepared => existing.clone(),
+        DevnetDirectSessionProducerPhaseV1::Finalized => {
+            if existing.previous_state_sha256.as_deref() != Some(prepared.state_sha256.as_str())
+                || existing.private_session_sha256.is_none()
+            {
+                return Err(refusal(
+                    "finalized Direct producer journal omitted its exact prepared predecessor or session digest",
+                ));
+            }
+            let mut projected = existing.clone();
+            projected.phase = DevnetDirectSessionProducerPhaseV1::Prepared;
+            projected.private_session_sha256 = None;
+            projected.previous_state_sha256 = None;
+            projected.state_sha256 = prepared.state_sha256.clone();
+            projected
+        }
+    };
+    if serde_json::to_vec(&recovered_prepared)? != serde_json::to_vec(prepared)? {
+        return Err(refusal(
+            "existing Direct producer journal belongs to another route, participant pair, ticket, release, payer, or output",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_devnet_private_session_output_v1(
+    path: &Path,
+    journal: &DevnetDirectSessionProducerJournalV1,
+) -> Result<()> {
+    let bytes = fs::read(path).map_err(|error| {
+        Error::new(format!(
+            "Direct private session {}: {error}",
+            path.display()
+        ))
+    })?;
+    require_unique_json_v1(&bytes, "Direct private session")?;
+    let session: ProducedDirectTradePrivateSessionV1 = serde_json::from_slice(&bytes)?;
+    let file_sha256 = sha256_hex(&bytes);
+    if session.schema != DEVNET_PRIVATE_SESSION_SCHEMA_V1
+        || session.session_sha256 != private_session_sha256_v1(&session)?
+        || journal.private_session_sha256.as_deref() != Some(file_sha256.as_str())
+        || session.public_manifest != journal.public_manifest
+        || session.public_manifest_sha256 != journal.public_manifest_sha256
+        || session.plan != journal.plan
+        || session.market_input != journal.market_input
+        || session.payer_keypair != journal.payer_keypair
+        || session.journal_dir != journal.journal_dir
+        || session.evidence_file != journal.evidence_file
+        || path.display().to_string() != journal.private_session
+    {
+        return Err(refusal(
+            "Direct private session output differs from its finalized producer journal",
+        ));
+    }
+    Ok(())
+}
+
+fn create_or_authenticate_session_journal_directory_v1(path: &Path) -> Result<()> {
+    if path.exists() {
+        canonical_directory_v1(path, "Direct journal directory")?;
+        if fs::read_dir(path)?.next().is_some() {
+            return Err(refusal(
+                "prepared Direct session journal directory is not empty before session creation",
+            ));
+        }
+        return Ok(());
+    }
+    fs::create_dir(path)?;
+    sync_parent_v1(path)?;
+    Ok(())
+}
+
+fn sync_parent_v1(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| refusal("durable Direct producer path has no parent"))?;
+    OpenOptions::new().read(true).open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn write_create_new_durable_v1(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_create_new_v1(path, bytes)?;
+    sync_parent_v1(path)
+}
+
+fn replace_json_durable_v1<T: Serialize>(path: &Path, expected: &T, next: &T) -> Result<()> {
+    let expected_bytes = pretty_json_bytes_v1(expected)?;
+    if fs::read(path)? != expected_bytes {
+        return Err(refusal(
+            "Direct producer journal changed before its Finalized transition",
+        ));
+    }
+    let temporary = path.with_extension("direct-session-producer.tmp");
+    if temporary.exists() {
+        return Err(refusal(
+            "Direct producer temporary journal path already exists",
+        ));
+    }
+    write_create_new_v1(&temporary, &pretty_json_bytes_v1(next)?)?;
+    fs::rename(&temporary, path)?;
+    sync_parent_v1(path)
+}
+
 fn required_v1(value: Option<String>, label: &str) -> Result<String> {
     value.ok_or_else(|| Error::new(format!("{label} is required")))
 }
@@ -1712,11 +2313,21 @@ mod tests {
     };
 
     use super::{
-        CAPABILITY_SEAL_PDA_DOMAIN_V1, EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
+        CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1,
+        DevnetDirectParticipantSourceV1, DevnetDirectSessionProducerJournalV1,
+        DevnetDirectSessionProducerPhaseV1, EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
         OwnedLoopbackDirectProducerReceiptV1, ProducedDirectTradePrivateSessionV1,
-        ProducedReplaySetupV1, ProducedTokenSetupV1, derive_capability_seal_v1, exact_quote_v1,
-        fee_floor_v1, private_session_sha256_v1, producer_receipt_sha256_v1, require_distinct_v1,
-        signed_intent_v1,
+        ProducedReplaySetupV1, ProducedTokenSetupV1,
+        authenticate_devnet_direct_participant_pair_v1,
+        authenticate_devnet_session_producer_recovery_v1, derive_capability_seal_v1,
+        devnet_session_producer_state_sha256_v1, devnet_session_usage, exact_quote_v1,
+        fee_floor_v1, parse_devnet_session_arguments_v1, private_session_sha256_v1,
+        producer_receipt_sha256_v1, require_distinct_v1, signed_intent_v1,
+    };
+    use crate::{
+        cluster::{DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
+        direct_trade::AuthenticatedDevnetDirectSessionSourceV1,
+        user_position_admission::FinalizedDirectParticipantEvidenceV1,
     };
     use dclutch_direct_codec::intent_v2::CompactIntentV2;
 
@@ -1872,5 +2483,206 @@ mod tests {
             first,
             derive_capability_seal_v1([1; 32], [2; 32], Pubkey::new_unique(), trading)
         );
+    }
+
+    fn devnet_pair() -> (
+        AuthenticatedDevnetDirectSessionSourceV1,
+        FinalizedDirectParticipantEvidenceV1,
+        FinalizedDirectParticipantEvidenceV1,
+    ) {
+        let market = Pubkey::new_unique();
+        let claims_market = Pubkey::new_unique();
+        let custody_authority = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let token_program = Pubkey::new_unique();
+        let seller = FinalizedDirectParticipantEvidenceV1 {
+            market,
+            claims_market,
+            position: Pubkey::new_unique(),
+            owner: Pubkey::new_unique(),
+            collateral_account: Pubkey::new_unique(),
+            collateral_quantity_atoms: 700,
+            custody_authority,
+            mint,
+            token_program,
+            admission_signature: "seller-admission".into(),
+            admission_slot: 10,
+            collateral_signature: "seller-collateral".into(),
+            collateral_slot: 11,
+        };
+        let buyer = FinalizedDirectParticipantEvidenceV1 {
+            market,
+            claims_market,
+            position: Pubkey::new_unique(),
+            owner: Pubkey::new_unique(),
+            collateral_account: Pubkey::new_unique(),
+            collateral_quantity_atoms: 800,
+            custody_authority,
+            mint,
+            token_program,
+            admission_signature: "buyer-admission".into(),
+            admission_slot: 12,
+            collateral_signature: "buyer-collateral".into(),
+            collateral_slot: 13,
+        };
+        let source = AuthenticatedDevnetDirectSessionSourceV1 {
+            public_manifest_sha256: "11".repeat(32),
+            plan_sha256: "22".repeat(32),
+            market_input_sha256: "33".repeat(32),
+            checked_execution_release_sha256: "44".repeat(32),
+            payer: Pubkey::new_unique(),
+            market,
+            seller: seller.owner,
+            buyer: buyer.owner,
+            claims_market,
+            seller_position: seller.position,
+            buyer_position: buyer.position,
+            seller_collateral: seller.collateral_account,
+            buyer_collateral: buyer.collateral_account,
+            custody_authority,
+            mint,
+            token_program,
+            seller_replay: Pubkey::new_unique(),
+            buyer_replay: Pubkey::new_unique(),
+            seller_nonce: 4,
+            buyer_nonce: 5,
+            seller_ticket_sha256: "55".repeat(32),
+            buyer_ticket_sha256: "66".repeat(32),
+            checked_binaries: Default::default(),
+        };
+        (source, seller, buyer)
+    }
+
+    #[test]
+    fn devnet_session_pair_joins_both_finalized_participants_to_one_route() {
+        let (source, seller, buyer) = devnet_pair();
+        assert!(authenticate_devnet_direct_participant_pair_v1(&source, &seller, &buyer).is_ok());
+        let mut hostile = buyer.clone();
+        hostile.position = seller.position;
+        assert!(
+            authenticate_devnet_direct_participant_pair_v1(&source, &seller, &hostile).is_err()
+        );
+        let mut hostile = buyer.clone();
+        hostile.collateral_account = Pubkey::new_unique();
+        assert!(
+            authenticate_devnet_direct_participant_pair_v1(&source, &seller, &hostile).is_err()
+        );
+        let mut hostile = buyer;
+        hostile.collateral_slot = hostile.admission_slot.saturating_sub(1);
+        assert!(
+            authenticate_devnet_direct_participant_pair_v1(&source, &seller, &hostile).is_err()
+        );
+    }
+
+    fn devnet_journal() -> DevnetDirectSessionProducerJournalV1 {
+        let participant = |name: &str, nonce| DevnetDirectParticipantSourceV1 {
+            report: format!("/tmp/{name}.json"),
+            report_sha256: "77".repeat(32),
+            owner: Pubkey::new_unique().to_string(),
+            position: Pubkey::new_unique().to_string(),
+            collateral: Pubkey::new_unique().to_string(),
+            collateral_quantity_atoms: 9,
+            replay: Pubkey::new_unique().to_string(),
+            nonce,
+            admission_signature: format!("{name}-admission"),
+            admission_slot: 7,
+            collateral_signature: format!("{name}-collateral"),
+            collateral_slot: 8,
+        };
+        let mut journal = DevnetDirectSessionProducerJournalV1 {
+            schema: DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1.into(),
+            phase: DevnetDirectSessionProducerPhaseV1::Prepared,
+            cluster: "devnet".into(),
+            genesis_hash: DEVNET_GENESIS_HASH.into(),
+            public_manifest: "/tmp/public.json".into(),
+            public_manifest_sha256: "11".repeat(32),
+            plan: "/tmp/plan.json".into(),
+            plan_sha256: "22".repeat(32),
+            market_input: "/tmp/market.json".into(),
+            market_input_sha256: "33".repeat(32),
+            checked_execution_release_sha256: "44".repeat(32),
+            checked_binaries: Default::default(),
+            payer: Pubkey::new_unique().to_string(),
+            payer_keypair: "/tmp/runtime-payer.json".into(),
+            seller: participant("seller", 4),
+            buyer: participant("buyer", 5),
+            seller_ticket_sha256: "55".repeat(32),
+            buyer_ticket_sha256: "66".repeat(32),
+            journal_dir: "/tmp/direct-journal".into(),
+            evidence_file: "/tmp/direct-finalized.json".into(),
+            private_session: "/tmp/direct-session.json".into(),
+            private_session_sha256: None,
+            previous_state_sha256: None,
+            state_sha256: String::new(),
+        };
+        journal.state_sha256 = devnet_session_producer_state_sha256_v1(&journal).expect("digest");
+        journal
+    }
+
+    #[test]
+    fn devnet_session_recovery_accepts_only_the_exact_prepared_predecessor() {
+        let prepared = devnet_journal();
+        assert!(authenticate_devnet_session_producer_recovery_v1(&prepared, &prepared).is_ok());
+        let mut finalized = prepared.clone();
+        finalized.phase = DevnetDirectSessionProducerPhaseV1::Finalized;
+        finalized.private_session_sha256 = Some("88".repeat(32));
+        finalized.previous_state_sha256 = Some(prepared.state_sha256.clone());
+        finalized.state_sha256 =
+            devnet_session_producer_state_sha256_v1(&finalized).expect("digest");
+        assert!(authenticate_devnet_session_producer_recovery_v1(&prepared, &finalized).is_ok());
+        for mutate in [
+            |value: &mut DevnetDirectSessionProducerJournalV1| {
+                value.seller.report_sha256 = "99".repeat(32);
+            },
+            |value: &mut DevnetDirectSessionProducerJournalV1| {
+                value.buyer_ticket_sha256 = "aa".repeat(32);
+            },
+            |value: &mut DevnetDirectSessionProducerJournalV1| {
+                value.payer_keypair.push('x');
+            },
+        ] {
+            let mut hostile = prepared.clone();
+            mutate(&mut hostile);
+            hostile.state_sha256 =
+                devnet_session_producer_state_sha256_v1(&hostile).expect("digest");
+            assert!(authenticate_devnet_session_producer_recovery_v1(&prepared, &hostile).is_err());
+        }
+    }
+
+    #[test]
+    fn devnet_session_parser_requires_exact_ack_and_refuses_unknown_flags() {
+        assert!(
+            parse_devnet_session_arguments_v1(vec![
+                DEVNET_ACKNOWLEDGMENT_FLAG.into(),
+                "another-genesis".into(),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_devnet_session_arguments_v1(vec!["--secret-key".into(), "x".into()]).is_err()
+        );
+    }
+
+    #[test]
+    fn devnet_session_usage_exposes_only_runtime_paths_and_exact_acknowledgment() {
+        let usage = devnet_session_usage();
+        assert!(usage.starts_with(
+            "dclutch-local-successor-bootstrap devnet-direct-trade-session-produce-v1 "
+        ));
+        for flag in [
+            DEVNET_ACKNOWLEDGMENT_FLAG,
+            "--public-manifest",
+            "--seller-participant",
+            "--buyer-participant",
+            "--payer-keypair",
+            "--producer-journal",
+            "--session",
+        ] {
+            assert!(usage.contains(flag), "usage omitted {flag}");
+        }
+        assert!(usage.contains(DEVNET_GENESIS_HASH));
+        for forbidden in ["--seller-keypair", "--buyer-keypair", "--secret-key"] {
+            assert!(!usage.contains(forbidden), "usage exposed {forbidden}");
+        }
     }
 }

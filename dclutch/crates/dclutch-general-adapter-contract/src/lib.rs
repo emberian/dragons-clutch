@@ -36,6 +36,8 @@ pub mod escrow_v1;
 pub mod gen_seven_v1;
 /// Complete General Hot38 candidate register ABI for exact child packets.
 pub mod hot_candidate_v3;
+/// Durable content-addressed intent and optimistic replay for executable General V3.
+pub mod invocation_v1;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
 pub mod local_state_v3;

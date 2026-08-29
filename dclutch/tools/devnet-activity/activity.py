@@ -52,6 +52,9 @@ BOUNDED_AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v2"
 V3_BOUNDED_AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v3"
 STOP_SCHEMA = "dclutch-devnet-activity-stop-v1"
 ADAPTER_JOURNAL_SCHEMA = "dclutch-devnet-activity-adapter-journal-v1"
+PROGRESSIVE_STEP_JOURNAL_SCHEMA = (
+    "dclutch-devnet-activity-progressive-step-journal-v1"
+)
 RECONCILIATION_SCHEMA = "dclutch-devnet-activity-reconciliation-v1"
 SUPERVISOR_REQUEST_SCHEMA = "dclutch-devnet-activity-supervisor-request-v2"
 SUPERVISOR_STATUS_SCHEMA = "dclutch-devnet-activity-supervisor-status-v2"
@@ -106,10 +109,7 @@ ACTIVITY_EVENT_KIND_ORDER = (
 )
 # These public callers intentionally advance exactly one durable action per
 # invocation and require the same authenticated session to be invoked again.
-# An activity adapter has a different crash contract: it invokes its child once,
-# marks the whole adapter dispatching, and thereafter only polls the named
-# completion. Admitting either command here would therefore strand the first
-# non-terminal action while presenting the manifest as executable.
+# They are accepted only with the explicit progressive contract parsed below.
 PROGRESSIVE_SUCCESSOR_COMMANDS = frozenset(
     {
         "devnet-direct-trade-v1",
@@ -514,6 +514,20 @@ class CompletionSpec:
     transaction_list_pointer: str | None
     required_transaction_labels: tuple[str, ...]
     required_values: Mapping[str, Any]
+    transaction_label_pointer: str = "/label"
+    transaction_signature_pointer: str = "/signature"
+    require_all_transactions_successful: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class ProgressiveSpec:
+    max_steps: int
+    source_input_id: str
+    session_input_id: str
+    market_input_id: str
+    source_sha256: str
+    session_sha256: str
+    market_sha256: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -526,6 +540,7 @@ class AdapterSpec:
     wallet_ids: tuple[str, ...]
     mutation: bool
     completion: CompletionSpec
+    progressive: ProgressiveSpec | None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -663,8 +678,13 @@ def parse_scenario(path: Path, expected_sha256: str) -> Scenario:
     text(body["title"], "scenario title", 256)
     text(body["description"], "scenario description", 4096)
     cluster_target = text(body["clusterTarget"], "cluster target", 32)
-    if cluster_target not in {"owned-loopback", "devnet"} or body["evidenceLevel"] != "scenario-only":
-        raise Refusal("scenario must be an owned-loopback/devnet scenario-only fixture")
+    if cluster_target not in {"owned-loopback", "devnet"} or body["evidenceLevel"] not in {
+        "scenario-only",
+        "authenticated-activity-v3",
+    }:
+        raise Refusal(
+            "scenario must carry an admitted owned-loopback/devnet evidence level"
+        )
     genesis_hash = text(body["genesisHash"], "scenario genesis hash", 64)
     if cluster_target == "devnet" and genesis_hash != DEVNET_GENESIS_HASH:
         raise Refusal("devnet scenario carries another genesis hash")
@@ -859,16 +879,24 @@ def validate_rpc_url(value: Any, target: str) -> str:
 
 def parse_completion(value: Any, adapter_id: str) -> CompletionSpec:
     source = exact_object(value, f"adapter {adapter_id} completion")
+    optional = {
+        "transactionLabelPointer",
+        "transactionSignaturePointer",
+        "requireAllTransactionsSuccessful",
+    }
+    expected = {
+        "path",
+        "schema",
+        "signaturePointers",
+        "transactionListPointer",
+        "requiredTransactionLabels",
+        "requiredValues",
+    }
+    if set(source) & optional:
+        expected |= optional
     exact_keys(
         source,
-        {
-            "path",
-            "schema",
-            "signaturePointers",
-            "transactionListPointer",
-            "requiredTransactionLabels",
-            "requiredValues",
-        },
+        expected,
         f"adapter {adapter_id} completion",
     )
     path = text(source["path"], f"adapter {adapter_id} completion path")
@@ -896,19 +924,48 @@ def parse_completion(value: Any, adapter_id: str) -> CompletionSpec:
     )
     if len(set(required_transaction_labels)) != len(required_transaction_labels):
         raise Refusal(f"adapter {adapter_id} repeats a required transaction label")
+    transaction_label_pointer = text(
+        source.get("transactionLabelPointer", "/label"),
+        f"adapter {adapter_id} transaction-label pointer",
+        256,
+    )
+    transaction_signature_pointer = text(
+        source.get("transactionSignaturePointer", "/signature"),
+        f"adapter {adapter_id} transaction-signature pointer",
+        256,
+    )
+    if not transaction_label_pointer.startswith("/") or not transaction_signature_pointer.startswith("/"):
+        raise Refusal(f"adapter {adapter_id} transaction row pointers are not canonical")
+    require_all_transactions_successful = source.get(
+        "requireAllTransactionsSuccessful", False
+    )
+    if not isinstance(require_all_transactions_successful, bool):
+        raise Refusal(
+            f"adapter {adapter_id} requireAllTransactionsSuccessful must be boolean"
+        )
     if transaction_list_pointer is None:
         if required_transaction_labels:
             raise Refusal(
                 f"adapter {adapter_id} has required transaction labels without a transaction list"
             )
-    elif (
-        schema != CAMPAIGN_REPORT_SCHEMA
-        or transaction_list_pointer != "/execution/transactions"
+        if require_all_transactions_successful:
+            raise Refusal(
+                f"adapter {adapter_id} requires all transactions without a transaction list"
+            )
+    elif schema == CAMPAIGN_REPORT_SCHEMA and (
+        transaction_list_pointer != "/execution/transactions"
         or pointers
         or not required_transaction_labels
+        or transaction_label_pointer != "/label"
+        or transaction_signature_pointer != "/signature"
+        or require_all_transactions_successful
     ):
         raise Refusal(
             f"adapter {adapter_id} campaign transaction-list completion has another exact shape"
+        )
+    elif schema != CAMPAIGN_REPORT_SCHEMA and not require_all_transactions_successful:
+        raise Refusal(
+            f"adapter {adapter_id} generic transaction list must require every listed transaction successful"
         )
     required_values = exact_object(source["requiredValues"], f"adapter {adapter_id} required values")
     for pointer in required_values:
@@ -921,6 +978,57 @@ def parse_completion(value: Any, adapter_id: str) -> CompletionSpec:
         transaction_list_pointer,
         required_transaction_labels,
         required_values,
+        transaction_label_pointer,
+        transaction_signature_pointer,
+        require_all_transactions_successful,
+    )
+
+
+def parse_progressive(
+    value: Any,
+    adapter_id: str,
+    inputs: Mapping[str, Path],
+) -> ProgressiveSpec:
+    source = exact_object(value, f"adapter {adapter_id} progressive contract")
+    exact_keys(
+        source,
+        {"maxSteps", "sourceInput", "sessionInput", "marketInput"},
+        f"adapter {adapter_id} progressive contract",
+    )
+    max_steps = source["maxSteps"]
+    if (
+        not isinstance(max_steps, int)
+        or isinstance(max_steps, bool)
+        or max_steps < 1
+        or max_steps > 256
+    ):
+        raise Refusal(f"adapter {adapter_id} maxSteps must be in 1..256")
+    source_input_id = stable_id(
+        source["sourceInput"], f"adapter {adapter_id} source input"
+    )
+    session_input_id = stable_id(
+        source["sessionInput"], f"adapter {adapter_id} session input"
+    )
+    market_input_id = stable_id(
+        source["marketInput"], f"adapter {adapter_id} Market input"
+    )
+    for role, input_id in (
+        ("source", source_input_id),
+        ("session", session_input_id),
+        ("Market", market_input_id),
+    ):
+        if input_id not in inputs:
+            raise Refusal(
+                f"adapter {adapter_id} progressive {role} input {input_id} is absent"
+            )
+    return ProgressiveSpec(
+        max_steps,
+        source_input_id,
+        session_input_id,
+        market_input_id,
+        sha256_file(inputs[source_input_id]),
+        sha256_file(inputs[session_input_id]),
+        sha256_file(inputs[market_input_id]),
     )
 
 
@@ -1066,9 +1174,13 @@ def parse_campaign(
     if founding_adapter_id not in adapter_by_id:
         raise Refusal("campaign founding adapter is absent")
     founding_adapter = adapter_by_id[founding_adapter_id]
+    operation_by_id = {
+        operation.operation_id: operation for operation in scenario.operations
+    }
     if (
         founding_adapter.caller != "successor"
-        or not set(founding_adapter.covers).issuperset({"found"})
+        or len(founding_adapter.covers) != 1
+        or operation_by_id[founding_adapter.covers[0]].kind != "found"
         or founding_adapter.completion.schema != CAMPAIGN_REPORT_SCHEMA
     ):
         raise Refusal("campaign founding adapter is not the exact campaign caller")
@@ -1206,7 +1318,13 @@ def parse_manifest(path: Path) -> Manifest:
     adapter_ids: set[str] = set()
     for index, raw in enumerate(exact_list(value["adapters"], "activity adapters")):
         source = exact_object(raw, f"activity adapter {index}")
-        exact_keys(source, {"id", "covers", "caller", "argv", "dependsOn", "wallets", "mutation", "completion"}, f"activity adapter {index}")
+        adapter_keys = {
+            "id", "covers", "caller", "argv", "dependsOn", "wallets",
+            "mutation", "completion",
+        }
+        if "progressive" in source:
+            adapter_keys.add("progressive")
+        exact_keys(source, adapter_keys, f"activity adapter {index}")
         adapter_id = stable_id(source["id"], f"activity adapter {index} id")
         if adapter_id in adapter_ids:
             raise Refusal(f"activity manifest repeats adapter {adapter_id}")
@@ -1234,7 +1352,9 @@ def parse_manifest(path: Path) -> Manifest:
             raise Refusal(f"adapter {adapter_id} disables a scenario operation with a committed mutating caller")
         completion = parse_completion(source["completion"], adapter_id)
         if mutation and not (
-            completion.signature_pointers or completion.required_transaction_labels
+            completion.signature_pointers
+            or completion.required_transaction_labels
+            or completion.require_all_transactions_successful
         ):
             raise Refusal(f"mutating adapter {adapter_id} has no finalized-signature evidence pointer")
         if completion.schema == CAMPAIGN_REPORT_SCHEMA and (
@@ -1243,7 +1363,47 @@ def parse_manifest(path: Path) -> Manifest:
             raise Refusal(
                 f"campaign adapter {adapter_id} requires checked-release and market inputs"
             )
-        adapters.append(AdapterSpec(adapter_id, covers, caller, argv, dependencies, tuple(sorted(adapter_wallets)), mutation, completion))
+        progressive = (
+            None
+            if "progressive" not in source
+            else parse_progressive(source["progressive"], adapter_id, inputs)
+        )
+        is_progressive_command = (
+            caller == "successor" and argv[0] in PROGRESSIVE_SUCCESSOR_COMMANDS
+        )
+        if is_progressive_command != (progressive is not None):
+            raise Refusal(
+                f"adapter {adapter_id} must pair progressive caller and contract exactly"
+            )
+        if progressive is not None:
+            if not mutation:
+                raise Refusal(f"progressive adapter {adapter_id} must be mutating")
+            session_path = inputs[progressive.session_input_id]
+            if argv.count("--session") != 1:
+                raise Refusal(
+                    f"progressive adapter {adapter_id} must name --session exactly once"
+                )
+            session_index = argv.index("--session")
+            expected_session = f"{{{{input.{progressive.session_input_id}}}}}"
+            if session_index + 1 >= len(argv) or argv[session_index + 1] != expected_session:
+                raise Refusal(
+                    f"progressive adapter {adapter_id} substitutes its authenticated session"
+                )
+            if not session_path.is_file():
+                raise Refusal(f"progressive adapter {adapter_id} session changed kind")
+        adapters.append(
+            AdapterSpec(
+                adapter_id,
+                covers,
+                caller,
+                argv,
+                dependencies,
+                tuple(sorted(adapter_wallets)),
+                mutation,
+                completion,
+                progressive,
+            )
+        )
     if covered != set(operation_by_id):
         raise Refusal(f"activity adapters do not cover exactly the scenario operations: missing {sorted(set(operation_by_id) - covered)}")
     for adapter in adapters:
@@ -1901,7 +2061,10 @@ def validate_caller_command(adapter_id: str, caller: str, argv: tuple[str, ...],
     table = dclutch if caller == "dclutch-cli" else successor
     if any(command not in table.get(kind, set()) for kind in kinds):
         raise Refusal(f"adapter {adapter_id} command {command} is not accepted for {kinds}")
-    if len(kinds) > 1 and command != "local-private-validator-lifecycle-v1":
+    if len(kinds) > 1 and command not in {
+        "local-private-validator-lifecycle-v1",
+        "devnet-terminal-sequence-v1",
+    }:
         raise Refusal(f"adapter {adapter_id} covers multiple operations without the one full-lifecycle caller")
     if command == "local-private-validator-lifecycle-v1" and target != "owned-loopback":
         raise Refusal("the private-validator lifecycle caller is loopback-only")
@@ -1911,19 +2074,17 @@ def validate_caller_command(adapter_id: str, caller: str, argv: tuple[str, ...],
         raise Refusal("an off-chain Direct intent cannot count as devnet Direct mutation")
 
 
-def require_one_shot_adapter_commands(manifest: Manifest) -> None:
-    """Refuse stepwise callers until the harness owns progressive recovery."""
+def require_progressive_adapter_commands(manifest: Manifest) -> None:
+    """Authenticate that every stepwise caller opted into progressive recovery."""
 
     for adapter in manifest.adapters:
-        if (
+        is_progressive_command = (
             adapter.caller == "successor"
             and adapter.argv[0] in PROGRESSIVE_SUCCESSOR_COMMANDS
-        ):
+        )
+        if is_progressive_command != (adapter.progressive is not None):
             raise Refusal(
-                f"adapter {adapter.adapter_id} uses progressive caller "
-                f"{adapter.argv[0]} under a one-shot dispatch contract; "
-                "a progressive adapter must durably re-invoke each accepted "
-                "step and recover its child journals before polling terminal completion"
+                f"adapter {adapter.adapter_id} changed its progressive caller contract"
             )
 
 
@@ -3742,6 +3903,14 @@ def adapter_journal_path(work: Path, adapter_id: str) -> Path:
     return work / "journals" / "activity" / f"{adapter_id}.json"
 
 
+def progressive_step_directory(work: Path, adapter_id: str) -> Path:
+    return work / "journals" / "activity-progressive" / adapter_id
+
+
+def progressive_step_path(work: Path, adapter_id: str, ordinal: int) -> Path:
+    return progressive_step_directory(work, adapter_id) / f"{ordinal:04d}.json"
+
+
 def stop_requested(work: Path) -> bool:
     path = work / "control" / "STOP.json"
     if not path.exists():
@@ -3761,7 +3930,7 @@ def caller_binaries(dclutch_bin: Path, successor_bin: Path) -> dict[str, Path]:
 
 def probe_callers(manifest: Manifest, binaries: Mapping[str, Path]) -> dict[str, str]:
     """Prove each exact public command is dispatched before any wallet access."""
-    require_one_shot_adapter_commands(manifest)
+    require_progressive_adapter_commands(manifest)
     digests = {name: sha256_file(path) for name, path in binaries.items()}
     observed: set[tuple[str, str]] = set()
     for adapter in manifest.adapters:
@@ -3979,6 +4148,135 @@ def validate_adapter_journal(
         raise Refusal(f"adapter journal {adapter.adapter_id} has unknown phase")
 
 
+PROGRESSIVE_STEP_KEYS = {
+    "schema",
+    "manifestSha256",
+    "scenarioSha256",
+    "marketSha256",
+    "sourceSha256",
+    "sessionSha256",
+    "binarySha256",
+    "adapterId",
+    "command",
+    "argvSha256",
+    "completionSpecSha256",
+    "ordinal",
+    "maxSteps",
+    "recoveryOf",
+    "phase",
+    "plannedAt",
+    "dispatchStartedAt",
+    "processExitCode",
+    "exitedAt",
+    "stateSha256",
+}
+
+
+def progressive_step_identity(
+    manifest: Manifest,
+    adapter: AdapterSpec,
+    binary_sha256: str,
+    argv: Sequence[str],
+) -> dict[str, Any]:
+    spec = adapter.progressive
+    if spec is None:
+        raise Refusal(f"adapter {adapter.adapter_id} has no progressive contract")
+    for role, path, accepted_sha256 in (
+        ("source", manifest.inputs[spec.source_input_id], spec.source_sha256),
+        ("session", manifest.inputs[spec.session_input_id], spec.session_sha256),
+        ("Market", manifest.inputs[spec.market_input_id], spec.market_sha256),
+    ):
+        if sha256_file(path) != accepted_sha256:
+            raise Refusal(
+                f"progressive adapter {adapter.adapter_id} {role} input changed"
+            )
+    return {
+        "schema": PROGRESSIVE_STEP_JOURNAL_SCHEMA,
+        "manifestSha256": manifest.sha256,
+        "scenarioSha256": manifest.scenario.sha256,
+        "marketSha256": spec.market_sha256,
+        "sourceSha256": spec.source_sha256,
+        "sessionSha256": spec.session_sha256,
+        "binarySha256": binary_sha256,
+        "adapterId": adapter.adapter_id,
+        "command": adapter.argv[0],
+        "argvSha256": sha256_bytes(canonical_json(list(argv))),
+        "completionSpecSha256": sha256_bytes(
+            canonical_json(dataclasses.asdict(adapter.completion))
+        ),
+        "maxSteps": spec.max_steps,
+    }
+
+
+def validate_progressive_step(
+    value: Mapping[str, Any],
+    manifest: Manifest,
+    adapter: AdapterSpec,
+    binary_sha256: str,
+    argv: Sequence[str],
+    expected_ordinal: int,
+) -> None:
+    exact_keys(
+        value,
+        PROGRESSIVE_STEP_KEYS,
+        f"progressive step {adapter.adapter_id}/{expected_ordinal}",
+    )
+    for key, expected in progressive_step_identity(
+        manifest, adapter, binary_sha256, argv
+    ).items():
+        if value.get(key) != expected:
+            raise Refusal(
+                f"progressive step {adapter.adapter_id}/{expected_ordinal} changed {key}"
+            )
+    if value.get("ordinal") != expected_ordinal:
+        raise Refusal(f"progressive step {adapter.adapter_id} changed ordinal")
+    phase = value.get("phase")
+    if phase not in {"planned", "dispatching", "exited"}:
+        raise Refusal(
+            f"progressive step {adapter.adapter_id}/{expected_ordinal} changed phase"
+        )
+    recovery_of = value.get("recoveryOf")
+    if recovery_of is not None and (
+        not isinstance(recovery_of, int)
+        or isinstance(recovery_of, bool)
+        or recovery_of < 1
+        or recovery_of >= expected_ordinal
+    ):
+        raise Refusal(
+            f"progressive step {adapter.adapter_id}/{expected_ordinal} has invalid recovery predecessor"
+        )
+
+
+def authenticated_progressive_steps(
+    manifest: Manifest,
+    adapter: AdapterSpec,
+    binary_sha256: str,
+    argv: Sequence[str],
+    work: Path,
+) -> list[dict[str, Any]]:
+    directory = progressive_step_directory(work, adapter.adapter_id)
+    if not directory.exists():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise Refusal(f"progressive adapter {adapter.adapter_id} journal changed kind")
+    paths = sorted(directory.iterdir())
+    expected_names = [f"{ordinal:04d}.json" for ordinal in range(1, len(paths) + 1)]
+    if [path.name for path in paths] != expected_names:
+        raise Refusal(
+            f"progressive adapter {adapter.adapter_id} steps are not one contiguous journal"
+        )
+    output: list[dict[str, Any]] = []
+    for ordinal, path in enumerate(paths, 1):
+        value = authenticated_state(
+            path, f"progressive step {adapter.adapter_id}/{ordinal}"
+        )
+        validate_progressive_step(
+            value, manifest, adapter, binary_sha256, argv, ordinal
+        )
+        output.append(value)
+    return output
+
+
 def transaction_signatures(transaction: Mapping[str, Any]) -> list[str]:
     body = exact_object(transaction.get("transaction"), "transaction body")
     return [signature_text(item, "transaction signature") for item in exact_list(body.get("signatures"), "transaction signatures")]
@@ -4076,6 +4374,31 @@ def inspect_completion(
         source = exact_object(value, f"adapter {adapter.adapter_id} completion")
         if source.get("schema") != adapter.completion.schema:
             raise Refusal(f"adapter {adapter.adapter_id} completion schema changed")
+    if adapter.progressive is not None:
+        source = exact_object(value, f"adapter {adapter.adapter_id} progressive completion")
+        spec = adapter.progressive
+        if adapter.argv[0] == "devnet-direct-trade-v1":
+            if (
+                source.get("publicManifestSha256") != spec.source_sha256
+                or source.get("privateSessionSha256") != spec.session_sha256
+            ):
+                raise Refusal(
+                    f"adapter {adapter.adapter_id} completion changed source/session hashes"
+                )
+        elif adapter.argv[0] == "devnet-terminal-sequence-v1":
+            if (
+                pointer(source, "/session/sha256", f"adapter {adapter.adapter_id} terminal session")
+                != spec.session_sha256
+                or pointer(source, "/invocation/sessionPath", f"adapter {adapter.adapter_id} terminal invocation")
+                != str(manifest.inputs[spec.session_input_id])
+                or pointer(source, "/invocation/planPath", f"adapter {adapter.adapter_id} terminal invocation")
+                != str(manifest.inputs[spec.source_input_id])
+                or pointer(source, "/invocation/marketInputPath", f"adapter {adapter.adapter_id} terminal invocation")
+                != str(manifest.inputs[spec.market_input_id])
+            ):
+                raise Refusal(
+                    f"adapter {adapter.adapter_id} completion changed source/session/Market bindings"
+                )
     for required_pointer, expected in adapter.completion.required_values.items():
         if pointer(value, required_pointer, f"adapter {adapter.adapter_id} required value") != expected:
             raise Refusal(f"adapter {adapter.adapter_id} completion changed {required_pointer}")
@@ -4088,28 +4411,29 @@ def inspect_completion(
     ]
     signatures = list(required_success_signatures)
     if adapter.completion.transaction_list_pointer is not None:
-        source = exact_object(value, f"adapter {adapter.adapter_id} campaign completion")
-        expected_cluster = (
-            "devnet"
-            if manifest.scenario.cluster_target == "devnet"
-            else "loopback"
-        )
-        if (
-            source.get("cluster") != expected_cluster
-            or source.get("mode") != "execute"
-            or pointer(
-                source,
-                "/execution/completed",
-                f"adapter {adapter.adapter_id} campaign completion",
+        source = exact_object(value, f"adapter {adapter.adapter_id} transaction-list completion")
+        if adapter.completion.schema == CAMPAIGN_REPORT_SCHEMA:
+            expected_cluster = (
+                "devnet"
+                if manifest.scenario.cluster_target == "devnet"
+                else "loopback"
             )
-            is not True
-            or source.get("plan_sha256")
-            != sha256_file(manifest.inputs["checked-release"])
-            or source.get("market_sha256") != sha256_file(manifest.inputs["market"])
-        ):
-            raise Refusal(
-                f"adapter {adapter.adapter_id} campaign report changed cluster/mode/release/Market completion"
-            )
+            if (
+                source.get("cluster") != expected_cluster
+                or source.get("mode") != "execute"
+                or pointer(
+                    source,
+                    "/execution/completed",
+                    f"adapter {adapter.adapter_id} campaign completion",
+                )
+                is not True
+                or source.get("plan_sha256")
+                != sha256_file(manifest.inputs["checked-release"])
+                or source.get("market_sha256") != sha256_file(manifest.inputs["market"])
+            ):
+                raise Refusal(
+                    f"adapter {adapter.adapter_id} campaign report changed cluster/mode/release/Market completion"
+                )
         transaction_rows = exact_list(
             pointer(
                 source,
@@ -4127,18 +4451,28 @@ def inspect_completion(
         for index, raw_row in enumerate(transaction_rows):
             row = exact_object(raw_row, f"adapter {adapter.adapter_id} transaction row {index}")
             label = text(
-                row.get("label"),
+                pointer(
+                    row,
+                    adapter.completion.transaction_label_pointer,
+                    f"adapter {adapter.adapter_id} transaction label {index}",
+                ),
                 f"adapter {adapter.adapter_id} transaction label {index}",
                 512,
             )
-            if label in by_label:
+            if label in by_label and adapter.completion.required_transaction_labels:
                 raise Refusal(f"adapter {adapter.adapter_id} repeats transaction label {label}")
             signature = signature_text(
-                row.get("signature"),
+                pointer(
+                    row,
+                    adapter.completion.transaction_signature_pointer,
+                    f"adapter {adapter.adapter_id} transaction signature {index}",
+                ),
                 f"adapter {adapter.adapter_id} transaction signature {index}",
             )
-            by_label[label] = signature
+            by_label.setdefault(label, signature)
             signatures.append(signature)
+            if adapter.completion.require_all_transactions_successful:
+                required_success_signatures.append(signature)
         for label in adapter.completion.required_transaction_labels:
             if label not in by_label:
                 raise Refusal(
@@ -4190,6 +4524,27 @@ def await_completion(
     rpc: Rpc,
     wallet_addresses: Mapping[str, str],
 ) -> dict[str, Any]:
+    final = poll_completion(
+        manifest,
+        adapter,
+        journal_path,
+        completion_path,
+        rpc,
+        wallet_addresses,
+    )
+    if final is not None:
+        return final
+    raise Refusal(f"adapter {adapter.adapter_id} remains ambiguous; only poll-only resume is allowed")
+
+
+def poll_completion(
+    manifest: Manifest,
+    adapter: AdapterSpec,
+    journal_path: Path,
+    completion_path: Path,
+    rpc: Rpc,
+    wallet_addresses: Mapping[str, str],
+) -> dict[str, Any] | None:
     for poll_index in range(manifest.scenario.limits.max_polls):
         observed = inspect_completion(manifest, adapter, completion_path, rpc, wallet_addresses)
         if observed is not None:
@@ -4209,7 +4564,155 @@ def await_completion(
             return final
         if poll_index + 1 < manifest.scenario.limits.max_polls:
             time.sleep(manifest.scenario.limits.poll_interval_ms / 1000)
-    raise Refusal(f"adapter {adapter.adapter_id} remains ambiguous; only poll-only resume is allowed")
+    return None
+
+
+def dispatch_progressive_adapter(
+    manifest: Manifest,
+    adapter: AdapterSpec,
+    binary: Path,
+    binary_sha256: str,
+    argv: tuple[str, ...],
+    completion_path: Path,
+    work: Path,
+    rpc: Rpc,
+    wallet_addresses: Mapping[str, str],
+    authorization_sha256: str | None,
+    limiter: DispatchLimiter,
+) -> dict[str, Any]:
+    spec = adapter.progressive
+    if spec is None:
+        raise Refusal(f"adapter {adapter.adapter_id} omitted its progressive contract")
+    journal_path = adapter_journal_path(work, adapter.adapter_id)
+    if journal_path.exists():
+        journal = authenticated_state(journal_path, f"adapter journal {adapter.adapter_id}")
+        validate_adapter_journal(
+            journal,
+            manifest,
+            adapter,
+            binary_sha256,
+            argv,
+            completion_path,
+            authorization_sha256,
+        )
+        if journal["phase"] == "finalized":
+            return await_completion(
+                manifest,
+                adapter,
+                journal_path,
+                completion_path,
+                rpc,
+                wallet_addresses,
+            )
+    else:
+        atomic_write_json(
+            journal_path,
+            new_adapter_journal(
+                manifest,
+                adapter,
+                binary_sha256,
+                argv,
+                completion_path,
+                authorization_sha256,
+            ),
+            mode=0o644,
+        )
+
+    while True:
+        final = poll_completion(
+            manifest,
+            adapter,
+            journal_path,
+            completion_path,
+            rpc,
+            wallet_addresses,
+        )
+        if final is not None:
+            return final
+        steps = authenticated_progressive_steps(
+            manifest, adapter, binary_sha256, argv, work
+        )
+        planned_step = steps[-1] if steps and steps[-1]["phase"] == "planned" else None
+        if planned_step is None and len(steps) >= spec.max_steps:
+            raise Refusal(
+                f"progressive adapter {adapter.adapter_id} exhausted maxSteps={spec.max_steps} without its authenticated completion"
+            )
+        if stop_requested(work):
+            raise Refusal("activity STOP prevents another progressive dispatch")
+
+        if planned_step is not None:
+            ordinal = planned_step["ordinal"]
+            step_path = progressive_step_path(work, adapter.adapter_id, ordinal)
+        else:
+            ordinal = len(steps) + 1
+            recovery_of = None
+            if steps and steps[-1]["phase"] in {"dispatching", "exited"}:
+                recovery_of = steps[-1]["ordinal"]
+            identity = progressive_step_identity(
+                manifest, adapter, binary_sha256, argv
+            )
+            step = {
+                **identity,
+                "ordinal": ordinal,
+                "recoveryOf": recovery_of,
+                "phase": "planned",
+                "plannedAt": utc_now(),
+                "dispatchStartedAt": None,
+                "processExitCode": None,
+                "exitedAt": None,
+            }
+            step_path = progressive_step_path(work, adapter.adapter_id, ordinal)
+            atomic_write_json(step_path, step, mode=0o644)
+        limiter.enter(work)
+
+        current = authenticated_state(
+            step_path, f"progressive step {adapter.adapter_id}/{ordinal}"
+        )
+        validate_progressive_step(
+            current, manifest, adapter, binary_sha256, argv, ordinal
+        )
+        dispatching_step = dict(current)
+        dispatching_step["phase"] = "dispatching"
+        dispatching_step["dispatchStartedAt"] = utc_now()
+        atomic_write_json(step_path, dispatching_step, mode=0o644)
+
+        adapter_journal = authenticated_state(
+            journal_path, f"adapter journal {adapter.adapter_id}"
+        )
+        dispatching_adapter = dict(adapter_journal)
+        dispatching_adapter["phase"] = "dispatching"
+        if dispatching_adapter["dispatchStartedAt"] is None:
+            dispatching_adapter["dispatchStartedAt"] = utc_now()
+        atomic_write_json(journal_path, dispatching_adapter, mode=0o644)
+
+        log_path = work / "private" / "logs" / adapter.adapter_id / f"{ordinal:04d}.log"
+        log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as log:
+            result = run_checked(
+                [str(binary), *argv], stdout=log, stderr=subprocess.STDOUT
+            )
+            log.flush()
+            os.fsync(log.fileno())
+
+        current = authenticated_state(
+            step_path, f"progressive step {adapter.adapter_id}/{ordinal}"
+        )
+        exited_step = dict(current)
+        exited_step.update(
+            {
+                "phase": "exited",
+                "processExitCode": result.returncode,
+                "exitedAt": utc_now(),
+            }
+        )
+        atomic_write_json(step_path, exited_step, mode=0o644)
+        adapter_journal = authenticated_state(
+            journal_path, f"adapter journal {adapter.adapter_id}"
+        )
+        exited_adapter = dict(adapter_journal)
+        exited_adapter["processExitCode"] = result.returncode
+        atomic_write_json(journal_path, exited_adapter, mode=0o644)
 
 
 def dispatch_adapter(
@@ -4225,6 +4728,20 @@ def dispatch_adapter(
     authorization_sha256: str | None,
     limiter: DispatchLimiter,
 ) -> dict[str, Any]:
+    if adapter.progressive is not None:
+        return dispatch_progressive_adapter(
+            manifest,
+            adapter,
+            binary,
+            binary_sha256,
+            argv,
+            completion_path,
+            work,
+            rpc,
+            wallet_addresses,
+            authorization_sha256,
+            limiter,
+        )
     journal_path = adapter_journal_path(work, adapter.adapter_id)
     if journal_path.exists():
         journal = authenticated_state(journal_path, f"adapter journal {adapter.adapter_id}")
@@ -5691,7 +6208,7 @@ def validate_only(manifest: Manifest) -> None:
     # no reason to construct an RPC or inspect a wallet.
     if not manifest.adapters:
         raise Refusal("activity manifest has no caller-backed adapters")
-    require_one_shot_adapter_commands(manifest)
+    require_progressive_adapter_commands(manifest)
 
 
 def stop(work: Path, reason: str) -> None:
