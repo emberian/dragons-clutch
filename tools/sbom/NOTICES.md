@@ -102,7 +102,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - baseline-browser-mapping 2.11.19 (npm)
 - blst 0.3.17 (cargo)
 - borsh 0.7.0 (npm)
-- borsh-derive 1.8.0 (cargo)
 - borsh-derive 1.8.1 (cargo)
 - detect-libc 2.1.2 (npm)
 - doctrine 2.1.0 (npm)
@@ -999,7 +998,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - color-convert 2.0.1 (npm)
 - color-name 1.1.4 (npm)
 - combine 3.8.1 (cargo)
-- combine 4.6.7 (cargo)
 - combine 4.6.8 (cargo)
 - commander 14.0.3 (npm)
 - commander 2.20.3 (npm)
@@ -1181,7 +1179,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - locate-path 6.0.0 (npm)
 - lodash.merge 4.6.2 (npm)
 - loose-envify 1.4.0 (npm)
-- lru 0.18.2 (cargo)
+- lru 0.18.3 (cargo)
 - lz4 1.28.1 (cargo)
 - lz4-sys 1.11.1+lz4-1.10.0 (cargo)
 - magic-string 0.30.21 (npm)
@@ -1444,7 +1442,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - block-buffer 0.10.4 (cargo)
 - block-buffer 0.12.1 (cargo)
 - block-buffer 0.9.0 (cargo)
-- borsh 1.8.0 (cargo)
 - borsh 1.8.1 (cargo)
 - bumpalo 3.20.3 (cargo)
 - bzip2 0.6.1 (cargo)
@@ -1453,7 +1450,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - cargo-platform 0.3.3 (cargo)
 - cc 1.4.4 (cargo)
 - cfg-if 1.0.4 (cargo)
-- chacha20 0.10.1 (cargo)
+- chacha20 0.10.2 (cargo)
 - chrono 0.4.45 (cargo)
 - cipher 0.4.4 (cargo)
 - clap 4.6.6 (cargo)
@@ -1466,7 +1463,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - core-foundation 0.10.1 (cargo)
 - core-foundation-sys 0.8.7 (cargo)
 - cpufeatures 0.2.17 (cargo)
-- cpufeatures 0.3.0 (cargo)
 - cpufeatures 0.3.1 (cargo)
 - crc32fast 1.5.1 (cargo)
 - crossbeam-channel 0.5.16 (cargo)
@@ -1495,7 +1491,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - errno 0.3.14 (cargo)
 - fastbloom 0.17.0 (cargo)
 - find-msvc-tools 0.1.11 (cargo)
-- flate2 1.1.9 (cargo)
+- flate2 1.1.10 (cargo)
 - form_urlencoded 1.2.2 (cargo)
 - futures 0.3.34 (cargo)
 - futures-channel 0.3.34 (cargo)
@@ -1592,7 +1588,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - quote 1.0.47 (cargo)
 - rand 0.10.2 (cargo)
 - rand 0.7.3 (cargo)
-- rand 0.8.7 (cargo)
 - rand 0.8.8 (cargo)
 - rand 0.9.5 (cargo)
 - rand_chacha 0.2.2 (cargo)
@@ -1718,7 +1713,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 ### `MIT OR Zlib OR Apache-2.0`
 
-- miniz_oxide 0.8.9 (cargo)
+- miniz_oxide 0.9.1 (cargo)
 
 ### `MIT/Apache-2.0`
 
@@ -1863,6 +1858,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 - foldhash 0.1.5 (cargo)
 - foldhash 0.2.0 (cargo)
+- zlib-rs 0.6.7 (cargo)
 
 ### `Zlib OR Apache-2.0 OR MIT`
 

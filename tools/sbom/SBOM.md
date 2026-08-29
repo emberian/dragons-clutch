@@ -3,16 +3,16 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify` (also wired into `tools/gauntlet` — see `tools/sbom/README.md`).
 
-**37 manifests, 1860 unique dependency rows (1034 cargo, 826 npm), 67 flagged for human review.**
+**48 manifests, 1867 unique dependency rows (1041 cargo, 826 npm), 67 flagged for human review.**
 
 ## Counts by license
 
 | License | Rows |
 |---|---|
-| `MIT` | 742 |
-| `Apache-2.0` | 401 |
-| `MIT OR Apache-2.0` | 304 |
-| `AGPL-3.0-or-later` | 129 |
+| `MIT` | 741 |
+| `Apache-2.0` | 400 |
+| `MIT OR Apache-2.0` | 301 |
+| `AGPL-3.0-or-later` | 140 |
 | `MIT/Apache-2.0` | 55 |
 | `Apache-2.0 OR MIT` | 39 |
 | `MPL-2.0` | 28 |
@@ -28,6 +28,7 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 | `0BSD` | 3 |
 | `Apache-2.0 OR ISC OR MIT` | 3 |
 | `MPL-2.0+` | 3 |
+| `Zlib` | 3 |
 | `Apache-2.0 / MIT` | 2 |
 | `Apache-2.0 AND LGPL-3.0-or-later AND MIT` | 2 |
 | `BSD-2-Clause OR Apache-2.0 OR MIT` | 2 |
@@ -37,7 +38,6 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 2 |
 | `MIT OR Apache-2.0 OR Zlib` | 2 |
 | `Unlicense/MIT` | 2 |
-| `Zlib` | 2 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
 | `(Unlicense OR Apache-2.0)` | 1 |
 | `0BSD OR MIT OR Apache-2.0` | 1 |
@@ -242,9 +242,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `block-buffer` | 0.9.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `blst` | 0.3.17 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `blstrs` | 0.7.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `borsh` | 1.8.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `borsh` | 1.8.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `borsh-derive` | 1.8.0 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `borsh-derive` | 1.8.1 | `Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `brotli` | 8.0.4 | `BSD-3-Clause AND MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `brotli-decompressor` | 5.0.3 | `BSD-3-Clause/MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -266,7 +264,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `cfg-if` | 1.0.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `cfg_aliases` | 0.2.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `cfg_eval` | 0.1.2 | `Zlib OR MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `chacha20` | 0.10.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `chacha20` | 0.10.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `chrono` | 0.4.45 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `chrono-humanize` | 0.2.3 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `cipher` | 0.4.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -277,7 +275,6 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `cmov` | 0.5.4 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `colorchoice` | 1.0.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `combine` | 3.8.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `combine` | 4.6.7 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `combine` | 4.6.8 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `compression-codecs` | 0.4.38 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `compression-core` | 0.4.32 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -286,7 +283,6 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `core-foundation` | 0.10.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `core-foundation-sys` | 0.8.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `cpufeatures` | 0.2.17 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `cpufeatures` | 0.3.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `cpufeatures` | 0.3.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `crc32fast` | 1.5.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `crossbeam-channel` | 0.5.16 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -330,11 +326,14 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-custody-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-custody-contract` | declared |
 | `dclutch-custody-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-custody-sbf` | declared |
 | `dclutch-custody-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-custody-sbf/test-programs/caller` | inherited-default (publish=false, undeclared) |
+| `dclutch-dealer-accelerator-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-dealer-accelerator-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf` | declared |
+| `dclutch-dealer-accelerator-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller` | declared |
 | `dclutch-dealer-codec` | 0.1.0 | `MIT OR Apache-2.0` | `path+crates/dclutch-dealer-codec` | declared |
 | `dclutch-dealer-family-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-dealer-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-sbf` | declared |
 | `dclutch-dealer-scenario-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-dealer-scenario-kernel` | declared |
+| `dclutch-devnet-scenarios` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/devnet-scenarios` | declared |
 | `dclutch-direct-aot-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-direct-aot-contract` | declared |
 | `dclutch-direct-aot-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-direct-aot-sbf` | declared |
 | `dclutch-direct-aot-v3-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-direct-aot-v3-contract` | declared |
@@ -352,6 +351,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-fractional-signed-delta-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/fractional-signed-delta` | inherited-default (publish=false, undeclared) |
 | `dclutch-fractional-signed-delta-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-gauntlet-direct-campaign` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/direct/producer` | declared |
+| `dclutch-general-accelerator-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-general-accelerator-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf` | declared |
 | `dclutch-general-accelerator-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf/test-programs/general-caller` | declared |
 | `dclutch-general-adapter-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-adapter-contract` | declared |
@@ -365,6 +365,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-market-open-v1-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-market-open-v1-operator` | declared |
 | `dclutch-market-retirement-v1-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-market-retirement-v1-operator` | declared |
 | `dclutch-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-operator` | declared |
+| `dclutch-postjoin-claims-hostile-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/postjoin-claims` | declared |
+| `dclutch-postjoin-custody-hostile-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/postjoin-custody` | declared |
+| `dclutch-postjoin-token-hostile-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/postjoin-token` | declared |
 | `dclutch-pre-market-funding-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-svm-harness/test-programs/pre-market-funding-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-product-compiler` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-product-compiler` | declared |
 | `dclutch-product-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-product-contract` | declared |
@@ -414,6 +417,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-resolution-receipt-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-svm-harness/test-programs/resolution-receipt-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-route-census` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/census` | declared |
 | `dclutch-series-consume-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-core-sbf/test-programs/series-consume-caller` | declared |
+| `dclutch-series-shadow-bundle-generator` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf/generator` | declared |
+| `dclutch-series-shadow-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf/program-test` | declared |
 | `dclutch-series-shadow-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf` | declared |
 | `dclutch-series-v3-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-series-v3-kernel` | declared |
 | `dclutch-sha256-adapter` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-sha256-adapter` | declared |
@@ -433,7 +438,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-trading-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test` | declared |
 | `dclutch-trading-registry-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/registry` | declared |
 | `dclutch-trading-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf` | declared |
+| `dclutch-trading-user-position-admission-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/user-position-admission` | inherited-default (publish=false, undeclared) |
 | `dclutch-transition-vm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-transition-vm` | declared |
+| `dclutch-user-position-admission-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-user-position-admission-contract` | declared |
 | `dclutch-versioned-message-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-versioned-message-operator` | declared |
 | `dclutch-web-founding-vector-generator` | 0.1.0 | `AGPL-3.0-or-later` | `path+apps/dclutch-web/fixtures/founding/generator` | declared |
 | `defmt` | 1.1.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -480,7 +487,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `five8` | 1.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `five8_const` | 1.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `five8_core` | 1.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `flate2` | 1.1.9 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `flate2` | 1.1.10 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `fnv` | 1.0.7 | `Apache-2.0 / MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `foldhash` | 0.1.5 | `Zlib` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `foldhash` | 0.2.0 | `Zlib` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -581,7 +588,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `litemap` | 0.8.3 | `Unicode-3.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `lock_api` | 0.4.14 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `log` | 0.4.34 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `lru` | 0.18.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `lru` | 0.18.3 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `lru-slab` | 0.1.2 | `MIT OR Apache-2.0 OR Zlib` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `lz4` | 1.28.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `lz4-sys` | 1.11.1+lz4-1.10.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -591,7 +598,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `memoffset` | 0.9.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `merlin` | 3.0.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `minimal-lexical` | 0.2.1 | `MIT/Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `miniz_oxide` | 0.8.9 | `MIT OR Zlib OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `miniz_oxide` | 0.9.1 | `MIT OR Zlib OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `mio` | 1.2.2 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `mockall` | 0.14.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `mockall` | 0.15.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -665,7 +672,6 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `radium` | 0.7.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.10.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.7.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
-| `rand` | 0.8.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.8.8 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.9.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand_chacha` | 0.2.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1168,6 +1174,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `zerotrie` | 0.2.5 | `Unicode-3.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `zerovec` | 0.11.8 | `Unicode-3.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `zerovec-derive` | 0.11.6 | `Unicode-3.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `zlib-rs` | 0.6.7 | `Zlib` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `zmij` | 1.0.23 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `zstd` | 0.13.3 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `zstd-safe` | 7.2.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -2010,54 +2017,54 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 
 | Manifest | Packages |
 |---|---|
-| `Cargo.toml` | 830 |
+| `Cargo.toml` | 832 |
 | `apps/dclutch-web/fixtures/founding/generator/Cargo.toml` | 21 |
-| `apps/dclutch-web/package.json` | 726 |
-| `crates/dclutch-svm-harness/Cargo.toml` | 790 |
+| `apps/dclutch-web/package.json` | 727 |
+| `crates/dclutch-svm-harness/Cargo.toml` | 792 |
 | `crates/dclutch-svm-harness/test-programs/pre-market-funding-caller/Cargo.toml` | 165 |
-| `crates/dclutch-token-svm/program-test/Cargo.toml` | 757 |
+| `crates/dclutch-svm-harness/test-programs/resolution-receipt-caller/Cargo.toml` | 169 |
+| `crates/dclutch-token-svm/program-test/Cargo.toml` | 758 |
 | `packages/dclutch-cli/package.json` | 299 |
 | `packages/dclutch-sdk/package.json` | 270 |
-| `programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml` | 771 |
-| `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml` | 782 |
-| `programs/dclutch-claims-sbf/program-test/protocol-position/Cargo.toml` | 780 |
-| `programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml` | 780 |
-| `programs/dclutch-claims-sbf/program-test/sparse-chain/Cargo.toml` | 781 |
+| `programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml` | 772 |
+| `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml` | 783 |
+| `programs/dclutch-claims-sbf/program-test/protocol-position/Cargo.toml` | 790 |
+| `programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml` | 790 |
+| `programs/dclutch-claims-sbf/program-test/sparse-chain/Cargo.toml` | 791 |
 | `programs/dclutch-claims-sbf/test-programs/affine-batch-caller/Cargo.toml` | 173 |
 | `programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller/Cargo.toml` | 182 |
-| `programs/dclutch-claims-sbf/test-programs/liability-basis-caller/Cargo.toml` | 162 |
+| `programs/dclutch-claims-sbf/test-programs/liability-basis-caller/Cargo.toml` | 181 |
 | `programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller/Cargo.toml` | 173 |
 | `programs/dclutch-claims-sbf/test-programs/rational-v2-caller/Cargo.toml` | 176 |
 | `programs/dclutch-claims-sbf/test-programs/sparse-chain-caller/Cargo.toml` | 173 |
 | `programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller/Cargo.toml` | 173 |
 | `programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml` | 175 |
 | `programs/dclutch-custody-sbf/test-programs/caller/Cargo.toml` | 165 |
-| `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 770 |
+| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 804 |
+| `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml` | 201 |
+| `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 771 |
+| `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 803 |
 | `programs/dclutch-general-accelerator-sbf/test-programs/general-caller/Cargo.toml` | 160 |
-| `programs/dclutch-trading-sbf/dealer-program-test/Cargo.toml` | 733 |
-| `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 794 |
+| `programs/dclutch-series-shadow-sbf/generator/Cargo.toml` | 198 |
+| `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml` | 787 |
+| `programs/dclutch-trading-sbf/dealer-program-test/Cargo.toml` | 734 |
+| `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 793 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/core-caller/Cargo.toml` | 163 |
+| `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-claims/Cargo.toml` | 232 |
+| `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-custody/Cargo.toml` | 184 |
+| `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-token/Cargo.toml` | 160 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml` | 163 |
-| `programs/dclutch-trading-sbf/program-test/test-programs/trading-outer/Cargo.toml` | 186 |
+| `programs/dclutch-trading-sbf/program-test/test-programs/trading-outer/Cargo.toml` | 198 |
+| `programs/dclutch-trading-sbf/program-test/user-position-admission/Cargo.toml` | 773 |
 | `programs/dclutch-trading-sbf/test-programs/dealer-wave/Cargo.toml` | 161 |
+| `tools/devnet-scenarios/Cargo.toml` | 63 |
 | `tools/direct-translation-validator/Cargo.toml` | 42 |
 | `tools/gauntlet/census/Cargo.toml` | 22 |
-| `tools/gauntlet/direct/producer/Cargo.toml` | 753 |
-| `tools/gauntlet/journey/Cargo.toml` | 353 |
-| `tools/gauntlet/relayed-vertical/Cargo.toml` | 354 |
-| `tools/local-validator/bootstrap/successor/Cargo.toml` | 398 |
-| `tools/relayer/Cargo.toml` | 221 |
-
-## Unresolvable manifests (stale lockfile, not a license question)
-
-Each manifest below refused `cargo metadata --locked --offline`: its `Cargo.lock` does not match its `Cargo.toml` (typically a dependency edge added or changed without re-running cargo in that mini-workspace). This tool cannot see that manifest's dependency graph at all until its owning lane runs `cargo metadata`/`cargo check` there and commits the refreshed lock — recorded here as owed work, not folded into the flagged-license review list above, and not failing `--verify` by itself, since it is a reproducibility gap rather than an unclassified license.
-
-- `crates/dclutch-svm-harness/test-programs/resolution-receipt-caller/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-series-shadow-sbf/generator/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
+| `tools/gauntlet/direct/producer/Cargo.toml` | 754 |
+| `tools/gauntlet/journey/Cargo.toml` | 362 |
+| `tools/gauntlet/relayed-vertical/Cargo.toml` | 362 |
+| `tools/local-validator/bootstrap/successor/Cargo.toml` | 403 |
+| `tools/relayer/Cargo.toml` | 229 |
 
 ## Stray lockfiles (not read by cargo, not part of this closure)
 
@@ -2182,7 +2189,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - baseline-browser-mapping 2.11.19 (npm)
 - blst 0.3.17 (cargo)
 - borsh 0.7.0 (npm)
-- borsh-derive 1.8.0 (cargo)
 - borsh-derive 1.8.1 (cargo)
 - detect-libc 2.1.2 (npm)
 - doctrine 2.1.0 (npm)
@@ -3079,7 +3085,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - color-convert 2.0.1 (npm)
 - color-name 1.1.4 (npm)
 - combine 3.8.1 (cargo)
-- combine 4.6.7 (cargo)
 - combine 4.6.8 (cargo)
 - commander 14.0.3 (npm)
 - commander 2.20.3 (npm)
@@ -3261,7 +3266,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - locate-path 6.0.0 (npm)
 - lodash.merge 4.6.2 (npm)
 - loose-envify 1.4.0 (npm)
-- lru 0.18.2 (cargo)
+- lru 0.18.3 (cargo)
 - lz4 1.28.1 (cargo)
 - lz4-sys 1.11.1+lz4-1.10.0 (cargo)
 - magic-string 0.30.21 (npm)
@@ -3524,7 +3529,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - block-buffer 0.10.4 (cargo)
 - block-buffer 0.12.1 (cargo)
 - block-buffer 0.9.0 (cargo)
-- borsh 1.8.0 (cargo)
 - borsh 1.8.1 (cargo)
 - bumpalo 3.20.3 (cargo)
 - bzip2 0.6.1 (cargo)
@@ -3533,7 +3537,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - cargo-platform 0.3.3 (cargo)
 - cc 1.4.4 (cargo)
 - cfg-if 1.0.4 (cargo)
-- chacha20 0.10.1 (cargo)
+- chacha20 0.10.2 (cargo)
 - chrono 0.4.45 (cargo)
 - cipher 0.4.4 (cargo)
 - clap 4.6.6 (cargo)
@@ -3546,7 +3550,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - core-foundation 0.10.1 (cargo)
 - core-foundation-sys 0.8.7 (cargo)
 - cpufeatures 0.2.17 (cargo)
-- cpufeatures 0.3.0 (cargo)
 - cpufeatures 0.3.1 (cargo)
 - crc32fast 1.5.1 (cargo)
 - crossbeam-channel 0.5.16 (cargo)
@@ -3575,7 +3578,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - errno 0.3.14 (cargo)
 - fastbloom 0.17.0 (cargo)
 - find-msvc-tools 0.1.11 (cargo)
-- flate2 1.1.9 (cargo)
+- flate2 1.1.10 (cargo)
 - form_urlencoded 1.2.2 (cargo)
 - futures 0.3.34 (cargo)
 - futures-channel 0.3.34 (cargo)
@@ -3672,7 +3675,6 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - quote 1.0.47 (cargo)
 - rand 0.10.2 (cargo)
 - rand 0.7.3 (cargo)
-- rand 0.8.7 (cargo)
 - rand 0.8.8 (cargo)
 - rand 0.9.5 (cargo)
 - rand_chacha 0.2.2 (cargo)
@@ -3798,7 +3800,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 ### `MIT OR Zlib OR Apache-2.0`
 
-- miniz_oxide 0.8.9 (cargo)
+- miniz_oxide 0.9.1 (cargo)
 
 ### `MIT/Apache-2.0`
 
@@ -3943,6 +3945,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 - foldhash 0.1.5 (cargo)
 - foldhash 0.2.0 (cargo)
+- zlib-rs 0.6.7 (cargo)
 
 ### `Zlib OR Apache-2.0 OR MIT`
 
