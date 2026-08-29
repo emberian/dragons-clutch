@@ -36,10 +36,12 @@ use dclutch_effect_kernel::{
 };
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_ATOMIC_ROOT_V3,
-    FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3,
-    FRACTIONAL_TERMINAL_ROOT_V3, FractionalAtomicReceiptV3, FractionalExposureActionV2,
-    FractionalExposureRequestV2, FractionalTerminalAtomicReceiptV3,
-    decode_fractional_capability_root_v4,
+    FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2, FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3,
+    FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3, FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3,
+    FRACTIONAL_TERMINAL_ATOMIC_RECEIPT_BYTES_V3, FRACTIONAL_TERMINAL_ROOT_V3,
+    FractionalAtomicReceiptV3, FractionalExposureActionV2, FractionalExposureRequestV2,
+    FractionalRetirementCoordinateReceiptV3, FractionalRetirementRequestV3,
+    FractionalTerminalAtomicReceiptV3, decode_fractional_capability_root_v4,
 };
 use dclutch_rational_representation_v2_contract::{
     CallerRoleV2, RECEIPT_BYTES_V2 as REPRESENTATION_RECEIPT_BYTES_V2,
@@ -87,6 +89,8 @@ pub enum ClaimsRouteReceiptV3 {
     FractionalAtomic(FractionalAtomicReceiptV3),
     /// One Claims+Custody+Token terminal Fractional mutation committed.
     FractionalTerminalAtomic(FractionalTerminalAtomicReceiptV3),
+    /// One zero native Position and terms-selected Mint retired atomically.
+    FractionalRetirementCoordinate(FractionalRetirementCoordinateReceiptV3),
     /// Zero canonical Position and admission record were reclaimed.
     Close(ProtocolPositionCloseReceiptV2),
 }
@@ -232,6 +236,14 @@ pub fn execute_claims_route_v3<'info>(
                 .key
                 .to_bytes(),
         ),
+        ReceiptKindV3::FractionalRetirementCoordinate => PostResourceEvidenceV3::FractionalRoot(
+            buffers
+                .accounts
+                .get(FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3)
+                .ok_or(TradingSbfError::Content)?
+                .key
+                .to_bytes(),
+        ),
         _ => PostResourceEvidenceV3::None,
     };
     verify_route_receipt(
@@ -284,6 +296,7 @@ enum ReceiptKindV3 {
     RationalRepresentation,
     FractionalAtomic,
     FractionalTerminalAtomic,
+    FractionalRetirementCoordinate,
     Close,
 }
 
@@ -316,7 +329,8 @@ impl ReceiptKindV3 {
             | Self::RationalLifecycle
             | Self::RationalRepresentation
             | Self::FractionalAtomic
-            | Self::FractionalTerminalAtomic => ReceiptDeliveryV3::VerifiedOnly,
+            | Self::FractionalTerminalAtomic
+            | Self::FractionalRetirementCoordinate => ReceiptDeliveryV3::VerifiedOnly,
         }
     }
 }
@@ -569,6 +583,22 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, receipt))
+    } else if request.get(..8) == Some(FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let request =
+            FractionalRetirementRequestV3::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let input = request.input();
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(input.release_set).map_err(|_| TradingSbfError::Content)?,
+            input.market,
+            ExecutionRoleV1::Trading,
+            input.terms,
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, ReceiptKindV3::FractionalRetirementCoordinate))
     } else {
         Err(TradingSbfError::Content.into())
     }
@@ -649,10 +679,46 @@ fn verify_route_receipt(
                 _ => None,
             },
         ),
+        ReceiptKindV3::FractionalRetirementCoordinate => {
+            verify_fractional_retirement_coordinate_receipt(
+                request,
+                receipt,
+                request_digest,
+                match expected_post_resources {
+                    PostResourceEvidenceV3::FractionalRoot(value) => Some(value),
+                    _ => None,
+                },
+            )
+        }
         ReceiptKindV3::Close => {
             verify_close_receipt(request, receipt, request_digest, claims_program)
         }
     }
+}
+
+#[inline(never)]
+fn verify_fractional_retirement_coordinate_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    expected_root: Option<[u8; 32]>,
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    if receipt.len() != FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3 {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let request =
+        FractionalRetirementRequestV3::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = FractionalRetirementCoordinateReceiptV3::decode(receipt)
+        .map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .verify_for(request, request_digest)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if expected_root != Some(receipt.root()) {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::FractionalRetirementCoordinate(
+        receipt,
+    ))
 }
 
 #[inline(never)]
@@ -716,15 +782,41 @@ fn fractional_root_signer(
 ) -> Result<Option<FractionalRootSignerV3>, ProgramError> {
     if !matches!(
         kind,
-        ReceiptKindV3::FractionalAtomic | ReceiptKindV3::FractionalTerminalAtomic
+        ReceiptKindV3::FractionalAtomic
+            | ReceiptKindV3::FractionalTerminalAtomic
+            | ReceiptKindV3::FractionalRetirementCoordinate
     ) {
         return Ok(None);
     }
-    let request =
-        FractionalExposureRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
-    let root_index = match kind {
-        ReceiptKindV3::FractionalAtomic => FRACTIONAL_ATOMIC_ROOT_V3,
-        ReceiptKindV3::FractionalTerminalAtomic => FRACTIONAL_TERMINAL_ROOT_V3,
+    let (release_set, market, terms, expected_revision, root_index) = match kind {
+        ReceiptKindV3::FractionalAtomic | ReceiptKindV3::FractionalTerminalAtomic => {
+            let request = FractionalExposureRequestV2::decode(request)
+                .map_err(|_| TradingSbfError::Content)?;
+            let input = request.input();
+            (
+                input.release_set,
+                input.market,
+                input.terms,
+                input.expected_revision,
+                if kind == ReceiptKindV3::FractionalAtomic {
+                    FRACTIONAL_ATOMIC_ROOT_V3
+                } else {
+                    FRACTIONAL_TERMINAL_ROOT_V3
+                },
+            )
+        }
+        ReceiptKindV3::FractionalRetirementCoordinate => {
+            let request = FractionalRetirementRequestV3::decode(request)
+                .map_err(|_| TradingSbfError::Content)?;
+            let input = request.input();
+            (
+                input.release_set,
+                input.market,
+                input.terms,
+                input.expected_revision,
+                FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3,
+            )
+        }
         _ => return Err(TradingSbfError::Content.into()),
     };
     let root_account = accounts.get(root_index).ok_or(TradingSbfError::Content)?;
@@ -742,13 +834,13 @@ fn fractional_root_signer(
         || root_account.is_signer
         || !root_account.is_writable
         || root_account.executable
-        || header.release_set().to_bytes() != request.input().release_set
-        || header.market() != request.input().market
-        || header.selection().config().to_bytes() != request.input().terms
+        || header.release_set().to_bytes() != release_set
+        || header.market() != market
+        || header.selection().config().to_bytes() != terms
         || input.bump != bump
-        || input.terms != request.input().terms
-        || input.market != request.input().market
-        || input.revision != request.input().expected_revision
+        || input.terms != terms
+        || input.market != market
+        || input.revision != expected_revision
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -1457,6 +1549,28 @@ mod tests {
         .to_vec()
     }
 
+    fn fractional_retirement_bytes(root: [u8; 32]) -> Vec<u8> {
+        FractionalRetirementRequestV3::new(
+            dclutch_fractional_claim_contract::FractionalRetirementActionV3::RetireCoordinate,
+            dclutch_fractional_claim_contract::FractionalRetirementRequestInputV3 {
+                release_set: id(1),
+                market: id(2),
+                terms: id(32),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                token_behavior: id(33),
+                exposure: id(34),
+                root,
+                rent_credit: id(50),
+                expected_revision: 4,
+                representation_coordinate: 1,
+            },
+        )
+        .expect("fractional retirement request")
+        .to_bytes()
+        .expect("fractional retirement bytes")
+        .to_vec()
+    }
+
     fn representation_receipt_bytes(request_bytes: &[u8], claims: [u8; 32]) -> Vec<u8> {
         let request = RepresentationRequestV2::decode(request_bytes).expect("request");
         let header = request.header();
@@ -1906,6 +2020,78 @@ mod tests {
             assert!(metas[FRACTIONAL_TERMINAL_ROOT_V3].is_signer);
             assert!(!metas[FRACTIONAL_ATOMIC_ROOT_V3].is_signer);
         }
+    }
+
+    #[test]
+    fn fractional_retirement_binds_exact_authority_receipt_and_root_signer() {
+        let trading = Pubkey::new_from_array(id(21));
+        let seed_request =
+            FractionalExposureRequestV2::decode(&fractional_bytes()).expect("seed request");
+        let (root_info, bump) = fractional_root_info(seed_request, trading);
+        let request = fractional_retirement_bytes(root_info.key.to_bytes());
+        let decoded = FractionalRetirementRequestV3::decode(&request).expect("request");
+        let digest = hash(&request).to_bytes();
+        let (seeds, kind) = route_authority(&request, RouteKindV3::Once).expect("authority");
+        assert_eq!(kind, ReceiptKindV3::FractionalRetirementCoordinate);
+        assert_eq!(seeds.context(), decoded.input().terms);
+        assert_eq!(seeds.role_request_digest(), digest);
+        assert!(route_authority(&request, RouteKindV3::AffineOnce).is_err());
+
+        let receipt = FractionalRetirementCoordinateReceiptV3::new(
+            decoded,
+            digest,
+            id(41),
+            id(42),
+            id(43),
+            id(44),
+            5,
+        )
+        .expect("retirement receipt");
+        assert!(matches!(
+            verify_route_receipt(
+                kind,
+                &request,
+                &receipt.to_bytes(),
+                id(20),
+                trading.to_bytes(),
+                PostResourceEvidenceV3::FractionalRoot(root_info.key.to_bytes()),
+            ),
+            Ok(ClaimsRouteReceiptV3::FractionalRetirementCoordinate(_))
+        ));
+        assert!(
+            verify_route_receipt(
+                kind,
+                &request,
+                &receipt.to_bytes(),
+                id(20),
+                trading.to_bytes(),
+                PostResourceEvidenceV3::FractionalRoot(id(60)),
+            )
+            .is_err()
+        );
+
+        let mut accounts: Vec<_> = (0
+            ..dclutch_fractional_claim_contract::FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3)
+            .map(|_| account_info(false, false))
+            .collect();
+        accounts[FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3] = root_info;
+        let mut metas: Vec<_> = accounts
+            .iter()
+            .map(|account| {
+                if account.is_writable {
+                    solana_program::instruction::AccountMeta::new(*account.key, false)
+                } else {
+                    solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+                }
+            })
+            .collect();
+        let signer = fractional_root_signer(&trading, kind, &request, &accounts, &mut metas)
+            .expect("root signer")
+            .expect("present");
+        assert_eq!(signer.bump, bump);
+        assert!(metas[FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3].is_signer);
+        metas[FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3].pubkey = Pubkey::new_unique();
+        assert!(fractional_root_signer(&trading, kind, &request, &accounts, &mut metas).is_err());
     }
 
     #[test]

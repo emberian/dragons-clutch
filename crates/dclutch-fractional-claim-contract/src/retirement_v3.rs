@@ -14,10 +14,20 @@ use dclutch_fractional_claim_kernel::FractionalExposureTermsV2;
 pub const FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3: usize = 296;
 /// Exact request width for begin, one-coordinate advance, and finish.
 pub const FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3: usize = 288;
+/// Exact Claims account frame for one Position-plus-Mint coordinate close.
+pub const FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3: usize = 22;
+/// Trading-owned root coordinate in the exact Claims retirement frame.
+pub const FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3: usize = 12;
 /// Cursor-state magic.
 pub const FRACTIONAL_RETIREMENT_CURSOR_MAGIC_V3: [u8; 8] = *b"DCFRCR03";
 /// Retirement-request magic.
 pub const FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3: [u8; 8] = *b"DCFRRQ03";
+/// Canonical ordered-retirement cursor PDA domain under Claims.
+pub const FRACTIONAL_RETIREMENT_CURSOR_PDA_SEED_V3: &[u8] = b"dclutch/fractional-retire-v3";
+/// Exact successful one-coordinate receipt width.
+pub const FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3: usize = 256;
+/// Successful one-coordinate receipt magic.
+pub const FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCFRCX03";
 /// Cursor schema preimage.
 pub const FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_PREIMAGE_V3: &[u8] = b"dclutch/schema/fractional-retirement-cursor-v3|bytes296|terms-owned-ordered-coordinate|constant-width|revision-bound";
 /// SHA-256 identity of [`FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_PREIMAGE_V3`].
@@ -50,6 +60,16 @@ const CURSOR_NEXT_OFFSET: usize = 272;
 const CURSOR_WIDTH_OFFSET: usize = 276;
 const CURSOR_REVISION_OFFSET: usize = 280;
 const CURSOR_RENT_PRINCIPAL_OFFSET: usize = 288;
+
+const RECEIPT_REQUEST_DIGEST_OFFSET: usize = 16;
+const RECEIPT_POSITION_CLOSE_DIGEST_OFFSET: usize = 48;
+const RECEIPT_PRE_CURSOR_DIGEST_OFFSET: usize = 80;
+const RECEIPT_POST_CURSOR_DIGEST_OFFSET: usize = 112;
+const RECEIPT_MINT_OFFSET: usize = 144;
+const RECEIPT_ROOT_OFFSET: usize = 176;
+const RECEIPT_RENT_CREDIT_OFFSET: usize = 208;
+const RECEIPT_COORDINATE_OFFSET: usize = 240;
+const RECEIPT_POST_REVISION_OFFSET: usize = 248;
 
 /// Canonical absent coordinate on begin and finish.
 pub const NO_RETIREMENT_COORDINATE_V3: u32 = u32::MAX;
@@ -458,6 +478,16 @@ impl FractionalRetirementCursorV3 {
         self.revision
     }
 
+    /// Canonical cursor PDA bump.
+    pub const fn bump(self) -> u8 {
+        self.bump
+    }
+
+    /// Historical cursor rent principal retained through coordinate steps.
+    pub const fn historical_rent_principal(self) -> u64 {
+        self.historical_rent_principal
+    }
+
     fn bind_terms(self, terms: FractionalExposureTermsV2<'_>) -> Result<()> {
         if self.release_set != terms.release_set()
             || self.market != terms.market()
@@ -470,6 +500,175 @@ impl FractionalRetirementCursorV3 {
             return Err(FractionalRetirementErrorV3::IdentityMismatch);
         }
         Ok(())
+    }
+}
+
+/// Exact evidence emitted only after the zero Position, admission, and selected
+/// Mint are closed and the ordered cursor advances.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalRetirementCoordinateReceiptV3 {
+    request_digest: [u8; 32],
+    position_close_receipt_digest: [u8; 32],
+    pre_cursor_digest: [u8; 32],
+    post_cursor_digest: [u8; 32],
+    shard_mint: [u8; 32],
+    root: [u8; 32],
+    rent_credit: [u8; 32],
+    representation_coordinate: u32,
+    post_revision: u64,
+}
+
+impl FractionalRetirementCoordinateReceiptV3 {
+    /// Construct one canonical completed-coordinate receipt.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        request: FractionalRetirementRequestV3,
+        request_digest: [u8; 32],
+        position_close_receipt_digest: [u8; 32],
+        pre_cursor_digest: [u8; 32],
+        post_cursor_digest: [u8; 32],
+        shard_mint: [u8; 32],
+        post_revision: u64,
+    ) -> Result<Self> {
+        let input = request.input();
+        if request.action() != FractionalRetirementActionV3::RetireCoordinate
+            || [
+                request_digest,
+                position_close_receipt_digest,
+                pre_cursor_digest,
+                post_cursor_digest,
+                shard_mint,
+            ]
+            .contains(&[0; 32])
+            || pre_cursor_digest == post_cursor_digest
+            || post_revision
+                != input
+                    .expected_revision
+                    .checked_add(1)
+                    .ok_or(FractionalRetirementErrorV3::Arithmetic)?
+        {
+            return Err(FractionalRetirementErrorV3::InvalidTransition);
+        }
+        Ok(Self {
+            request_digest,
+            position_close_receipt_digest,
+            pre_cursor_digest,
+            post_cursor_digest,
+            shard_mint,
+            root: input.root,
+            rent_credit: input.rent_credit,
+            representation_coordinate: input.representation_coordinate,
+            post_revision,
+        })
+    }
+
+    /// Hostile-decode one exact receipt.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3
+            || array::<8>(bytes, 0)? != FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_MAGIC_V3
+            || read_u16(bytes, 8)? != VERSION_V3
+            || bytes
+                .get(10..16)
+                .is_none_or(|reserved| reserved.iter().any(|byte| *byte != 0))
+            || bytes
+                .get(244..248)
+                .is_none_or(|reserved| reserved.iter().any(|byte| *byte != 0))
+        {
+            return Err(FractionalRetirementErrorV3::InvalidEncoding);
+        }
+        let receipt = Self {
+            request_digest: array(bytes, RECEIPT_REQUEST_DIGEST_OFFSET)?,
+            position_close_receipt_digest: array(bytes, RECEIPT_POSITION_CLOSE_DIGEST_OFFSET)?,
+            pre_cursor_digest: array(bytes, RECEIPT_PRE_CURSOR_DIGEST_OFFSET)?,
+            post_cursor_digest: array(bytes, RECEIPT_POST_CURSOR_DIGEST_OFFSET)?,
+            shard_mint: array(bytes, RECEIPT_MINT_OFFSET)?,
+            root: array(bytes, RECEIPT_ROOT_OFFSET)?,
+            rent_credit: array(bytes, RECEIPT_RENT_CREDIT_OFFSET)?,
+            representation_coordinate: read_u32(bytes, RECEIPT_COORDINATE_OFFSET)?,
+            post_revision: read_u64(bytes, RECEIPT_POST_REVISION_OFFSET)?,
+        };
+        if [
+            receipt.request_digest,
+            receipt.position_close_receipt_digest,
+            receipt.pre_cursor_digest,
+            receipt.post_cursor_digest,
+            receipt.shard_mint,
+            receipt.root,
+            receipt.rent_credit,
+        ]
+        .contains(&[0; 32])
+            || receipt.pre_cursor_digest == receipt.post_cursor_digest
+        {
+            return Err(FractionalRetirementErrorV3::NonCanonical);
+        }
+        Ok(receipt)
+    }
+
+    /// Encode one exact canonical receipt.
+    pub fn to_bytes(self) -> [u8; FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3] {
+        let mut output = [0; FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3];
+        output[..8].copy_from_slice(&FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_MAGIC_V3);
+        output[8..10].copy_from_slice(&VERSION_V3.to_le_bytes());
+        for (offset, value) in [
+            (RECEIPT_REQUEST_DIGEST_OFFSET, self.request_digest),
+            (
+                RECEIPT_POSITION_CLOSE_DIGEST_OFFSET,
+                self.position_close_receipt_digest,
+            ),
+            (RECEIPT_PRE_CURSOR_DIGEST_OFFSET, self.pre_cursor_digest),
+            (RECEIPT_POST_CURSOR_DIGEST_OFFSET, self.post_cursor_digest),
+            (RECEIPT_MINT_OFFSET, self.shard_mint),
+            (RECEIPT_ROOT_OFFSET, self.root),
+            (RECEIPT_RENT_CREDIT_OFFSET, self.rent_credit),
+        ] {
+            if let Some(field) = output.get_mut(offset..offset + 32) {
+                field.copy_from_slice(&value);
+            }
+        }
+        output[RECEIPT_COORDINATE_OFFSET..RECEIPT_COORDINATE_OFFSET + 4]
+            .copy_from_slice(&self.representation_coordinate.to_le_bytes());
+        output[RECEIPT_POST_REVISION_OFFSET..RECEIPT_POST_REVISION_OFFSET + 8]
+            .copy_from_slice(&self.post_revision.to_le_bytes());
+        output
+    }
+
+    /// Bind this receipt to the exact parent request digest and identities.
+    pub fn verify_for(
+        self,
+        request: FractionalRetirementRequestV3,
+        request_digest: [u8; 32],
+    ) -> Result<()> {
+        let input = request.input();
+        if request.action() != FractionalRetirementActionV3::RetireCoordinate
+            || self.request_digest != request_digest
+            || self.root != input.root
+            || self.rent_credit != input.rent_credit
+            || self.representation_coordinate != input.representation_coordinate
+            || self.post_revision
+                != input
+                    .expected_revision
+                    .checked_add(1)
+                    .ok_or(FractionalRetirementErrorV3::Arithmetic)?
+        {
+            Err(FractionalRetirementErrorV3::InvalidTransition)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Selected terms-owned Mint that was closed.
+    pub const fn shard_mint(self) -> [u8; 32] {
+        self.shard_mint
+    }
+
+    /// Trading-owned root that signed the selected Mint close.
+    pub const fn root(self) -> [u8; 32] {
+        self.root
+    }
+
+    /// Cursor revision after the exact one-coordinate advance.
+    pub const fn post_revision(self) -> u64 {
+        self.post_revision
     }
 }
 

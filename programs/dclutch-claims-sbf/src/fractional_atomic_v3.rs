@@ -123,6 +123,16 @@ fn process_open(
         return Err(ClaimsSbfError::Accounts.into());
     }
     authenticate_tail_privileges(program_id, accounts, *request)?;
+    authenticate_open_inputs(accounts, request)?;
+    let prepared = prepare_open_mutation(program_id, accounts, request)?;
+    execute_prepared_open(program_id, accounts, instruction_data, request, &prepared)
+}
+
+#[inline(never)]
+fn authenticate_open_inputs(
+    accounts: &[AccountInfo<'_>],
+    request: &FractionalExposureRequestV2,
+) -> Result<(), ProgramError> {
     let rent =
         Rent::from_account_info(account(accounts, RENT)?).map_err(|_| ClaimsSbfError::Accounts)?;
     let registry = account(accounts, REGISTRY)?;
@@ -215,7 +225,50 @@ fn process_open(
     {
         return Err(ClaimsSbfError::Representation.into());
     }
-    drop(root_data);
+    Ok(())
+}
+
+struct PreparedOpenV3 {
+    signed_delta: Box<PreparedFractionalExposureSignedDeltaV2>,
+    packet: Vec<u8>,
+    root: [u8; 32],
+    token_program: [u8; 32],
+    shard_mint: [u8; 32],
+    consumed_shards: u64,
+    decimals: u8,
+    pre_supply: u64,
+    pre_holder: u64,
+    position_0_owner: [u8; 32],
+}
+
+#[inline(never)]
+fn prepare_open_mutation(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: &FractionalExposureRequestV2,
+) -> Result<Box<PreparedOpenV3>, ProgramError> {
+    let terms_data = account(accounts, FRACTIONAL_ATOMIC_TERMS_RAW_V3)?
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let terms = FractionalExposureTermsV2::decode(
+        &terms_data,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: request.input().terms,
+            finalized_terms_id: request.input().terms,
+            recomputed_terms_digest: request.input().terms,
+            finalized_terms_digest: request.input().terms,
+            record_authenticated: true,
+        },
+    )
+    .map_err(|_| ClaimsSbfError::Representation)?;
+    let market_data = account(accounts, MARKET)?
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let market =
+        LiabilityBasisMarketViewV2::decode(&market_data).map_err(|_| ClaimsSbfError::Identity)?;
+    let root_account = account(accounts, FRACTIONAL_ATOMIC_ROOT_V3)?;
 
     let physical =
         plan_fractional_physical_v3(terms, *request).map_err(|_| ClaimsSbfError::Representation)?;
@@ -333,20 +386,44 @@ fn process_open(
         )
         .map_err(|_| ClaimsSbfError::Economic)?,
     );
+    let token_program_identity = terms.token_program();
+    let shard_mint = physical.shard_mint.ok_or(ClaimsSbfError::Token)?;
     drop(position_0_data);
     drop(position_1_data);
     drop(market_data);
-    drop(behavior_data);
+    drop(terms_data);
 
+    Ok(Box::new(PreparedOpenV3 {
+        signed_delta: prepared,
+        packet,
+        root: root_account.key.to_bytes(),
+        token_program: token_program_identity,
+        shard_mint,
+        consumed_shards: physical.consumed_shards,
+        decimals,
+        pre_supply,
+        pre_holder,
+        position_0_owner: position_0.owner,
+    }))
+}
+
+#[inline(never)]
+fn execute_prepared_open(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+    request: &FractionalExposureRequestV2,
+    prepared: &PreparedOpenV3,
+) -> Result<(), ProgramError> {
     let signed_accounts = accounts
         .get(..FRACTIONAL_ATOMIC_SIGNED_DELTA_ACCOUNT_COUNT_V3)
         .ok_or(ClaimsSbfError::Accounts)?;
-    authenticate_parent_releases(program_id, signed_accounts, &packet)?;
+    authenticate_parent_releases(program_id, signed_accounts, &prepared.packet)?;
     let request_digest = digest(instruction_data);
     let signed_receipt = execute_signed_delta_boxed(
         program_id,
         signed_accounts,
-        &packet,
+        &prepared.packet,
         AuthenticatedSignedDeltaParentV3 {
             caller_role: CallerRole::Trading,
             authority: ParentAuthorityV3::CallerProgramPda,
@@ -359,35 +436,45 @@ fn process_open(
 
     execute_token(
         *request,
-        physical.consumed_shards,
-        decimals,
-        root_account,
+        prepared.consumed_shards,
+        prepared.decimals,
+        account(accounts, FRACTIONAL_ATOMIC_ROOT_V3)?,
         account(accounts, FRACTIONAL_ATOMIC_ACTOR_V3)?,
-        mint_account,
-        holder_account,
-        token_program,
+        account(accounts, FRACTIONAL_ATOMIC_SHARD_MINT_V3)?,
+        account(accounts, FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3)?,
+        account(accounts, FRACTIONAL_ATOMIC_TOKEN_PROGRAM_V3)?,
     )?;
 
     let expected_supply = match request.action() {
-        FractionalExposureActionV2::Wrap => pre_supply.checked_add(physical.consumed_shards),
-        FractionalExposureActionV2::WholeUnwrap => pre_supply.checked_sub(physical.consumed_shards),
+        FractionalExposureActionV2::Wrap => {
+            prepared.pre_supply.checked_add(prepared.consumed_shards)
+        }
+        FractionalExposureActionV2::WholeUnwrap => {
+            prepared.pre_supply.checked_sub(prepared.consumed_shards)
+        }
         _ => None,
     }
     .ok_or(ClaimsSbfError::Token)?;
     let expected_holder = match request.action() {
-        FractionalExposureActionV2::Wrap => pre_holder.checked_add(physical.consumed_shards),
-        FractionalExposureActionV2::WholeUnwrap => pre_holder.checked_sub(physical.consumed_shards),
+        FractionalExposureActionV2::Wrap => {
+            prepared.pre_holder.checked_add(prepared.consumed_shards)
+        }
+        FractionalExposureActionV2::WholeUnwrap => {
+            prepared.pre_holder.checked_sub(prepared.consumed_shards)
+        }
         _ => None,
     }
     .ok_or(ClaimsSbfError::Token)?;
+    let mint_account = account(accounts, FRACTIONAL_ATOMIC_SHARD_MINT_V3)?;
+    let holder_account = account(accounts, FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3)?;
     let post_mint = mint_account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     Token2022BehaviorProfileV2::check_mint(
-        terms.token_program(),
+        prepared.token_program,
         mint_account.key.to_bytes(),
         &post_mint,
-        root_account.key.to_bytes(),
+        prepared.root,
         expected_supply,
     )
     .map_err(|_| ClaimsSbfError::Token)?;
@@ -395,9 +482,9 @@ fn process_open(
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     Token2022BehaviorProfileV2::check_account(
-        terms.token_program(),
+        prepared.token_program,
         &post_holder,
-        physical.shard_mint.ok_or(ClaimsSbfError::Token)?,
+        prepared.shard_mint,
         request.input().owner,
         expected_holder,
     )
@@ -421,15 +508,15 @@ fn process_open(
     validate_open_and_emit(
         request,
         request_digest,
-        &prepared,
-        &packet,
+        &prepared.signed_delta,
+        &prepared.packet,
         &signed_receipt,
         token_post_digest,
-        root_account.key.to_bytes(),
+        prepared.root,
         expected_supply,
         expected_holder,
-        physical.consumed_shards,
-        position_0.owner,
+        prepared.consumed_shards,
+        prepared.position_0_owner,
         &post_market,
         &post_position_0,
         &post_position_1,
