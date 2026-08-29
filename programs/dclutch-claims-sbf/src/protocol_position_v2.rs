@@ -791,11 +791,13 @@ fn authenticate_parent_authority(
     request: ProtocolPositionRequestV2,
     parent: AuthenticatedProtocolPositionCloseParentV2,
 ) -> Result<(), ProgramError> {
+    // `request.parent_request_digest` is the historic admission parent and is
+    // rejoined by `authenticate_admission`. `parent.parent_request_digest` is
+    // the current enclosing operation and solely controls this caller PDA.
     if request.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord
         || request.release_set != parent.release_set
         || request.market != parent.market
         || request.position_owner != parent.trading_root
-        || request.parent_request_digest != parent.parent_request_digest
         || parent.parent_context == [0; 32]
         || parent.trading_root == [0; 32]
     {
@@ -1312,6 +1314,7 @@ mod tests {
         let market = [2; 32];
         let parent_context = [3; 32];
         let parent_request_digest = [4; 32];
+        let historical_admission_parent_digest = [14; 32];
         let trading_root = [5; 32];
         let request = ProtocolPositionRequestV2 {
             action: ProtocolPositionActionV2::Close,
@@ -1320,7 +1323,7 @@ mod tests {
             release_set,
             market,
             position_owner: trading_root,
-            parent_request_digest,
+            parent_request_digest: historical_admission_parent_digest,
             rent_credit: [6; 32],
             rent_program: [7; 32],
             generation: 1,
@@ -1476,7 +1479,7 @@ mod tests {
     }
 
     #[test]
-    fn parent_close_refuses_signer_loss_alias_and_replayed_request() {
+    fn parent_close_refuses_signer_loss_and_alias() {
         let (program_id, mut accounts, _, _) = parent_fixture();
         accounts[CLOSE_OWNER_IDENTITY].is_signer = false;
         assert_eq!(
@@ -1490,14 +1493,6 @@ mod tests {
         assert_eq!(
             authenticate_close_privileges(&program_id, close),
             Err(ProtocolPositionSbfErrorV2::Accounts.into())
-        );
-
-        let (_, fresh_accounts, mut replayed, parent) = parent_fixture();
-        replayed.parent_request_digest = [10; 32];
-        let close = CloseAccounts::parse(&fresh_accounts).expect("close accounts");
-        assert_eq!(
-            authenticate_parent_authority(close, replayed, parent),
-            Err(ProtocolPositionSbfErrorV2::Release.into())
         );
     }
 }
