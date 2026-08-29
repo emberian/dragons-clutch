@@ -320,6 +320,17 @@ mod tests {
         }
     }
 
+    /// The lifecycle spec is a checklist against the verifier, not prose.
+    #[test]
+    fn the_lifecycle_requirements_are_stated_as_a_checklist() {
+        assert_eq!(SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4.len(), 4);
+        assert!(
+            SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4
+                .iter()
+                .all(|line| !line.is_empty())
+        );
+    }
+
     /// An empty supplied artifact is refused rather than digested.
     ///
     /// `sha256("")` is a perfectly good digest of nothing, so a descriptor
@@ -360,3 +371,46 @@ mod tests {
         );
     }
 }
+
+/// What a Series `StateLifecyclePolicyV5` must satisfy, read off the verifier.
+///
+/// This is not documentation of a decision that has been made. It is the
+/// *specification the decision has to meet*, derived by reading what
+/// [`super::artifacts_v4::authenticate_series_consume_artifacts_v4`] actually
+/// does with the lifecycle bytes, so that whoever rules on the open questions
+/// in this module's header can check their answer against the verifier rather
+/// than against a description of it.
+///
+/// The verifier, in order:
+///
+/// 1. `require_artifact` — the descriptor's lifecycle reference must carry
+///    schema `CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5` and name `sha256` of
+///    the exact policy bytes. This is what [`assemble_series_consume_descriptor_v4`]
+///    already guarantees for any bytes it is handed.
+/// 2. `StateLifecyclePolicyV5::decode_selected` — the bytes must decode under
+///    that schema at that digest. So the policy is content-addressed and a
+///    substitution is caught here, not later.
+/// 3. `validate_account_profile(account_profile)` — the policy is checked
+///    against the **Series Consume account profile this module emits**. Any
+///    state coordinate the policy names has to exist in Profile13 with the
+///    matching rule. This is the conjunct a hand-written policy is most
+///    likely to fail, and the reason the two artifacts cannot be authored
+///    independently.
+/// 4. `action_plan_count(SeriesActionV3::Consume as u32) != 0` — the policy
+///    must declare at least one creation plan **for Consume specifically**. A
+///    policy that covered only Prepare or Expire would decode, validate
+///    against the profile, and still be refused here.
+///
+/// The open questions are which states step 3 must cover and who the refund
+/// beneficiary is; both are stated in this module's header. Step 4 is the one
+/// that makes the ruling urgent rather than cosmetic: without a Consume plan
+/// there is no admissible Series release at all, so this is not a field that
+/// can be left empty and filled in later.
+pub const SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4: [&str; 4] = [
+    "descriptor lifecycle reference carries CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 and sha256 of \
+     the exact policy bytes",
+    "the bytes decode via StateLifecyclePolicyV5::decode_selected at that digest",
+    "validate_account_profile accepts it against the Series Consume Profile13 this module emits",
+    "action_plan_count(SeriesActionV3::Consume) is nonzero, so a Prepare-only or Expire-only \
+     policy is refused",
+];
