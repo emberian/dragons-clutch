@@ -3749,17 +3749,13 @@ mod tests {
                 AccountMeta::new_readonly(source, false)
             },
         );
-        set_account(
-            &mut accounts,
-            13,
-            if action == ResolutionCoreActionV1::CreateFund {
-                AccountMeta::new_readonly(key(13), false)
-            } else {
-                AccountMeta::new(key(13), false)
-            },
-        );
+        set_account(&mut accounts, 13, AccountMeta::new_readonly(key(13), false));
         if action == ResolutionCoreActionV1::VerifyFundReady {
-            set_account(&mut accounts, 14, AccountMeta::new(beneficiary, false));
+            set_account(
+                &mut accounts,
+                14,
+                AccountMeta::new_readonly(beneficiary, false),
+            );
         }
         (
             Instruction {

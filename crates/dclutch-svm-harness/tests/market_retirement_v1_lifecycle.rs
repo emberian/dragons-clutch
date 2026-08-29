@@ -243,6 +243,15 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         ],
         &RESOLUTION_PROGRAM_ID,
     );
+    let activation_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -368,6 +377,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     base.market = market;
     base.source = source;
     base.funding = funding;
+    base.activation_receipt = activation_receipt;
     base.certificate = certificate;
     base.closure = closure;
     base.rent_credit = rent_credit;
@@ -585,27 +595,61 @@ async fn execute_same_lineage_funding_and_open(
         .expect("create the exact same-Market Source against the pending subset ledger");
     assert_funding_ledger_status(context, &fixture.base, FundingLedgerStatusV2::Pending).await;
 
-    let verify =
-        build_resolution_verify_fund_ready_v3(&verify_snapshot(context, &fixture.base).await)
-            .expect("chain-derived same-Market VerifyFundReady");
-    validate_resolution_verify_fund_ready_report_v3(&verify)
-        .expect("exact same-Market VerifyFundReady");
-    let before_verify = open_rollback_snapshot(context, &fixture.base).await;
-    let mut read_only_beneficiary = verify.instruction.clone();
-    read_only_beneficiary.accounts[16].is_writable = false;
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(context, &fixture.base).await,
+        system_program: required_observed(context, system_program::ID).await,
+    })
+    .expect("chain-derived direct same-Market activation");
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.base.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    activation_instructions.push(activation.instruction);
+    let before_activation = open_rollback_snapshot(context, &fixture.base).await;
+    let mut read_only_beneficiary = activation_instructions.clone();
+    read_only_beneficiary
+        .last_mut()
+        .expect("direct activation instruction")
+        .accounts[13]
+        .is_writable = false;
     assert!(
-        submit(context, &[read_only_beneficiary]).await.is_err(),
-        "a read-only immutable beneficiary must refuse"
+        submit(context, &read_only_beneficiary).await.is_err(),
+        "a read-only activation beneficiary must refuse"
     );
     assert_eq!(
         open_rollback_snapshot(context, &fixture.base).await,
-        before_verify,
-        "VerifyFundReady privilege refusal rolls every funding ledger back"
+        before_activation,
+        "direct activation privilege refusal rolls its receipt top-up and every funding mutation back"
     );
-    submit(context, &[verify.instruction])
+    submit(context, &activation_instructions)
         .await
         .expect("activate the exact same-Market three-row subset ledger");
     assert_funding_ledger_status(context, &fixture.base, FundingLedgerStatusV2::Active).await;
+
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(context, &fixture.base).await)
+            .expect("chain-derived no-CPI same-Market funding Accept");
+    validate_resolution_verify_fund_ready_report_v3(&verify)
+        .expect("exact same-Market funding Accept");
+    let before_accept = open_rollback_snapshot(context, &fixture.base).await;
+    let mut writable_beneficiary = verify.instruction.clone();
+    writable_beneficiary.accounts[14].is_writable = true;
+    assert!(
+        submit(context, &[writable_beneficiary]).await.is_err(),
+        "surplus writable Accept beneficiary must refuse"
+    );
+    assert_eq!(
+        open_rollback_snapshot(context, &fixture.base).await,
+        before_accept,
+        "funding Accept privilege refusal preserves the activated ledger"
+    );
+    submit(context, &[verify.instruction])
+        .await
+        .expect("accept the durable activation receipt into Core readiness");
 
     let before_open = open_rollback_snapshot(context, &fixture.base).await;
     let mut substituted_admission =
@@ -851,9 +895,9 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     )
     .await
     .expect("prepay Source closure receipt");
-    let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture.base).await)
-        .expect("chain-derived CloseFund");
-    validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture.base).await)
+            .expect("chain-derived direct CloseFund");
     let expected_resolution_facts = close.expected_retirement_facts;
     submit(&mut context, &[close.instruction.clone()])
         .await
