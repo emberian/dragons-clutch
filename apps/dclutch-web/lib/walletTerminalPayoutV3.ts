@@ -1005,6 +1005,16 @@ export async function authenticateCheckedLiveDevnetPayoutPlanV3(
 
   const aggregate = material(accounts.get(route.aggregate) ?? null, route.claimsProgram, 'Claims aggregate');
   const aggregateView = decodeClaimsAggregateV2(route.aggregate, aggregate.data);
+  if (aggregateView.logicalMarket !== request.market
+      || aggregateView.selectedReleaseSetId !== request.releaseSet
+      || aggregateView.registryProgram !== route.registryProgram
+      || aggregateView.productInstanceId !== hex(product.productId)
+      || aggregateView.liabilityBasisId !== request.semanticBasisId
+      || aggregateView.realmId !== request.realm
+      || aggregateView.custodyContext !== manifest.custodyContext
+      || aggregateView.generation !== request.generation) {
+    throw new Error('Claims aggregate differs from the Market, Product, Realm, release, or Custody context');
+  }
   const basis = await authenticateRationalProductBasisRecordV3(client, accounts, {
     registry: route.registryProgram, rawAddress: route.linkedBasisRaw, stagingAddress: route.linkedBasisStaging,
     productId: product.productId, domainDigest, domainBytes: domainRaw.data,
@@ -1022,6 +1032,9 @@ export async function authenticateCheckedLiveDevnetPayoutPlanV3(
   }
   const exposureSchema = await sha256(COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3);
   const exposureDigest = requestIdentity(request.exposureDigest, 'composition exposure digest');
+  if (request.exposureId !== request.exposureDigest) {
+    throw new Error('composition exposure selected identity differs from its authenticated finalized digest');
+  }
   const exposureRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, route.registryProgram,
     route.exposureRaw, route.exposureStaging, exposureSchema, exposureDigest, 'composition exposure');
   validateCompositionExposureHeaderV3(exposureRaw.data, request, domainDigest, product.outcomeCount, aggregateView.claimCount);
