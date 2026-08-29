@@ -424,6 +424,95 @@ describe('Market enumeration', () => {
   });
 });
 
+/**
+ * The read arithmetic, pinned so it cannot silently return to a join per Market.
+ *
+ * Discovery once spent a one- or two-address `getMultipleAccounts` per Market
+ * per companion record, inside a sequential loop: a full listing of 32 Markets
+ * cost 129 round trips against public endpoints whose burst allowance is single
+ * digits, and was refused partway through. The same reads are now collected per
+ * round and asked for together, so the call count follows the 32-address batch
+ * width rather than the Market count.
+ */
+describe('batched discovery reads', () => {
+  it('spends one call per 32 addresses per round, not one call per Market per record', async () => {
+    const accounts = await liveChain();
+    accounts.set(LIVE.hoardVault.address, liveRpcAccount(LIVE.hoardVault));
+    accounts.set(LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate, {
+      data: mutate(LIVE.claimsAggregate.data, LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET, await liveFoundingNamespace()),
+    }));
+    // Thirty-one further Markets carrying the same finalized body at addresses
+    // of their own. They commit to the same Realm and manifest identities, so
+    // those records are collected once; their Claims aggregates are derived
+    // from the Market address, so they are 31 distinct further reads.
+    const extras = Array.from(
+      { length: MARKET_DISCOVERY_MAX_ADDRESSES - 1 },
+      (_, index) => new PublicKey(new Uint8Array(32).fill(index + 1)).toBase58(),
+    );
+    for (const address of extras) accounts.set(address, liveRpcAccount(LIVE.market, { data: CURRENT_MARKET_DATA }));
+
+    const widths: number[] = [];
+    const counted = client(accounts);
+    const discovery = await inspectMarketDiscoveryV1(
+      {
+        finalizedSlot: () => counted.finalizedSlot(),
+        multipleAccounts: (addresses: ReadonlyArray<string>, floor?: string) => {
+          widths.push(addresses.length);
+          return counted.multipleAccounts(addresses, floor);
+        },
+      } as unknown as SolanaRpcClient,
+      {
+        coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, custodyProgramId: CUSTODY,
+        addresses: [LIVE.market.address, ...extras],
+      },
+    );
+
+    expect(discovery.cards).toHaveLength(MARKET_DISCOVERY_MAX_ADDRESSES);
+    // Round one: 32 Market roots. Round two: 36 companion addresses -- one
+    // Realm record and its staging cursor, one manifest record and its staging
+    // cursor, and 32 Claims aggregates -- chunked at the 32-address batch
+    // width. Round three: the single Hoard Vault a bound aggregate reaches.
+    // Four calls. One call per Market per record would have been 129.
+    expect(widths).toEqual([32, 32, 4, 1]);
+    expect(widths.every((width) => width >= 1 && width <= 32)).toBe(true);
+
+    // And the join still lands: the campaign's real Market keeps the
+    // authenticated Hoard it had when each record was read on its own.
+    const card = discovery.cards[0];
+    if (card.status !== 'decoded') throw new Error(card.refusal);
+    if (card.hoard.status !== 'derived') throw new Error(card.hoard.reason);
+    expect(card.hoard.address).toBe(LIVE.hoardVault.address);
+  });
+
+  /**
+   * A refused batch is not a thrown listing. Each address in the chunk the
+   * endpoint refused carries that refusal to the helper that asked for it, so
+   * the card states the endpoint's own reason instead of the page dying.
+   */
+  it('carries a refused companion batch into the cards that asked for it', async () => {
+    const counted = client(await liveChain());
+    let call = 0;
+    const discovery = await inspectMarketDiscoveryV1(
+      {
+        finalizedSlot: () => counted.finalizedSlot(),
+        multipleAccounts: (addresses: ReadonlyArray<string>, floor?: string) => {
+          call += 1;
+          if (call > 1) throw new Error('429 Too Many Requests: rate limit exceeded');
+          return counted.multipleAccounts(addresses, floor);
+        },
+      } as unknown as SolanaRpcClient,
+      { coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, addresses: [LIVE.market.address] },
+    );
+    const card = discovery.cards[0];
+    if (card.status !== 'decoded') throw new Error(card.refusal);
+    expect(card.collateral.status).toBe('refused');
+    if (card.collateral.status !== 'refused') throw new Error('expected a refused Realm');
+    expect(card.collateral.reason).toMatch(/429 Too Many Requests/);
+    expect(card.liability.status).toBe('refused');
+    expect(card.capabilities.status).toBe('refused');
+  });
+});
+
 describe('capability manifest authentication', () => {
   it('authenticates the live manifest record against the identity the Market committed to', async () => {
     // The manifest body is large; deriving its record address here proves the

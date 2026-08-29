@@ -362,17 +362,77 @@ export async function enumerateCoreMarketAddressesV1(client: EnumerationClient, 
 
 type DiscoveryClient = Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>;
 
+type ObservedAccountV1 = Readonly<{ account: RpcAccount | null; slot: string }>;
+
+/** One batched read the endpoint refused, held per address it was asked for. */
+type UnreadAccountV1 = Readonly<{ failure: string }>;
+
+type PrefetchedAccountsV1 = ReadonlyMap<string, ObservedAccountV1 | UnreadAccountV1>;
+
 async function readAccounts(
   client: DiscoveryClient,
   addresses: ReadonlyArray<string>,
   floor: string,
-): Promise<ReadonlyMap<string, Readonly<{ account: RpcAccount | null; slot: string }>>> {
-  const observed = new Map<string, Readonly<{ account: RpcAccount | null; slot: string }>>();
+): Promise<ReadonlyMap<string, ObservedAccountV1>> {
+  const observed = new Map<string, ObservedAccountV1>();
   for (const group of chunks(addresses, RPC_ACCOUNT_BATCH)) {
     const batch = await client.multipleAccounts(group, floor);
     for (const entry of batch.accounts) observed.set(entry.address, Object.freeze({ account: entry.account, slot: batch.slot }));
   }
   return observed;
+}
+
+/**
+ * Read one whole round of companion accounts in `RPC_ACCOUNT_BATCH` chunks.
+ *
+ * The join below used to spend a one- or two-address `getMultipleAccounts` per
+ * Market per record, inside a sequential loop: ten Markets cost about forty
+ * round trips against endpoints whose burst allowance is far smaller. The reads
+ * are the same reads; they are now collected first and asked for together.
+ *
+ * A chunk the endpoint refuses does not sink the listing. Each address in it
+ * carries that refusal forward, so the per-Market helper that asked for the
+ * account states exactly the refusal it stated when it owned the call itself.
+ */
+async function prefetchRound(
+  client: DiscoveryClient,
+  addresses: ReadonlyArray<string>,
+  floor: string,
+): Promise<PrefetchedAccountsV1> {
+  const observed = new Map<string, ObservedAccountV1 | UnreadAccountV1>();
+  for (const group of chunks([...new Set(addresses)], RPC_ACCOUNT_BATCH)) {
+    try {
+      for (const [address, entry] of await readAccounts(client, group, floor)) observed.set(address, entry);
+    } catch (error) {
+      const failure = error instanceof Error ? error.message : 'this batched finalized account read was refused without a usable reason';
+      for (const address of group) observed.set(address, Object.freeze({ failure }));
+    }
+  }
+  return observed;
+}
+
+/** Take one prefetched account, or throw the refusal standing in its place. */
+function prefetchedAccount(accounts: PrefetchedAccountsV1, address: string, field: string): ObservedAccountV1 {
+  const entry = accounts.get(address);
+  if (entry === undefined) throw new Error(`${field} ${address} was not collected into this listing's batched finalized read`);
+  if ('failure' in entry) throw new Error(entry.failure);
+  return entry;
+}
+
+/**
+ * Collect the addresses one round will read, without deciding what they mean.
+ *
+ * Collection is best-effort by design: a derivation that refuses here is simply
+ * not collected, and the helper that owns the refusal derives the same address
+ * again and states it. Derivation is deterministic, so the only reads this can
+ * miss are reads whose helper is about to refuse for the same reason.
+ */
+function collectAddresses(into: string[], derive: () => ReadonlyArray<string>): void {
+  try {
+    into.push(...derive());
+  } catch {
+    return;
+  }
 }
 
 /**
@@ -382,35 +442,41 @@ async function readAccounts(
  * staging cursor, and hash to the identity that asked for it. Anything else is a
  * refusal carrying its exact reason.
  */
-async function finalizedRecordBody(
-  client: DiscoveryClient,
+function finalizedRecordAddresses(
   registryProgramId: string,
   schema: Uint8Array,
   identityHex: string,
-  floor: string,
+  field: string,
+): Readonly<{ record: string; staging: string }> {
+  return deriveFinalizedRecordAddressesV1(registryProgramId, schema, fromHex(identityHex, `${field} identity`));
+}
+
+async function finalizedRecordBody(
+  accounts: PrefetchedAccountsV1,
+  registryProgramId: string,
+  schema: Uint8Array,
+  identityHex: string,
   field: string,
 ): Promise<Readonly<{ address: string; data: Uint8Array; observedSlot: string }>> {
-  const digest = fromHex(identityHex, `${field} identity`);
-  const addresses = deriveFinalizedRecordAddressesV1(registryProgramId, schema, digest);
-  const batch = await client.multipleAccounts([addresses.record, addresses.staging], floor);
-  const record = batch.accounts.find((entry) => entry.address === addresses.record)?.account ?? null;
-  const staging = batch.accounts.find((entry) => entry.address === addresses.staging)?.account ?? null;
-  if (record === null) throw new Error(`${field} record ${addresses.record} is absent at finalized slot ${batch.slot}`);
+  const addresses = finalizedRecordAddresses(registryProgramId, schema, identityHex, field);
+  const observed = prefetchedAccount(accounts, addresses.record, `${field} record`);
+  const record = observed.account;
+  const staging = prefetchedAccount(accounts, addresses.staging, `${field} staging cursor`).account;
+  if (record === null) throw new Error(`${field} record ${addresses.record} is absent at finalized slot ${observed.slot}`);
   if (record.owner !== registryProgramId || record.executable) throw new Error(`${field} record is not Registry-owned finalized data`);
   if (staging !== null) throw new Error(`${field} staging cursor is still present; the record is not canonically final`);
   const observedDigest = hex(await sha256(record.data));
   if (observedDigest !== identityHex) throw new Error(`${field} bytes differ from the identity the Market committed to`);
-  return Object.freeze({ address: addresses.record, data: record.data, observedSlot: batch.slot });
+  return Object.freeze({ address: addresses.record, data: record.data, observedSlot: observed.slot });
 }
 
 async function authenticateCapabilityManifest(
-  client: DiscoveryClient,
+  accounts: PrefetchedAccountsV1,
   registryProgramId: string,
   manifestIdHex: string,
-  floor: string,
 ): Promise<MarketCapabilityManifestV1> {
   try {
-    const record = await finalizedRecordBody(client, registryProgramId, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifestIdHex, floor, 'capability manifest');
+    const record = await finalizedRecordBody(accounts, registryProgramId, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifestIdHex, 'capability manifest');
     const badges = decodeCapabilityManifestV1(record.data).map((entry) => {
       const kindId = hex(entry.kind);
       const recognized = recognizeCapabilityKindV1(entry.kind);
@@ -446,10 +512,9 @@ async function authenticateCapabilityManifest(
  * UNREAD rather than claiming it is unbound.
  */
 async function authenticateCollateral(
-  client: DiscoveryClient,
+  accounts: PrefetchedAccountsV1,
   registryProgramId: string | null,
   realmContentId: string,
-  floor: string,
 ): Promise<MarketCollateralV1> {
   if (registryProgramId === null) {
     return Object.freeze({
@@ -459,7 +524,7 @@ async function authenticateCollateral(
     });
   }
   try {
-    const record = await finalizedRecordBody(client, registryProgramId, REALM_SCHEMA_RELEASE_ID_V1, realmContentId, floor, 'Realm');
+    const record = await finalizedRecordBody(accounts, registryProgramId, REALM_SCHEMA_RELEASE_ID_V1, realmContentId, 'Realm');
     const realm = decodeRealmRecordV1(record.data);
     return Object.freeze({
       status: 'bound',
@@ -485,12 +550,11 @@ async function authenticateCollateral(
 
 /** Read one Market's liability state from the Claims program that owns it. */
 async function readLiability(
-  client: DiscoveryClient,
+  accounts: PrefetchedAccountsV1,
   claimsProgramId: string | null,
   marketAddress: string,
   marketGeneration: string,
   settled: boolean,
-  floor: string,
 ): Promise<MarketLiabilityV1> {
   if (claimsProgramId === null) {
     return Object.freeze({
@@ -501,16 +565,16 @@ async function readLiability(
   let aggregateAddress: string | null = null;
   try {
     aggregateAddress = deriveClaimsAggregateAddressV2(claimsProgramId, marketAddress);
-    const batch = await client.multipleAccounts([aggregateAddress], floor);
-    const account = batch.accounts[0]?.account ?? null;
-    if (account === null) throw new Error(`no Claims LiabilityBasisV2 aggregate exists at ${aggregateAddress} at finalized slot ${batch.slot}`);
+    const observed = prefetchedAccount(accounts, aggregateAddress, 'Claims LiabilityBasisV2 aggregate');
+    const account = observed.account;
+    if (account === null) throw new Error(`no Claims LiabilityBasisV2 aggregate exists at ${aggregateAddress} at finalized slot ${observed.slot}`);
     if (account.owner !== claimsProgramId || account.executable) throw new Error('the derived aggregate address holds an account the selected Claims program does not own');
     const aggregate = decodeClaimsAggregateV2(aggregateAddress, account.data);
     if (aggregate.logicalMarket !== marketAddress) throw new Error(`the aggregate names Market ${aggregate.logicalMarket}, not ${marketAddress}`);
     if (aggregate.generation !== marketGeneration) throw new Error(`the aggregate is at generation ${aggregate.generation} while the Market is at ${marketGeneration}; these are two incarnations and are not shown as one`);
     return Object.freeze({
       status: 'bound',
-      observedSlot: batch.slot,
+      observedSlot: observed.slot,
       aggregateAddress,
       claimsProgramId,
       claimCount: aggregate.claimCount,
@@ -552,13 +616,12 @@ const TOKEN_ACCOUNT_BYTES_V1 = 165;
  * and no delegate, native reserve, or close authority.
  */
 async function readHoard(
-  client: DiscoveryClient,
+  accounts: PrefetchedAccountsV1,
   custodyProgramId: string | null,
   marketAddress: string,
   selectedReleaseSetId: string,
   collateral: MarketCollateralV1,
   liability: MarketLiabilityV1,
-  floor: string,
 ): Promise<MarketHoardV1> {
   if (custodyProgramId === null) {
     return Object.freeze({
@@ -582,9 +645,9 @@ async function readHoard(
   try {
     address = deriveMarketHoardAddressV1(custodyProgramId, marketAddress, selectedReleaseSetId, liability.custodyContext);
     const authority = deriveCustodyAuthorityAddressV1(custodyProgramId, marketAddress, selectedReleaseSetId);
-    const batch = await client.multipleAccounts([address], floor);
-    const account = batch.accounts[0]?.account ?? null;
-    if (account === null) throw new Error(`no account exists at the derived Hoard Vault ${address} at finalized slot ${batch.slot}`);
+    const observed = prefetchedAccount(accounts, address, 'the derived Hoard Vault');
+    const account = observed.account;
+    if (account === null) throw new Error(`no account exists at the derived Hoard Vault ${address} at finalized slot ${observed.slot}`);
     if (account.executable) throw new Error('the derived Hoard Vault address holds an executable account');
     if (account.owner !== collateral.tokenProgram) throw new Error(`the derived Hoard Vault is owned by ${account.owner}, not the Realm's token program ${collateral.tokenProgram}`);
     const bytes = account.data;
@@ -599,7 +662,7 @@ async function readHoard(
     if (readU32(bytes, 129) !== 0) throw new Error('the derived Hoard Vault has a separate close authority');
     return Object.freeze({
       status: 'derived',
-      observedSlot: batch.slot,
+      observedSlot: observed.slot,
       address,
       custodyProgramId,
       custodyContext: liability.custodyContext,
@@ -625,12 +688,87 @@ function readU64(bytes: Uint8Array, offset: number): bigint {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(offset, true);
 }
 
+type DecodedMarketCoreStateV2 = ReturnType<typeof decodeMarketCoreStateV2>;
+
+type WalkedMarketV1 =
+  | Readonly<{ kind: 'refused'; card: MarketDiscoveryCardV1 }>
+  | Readonly<{
+    kind: 'decoded';
+    address: string;
+    observedSlot: string;
+    state: DecodedMarketCoreStateV2;
+    bindings: ReadonlyArray<BindingCheck>;
+  }>;
+
+function refusedCard(address: string, observedSlot: string, reason: string): MarketDiscoveryCardV1 {
+  return Object.freeze({
+    status: 'refused',
+    address,
+    provenance: Object.freeze({ kind: 'refused', reason }),
+    observedSlot,
+    refusal: reason,
+  });
+}
+
+/**
+ * Decode one Market root, or produce the refusal card that stands for it.
+ *
+ * This is the whole of what the Market account itself can settle, and it reads
+ * nothing further: the addresses of a Market's companion records are known only
+ * once its identities are decoded, which is why the join below is staged.
+ */
+function walkMarketRoot(
+  coreProgramId: string,
+  registryProgramId: string | null,
+  address: string,
+  entry: ObservedAccountV1 | undefined,
+  floor: string,
+): WalkedMarketV1 {
+  if (entry === undefined || entry.account === null) {
+    const reason = 'account is absent at the finalized observation floor';
+    return Object.freeze({ kind: 'refused', card: refusedCard(address, entry?.slot ?? floor, reason) });
+  }
+  if (entry.account.owner !== coreProgramId || entry.account.executable) {
+    const reason = 'account owner differs from the selected Core program, or it is executable program data';
+    return Object.freeze({ kind: 'refused', card: refusedCard(address, entry.slot, reason) });
+  }
+  let state: DecodedMarketCoreStateV2;
+  try {
+    state = decodeMarketCoreStateV2(address, entry.account.data);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'the account did not decode as one canonical Core Market state';
+    return Object.freeze({ kind: 'refused', card: refusedCard(address, entry.slot, reason) });
+  }
+
+  // The account must derive the address it was found at, from the identities
+  // it declares. `market_id` is not one of those seeds, so this is a real
+  // check and not a restatement.
+  const derived = deriveMarketCoreAddressV2(coreProgramId, entry.account.data);
+  const bindings: ReadonlyArray<BindingCheck> = Object.freeze([
+    Object.freeze({ label: 'Market PDA', ok: derived === address, detail: `identity seeds + generation ${state.identity.generation} → ${derived}` }),
+    Object.freeze({ label: 'Market self-identity', ok: state.marketId === address, detail: `state names ${state.marketId}` }),
+    Object.freeze({
+      label: 'Registry authority',
+      ok: registryProgramId === null || state.identity.registryProgram === registryProgramId,
+      detail: registryProgramId === null ? `Market selects Registry ${state.identity.registryProgram}; none was selected here` : `Market selects ${state.identity.registryProgram}`,
+    }),
+  ]);
+  return Object.freeze({ kind: 'decoded', address, observedSlot: entry.slot, state, bindings });
+}
+
 /**
  * Read one finalized Market discovery listing.
  *
  * All Markets, their Realm records, their liability aggregates and their
  * capability manifests are read behind a single finalized floor slot so no card
  * mixes observation epochs.
+ *
+ * The reads are staged into three rounds rather than a join per Market, because
+ * each round's addresses are only derivable from the previous round's decode: a
+ * Market root names its Realm and manifest, and only the Claims aggregate
+ * records the Custody namespace a Hoard Vault sits under. Within a round every
+ * address is read together in `RPC_ACCOUNT_BATCH` chunks. Three rounds is the
+ * floor this data dependency imposes; it is not a budget choice.
  */
 export async function inspectMarketDiscoveryV1(
   client: DiscoveryClient,
@@ -668,59 +806,81 @@ export async function inspectMarketDiscoveryV1(
     });
   }
 
+  // ROUND ONE: the Market roots themselves.
   const observed = await readAccounts(client, addresses, floor);
-  const cards: MarketDiscoveryCardV1[] = [];
-  for (const address of addresses) {
-    const entry = observed.get(address);
-    if (entry === undefined || entry.account === null) {
-      const reason = 'account is absent at the finalized observation floor';
-      cards.push(Object.freeze({ status: 'refused', address, provenance: Object.freeze({ kind: 'refused', reason }), observedSlot: entry?.slot ?? floor, refusal: reason }));
-      continue;
-    }
-    if (entry.account.owner !== coreProgramId || entry.account.executable) {
-      const reason = 'account owner differs from the selected Core program, or it is executable program data';
-      cards.push(Object.freeze({ status: 'refused', address, provenance: Object.freeze({ kind: 'refused', reason }), observedSlot: entry.slot, refusal: reason }));
-      continue;
-    }
-    let state;
-    try {
-      state = decodeMarketCoreStateV2(address, entry.account.data);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : 'the account did not decode as one canonical Core Market state';
-      cards.push(Object.freeze({ status: 'refused', address, provenance: Object.freeze({ kind: 'refused', reason }), observedSlot: entry.slot, refusal: reason }));
-      continue;
-    }
+  const walked = addresses.map((address) => walkMarketRoot(coreProgramId, registryProgramId, address, observed.get(address), floor));
 
-    // The account must derive the address it was found at, from the identities
-    // it declares. `market_id` is not one of those seeds, so this is a real
-    // check and not a restatement.
-    const derived = deriveMarketCoreAddressV2(coreProgramId, entry.account.data);
-    const bindings: BindingCheck[] = [
-      Object.freeze({ label: 'Market PDA', ok: derived === address, detail: `identity seeds + generation ${state.identity.generation} → ${derived}` }),
-      Object.freeze({ label: 'Market self-identity', ok: state.marketId === address, detail: `state names ${state.marketId}` }),
-      Object.freeze({
-        label: 'Registry authority',
-        ok: registryProgramId === null || state.identity.registryProgram === registryProgramId,
-        detail: registryProgramId === null ? `Market selects Registry ${state.identity.registryProgram}; none was selected here` : `Market selects ${state.identity.registryProgram}`,
-      }),
-    ];
+  // ROUND TWO: every companion record the decoded Markets name. A Realm record
+  // and its staging cursor, a capability manifest record and its staging
+  // cursor, and a Claims aggregate — collected across all Markets first, then
+  // read in 32-address chunks.
+  const recordRound: string[] = [];
+  for (const market of walked) {
+    if (market.kind !== 'decoded') continue;
+    if (registryProgramId !== null) {
+      collectAddresses(recordRound, () => {
+        const realm = finalizedRecordAddresses(registryProgramId, REALM_SCHEMA_RELEASE_ID_V1, market.state.identity.realmId, 'Realm');
+        return [realm.record, realm.staging];
+      });
+      collectAddresses(recordRound, () => {
+        const manifest = finalizedRecordAddresses(registryProgramId, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, market.state.identity.capabilityManifestId, 'capability manifest');
+        return [manifest.record, manifest.staging];
+      });
+    }
+    if (claimsProgramId !== null) {
+      collectAddresses(recordRound, () => [deriveClaimsAggregateAddressV2(claimsProgramId, market.address)]);
+    }
+  }
+  const records = await prefetchRound(client, recordRound, floor);
 
-    const collateral = await authenticateCollateral(client, registryProgramId, state.identity.realmId, floor);
-    const liability = await readLiability(client, claimsProgramId, address, state.identity.generation, state.settlement.status === 'terminal', floor);
-    const hoard = await readHoard(client, custodyProgramId, address, state.identity.selectedReleaseSetId, collateral, liability, floor);
+  // ROUND THREE: the Hoard Vaults, which cannot join round two. A Vault's
+  // address is namespaced by the Custody context only the Claims aggregate
+  // carries, so it is not derivable until round two has been decoded.
+  const hoardRound: string[] = [];
+  const companions: Array<Readonly<{
+    collateral: MarketCollateralV1;
+    liability: MarketLiabilityV1;
+    capabilities: MarketCapabilityManifestV1;
+  }> | null> = [];
+  for (const market of walked) {
+    if (market.kind !== 'decoded') {
+      companions.push(null);
+      continue;
+    }
+    const collateral = await authenticateCollateral(records, registryProgramId, market.state.identity.realmId);
+    const liability = await readLiability(records, claimsProgramId, market.address, market.state.identity.generation, market.state.settlement.status === 'terminal');
     const capabilities: MarketCapabilityManifestV1 = registryProgramId === null
       ? Object.freeze({
         status: 'unread',
-        manifestId: state.identity.capabilityManifestId,
+        manifestId: market.state.identity.capabilityManifestId,
         reason: 'No Registry program was selected, so this Market\'s capability manifest was not authenticated. No capability may be asserted from the Market root alone.',
       })
-      : await authenticateCapabilityManifest(client, registryProgramId, state.identity.capabilityManifestId, floor);
+      : await authenticateCapabilityManifest(records, registryProgramId, market.state.identity.capabilityManifestId);
+    if (custodyProgramId !== null && collateral.status === 'bound' && liability.status === 'bound') {
+      collectAddresses(hoardRound, () => [deriveMarketHoardAddressV1(custodyProgramId, market.address, market.state.identity.selectedReleaseSetId, liability.custodyContext)]);
+    }
+    companions.push(Object.freeze({ collateral, liability, capabilities }));
+  }
+  const hoards = await prefetchRound(client, hoardRound, floor);
+
+  const cards: MarketDiscoveryCardV1[] = [];
+  for (const [index, market] of walked.entries()) {
+    const companion = companions[index];
+    if (market.kind !== 'decoded' || companion === null || companion === undefined) {
+      cards.push(market.kind === 'refused'
+        ? market.card
+        : refusedCard(market.address, market.observedSlot, 'this Market was walked but never joined to its companion records'));
+      continue;
+    }
+    const { collateral, liability, capabilities } = companion;
+    const state = market.state;
+    const hoard = await readHoard(hoards, custodyProgramId, market.address, state.identity.selectedReleaseSetId, collateral, liability);
 
     cards.push(Object.freeze({
       status: 'decoded',
-      address,
-      provenance: Object.freeze({ kind: 'chain', observedSlot: entry.slot }),
-      observedSlot: entry.slot,
+      address: market.address,
+      provenance: Object.freeze({ kind: 'chain', observedSlot: market.observedSlot }),
+      observedSlot: market.observedSlot,
       phase: state.phase,
       readiness: state.readiness,
       generation: state.identity.generation,
@@ -745,7 +905,7 @@ export async function inspectMarketDiscoveryV1(
       liability,
       hoard,
       capabilities,
-      bindings: Object.freeze(bindings),
+      bindings: market.bindings,
       refusal: null,
     }));
   }
