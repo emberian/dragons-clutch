@@ -18,6 +18,8 @@ pub mod config_v4;
 pub mod scenario;
 /// Durable lock-bounded preparation checkpoint for Dealer scenario commits.
 pub mod scenario_checkpoint_v1;
+/// Producer-bound receipt for sealing one paged scenario evaluation.
+pub mod scenario_evaluation_receipt_v1;
 
 #[rustfmt::skip]
 mod generated_dealer_liquidity;

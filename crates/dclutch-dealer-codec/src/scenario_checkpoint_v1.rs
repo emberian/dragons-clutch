@@ -24,8 +24,7 @@ pub const DEALER_SCENARIO_CHECKPOINT_MAGIC_V1: [u8; 8] = *b"DCLTDSC1";
 /// Implemented checkpoint schema version.
 pub const DEALER_SCENARIO_CHECKPOINT_VERSION_V1: u16 = 1;
 /// Trading PDA domain for one request-scoped checkpoint.
-pub const DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1: &[u8] =
-    b"dclutch:dealer-scenario-checkpoint:v1";
+pub const DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-checkpoint:v1";
 /// Domain for one page receipt over an exact checkpoint prestate.
 pub const DEALER_SCENARIO_PAGE_RECEIPT_DOMAIN_V1: &[u8] = b"dclutch:dealer-scenario-page:v1";
 /// Domain for the joined Claims prestate used by preparation and commit.
@@ -105,11 +104,19 @@ pub struct DealerScenarioCheckpointInputV1 {
     pub request_digest: [u8; 32],
     /// Digest of the root bytes observed before preparation.
     pub root_prestate_digest: [u8; 32],
-    /// Domain-separated digest of every Claims prestate used by evaluation.
+    /// Domain-separated digest of every Claims page admitted for evaluation.
+    ///
+    /// This is zero while the checkpoint is collecting and is written exactly
+    /// once by [`DealerScenarioCheckpointV1::finish_evaluation`] from the
+    /// adapter's ordered page transcript.
     pub claims_prestate_digest: [u8; 32],
     /// Digest of the exact current obligation account bytes.
     pub obligation_prestate_digest: [u8; 32],
-    /// Domain-separated digest of every Custody prestate used by evaluation.
+    /// Domain-separated digest of every Custody page admitted for evaluation.
+    ///
+    /// This is zero while the checkpoint is collecting and is written exactly
+    /// once by [`DealerScenarioCheckpointV1::finish_evaluation`] from the
+    /// adapter's ordered page transcript.
     pub custody_prestate_digest: [u8; 32],
     /// Current Core Market generation.
     pub generation: u64,
@@ -397,17 +404,25 @@ impl DealerScenarioCheckpointV1 {
         self,
         current_slot: u64,
         checkpoint_prestate_digest: [u8; 32],
+        claims_prestate_digest: [u8; 32],
+        custody_prestate_digest: [u8; 32],
         evaluation: DealerScenarioEvaluationV1,
     ) -> CheckpointResultV1<Self> {
         self.require_live_collecting(current_slot)?;
         if usize::from(self.next_page) != DEALER_SCENARIO_PREPARATION_PAGES_V1 {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
         }
-        if checkpoint_prestate_digest == [0; 32] || !evaluation_is_complete(evaluation) {
+        if checkpoint_prestate_digest == [0; 32]
+            || claims_prestate_digest == [0; 32]
+            || custody_prestate_digest == [0; 32]
+            || !evaluation_is_complete(evaluation)
+        {
             return Err(DealerScenarioCheckpointErrorV1::Coordinate);
         }
         let mut next = self;
         next.last_checkpoint_prestate_digest = checkpoint_prestate_digest;
+        next.input.claims_prestate_digest = claims_prestate_digest;
+        next.input.custody_prestate_digest = custody_prestate_digest;
         next.evaluation = evaluation;
         next.phase = DealerScenarioCheckpointPhaseV1::Evaluated;
         next.revision = next
@@ -508,7 +523,7 @@ impl DealerScenarioCheckpointV1 {
     }
 
     fn validate(self) -> CheckpointResultV1<()> {
-        validate_input(self.input)?;
+        validate_immutable_input(self.input)?;
         if usize::from(self.next_page) > DEALER_SCENARIO_PREPARATION_PAGES_V1 {
             return Err(DealerScenarioCheckpointErrorV1::Phase);
         }
@@ -521,6 +536,8 @@ impl DealerScenarioCheckpointV1 {
         match self.phase {
             DealerScenarioCheckpointPhaseV1::Collecting => {
                 if self.revision != u64::from(self.next_page)
+                    || self.input.claims_prestate_digest != [0; 32]
+                    || self.input.custody_prestate_digest != [0; 32]
                     || evaluation_is_complete(self.evaluation)
                     || self.evaluation != empty_evaluation()
                     || (self.next_page == 0 && self.last_checkpoint_prestate_digest != [0; 32])
@@ -536,6 +553,8 @@ impl DealerScenarioCheckpointV1 {
                             .map_err(|_| DealerScenarioCheckpointErrorV1::Arithmetic)?
                             + 1
                     || self.last_checkpoint_prestate_digest == [0; 32]
+                    || self.input.claims_prestate_digest == [0; 32]
+                    || self.input.custody_prestate_digest == [0; 32]
                     || !evaluation_is_complete(self.evaluation)
                 {
                     return Err(DealerScenarioCheckpointErrorV1::Phase);
@@ -547,6 +566,14 @@ impl DealerScenarioCheckpointV1 {
 }
 
 fn validate_input(input: DealerScenarioCheckpointInputV1) -> CheckpointResultV1<()> {
+    validate_immutable_input(input)?;
+    if input.claims_prestate_digest != [0; 32] || input.custody_prestate_digest != [0; 32] {
+        return Err(DealerScenarioCheckpointErrorV1::Coordinate);
+    }
+    Ok(())
+}
+
+fn validate_immutable_input(input: DealerScenarioCheckpointInputV1) -> CheckpointResultV1<()> {
     if input.created_slot >= input.expires_at
         || [
             input.release_set,
@@ -556,9 +583,7 @@ fn validate_input(input: DealerScenarioCheckpointInputV1) -> CheckpointResultV1<
             input.refund_beneficiary,
             input.request_digest,
             input.root_prestate_digest,
-            input.claims_prestate_digest,
             input.obligation_prestate_digest,
-            input.custody_prestate_digest,
         ]
         .contains(&[0; 32])
     {
@@ -620,9 +645,9 @@ mod tests {
             refund_beneficiary: id(5),
             request_digest: id(6),
             root_prestate_digest: id(7),
-            claims_prestate_digest: id(8),
+            claims_prestate_digest: [0; 32],
             obligation_prestate_digest: id(9),
-            custody_prestate_digest: id(10),
+            custody_prestate_digest: [0; 32],
             generation: 11,
             created_slot: 20,
             expires_at: 40,
@@ -647,7 +672,7 @@ mod tests {
                 .expect("canonical page");
         }
         checkpoint
-            .finish_evaluation(30, id(60), evaluation())
+            .finish_evaluation(30, id(60), id(8), id(10), evaluation())
             .expect("evaluation")
     }
 
@@ -706,7 +731,7 @@ mod tests {
     fn evaluation_requires_every_page_and_is_commit_last() {
         let checkpoint = DealerScenarioCheckpointV1::new(input()).expect("new");
         assert_eq!(
-            checkpoint.finish_evaluation(21, id(30), evaluation()),
+            checkpoint.finish_evaluation(21, id(30), id(8), id(10), evaluation()),
             Err(DealerScenarioCheckpointErrorV1::Phase)
         );
         let evaluated = evaluated();
@@ -715,7 +740,7 @@ mod tests {
             Err(DealerScenarioCheckpointErrorV1::Phase)
         );
         assert_eq!(
-            evaluated.finish_evaluation(31, id(32), evaluation()),
+            evaluated.finish_evaluation(31, id(32), id(8), id(10), evaluation()),
             Err(DealerScenarioCheckpointErrorV1::Phase)
         );
     }

@@ -54,6 +54,9 @@ pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
 #[cfg(any(feature = "families", feature = "dealer-family"))]
 pub mod dealer;
+/// Lock-bounded durable Dealer scenario checkpoint lifecycle.
+#[cfg(any(feature = "families", feature = "dealer-family"))]
+pub mod dealer_scenario_checkpoint_v1;
 /// Direct family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod direct;
@@ -277,6 +280,38 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     require_instruction_account_bound_v3(accounts.len())?;
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_create_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_page_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_evaluate_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_cleanup_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     if dclutch_user_position_admission_contract::is_user_position_admission_v1(instruction_data) {
         return user_position_admission_v1::process_user_position_admission_v1(
             program_id,

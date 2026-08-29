@@ -644,7 +644,13 @@ fn account_meta(value: &ObservedAccountMetaV3) -> AccountMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObservedAccount;
+    use crate::{
+        ObservedAccount,
+        dealer_scenario_checkpoint_v1::{
+            DealerScenarioFinalCommitFixedAccountsV1,
+            project_dealer_scenario_final_commit_topology_v1,
+        },
+    };
     use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
     use dclutch_custody_contract::{
         CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1,
@@ -821,6 +827,37 @@ mod tests {
                 .expect("packed geometry");
             assert_eq!(observed, suffix.len() + DEALER_HOT_INJECTED_ACCOUNTS_V4);
         }
+    }
+
+    #[test]
+    fn final_commit_topology_reports_dense_selector_nine_lock_wall() {
+        let spans = [14, 14, 14, 14, 2, 14, 14, 0, 6];
+        let (fixed_accounts, suffix) = runtime_fixture(4, spans);
+        let topology = project_dealer_scenario_final_commit_topology_v1(
+            DealerScenarioHotMetaStateV4 {
+                fixed_accounts: &fixed_accounts,
+                strategy_accounts: &[],
+                runtime_suffix_accounts: &suffix,
+            },
+            4,
+            spans,
+            DealerScenarioFinalCommitFixedAccountsV1 {
+                payer: Pubkey::new_from_array([255; 32]),
+                trading_program: Pubkey::new_from_array([254; 32]),
+                checkpoint: Pubkey::new_from_array([253; 32]),
+                clock: Pubkey::new_from_array([252; 32]),
+                request: Pubkey::new_from_array([251; 32]),
+                evaluation_receipt: Pubkey::new_from_array([250; 32]),
+                candidate_bank: Pubkey::new_from_array([249; 32]),
+                candidate_obligation: Pubkey::new_from_array([248; 32]),
+                claims_delta: Pubkey::new_from_array([247; 32]),
+                effects: Pubkey::new_from_array([246; 32]),
+            },
+        )
+        .expect("topology");
+        assert_eq!(topology.effect_accounts.len(), 117);
+        assert_eq!(topology.unique_account_lock_count, 119);
+        assert!(!topology.fits_devnet_lock_limit);
     }
 
     #[test]
