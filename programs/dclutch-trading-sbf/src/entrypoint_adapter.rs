@@ -1198,7 +1198,7 @@ const fn hot_cu_profile_lifts_every_route_v1() -> bool {
 ///
 /// The two entries are the one-time, ALT-backed founding transactions:
 ///
-/// - `DCLTGMF2`, the atomic Lock/Found/Realize/Claims/Open route;
+/// - `DCLTGMF3`, the atomic Lock/Found/Realize/Claims/Open route;
 /// - `DCLTPCB2`, projected-Custody bootstrap, which commit `328fead` measured
 ///   dying out of memory and diagnosed precisely: it "holds three stages' worth
 ///   of allocations live [...] against an allocator that never frees, so its
@@ -1214,7 +1214,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    if crate::generic_market_founding_v1::is_generic_market_founding_v2(instruction_data)
+    if crate::generic_market_founding_v1::is_generic_market_founding_v3(instruction_data)
         || crate::projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2(
             instruction_data,
         )
@@ -2763,12 +2763,20 @@ mod tests {
                 feature = "dealer-family"
             ))]
             {
+                let mut founding = vec![
+                    0_u8;
+                    crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3
+                ];
+                founding[..8].copy_from_slice(
+                    &crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V3,
+                );
                 for magic in [
-                    crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V2,
-                    crate::projected_custody_bootstrap_v1::PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2,
+                    founding,
+                    crate::projected_custody_bootstrap_v1::PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2
+                        .to_vec(),
                 ] {
                     assert!(declares_extended_heap_profile_v1(&magic));
-                    let mut nearly = magic;
+                    let mut nearly = magic.clone();
                     nearly[7] = nearly[7].wrapping_add(1);
                     assert!(!declares_extended_heap_profile_v1(&nearly));
                     assert!(!declares_extended_heap_profile_v1(

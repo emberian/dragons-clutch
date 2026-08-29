@@ -17,11 +17,11 @@ pub const GENERIC_FOUNDING_REQUEST_BYTES_V1: usize = 400;
 /// Exact fixed acknowledgement width.
 pub const GENERIC_FOUNDING_ACK_BYTES_V1: usize = 248;
 /// Fixed Core accounts before the exact ordered FundingState span.
-pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = 28;
+pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = 26;
 /// Fixed Core accounts after the exact ordered FundingState span.
 pub const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact Core final-Open account count.
-pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 23;
+pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 21;
 /// Domain for the exact ordered generic FundingState account list.
 pub const GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1: &[u8] =
     b"dclutch/generic-founding-funding-list/v1";

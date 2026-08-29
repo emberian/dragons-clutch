@@ -59,11 +59,14 @@ use solana_sdk_ids::system_program;
 use crate::TradingSbfError;
 
 /// Sole top-level generic Market founding instruction.
-pub const GENERIC_MARKET_FOUNDING_MAGIC_V2: [u8; 8] = *b"DCLTGMF2";
+pub const GENERIC_MARKET_FOUNDING_MAGIC_V3: [u8; 8] = *b"DCLTGMF3";
+/// Exact number of invocation-scoped child-authority bumps.
+pub const GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3: usize = 5;
 /// Exact outer instruction width. All economic bytes live in readonly accounts.
-pub const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2: usize = 8;
+pub const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3: usize =
+    8 + GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3;
 /// Exact readonly raw-request prefix width.
-pub const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2: usize = 4;
+pub const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3: usize = 4;
 
 /// Index of the instructions sysvar this route presents to its own entrypoint.
 ///
@@ -76,12 +79,12 @@ pub const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2: usize = 4;
 /// optional convenience, and it is authenticated here rather than tolerated:
 /// a frame carrying something else at this index refuses instead of running
 /// out of memory three stages later.
-pub const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2: usize =
-    GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2;
+pub const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3: usize =
+    GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3;
 
 /// Exact readonly prefix width: the four raw requests and the sysvar.
-pub const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2: usize =
-    GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2 + 1;
+pub const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3: usize =
+    GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3 + 1;
 
 const FOUND_RAW: usize = 0;
 const LOCK_RAW: usize = 1;
@@ -100,28 +103,79 @@ const CLAIMS_AGGREGATE: usize = 2;
 const CLAIMS_POSITION: usize = 3;
 const CLAIMS_ADMISSION: usize = 4;
 
+const LOCK_CALLER_BUMP_INDEX_V3: usize = 0;
+const FOUND_CALLER_BUMP_INDEX_V3: usize = 1;
+const REALIZE_CALLER_BUMP_INDEX_V3: usize = 2;
+const CLAIMS_CALLER_BUMP_INDEX_V3: usize = 3;
+const OPEN_CALLER_BUMP_INDEX_V3: usize = 4;
+
 const LOCK_REPLAY: usize = 1;
 const LOCK_RENT_CREDIT: usize = 6;
 const LOCK_HOARD_VAULT: usize = 7;
 const LOCK_SOURCE_VAULT: usize = 8;
 const LOCK_SOURCE_REPLAY: usize = 12;
 
+/// Invocation evidence for the five child authorities, in execution order.
+///
+/// These bytes are not persisted semantic truth. The outer reproduces each
+/// address from its complete authenticated request and the supplied bump,
+/// requires equality with the frame account, and then the child independently
+/// performs the canonical bump search before honoring the PDA signature.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenericMarketFoundingCallerBumpsV3 {
+    values: [u8; GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3],
+}
+
+impl GenericMarketFoundingCallerBumpsV3 {
+    fn decode(instruction_data: &[u8]) -> Result<Self, ProgramError> {
+        if instruction_data.len() != GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3
+            || instruction_data.get(..8) != Some(GENERIC_MARKET_FOUNDING_MAGIC_V3.as_slice())
+        {
+            return Err(TradingSbfError::UnsupportedContent.into());
+        }
+        let values = instruction_data
+            .get(8..)
+            .ok_or(TradingSbfError::UnsupportedContent)?
+            .try_into()
+            .map_err(|_| TradingSbfError::UnsupportedContent)?;
+        Ok(Self { values })
+    }
+
+    const fn lock(self) -> u8 {
+        self.values[LOCK_CALLER_BUMP_INDEX_V3]
+    }
+
+    const fn found(self) -> u8 {
+        self.values[FOUND_CALLER_BUMP_INDEX_V3]
+    }
+
+    const fn realize(self) -> u8 {
+        self.values[REALIZE_CALLER_BUMP_INDEX_V3]
+    }
+
+    const fn claims(self) -> u8 {
+        self.values[CLAIMS_CALLER_BUMP_INDEX_V3]
+    }
+
+    const fn open(self) -> u8 {
+        self.values[OPEN_CALLER_BUMP_INDEX_V3]
+    }
+}
+
 /// Return whether bytes select the sole generic founding outer.
 #[must_use]
-pub fn is_generic_market_founding_v2(instruction_data: &[u8]) -> bool {
-    instruction_data == GENERIC_MARKET_FOUNDING_MAGIC_V2
+pub fn is_generic_market_founding_v3(instruction_data: &[u8]) -> bool {
+    GenericMarketFoundingCallerBumpsV3::decode(instruction_data).is_ok()
 }
 
 /// Execute Lock→Found→Realize→Claims→Open as one rollback domain.
 #[inline(never)]
-pub fn process_generic_market_founding_v2(
+pub fn process_generic_market_founding_v3(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    if !is_generic_market_founding_v2(instruction_data) {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
+    let caller_bumps = GenericMarketFoundingCallerBumpsV3::decode(instruction_data)?;
     let found_raw = raw_account_bytes(accounts, FOUND_RAW, GENERIC_FOUNDING_REQUEST_BYTES_V1)?;
     let found = decode_found_request(&found_raw)?;
     let frame = GenericFoundingFrameV1::parse(accounts, usize::from(found.funding_count()))?;
@@ -136,10 +190,23 @@ pub fn process_generic_market_founding_v2(
     )?;
     let staged = authenticate_staged_checkpoint_v1(program_id, &frame, &found, &lock, &lock_raw)?;
 
-    let lock_receipt = execute_lock(program_id, &frame, &lock, &lock_raw)?;
-    let found_ack = execute_core_found(program_id, &frame, &found, &found_raw, &lock_receipt)?;
+    let lock_receipt = execute_lock(program_id, &frame, &lock, &lock_raw, caller_bumps.lock())?;
+    let found_ack = execute_core_found(
+        program_id,
+        &frame,
+        &found,
+        &found_raw,
+        &lock_receipt,
+        caller_bumps.found(),
+    )?;
     authenticate_found_to_claims(&frame, &found_ack, &claims)?;
-    let realize_receipt = execute_realize(program_id, &frame, &realize, &realize_raw)?;
+    let realize_receipt = execute_realize(
+        program_id,
+        &frame,
+        &realize,
+        &realize_raw,
+        caller_bumps.realize(),
+    )?;
     authenticate_realize_receipt(&frame, &found, &realize, &realize_raw, &realize_receipt)?;
     let claims_receipt = execute_claims(
         program_id,
@@ -148,12 +215,20 @@ pub fn process_generic_market_founding_v2(
         &claims_raw,
         &lock_receipt,
         &realize_receipt,
+        caller_bumps.claims(),
     )?;
     let open = found
         .with_stage(GenericFoundingStageV1::Open)
         .map_err(|_| TradingSbfError::Content)?;
     let open_raw = open.encode().map_err(|_| TradingSbfError::Content)?;
-    let open_ack = execute_core_open(program_id, &frame, &open, &open_raw, &claims_receipt)?;
+    let open_ack = execute_core_open(
+        program_id,
+        &frame,
+        &open,
+        &open_raw,
+        &claims_receipt,
+        caller_bumps.open(),
+    )?;
     authenticate_unchanged_pending_ledgers_v1(&frame, staged)?;
     close_open_consumed_checkpoint_v1(program_id, &frame, staged)?;
     set_return_data(&open_ack);
@@ -180,7 +255,7 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
             .checked_add(funding_count)
             .and_then(|value| value.checked_add(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1))
             .ok_or(TradingSbfError::Content)?;
-        let lock_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2;
+        let lock_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3;
         let found_start = lock_start
             .checked_add(PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1)
             .ok_or(TradingSbfError::Content)?;
@@ -204,12 +279,12 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
         }
         authenticate_raw_accounts(
             accounts
-                .get(..GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2)
+                .get(..GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3)
                 .ok_or(TradingSbfError::Content)?,
         )?;
         authenticate_instructions_sysvar_v1(account(
             accounts,
-            GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2,
+            GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3,
         )?)?;
         Ok(Self {
             lock: subslice(
@@ -613,17 +688,71 @@ fn authenticate_projected_sequence(
     Ok(())
 }
 
+/// Reproduce one projected-Custody caller from operator evidence.
+///
+/// Custody performs the canonical search again at its own trust boundary
+/// before honoring the signer. This outer only needs to prove that the bump
+/// names the exact account in its authenticated frame.
+fn projected_caller_from_bump_v3(
+    seeds: &ProjectedCustodyCallerSeedsV1,
+    program_id: &Pubkey,
+    bump: u8,
+) -> Result<Pubkey, ProgramError> {
+    let [domain, release, market, root, context, request_digest] = seeds.as_slices();
+    let bump_seed = [bump];
+    Pubkey::create_program_address(
+        &[
+            domain,
+            release,
+            market,
+            root,
+            context,
+            request_digest,
+            &bump_seed,
+        ],
+        program_id,
+    )
+    .map_err(|_| TradingSbfError::Release.into())
+}
+
+/// Reproduce one release-role caller from operator evidence.
+///
+/// Core and Claims independently canonical-search the same complete seed
+/// vector. The bump is invocation evidence, never persisted authority.
+fn role_caller_from_bump_v3(
+    seeds: &CallerAuthoritySeedsV1,
+    program_id: &Pubkey,
+    bump: u8,
+) -> Result<Pubkey, ProgramError> {
+    let [domain, release, market, role, context, request_digest] = seeds.as_slices();
+    let bump_seed = [bump];
+    Pubkey::create_program_address(
+        &[
+            domain,
+            release,
+            market,
+            role,
+            context,
+            request_digest,
+            &bump_seed,
+        ],
+        program_id,
+    )
+    .map_err(|_| TradingSbfError::Release.into())
+}
+
 #[inline(never)]
 fn execute_lock(
     program_id: &Pubkey,
     frame: &GenericFoundingFrameV1<'_, '_>,
     request: &ProjectedCustodyRequestV1,
     raw: &[u8],
+    bump: u8,
 ) -> Result<Vec<u8>, ProgramError> {
     let custody_program = frame.custody_program()?;
     let digest = hash(raw).to_bytes();
     let seeds = ProjectedCustodyCallerSeedsV1::new(*request, digest);
-    let (caller, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    let caller = projected_caller_from_bump_v3(&seeds, program_id, bump)?;
     if account(frame.lock, 0)?.key != &caller {
         return Err(TradingSbfError::Release.into());
     }
@@ -668,11 +797,12 @@ fn execute_core_found(
     request: &GenericFoundingRequestV1,
     raw: &[u8],
     lock_receipt: &[u8],
+    bump: u8,
 ) -> Result<Vec<u8>, ProgramError> {
     let core_program = frame.core_program()?;
     let digest = hash(raw).to_bytes();
     let seeds = caller_seeds(request, digest)?;
-    let (caller, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    let caller = role_caller_from_bump_v3(&seeds, program_id, bump)?;
     if account(frame.found, 0)?.key != &caller {
         return Err(TradingSbfError::Release.into());
     }
@@ -725,11 +855,12 @@ fn execute_realize(
     frame: &GenericFoundingFrameV1<'_, '_>,
     request: &ProjectedCustodyRequestV1,
     raw: &[u8],
+    bump: u8,
 ) -> Result<Vec<u8>, ProgramError> {
     let custody_program = frame.custody_program()?;
     let digest = hash(raw).to_bytes();
     let seeds = ProjectedCustodyCallerSeedsV1::new(*request, digest);
-    let (caller, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    let caller = projected_caller_from_bump_v3(&seeds, program_id, bump)?;
     if account(frame.realize, 0)?.key != &caller {
         return Err(TradingSbfError::Release.into());
     }
@@ -798,6 +929,7 @@ fn execute_claims(
     raw: &[u8],
     lock_receipt: &[u8],
     realize_receipt: &[u8],
+    bump: u8,
 ) -> Result<Vec<u8>, ProgramError> {
     let claims_program = frame.claims_program()?;
     if request.custody_receipt_digest() != hash(lock_receipt).to_bytes() {
@@ -812,7 +944,7 @@ fn execute_claims(
         digest,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    let (caller, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    let caller = role_caller_from_bump_v3(&seeds, program_id, bump)?;
     if account(frame.claims, 0)?.key != &caller {
         return Err(TradingSbfError::Release.into());
     }
@@ -893,11 +1025,12 @@ fn execute_core_open(
     request: &GenericFoundingRequestV1,
     raw: &[u8],
     claims_receipt: &[u8],
+    bump: u8,
 ) -> Result<Vec<u8>, ProgramError> {
     let core_program = frame.core_program()?;
     let digest = hash(raw).to_bytes();
     let seeds = caller_seeds(request, digest)?;
-    let (caller, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    let caller = role_caller_from_bump_v3(&seeds, program_id, bump)?;
     if account(frame.open, 0)?.key != &caller {
         return Err(TradingSbfError::Release.into());
     }
@@ -1059,7 +1192,7 @@ pub(crate) fn authenticate_instructions_sysvar_v1(
 }
 
 fn authenticate_raw_accounts(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
-    if accounts.len() != GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 {
+    if accounts.len() != GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 {
         return Err(TradingSbfError::Content.into());
     }
     for (index, account) in accounts.iter().enumerate() {
@@ -1187,11 +1320,24 @@ mod tests {
 
     #[test]
     fn outer_abi_is_data_account_only_and_stage_distinct() {
-        assert!(is_generic_market_founding_v2(
-            &GENERIC_MARKET_FOUNDING_MAGIC_V2
+        let mut instruction = [0_u8; GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3];
+        instruction[..8].copy_from_slice(&GENERIC_MARKET_FOUNDING_MAGIC_V3);
+        instruction[8..].copy_from_slice(&[1, 2, 3, 4, 5]);
+        assert!(is_generic_market_founding_v3(&instruction));
+        assert_eq!(
+            GenericMarketFoundingCallerBumpsV3::decode(&instruction)
+                .expect("caller bumps")
+                .values,
+            [1, 2, 3, 4, 5]
+        );
+        assert!(!is_generic_market_founding_v3(
+            &GENERIC_MARKET_FOUNDING_MAGIC_V3
         ));
-        assert!(!is_generic_market_founding_v2(&[0; 8]));
-        assert_eq!(GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2, 8);
+        assert!(!is_generic_market_founding_v3(&[0; 13]));
+        let mut trailing = instruction.to_vec();
+        trailing.push(0);
+        assert!(!is_generic_market_founding_v3(&trailing));
+        assert_eq!(GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3, 13);
         let request = found();
         assert_ne!(
             request.encode().expect("found bytes"),
@@ -1200,6 +1346,58 @@ mod tests {
                 .expect("open")
                 .encode()
                 .expect("open bytes")
+        );
+    }
+
+    #[test]
+    fn caller_bumps_reproduce_every_address_and_wrong_bumps_refuse_identity() {
+        let trading = trading();
+        let lock = lock_request();
+        let lock_raw = lock.encode().expect("lock bytes");
+        let projected = ProjectedCustodyCallerSeedsV1::new(lock, hash(&lock_raw).to_bytes());
+        let (projected_address, projected_bump) =
+            Pubkey::find_program_address(&projected.as_slices(), &trading);
+        assert_eq!(
+            projected_caller_from_bump_v3(&projected, &trading, projected_bump),
+            Ok(projected_address)
+        );
+        let wrong_projected = projected_bump.wrapping_sub(1);
+        assert!(
+            match projected_caller_from_bump_v3(&projected, &trading, wrong_projected) {
+                Ok(address) => address != projected_address,
+                Err(_) => true,
+            }
+        );
+
+        let found = found();
+        let found_raw = found.encode().expect("found bytes");
+        let role = caller_seeds(&found, hash(&found_raw).to_bytes()).expect("role seeds");
+        let (role_address, role_bump) = Pubkey::find_program_address(&role.as_slices(), &trading);
+        assert_eq!(
+            role_caller_from_bump_v3(&role, &trading, role_bump),
+            Ok(role_address)
+        );
+        let wrong_role = role_bump.wrapping_sub(1);
+        assert!(
+            match role_caller_from_bump_v3(&role, &trading, wrong_role) {
+                Ok(address) => address != role_address,
+                Err(_) => true,
+            }
+        );
+
+        let mut changed = found;
+        changed = changed
+            .with_stage(GenericFoundingStageV1::Open)
+            .expect("changed request");
+        let changed_raw = changed.encode().expect("changed bytes");
+        let changed_seeds =
+            caller_seeds(&changed, hash(&changed_raw).to_bytes()).expect("changed role seeds");
+        let (changed_address, changed_bump) =
+            Pubkey::find_program_address(&changed_seeds.as_slices(), &trading);
+        assert_ne!(changed_address, role_address);
+        assert_eq!(
+            role_caller_from_bump_v3(&changed_seeds, &trading, changed_bump),
+            Ok(changed_address)
         );
     }
 
@@ -1557,7 +1755,7 @@ mod tests {
     #[test]
     fn frame_width_is_runtime_funding_polymorphic() {
         let count = |funding: usize| {
-            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2
+            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3
                 + PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1
                 + GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
                 + funding
@@ -1572,12 +1770,13 @@ mod tests {
         // above that width is the instructions sysvar the heap-frame admission
         // reads back. Projected Found V2 consumes the authenticated Custody
         // projection instead of repeating three finalized record pairs, so
-        // the three-ledger demo frame plus its checkpoint is exactly 133.
-        assert_eq!(count(3), 133);
-        assert_eq!(count(16), 146);
+        // the three-ledger frame is exactly 128 after runtime Rent/Clock access
+        // removes five repeated child metas.
+        assert_eq!(count(3), 128);
+        assert_eq!(count(16), 141);
         assert_eq!(
-            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2,
-            GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 + 1
+            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3,
+            GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 + 1
         );
     }
 }

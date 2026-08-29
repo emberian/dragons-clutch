@@ -8,7 +8,7 @@ use crate::CoreSbfError;
 /// Exact ordinary mutating Found V3 and readonly ProjectFound V2 account counts.
 pub use dclutch_market_core_codec::{FOUND_ACCOUNT_COUNT_V3, PROJECT_FOUND_ACCOUNT_COUNT_V2};
 /// Exact projected generic-Found V2 prefix account count.
-pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 25;
+pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 24;
 /// Exact account count for one-time infrastructure-profile initialization.
 pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1: usize = 14;
 
@@ -291,7 +291,6 @@ pub(crate) struct ProjectedFoundAccountsV2<'accounts, 'info> {
     pub core_program: &'accounts AccountInfo<'info>,
     pub core_programdata: &'accounts AccountInfo<'info>,
     pub registry_program: &'accounts AccountInfo<'info>,
-    pub rent: &'accounts AccountInfo<'info>,
     pub system: &'accounts AccountInfo<'info>,
     pub infrastructure_profile: &'accounts AccountInfo<'info>,
     pub registry_artifact_raw: &'accounts AccountInfo<'info>,
@@ -325,7 +324,6 @@ impl<'accounts, 'info> ProjectedFoundAccountsV2<'accounts, 'info> {
             core_program,
             core_programdata,
             registry_program,
-            rent,
             system,
             infrastructure_profile,
             registry_artifact_raw,
@@ -370,10 +368,6 @@ impl<'accounts, 'info> ProjectedFoundAccountsV2<'accounts, 'info> {
             || rent_programdata.is_signer
             || rent_programdata.is_writable
             || rent_programdata.executable
-            || rent.key != &sysvar::rent::ID
-            || rent.is_signer
-            || rent.is_writable
-            || rent.executable
             || system.key != &system_program::ID
             || system.is_signer
             || system.is_writable
@@ -417,7 +411,6 @@ impl<'accounts, 'info> ProjectedFoundAccountsV2<'accounts, 'info> {
             core_program,
             core_programdata,
             registry_program,
-            rent,
             system,
             infrastructure_profile,
             registry_artifact_raw,
