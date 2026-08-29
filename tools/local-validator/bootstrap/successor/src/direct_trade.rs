@@ -715,7 +715,8 @@ fn run_for_cluster_v1(arguments: Vec<String>, expected_cluster: ExpectedClusterV
 }
 
 pub(crate) fn usage() -> &'static str {
-    "dclutch-local-successor-bootstrap devnet-direct-trade-v1 --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS --session ABSOLUTE_PRIVATE_JSON [--execute]\n\
+    "dclutch-local-successor-bootstrap local-private-validator-direct-trade-v1 --rpc-url http://127.0.0.1:PORT/ --session ABSOLUTE_PRIVATE_JSON [--execute]\n\
+     dclutch-local-successor-bootstrap devnet-direct-trade-v1 --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS --session ABSOLUTE_PRIVATE_JSON [--execute]\n\
      \nThe public manifest freezes two already-signed, host-verified Direct intents, explicit fee facts, the checked release manifest, and untrusted named account hints. The private session contains only local paths and the payer keypair path. Preflight opens no key and uses a read-only RPC allowlist. Execute advances exactly one durable ALT, seal, or Hot action and never blind-resubmits an ambiguous packet."
 }
 
@@ -6244,11 +6245,19 @@ mod tests {
         authenticate_lookup_activation_slot_order_v1, direct_evidence_digest_v1,
         direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
         direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
-        journal_state_sha256, refresh_direct_journal_digest_v1, require_unique_json_v1,
+        journal_state_sha256, refresh_direct_journal_digest_v1, require_unique_json_v1, usage,
         verify_expected_direct_poststates_v1, write_direct_journal_v1,
     };
     use crate::cluster::ExpectedClusterV1;
     use dclutch_operator::{Finality, Observation, ObservedAccount};
+
+    #[test]
+    fn usage_exposes_exact_owned_loopback_direct_executor() {
+        assert!(usage().lines().any(|line| {
+            line.trim()
+                == "dclutch-local-successor-bootstrap local-private-validator-direct-trade-v1 --rpc-url http://127.0.0.1:PORT/ --session ABSOLUTE_PRIVATE_JSON [--execute]"
+        }));
+    }
 
     fn journal() -> DirectTradeJournalV1 {
         DirectTradeJournalV1 {
