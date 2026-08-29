@@ -90,6 +90,78 @@ impl PythProviderAdapterObligationV2 {
         statistic: StatisticSpecV1,
         failure_policy_release: ContentId,
     ) -> Result<Self> {
+        Self::from_authenticated_records_for_profile(
+            material,
+            authenticated_product_record_digest,
+            source_spec_id,
+            source,
+            provider_release_id,
+            provider_release,
+            adapter_config_id,
+            adapter_config,
+            window_spec_id,
+            window,
+            statistic_spec_id,
+            statistic,
+            failure_policy_release,
+            SourceAccessProfile::PythTerminalOneTransaction,
+        )
+    }
+
+    /// Join the same terminal-sample graph for the distinct sponsored-push
+    /// snapshot transport. This entry point cannot admit a Receiver/PostUpdate
+    /// source profile, and the existing entry point cannot admit this one.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_authenticated_sponsored_push_records(
+        material: SourceMaterialV3,
+        authenticated_product_record_digest: ContentId,
+        source_spec_id: ContentId,
+        source: SourceSpecV1,
+        provider_release_id: ContentId,
+        provider_release: ProviderReleaseV1,
+        adapter_config_id: ContentId,
+        adapter_config: PythAdapterConfigV1,
+        window_spec_id: ContentId,
+        window: WindowSpecV1,
+        statistic_spec_id: ContentId,
+        statistic: StatisticSpecV1,
+        failure_policy_release: ContentId,
+    ) -> Result<Self> {
+        Self::from_authenticated_records_for_profile(
+            material,
+            authenticated_product_record_digest,
+            source_spec_id,
+            source,
+            provider_release_id,
+            provider_release,
+            adapter_config_id,
+            adapter_config,
+            window_spec_id,
+            window,
+            statistic_spec_id,
+            statistic,
+            failure_policy_release,
+            SourceAccessProfile::PythSponsoredPushSnapshot,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_authenticated_records_for_profile(
+        material: SourceMaterialV3,
+        authenticated_product_record_digest: ContentId,
+        source_spec_id: ContentId,
+        source: SourceSpecV1,
+        provider_release_id: ContentId,
+        provider_release: ProviderReleaseV1,
+        adapter_config_id: ContentId,
+        adapter_config: PythAdapterConfigV1,
+        window_spec_id: ContentId,
+        window: WindowSpecV1,
+        statistic_spec_id: ContentId,
+        statistic: StatisticSpecV1,
+        failure_policy_release: ContentId,
+        expected_profile: SourceAccessProfile,
+    ) -> Result<Self> {
         material.authenticate_product_record(authenticated_product_record_digest)?;
         material.validate_source_graph(
             source_spec_id,
@@ -104,7 +176,7 @@ impl PythProviderAdapterObligationV2 {
         source.validate_dependencies(provider_release_id, source.capacity_profile_id())?;
         if source.provider_release_id() != provider_release_id
             || source.adapter_config_id() != adapter_config_id
-            || source.access_profile() != SourceAccessProfile::PythTerminalOneTransaction
+            || source.access_profile() != expected_profile
             || statistic.source_unit_id() != source.unit_id()
             || statistic.kind() != StatisticKind::TerminalSample
             || statistic.required_samples() != 1

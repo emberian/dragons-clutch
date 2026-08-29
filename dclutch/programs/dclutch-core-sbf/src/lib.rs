@@ -39,7 +39,6 @@ use solana_program::{
 
 mod begin_retiring;
 mod capability;
-mod execute_provider_v3;
 mod fixed_role;
 mod found;
 mod frame;
@@ -57,9 +56,6 @@ mod series_open;
 mod series_permit_expiry;
 
 pub use begin_retiring::BEGIN_RETIRING_ACCOUNT_COUNT_V1;
-pub use execute_provider_v3::{
-    EXECUTE_PROVIDER_ACCOUNT_COUNT_V3, EXECUTE_PROVIDER_PREFIX_BYTES_V3,
-};
 pub use frame::{
     FOUND_ACCOUNT_COUNT_V3, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1,
     PROJECTED_FOUND_ACCOUNT_COUNT_V2,
@@ -314,19 +310,11 @@ pub fn process_instruction(
         Action::BeginRetiring if instruction_data.len() == REQUEST_BYTES => {
             begin_retiring::process(program_id, accounts, request)
         }
-        Action::ExecuteProvider
-            if instruction_data.len() > execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3 =>
-        {
-            let provider_data = instruction_data
-                .get(REQUEST_BYTES..)
-                .ok_or(CoreSbfError::Instruction)?;
-            execute_provider_v3::process(
-                program_id,
-                accounts,
-                request,
-                request_bytes,
-                provider_data,
-            )
+        Action::ExecuteProvider => {
+            // Provider V7 executes directly in Resolution and persists the
+            // certificate/lifecycle first. Core later accepts that durable
+            // poststate through AdmitTerminal without CPI.
+            Err(CoreSbfError::Instruction.into())
         }
         Action::OpenMarket
             if instruction_data.len() == open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1 =>

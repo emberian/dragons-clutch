@@ -24,7 +24,7 @@ use dclutch_relay_contract::{
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
     record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1},
 };
-use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V5, ResolutionCertificateKindV2};
+use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2};
 use dclutch_resolution_core_v3_operator::{
     ObservedAccount, ResolutionCreateFundSnapshotV3, ResolutionVerifyFundReadySnapshotV3,
     build_resolution_create_fund_v3, build_resolution_verify_fund_ready_v3,
@@ -1204,7 +1204,7 @@ fn select_no_recovery_entries(
         let entry = manifest
             .entry(entry_index)
             .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
             continue;
         }
         if entry.config_id().to_bytes() == material_digest {

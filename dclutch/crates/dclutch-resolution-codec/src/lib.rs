@@ -13,13 +13,16 @@ mod generated_source_resolution;
 #[allow(missing_docs)]
 #[rustfmt::skip]
 mod generated_v2;
+mod funding_lifecycle_v1;
 mod pre_market_funding_abort_v1;
 mod pre_market_funding_v1;
 mod provider_transport_v3;
 mod provider_v3;
 mod source_closure_receipt_v3;
+mod sponsored_push_v1;
 mod v2;
 
+pub use funding_lifecycle_v1::*;
 pub use generated_v2::{
     ACCEPT_PYTH_REQUEST_BYTES_V2, ACCEPT_PYTH_V2_ACTION, ACCEPT_PYTH_V2_MAGIC,
     ACCEPT_PYTH_V2_VERSION, RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_MAGIC_V2,
@@ -41,13 +44,14 @@ pub use provider_v3::{
     PROVIDER_RESOLUTION_SOURCE_RECORDS_START_V3, PROVIDER_RESOLUTION_SOURCE_STATE_ACCOUNT_V3,
     PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_TRADING_RECORDS_START_V3,
     PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, ProviderCallerV3, ProviderExecutionReceiptV3,
-    ProviderExecutionRequestV3,
+    ProviderExecutionRequestV3, provider_resolution_direct_intent_digest_v1,
 };
 pub use source_closure_receipt_v3::{
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_KIND_V3,
     SOURCE_CLOSURE_RECEIPT_MAGIC_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
     SOURCE_CLOSURE_RECEIPT_VERSION_V3, SourceClosureReceiptV3,
 };
+pub use sponsored_push_v1::*;
 pub use v2::{
     AcceptPythRequestV2, ResolutionCertificateKindV2, ResolutionCertificateV2,
     SourceClosureReceiptV2,
@@ -124,6 +128,14 @@ pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6: &[u8] =
 pub const RESOLUTION_CONTROLLER_RELEASE_ID_V6: [u8; 32] = [
     0x38, 0x66, 0x47, 0xd9, 0x82, 0x0e, 0x50, 0x2d, 0x97, 0xd3, 0x50, 0xdc, 0x10, 0xaf, 0x78, 0x8a,
     0x7e, 0x10, 0x29, 0x90, 0x33, 0xac, 0xff, 0x71, 0x3e, 0x99, 0xc8, 0x6d, 0x9d, 0x8e, 0x5b, 0xb0,
+];
+/// Closed semantic release preimage for durable direct activation and close.
+pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7: &[u8] =
+    b"dclutch/release/source-resolution-controller-direct-activation-receipt-permissionless-close-v7";
+/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7`].
+pub const RESOLUTION_CONTROLLER_RELEASE_ID_V7: [u8; 32] = [
+    0x6e, 0x4b, 0x9a, 0x54, 0x52, 0x77, 0xcf, 0x68, 0x73, 0x11, 0x08, 0xfe, 0x17, 0x29, 0xff, 0x04,
+    0x7a, 0xff, 0xe7, 0x2e, 0x16, 0xd7, 0x9c, 0x39, 0x30, 0xac, 0xad, 0xc8, 0x01, 0x6f, 0x55, 0x4a,
 ];
 /// Schema identity used only to finalize a canonical Pyth-release record.
 pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
@@ -2686,6 +2698,22 @@ mod tests {
         assert_ne!(
             RESOLUTION_CONTROLLER_RELEASE_ID_V5,
             RESOLUTION_CONTROLLER_RELEASE_ID_V6
+        );
+    }
+
+    #[test]
+    fn v7_direct_activation_semantics_cannot_alias_the_v6_release() {
+        assert_eq!(
+            dclutch_sha256_adapter::digest(RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7),
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7
+        );
+        assert_ne!(
+            RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6,
+            RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V7
+        );
+        assert_ne!(
+            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7
         );
     }
 }

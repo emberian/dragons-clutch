@@ -104,7 +104,7 @@ use dclutch_relay_contract::{
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
@@ -196,14 +196,14 @@ struct ReleaseFacts {
 }
 
 /// What the authenticated Core Market says, and nothing the caller said.
-struct MarketFacts {
-    registry_program: Pubkey,
-    rent_beneficiary: [u8; 32],
-    product_record: [u8; 32],
-    capability_manifest: [u8; 32],
+pub(crate) struct MarketFacts {
+    pub(crate) registry_program: Pubkey,
+    pub(crate) rent_beneficiary: [u8; 32],
+    pub(crate) product_record: [u8; 32],
+    pub(crate) capability_manifest: [u8; 32],
 }
 
-fn account<'a, 'info>(
+pub(crate) fn account<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
     index: usize,
 ) -> Result<&'a AccountInfo<'info>, ProgramError> {
@@ -212,7 +212,10 @@ fn account<'a, 'info>(
         .ok_or(ResolutionError::AccountFrame.into())
 }
 
-fn validate_frame(kind: RelayFrameKindV1, accounts: &[AccountInfo<'_>]) -> ProgramResult {
+pub(crate) fn validate_frame(
+    kind: RelayFrameKindV1,
+    accounts: &[AccountInfo<'_>],
+) -> ProgramResult {
     let mut observed = Vec::new();
     observed
         .try_reserve_exact(accounts.len())
@@ -228,7 +231,7 @@ fn validate_frame(kind: RelayFrameKindV1, accounts: &[AccountInfo<'_>]) -> Progr
     Ok(())
 }
 
-fn require_system(account: &AccountInfo<'_>) -> ProgramResult {
+pub(crate) fn require_system(account: &AccountInfo<'_>) -> ProgramResult {
     if account.key != &system_program::ID || !account.executable {
         return Err(ResolutionError::AccountFrame.into());
     }
@@ -243,7 +246,7 @@ fn require_system(account: &AccountInfo<'_>) -> ProgramResult {
 /// Market of some other Core. The activation cache then closes the loop in the
 /// other direction — the release set this Market selected must name this
 /// executing Program as its Resolution role.
-fn authenticate_market(
+pub(crate) fn authenticate_market(
     program_id: &Pubkey,
     market: &AccountInfo<'_>,
     core: &AccountInfo<'_>,
@@ -1047,6 +1050,28 @@ fn process_commit_deadline_failure(
     request: CommitDeadlineFailureInstructionV1,
 ) -> ProgramResult {
     validate_frame(RelayFrameKindV1::CommitDeadlineFailure, accounts)?;
+    process_deadline_failure_coordinates(
+        program_id,
+        accounts,
+        request.generation(),
+        request.terminal_sequence(),
+    )
+}
+
+/// Execute the existing funded primary-deadline walk after a transport-specific
+/// caller has authenticated its own additional liveness boundary.
+///
+/// The account slice remains the exact 22-account canonical failure frame; the
+/// sponsored-push family uses this only after proving its canonical head PDA is
+/// vacant. Keeping the funding and certificate transition here preserves one
+/// semantic owner for the failure payout.
+#[inline(never)]
+pub(crate) fn process_deadline_failure_coordinates(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    generation: u64,
+    terminal_sequence: u64,
+) -> ProgramResult {
     let worker = account(accounts, 0)?;
     let market_account = account(accounts, 1)?;
     let core = account(accounts, 2)?;
@@ -1078,7 +1103,7 @@ fn process_commit_deadline_failure(
         market_account,
         core,
         activation,
-        request.generation(),
+        generation,
         material_id.to_bytes(),
     )?;
     let walk_source = Box::new(deadline_walk_source(
@@ -1130,7 +1155,7 @@ fn process_commit_deadline_failure(
         market_account,
         manifest_id,
         manifest,
-        request.generation(),
+        generation,
         material_id.to_bytes(),
         &rent,
     )?);
@@ -1144,8 +1169,8 @@ fn process_commit_deadline_failure(
     let outputs = plan_and_encode_deadline_failure(
         &DeadlineFailureRequestV1 {
             market: market_account.key.to_bytes(),
-            generation: request.generation(),
-            terminal_sequence: request.terminal_sequence(),
+            generation,
+            terminal_sequence,
             certificate_account: certificate_account.key.to_bytes(),
             current_unix_seconds: clock.unix_timestamp,
         },
@@ -1164,7 +1189,7 @@ fn process_commit_deadline_failure(
     drop(manifest_data);
     commit_deadline_failure(
         program_id,
-        request.terminal_sequence(),
+        terminal_sequence,
         DeadlineFailureOutputs {
             source_state: source_state_account,
             certificate: certificate_account,
@@ -1319,7 +1344,7 @@ fn deadline_walk_source(
 /// Authenticate the subset ledger and select its explicit-failure row.
 ///
 /// The ledger PDA binds this controller, Market, generation, manifest and exact
-/// three-row mask. The Failure row is then selected by its V5 release and this
+/// three-row mask. The Failure row is then selected by its V6 release and this
 /// Market's Source-material configuration; it is never a caller-supplied index.
 #[inline(never)]
 fn authenticate_failure_funding<'a>(
@@ -1355,7 +1380,7 @@ fn authenticate_failure_funding<'a>(
             let entry = manifest
                 .entry(entry_index)
                 .map_err(|_| ResolutionError::Funding)?;
-            if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+            if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
                 || authenticated
                     .slot(entry_index)
                     .map_err(|_| ResolutionError::Funding)?
@@ -1506,7 +1531,7 @@ const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
 /// result through a *Product*, and the records that decide how are not fields of
 /// the record being consumed.
 #[inline(never)]
-fn boxed_product_runtime(
+pub(crate) fn boxed_product_runtime(
     registry: &Pubkey,
     rent: &Rent,
     product_record: ProductContentId,
@@ -1716,7 +1741,7 @@ fn authenticate_consumable_record(
 
 /// Authenticate the Source state account this consumption makes terminal.
 #[inline(never)]
-fn authenticate_source_state_account(
+pub(crate) fn authenticate_source_state_account(
     program_id: &Pubkey,
     state: &AccountInfo<'_>,
     market: &AccountInfo<'_>,
@@ -1864,7 +1889,7 @@ fn commit_consumption<'info>(
 /// `ResolutionFailure` has the tag `4` and no route emits it yet: see the
 /// `CommitDeadlineFailure` arm above for why that is a refusal rather than an
 /// omission.
-const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
+pub(crate) const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
 
 /// Allocate and assign a terminal certificate at its canonical address.
 ///
@@ -1876,7 +1901,7 @@ const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
 /// addresses and neither can quietly overwrite the other.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn initialize_certificate_at_kind<'info>(
+pub(crate) fn initialize_certificate_at_kind<'info>(
     program_id: &Pubkey,
     kind: u8,
     terminal_sequence: u64,
@@ -2063,7 +2088,7 @@ fn authenticate_adjacent_signature(
     Ok(authorization.signer())
 }
 
-fn create_prefunded_pda<'info>(
+pub(crate) fn create_prefunded_pda<'info>(
     payer: &AccountInfo<'info>,
     created: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
@@ -2125,7 +2150,10 @@ fn create_prefunded_pda<'info>(
     Ok(())
 }
 
-fn close_to_beneficiary(source: &AccountInfo<'_>, beneficiary: &AccountInfo<'_>) -> ProgramResult {
+pub(crate) fn close_to_beneficiary(
+    source: &AccountInfo<'_>,
+    beneficiary: &AccountInfo<'_>,
+) -> ProgramResult {
     let source_balance = source.lamports();
     let after = beneficiary
         .lamports()

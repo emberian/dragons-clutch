@@ -25,7 +25,7 @@ use dclutch_release_tool::{
     build_redeployed_checked_release, derive_execution_release_set,
     verify_checked_execution_release_set,
 };
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5;
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use solana_program::rent::Rent;
@@ -483,7 +483,7 @@ fn local_semantic_release_preimage_v1(role: &str, source_revision: &str) -> Resu
         .map_err(|_| Error::new("Custody semantic source revision is not canonical"))?
         .to_vec(),
         "trading" => DIRECT_SEMANTIC_RELEASE_PREIMAGE_V1.to_vec(),
-        "resolution" => RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V5.to_vec(),
+        "resolution" => RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6.to_vec(),
         _ => {
             return Err(Error::new(format!(
                 "role {role:?} is not an execution semantic owner"
@@ -906,11 +906,15 @@ pub(crate) struct LocalMutablePrepareReportV1 {
     /// Exact campaign flag surface, projected from the campaign role owner.
     /// The lifecycle supervisor must not grow its own stale copy of this list.
     pub(crate) campaign_keypairs: BTreeMap<String, String>,
+    /// Public-only founding identities. Their secret material is never exposed
+    /// through the campaign keypair surface.
+    pub(crate) campaign_public_identities: BTreeMap<String, String>,
 }
 
 const LOCAL_ID_DOMAIN_V1: &[u8] = b"dclutch/private-validator-lifecycle/program-id/v1";
 const LOCAL_KEY_DOMAIN_V1: &[u8] = b"dclutch/private-validator-lifecycle/keypair/v1";
-const EXTRA_KEY_ROLES_V1: [&str; 8] = [
+const EXTRA_KEY_ROLES_V1: [&str; 9] = [
+    crate::seed::role::FOUNDING_FOUNDER,
     "participant",
     "direct-seller",
     "direct-buyer",
@@ -929,6 +933,36 @@ fn local_key_roles_v1() -> BTreeSet<&'static str> {
         .copied()
         .chain(EXTRA_KEY_ROLES_V1)
         .collect()
+}
+
+fn local_campaign_public_identities_v1(seed: [u8; 32]) -> Result<BTreeMap<String, String>> {
+    let founder = Keypair::new_from_array(derive(
+        LOCAL_KEY_DOMAIN_V1,
+        seed,
+        crate::seed::role::FOUNDING_FOUNDER,
+    ))
+    .pubkey();
+    let substituted_founder = Keypair::new_from_array(derive(
+        LOCAL_KEY_DOMAIN_V1,
+        seed,
+        crate::seed::role::SUBSTITUTED_FOUNDER,
+    ))
+    .pubkey();
+    if founder == substituted_founder {
+        return Err(Error::new(
+            "local founding and substituted-founder public identities aliased",
+        ));
+    }
+    Ok(BTreeMap::from([
+        (
+            crate::seed::role::FOUNDING_FOUNDER.into(),
+            founder.to_string(),
+        ),
+        (
+            crate::seed::role::SUBSTITUTED_FOUNDER.into(),
+            substituted_founder.to_string(),
+        ),
+    ]))
 }
 
 /// Prepare one exact checked mutable plan and its disposable role key files.
@@ -1045,6 +1079,24 @@ pub(crate) fn prepare_local_mutable_v1(
         crate::seed::role::CORE_UPGRADE_AUTHORITY,
     )?;
     let authority = Keypair::new_from_array(authority_secret).pubkey();
+    let founder_path = keypairs
+        .get(crate::seed::role::FOUNDING_FOUNDER)
+        .ok_or_else(|| Error::new("local role derivation omitted the founding founder"))?;
+    let founder_secret = crate::campaign::read_keypair_file(
+        Path::new(founder_path),
+        crate::seed::role::FOUNDING_FOUNDER,
+    )?;
+    let founder = Keypair::new_from_array(founder_secret).pubkey();
+    let campaign_public_identities = local_campaign_public_identities_v1(seed)?;
+    if campaign_public_identities
+        .get(crate::seed::role::FOUNDING_FOUNDER)
+        .map(String::as_str)
+        != Some(founder.to_string().as_str())
+    {
+        return Err(Error::new(
+            "local founding public identity changed from its retained signer",
+        ));
+    }
 
     let mut programs = BTreeMap::new();
     let mut artifacts = BTreeMap::new();
@@ -1180,6 +1232,7 @@ pub(crate) fn prepare_local_mutable_v1(
                     })
             })
             .collect::<Result<BTreeMap<_, _>>>()?,
+        campaign_public_identities,
         keypairs,
     };
     Ok(report)
@@ -1326,6 +1379,23 @@ fn absolute_new_directory(value: String, label: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn resolution_local_projection_refuses_the_retired_v5_semantic_owner() {
+        let preimage = local_semantic_release_preimage_v1(
+            "resolution",
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+        .expect("Resolution V6 semantic preimage");
+        assert_eq!(
+            preimage,
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V6
+        );
+        assert_ne!(
+            Sha256::digest(&preimage).as_slice(),
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5
+        );
+    }
+
     fn test_checked_execution_pin_v1() -> (CheckedLocalExecutionReleaseSetPinV1, String) {
         use dclutch_release_tool::{BuildMetadataV1, ReleaseEvidenceV1, build_checked_release};
 
@@ -1439,12 +1509,17 @@ mod tests {
     fn local_lifecycle_roles_include_distinct_vacant_pyth_accounts() {
         let roles = EXTRA_KEY_ROLES_V1.into_iter().collect::<BTreeSet<_>>();
         assert_eq!(roles.len(), EXTRA_KEY_ROLES_V1.len());
+        assert!(roles.contains(crate::seed::role::FOUNDING_FOUNDER));
         assert!(roles.contains("pyth-encoded-vaa"));
         assert!(roles.contains("pyth-update-account"));
         let campaign_roles = crate::campaign::KEYPAIR_ROLES
             .iter()
             .copied()
             .collect::<BTreeSet<_>>();
+        assert!(
+            !campaign_roles.contains(crate::seed::role::FOUNDING_FOUNDER),
+            "the later lifecycle keeps the founder signer, but public founding receives only its pubkey"
+        );
         assert_eq!(
             roles
                 .intersection(&campaign_roles)
@@ -1461,6 +1536,34 @@ mod tests {
             campaign_roles.len() + roles.len() - 2,
             "the local key surface is the canonical set union, not a sequence that writes shared roles twice"
         );
+    }
+
+    #[test]
+    fn local_campaign_projects_two_public_founders_without_a_substituted_signer_file() {
+        let roles = local_key_roles_v1();
+        assert!(roles.contains(crate::seed::role::FOUNDING_FOUNDER));
+        assert!(!roles.contains(crate::seed::role::SUBSTITUTED_FOUNDER));
+        assert!(
+            !crate::campaign::KEYPAIR_ROLES.contains(&crate::seed::role::FOUNDING_FOUNDER)
+                && !crate::campaign::KEYPAIR_ROLES
+                    .contains(&crate::seed::role::SUBSTITUTED_FOUNDER)
+        );
+        let public = local_campaign_public_identities_v1([0x73; 32])
+            .expect("two public founding identities");
+        assert_eq!(
+            public.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                crate::seed::role::FOUNDING_FOUNDER,
+                crate::seed::role::SUBSTITUTED_FOUNDER,
+            ]
+        );
+        let founder = public[crate::seed::role::FOUNDING_FOUNDER]
+            .parse::<Pubkey>()
+            .expect("founder public key");
+        let substituted = public[crate::seed::role::SUBSTITUTED_FOUNDER]
+            .parse::<Pubkey>()
+            .expect("substituted-founder public key");
+        assert_ne!(founder, substituted);
     }
 
     #[test]

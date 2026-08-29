@@ -37,7 +37,7 @@ use dclutch_release_set_contract::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
     SourceSemanticRoleV1, source_semantic_release_preimage_v1,
 };
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6;
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
@@ -77,7 +77,7 @@ const SET_AUDIT_SCHEMA: &str = "dclutch-devnet-deployment-set-audit-v2";
 const CARRY_FORWARD_SNAPSHOT_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v1";
 pub(crate) const CHECKED_SET_PREPARE_SCHEMA: &str = "dclutch-checked-deployment-set-release-pin-v2";
 pub(crate) const SEMANTIC_DERIVATION_V1: &str =
-    "source-semantic-release-v1+compiled-direct-release-v1+resolution-controller-release-v5";
+    "source-semantic-release-v1+compiled-direct-release-v1+resolution-controller-release-v6";
 const TARGET_ACK_FLAG: &str = "--i-accept-upgrade";
 const EXCLUSIVE_PAYER_ACK_FLAG: &str = "--i-kept-fee-payer-exclusive";
 const OPERATION_ACCOUNTING_SCOPE_V1: &str = "exclusive-payer-window-observed-net-v1";
@@ -3009,7 +3009,7 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
 pub(crate) fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
     let fixed = match role {
         "trading" => Some(COMPILED_DIRECT_RELEASE_ID_V1),
-        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V6),
+        "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
         _ => None,
     };
     if let Some(release_id) = fixed {
@@ -8277,6 +8277,8 @@ mod tests {
 
     use serde_json::json;
 
+    use dclutch_release_tool::{BuildMetadataV1, ReleaseEvidenceV1, build_checked_release};
+
     use super::*;
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -8916,6 +8918,87 @@ mod tests {
         gate_file(root, relative)
     }
 
+    fn synthetic_sbf_elf(seed: u8) -> Vec<u8> {
+        let mut elf = vec![0_u8; 64];
+        elf[..4].copy_from_slice(b"\x7fELF");
+        elf[4] = 2;
+        elf[5] = 1;
+        elf[6] = 1;
+        elf[16..18].copy_from_slice(&3_u16.to_le_bytes());
+        elf[18..20].copy_from_slice(&263_u16.to_le_bytes());
+        elf[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        elf[52..54].copy_from_slice(&64_u16.to_le_bytes());
+        elf[63] = seed;
+        elf
+    }
+
+    fn checked_build_manifest(
+        role: &str,
+        package: &str,
+        ordinal: usize,
+        elf: &[u8],
+        source_revision: &str,
+        source_tree_sha256: &str,
+        solana_cli_version: &str,
+    ) -> Vec<u8> {
+        let seed = u8::try_from(ordinal).expect("fixture link ordinal") + 1;
+        let program_id = [seed; 32];
+        let programdata_id = [seed + 32; 32];
+        let loader = bpf_loader_upgradeable::ID.to_bytes();
+        let mut program = [0_u8; 36];
+        program[..4].copy_from_slice(&2_u32.to_le_bytes());
+        program[4..].copy_from_slice(&programdata_id);
+        let mut programdata = vec![0_u8; 45];
+        programdata[..4].copy_from_slice(&3_u32.to_le_bytes());
+        programdata.extend_from_slice(elf);
+        let semantic_preimage = format!(
+            "dclutch/checked-release-candidate/unowned-semantic-release/v1\nrole={role}\npackage={package}\nsource_revision={source_revision}\n"
+        );
+        let metadata = BuildMetadataV1::parse(&format!(
+            concat!(
+                "dclutch-release-metadata-v1\n",
+                "semantic_kind=unowned\n",
+                "program_id={}\n",
+                "programdata_id={}\n",
+                "loader_program_id={}\n",
+                "program_owner={}\n",
+                "program_executable=true\n",
+                "programdata_owner={}\n",
+                "programdata_executable=false\n",
+                "source_digest={}\n",
+                "cargo_lock_digest={}\n",
+                "source_revision={}\n",
+                "rustc_version=rustc 1.90.0 (fixture)\n",
+                "solana_version={}\n",
+                "cargo_build_sbf_version=cargo-build-sbf 4.0.2 (fixture)\n",
+                "target_triple=sbpf-solana-solana\n",
+                "build_command=cargo build-sbf --manifest-path programs/{}/Cargo.toml -- --locked\n",
+                "assumption=synthetic checked-build evidence is scoped to this hostile unit test\n",
+            ),
+            hex(&program_id),
+            hex(&programdata_id),
+            hex(&loader),
+            hex(&loader),
+            hex(&loader),
+            source_tree_sha256,
+            "ef".repeat(32),
+            source_revision,
+            solana_cli_version,
+            package,
+        ))
+        .expect("canonical fixture build metadata");
+        build_checked_release(ReleaseEvidenceV1 {
+            elf,
+            semantic_preimage: semantic_preimage.as_bytes(),
+            program_account_data: &program,
+            programdata_account_data: &programdata,
+            metadata: &metadata,
+        })
+        .expect("fixture checked build release")
+        .encode()
+        .expect("encode fixture checked build release")
+    }
+
     fn checked_gate(root: &Path, raw_elf: &[u8], solana_cli_version: &str) -> CheckedUpgradeGateV1 {
         let run_id = "ab".repeat(32);
         let source_tree =
@@ -8935,7 +9018,8 @@ mod tests {
             write_gate_evidence(root, "build-diagnostics.txt", diagnostics_text.as_bytes());
         let links = SHIPPED_LINKS
             .iter()
-            .map(|(label, package, produces_artifact)| {
+            .enumerate()
+            .map(|(ordinal, (label, package, produces_artifact))| {
                 let compile_marker =
                     format!("   Compiling {package} v0.1.0 (/checked/programs/{package})");
                 let build_log_text = format!(
@@ -8971,8 +9055,19 @@ mod tests {
                     let bytes = if *label == "custody" {
                         raw_elf.to_vec()
                     } else {
-                        format!("\x7fELF{label}").into_bytes()
+                        synthetic_sbf_elf(
+                            u8::try_from(ordinal).expect("fixture link ordinal") + 1,
+                        )
                     };
+                    let checked = checked_build_manifest(
+                        label,
+                        package,
+                        ordinal,
+                        &bytes,
+                        "0123456789abcdef0123456789abcdef01234567",
+                        &source_tree.sha256,
+                        solana_cli_version,
+                    );
                     (
                         Some(write_gate_evidence(
                             root,
@@ -8982,7 +9077,7 @@ mod tests {
                         Some(write_gate_evidence(
                             root,
                             &format!("evidence/{label}/checked.bin"),
-                            format!("checked-{label}").as_bytes(),
+                            &checked,
                         )),
                     )
                 } else {
@@ -9038,10 +9133,11 @@ mod tests {
             let payer_signer = Keypair::new();
             let authority = authority_signer.pubkey();
             let payer = payer_signer.pubkey();
-            let raw_elf = b"\x7fELFnew!".to_vec();
+            let raw_elf = synthetic_sbf_elf(3);
             let mut candidate_live = raw_elf.clone();
             candidate_live.extend_from_slice(&[0; 4]);
-            let before_live = b"\x7fELFold!\0\0\0\0".to_vec();
+            let mut before_live = synthetic_sbf_elf(4);
+            before_live.extend_from_slice(&[0; 4]);
             let solana_cli_version = "solana-cli 4.0.2 (test fixture)".to_owned();
             let gate = checked_gate(&directory.0, &raw_elf, &solana_cli_version);
             let elf_path = directory.0.join("elf/custody.so");
@@ -10127,7 +10223,7 @@ mod tests {
         );
         assert_eq!(
             pin.roles[3].semantic_release_id,
-            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V6)
+            hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V7)
         );
         let mut substituted = pin;
         substituted.roles[0].semantic_release_id = "11".repeat(32);
@@ -10948,7 +11044,7 @@ mod tests {
             fs::read_dir(&report.account_dir)
                 .expect("local account directory")
                 .count(),
-            14
+            18
         );
         for (ordinal, role) in checked.roles.iter().enumerate() {
             assert_eq!(role.role, CHECKED_ROLE_ORDER_V1[ordinal]);
@@ -11555,6 +11651,10 @@ mod tests {
         )
         .expect("valid extension signature");
         assert!(receipt.finalized_transaction.is_some());
+        let programdata_before_bytes = u64::try_from(fixture.before_live.len())
+            .expect("fixture live width")
+            .checked_add(45)
+            .expect("fixture ProgramData width");
         assert_eq!(
             receipt.arithmetic,
             Some(ExtensionArithmeticV1 {
@@ -11566,8 +11666,8 @@ mod tests {
                 programdata_before_lamports: 77_000,
                 programdata_after_lamports: 967_880,
                 programdata_delta_lamports: 890_880,
-                programdata_before_bytes: 57,
-                programdata_after_bytes: 185,
+                programdata_before_bytes,
+                programdata_after_bytes: programdata_before_bytes + 128,
                 extension_additional_bytes: 128,
             })
         );

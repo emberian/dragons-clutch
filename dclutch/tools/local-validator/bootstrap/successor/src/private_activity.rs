@@ -70,6 +70,14 @@ const STAGES: [&str; 6] = [
     "payout",
     "retirement",
 ];
+const FOUNDING_SUCCESS_MUTATIONS: [&str; 6] = [
+    "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
+    "stage projected custody against prepared controller funding (DCLTPCB2)",
+    "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
+    "core-funding-create-v1",
+    "resolution-funding-activate-v1",
+    "core-funding-accept-v1",
+];
 
 #[derive(Clone, Debug)]
 pub(crate) struct StageArgumentsV1 {
@@ -734,6 +742,7 @@ fn adapt_founding(
     let rows = array(execution.get("transactions"), "campaign transactions")?;
     let mut pending = Vec::new();
     let mut labels = BTreeSet::new();
+    let mut success_mutations = Vec::new();
     for row in rows {
         let row = object(Some(row), "campaign transaction")?;
         let label = string_field(row, "label", "campaign transaction")?;
@@ -744,6 +753,9 @@ fn adapt_founding(
             return Err(Error::new(
                 "authorized founding history repeats or failed an admitted mutation label",
             ));
+        }
+        if FOUNDING_SUCCESS_MUTATIONS.contains(&label) {
+            success_mutations.push(label);
         }
         let fee = u64_field(row, "fee_lamports", "campaign transaction")?;
         let compute = optional_u64_field(row, "compute_units_consumed", "campaign transaction")?;
@@ -769,14 +781,7 @@ fn adapt_founding(
             retirement: None,
         });
     }
-    if !labels.contains("create projected custody and controller funding (DCLTPCB2)")
-        || !labels
-            .contains("found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)")
-    {
-        return Err(Error::new(
-            "founding history omitted its exact DCLTPCB2 or DCLTGMF2 success",
-        ));
-    }
+    authenticate_founding_success_mutations(&success_mutations)?;
     let market = object(execution.get("market"), "campaign market")?;
     let account_rows = object(market.get("accounts"), "campaign market accounts")?;
     let mut kinds = BTreeMap::new();
@@ -810,15 +815,28 @@ fn is_authorized_founding_label(label: &str) -> bool {
             | "activate immutable release-set role: Custody"
             | "fund the founding principal supplier and its rent-capacity witness"
             | "create the founding generation's lifecycle RentCreditV2"
-            | "create projected custody and controller funding (DCLTPCB2)"
+            | "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)"
+            | "stage projected custody against prepared controller funding (DCLTPCB2)"
             | "pre-fund the founding's five program-allocated accounts"
             | "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)"
+            | "core-funding-create-v1"
+            | "resolution-funding-activate-v1"
+            | "core-funding-accept-v1"
     ) || label.starts_with("publish record: ")
         || label.starts_with("publish Product graph: ")
         || label.starts_with("create DCLTPCB2 routing address lookup table")
         || label.starts_with("extend DCLTPCB2 routing table page ")
         || label.starts_with("create DCLTGMF2 routing address lookup table")
         || label.starts_with("extend DCLTGMF2 routing table page ")
+}
+
+fn authenticate_founding_success_mutations(labels: &[&str]) -> Result<()> {
+    if labels != FOUNDING_SUCCESS_MUTATIONS {
+        return Err(Error::new(
+            "founding history changed the exact DCLTCFQ1 -> DCLTPCB2 -> DCLTGMF2 -> CreateFund -> Activate -> Accept success order",
+        ));
+    }
+    Ok(())
 }
 
 fn adapt_participant(
@@ -3079,5 +3097,29 @@ mod tests {
         authenticate_normalized_stage_descriptor(&descriptor).expect("top-level stage status");
         descriptor.completion_pointer = "/sources/0/completionValue".into();
         assert!(authenticate_normalized_stage_descriptor(&descriptor).is_err());
+    }
+
+    #[test]
+    fn founding_activity_requires_split_success_order_and_refuses_legacy_atomic_label() {
+        authenticate_founding_success_mutations(&FOUNDING_SUCCESS_MUTATIONS)
+            .expect("exact prepare, stage, Open order");
+        let reordered = [
+            FOUNDING_SUCCESS_MUTATIONS[1],
+            FOUNDING_SUCCESS_MUTATIONS[0],
+            FOUNDING_SUCCESS_MUTATIONS[2],
+            FOUNDING_SUCCESS_MUTATIONS[3],
+            FOUNDING_SUCCESS_MUTATIONS[4],
+            FOUNDING_SUCCESS_MUTATIONS[5],
+        ];
+        assert!(authenticate_founding_success_mutations(&reordered).is_err());
+        assert!(authenticate_founding_success_mutations(&FOUNDING_SUCCESS_MUTATIONS[..5]).is_err());
+        assert!(!is_authorized_founding_label(
+            "create projected custody and controller funding (DCLTPCB2)"
+        ));
+        assert!(
+            FOUNDING_SUCCESS_MUTATIONS
+                .iter()
+                .all(|label| is_authorized_founding_label(label))
+        );
     }
 }

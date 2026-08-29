@@ -9,16 +9,18 @@
 //!
 //! The checkpoint deliberately has no `OpenConsumed` persisted phase. Opening
 //! consumes and closes the account atomically; the typed terminal receipt owns
-//! that fact. The only durable phases are therefore `Prepared` and
-//! `CustodyStaged`. Expiry cleanup has two distinct terminal paths: Prepared
-//! cleanup never accepts Custody accounts, while CustodyStaged cleanup first
-//! proves the exact Custody abort in the same transaction. Neither terminal
-//! fact is a third persisted phase because the checkpoint is closed last.
+//! that fact. Expiry cleanup, however, is deliberately multi-transaction. A
+//! Resolution ledger close consumes most of Solana's transaction compute
+//! ceiling, and moving lamports out of a Trading-only account immediately
+//! before a Resolution CPI also violates the runtime's CPI balance boundary.
+//! The cleanup phases therefore persist each completed prefix onchain. No
+//! caller journal is authority for which child may close next.
 
 use crate::Error;
+use dclutch_sha256_adapter::digestv;
 
 /// Exact checkpoint account width.
-pub const CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1: usize = 512;
+pub const CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1: usize = 768;
 /// Canonical checkpoint magic.
 pub const CONTROLLER_FUNDING_CHECKPOINT_MAGIC_V1: [u8; 8] = *b"DCLTCFP1";
 /// Implemented checkpoint schema version.
@@ -34,6 +36,9 @@ pub const CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1: &[u8] =
     b"dclutch/controller-funding/custody-ladder/v1";
 /// Exact number of accounts committed by the Custody ladder digest.
 pub const CONTROLLER_FUNDING_CUSTODY_LADDER_ACCOUNT_COUNT_V1: usize = 4;
+/// Domain for one exact controller-ledger account state before or after close.
+pub const CONTROLLER_FUNDING_LEDGER_ACCOUNT_DIGEST_DOMAIN_V1: &[u8] =
+    b"dclutch/controller-funding/ledger-account/v1";
 
 const SCHEMA_OFFSET: usize = 8;
 const PHASE_OFFSET: usize = 10;
@@ -60,11 +65,27 @@ const STAGED_SLOT_OFFSET: usize = 488;
 const RESOLUTION_MASK_OFFSET: usize = 496;
 const TRADING_MASK_OFFSET: usize = 498;
 const REVISION_OFFSET: usize = 500;
-const BODY_RESERVED_OFFSET: usize = 508;
-const BODY_RESERVED_BYTES: usize = 4;
+const CLEANUP_ORIGIN_OFFSET: usize = 508;
+const CLEANUP_FIRST_CONTROLLER_OFFSET: usize = 509;
+const CLEANUP_FIRST_MASK_OFFSET: usize = 510;
+const CLEANUP_PRIOR_CHECKPOINT_DIGEST_OFFSET: usize = 512;
+const CLEANUP_CUSTODY_ABORT_RECEIPT_DIGEST_OFFSET: usize = 544;
+const CLEANUP_CUSTODY_POSTSTATE_DIGEST_OFFSET: usize = 576;
+const CLEANUP_FIRST_LEDGER_PRESTATE_DIGEST_OFFSET: usize = 608;
+const CLEANUP_FIRST_LEDGER_CLOSED_DIGEST_OFFSET: usize = 640;
+const CLEANUP_FIRST_CLOSE_RECEIPT_DIGEST_OFFSET: usize = 672;
+const CLEANUP_REMAINING_LEDGER_PRESTATE_DIGEST_OFFSET: usize = 704;
+const CLEANUP_TRANSITION_SLOT_OFFSET: usize = 736;
+const CLEANUP_PRINCIPAL_REFUND_OFFSET: usize = 744;
+const CLEANUP_RENT_REFUND_OFFSET: usize = 752;
+const BODY_RESERVED_OFFSET: usize = 760;
+const BODY_RESERVED_BYTES: usize = 8;
 
 const PREPARED_REVISION_V1: u64 = 1;
 const CUSTODY_STAGED_REVISION_V1: u64 = 2;
+const CUSTODY_ABORTED_REVISION_V1: u64 = 3;
+const PREPARED_FIRST_LEDGER_CLOSED_REVISION_V1: u64 = 4;
+const CUSTODY_FIRST_LEDGER_CLOSED_REVISION_V1: u64 = 5;
 
 /// Canonical order inside the Custody ladder poststate digest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,10 +104,76 @@ pub enum ControllerFundingCustodyLadderEntryV1 {
 /// Terminal expiry path selected by the authenticated durable phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControllerFundingCheckpointAbortKindV1 {
-    /// No Custody mutation finalized; close only the two Pending ledgers and checkpoint.
+    /// No Custody mutation finalized; controller-ledger cleanup may begin.
     PreparedExpired,
-    /// Custody staging finalized; abort Custody first, then close the ledgers and checkpoint.
+    /// Custody staging finalized; its exact Custody abort must persist first.
     CustodyStagedExpired,
+    /// Custody abort persisted; controller-ledger cleanup may begin.
+    CustodyAborted,
+    /// The canonical first ledger closed; only the remaining ledger may close.
+    FirstLedgerClosed,
+}
+
+/// Origin of an expiry-cleanup prefix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum ControllerFundingCleanupOriginV1 {
+    /// Cleanup started directly from Prepared; Custody never staged.
+    Prepared = 1,
+    /// Cleanup started from CustodyStaged and persisted its Custody abort.
+    CustodyStaged = 2,
+}
+
+impl TryFrom<u8> for ControllerFundingCleanupOriginV1 {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Prepared),
+            2 => Ok(Self::CustodyStaged),
+            _ => Err(Error::InvalidControllerFundingCheckpointTransition),
+        }
+    }
+}
+
+/// Controller identity persisted for the canonical first ledger close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum ControllerFundingControllerV1 {
+    /// Resolution-owned three-row ledger.
+    Resolution = 1,
+    /// Trading-owned one-row ledger.
+    Trading = 2,
+}
+
+impl TryFrom<u8> for ControllerFundingControllerV1 {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Resolution),
+            2 => Ok(Self::Trading),
+            _ => Err(Error::InvalidControllerFundingCheckpointTransition),
+        }
+    }
+}
+
+/// Exact persisted evidence for an expiry-cleanup prefix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ControllerFundingCleanupV1 {
+    origin: ControllerFundingCleanupOriginV1,
+    first_controller: Option<ControllerFundingControllerV1>,
+    first_mask: u16,
+    prior_checkpoint_digest: [u8; 32],
+    custody_abort_receipt_digest: [u8; 32],
+    custody_poststate_digest: [u8; 32],
+    first_ledger_prestate_digest: [u8; 32],
+    first_ledger_closed_digest: [u8; 32],
+    first_close_receipt_digest: [u8; 32],
+    remaining_ledger_prestate_digest: [u8; 32],
+    transition_slot: u64,
+    principal_refund_lamports: u64,
+    rent_refund_lamports: u64,
 }
 
 /// Durable pre-Open lifecycle state.
@@ -97,6 +184,12 @@ pub enum ControllerFundingCheckpointPhaseV1 {
     Prepared = 1,
     /// Projected Custody staging finalized and committed its exact poststate.
     CustodyStaged = 2,
+    /// The staged Custody projection was exactly aborted; both ledgers remain Pending.
+    CustodyAborted = 3,
+    /// Prepared cleanup closed the canonical first controller ledger.
+    PreparedFirstLedgerClosed = 4,
+    /// Custody-origin cleanup closed the canonical first controller ledger.
+    CustodyFirstLedgerClosed = 5,
 }
 
 impl TryFrom<u8> for ControllerFundingCheckpointPhaseV1 {
@@ -106,6 +199,9 @@ impl TryFrom<u8> for ControllerFundingCheckpointPhaseV1 {
         match value {
             1 => Ok(Self::Prepared),
             2 => Ok(Self::CustodyStaged),
+            3 => Ok(Self::CustodyAborted),
+            4 => Ok(Self::PreparedFirstLedgerClosed),
+            5 => Ok(Self::CustodyFirstLedgerClosed),
             _ => Err(Error::UnknownControllerFundingCheckpointPhase),
         }
     }
@@ -160,6 +256,7 @@ pub struct ControllerFundingCheckpointV1 {
     custody_ladder_digest: [u8; 32],
     staged_slot: u64,
     revision: u64,
+    cleanup: Option<ControllerFundingCleanupV1>,
 }
 
 impl ControllerFundingCheckpointV1 {
@@ -172,6 +269,7 @@ impl ControllerFundingCheckpointV1 {
             custody_ladder_digest: [0; 32],
             staged_slot: 0,
             revision: PREPARED_REVISION_V1,
+            cleanup: None,
         })
     }
 
@@ -213,11 +311,13 @@ impl ControllerFundingCheckpointV1 {
         let custody_ladder_digest = read_array(bytes, CUSTODY_LADDER_DIGEST_OFFSET)?;
         let staged_slot = read_u64(bytes, STAGED_SLOT_OFFSET)?;
         let revision = read_u64(bytes, REVISION_OFFSET)?;
+        let cleanup = decode_cleanup(bytes)?;
         match phase {
             ControllerFundingCheckpointPhaseV1::Prepared
                 if custody_ladder_digest != [0; 32]
                     || staged_slot != 0
-                    || revision != PREPARED_REVISION_V1 =>
+                    || revision != PREPARED_REVISION_V1
+                    || cleanup.is_some() =>
             {
                 return Err(Error::InvalidControllerFundingCheckpointTransition);
             }
@@ -225,9 +325,39 @@ impl ControllerFundingCheckpointV1 {
                 if custody_ladder_digest == [0; 32]
                     || staged_slot < input.prepared_slot
                     || staged_slot > input.expiry_slot
-                    || revision != CUSTODY_STAGED_REVISION_V1 =>
+                    || revision != CUSTODY_STAGED_REVISION_V1
+                    || cleanup.is_some() =>
             {
                 return Err(Error::InvalidControllerFundingCheckpointTransition);
+            }
+            ControllerFundingCheckpointPhaseV1::CustodyAborted => {
+                validate_custody_aborted(
+                    input,
+                    custody_ladder_digest,
+                    staged_slot,
+                    revision,
+                    cleanup,
+                )?;
+            }
+            ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed => {
+                validate_first_ledger_closed(
+                    input,
+                    custody_ladder_digest,
+                    staged_slot,
+                    revision,
+                    cleanup,
+                    ControllerFundingCleanupOriginV1::Prepared,
+                )?;
+            }
+            ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed => {
+                validate_first_ledger_closed(
+                    input,
+                    custody_ladder_digest,
+                    staged_slot,
+                    revision,
+                    cleanup,
+                    ControllerFundingCleanupOriginV1::CustodyStaged,
+                )?;
             }
             _ => {}
         }
@@ -237,6 +367,7 @@ impl ControllerFundingCheckpointV1 {
             custody_ladder_digest,
             staged_slot,
             revision,
+            cleanup,
         })
     }
 
@@ -311,6 +442,7 @@ impl ControllerFundingCheckpointV1 {
         );
         put_u16(&mut output, TRADING_MASK_OFFSET, self.input.trading_mask);
         put_u64(&mut output, REVISION_OFFSET, self.revision);
+        encode_cleanup(&mut output, self.cleanup);
         output
     }
 
@@ -334,6 +466,121 @@ impl ControllerFundingCheckpointV1 {
             custody_ladder_digest,
             staged_slot,
             revision: CUSTODY_STAGED_REVISION_V1,
+            cleanup: None,
+        })
+    }
+
+    /// Persist the exact Custody-abort prefix before any controller ledger closes.
+    pub fn abort_custody(
+        self,
+        transition_slot: u64,
+        prior_checkpoint_digest: [u8; 32],
+        custody_abort_receipt_digest: [u8; 32],
+        custody_poststate_digest: [u8; 32],
+    ) -> Result<Self, Error> {
+        if self.phase != ControllerFundingCheckpointPhaseV1::CustodyStaged
+            || self.revision != CUSTODY_STAGED_REVISION_V1
+            || transition_slot <= self.input.expiry_slot
+            || [
+                prior_checkpoint_digest,
+                custody_abort_receipt_digest,
+                custody_poststate_digest,
+            ]
+            .contains(&[0; 32])
+        {
+            return Err(Error::InvalidControllerFundingCheckpointTransition);
+        }
+        Ok(Self {
+            phase: ControllerFundingCheckpointPhaseV1::CustodyAborted,
+            input: self.input,
+            custody_ladder_digest: self.custody_ladder_digest,
+            staged_slot: self.staged_slot,
+            revision: CUSTODY_ABORTED_REVISION_V1,
+            cleanup: Some(ControllerFundingCleanupV1 {
+                origin: ControllerFundingCleanupOriginV1::CustodyStaged,
+                first_controller: None,
+                first_mask: 0,
+                prior_checkpoint_digest,
+                custody_abort_receipt_digest,
+                custody_poststate_digest,
+                first_ledger_prestate_digest: [0; 32],
+                first_ledger_closed_digest: [0; 32],
+                first_close_receipt_digest: [0; 32],
+                remaining_ledger_prestate_digest: [0; 32],
+                transition_slot,
+                principal_refund_lamports: 0,
+                rent_refund_lamports: 0,
+            }),
+        })
+    }
+
+    /// Persist one canonical first-ledger close and the exact remaining prestate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn close_first_ledger(
+        self,
+        transition_slot: u64,
+        prior_checkpoint_digest: [u8; 32],
+        first_controller: ControllerFundingControllerV1,
+        first_mask: u16,
+        first_ledger_prestate_digest: [u8; 32],
+        first_ledger_closed_digest: [u8; 32],
+        first_close_receipt_digest: [u8; 32],
+        remaining_ledger_prestate_digest: [u8; 32],
+        principal_refund_lamports: u64,
+        rent_refund_lamports: u64,
+    ) -> Result<Self, Error> {
+        let (phase, revision, origin, custody_abort_receipt_digest, custody_poststate_digest) =
+            match (self.phase, self.revision, self.cleanup) {
+                (ControllerFundingCheckpointPhaseV1::Prepared, PREPARED_REVISION_V1, None) => (
+                    ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed,
+                    PREPARED_FIRST_LEDGER_CLOSED_REVISION_V1,
+                    ControllerFundingCleanupOriginV1::Prepared,
+                    [0; 32],
+                    [0; 32],
+                ),
+                (
+                    ControllerFundingCheckpointPhaseV1::CustodyAborted,
+                    CUSTODY_ABORTED_REVISION_V1,
+                    Some(cleanup),
+                ) => (
+                    ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed,
+                    CUSTODY_FIRST_LEDGER_CLOSED_REVISION_V1,
+                    ControllerFundingCleanupOriginV1::CustodyStaged,
+                    cleanup.custody_abort_receipt_digest,
+                    cleanup.custody_poststate_digest,
+                ),
+                _ => return Err(Error::InvalidControllerFundingCheckpointTransition),
+            };
+        let cleanup = ControllerFundingCleanupV1 {
+            origin,
+            first_controller: Some(first_controller),
+            first_mask,
+            prior_checkpoint_digest,
+            custody_abort_receipt_digest,
+            custody_poststate_digest,
+            first_ledger_prestate_digest,
+            first_ledger_closed_digest,
+            first_close_receipt_digest,
+            remaining_ledger_prestate_digest,
+            transition_slot,
+            principal_refund_lamports,
+            rent_refund_lamports,
+        };
+        validate_first_ledger_closed(
+            self.input,
+            self.custody_ladder_digest,
+            self.staged_slot,
+            revision,
+            Some(cleanup),
+            origin,
+        )?;
+        Ok(Self {
+            phase,
+            input: self.input,
+            custody_ladder_digest: self.custody_ladder_digest,
+            staged_slot: self.staged_slot,
+            revision,
+            cleanup: Some(cleanup),
         })
     }
 
@@ -369,6 +616,17 @@ impl ControllerFundingCheckpointV1 {
             (ControllerFundingCheckpointPhaseV1::CustodyStaged, CUSTODY_STAGED_REVISION_V1) => {
                 Ok(ControllerFundingCheckpointAbortKindV1::CustodyStagedExpired)
             }
+            (ControllerFundingCheckpointPhaseV1::CustodyAborted, CUSTODY_ABORTED_REVISION_V1) => {
+                Ok(ControllerFundingCheckpointAbortKindV1::CustodyAborted)
+            }
+            (
+                ControllerFundingCheckpointPhaseV1::PreparedFirstLedgerClosed,
+                PREPARED_FIRST_LEDGER_CLOSED_REVISION_V1,
+            )
+            | (
+                ControllerFundingCheckpointPhaseV1::CustodyFirstLedgerClosed,
+                CUSTODY_FIRST_LEDGER_CLOSED_REVISION_V1,
+            ) => Ok(ControllerFundingCheckpointAbortKindV1::FirstLedgerClosed),
             _ => Err(Error::InvalidControllerFundingCheckpointTransition),
         }
     }
@@ -406,6 +664,314 @@ impl ControllerFundingCheckpointV1 {
     /// Return the exact transition revision (`1` Prepared, `2` CustodyStaged).
     pub const fn revision(self) -> u64 {
         self.revision
+    }
+
+    /// Return persisted expiry-cleanup evidence, if cleanup has begun.
+    pub const fn cleanup(self) -> Option<ControllerFundingCleanupV1> {
+        self.cleanup
+    }
+
+    /// Return the controller whose mask appears first in canonical funding-list order.
+    pub fn canonical_first_controller(self) -> ControllerFundingControllerV1 {
+        canonical_first_controller(self.input)
+    }
+
+    /// Return the controller remaining after the canonical first ledger closes.
+    pub fn canonical_remaining_controller(self) -> ControllerFundingControllerV1 {
+        match self.canonical_first_controller() {
+            ControllerFundingControllerV1::Resolution => ControllerFundingControllerV1::Trading,
+            ControllerFundingControllerV1::Trading => ControllerFundingControllerV1::Resolution,
+        }
+    }
+
+    /// Return the exact manifest mask owned by one controller.
+    pub const fn controller_mask(self, controller: ControllerFundingControllerV1) -> u16 {
+        match controller {
+            ControllerFundingControllerV1::Resolution => self.input.resolution_mask,
+            ControllerFundingControllerV1::Trading => self.input.trading_mask,
+        }
+    }
+}
+
+impl ControllerFundingCleanupV1 {
+    /// Return the cleanup origin.
+    pub const fn origin(self) -> ControllerFundingCleanupOriginV1 {
+        self.origin
+    }
+
+    /// Return the canonical first controller, once that ledger has closed.
+    pub const fn first_controller(self) -> Option<ControllerFundingControllerV1> {
+        self.first_controller
+    }
+
+    /// Return the canonical first controller mask.
+    pub const fn first_mask(self) -> u16 {
+        self.first_mask
+    }
+
+    /// Return the exact prior checkpoint account-data digest.
+    pub const fn prior_checkpoint_digest(self) -> [u8; 32] {
+        self.prior_checkpoint_digest
+    }
+
+    /// Return the exact Custody-abort receipt digest, or zero for Prepared origin.
+    pub const fn custody_abort_receipt_digest(self) -> [u8; 32] {
+        self.custody_abort_receipt_digest
+    }
+
+    /// Return the exact post-abort Custody tuple digest, or zero for Prepared origin.
+    pub const fn custody_poststate_digest(self) -> [u8; 32] {
+        self.custody_poststate_digest
+    }
+
+    /// Return the exact first-ledger account prestate digest.
+    pub const fn first_ledger_prestate_digest(self) -> [u8; 32] {
+        self.first_ledger_prestate_digest
+    }
+
+    /// Return the exact closed first-ledger account-state digest.
+    pub const fn first_ledger_closed_digest(self) -> [u8; 32] {
+        self.first_ledger_closed_digest
+    }
+
+    /// Return the exact first child close receipt digest.
+    pub const fn first_close_receipt_digest(self) -> [u8; 32] {
+        self.first_close_receipt_digest
+    }
+
+    /// Return the exact remaining-ledger account prestate digest.
+    pub const fn remaining_ledger_prestate_digest(self) -> [u8; 32] {
+        self.remaining_ledger_prestate_digest
+    }
+
+    /// Return the finalized slot of this persisted cleanup prefix.
+    pub const fn transition_slot(self) -> u64 {
+        self.transition_slot
+    }
+
+    /// Return first-ledger principal refunded to the immutable source.
+    pub const fn principal_refund_lamports(self) -> u64 {
+        self.principal_refund_lamports
+    }
+
+    /// Return first-ledger Rent refunded to the immutable RentCredit.
+    pub const fn rent_refund_lamports(self) -> u64 {
+        self.rent_refund_lamports
+    }
+}
+
+/// Digest one exact controller-owned ledger account state.
+#[must_use]
+pub fn controller_funding_ledger_account_digest_v1(
+    key: [u8; 32],
+    owner: [u8; 32],
+    lamports: u64,
+    data: &[u8],
+) -> [u8; 32] {
+    let lamports = lamports.to_le_bytes();
+    let data_len = u64::try_from(data.len()).unwrap_or(u64::MAX).to_le_bytes();
+    digestv(&[
+        CONTROLLER_FUNDING_LEDGER_ACCOUNT_DIGEST_DOMAIN_V1,
+        &key,
+        &owner,
+        &lamports,
+        &data_len,
+        data,
+    ])
+}
+
+fn decode_cleanup(bytes: &[u8]) -> Result<Option<ControllerFundingCleanupV1>, Error> {
+    let origin_byte = read_u8(bytes, CLEANUP_ORIGIN_OFFSET)?;
+    if origin_byte == 0 {
+        require_zero(
+            bytes,
+            CLEANUP_ORIGIN_OFFSET,
+            BODY_RESERVED_OFFSET - CLEANUP_ORIGIN_OFFSET,
+        )?;
+        return Ok(None);
+    }
+    let first_controller = match read_u8(bytes, CLEANUP_FIRST_CONTROLLER_OFFSET)? {
+        0 => None,
+        value => Some(ControllerFundingControllerV1::try_from(value)?),
+    };
+    Ok(Some(ControllerFundingCleanupV1 {
+        origin: ControllerFundingCleanupOriginV1::try_from(origin_byte)?,
+        first_controller,
+        first_mask: read_u16(bytes, CLEANUP_FIRST_MASK_OFFSET)?,
+        prior_checkpoint_digest: read_array(bytes, CLEANUP_PRIOR_CHECKPOINT_DIGEST_OFFSET)?,
+        custody_abort_receipt_digest: read_array(
+            bytes,
+            CLEANUP_CUSTODY_ABORT_RECEIPT_DIGEST_OFFSET,
+        )?,
+        custody_poststate_digest: read_array(bytes, CLEANUP_CUSTODY_POSTSTATE_DIGEST_OFFSET)?,
+        first_ledger_prestate_digest: read_array(
+            bytes,
+            CLEANUP_FIRST_LEDGER_PRESTATE_DIGEST_OFFSET,
+        )?,
+        first_ledger_closed_digest: read_array(bytes, CLEANUP_FIRST_LEDGER_CLOSED_DIGEST_OFFSET)?,
+        first_close_receipt_digest: read_array(bytes, CLEANUP_FIRST_CLOSE_RECEIPT_DIGEST_OFFSET)?,
+        remaining_ledger_prestate_digest: read_array(
+            bytes,
+            CLEANUP_REMAINING_LEDGER_PRESTATE_DIGEST_OFFSET,
+        )?,
+        transition_slot: read_u64(bytes, CLEANUP_TRANSITION_SLOT_OFFSET)?,
+        principal_refund_lamports: read_u64(bytes, CLEANUP_PRINCIPAL_REFUND_OFFSET)?,
+        rent_refund_lamports: read_u64(bytes, CLEANUP_RENT_REFUND_OFFSET)?,
+    }))
+}
+
+fn encode_cleanup(
+    output: &mut [u8; CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1],
+    cleanup: Option<ControllerFundingCleanupV1>,
+) {
+    let Some(cleanup) = cleanup else {
+        return;
+    };
+    output[CLEANUP_ORIGIN_OFFSET] = cleanup.origin as u8;
+    output[CLEANUP_FIRST_CONTROLLER_OFFSET] = cleanup
+        .first_controller
+        .map_or(0, |controller| controller as u8);
+    put_u16(output, CLEANUP_FIRST_MASK_OFFSET, cleanup.first_mask);
+    for (offset, value) in [
+        (
+            CLEANUP_PRIOR_CHECKPOINT_DIGEST_OFFSET,
+            cleanup.prior_checkpoint_digest,
+        ),
+        (
+            CLEANUP_CUSTODY_ABORT_RECEIPT_DIGEST_OFFSET,
+            cleanup.custody_abort_receipt_digest,
+        ),
+        (
+            CLEANUP_CUSTODY_POSTSTATE_DIGEST_OFFSET,
+            cleanup.custody_poststate_digest,
+        ),
+        (
+            CLEANUP_FIRST_LEDGER_PRESTATE_DIGEST_OFFSET,
+            cleanup.first_ledger_prestate_digest,
+        ),
+        (
+            CLEANUP_FIRST_LEDGER_CLOSED_DIGEST_OFFSET,
+            cleanup.first_ledger_closed_digest,
+        ),
+        (
+            CLEANUP_FIRST_CLOSE_RECEIPT_DIGEST_OFFSET,
+            cleanup.first_close_receipt_digest,
+        ),
+        (
+            CLEANUP_REMAINING_LEDGER_PRESTATE_DIGEST_OFFSET,
+            cleanup.remaining_ledger_prestate_digest,
+        ),
+    ] {
+        put_array(output, offset, value);
+    }
+    put_u64(
+        output,
+        CLEANUP_TRANSITION_SLOT_OFFSET,
+        cleanup.transition_slot,
+    );
+    put_u64(
+        output,
+        CLEANUP_PRINCIPAL_REFUND_OFFSET,
+        cleanup.principal_refund_lamports,
+    );
+    put_u64(
+        output,
+        CLEANUP_RENT_REFUND_OFFSET,
+        cleanup.rent_refund_lamports,
+    );
+}
+
+fn validate_custody_aborted(
+    input: ControllerFundingCheckpointInputV1,
+    custody_ladder_digest: [u8; 32],
+    staged_slot: u64,
+    revision: u64,
+    cleanup: Option<ControllerFundingCleanupV1>,
+) -> Result<(), Error> {
+    let cleanup = cleanup.ok_or(Error::InvalidControllerFundingCheckpointTransition)?;
+    if revision != CUSTODY_ABORTED_REVISION_V1
+        || custody_ladder_digest == [0; 32]
+        || staged_slot < input.prepared_slot
+        || staged_slot > input.expiry_slot
+        || cleanup.origin != ControllerFundingCleanupOriginV1::CustodyStaged
+        || cleanup.first_controller.is_some()
+        || cleanup.first_mask != 0
+        || cleanup.transition_slot <= input.expiry_slot
+        || cleanup.prior_checkpoint_digest == [0; 32]
+        || cleanup.custody_abort_receipt_digest == [0; 32]
+        || cleanup.custody_poststate_digest == [0; 32]
+        || cleanup.first_ledger_prestate_digest != [0; 32]
+        || cleanup.first_ledger_closed_digest != [0; 32]
+        || cleanup.first_close_receipt_digest != [0; 32]
+        || cleanup.remaining_ledger_prestate_digest != [0; 32]
+        || cleanup.principal_refund_lamports != 0
+        || cleanup.rent_refund_lamports != 0
+    {
+        return Err(Error::InvalidControllerFundingCheckpointTransition);
+    }
+    Ok(())
+}
+
+fn validate_first_ledger_closed(
+    input: ControllerFundingCheckpointInputV1,
+    custody_ladder_digest: [u8; 32],
+    staged_slot: u64,
+    revision: u64,
+    cleanup: Option<ControllerFundingCleanupV1>,
+    expected_origin: ControllerFundingCleanupOriginV1,
+) -> Result<(), Error> {
+    let cleanup = cleanup.ok_or(Error::InvalidControllerFundingCheckpointTransition)?;
+    let expected_revision = match expected_origin {
+        ControllerFundingCleanupOriginV1::Prepared => PREPARED_FIRST_LEDGER_CLOSED_REVISION_V1,
+        ControllerFundingCleanupOriginV1::CustodyStaged => CUSTODY_FIRST_LEDGER_CLOSED_REVISION_V1,
+    };
+    let first_controller = cleanup
+        .first_controller
+        .ok_or(Error::InvalidControllerFundingCheckpointTransition)?;
+    let expected_mask = match first_controller {
+        ControllerFundingControllerV1::Resolution => input.resolution_mask,
+        ControllerFundingControllerV1::Trading => input.trading_mask,
+    };
+    let custody_shape_valid = match expected_origin {
+        ControllerFundingCleanupOriginV1::Prepared => {
+            custody_ladder_digest == [0; 32]
+                && staged_slot == 0
+                && cleanup.custody_abort_receipt_digest == [0; 32]
+                && cleanup.custody_poststate_digest == [0; 32]
+        }
+        ControllerFundingCleanupOriginV1::CustodyStaged => {
+            custody_ladder_digest != [0; 32]
+                && staged_slot >= input.prepared_slot
+                && staged_slot <= input.expiry_slot
+                && cleanup.custody_abort_receipt_digest != [0; 32]
+                && cleanup.custody_poststate_digest != [0; 32]
+        }
+    };
+    if revision != expected_revision
+        || cleanup.origin != expected_origin
+        || first_controller != canonical_first_controller(input)
+        || cleanup.first_mask != expected_mask
+        || cleanup.transition_slot <= input.expiry_slot
+        || cleanup.prior_checkpoint_digest == [0; 32]
+        || cleanup.first_ledger_prestate_digest == [0; 32]
+        || cleanup.first_ledger_closed_digest == [0; 32]
+        || cleanup.first_close_receipt_digest == [0; 32]
+        || cleanup.remaining_ledger_prestate_digest == [0; 32]
+        || cleanup.rent_refund_lamports == 0
+        || !custody_shape_valid
+    {
+        return Err(Error::InvalidControllerFundingCheckpointTransition);
+    }
+    Ok(())
+}
+
+fn canonical_first_controller(
+    input: ControllerFundingCheckpointInputV1,
+) -> ControllerFundingControllerV1 {
+    if input.resolution_mask.trailing_zeros() < input.trading_mask.trailing_zeros() {
+        ControllerFundingControllerV1::Resolution
+    } else {
+        ControllerFundingControllerV1::Trading
     }
 }
 

@@ -379,3 +379,108 @@ capability-root selection was a SHA-256 fixed point and so unsatisfiable for
 every well-formed artifact (`386f254`). The full decomposition, the per-role
 activation table, the artifact digests, and the complete transcript are in
 `docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.
+
+## Sponsored Pyth push exterior
+
+You can capture the public devnet SOL/USD sponsored account without a Hermes
+token, a Pyth Terminal subscription, or a caller-owned Receiver update. The
+command reads the fixed onchain account directly, authenticates the active
+Resolution role through the Market's checked release set, and derives the
+candidate, head, certificate, and receipt addresses from finalized bytes.
+
+Start with a read-only preflight. The output path must not already exist:
+
+```sh
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -- \
+  devnet-sponsored-push-v1 \
+  --rpc-url https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --input /absolute/path/sponsored-market.json \
+  --output /absolute/path/capture-preflight.json \
+  --action capture \
+  --signer YOUR_SPONSOR_PUBKEY
+```
+
+The input is one routing document. Each `raw`/`staging` pair names an existing
+finalized Registry record and its vacant staging account:
+
+```json
+{
+  "format": "dclutch-sponsored-push-exterior-input-v1",
+  "generation": 1,
+  "terminalSequence": 0,
+  "releaseSet": "64_lowercase_hex_characters",
+  "accounts": {
+    "registryProgram": "PUBKEY",
+    "activationCache": "PUBKEY",
+    "coreProgram": "PUBKEY",
+    "resolutionProgram": "PUBKEY",
+    "resolutionProgramdata": "PUBKEY",
+    "market": "PUBKEY",
+    "sourceState": "PUBKEY",
+    "sourceMaterial": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "sourceSpec": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "providerRelease": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "adapterConfig": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "window": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "statistic": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "sponsoredRelease": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "product": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "resultDomain": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "portfolio": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "capabilityManifest": { "raw": "PUBKEY", "staging": "PUBKEY" },
+    "failureFunding": "PUBKEY",
+    "priceAccount": "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
+    "receiverProgram": "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
+    "receiverProgramdata": "96QrNCjmh32H9quY9DX4NEH81nECVsbkATBDZeoVbvLV",
+    "pushOracleProgram": "pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT",
+    "pushOracleProgramdata": "8xAeURaAWExxyHUXJSgjsg5r96Ydr3G4cek2if7imQmz",
+    "receiverConfig": "DaWUKXCyXsnzcvLUyeJRWou8KTn7XtadgTsdhJ6RHS7b",
+    "lookupTable": "FROZEN_ADDRESS_LOOKUP_TABLE_PUBKEY"
+  }
+}
+```
+
+`failureFunding` is the active Resolution-owned `FundingLedgerV2` left by the
+V6 controller-funding split after Market Open. It is not the transient
+controller-funding checkpoint: Open already authenticated and closed that
+checkpoint after Custody staging. Sponsored capture and settlement never
+recreate, stage, or consume pre-Market funding; the head-vacant failure action
+authenticates and debits the exact active Resolution ledger that the opened
+Market selected.
+
+The lookup table is routing, never authority. It must already be active,
+finalized, and frozen, and it must contain enough of this Market's sponsored
+frame to keep every action below Solana's 1,232-byte packet ceiling. The caller
+persists its complete account body and compiles the canonical v0 message from
+those exact bytes; a table substitution, mutable authority, later extension,
+or packet above the ceiling refuses. The 32-account Settle frame is 1,277 bytes
+as a legacy packet and therefore cannot be honestly submitted without routing.
+
+To submit after reviewing the preflight, rerun the exact command with the same
+output path and add `--execute --signer-keypair /absolute/path/keypair.json`.
+The report advances atomically through `planned`, `prepared`, `submitted`, and
+`finalized`. `prepared` contains the exact signed packet, signature, packet
+digest, and last-valid block height before the first send. A restart from
+`prepared` may send only those same bytes; a restart from `submitted` is
+poll-only and cannot rebuild or submit a second signature. Once the report is
+`prepared`, the keypair is no longer required for restart. If the exact packet
+expires without a finalized status, the command preserves that journal and
+requires a new action under a new output path.
+
+One create-new lock covers the report's entire read, transition, send, and poll
+run. A normal exit removes it. A crash leaves it fail-closed; confirm that no
+process still owns the report before you manually remove the named stale lock.
+
+Use
+`terminalSequence: 1` for `settle` or `commit-failure`, and zero for the other
+actions. `settle` reads the selected candidate from the canonical head.
+`close-candidate` additionally requires `--candidate PUBKEY`. Cleanup is
+permissionless, but its transaction payer must be different from every account
+in the cleanup instruction; in particular, do not reuse the captured rent
+beneficiary as that transaction's payer.
+
+The report format is `dclutch-sponsored-push-exterior-report-v2`. It retains
+the reviewed instruction and prestate, the durable signed packet, finalized
+signature/fee/compute/log evidence, and the writable poststates in that one
+path. The keypair file and secret bytes never enter the report.

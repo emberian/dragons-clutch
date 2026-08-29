@@ -1218,9 +1218,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
         || crate::projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2(
             instruction_data,
         )
-        || crate::projected_custody_bootstrap_v1::is_controller_funding_prepare_v1(
-            instruction_data,
-        )
+        || crate::projected_custody_bootstrap_v1::is_controller_funding_prepare_v1(instruction_data)
     {
         return true;
     }

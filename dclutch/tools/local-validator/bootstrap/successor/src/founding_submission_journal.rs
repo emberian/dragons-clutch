@@ -1,4 +1,4 @@
-//! Durable public-devnet submission semantics for DCLTPCB2 and DCLTGMF2.
+//! Durable public-devnet submission semantics for the split founding ladder.
 //!
 //! The campaign report is the filesystem owner. This module owns the smaller
 //! semantic fact embedded in it: one exact founding packet moves through
@@ -25,6 +25,7 @@ pub(crate) const FOUNDING_PRE_SEND_PROJECTION_SCHEMA_V1: &str =
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum FoundingSubmissionOperationV1 {
+    Dcltcfq1,
     Dcltpcb2,
     Dcltgmf2,
 }
@@ -32,6 +33,7 @@ pub(crate) enum FoundingSubmissionOperationV1 {
 impl FoundingSubmissionOperationV1 {
     pub(crate) const fn label(self) -> &'static str {
         match self {
+            Self::Dcltcfq1 => "DCLTCFQ1",
             Self::Dcltpcb2 => "DCLTPCB2",
             Self::Dcltgmf2 => "DCLTGMF2",
         }
@@ -39,14 +41,14 @@ impl FoundingSubmissionOperationV1 {
 
     const fn exact_unique_accounts(self) -> usize {
         match self {
-            Self::Dcltpcb2 => 62,
-            Self::Dcltgmf2 => 59,
+            Self::Dcltcfq1 => 51,
+            Self::Dcltpcb2 | Self::Dcltgmf2 => 60,
         }
     }
 
     const fn exact_required_signatures(self) -> usize {
         match self {
-            Self::Dcltpcb2 => 2,
+            Self::Dcltcfq1 | Self::Dcltpcb2 => 2,
             Self::Dcltgmf2 => 1,
         }
     }
@@ -1089,15 +1091,19 @@ mod tests {
     }
 
     #[test]
-    fn exact_62_and_59_geometry_progress_through_all_crash_boundaries() {
+    fn exact_split_founding_geometry_progresses_through_all_crash_boundaries() {
         for operation in [
+            FoundingSubmissionOperationV1::Dcltcfq1,
             FoundingSubmissionOperationV1::Dcltpcb2,
             FoundingSubmissionOperationV1::Dcltgmf2,
         ] {
             let payer = Keypair::new();
             let beneficiary = Keypair::new();
             let signers = match operation {
-                FoundingSubmissionOperationV1::Dcltpcb2 => vec![&payer, &beneficiary],
+                FoundingSubmissionOperationV1::Dcltcfq1
+                | FoundingSubmissionOperationV1::Dcltpcb2 => {
+                    vec![&payer, &beneficiary]
+                }
                 FoundingSubmissionOperationV1::Dcltgmf2 => vec![&payer],
             };
             let (binding, prepared) = prepared(&signers, operation);

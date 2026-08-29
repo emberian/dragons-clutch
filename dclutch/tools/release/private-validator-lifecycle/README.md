@@ -4,14 +4,13 @@
 dClutch source commit. It is not devnet evidence and it never accepts a
 caller-supplied RPC URL.
 
-The accepted executable mode in this revision is the one-seed
-founding/participant probe. The post-Direct Pyth, Resolution, payout,
-retirement, finalized-capture, activity-manifest, provider-closure, session,
-aggregate-receipt, and dossier surfaces are implemented. The one-seed
-`full-probe` and twenty-seed `full` modes remain deliberately refused until the
-owned-loopback Direct producer exports one finalized terminal semantic owner
-and its canonical nonzero-claim payout schedule. The terminal steps below are
-the convergence target; they are not a claim that a full lifecycle has run.
+This revision has two development modes. The one-seed `participant` probe stops
+after finalized participant admission. The one-seed `full-probe` continues
+through the Direct producer, every replay/token/ALT/seal/Hot mutation, Pyth,
+Resolution, every nonzero payout, and retirement. The full probe is integration
+evidence only: it cannot write an aggregate receipt or dossier and is never
+twenty-seed release evidence. The twenty-seed `full` mode remains deliberately
+refused until the exact seventeen-case resumable chaos session exists.
 
 At terminal convergence, each of exactly twenty named seeds will:
 
@@ -84,6 +83,9 @@ The final evidence path uses the callable successor commands below. They are
 semantic-owner producers, not licenses to hand-author JSON:
 
 ```text
+local-private-validator-direct-trade-produce-v1
+local-private-validator-direct-trade-v1
+local-private-validator-direct-payout-schedule-v1
 local-private-validator-pyth-provider-closure-v1
 local-private-validator-activity-stage-completion-v1
 local-private-validator-activity-manifest-v1
@@ -96,8 +98,8 @@ The dossier is the last write. Its reconciler reopens the exact aggregate
 receipt by caller-supplied SHA-256 and creates a new output without replacing
 an existing file or following a symlink.
 
-Today, the caller-backed development probe stops after the real founding and
-participant transactions. The local market mints an explicit extra 100,000,000
+The participant-only probe stops after the real founding and participant
+transactions. The local market mints an explicit extra 100,000,000
 raw collateral atoms into the `direct-buyer` fixture account owned by the
 `participant`, removes mint authority, and records that separate supply before
 the participant caller transfers and approves the exact amount:
@@ -120,6 +122,29 @@ are `floor(seller gross collateral atoms * 50 / 10,000)`, buyer fee atoms are
 `floor(buyer gross collateral atoms * 50 / 10,000)`, and the recipient gets
 their exact sum. The realized Direct stage remains the fee semantic owner's
 evidence.
+
+The callable full probe uses the same clean-source and checked-release
+requirements, but continues on the still-live validator. Direct's producer
+writes one private session. Repeated executor invocations advance exactly one
+durable mutation each until the sole finalized evidence exists. A read-only
+typed adapter then reopens that evidence and live finalized state, projects the
+canonical nonzero claim schedule, and exposes each mutating transaction's CU;
+the Python supervisor never parses Direct's private session into another DTO.
+
+```sh
+SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
+  python3 tools/release/private-validator-lifecycle/run.py \
+  --repo /tank/dregg-build/dclutch-private-lifecycle-source \
+  --release-root /tank/dregg-build/dclutch-release \
+  --validator /usr/local/bin/solana-test-validator \
+  --solana /usr/local/bin/solana \
+  --work /tank/dregg-build/dclutch-private-full-probe-REV \
+  --through full-probe --seeds 1
+```
+
+This mode reports the one pass and every exact named CU. It does not make the
+M-61 twenty-seed claim, synthesize chaos, or invoke the aggregate/dossier
+commands.
 
 When the callable Direct exterior must consume the same authenticated local
 state before it is integrated into this supervisor, add

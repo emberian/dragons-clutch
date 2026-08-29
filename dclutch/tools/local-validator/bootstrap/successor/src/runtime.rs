@@ -2778,7 +2778,7 @@ mod tests {
             resolution_sha256: digest(&resolution_elf),
             resolution_elf,
             resolution_semantic_release_id: hex(
-                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             ),
             custody_program: program(0x36),
             custody_sha256: digest(&custody_elf),

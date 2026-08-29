@@ -8,7 +8,7 @@ use dclutch_market_core_codec::{ProjectFoundReceiptV2, ProjectFoundRequestV2};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
-    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_prestate_digest_v1,
 };
 use solana_program::{
@@ -198,7 +198,7 @@ pub fn build_pre_market_funding_v2(
         || trading.release().program().to_bytes() != snapshot.caller_program.key.to_bytes()
         || resolution.release().program().to_bytes() != snapshot.resolution_program.key.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
-            != RESOLUTION_CONTROLLER_RELEASE_ID_V6
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
         return Err(ResolutionCoreOperatorErrorV3::Record);
     }
@@ -433,7 +433,7 @@ fn resolution_mask(
             .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?
             .release_id()
             .to_bytes()
-            == RESOLUTION_CONTROLLER_RELEASE_ID_V6
+            == RESOLUTION_CONTROLLER_RELEASE_ID_V7
         {
             mask |= 1_u16 << entry_index;
         }

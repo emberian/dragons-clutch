@@ -366,8 +366,20 @@ pub fn process_instruction(
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    if projected_custody_bootstrap_v1::is_controller_funding_prepared_abort_v1(instruction_data) {
-        return projected_custody_bootstrap_v1::process_controller_funding_prepared_abort_v1(
+    if projected_custody_bootstrap_v1::is_controller_funding_cleanup_step1_v1(instruction_data) {
+        return projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if projected_custody_bootstrap_v1::is_controller_funding_cleanup_step2_v1(instruction_data) {
+        return projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1(
             program_id,
             accounts,
             instruction_data,

@@ -11,7 +11,7 @@ use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
     PRE_MARKET_FUNDING_REQUEST_BYTES_V2, PRE_MARKET_FUNDING_REQUEST_MAGIC_V2,
-    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
     pre_market_funding_prestate_digest_v1,
 };
 use solana_program::{
@@ -379,7 +379,7 @@ fn resolution_funding_plan(
         let entry = manifest
             .entry(entry_index)
             .map_err(|_| ResolutionError::Funding)?;
-        if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V6 {
+        if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
             let quote = entry.funding_quote();
             if quote.realm_collateral().is_some() {
                 return Err(ResolutionError::Funding.into());
@@ -440,7 +440,7 @@ fn authenticate_release_and_caller(
     if trading.release().program().to_bytes() != caller_program.key.to_bytes()
         || resolution.release().program().to_bytes() != program_id.to_bytes()
         || resolution.release().semantic_release_id().to_bytes()
-            != RESOLUTION_CONTROLLER_RELEASE_ID_V6
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }

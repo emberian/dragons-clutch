@@ -37,15 +37,18 @@ SIGNATURES = [base58(bytes([index]) * 64) for index in range(1, 20)]
 
 class PrivateValidatorLifecycleTests(unittest.TestCase):
     def test_full_help_requires_every_dispatched_final_evidence_command(self) -> None:
-        required = (
+        probe_required = (
             *MODULE.FOUNDING_PARTICIPANT_COMMANDS,
+            MODULE.DIRECT_PRODUCER_COMMAND,
+            MODULE.DIRECT_EXECUTE_COMMAND,
+            MODULE.DIRECT_PAYOUT_SCHEDULE_COMMAND,
             MODULE.PYTH_PROVISION_COMMAND,
             MODULE.FLAGSHIP_RESOLUTION_COMMAND,
             MODULE.PAYOUT_INPUT_COMMAND,
             MODULE.PAYOUT_EXECUTE_COMMAND,
             MODULE.TERMINAL_RETIREMENT_COMMAND,
-            *MODULE.FINAL_EVIDENCE_COMMANDS,
         )
+        full_required = (*probe_required, *MODULE.FINAL_EVIDENCE_COMMANDS)
         with tempfile.TemporaryDirectory() as root_text:
             bootstrap = Path(root_text) / "fake-bootstrap"
 
@@ -57,12 +60,12 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                 )
                 bootstrap.chmod(0o755)
 
-            install(required)
+            install(probe_required)
             self.assertEqual(len(MODULE.command_surface(bootstrap, "full-probe")), 64)
             for omitted in MODULE.FINAL_EVIDENCE_COMMANDS:
                 with self.subTest(omitted=omitted):
                     install(
-                        tuple(command for command in required if command != omitted)
+                        tuple(command for command in full_required if command != omitted)
                     )
                     with self.assertRaisesRegex(MODULE.Refusal, omitted):
                         MODULE.command_surface(bootstrap, "full")
@@ -310,9 +313,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             release = root / "release"
             repo.mkdir()
             release.mkdir()
-            with self.assertRaisesRegex(
-                MODULE.Refusal, "owned-loopback Direct producer"
-            ):
+            with self.assertRaisesRegex(MODULE.Refusal, "seventeen-case"):
                 MODULE.parse(
                     [
                         "--repo",
@@ -499,6 +500,105 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             MODULE.canonical_payout_schedule((ordered[0], ordered[0]))
         with self.assertRaisesRegex(MODULE.Refusal, "one through 32"):
             MODULE.canonical_payout_schedule(())
+
+    def test_typed_direct_schedule_reopens_mutations_and_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            evidence = root / "direct-finalized.json"
+            evidence.write_text("{}\n")
+            kinds = (
+                "replay-setup",
+                "token-setup",
+                "lookup-create",
+                "lookup-extend",
+                "lookup-freeze",
+                "capability-seal",
+                "hot",
+            )
+            mutations = []
+            for index, kind in enumerate(kinds):
+                journal = root / f"journal-{index}.json"
+                journal.write_text(f'{{"phase":"finalized","index":{index}}}\n')
+                mutations.append(
+                    {
+                        "kind": kind,
+                        "prefixLen": "32" if kind == "lookup-extend" else None,
+                        "path": str(journal),
+                        "sha256": MODULE.sha256_file(journal),
+                        "intentSha256": f"{index + 1:02x}" * 32,
+                        "schema": "dclutch-test-direct-journal-v1",
+                        "completionPointer": "/phase",
+                        "completionValue": "finalized",
+                        "signature": SIGNATURES[index],
+                        "slot": str(index + 1),
+                        "feePayer": PUBKEY_A,
+                        "feeLamports": "5000",
+                        "computeUnitsConsumed": str(100 + index),
+                    }
+                )
+            claims = [
+                {
+                    "owner": PUBKEY_A,
+                    "position": PUBKEY_C,
+                    "recipientToken": PUBKEY_B,
+                    "claimIndex": "0",
+                    "quantityAtoms": "900",
+                },
+                {
+                    "owner": PUBKEY_B,
+                    "position": PUBKEY_C,
+                    "recipientToken": PUBKEY_A,
+                    "claimIndex": "1",
+                    "quantityAtoms": "100",
+                },
+            ]
+            schedule = {
+                "schema": MODULE.DIRECT_PAYOUT_SCHEDULE_SCHEMA,
+                "status": "finalized",
+                "cluster": "owned-loopback",
+                "directEvidence": {
+                    "path": str(evidence),
+                    "sha256": MODULE.sha256_file(evidence),
+                    "schema": MODULE.DIRECT_FINALIZED_SCHEMA,
+                    "evidenceSha256": "11" * 32,
+                },
+                "market": PUBKEY_C,
+                "planSha256": "22" * 32,
+                "marketInputSha256": "33" * 32,
+                "finalizedSlot": "10",
+                "mutations": mutations,
+                "claims": claims,
+                "scheduleSetSha256": MODULE.sha256_bytes(
+                    (
+                        MODULE.json.dumps(
+                            claims, sort_keys=True, separators=(",", ":")
+                        )
+                        + "\n"
+                    ).encode()
+                ),
+            }
+            schedule_path = root / "schedule.json"
+            schedule_path.write_text(MODULE.json.dumps(schedule, sort_keys=True) + "\n")
+            targets, metrics, decoded = MODULE.accepted_direct_payout_schedule(
+                schedule_path, evidence
+            )
+            self.assertEqual(len(targets), 2)
+            self.assertEqual(len(metrics), 7)
+            self.assertEqual(decoded["status"], "finalized")
+
+            schedule["claims"] = list(reversed(claims))
+            schedule["scheduleSetSha256"] = MODULE.sha256_bytes(
+                (
+                    MODULE.json.dumps(
+                        schedule["claims"], sort_keys=True, separators=(",", ":")
+                    )
+                    + "\n"
+                ).encode()
+            )
+            hostile = root / "hostile.json"
+            hostile.write_text(MODULE.json.dumps(schedule, sort_keys=True) + "\n")
+            with self.assertRaisesRegex(MODULE.Refusal, "canonical"):
+                MODULE.accepted_direct_payout_schedule(hostile, evidence)
 
     def test_resolution_v2_requires_three_cu_bound_mutating_receipts(self) -> None:
         receipts = [
@@ -729,7 +829,7 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
                     market=PUBKEY_B,
                 )
 
-    def test_full_probe_is_distinct_one_seed_and_still_refused(self) -> None:
+    def test_full_probe_is_distinct_and_admits_exactly_one_seed(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
             fake = root / "fake"
@@ -755,8 +855,8 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             ]
             with self.assertRaisesRegex(MODULE.Refusal, "exactly one"):
                 MODULE.parse([*common, "--seeds", "2"])
-            with self.assertRaisesRegex(MODULE.Refusal, "Direct"):
-                MODULE.parse([*common, "--seeds", "1"])
+            _paths, seeds, through, hold = MODULE.parse([*common, "--seeds", "1"])
+            self.assertEqual((seeds, through, hold), (1, "full-probe", False))
             self.assertNotEqual(MODULE.FULL_PROBE_SCHEMA, MODULE.SCHEMA)
             self.assertNotEqual(MODULE.FULL_PROBE_RUN_SCHEMA, MODULE.RUN_SCHEMA)
 

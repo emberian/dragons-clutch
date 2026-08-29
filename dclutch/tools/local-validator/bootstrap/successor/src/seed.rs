@@ -76,6 +76,10 @@ pub(crate) const KEYPAIR_SEED_DOMAIN_V1: &[u8] =
 pub(crate) mod role {
     /// The ephemeral Core upgrade authority, and the campaign's fee payer.
     pub(crate) const CORE_UPGRADE_AUTHORITY: &str = "core-upgrade-authority";
+    /// The disposable public-founding fee and rent payer. It is deliberately
+    /// distinct from every retained protocol signer and from the deployment's
+    /// upgrade authority.
+    pub(crate) const CAMPAIGN_PAYER: &str = "campaign-payer";
     /// The wrong authority every refusal probe signs with.
     pub(crate) const HOSTILE_AUTHORITY: &str = "hostile-authority";
     /// The Token-2022 collateral mint.

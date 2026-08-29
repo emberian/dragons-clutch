@@ -9,6 +9,7 @@ appear in the public ledger or captured output.
 from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
+import base64
 import dataclasses
 import datetime as dt
 import hashlib
@@ -48,6 +49,16 @@ def write_json(path: Path, value: object) -> None:
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def base58_encode(value: bytes) -> str:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    number = int.from_bytes(value, "big")
+    output = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        output = alphabet[remainder] + output
+    return "1" * (len(value) - len(value.lstrip(b"\0"))) + (output or "1")
 
 
 def limits(target: str = "owned-loopback") -> dict[str, int]:
@@ -154,7 +165,7 @@ def scenario_value(target: str = "owned-loopback") -> dict[str, object]:
 
 def manifest_value(scenario: Path, target: str = "owned-loopback", rpc_url: str = "http://127.0.0.1:18899/") -> dict[str, object]:
     return {
-        "schema": activity.MANIFEST_SCHEMA,
+        "schema": activity.LEGACY_MANIFEST_SCHEMA,
         "scenario": {"path": str(scenario), "sha256": digest(scenario)},
         "target": {
             "kind": target,
@@ -184,6 +195,178 @@ def manifest_value(scenario: Path, target: str = "owned-loopback", rpc_url: str 
                 },
             }
         ],
+    }
+
+
+def v3_scenario_value() -> dict[str, object]:
+    value = scenario_value()
+    body = value["body"]
+    assert isinstance(body, dict)
+
+    def wallet(wallet_id: str, role: str, amount: str) -> dict[str, object]:
+        return {
+            "id": wallet_id,
+            "roles": [role],
+            "fundingLamports": amount,
+            "collateralAccountRef": f"token.test-lifecycle.{wallet_id}.collateral",
+            "claimAccountRefs": [
+                f"token.test-lifecycle.{wallet_id}.claim.{index}" for index in range(4)
+            ],
+            "positionAccountRef": f"position.test-lifecycle.{wallet_id}",
+        }
+
+    body["wallets"] = [
+        wallet("deployer", "campaign-payer", "100000"),
+        wallet("collateral-mint", "collateral-mint", "0"),
+        wallet("collateral-wallet", "collateral-wallet", "0"),
+        wallet("founding-beneficiary", "founding-beneficiary", "0"),
+        wallet(
+            "founding-projection-witness", "founding-projection-witness", "0"
+        ),
+        wallet("founding-source-funder", "founding-source-funder", "0"),
+        wallet("alice", "participant", "10000"),
+    ]
+    operations = body["operations"]
+    assert isinstance(operations, list) and isinstance(operations[0], dict)
+    operations[0]["feePayerWalletRef"] = "deployer"
+    value["bodySha256"] = hashlib.sha256(
+        json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    return value
+
+
+def v3_manifest_value(
+    scenario: Path, checked_release: Path, market: Path
+) -> dict[str, object]:
+    founder = "7" * 32
+    substituted = "8" * 32
+    return {
+        "schema": activity.MANIFEST_SCHEMA,
+        "scenario": {"path": str(scenario), "sha256": digest(scenario)},
+        "target": {
+            "kind": "owned-loopback",
+            "rpcUrl": "http://127.0.0.1:18899/",
+            "devnetGenesisHash": None,
+        },
+        "inputs": [
+            {
+                "id": "checked-release",
+                "path": str(checked_release),
+                "sha256": digest(checked_release),
+            },
+            {"id": "market", "path": str(market), "sha256": digest(market)},
+        ],
+        "addressBindings": [
+            {
+                "ref": "wallet.alice",
+                "source": {"kind": "wallet", "walletRef": "alice"},
+            },
+            {
+                "ref": "core-upgrade-authority",
+                "source": {"kind": "literal", "address": "9" * 32},
+            },
+        ],
+        "adapters": [
+            {
+                "id": "founding",
+                "covers": ["found"],
+                "caller": "successor",
+                "argv": [
+                    "campaign",
+                    "--founding-only",
+                    "--plan",
+                    "{{input.checked-release}}",
+                    "--market",
+                    "{{input.market}}",
+                    "--keypair-campaign-payer",
+                    "{{wallet.deployer.keypair}}",
+                    "--keypair-collateral-mint",
+                    "{{wallet.collateral-mint.keypair}}",
+                    "--keypair-collateral-wallet",
+                    "{{wallet.collateral-wallet.keypair}}",
+                    "--keypair-founding-beneficiary",
+                    "{{wallet.founding-beneficiary.keypair}}",
+                    "--founding-founder",
+                    founder,
+                    "--keypair-founding-projection-witness",
+                    "{{wallet.founding-projection-witness.keypair}}",
+                    "--keypair-founding-source-funder",
+                    "{{wallet.founding-source-funder.keypair}}",
+                    "--substituted-founder",
+                    substituted,
+                    "--evidence",
+                    "{{work}}/receipts/founding.json",
+                    "--execute",
+                ],
+                "dependsOn": [],
+                "wallets": ["deployer"],
+                "mutation": True,
+                "completion": {
+                    "path": "{{work}}/receipts/founding.json",
+                    "schema": activity.CAMPAIGN_REPORT_SCHEMA,
+                    "signaturePointers": [],
+                    "transactionListPointer": "/execution/transactions",
+                    "requiredTransactionLabels": ["DCLTCFQ1", "DCLTPCB2", "DCLTGMF2"],
+                    "requiredValues": {},
+                },
+            },
+            {
+                "id": "remaining-lifecycle",
+                "covers": ["participant", "direct", "resolve", "redeem", "retire"],
+                "caller": "successor",
+                "argv": [
+                    "local-private-validator-lifecycle-v1",
+                    "--work",
+                    "{{work}}",
+                    "--execute",
+                ],
+                "dependsOn": ["founding"],
+                "wallets": ["alice"],
+                "mutation": True,
+                "completion": {
+                    "path": "{{work}}/receipts/private-lifecycle.json",
+                    "schema": "dclutch-local-private-validator-lifecycle-v1",
+                    "signaturePointers": ["/signature"],
+                    "transactionListPointer": None,
+                    "requiredTransactionLabels": [],
+                    "requiredValues": {"/completed": True},
+                },
+            },
+        ],
+        "campaign": {
+            "identities": [
+                {
+                    "role": role,
+                    "source": (
+                        {"kind": "literal", "address": founder}
+                        if role == "founding-founder"
+                        else {"kind": "literal", "address": substituted}
+                        if role == "substituted-founder"
+                        else {
+                            "kind": "wallet",
+                            "walletRef": "deployer"
+                            if role == "campaign-payer"
+                            else role,
+                        }
+                    ),
+                }
+                for role in activity.CAMPAIGN_IDENTITY_ROLES
+            ],
+            "permanentAuthorityRef": "core-upgrade-authority",
+            "foundingAdapter": "founding",
+            "initialFunding": {
+                "walletRef": "deployer",
+                "transferLamports": "100000",
+            },
+            "postInitFunding": [
+                {
+                    "id": "fund-alice",
+                    "walletRef": "alice",
+                    "transferLamports": "10000",
+                    "afterAdapter": "founding",
+                }
+            ],
+        },
     }
 
 
@@ -300,6 +483,7 @@ class RpcState:
         self.signatures: list[str] = []
         self.signature_errors: dict[str, object] = {}
         self.balances: dict[str, int] = {}
+        self.multiple_accounts: list[object | None] = []
 
 
 @contextmanager
@@ -316,6 +500,11 @@ def rpc_server(state: RpcState):
                 result: object = state.genesis
             elif method == "getBalance":
                 result = {"context": {"slot": 101}, "value": state.balances.get(body["params"][0], 0)}
+            elif method == "getMultipleAccounts":
+                result = {
+                    "context": {"slot": 102},
+                    "value": state.multiple_accounts,
+                }
             elif method == "getTransaction":
                 result = state.transactions.get(body["params"][0])
             elif method == "getSignaturesForAddress":
@@ -368,6 +557,16 @@ class ActivityTests(unittest.TestCase):
     def parsed(self):
         return activity.parse_manifest(self.manifest)
 
+    def write_v3(self) -> dict[str, object]:
+        write_json(self.scenario, v3_scenario_value())
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        write_json(checked_release, {"fixture": "checked-release"})
+        write_json(market, {"fixture": "market"})
+        value = v3_manifest_value(self.scenario, checked_release, market)
+        write_json(self.manifest, value)
+        return value
+
     def prepare_finalized_funding(self, manifest, state: RpcState) -> None:
         activity.prepare_wallets(manifest, self.work, self.keygen)
         journal = activity.new_funding_journal(manifest, "alice", WALLET, FUNDER, 10_000, None)
@@ -391,6 +590,129 @@ class ActivityTests(unittest.TestCase):
         write_json(self.manifest, rewritten)
         with self.assertRaisesRegex(activity.Refusal, "unknown fields"):
             self.parsed()
+
+    def test_v3_owns_exact_campaign_identities_and_funding_partition(self) -> None:
+        self.write_v3()
+        manifest = self.parsed()
+        assert manifest.campaign is not None
+        self.assertEqual(manifest.schema, activity.MANIFEST_SCHEMA)
+        self.assertEqual(
+            [identity.role for identity in manifest.campaign.identities],
+            list(activity.CAMPAIGN_IDENTITY_ROLES),
+        )
+        self.assertEqual(manifest.campaign.payer_wallet_ref, "deployer")
+        self.assertEqual(
+            [wallet.wallet_id for wallet in activity.initial_funding_wallets(manifest)],
+            ["deployer"],
+        )
+        self.assertEqual(
+            [row.journal_id for row in manifest.campaign.post_init_funding],
+            ["fund-alice"],
+        )
+        self.assertEqual(
+            [row.wallet_ref for row in manifest.campaign.post_init_funding],
+            ["alice"],
+        )
+
+    def test_v3_refuses_prefunded_fresh_roles_aliases_and_missing_post_init(self) -> None:
+        value = self.write_v3()
+        changed = json.loads(json.dumps(value))
+        changed["campaign"]["identities"][7]["source"]["address"] = "7" * 32
+        write_json(self.manifest, changed)
+        with self.assertRaisesRegex(activity.Refusal, "alias"):
+            self.parsed()
+
+        changed = json.loads(json.dumps(value))
+        changed["campaign"]["postInitFunding"] = []
+        write_json(self.manifest, changed)
+        with self.assertRaisesRegex(activity.Refusal, "transaction wallets"):
+            self.parsed()
+
+        scenario = v3_scenario_value()
+        scenario["body"]["wallets"][1]["fundingLamports"] = "1"
+        scenario["bodySha256"] = hashlib.sha256(
+            json.dumps(scenario["body"], separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()
+        write_json(self.scenario, scenario)
+        checked_release = self.root / "checked-release.json"
+        market = self.root / "market.json"
+        changed = v3_manifest_value(self.scenario, checked_release, market)
+        write_json(self.manifest, changed)
+        with self.assertRaisesRegex(activity.Refusal, "zero prefunding"):
+            self.parsed()
+
+    def test_campaign_freshness_reads_five_absences_at_one_finalized_boundary(self) -> None:
+        state = RpcState()
+        state.multiple_accounts = [None] * 5
+        with rpc_server(state) as rpc_url:
+            rpc = activity.Rpc(rpc_url)
+            self.assertEqual(rpc.absent_accounts([str(index + 2) * 32 for index in range(5)]), 102)
+            state.multiple_accounts[3] = {"lamports": 1}
+            with self.assertRaisesRegex(activity.Refusal, "not all absent"):
+                rpc.absent_accounts([str(index + 2) * 32 for index in range(5)])
+
+    def test_post_init_funding_is_sign_once_and_dispatch_marker_gated(self) -> None:
+        self.write_v3()
+        manifest = self.parsed()
+        assert manifest.campaign is not None
+        spec = manifest.campaign.post_init_funding[0]
+        path = activity.post_init_funding_journal_path(self.work, spec.journal_id)
+        planned = activity.new_post_init_funding_journal(
+            manifest,
+            spec,
+            FUNDER,
+            WALLET,
+            "a" * 64,
+            "b" * 64,
+        )
+        activity.atomic_write_json(path, planned)
+        planned = activity.authenticated_state(path, "planned post-init")
+        signature = base58_encode(b"\x01" * 64)
+        message = base64.b64encode(b"\x02" * 100).decode()
+        prepared = activity.prepare_post_init_funding_journal(
+            planned,
+            {
+                "blockhash": "B" * 32,
+                "signers": [f"{FUNDER}={signature}"],
+                "absent": [],
+                "badSig": [],
+                "message": message,
+            },
+            "B" * 32,
+            1234,
+        )
+        activity.atomic_write_json(path, prepared)
+        prepared = activity.authenticated_state(path, "prepared post-init")
+        self.assertEqual(prepared["phase"], "Prepared")
+        self.assertEqual(
+            prepared["packetSha256"],
+            hashlib.sha256(base64.b64decode(prepared["packetBase64"])).hexdigest(),
+        )
+        with self.assertRaisesRegex(activity.Refusal, "Dispatching"):
+            activity.submitted_post_init_funding_journal(prepared, signature)
+
+        dispatching = activity.dispatching_post_init_funding_journal(prepared)
+        activity.atomic_write_json(path, dispatching)
+        dispatching = activity.authenticated_state(path, "dispatching post-init")
+        with self.assertRaisesRegex(activity.Refusal, "another packet"):
+            activity.submitted_post_init_funding_journal(
+                dispatching, base58_encode(b"\x03" * 64)
+            )
+        submitted = activity.submitted_post_init_funding_journal(
+            dispatching, signature
+        )
+        activity.atomic_write_json(path, submitted)
+        submitted = activity.authenticated_state(path, "submitted post-init")
+        finalized = activity.finalize_post_init_funding_journal(
+            submitted,
+            funding_transaction(
+                amount=spec.transfer_lamports,
+                memo=submitted["memo"],
+            ),
+        )
+        self.assertEqual(finalized["phase"], "Finalized")
+        self.assertEqual(finalized["signature"], signature)
+        self.assertEqual(finalized["feeLamports"], "5000")
 
     def test_cycle_and_preflight_only_direct_refuse(self) -> None:
         changed = scenario_value()

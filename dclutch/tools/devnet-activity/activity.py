@@ -14,6 +14,8 @@ accepts that authorization and public devnet never accepts loopback affordances.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 import dataclasses
 import datetime as dt
@@ -34,11 +36,17 @@ from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 
-MANIFEST_SCHEMA = "dclutch-devnet-activity-manifest-v2"
+MANIFEST_SCHEMA = "dclutch-devnet-activity-manifest-v3"
+LEGACY_MANIFEST_SCHEMA = "dclutch-devnet-activity-manifest-v2"
 WALLET_LEDGER_SCHEMA = "dclutch-devnet-activity-wallet-ledger-v1"
 PRIVATE_INDEX_SCHEMA = "dclutch-devnet-activity-private-wallet-index-v1"
 FUNDING_JOURNAL_SCHEMA = "dclutch-devnet-activity-funding-journal-v1"
 FUNDING_CLOSURE_SCHEMA = "dclutch-devnet-activity-funding-closure-v1"
+INITIAL_FUNDING_CLOSURE_SCHEMA = "dclutch-devnet-activity-initial-funding-closure-v1"
+POST_INIT_FUNDING_JOURNAL_SCHEMA = "dclutch-devnet-activity-post-init-funding-journal-v1"
+POST_INIT_FUNDING_CLOSURE_SCHEMA = "dclutch-devnet-activity-post-init-funding-closure-v1"
+FUNDING_LIFECYCLE_SCHEMA = "dclutch-devnet-activity-funding-lifecycle-v1"
+CAMPAIGN_FRESHNESS_SCHEMA = "dclutch-devnet-activity-campaign-freshness-v1"
 AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v1"
 BOUNDED_AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v2"
 STOP_SCHEMA = "dclutch-devnet-activity-stop-v1"
@@ -51,6 +59,24 @@ DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 DEVNET_MANIFEST_RPC_URL = "https://api.devnet.solana.com:443/"
 DEVNET_SUPERVISOR_RPC_URL = "https://api.devnet.solana.com/"
 MEMO_PREFIX = "dclutch-activity-fund-v1:"
+POST_INIT_MEMO_PREFIX = "dclutch-activity-post-init-fund-v1:"
+CAMPAIGN_IDENTITY_ROLES = (
+    "campaign-payer",
+    "collateral-mint",
+    "collateral-wallet",
+    "founding-beneficiary",
+    "founding-founder",
+    "founding-projection-witness",
+    "founding-source-funder",
+    "substituted-founder",
+)
+CAMPAIGN_FRESH_SIGNER_ROLES = (
+    "collateral-mint",
+    "collateral-wallet",
+    "founding-beneficiary",
+    "founding-projection-witness",
+    "founding-source-funder",
+)
 PUBKEY_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -90,6 +116,33 @@ def sha256_file(path: Path) -> str:
 
 def canonical_json(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+
+
+def base58_decode(value: str, label: str, expected_length: int) -> bytes:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    number = 0
+    try:
+        for character in value:
+            number = number * 58 + alphabet.index(character)
+    except (ValueError, binascii.Error) as error:
+        raise Refusal(f"{label} is not canonical base58") from error
+    body = b"" if number == 0 else number.to_bytes((number.bit_length() + 7) // 8, "big")
+    decoded = b"\0" * (len(value) - len(value.lstrip("1"))) + body
+    if len(decoded) != expected_length:
+        raise Refusal(f"{label} is not exactly {expected_length} bytes")
+    return decoded
+
+
+def shortvec(value: int) -> bytes:
+    if value < 0:
+        raise Refusal("shortvec value must be nonnegative")
+    output = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        output.append(byte | (0x80 if value else 0))
+        if not value:
+            return bytes(output)
 
 
 def compact_json(value: Any) -> bytes:
@@ -385,6 +438,32 @@ class AdapterSpec:
 
 
 @dataclasses.dataclass(frozen=True)
+class CampaignIdentity:
+    role: str
+    source_kind: str
+    wallet_ref: str | None
+    address: str | None
+
+
+@dataclasses.dataclass(frozen=True)
+class PostInitFundingSpec:
+    journal_id: str
+    wallet_ref: str
+    transfer_lamports: int
+    after_adapter_id: str
+
+
+@dataclasses.dataclass(frozen=True)
+class CampaignSpec:
+    payer_wallet_ref: str
+    identities: tuple[CampaignIdentity, ...]
+    permanent_authority_ref: str
+    founding_adapter_id: str
+    initial_funding_lamports: int
+    post_init_funding: tuple[PostInitFundingSpec, ...]
+
+
+@dataclasses.dataclass(frozen=True)
 class Manifest:
     path: Path
     sha256: str
@@ -394,6 +473,8 @@ class Manifest:
     inputs: Mapping[str, Path]
     address_bindings: tuple[AddressBinding, ...]
     adapters: tuple[AdapterSpec, ...]
+    schema: str = LEGACY_MANIFEST_SCHEMA
+    campaign: CampaignSpec | None = None
 
 
 def parse_limits(value: Any, label: str, cluster_target: str) -> Limits:
@@ -527,7 +608,7 @@ def parse_scenario(path: Path, expected_sha256: str) -> Scenario:
             WalletSpec(
                 wallet_id,
                 roles,
-                decimal(source["fundingLamports"], f"wallet {wallet_id} funding", positive=True),
+                decimal(source["fundingLamports"], f"wallet {wallet_id} funding"),
                 logical_ref(source["collateralAccountRef"], f"wallet {wallet_id} collateral account"),
                 tuple(logical_ref(item, f"wallet {wallet_id} claim account") for item in exact_list(source["claimAccountRefs"], f"wallet {wallet_id} claim accounts")),
                 "" if source["positionAccountRef"] is None else logical_ref(source["positionAccountRef"], f"wallet {wallet_id} Position", allow_empty=True),
@@ -779,13 +860,205 @@ def parse_address_binding(value: Any, index: int, inputs: Mapping[str, Path], wa
     raise Refusal(f"address binding {reference} has unknown source kind {kind}")
 
 
+def parse_campaign(
+    value: Any,
+    scenario: Scenario,
+    address_bindings: Sequence[AddressBinding],
+    adapters: Sequence[AdapterSpec],
+) -> CampaignSpec:
+    source = exact_object(value, "activity campaign")
+    exact_keys(
+        source,
+        {
+            "identities",
+            "permanentAuthorityRef",
+            "foundingAdapter",
+            "initialFunding",
+            "postInitFunding",
+        },
+        "activity campaign",
+    )
+    wallet_by_id = {wallet.wallet_id: wallet for wallet in scenario.wallets}
+    identities: list[CampaignIdentity] = []
+    identity_wallet_refs: set[str] = set()
+    literal_addresses: set[str] = set()
+    raw_identities = exact_list(source["identities"], "campaign identities")
+    if len(raw_identities) != len(CAMPAIGN_IDENTITY_ROLES):
+        raise Refusal("campaign must name its exact eight identities")
+    for index, (raw, expected_role) in enumerate(
+        zip(raw_identities, CAMPAIGN_IDENTITY_ROLES, strict=True)
+    ):
+        row = exact_object(raw, f"campaign identity {index}")
+        exact_keys(row, {"role", "source"}, f"campaign identity {index}")
+        role = stable_id(row["role"], f"campaign identity {index} role")
+        if role != expected_role:
+            raise Refusal("campaign identities are not the exact canonical role partition")
+        identity_source = exact_object(
+            row["source"], f"campaign identity {role} source"
+        )
+        kind = text(
+            identity_source.get("kind"), f"campaign identity {role} source kind", 32
+        )
+        if role in {"founding-founder", "substituted-founder"}:
+            if kind != "literal":
+                raise Refusal(f"campaign identity {role} must be a pubkey-only literal")
+            exact_keys(
+                identity_source,
+                {"kind", "address"},
+                f"campaign identity {role} source",
+            )
+            address = pubkey_text(
+                identity_source["address"], f"campaign identity {role} address"
+            )
+            if address in literal_addresses:
+                raise Refusal("campaign pubkey-only identities alias")
+            literal_addresses.add(address)
+            identities.append(CampaignIdentity(role, kind, None, address))
+            continue
+        if kind != "wallet":
+            raise Refusal(f"campaign identity {role} must use a disposable wallet")
+        exact_keys(
+            identity_source,
+            {"kind", "walletRef"},
+            f"campaign identity {role} source",
+        )
+        wallet_ref = stable_id(
+            identity_source["walletRef"], f"campaign identity {role} wallet"
+        )
+        if wallet_ref not in wallet_by_id or wallet_ref in identity_wallet_refs:
+            raise Refusal(f"campaign identity {role} has an absent or aliased wallet")
+        if role not in wallet_by_id[wallet_ref].roles:
+            raise Refusal(f"campaign identity {role} wallet omits its exact role")
+        identity_wallet_refs.add(wallet_ref)
+        identities.append(CampaignIdentity(role, kind, wallet_ref, None))
+
+    identity_by_role = {identity.role: identity for identity in identities}
+    payer_wallet_ref = identity_by_role["campaign-payer"].wallet_ref
+    assert payer_wallet_ref is not None
+    if payer_wallet_ref != "deployer":
+        raise Refusal("campaign-payer must bind the disposable scenario deployer wallet")
+    for role in CAMPAIGN_FRESH_SIGNER_ROLES:
+        wallet_ref = identity_by_role[role].wallet_ref
+        assert wallet_ref is not None
+        if wallet_by_id[wallet_ref].funding_lamports != 0:
+            raise Refusal(f"campaign fresh signer {role} must have zero prefunding")
+
+    initial = exact_object(source["initialFunding"], "campaign initial funding")
+    exact_keys(
+        initial,
+        {"walletRef", "transferLamports"},
+        "campaign initial funding",
+    )
+    if stable_id(initial["walletRef"], "campaign initial funding wallet") != payer_wallet_ref:
+        raise Refusal("campaign initial funding may target only campaign-payer")
+    initial_funding_lamports = decimal(
+        initial["transferLamports"],
+        "campaign initial funding transfer",
+        positive=True,
+    )
+    if wallet_by_id[payer_wallet_ref].funding_lamports != initial_funding_lamports:
+        raise Refusal("campaign payer bankroll differs from its initial funding")
+
+    permanent_authority_ref = logical_ref(
+        source["permanentAuthorityRef"], "campaign permanent authority ref"
+    )
+    binding_by_ref = {binding.reference: binding for binding in address_bindings}
+    if permanent_authority_ref not in binding_by_ref:
+        raise Refusal("campaign permanent authority has no exact address binding")
+    if binding_by_ref[permanent_authority_ref].kind == "wallet":
+        raise Refusal("campaign permanent authority must not be a disposable wallet")
+
+    founding_adapter_id = stable_id(
+        source["foundingAdapter"], "campaign founding adapter"
+    )
+    adapter_by_id = {adapter.adapter_id: adapter for adapter in adapters}
+    if founding_adapter_id not in adapter_by_id:
+        raise Refusal("campaign founding adapter is absent")
+    founding_adapter = adapter_by_id[founding_adapter_id]
+    if (
+        founding_adapter.caller != "successor"
+        or not set(founding_adapter.covers).issuperset({"found"})
+        or founding_adapter.completion.schema != CAMPAIGN_REPORT_SCHEMA
+    ):
+        raise Refusal("campaign founding adapter is not the exact campaign caller")
+    if founding_adapter.depends_on:
+        raise Refusal("campaign founding adapter must be the root activity adapter")
+
+    post_init: list[PostInitFundingSpec] = []
+    post_init_ids: set[str] = set()
+    post_init_wallets: set[str] = set()
+    for index, raw in enumerate(
+        exact_list(source["postInitFunding"], "campaign post-init funding")
+    ):
+        row = exact_object(raw, f"campaign post-init funding {index}")
+        exact_keys(
+            row,
+            {"id", "walletRef", "transferLamports", "afterAdapter"},
+            f"campaign post-init funding {index}",
+        )
+        journal_id = stable_id(row["id"], f"post-init funding {index} id")
+        wallet_ref = stable_id(
+            row["walletRef"], f"post-init funding {journal_id} wallet"
+        )
+        amount = decimal(
+            row["transferLamports"],
+            f"post-init funding {journal_id} transfer",
+            positive=True,
+        )
+        after_adapter_id = stable_id(
+            row["afterAdapter"], f"post-init funding {journal_id} adapter"
+        )
+        if journal_id in post_init_ids or wallet_ref in post_init_wallets:
+            raise Refusal("campaign post-init funding repeats an id or wallet")
+        if wallet_ref not in wallet_by_id or wallet_ref in identity_wallet_refs:
+            raise Refusal("campaign post-init funding names an absent or campaign identity wallet")
+        if wallet_by_id[wallet_ref].funding_lamports != amount:
+            raise Refusal(f"post-init funding {journal_id} changes the scenario bankroll")
+        if after_adapter_id != founding_adapter_id:
+            raise Refusal(f"post-init funding {journal_id} is not ordered after founding")
+        post_init_ids.add(journal_id)
+        post_init_wallets.add(wallet_ref)
+        post_init.append(
+            PostInitFundingSpec(journal_id, wallet_ref, amount, after_adapter_id)
+        )
+    expected_post_init = [
+        wallet.wallet_id
+        for wallet in scenario.wallets
+        if wallet.wallet_id not in identity_wallet_refs and wallet.funding_lamports > 0
+    ]
+    if [item.wallet_ref for item in post_init] != expected_post_init:
+        raise Refusal(
+            "campaign post-init funding must cover transaction wallets in scenario order"
+        )
+    return CampaignSpec(
+        payer_wallet_ref,
+        tuple(identities),
+        permanent_authority_ref,
+        founding_adapter_id,
+        initial_funding_lamports,
+        tuple(post_init),
+    )
+
+
 def parse_manifest(path: Path) -> Manifest:
     path = canonical_existing_file(path, "activity manifest")
     manifest_sha256 = sha256_file(path)
     value = exact_object(read_exact_json(path, "activity manifest"), "activity manifest")
-    exact_keys(value, {"schema", "scenario", "target", "inputs", "addressBindings", "adapters"}, "activity manifest")
-    if value["schema"] != MANIFEST_SCHEMA:
-        raise Refusal(f"activity manifest schema is not {MANIFEST_SCHEMA}")
+    schema = text(value.get("schema"), "activity manifest schema", 128)
+    if schema == MANIFEST_SCHEMA:
+        exact_keys(
+            value,
+            {"schema", "scenario", "target", "inputs", "addressBindings", "adapters", "campaign"},
+            "activity manifest",
+        )
+    elif schema == LEGACY_MANIFEST_SCHEMA:
+        exact_keys(
+            value,
+            {"schema", "scenario", "target", "inputs", "addressBindings", "adapters"},
+            "activity manifest",
+        )
+    else:
+        raise Refusal(f"activity manifest schema is not {MANIFEST_SCHEMA} or legacy v2")
     scenario_source = exact_object(value["scenario"], "activity scenario binding")
     exact_keys(scenario_source, {"path", "sha256"}, "activity scenario binding")
     scenario_path = canonical_existing_file(text(scenario_source["path"], "scenario path"), "economic scenario")
@@ -802,6 +1075,8 @@ def parse_manifest(path: Path) -> Manifest:
         genesis = text(genesis_value, "devnet genesis hash", 64)
         if genesis != DEVNET_GENESIS_HASH:
             raise Refusal("activity target does not name Solana devnet's exact genesis hash")
+        if schema == LEGACY_MANIFEST_SCHEMA:
+            raise Refusal("legacy v2 activity manifests are evidence-only and refuse devnet")
     elif genesis_value is not None:
         raise Refusal("owned-loopback must not carry a devnet genesis acknowledgment")
     else:
@@ -897,7 +1172,26 @@ def parse_manifest(path: Path) -> Manifest:
     require_acyclic({item.adapter_id: item.depends_on for item in adapters}, "activity adapter graph")
     if sum(len(item.completion.signature_pointers) for item in adapters) > scenario.limits.max_transactions:
         raise Refusal("activity adapter finalized-signature count exceeds maxTransactions")
-    return Manifest(path, manifest_sha256, scenario, rpc_url, genesis, inputs, tuple(address_bindings), tuple(adapters))
+    if schema == LEGACY_MANIFEST_SCHEMA:
+        if any(wallet.funding_lamports == 0 for wallet in scenario.wallets):
+            raise Refusal("legacy v2 wallets must all carry positive prefunding")
+        campaign = None
+    else:
+        campaign = parse_campaign(
+            value["campaign"], scenario, tuple(address_bindings), tuple(adapters)
+        )
+    return Manifest(
+        path,
+        manifest_sha256,
+        scenario,
+        rpc_url,
+        genesis,
+        inputs,
+        tuple(address_bindings),
+        tuple(adapters),
+        schema,
+        campaign,
+    )
 
 
 def validate_caller_command(adapter_id: str, caller: str, argv: tuple[str, ...], kinds: tuple[str, ...], target: str) -> None:
@@ -987,6 +1281,23 @@ class Rpc:
         if not isinstance(slot, int) or not isinstance(value, int) or slot < 0 or value < 0 or value > 2**64 - 1:
             raise Refusal("getBalance returned another slot or lamport shape")
         return slot, value
+
+    def absent_accounts(self, addresses: Sequence[str]) -> int:
+        result = exact_object(
+            self.call(
+                "getMultipleAccounts",
+                [list(addresses), {"encoding": "base64", "commitment": "finalized"}],
+            ),
+            "getMultipleAccounts result",
+        )
+        context = exact_object(result.get("context"), "getMultipleAccounts context")
+        slot = context.get("slot")
+        values = exact_list(result.get("value"), "getMultipleAccounts values")
+        if not isinstance(slot, int) or isinstance(slot, bool) or slot < 0:
+            raise Refusal("getMultipleAccounts returned another finalized slot")
+        if len(values) != len(addresses) or any(value is not None for value in values):
+            raise Refusal("campaign fresh signer coordinates are not all absent")
+        return slot
 
     def transaction(self, signature: str) -> dict[str, Any] | None:
         result = self.call(
@@ -1096,7 +1407,7 @@ def authorization(path: Path, manifest: Manifest, *, allow_expired: bool = False
         now = dt.datetime.now(dt.timezone.utc)
         not_before = dt.datetime.fromisoformat(text(value["notBefore"], "authorization notBefore").replace("Z", "+00:00"))
         expires = dt.datetime.fromisoformat(text(value["expiresAt"], "authorization expiresAt").replace("Z", "+00:00"))
-    except ValueError as error:
+    except (ValueError, binascii.Error) as error:
         raise Refusal("live authorization timestamps are not RFC3339 timestamps") from error
     if not_before.tzinfo is None or expires.tzinfo is None or not_before >= expires or expires - not_before > dt.timedelta(hours=6):
         raise Refusal("live authorization is not one ordered at-most-six-hour window")
@@ -1126,7 +1437,11 @@ def bounded_live_authorization(
         value["prefundedWalletClosureSha256"],
         "bounded live authorization prefunded wallet closure digest",
     )
-    bankroll = sum(wallet.funding_lamports for wallet in manifest.scenario.wallets)
+    bankroll = (
+        manifest.campaign.initial_funding_lamports
+        if manifest.campaign is not None
+        else sum(wallet.funding_lamports for wallet in manifest.scenario.wallets)
+    )
     if max_spend > bankroll:
         raise Refusal("live authorization maxSpendLamports exceeds scenario wallet bankroll")
     return (
@@ -1150,6 +1465,13 @@ def require_live_authorization(manifest: Manifest, path: Path | None, *, allow_e
 
 def wallet_paths(work: Path) -> tuple[Path, Path, Path]:
     return work / "private" / "wallets", work / "private" / "wallet-index.json", work / "public" / "wallet-ledger.json"
+
+
+def initial_funding_wallets(manifest: Manifest) -> tuple[WalletSpec, ...]:
+    if manifest.campaign is None:
+        return manifest.scenario.wallets
+    by_id = {wallet.wallet_id: wallet for wallet in manifest.scenario.wallets}
+    return (by_id[manifest.campaign.payer_wallet_ref],)
 
 
 def run_checked(argv: Sequence[str], *, stdout: int | Any = subprocess.PIPE, stderr: int | Any = subprocess.PIPE) -> subprocess.CompletedProcess[bytes]:
@@ -1269,8 +1591,13 @@ def funding_journal_path(work: Path, wallet_id: str) -> Path:
     return work / "journals" / "funding" / f"{wallet_id}.json"
 
 
-def funding_closure_path(work: Path) -> Path:
-    return work / "public" / "funding-closure.json"
+def funding_closure_path(work: Path, manifest: Manifest | None = None) -> Path:
+    name = (
+        "initial-funding-closure.json"
+        if manifest is not None and manifest.campaign is not None
+        else "funding-closure.json"
+    )
+    return work / "public" / name
 
 
 def funding_journal_phases(manifest: Manifest, work: Path) -> dict[str, str]:
@@ -1279,7 +1606,7 @@ def funding_journal_phases(manifest: Manifest, work: Path) -> dict[str, str]:
         return {}
     if journal_dir.is_symlink() or not journal_dir.is_dir():
         raise Refusal("funding journal directory changed kind")
-    wallet_ids = {wallet.wallet_id for wallet in manifest.scenario.wallets}
+    wallet_ids = {wallet.wallet_id for wallet in initial_funding_wallets(manifest)}
     observed_paths = {path.stem: path for path in journal_dir.glob("*.json")}
     unknown = set(observed_paths) - wallet_ids
     if unknown:
@@ -1504,8 +1831,12 @@ def fund_wallets(manifest: Manifest, work: Path, solana: Path, keygen: Path, fun
     funder = pubkey_text(funder_result.stdout.decode().strip(), "funder address")
     private_by_id = {row["id"]: row for row in exact_list(private["wallets"], "private wallets")}
     public_by_id = {row["id"]: row for row in exact_list(public["wallets"], "public wallets")}
+    if manifest.campaign is not None:
+        identities, _ = campaign_identity_addresses(manifest, public_by_id)
+        if funder in identities.values():
+            raise Refusal("development funder aliases a disposable campaign identity")
 
-    for wallet in manifest.scenario.wallets:
+    for wallet in initial_funding_wallets(manifest):
         journal_path = funding_journal_path(work, wallet.wallet_id)
         if journal_path.exists():
             journal = authenticated_state(journal_path, f"funding journal {wallet.wallet_id}")
@@ -1591,7 +1922,7 @@ def funding_closure_rows(
     rows: list[dict[str, str]] = []
     total_transfer = 0
     total_fee = 0
-    for wallet in manifest.scenario.wallets:
+    for wallet in initial_funding_wallets(manifest):
         path = funding_journal_path(work, wallet.wallet_id)
         journal = authenticated_state(path, f"funding journal {wallet.wallet_id}")
         if (
@@ -1657,7 +1988,11 @@ def write_funding_closure(
     )
     public_ledger = wallet_paths(work)[2]
     expected = {
-        "schema": FUNDING_CLOSURE_SCHEMA,
+        "schema": (
+            INITIAL_FUNDING_CLOSURE_SCHEMA
+            if manifest.campaign is not None
+            else FUNDING_CLOSURE_SCHEMA
+        ),
         "manifestSha256": manifest.sha256,
         "scenarioSha256": manifest.scenario.sha256,
         "clusterTarget": manifest.scenario.cluster_target,
@@ -1669,7 +2004,7 @@ def write_funding_closure(
         "totalTransferLamports": str(total_transfer),
         "totalFundingFeeLamports": str(total_fee),
     }
-    path = funding_closure_path(work)
+    path = funding_closure_path(work, manifest)
     if path.exists():
         prior = authenticated_state(path, "funding closure")
         exact_keys(prior, set(expected) | {"closedAt", "stateSha256"}, "funding closure")
@@ -1685,7 +2020,7 @@ def write_funding_closure(
 def authenticate_funding_closure(
     manifest: Manifest, work: Path, expected_sha256: str
 ) -> dict[str, Any]:
-    path = canonical_existing_file(funding_closure_path(work), "funding closure")
+    path = canonical_existing_file(funding_closure_path(work, manifest), "funding closure")
     if sha256_file(path) != expected_sha256:
         raise Refusal("funding closure differs from live authorization")
     value = authenticated_state(path, "funding closure")
@@ -1714,7 +2049,12 @@ def authenticate_funding_closure(
         else manifest.scenario.genesis_hash
     )
     if (
-        value.get("schema") != FUNDING_CLOSURE_SCHEMA
+        value.get("schema")
+        != (
+            INITIAL_FUNDING_CLOSURE_SCHEMA
+            if manifest.campaign is not None
+            else FUNDING_CLOSURE_SCHEMA
+        )
         or value.get("manifestSha256") != manifest.sha256
         or value.get("scenarioSha256") != manifest.scenario.sha256
         or value.get("clusterTarget") != manifest.scenario.cluster_target
@@ -1737,6 +2077,227 @@ def authenticate_funding_closure(
         raise Refusal("funding closure fee total changed")
     text(value.get("closedAt"), "funding closure timestamp", 64)
     return value
+
+
+def post_init_funding_plan_rows(manifest: Manifest) -> list[dict[str, str]]:
+    if manifest.campaign is None:
+        return []
+    return [
+        {
+            "id": spec.journal_id,
+            "walletRef": spec.wallet_ref,
+            "transferLamports": str(spec.transfer_lamports),
+            "afterAdapter": spec.after_adapter_id,
+        }
+        for spec in manifest.campaign.post_init_funding
+    ]
+
+
+def post_init_funding_plan_sha256(manifest: Manifest) -> str:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no post-init funding plan")
+    return sha256_bytes(
+        canonical_json(
+            {
+                "manifestSha256": manifest.sha256,
+                "scenarioSha256": manifest.scenario.sha256,
+                "payerWalletRef": manifest.campaign.payer_wallet_ref,
+                "foundingAdapter": manifest.campaign.founding_adapter_id,
+                "rows": post_init_funding_plan_rows(manifest),
+            }
+        )
+    )
+
+
+def post_init_funding_journal_path(work: Path, journal_id: str) -> Path:
+    return work / "journals" / "post-init-funding" / f"{journal_id}.json"
+
+
+def new_post_init_funding_journal(
+    manifest: Manifest,
+    spec: PostInitFundingSpec,
+    payer_address: str,
+    wallet_address: str,
+    authorization_sha256: str | None,
+    initial_funding_closure_sha256: str,
+) -> dict[str, Any]:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no post-init funding")
+    if spec not in manifest.campaign.post_init_funding:
+        raise Refusal("post-init funding spec is not in the exact manifest plan")
+    operation_nonce = os.urandom(16).hex()
+    return {
+        "schema": POST_INIT_FUNDING_JOURNAL_SCHEMA,
+        "manifestSha256": manifest.sha256,
+        "scenarioSha256": manifest.scenario.sha256,
+        "clusterTarget": manifest.scenario.cluster_target,
+        "postInitFundingPlanSha256": post_init_funding_plan_sha256(manifest),
+        "initialFundingClosureSha256": digest_text(
+            initial_funding_closure_sha256,
+            "post-init initial funding closure digest",
+        ),
+        "journalId": spec.journal_id,
+        "afterAdapter": spec.after_adapter_id,
+        "payerWalletRef": manifest.campaign.payer_wallet_ref,
+        "funderAddress": pubkey_text(payer_address, "post-init payer address"),
+        "walletId": spec.wallet_ref,
+        "walletAddress": pubkey_text(wallet_address, "post-init wallet address"),
+        "transferLamports": str(spec.transfer_lamports),
+        "authorizationSha256": authorization_sha256,
+        "operationNonce": operation_nonce,
+        "memo": f"{POST_INIT_MEMO_PREFIX}{spec.journal_id}:{operation_nonce}",
+        "phase": "Planned",
+        "plannedAt": utc_now(),
+        "plannedStateSha256": None,
+        "preparedAt": None,
+        "recentBlockhash": None,
+        "lastValidBlockHeight": None,
+        "messageBase64": None,
+        "messageSha256": None,
+        "packetBase64": None,
+        "packetSha256": None,
+        "expectedSignature": None,
+        "dispatchAttemptedAt": None,
+        "preparedStateSha256": None,
+        "submittedAt": None,
+        "dispatchStateSha256": None,
+        "signature": None,
+        "finalizedAt": None,
+        "slot": None,
+        "feeLamports": None,
+        "funderPreLamports": None,
+        "funderPostLamports": None,
+        "walletPreLamports": None,
+        "walletPostLamports": None,
+        "transactionSha256": None,
+    }
+
+
+def prepare_post_init_funding_journal(
+    journal: Mapping[str, Any],
+    sign_only_output: Mapping[str, Any],
+    recent_blockhash: str,
+    last_valid_block_height: int,
+) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") != "Planned":
+        raise Refusal("only an exact Planned post-init journal may be prepared")
+    planned_state = digest_text(
+        journal.get("stateSha256"), "planned post-init journal state digest"
+    )
+    exact_keys(
+        sign_only_output,
+        {"blockhash", "signers", "absent", "badSig", "message"},
+        "post-init sign-only output",
+    )
+    blockhash = pubkey_text(recent_blockhash, "post-init recent blockhash")
+    if sign_only_output["blockhash"] != blockhash:
+        raise Refusal("post-init sign-only output substitutes the recent blockhash")
+    if sign_only_output["absent"] != [] or sign_only_output["badSig"] != []:
+        raise Refusal("post-init sign-only output has absent or bad signatures")
+    signer_rows = exact_list(sign_only_output["signers"], "post-init signers")
+    if len(signer_rows) != 1:
+        raise Refusal("post-init packet must have exactly one payer signature")
+    signer = text(signer_rows[0], "post-init signer", 256)
+    payer = pubkey_text(journal.get("funderAddress"), "post-init payer")
+    prefix = payer + "="
+    if not signer.startswith(prefix) or signer.count("=") != 1:
+        raise Refusal("post-init signer is not the exact campaign payer")
+    signature = signature_text(signer[len(prefix) :], "post-init expected signature")
+    message_base64 = text(sign_only_output["message"], "post-init message", 4096)
+    try:
+        message = base64.b64decode(message_base64, validate=True)
+    except ValueError as error:
+        raise Refusal("post-init message is not canonical base64") from error
+    if not message or len(message) > 1_168 or base64.b64encode(message).decode() != message_base64:
+        raise Refusal("post-init message is empty, oversized, or noncanonical")
+    packet = shortvec(1) + base58_decode(signature, "post-init signature", 64) + message
+    if len(packet) > 1_232:
+        raise Refusal("post-init signed packet exceeds the Solana packet bound")
+    if (
+        not isinstance(last_valid_block_height, int)
+        or isinstance(last_valid_block_height, bool)
+        or last_valid_block_height < 0
+    ):
+        raise Refusal("post-init last valid block height is not canonical")
+    prepared = dict(journal)
+    prepared.update(
+        {
+            "phase": "Prepared",
+            "plannedStateSha256": planned_state,
+            "preparedAt": utc_now(),
+            "recentBlockhash": blockhash,
+            "lastValidBlockHeight": str(last_valid_block_height),
+            "messageBase64": message_base64,
+            "messageSha256": sha256_bytes(message),
+            "packetBase64": base64.b64encode(packet).decode(),
+            "packetSha256": sha256_bytes(packet),
+            "expectedSignature": signature,
+        }
+    )
+    return prepared
+
+
+def dispatching_post_init_funding_journal(journal: Mapping[str, Any]) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") != "Prepared":
+        raise Refusal("only an exact Prepared post-init journal may enter Dispatching")
+    prepared_state = digest_text(
+        journal.get("stateSha256"), "prepared post-init journal state digest"
+    )
+    packet_base64 = text(journal.get("packetBase64"), "prepared post-init packet", 4096)
+    try:
+        packet = base64.b64decode(packet_base64, validate=True)
+    except ValueError as error:
+        raise Refusal("prepared post-init packet is not base64") from error
+    if sha256_bytes(packet) != journal.get("packetSha256"):
+        raise Refusal("prepared post-init packet digest changed")
+    dispatching = dict(journal)
+    dispatching.update(
+        {
+            "phase": "Dispatching",
+            "dispatchAttemptedAt": utc_now(),
+            "preparedStateSha256": prepared_state,
+        }
+    )
+    return dispatching
+
+
+def submitted_post_init_funding_journal(
+    journal: Mapping[str, Any], signature: str
+) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") != "Dispatching":
+        raise Refusal("only an exact Dispatching post-init journal may enter Submitted")
+    dispatch_state = digest_text(
+        journal.get("stateSha256"), "dispatching post-init journal state digest"
+    )
+    observed = signature_text(signature, "submitted post-init signature")
+    if observed != journal.get("expectedSignature"):
+        raise Refusal("post-init RPC returned another packet signature")
+    submitted = dict(journal)
+    submitted.update(
+        {
+            "phase": "Submitted",
+            "submittedAt": utc_now(),
+            "dispatchStateSha256": dispatch_state,
+            "signature": observed,
+        }
+    )
+    return submitted
+
+
+def finalize_post_init_funding_journal(
+    journal: Mapping[str, Any], transaction: Mapping[str, Any]
+) -> dict[str, Any]:
+    if journal.get("schema") != POST_INIT_FUNDING_JOURNAL_SCHEMA or journal.get("phase") not in {"Dispatching", "Submitted"}:
+        raise Refusal("post-init finalization requires a durable dispatch-attempt marker")
+    signature = signature_text(
+        journal.get("expectedSignature"), "post-init expected signature"
+    )
+    if journal.get("phase") == "Submitted" and journal.get("signature") != signature:
+        raise Refusal("Submitted post-init journal substitutes its signature")
+    finalized = verify_funding_transaction(transaction, journal, signature)
+    finalized["phase"] = "Finalized"
+    finalized["signature"] = signature
+    return finalized
 
 
 def adapter_journal_path(work: Path, adapter_id: str) -> Path:
@@ -1878,6 +2439,35 @@ def expanded_adapter(
             raise Refusal(
                 f"campaign adapter {adapter.adapter_id} is not one exact executed campaign"
             )
+        if manifest.campaign is not None:
+            if adapter.adapter_id != manifest.campaign.founding_adapter_id:
+                raise Refusal("v3 has more than one campaign report owner")
+            if argv.count("--founding-only") != 1:
+                raise Refusal("v3 campaign adapter must be exactly founding-only")
+            identities, _ = campaign_identity_addresses(manifest, public_wallets)
+            identity_by_role = {
+                identity.role: identity for identity in manifest.campaign.identities
+            }
+            expected_identity_pairs: dict[str, str] = {}
+            for role in CAMPAIGN_IDENTITY_ROLES:
+                identity = identity_by_role[role]
+                if identity.source_kind == "wallet":
+                    assert identity.wallet_ref is not None
+                    expected = text(
+                        private_wallets[identity.wallet_ref].get("keypair"),
+                        f"campaign identity {role} keypair",
+                    )
+                    flag = f"--keypair-{role}"
+                else:
+                    expected = identities[role]
+                    flag = f"--{role}"
+                expected_identity_pairs[flag] = expected
+            for flag, expected in expected_identity_pairs.items():
+                if argv.count(flag) != 1:
+                    raise Refusal(f"v3 campaign adapter must name {flag} exactly once")
+                index = argv.index(flag)
+                if index + 1 >= len(argv) or argv[index + 1] != expected:
+                    raise Refusal(f"v3 campaign adapter substitutes {flag}")
     return argv, completion_path
 
 
@@ -2264,7 +2854,7 @@ def require_finalized_funding(
         return authenticate_funding_closure(
             manifest, work, prefunded_closure_sha256
         )
-    for wallet in manifest.scenario.wallets:
+    for wallet in initial_funding_wallets(manifest):
         path = funding_journal_path(work, wallet.wallet_id)
         if not path.exists():
             raise Refusal(f"activity requires exact finalized funding for wallet {wallet.wallet_id}")
@@ -2341,11 +2931,28 @@ def run_activity(
     private_wallets = {row["id"]: exact_object(row, "private wallet") for row in exact_list(private["wallets"], "private wallets")}
     public_wallets = {row["id"]: exact_object(row, "public wallet") for row in exact_list(public["wallets"], "public wallets")}
     wallet_addresses = {wallet_id: pubkey_text(row.get("address"), f"wallet {wallet_id} address") for wallet_id, row in public_wallets.items()}
+    if manifest.campaign is not None:
+        founding_journal_exists = adapter_journal_path(
+            work, manifest.campaign.founding_adapter_id
+        ).exists()
+        if founding_journal_exists and not campaign_freshness_path(work).exists():
+            raise Refusal("v3 founding journal exists without its prior freshness boundary")
+        authenticate_campaign_freshness(manifest, work, rpc, public_wallets)
     expanded = {
         adapter.adapter_id: expanded_adapter(adapter, manifest, work, private_wallets, public_wallets)
         for adapter in manifest.adapters
     }
     by_id = {item.adapter_id: item for item in manifest.adapters}
+    dispatch_adapters = (
+        tuple(manifest.adapters)
+        if manifest.campaign is None
+        else tuple(
+            adapter
+            for adapter in manifest.adapters
+            if adapter.adapter_id == manifest.campaign.founding_adapter_id
+        )
+    )
+    dispatch_ids = {adapter.adapter_id for adapter in dispatch_adapters}
     completed: set[str] = set()
     for adapter in manifest.adapters:
         path = adapter_journal_path(work, adapter.adapter_id)
@@ -2356,8 +2963,14 @@ def run_activity(
             if journal["phase"] == "finalized":
                 await_completion(manifest, adapter, path, completion_path, rpc, wallet_addresses)
                 completed.add(adapter.adapter_id)
+    if manifest.campaign is not None and any(
+        adapter.adapter_id not in dispatch_ids
+        and adapter_journal_path(work, adapter.adapter_id).exists()
+        for adapter in manifest.adapters
+    ):
+        raise Refusal("v3 downstream activity exists before post-init funding closure")
     if poll_only:
-        for adapter in manifest.adapters:
+        for adapter in dispatch_adapters:
             if adapter.adapter_id in completed:
                 continue
             path = adapter_journal_path(work, adapter.adapter_id)
@@ -2371,6 +2984,8 @@ def run_activity(
             elif journal["phase"] != "planned":
                 raise Refusal(f"poll-only activity found another adapter phase {adapter.adapter_id}")
         final_phases = activity_journal_phases(manifest, work)
+        if manifest.campaign is not None and completed.issuperset(dispatch_ids):
+            return "post-init-funding-held"
         return "complete" if len(final_phases) == len(manifest.adapters) and set(final_phases.values()) == {"finalized"} else "partial-recovery"
 
     limiter = DispatchLimiter(manifest.scenario.limits.min_dispatch_interval_ms)
@@ -2378,9 +2993,9 @@ def run_activity(
     used_wallets: set[str] = set()
     first_error: BaseException | None = None
     with ThreadPoolExecutor(max_workers=manifest.scenario.limits.max_concurrency) as executor:
-        while len(completed) < len(manifest.adapters):
+        while not dispatch_ids.issubset(completed):
             if first_error is None and not stop_requested(work):
-                for adapter in sorted(manifest.adapters, key=lambda item: item.adapter_id):
+                for adapter in sorted(dispatch_adapters, key=lambda item: item.adapter_id):
                     if adapter.adapter_id in completed or adapter in running.values():
                         continue
                     if not set(adapter.depends_on).issubset(completed) or set(adapter.wallet_ids) & used_wallets:
@@ -2422,6 +3037,8 @@ def run_activity(
                         first_error = error
         if first_error is not None:
             raise first_error
+    if manifest.campaign is not None:
+        return "post-init-funding-held"
     return "complete"
 
 
@@ -2446,6 +3063,100 @@ def resolve_address_bindings(manifest: Manifest, public_wallets: Mapping[str, Ma
         addresses.add(address)
         resolved[binding.reference] = address
     return resolved
+
+
+def campaign_identity_addresses(
+    manifest: Manifest,
+    public_wallets: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, str], str]:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no founding campaign identities")
+    identities: dict[str, str] = {}
+    for identity in manifest.campaign.identities:
+        if identity.source_kind == "wallet":
+            assert identity.wallet_ref is not None
+            address = pubkey_text(
+                public_wallets[identity.wallet_ref].get("address"),
+                f"campaign identity {identity.role}",
+            )
+        elif identity.source_kind == "literal":
+            assert identity.address is not None
+            address = identity.address
+        else:
+            raise Refusal(f"campaign identity {identity.role} changed source kind")
+        if address in identities.values():
+            raise Refusal("campaign identities alias at runtime")
+        identities[identity.role] = address
+    bindings = resolve_address_bindings(manifest, public_wallets)
+    permanent_authority = bindings[manifest.campaign.permanent_authority_ref]
+    if permanent_authority in identities.values():
+        raise Refusal("disposable campaign identity aliases the permanent authority")
+    return identities, permanent_authority
+
+
+def campaign_freshness_path(work: Path) -> Path:
+    return work / "public" / "campaign-freshness.json"
+
+
+def authenticate_campaign_freshness(
+    manifest: Manifest,
+    work: Path,
+    rpc: Rpc,
+    public_wallets: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    if manifest.campaign is None:
+        raise Refusal("legacy activity manifest has no campaign freshness boundary")
+    identities, permanent_authority = campaign_identity_addresses(
+        manifest, public_wallets
+    )
+    fresh_rows = [
+        {"role": role, "address": identities[role]}
+        for role in CAMPAIGN_FRESH_SIGNER_ROLES
+    ]
+    path = campaign_freshness_path(work)
+    if path.exists():
+        prior = authenticated_state(path, "campaign freshness")
+        exact_keys(
+            prior,
+            {
+                "schema",
+                "manifestSha256",
+                "scenarioSha256",
+                "genesisHash",
+                "finalizedSlot",
+                "freshAbsentIdentities",
+                "permanentAuthority",
+                "observedAt",
+                "stateSha256",
+            },
+            "campaign freshness",
+        )
+        if (
+            prior.get("schema") != CAMPAIGN_FRESHNESS_SCHEMA
+            or prior.get("manifestSha256") != manifest.sha256
+            or prior.get("scenarioSha256") != manifest.scenario.sha256
+            or prior.get("freshAbsentIdentities") != fresh_rows
+            or prior.get("permanentAuthority") != permanent_authority
+        ):
+            raise Refusal("campaign freshness belongs to another identity partition")
+        return prior
+    genesis = authenticate_cluster(manifest, rpc)
+    slot = rpc.absent_accounts([row["address"] for row in fresh_rows])
+    atomic_write_json(
+        path,
+        {
+            "schema": CAMPAIGN_FRESHNESS_SCHEMA,
+            "manifestSha256": manifest.sha256,
+            "scenarioSha256": manifest.scenario.sha256,
+            "genesisHash": genesis,
+            "finalizedSlot": str(slot),
+            "freshAbsentIdentities": fresh_rows,
+            "permanentAuthority": permanent_authority,
+            "observedAt": utc_now(),
+        },
+        mode=0o644,
+    )
+    return authenticated_state(path, "campaign freshness")
 
 
 def load_finalized_activity_journals(
@@ -2479,6 +3190,10 @@ def reconcile_activity(
     keygen: Path | None,
     live_authorization: Path | None = None,
 ) -> dict[str, Any]:
+    if manifest.campaign is not None:
+        raise Refusal(
+            "v3 reconciliation is held until typed post-init funding journals and closure land"
+        )
     authorization_sha256 = require_live_authorization(manifest, live_authorization, allow_expired=True)
     private, public = unverified_wallet_indexes(manifest, work)
     closure_sha256 = prefunded_closure_digest(

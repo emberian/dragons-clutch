@@ -22,7 +22,10 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::{
     Error, Result,
+    cluster::{ClusterOriginV1, ExpectedClusterV1},
+    direct_trade::AuthenticatedDirectTradeEvidenceV1,
     model::SuccessorPlan,
+    rpc::{Rpc, WritePolicyV1},
     terminal_exterior_pyth::{
         authenticate_provider_closure_receipt_v1,
         owned_loopback_capture::{self, CaptureV1, DeploymentSlotPolicyV1},
@@ -30,7 +33,11 @@ use crate::{
 };
 
 pub(crate) const COMMAND_V1: &str = "local-private-validator-lifecycle-receipt-v1";
+pub(crate) const DIRECT_PAYOUT_SCHEDULE_COMMAND_V1: &str =
+    "local-private-validator-direct-payout-schedule-v1";
 const RECEIPT_SCHEMA_V1: &str = "dclutch-owned-loopback-reconcile-session-receipt-v1";
+const DIRECT_PAYOUT_SCHEDULE_SCHEMA_V1: &str = "dclutch-owned-loopback-direct-payout-schedule-v1";
+const DIRECT_FINALIZED_SCHEMA_V1: &str = "dclutch-owned-loopback-direct-trade-finalized-v1";
 const MANIFEST_SCHEMA_V1: &str = "dclutch-owned-loopback-activity-reconcile-manifest-v1";
 const DESCRIPTORS_SCHEMA_V1: &str = "dclutch-owned-loopback-stage-journal-descriptors-v1";
 const ACTIVITY_SESSION_SCHEMA_V1: &str = "dclutch-owned-loopback-private-lifecycle-session-v1";
@@ -108,6 +115,69 @@ pub(crate) struct PrivateLifecycleArgs {
     stage_journal_descriptors: PathBuf,
     chaos_session: PathBuf,
     output: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DirectPayoutScheduleArgs {
+    rpc_url: String,
+    plan: PathBuf,
+    market_input: PathBuf,
+    market: Pubkey,
+    direct_evidence: PathBuf,
+    output: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectEvidenceReferenceV1 {
+    path: String,
+    sha256: String,
+    schema: String,
+    evidence_sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectPayoutClaimV1 {
+    owner: String,
+    position: String,
+    recipient_token: String,
+    claim_index: String,
+    quantity_atoms: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectMutationProjectionV1 {
+    kind: String,
+    prefix_len: Option<String>,
+    path: String,
+    sha256: String,
+    intent_sha256: String,
+    schema: String,
+    completion_pointer: String,
+    completion_value: String,
+    signature: String,
+    slot: String,
+    fee_payer: String,
+    fee_lamports: String,
+    compute_units_consumed: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectPayoutScheduleReceiptV1 {
+    schema: String,
+    status: String,
+    cluster: String,
+    direct_evidence: DirectEvidenceReferenceV1,
+    market: String,
+    plan_sha256: String,
+    market_input_sha256: String,
+    finalized_slot: String,
+    mutations: Vec<DirectMutationProjectionV1>,
+    claims: Vec<DirectPayoutClaimV1>,
+    schedule_set_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +261,12 @@ pub(crate) fn usage() -> &'static str {
     "\n  dclutch-local-successor-bootstrap local-private-validator-lifecycle-receipt-v1 \\\n     --evidence-root ABSOLUTE_DIR --source-commit FULL_LOWERCASE_COMMIT \\\n     --checked-release-gate-sha256 SHA256 --plan ABSOLUTE_JSON \\\n     --checked-release-gate ABSOLUTE_JSON --pyth-facts ABSOLUTE_JSON \\\n     --pyth-provider-closure ABSOLUTE_JSON --finalized-capture ABSOLUTE_JSON \\\n     --activity-manifest ABSOLUTE_JSON --stage-journal-descriptors ABSOLUTE_JSON \\\n     --chaos-session ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON\n"
 }
 
+pub(crate) fn direct_payout_schedule_usage() -> &'static str {
+    "local-private-validator-direct-payout-schedule-v1 --rpc-url LOOPBACK \
+     --plan ABSOLUTE_JSON --market-input ABSOLUTE_JSON --market MARKET_ADDRESS \
+     --direct-evidence ABSOLUTE_FINALIZED_JSON --output ABSOLUTE_NEW_JSON"
+}
+
 pub(crate) fn parse_args<I>(arguments: I) -> Result<PrivateLifecycleArgs>
 where
     I: IntoIterator<Item = String>,
@@ -256,6 +332,254 @@ where
         chaos_session: required(chaos_session, "--chaos-session")?,
         output: required(output, "--output")?,
     })
+}
+
+pub(crate) fn parse_direct_payout_schedule_args<I>(arguments: I) -> Result<DirectPayoutScheduleArgs>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut rpc_url = None;
+    let mut plan = None;
+    let mut market_input = None;
+    let mut market = None;
+    let mut direct_evidence = None;
+    let mut output = None;
+    let mut values = arguments.into_iter();
+    while let Some(flag) = values.next() {
+        let value = values
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} omitted its value")))?;
+        match flag.as_str() {
+            "--rpc-url" => set_once(&mut rpc_url, value, &flag)?,
+            "--plan" => set_once(&mut plan, PathBuf::from(value), &flag)?,
+            "--market-input" => set_once(&mut market_input, PathBuf::from(value), &flag)?,
+            "--market" => set_once(&mut market, parse_pubkey(&value, "Direct Market")?, &flag)?,
+            "--direct-evidence" => set_once(&mut direct_evidence, PathBuf::from(value), &flag)?,
+            "--output" => set_once(&mut output, PathBuf::from(value), &flag)?,
+            _ => {
+                return Err(Error::new(format!(
+                    "unknown Direct payout schedule flag {flag}"
+                )));
+            }
+        }
+    }
+    Ok(DirectPayoutScheduleArgs {
+        rpc_url: required(rpc_url, "--rpc-url")?,
+        plan: required(plan, "--plan")?,
+        market_input: required(market_input, "--market-input")?,
+        market: required(market, "--market")?,
+        direct_evidence: required(direct_evidence, "--direct-evidence")?,
+        output: required(output, "--output")?,
+    })
+}
+
+pub(crate) fn run_direct_payout_schedule(arguments: DirectPayoutScheduleArgs) -> Result<Value> {
+    let plan_path = canonical_regular(&arguments.plan, "Direct payout schedule plan")?;
+    let market_input_path = canonical_regular(
+        &arguments.market_input,
+        "Direct payout schedule market input",
+    )?;
+    let direct_evidence_path = canonical_regular(
+        &arguments.direct_evidence,
+        "Direct payout schedule finalized evidence",
+    )?;
+    let plan_sha256 = sha256(&bounded_read(&plan_path, "Direct payout schedule plan")?);
+    let market_input_sha256 = sha256(&bounded_read(
+        &market_input_path,
+        "Direct payout schedule market input",
+    )?);
+    let direct_evidence_bytes = bounded_read(
+        &direct_evidence_path,
+        "Direct payout schedule finalized evidence",
+    )?;
+    let direct_evidence_file_sha256 = sha256(&direct_evidence_bytes);
+    let origin = ClusterOriginV1::parse(&arguments.rpc_url, None)?;
+    ExpectedClusterV1::OwnedLoopback.authenticate(&origin)?;
+    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let authenticated = crate::direct_trade::authenticate_owned_loopback_finalized_evidence_v1(
+        &mut rpc,
+        &direct_evidence_path,
+        arguments.market,
+        &plan_sha256,
+        &market_input_sha256,
+    )?;
+    let mutations = project_direct_mutations_v1(&authenticated)?;
+    let claims = project_direct_payout_claims_v1(&authenticated)?;
+    let schedule_set_sha256 = sha256(&canonical_json_bytes(&serde_json::to_value(&claims)?)?);
+    let receipt = DirectPayoutScheduleReceiptV1 {
+        schema: DIRECT_PAYOUT_SCHEDULE_SCHEMA_V1.into(),
+        status: "finalized".into(),
+        cluster: "owned-loopback".into(),
+        direct_evidence: DirectEvidenceReferenceV1 {
+            path: direct_evidence_path
+                .to_str()
+                .ok_or_else(|| Error::new("Direct finalized evidence path is not UTF-8"))?
+                .into(),
+            sha256: direct_evidence_file_sha256,
+            schema: DIRECT_FINALIZED_SCHEMA_V1.into(),
+            evidence_sha256: authenticated.evidence_sha256.clone(),
+        },
+        market: authenticated.market.to_string(),
+        plan_sha256,
+        market_input_sha256,
+        finalized_slot: authenticated.finalized_slot.to_string(),
+        mutations,
+        claims,
+        schedule_set_sha256,
+    };
+    let value = serde_json::to_value(receipt)?;
+    write_new_json(&arguments.output, &value)?;
+    Ok(value)
+}
+
+fn project_direct_mutations_v1(
+    authenticated: &AuthenticatedDirectTradeEvidenceV1,
+) -> Result<Vec<DirectMutationProjectionV1>> {
+    if authenticated.mutations.is_empty() || authenticated.mutations.len() > 32 {
+        return Err(Error::new(
+            "authenticated Direct terminal mutation sequence is absent or unbounded",
+        ));
+    }
+    let mut signatures = BTreeSet::new();
+    authenticated
+        .mutations
+        .iter()
+        .map(|row| {
+            if row.kind.is_empty()
+                || row.path.is_empty()
+                || row.schema.is_empty()
+                || row.completion_pointer != "/phase"
+                || row.completion_value != "finalized"
+                || row.slot == 0
+                || row.slot > authenticated.finalized_slot
+                || row.fee_lamports == 0
+                || row.compute_units_consumed == 0
+                || !signatures.insert(row.signature.clone())
+            {
+                return Err(Error::new(
+                    "authenticated Direct mutation sequence is not finalized and unique",
+                ));
+            }
+            exact_lower_hex(&row.sha256, 64, "Direct mutation journal SHA-256")?;
+            exact_lower_hex(&row.intent_sha256, 64, "Direct mutation intent SHA-256")?;
+            parse_pubkey(&row.fee_payer, "Direct mutation fee payer")?;
+            Ok(DirectMutationProjectionV1 {
+                kind: row.kind.clone(),
+                prefix_len: row.prefix_len.map(|value| value.to_string()),
+                path: row.path.clone(),
+                sha256: row.sha256.clone(),
+                intent_sha256: row.intent_sha256.clone(),
+                schema: row.schema.clone(),
+                completion_pointer: row.completion_pointer.clone(),
+                completion_value: row.completion_value.clone(),
+                signature: row.signature.clone(),
+                slot: row.slot.to_string(),
+                fee_payer: row.fee_payer.clone(),
+                fee_lamports: row.fee_lamports.to_string(),
+                compute_units_consumed: row.compute_units_consumed.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn project_direct_payout_claims_v1(
+    authenticated: &AuthenticatedDirectTradeEvidenceV1,
+) -> Result<Vec<DirectPayoutClaimV1>> {
+    if authenticated.market == Pubkey::default()
+        || authenticated.seller_owner == Pubkey::default()
+        || authenticated.buyer_owner == Pubkey::default()
+        || authenticated.seller_owner == authenticated.buyer_owner
+        || authenticated.seller_position == authenticated.buyer_position
+        || authenticated.seller_collateral_destination == Pubkey::default()
+        || authenticated.buyer_collateral_source == Pubkey::default()
+        || authenticated.seller_collateral_destination == authenticated.buyer_collateral_source
+        || authenticated.finalized_slot == 0
+        || authenticated.outcome_count == 0
+        || authenticated.outcome_index >= authenticated.outcome_count
+        || authenticated.claim_balances.is_empty()
+        || authenticated.claim_balances.len() > 32
+    {
+        return Err(Error::new(
+            "authenticated Direct terminal facts cannot form a bounded payout schedule",
+        ));
+    }
+    exact_lower_hex(
+        &authenticated.evidence_sha256,
+        64,
+        "Direct evidence semantic SHA-256",
+    )?;
+
+    let mut seller_claims = BTreeSet::new();
+    let mut buyer_claims = BTreeSet::new();
+    let mut identities = BTreeSet::new();
+    let mut claims = Vec::with_capacity(authenticated.claim_balances.len());
+    for row in &authenticated.claim_balances {
+        let owner = parse_pubkey(&row.owner, "Direct payout claim owner")?;
+        let position = parse_pubkey(&row.position, "Direct payout Position")?;
+        let recipient = parse_pubkey(&row.recipient_token, "Direct payout recipient token")?;
+        if row.quantity_atoms == 0 || row.claim_index >= authenticated.outcome_count {
+            return Err(Error::new(
+                "Direct payout schedule contains a zero or out-of-range claim",
+            ));
+        }
+        if !identities.insert((owner.to_bytes(), row.claim_index)) {
+            return Err(Error::new(
+                "Direct payout schedule repeats an owner and claim index",
+            ));
+        }
+        if owner == authenticated.seller_owner {
+            if position != authenticated.seller_position
+                || recipient != authenticated.seller_collateral_destination
+                || !seller_claims.insert(row.claim_index)
+            {
+                return Err(Error::new(
+                    "Direct seller payout claim changed its Position or recipient",
+                ));
+            }
+        } else if owner == authenticated.buyer_owner {
+            if position != authenticated.buyer_position
+                || recipient != authenticated.buyer_collateral_source
+                || row.claim_index != authenticated.outcome_index
+                || !buyer_claims.insert(row.claim_index)
+            {
+                return Err(Error::new(
+                    "Direct buyer payout claim changed its Position, outcome, or recipient",
+                ));
+            }
+        } else {
+            return Err(Error::new(
+                "Direct payout claim names neither authenticated maker",
+            ));
+        }
+        claims.push((
+            owner.to_bytes(),
+            row.claim_index,
+            recipient.to_bytes(),
+            DirectPayoutClaimV1 {
+                owner: owner.to_string(),
+                position: position.to_string(),
+                recipient_token: recipient.to_string(),
+                claim_index: row.claim_index.to_string(),
+                quantity_atoms: row.quantity_atoms.to_string(),
+            },
+        ));
+    }
+    let expected_seller_claims = (0..authenticated.outcome_count).collect::<BTreeSet<_>>();
+    if seller_claims != expected_seller_claims
+        || buyer_claims.len() != 1
+        || !buyer_claims.contains(&authenticated.outcome_index)
+        || authenticated.claim_balances.len()
+            != usize::try_from(authenticated.outcome_count)
+                .map_err(|_| Error::new("Direct outcome count does not fit this host"))?
+                .checked_add(1)
+                .ok_or_else(|| Error::new("Direct payout claim count overflowed"))?
+    {
+        return Err(Error::new(
+            "Direct payout schedule is not the exhaustive seller plus filled buyer partition",
+        ));
+    }
+    claims.sort_by_key(|(owner, index, recipient, _)| (*owner, *index, *recipient));
+    Ok(claims.into_iter().map(|(_, _, _, row)| row).collect())
 }
 
 pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
@@ -1167,6 +1491,125 @@ fn write_new_json(path: &Path, value: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn direct_terminal_fixture() -> AuthenticatedDirectTradeEvidenceV1 {
+        let seller_owner = Pubkey::new_from_array([1; 32]);
+        let seller_position = Pubkey::new_from_array([2; 32]);
+        let seller_recipient = Pubkey::new_from_array([3; 32]);
+        let buyer_owner = Pubkey::new_from_array([4; 32]);
+        let buyer_position = Pubkey::new_from_array([5; 32]);
+        let buyer_recipient = Pubkey::new_from_array([6; 32]);
+        let position_transition = |account: Pubkey, owner: Pubkey| {
+            crate::direct_trade::DirectPositionTransitionEvidenceV1 {
+                account: account.to_string(),
+                owner: owner.to_string(),
+                pre_data_base64: BASE64.encode([1_u8]),
+                post_data_base64: BASE64.encode([2_u8]),
+            }
+        };
+        let claim = |owner: Pubkey,
+                     position: Pubkey,
+                     recipient: Pubkey,
+                     claim_index: u32,
+                     quantity_atoms: u64| {
+            crate::direct_trade::DirectClaimBalanceEvidenceV1 {
+                owner: owner.to_string(),
+                position: position.to_string(),
+                recipient_token: recipient.to_string(),
+                claim_index,
+                quantity_atoms,
+            }
+        };
+        AuthenticatedDirectTradeEvidenceV1 {
+            market: Pubkey::new_from_array([7; 32]),
+            seller_owner,
+            seller_position,
+            seller_collateral_destination: seller_recipient,
+            buyer_owner,
+            buyer_position,
+            buyer_collateral_source: buyer_recipient,
+            fee_recipient: Pubkey::new_from_array([8; 32]),
+            fee_token_account: Pubkey::new_from_array([9; 32]),
+            mint: Pubkey::new_from_array([10; 32]),
+            outcome_index: 1,
+            outcome_count: 3,
+            mutations: vec![crate::direct_trade::DirectFinalizedMutationEvidenceV1 {
+                kind: "hot".into(),
+                prefix_len: None,
+                path: "/tmp/direct-hot.json".into(),
+                sha256: "22".repeat(32),
+                intent_sha256: "33".repeat(32),
+                schema: "dclutch-owned-loopback-direct-trade-journal-v1".into(),
+                completion_pointer: "/phase".into(),
+                completion_value: "finalized".into(),
+                signature: "direct-finalized-signature".into(),
+                slot: 76,
+                fee_payer: Pubkey::new_from_array([11; 32]).to_string(),
+                fee_lamports: 5_000,
+                compute_units_consumed: 1,
+            }],
+            positions: [
+                position_transition(seller_position, seller_owner),
+                position_transition(buyer_position, buyer_owner),
+            ],
+            claim_balances: vec![
+                claim(buyer_owner, buyer_position, buyer_recipient, 1, 100),
+                claim(seller_owner, seller_position, seller_recipient, 2, 1_000),
+                claim(seller_owner, seller_position, seller_recipient, 0, 900),
+                claim(seller_owner, seller_position, seller_recipient, 1, 1_000),
+            ],
+            final_accounts: Vec::new(),
+            finalized_slot: 77,
+            evidence_sha256: "11".repeat(32),
+        }
+    }
+
+    #[test]
+    fn direct_payout_projection_is_exhaustive_nonzero_and_canonical() {
+        let receipt = direct_terminal_fixture();
+        let claims = project_direct_payout_claims_v1(&receipt).expect("exact Direct schedule");
+        let mutations = project_direct_mutations_v1(&receipt).expect("exact Direct mutations");
+        assert_eq!(claims.len(), 4);
+        assert_eq!(mutations.len(), 1);
+        assert_eq!(mutations[0].compute_units_consumed, "1");
+        assert_eq!(claims[0].owner, receipt.seller_owner.to_string());
+        assert_eq!(claims[0].claim_index, "0");
+        assert_eq!(claims[3].owner, receipt.buyer_owner.to_string());
+        assert_eq!(claims[3].claim_index, "1");
+        assert!(claims.iter().all(|row| row.quantity_atoms != "0"));
+    }
+
+    #[test]
+    fn direct_payout_projection_refuses_partial_or_substituted_rows() {
+        let mut partial = direct_terminal_fixture();
+        partial.claim_balances.remove(2);
+        assert!(project_direct_payout_claims_v1(&partial).is_err());
+
+        let mut substituted = direct_terminal_fixture();
+        substituted.claim_balances[0].recipient_token = Pubkey::new_unique().to_string();
+        assert!(project_direct_payout_claims_v1(&substituted).is_err());
+
+        let mut zero = direct_terminal_fixture();
+        zero.claim_balances[0].quantity_atoms = 0;
+        assert!(project_direct_payout_claims_v1(&zero).is_err());
+    }
+
+    #[test]
+    fn direct_payout_projection_refuses_alias_and_duplicate_claims() {
+        let mut alias = direct_terminal_fixture();
+        alias.buyer_owner = alias.seller_owner;
+        assert!(project_direct_payout_claims_v1(&alias).is_err());
+
+        let mut duplicate = direct_terminal_fixture();
+        duplicate.claim_balances[0] = duplicate.claim_balances[1].clone();
+        assert!(project_direct_payout_claims_v1(&duplicate).is_err());
+
+        let mut repeated_signature = direct_terminal_fixture();
+        repeated_signature
+            .mutations
+            .push(repeated_signature.mutations[0].clone());
+        assert!(project_direct_mutations_v1(&repeated_signature).is_err());
+    }
 
     #[test]
     fn rfc6901_requires_terminal_finalized_value() {

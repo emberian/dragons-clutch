@@ -22,7 +22,7 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1026,7 +1026,7 @@ fn prepare_inner(
         trading_deployment.upgrade_authority,
     )?;
     let resolution_semantic = hex32(&args.resolution_semantic_release_id)?;
-    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V6 {
+    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
         return Err(Error::new(
             "Resolution semantic release ID does not match the selected executable contract",
         ));
@@ -1950,7 +1950,7 @@ mod tests {
         prepared_plan_with_resolution_semantic(
             publication,
             deployments,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V6,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         )
     }
 

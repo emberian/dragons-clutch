@@ -417,31 +417,45 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
 /// transaction fees, and a driver that silently demanded a second funded key to
 /// run at all would be trading the operator's lamports for evidence they did not
 /// ask for. It is opt-in through `--keypair-hostile-authority`.
-pub(crate) const REQUIRED_ROLES: &[&str] = &[
-    role::CORE_UPGRADE_AUTHORITY,
+pub(crate) const ADMIN_REQUIRED_ROLES: &[&str] = &[role::CORE_UPGRADE_AUTHORITY];
+
+pub(crate) const FOUNDING_REQUIRED_ROLES: &[&str] = &[
+    role::CAMPAIGN_PAYER,
     role::COLLATERAL_MINT,
     role::COLLATERAL_WALLET,
     role::FOUNDING_BENEFICIARY,
-    role::FOUNDING_FOUNDER,
     role::FOUNDING_PROJECTION_WITNESS,
     role::FOUNDING_SOURCE_FUNDER,
-    role::SUBSTITUTED_FOUNDER,
 ];
 
 /// Every role a `--keypair-<role>` flag may name.
 pub(crate) const KEYPAIR_ROLES: &[&str] = &[
     role::CORE_UPGRADE_AUTHORITY,
+    role::CAMPAIGN_PAYER,
     role::HOSTILE_AUTHORITY,
     role::COLLATERAL_MINT,
     role::COLLATERAL_WALLET,
     role::FOUNDING_BENEFICIARY,
-    role::FOUNDING_FOUNDER,
     role::FOUNDING_PROJECTION_WITNESS,
     role::FOUNDING_SOURCE_FUNDER,
-    role::SUBSTITUTED_FOUNDER,
     crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
     crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CampaignModeV1 {
+    Administration,
+    FoundingOnly,
+}
+
+impl CampaignModeV1 {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Administration => "administration",
+            Self::FoundingOnly => "founding-only",
+        }
+    }
+}
 
 /// The stages a campaign passes through, in the only order a chain accepts.
 ///
@@ -693,14 +707,21 @@ fn activation_compute_preflight_v1(
 }
 
 /// The command surface, already parsed and validated.
+#[derive(Debug)]
 pub(crate) struct CampaignArgsV1 {
     pub(crate) origin: ClusterOriginV1,
+    pub(crate) mode: CampaignModeV1,
     pub(crate) plan_path: PathBuf,
     /// The market input the founding stage founds — the run spec's `market`
     /// block as its own JSON document. Optional because every earlier stage
     /// runs without one; the founding stage refuses by name when it is absent.
     pub(crate) market_path: Option<PathBuf>,
     pub(crate) evidence_path: Option<PathBuf>,
+    /// Public identities only. Neither party signs a founding transaction, so
+    /// requiring secret-bearing files for them would manufacture authority the
+    /// protocol does not use.
+    pub(crate) founding_founder: Option<Pubkey>,
+    pub(crate) substituted_founder: Option<Pubkey>,
     /// Paths only. Their contents are first read after the durable key-free
     /// plan and live-substrate preflight has been fsynced.
     pub(crate) keypairs: BTreeMap<String, PathBuf>,
@@ -1438,8 +1459,12 @@ fn load_prior_campaign_evidence(
     })
 }
 
-fn authenticate_keypair_paths(keypairs: &BTreeMap<String, PathBuf>) -> Result<()> {
-    let missing = REQUIRED_ROLES
+fn authenticate_keypair_paths(
+    keypairs: &BTreeMap<String, PathBuf>,
+    required: &[&str],
+    allowed: &[&str],
+) -> Result<()> {
+    let missing = required
         .iter()
         .filter(|role| !keypairs.contains_key(**role))
         .copied()
@@ -1448,6 +1473,17 @@ fn authenticate_keypair_paths(keypairs: &BTreeMap<String, PathBuf>) -> Result<()
         return Err(Error::new(format!(
             "campaign omitted required keypair paths: {}",
             missing.join(", ")
+        )));
+    }
+    let unexpected = keypairs
+        .keys()
+        .filter(|role| !allowed.contains(&role.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(Error::new(format!(
+            "campaign supplied keypair paths outside this mode: {}",
+            unexpected.join(", ")
         )));
     }
     let mut paths = BTreeSet::new();
@@ -1462,6 +1498,80 @@ fn authenticate_keypair_paths(keypairs: &BTreeMap<String, PathBuf>) -> Result<()
         }
     }
     Ok(())
+}
+
+fn founding_keypair_roles_v1(market: &crate::model::MarketRunInput) -> Vec<&'static str> {
+    let mut roles = FOUNDING_REQUIRED_ROLES.to_vec();
+    if market.local_participant_fixture_liquidity_atoms != 0 {
+        roles.extend([
+            crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+            crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+        ]);
+    }
+    roles
+}
+
+fn authenticate_founding_actor_partition_v1(
+    founding_founder: Pubkey,
+    substituted_founder: Pubkey,
+    secrets: &BTreeMap<String, [u8; 32]>,
+) -> Result<()> {
+    if founding_founder == Pubkey::default()
+        || substituted_founder == Pubkey::default()
+        || founding_founder == substituted_founder
+    {
+        return Err(Error::new(
+            "founding and substituted founder must be nonzero, distinct public identities",
+        ));
+    }
+    let mut identities = BTreeSet::from([founding_founder, substituted_founder]);
+    for (role, secret) in secrets {
+        let signer = Keypair::new_from_array(*secret).pubkey();
+        if !identities.insert(signer) {
+            return Err(Error::new(format!(
+                "{role} keypair aliases a founding actor or another retained signer"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn authenticate_founding_only_prerequisites_v1(states: &[(StageV1, StageStateV1)]) -> Result<()> {
+    for stage in [
+        StageV1::Substrate,
+        StageV1::Publication,
+        StageV1::Initialize,
+        StageV1::Activation,
+    ] {
+        let state = states
+            .iter()
+            .find(|(candidate, _)| *candidate == stage)
+            .map(|(_, state)| state)
+            .ok_or_else(|| Error::new(format!("founding-only gate omitted {}", stage.name())))?;
+        if state != &StageStateV1::Complete {
+            return Err(Error::new(format!(
+                "--founding-only requires {} Complete before any key is read; observed {}{}",
+                stage.name(),
+                state.label(),
+                state
+                    .detail()
+                    .map(|detail| format!(": {detail}"))
+                    .unwrap_or_default(),
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn administration_requires_authority_v1(
+    states: &[(StageV1, StageStateV1)],
+    through: StageV1,
+) -> bool {
+    states.iter().any(|(stage, state)| {
+        *stage > StageV1::Substrate
+            && *stage <= through
+            && matches!(state, StageStateV1::Absent | StageStateV1::Partial(_))
+    })
 }
 
 fn authenticate_local_participant_fixture_policy_v1(
@@ -2433,7 +2543,37 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "--execute requires --evidence ABSOLUTE_JSON so intent is durable before any mutation",
         ));
     }
-    authenticate_keypair_paths(&args.keypairs)?;
+    match args.mode {
+        CampaignModeV1::Administration => {
+            authenticate_keypair_paths(&args.keypairs, &[], ADMIN_REQUIRED_ROLES)?;
+            if args.market_path.is_some()
+                || args.founding_founder.is_some()
+                || args.substituted_founder.is_some()
+                || args.through > StageV1::Activation
+            {
+                return Err(Error::new(
+                    "administration mode is infrastructure-only through activation",
+                ));
+            }
+        }
+        CampaignModeV1::FoundingOnly => {
+            let mut allowed = FOUNDING_REQUIRED_ROLES.to_vec();
+            allowed.extend([
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1,
+                crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1,
+            ]);
+            authenticate_keypair_paths(&args.keypairs, FOUNDING_REQUIRED_ROLES, &allowed)?;
+            if args.market_path.is_none()
+                || args.founding_founder.is_none()
+                || args.substituted_founder.is_none()
+                || args.through != StageV1::Founding
+            {
+                return Err(Error::new(
+                    "founding-only mode requires its Market, two public founder identities, and through=founding",
+                ));
+            }
+        }
+    }
     let plan_source = fs::read(&args.plan_path)?;
     let plan: SuccessorPlan =
         serde_json::from_value(parse_json_without_duplicate_keys_v1(&plan_source)?)?;
@@ -2454,6 +2594,13 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         market.as_ref(),
         &args.keypairs,
     )?;
+    if args.mode == CampaignModeV1::FoundingOnly {
+        let input = market
+            .as_ref()
+            .ok_or_else(|| Error::new("founding-only Market disappeared after parsing"))?;
+        let roles = founding_keypair_roles_v1(input);
+        authenticate_keypair_paths(&args.keypairs, &roles, &roles)?;
+    }
     let prior = match &args.evidence_path {
         None => PriorCampaignEvidenceV1 {
             checkpoint: None,
@@ -2517,6 +2664,9 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         // page of false negatives and teach nobody anything.
         ClusterOriginV1::Loopback { .. } => None,
     };
+    if args.mode == CampaignModeV1::FoundingOnly {
+        authenticate_founding_only_prerequisites_v1(&states)?;
+    }
 
     let mut report = json!({
         "schema": "dclutch-successor-campaign-report-v1",
@@ -2531,9 +2681,12 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         "through_stage": args.through.name(),
         "execution_intent": {
             "authorized_mutation": args.execute,
+            "campaign_mode": args.mode.name(),
             "through_stage": args.through.name(),
             "plan": args.plan_path.display().to_string(),
             "market": args.market_path.as_ref().map(|path| path.display().to_string()),
+            "founding_founder": args.founding_founder.map(|value| value.to_string()),
+            "substituted_founder": args.substituted_founder.map(|value| value.to_string()),
         },
         "pre_key_checkpoint": {
             "durable": args.evidence_path.is_some(),
@@ -2611,6 +2764,107 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         return Ok(());
     }
 
+    if args.mode == CampaignModeV1::Administration {
+        if compatible_checkpoint.is_some() || !founding_submission_journals.is_empty() {
+            return Err(Error::new(
+                "administration evidence must not carry a founding checkpoint or submission journal",
+            ));
+        }
+        if !args.execute {
+            let mut stdout = std::io::stdout();
+            stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+            stdout.write_all(b"\n")?;
+            return Ok(());
+        }
+        for (stage, state) in states.iter().filter(|(stage, _)| *stage <= args.through) {
+            if *stage == StageV1::Substrate && state != &StageStateV1::Complete {
+                return Err(Error::new(
+                    "administration cannot open a signer while the substrate is not Complete",
+                ));
+            }
+            if let StageStateV1::Conflict(detail) = state {
+                return Err(Error::new(format!(
+                    "administration stage {} conflicts before any key read: {detail}",
+                    stage.name()
+                )));
+            }
+        }
+        let execution = if administration_requires_authority_v1(&states, args.through) {
+            authenticate_keypair_paths(&args.keypairs, ADMIN_REQUIRED_ROLES, ADMIN_REQUIRED_ROLES)?;
+            let forge = KeyForge::persisted(
+                load_campaign_keypairs(&args.keypairs)?,
+                ADMIN_REQUIRED_ROLES,
+            )?;
+            let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
+            let wallet = wallet_arithmetic(&mut rpc, &plan, authority.pubkey())?;
+            report["pre_key_checkpoint"]["keypair_files_read"] = json!(true);
+            report["payer"] = json!(authority.pubkey().to_string());
+            report["keypair_derivation"] = json!(forge.derivation_label());
+            report["private_key_persisted"] = json!(forge.persists_private_keys());
+            report["wallet"] = serde_json::to_value(&json!({
+                "payer": wallet.payer,
+                "balance_lamports": wallet.balance_lamports,
+                "record_rent_lamports": wallet.record_rent_lamports,
+                "profile_rent_lamports": wallet.profile_rent_lamports,
+                "activation_rent_lamports": wallet.activation_rent_lamports,
+                "estimated_fee_lamports": wallet.estimated_fee_lamports,
+                "required_lamports": wallet.required_lamports,
+                "shortfall_lamports": wallet.shortfall(),
+                "may_airdrop": args.origin.may_airdrop(),
+                "funding": if args.origin.may_airdrop() {
+                    "this origin's faucet is the campaign's own, so a shortfall is not a blocker"
+                } else {
+                    "this driver never airdrops: fund the payer before --execute so a shortfall refuses before the ladder"
+                },
+            }))?;
+            if let Some(path) = &args.evidence_path {
+                write_evidence_atomically(path, &report)?;
+            }
+            execute_stages(
+                &mut rpc,
+                &plan,
+                &authority,
+                &forge,
+                None,
+                None,
+                None,
+                &states,
+                args.through,
+                None,
+                &mut |_| Ok(()),
+                None,
+            )?
+        } else {
+            for (stage, state) in states.iter().filter(|(stage, _)| *stage <= args.through) {
+                if state != &StageStateV1::Complete {
+                    return Err(Error::new(format!(
+                        "administration stage {} is {} but has no admissible mutation route",
+                        stage.name(),
+                        state.label()
+                    )));
+                }
+            }
+            CampaignExecutionEvidenceV1 {
+                transactions: Vec::new(),
+                market: None,
+                recovered_finalized_founding: false,
+            }
+        };
+        report["execution"] = json!({
+            "completed": true,
+            "recoveredFinalizedFounding": execution.recovered_finalized_founding,
+            "transactions": execution.transactions,
+            "market": execution.market,
+        });
+        if let Some(path) = &args.evidence_path {
+            write_evidence_atomically(path, &report)?;
+        }
+        let mut stdout = std::io::stdout();
+        stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+        stdout.write_all(b"\n")?;
+        return Ok(());
+    }
+
     // Recover an ambiguous founding packet before opening any key file. A
     // Prepared advances only to durable Dispatching. Dispatching may resend
     // only its already-signed bytes after exact prestate reauthentication; a
@@ -2650,9 +2904,10 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                 crate::market::founding_submission_journal::founding_submission_recovery_v1(
                     &binding, &journal,
                 )?;
-            let finalized = match action {
+            let mut completed_locally = false;
+            let finalized_packet = match action {
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::SignOnce
-                | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch => false,
+                | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch => None,
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::Complete => {
                     crate::market::authenticate_completed_founding_submission_v1(
                         &mut rpc,
@@ -2660,7 +2915,8 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                         &binding,
                         &journal,
                     )?;
-                    true
+                    completed_locally = true;
+                    None
                 }
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::ResendIdenticalPacket
                 | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::PollOnly => {
@@ -2670,20 +2926,83 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                         .ok_or_else(|| Error::new("ambiguous founding journal omitted signature"))?
                         .parse::<solana_sdk::signature::Signature>()
                         .map_err(|error| Error::new(format!("ambiguous founding signature: {error}")))?;
-                    rpc.finalized_signed_packet(operation.label(), signature, false)?.is_some()
+                    rpc.finalized_signed_packet(operation.label(), signature, false)?
                 }
             };
-            if finalized {
-                if operation == crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltpcb2
-                    && compatible_checkpoint.is_none()
+            if let Some(finalized) = finalized_packet {
+                let persistence = observed_finalization_persistence_v1(journal.phase)?;
+                // A chain-finalized Dispatching packet first advances through
+                // the adjacent Submitted phase locally. Neither transition
+                // opens a key or a send path, and each is fsynced separately.
+                if persistence
+                    == ObservedFinalizationPersistenceV1::SubmittedThenFinalizedThenCheckpoint
                 {
-                    let checkpoint = crate::market::materialize_dcltpcb2_checkpoint_v1(
-                        &mut rpc,
-                        &binding,
-                        &journal,
+                    let signature = journal.expected_signature.clone().ok_or_else(|| {
+                        Error::new("Dispatching founding journal omitted signature")
+                    })?;
+                    journal =
+                        crate::market::founding_submission_journal::submit_founding_submission_v1(
+                            &binding, &journal, &signature,
+                        )?;
+                    founding_submission_journals.insert(operation, journal.clone());
+                    report["foundingSubmissionJournals"] = serde_json::to_value(
+                        founding_submission_journals
+                            .values()
+                            .cloned()
+                            .collect::<Vec<_>>(),
                     )?;
+                    write_evidence_atomically(evidence_path, &report)?;
+                }
+                journal = crate::market::finalize_observed_founding_submission_v1(
+                    &mut rpc, &binding, &journal, &finalized,
+                )?;
+                founding_submission_journals.insert(operation, journal.clone());
+                report["foundingSubmissionJournals"] = serde_json::to_value(
+                    founding_submission_journals
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )?;
+                write_evidence_atomically(evidence_path, &report)?;
+                crate::market::authenticate_completed_founding_submission_v1(
+                    &mut rpc,
+                    operation.label(),
+                    &binding,
+                    &journal,
+                )?;
+                completed_locally = true;
+                action = crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::Complete;
+            }
+            if completed_locally {
+                let materialized = match operation {
+                    crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltcfq1
+                        if compatible_checkpoint.is_none() =>
+                    {
+                        Some(crate::market::materialize_dcltcfq1_checkpoint_v1(
+                            &mut rpc,
+                            &binding,
+                            &journal,
+                        )?)
+                    }
+                    crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltpcb2
+                        if compatible_checkpoint.as_ref().is_none_or(|checkpoint| {
+                            checkpoint.schema
+                                != crate::market::DCLTPCB2_CHECKPOINT_SCHEMA_V1
+                        }) =>
+                    {
+                        Some(crate::market::materialize_dcltpcb2_checkpoint_v1(
+                            &mut rpc,
+                            &binding,
+                            &journal,
+                        )?)
+                    }
+                    _ => None,
+                };
+                if let Some(checkpoint) = materialized {
                     report["foundingCheckpoint"] = serde_json::to_value(&checkpoint)?;
                     compatible_checkpoint = Some(checkpoint);
+                    // The journal is already durably Finalized. Checkpoint
+                    // materialization is always the strictly later fsync.
                     write_evidence_atomically(evidence_path, &report)?;
                 }
                 continue;
@@ -2785,8 +3104,21 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     // This is the first private-key read in the campaign. Every parser,
     // mutable-plan pin, live ProgramData observation, and key-free stage
     // detector above is already represented by an fsynced report.
-    let forge = KeyForge::persisted(load_campaign_keypairs(&args.keypairs)?, REQUIRED_ROLES)?;
-    let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
+    let market_input = market
+        .as_ref()
+        .ok_or_else(|| Error::new("founding-only execution omitted its Market input"))?;
+    let founding_roles = founding_keypair_roles_v1(market_input);
+    let secrets = load_campaign_keypairs(&args.keypairs)?;
+    let founding_founder = args
+        .founding_founder
+        .ok_or_else(|| Error::new("founding-only execution omitted its founder"))?;
+    let substituted_founder = args
+        .substituted_founder
+        .ok_or_else(|| Error::new("founding-only execution omitted its substituted founder"))?;
+    authenticate_founding_actor_partition_v1(founding_founder, substituted_founder, &secrets)?;
+    let actors = crate::market::FoundingActorsV1::new(founding_founder, substituted_founder)?;
+    let forge = KeyForge::persisted(secrets, &founding_roles)?;
+    let payer = forge.keypair(role::CAMPAIGN_PAYER);
     // PEEKED, never drawn: the detector must name the exact next key without
     // advancing the forge's issuance index.
     let founding_keys = match &market {
@@ -2804,9 +3136,9 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         }
         _ => None,
     };
-    let wallet = wallet_arithmetic(&mut rpc, &plan, authority.pubkey())?;
+    let wallet = wallet_arithmetic(&mut rpc, &plan, payer.pubkey())?;
     report["pre_key_checkpoint"]["keypair_files_read"] = json!(true);
-    report["payer"] = json!(authority.pubkey().to_string());
+    report["payer"] = json!(payer.pubkey().to_string());
     report["keypair_derivation"] = json!(forge.derivation_label());
     report["private_key_persisted"] = json!(forge.persists_private_keys());
     report["stages"] = json!(
@@ -2889,7 +3221,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                         args.origin.redacted_url(),
                         plan_sha256.clone(),
                         market_sha256,
-                        authority.pubkey(),
+                        payer.pubkey(),
                     )?;
                 Some(crate::market::FoundingSubmissionRecorderV1::new(
                     binding,
@@ -2902,8 +3234,9 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         execute_stages(
             &mut rpc,
             &plan,
-            &authority,
+            &payer,
             &forge,
+            Some(actors),
             market.as_ref(),
             founding_keys,
             &states,
@@ -2981,12 +3314,57 @@ pub(crate) struct CampaignExecutionEvidenceV1 {
     pub(crate) recovered_finalized_founding: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FoundingCheckpointResumeV1 {
+    PreparedControllerFunding,
+    CustodyStaged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservedFinalizationPersistenceV1 {
+    SubmittedThenFinalizedThenCheckpoint,
+    FinalizedThenCheckpoint,
+}
+
+fn observed_finalization_persistence_v1(
+    phase: crate::market::founding_submission_journal::FoundingSubmissionPhaseV1,
+) -> Result<ObservedFinalizationPersistenceV1> {
+    match phase {
+        crate::market::founding_submission_journal::FoundingSubmissionPhaseV1::Dispatching => {
+            Ok(ObservedFinalizationPersistenceV1::SubmittedThenFinalizedThenCheckpoint)
+        }
+        crate::market::founding_submission_journal::FoundingSubmissionPhaseV1::Submitted => {
+            Ok(ObservedFinalizationPersistenceV1::FinalizedThenCheckpoint)
+        }
+        _ => Err(Error::new(
+            "observed finalized packet did not start from Dispatching or Submitted",
+        )),
+    }
+}
+
+fn founding_checkpoint_resume_v1(
+    checkpoint: &crate::market::MarketExecutionCheckpointV1,
+) -> Result<FoundingCheckpointResumeV1> {
+    match checkpoint.schema.as_str() {
+        crate::market::DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1 => {
+            Ok(FoundingCheckpointResumeV1::PreparedControllerFunding)
+        }
+        crate::market::DCLTPCB2_CHECKPOINT_SCHEMA_V1 => {
+            Ok(FoundingCheckpointResumeV1::CustodyStaged)
+        }
+        schema => Err(Error::new(format!(
+            "partial founding checkpoint uses unsupported schema {schema}"
+        ))),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_stages(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     authority: &Keypair,
     forge: &KeyForge,
+    founding_actors: Option<crate::market::FoundingActorsV1>,
     market: Option<&crate::model::MarketRunInput>,
     founding_keys: Option<(Pubkey, Pubkey)>,
     states: &[(StageV1, StageStateV1)],
@@ -3024,6 +3402,9 @@ fn execute_stages(
         if *state == StageStateV1::Complete {
             eprintln!("campaign stage {}: already complete, skipped", stage.name());
             if *stage == StageV1::Founding {
+                let actors = founding_actors.ok_or_else(|| {
+                    Error::new("completed founding recovery omitted its two public actors")
+                })?;
                 let input = market.ok_or_else(|| {
                     Error::new("completed founding recovery requires the exact Market input")
                 })?;
@@ -3038,6 +3419,7 @@ fn execute_stages(
                     input,
                     authority,
                     forge,
+                    actors,
                     &mut transactions,
                     saved,
                     submission_recorder.as_deref_mut(),
@@ -3080,6 +3462,9 @@ fn execute_stages(
                 runtime::verify_activation(rpc, plan)?;
             }
             StageV1::Founding => {
+                let actors = founding_actors.ok_or_else(|| {
+                    Error::new("founding execution omitted its two public actors")
+                })?;
                 let Some(input) = market else {
                     return Err(Error::new(
                         "the founding stage needs a market input: pass --market ABSOLUTE_JSON \
@@ -3097,16 +3482,35 @@ fn execute_stages(
                                 "this founding has STARTED on this chain ({detail}), but no compatible durable DCLTPCB2 checkpoint authenticates a safe suffix resume"
                             ))
                         })?;
-                        crate::market::resume_found_market_from_checkpoint(
-                            rpc,
-                            plan,
-                            input,
-                            authority,
-                            forge,
-                            &mut transactions,
-                            saved,
-                            submission_recorder.as_deref_mut(),
-                        )?
+                        match founding_checkpoint_resume_v1(saved)? {
+                            FoundingCheckpointResumeV1::PreparedControllerFunding => {
+                                crate::market::resume_found_market_from_prepared_checkpoint(
+                                    rpc,
+                                    plan,
+                                    input,
+                                    authority,
+                                    forge,
+                                    actors,
+                                    &mut transactions,
+                                    saved,
+                                    checkpoint,
+                                    submission_recorder.as_deref_mut(),
+                                )?
+                            }
+                            FoundingCheckpointResumeV1::CustodyStaged => {
+                                crate::market::resume_found_market_from_checkpoint(
+                                    rpc,
+                                    plan,
+                                    input,
+                                    authority,
+                                    forge,
+                                    actors,
+                                    &mut transactions,
+                                    saved,
+                                    submission_recorder.as_deref_mut(),
+                                )?
+                            }
+                        }
                     }
                     StageStateV1::Absent if compatible_checkpoint.is_some() => {
                         return Err(Error::new(
@@ -3120,6 +3524,7 @@ fn execute_stages(
                             input,
                             authority,
                             forge,
+                            actors,
                             &mut transactions,
                             checkpoint,
                             submission_recorder.as_deref_mut(),
@@ -3675,6 +4080,54 @@ mod tests {
         })
     }
 
+    #[test]
+    fn partial_founding_routes_only_the_two_durable_checkpoint_schemas() {
+        let custody: crate::market::MarketExecutionCheckpointV1 =
+            serde_json::from_value(checkpoint_value()).expect("custody checkpoint");
+        assert_eq!(
+            founding_checkpoint_resume_v1(&custody).expect("custody route"),
+            FoundingCheckpointResumeV1::CustodyStaged
+        );
+
+        let mut prepared = custody.clone();
+        prepared.schema = crate::market::DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1.into();
+        assert_eq!(
+            founding_checkpoint_resume_v1(&prepared).expect("Prepared route"),
+            FoundingCheckpointResumeV1::PreparedControllerFunding
+        );
+
+        prepared.schema = "dclutch-market-shadow-checkpoint-v1".into();
+        let refusal = founding_checkpoint_resume_v1(&prepared)
+            .expect_err("unknown checkpoint schema must refuse");
+        assert!(refusal.0.contains("unsupported schema"), "{refusal:?}");
+    }
+
+    #[test]
+    fn observed_finalization_preserves_adjacent_fsync_order_without_a_send_route() {
+        use crate::market::founding_submission_journal::FoundingSubmissionPhaseV1;
+
+        assert_eq!(
+            observed_finalization_persistence_v1(FoundingSubmissionPhaseV1::Dispatching)
+                .expect("Dispatching recovery"),
+            ObservedFinalizationPersistenceV1::SubmittedThenFinalizedThenCheckpoint
+        );
+        assert_eq!(
+            observed_finalization_persistence_v1(FoundingSubmissionPhaseV1::Submitted)
+                .expect("Submitted recovery"),
+            ObservedFinalizationPersistenceV1::FinalizedThenCheckpoint
+        );
+        for phase in [
+            FoundingSubmissionPhaseV1::Planned,
+            FoundingSubmissionPhaseV1::Prepared,
+            FoundingSubmissionPhaseV1::Finalized,
+        ] {
+            assert!(
+                observed_finalization_persistence_v1(phase).is_err(),
+                "{phase:?} must not acquire an observed-finalization path"
+            );
+        }
+    }
+
     fn terminal_consumable_report(path: &Path, checkpoint: Value) -> Value {
         json!({
             "schema": "dclutch-successor-campaign-report-v1",
@@ -4035,30 +4488,34 @@ mod tests {
             "dclutch-absent-campaign-keys-{}",
             Pubkey::new_unique()
         ));
-        let paths = REQUIRED_ROLES
+        let paths = FOUNDING_REQUIRED_ROLES
             .iter()
             .enumerate()
             .map(|(index, role)| (role.to_string(), root.join(format!("{index}.json"))))
             .collect::<BTreeMap<_, _>>();
-        authenticate_keypair_paths(&paths)
+        authenticate_keypair_paths(&paths, FOUNDING_REQUIRED_ROLES, FOUNDING_REQUIRED_ROLES)
             .expect("path-only authentication must not open absent key files");
         assert!(load_campaign_keypairs(&paths).is_err());
 
         let mut duplicate = paths;
         let first = duplicate
-            .get(REQUIRED_ROLES[0])
+            .get(FOUNDING_REQUIRED_ROLES[0])
             .expect("first path")
             .clone();
-        duplicate.insert(REQUIRED_ROLES[1].into(), first);
-        let refusal = authenticate_keypair_paths(&duplicate)
-            .err()
-            .expect("duplicate path refuses");
+        duplicate.insert(FOUNDING_REQUIRED_ROLES[1].into(), first);
+        let refusal = authenticate_keypair_paths(
+            &duplicate,
+            FOUNDING_REQUIRED_ROLES,
+            FOUNDING_REQUIRED_ROLES,
+        )
+        .err()
+        .expect("duplicate path refuses");
         assert!(refusal.0.contains("distinct"), "{}", refusal.0);
     }
 
     #[test]
     fn every_required_role_is_one_a_keypair_flag_can_name() {
-        for role in REQUIRED_ROLES {
+        for role in ADMIN_REQUIRED_ROLES.iter().chain(FOUNDING_REQUIRED_ROLES) {
             assert!(
                 KEYPAIR_ROLES.contains(role),
                 "{role} is required but no flag names it"
@@ -4067,8 +4524,97 @@ mod tests {
         // The hostile authority is deliberately NOT required: proving a refusal
         // costs a second funded wallet and two fees the operator did not ask
         // for.
-        assert!(!REQUIRED_ROLES.contains(&role::HOSTILE_AUTHORITY));
+        assert!(!ADMIN_REQUIRED_ROLES.contains(&role::HOSTILE_AUTHORITY));
+        assert!(!FOUNDING_REQUIRED_ROLES.contains(&role::HOSTILE_AUTHORITY));
         assert!(KEYPAIR_ROLES.contains(&role::HOSTILE_AUTHORITY));
+        assert!(!KEYPAIR_ROLES.contains(&role::FOUNDING_FOUNDER));
+        assert!(!KEYPAIR_ROLES.contains(&role::SUBSTITUTED_FOUNDER));
+        assert!(FOUNDING_REQUIRED_ROLES.contains(&role::CAMPAIGN_PAYER));
+        assert!(!FOUNDING_REQUIRED_ROLES.contains(&role::CORE_UPGRADE_AUTHORITY));
+    }
+
+    #[test]
+    fn founding_actor_partition_preserves_the_old_all_identity_nonalias_rule() {
+        let actor_keypair = Keypair::new();
+        let founder = actor_keypair.pubkey();
+        let substituted = Pubkey::new_from_array([0x62; 32]);
+        let signer = Keypair::new();
+        let mut secrets = BTreeMap::from([(
+            role::CAMPAIGN_PAYER.to_owned(),
+            signer.to_bytes()[..32].try_into().expect("secret seed"),
+        )]);
+        authenticate_founding_actor_partition_v1(founder, substituted, &secrets)
+            .expect("disjoint actors and signer");
+
+        secrets.insert(
+            role::CAMPAIGN_PAYER.to_owned(),
+            actor_keypair.to_bytes()[..32]
+                .try_into()
+                .expect("actor secret seed"),
+        );
+        let refusal = authenticate_founding_actor_partition_v1(founder, substituted, &secrets)
+            .expect_err("signer alias must refuse");
+        assert!(
+            refusal.0.contains("aliases a founding actor"),
+            "{refusal:?}"
+        );
+        assert!(
+            authenticate_founding_actor_partition_v1(founder, founder, &BTreeMap::new()).is_err()
+        );
+    }
+
+    fn exact_prerequisite_states_v1() -> Vec<(StageV1, StageStateV1)> {
+        [
+            StageV1::Substrate,
+            StageV1::Publication,
+            StageV1::Initialize,
+            StageV1::Activation,
+        ]
+        .into_iter()
+        .map(|stage| (stage, StageStateV1::Complete))
+        .collect()
+    }
+
+    #[test]
+    fn founding_only_gate_requires_every_infrastructure_stage_exactly_complete() {
+        let exact = exact_prerequisite_states_v1();
+        authenticate_founding_only_prerequisites_v1(&exact).expect("exact Complete prefix");
+        for hostile in [
+            StageStateV1::Absent,
+            StageStateV1::Partial("in flight".into()),
+            StageStateV1::Conflict("substituted".into()),
+        ] {
+            for index in 0..exact.len() {
+                let mut states = exact.clone();
+                states[index].1 = hostile.clone();
+                let refusal = authenticate_founding_only_prerequisites_v1(&states)
+                    .expect_err("non-Complete prerequisite must refuse");
+                assert!(
+                    refusal.0.contains(states[index].0.name())
+                        && refusal.0.contains("before any key is read"),
+                    "{refusal:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn administration_authority_is_required_only_for_an_incomplete_write_stage() {
+        let exact = exact_prerequisite_states_v1();
+        assert!(!administration_requires_authority_v1(
+            &exact,
+            StageV1::Activation
+        ));
+        let mut partial = exact.clone();
+        partial[1].1 = StageStateV1::Partial("one record".into());
+        assert!(administration_requires_authority_v1(
+            &partial,
+            StageV1::Activation
+        ));
+        assert!(!administration_requires_authority_v1(
+            &partial,
+            StageV1::Substrate
+        ));
     }
 
     #[test]

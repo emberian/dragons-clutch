@@ -32,11 +32,14 @@ use dclutch_registry_contract::{
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
-    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V5, ResolutionCertificateKindV2, ResolutionCertificateV2,
-    ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2,
-    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
-    SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2, SourceClosureReceiptV3,
+    DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1, DirectFundingCloseRequestV1,
+    FUNDING_ACTIVATION_RECEIPT_BYTES_V1, FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+    FundingActivationReceiptV1, FundingActivationRequestV1, RESOLUTION_CERTIFICATE_BYTES_V2,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    ResolutionCertificateKindV2, ResolutionCertificateV2, ResolutionCoreActionV1,
+    ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
+    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2,
+    SourceClosureReceiptV3, funding_lifecycle_account_digest_v1,
 };
 use dclutch_source_contract::{
     RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
@@ -103,7 +106,11 @@ pub const RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3: usize = 22;
 /// Exact account count consumed by Core and Resolution for funding creation.
 pub const RESOLUTION_CREATE_FUND_ACCOUNT_COUNT_V3: usize = 18;
 /// Exact account count consumed by Core and Resolution for funding readiness.
-pub const RESOLUTION_VERIFY_FUND_ACCOUNT_COUNT_V3: usize = 19;
+pub const RESOLUTION_VERIFY_FUND_ACCOUNT_COUNT_V3: usize = 20;
+/// Exact direct Resolution account count for activation with a recovery-policy pair.
+pub const RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1: usize = 20;
+/// Exact direct Resolution account count for terminal close with a recovery-policy pair.
+pub const RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1: usize = 21;
 
 /// Same-finalized state selecting dust-tolerant Source/funding creation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -198,6 +205,8 @@ pub struct ResolutionVerifyFundReadySnapshotV3 {
     pub clock_sysvar: ObservedAccount,
     /// Canonical Rent sysvar.
     pub rent_sysvar: ObservedAccount,
+    /// Immutable Resolution-owned V7 activation receipt.
+    pub activation_receipt: ObservedAccount,
     /// Finalized RecoveryPolicy record.
     pub recovery_policy: ObservedAccount,
     /// Vacant RecoveryPolicy staging cursor.
@@ -223,6 +232,34 @@ pub struct ResolutionVerifyFundReadyReportV3 {
     pub expected_beneficiary_credit_lamports: u64,
     /// Digest of the exact funded role request.
     pub role_request_digest: [u8; 32],
+}
+
+/// Same-finalized Pending state for the V7 permissionless Resolution activation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolutionActivateFundSnapshotV1 {
+    /// Pending funding/source snapshot; its activation-receipt account is still vacant.
+    pub pending: ResolutionVerifyFundReadySnapshotV3,
+    /// Canonical executable System Program used to allocate the prefunded receipt PDA.
+    pub system_program: ObservedAccount,
+}
+
+/// Exact direct Resolution activation instruction and durable receipt projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolutionActivateFundReportV1 {
+    /// Permissionless unsigned Resolution instruction.
+    pub instruction: Instruction,
+    /// One finalized observation selecting every semantic input.
+    pub observation: Observation,
+    /// Canonical activation receipt PDA.
+    pub activation_receipt: Pubkey,
+    /// Minimum receipt-PDA top-up required before execution.
+    pub receipt_top_up_lamports: u64,
+    /// Exact debit credited to the immutable beneficiary.
+    pub expected_beneficiary_credit_lamports: u64,
+    /// Exact activation request digest persisted by the receipt.
+    pub request_digest: [u8; 32],
+    /// Chain-derived ordered recovery/exhaustion/failure indices.
+    pub funding_entry_indices: [u16; 3],
 }
 
 /// Same-finalized chain state selecting one terminal Resolution admission.
@@ -366,6 +403,21 @@ pub struct ResolutionCloseFundReportV3 {
     /// SHA-256 of the exact role-owned request bytes.
     pub role_request_digest: [u8; 32],
     /// Exact typed facts the post-close retirement waist must consume.
+    pub expected_retirement_facts: ResolutionRetirementReceiptFactsV3,
+}
+
+/// Exact V7 direct Resolution close instruction and retirement projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolutionDirectCloseFundReportV1 {
+    /// Permissionless unsigned Resolution instruction.
+    pub instruction: Instruction,
+    /// One finalized observation selecting every semantic input.
+    pub observation: Observation,
+    /// Canonical immutable Source-closure receipt PDA.
+    pub closure_receipt: Pubkey,
+    /// SHA-256 of the exact direct-close request.
+    pub request_digest: [u8; 32],
+    /// Exact typed facts consumed by the post-close retirement waist.
     pub expected_retirement_facts: ResolutionRetirementReceiptFactsV3,
 }
 
@@ -561,15 +613,14 @@ pub fn build_resolution_create_fund_v3(
     })
 }
 
-/// Construct the canonical Core `VerifyFundReady` effect from one pending
-/// Resolution subset ledger and its exact aggregate physical custody.
+/// Construct the V7 no-CPI Core acceptance from an immutable activation receipt.
 pub fn build_resolution_verify_fund_ready_v3(
     snapshot: &ResolutionVerifyFundReadySnapshotV3,
 ) -> Result<ResolutionVerifyFundReadyReportV3, ResolutionCoreOperatorErrorV3> {
     let observation = same_finalized_verify_observation(snapshot)?;
     let market = CoreState::decode(&snapshot.market.data)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
-    authenticate_founding_market(
+    authenticate_accept_market(
         &snapshot.market,
         &snapshot.registry_program,
         &snapshot.core_program,
@@ -586,10 +637,8 @@ pub fn build_resolution_verify_fund_ready_v3(
     )?;
     let rent =
         decode_rent(&snapshot.rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
-    let clock =
-        decode_clock(&snapshot.clock_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
-    if clock.slot == 0
-        || snapshot.beneficiary.key.to_bytes() != market.rent_beneficiary.to_bytes()
+    decode_clock(&snapshot.clock_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    if snapshot.beneficiary.key.to_bytes() != market.rent_beneficiary.to_bytes()
         || snapshot.beneficiary.executable
     {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
@@ -611,46 +660,19 @@ pub fn build_resolution_verify_fund_ready_v3(
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
-    let mut funding = authenticate_pending_funding(
+    let active_entries = authenticate_active_funding_ledger(
         snapshot.market.key,
         snapshot.resolution_program.key,
         &snapshot.funding_ledger,
         market.identity.generation,
         manifest_id,
         manifest,
-        funding_entry_mask(entries)?,
         &rent,
+        false,
     )?;
-    let mut expected_beneficiary_credit_lamports = 0_u64;
-    for entry_index in entries {
-        let debit = FundingLedgerV2::activate_in_place(
-            &mut funding,
-            manifest_id,
-            manifest,
-            entry_index,
-            clock.slot,
-        )
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
-        expected_beneficiary_credit_lamports = expected_beneficiary_credit_lamports
-            .checked_add(debit.rent_lamports())
-            .and_then(|value| value.checked_add(debit.creation_lamports()))
-            .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+    if active_entries != entries {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    let post_lamports = snapshot
-        .funding_ledger
-        .lamports
-        .checked_sub(expected_beneficiary_credit_lamports)
-        .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
-    FundingLedgerV2::decode(&funding)
-        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
-        .and_then(|ledger| {
-            ledger.validate_native_custody(
-                post_lamports,
-                rent.minimum_balance(funding.len()),
-                false,
-            )
-        })
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
     let role_request = funding_role_request(
         ResolutionCoreActionV1::VerifyFundReady,
         snapshot.source_state.key,
@@ -658,6 +680,63 @@ pub fn build_resolution_verify_fund_ready_v3(
         snapshot.funding_ledger.key,
         entries,
     );
+    let expected_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            snapshot.market.key.as_ref(),
+            &market.identity.generation.to_le_bytes(),
+        ],
+        &snapshot.resolution_program.key,
+    )
+    .0;
+    if snapshot.activation_receipt.key != expected_receipt
+        || snapshot.activation_receipt.owner != snapshot.resolution_program.key
+        || snapshot.activation_receipt.executable
+        || snapshot.activation_receipt.data.len() != FUNDING_ACTIVATION_RECEIPT_BYTES_V1
+        || !rent.is_exempt(
+            snapshot.activation_receipt.lamports,
+            FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
+        )
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
+    let receipt = FundingActivationReceiptV1::decode(&snapshot.activation_receipt.data)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    let market_state_digest = activation_receipt_market_digest(market, &snapshot.market.data)?;
+    let source_state_digest = hash(&snapshot.source_state.data).to_bytes();
+    let active_ledger_digest = funding_lifecycle_account_digest_v1(
+        snapshot.funding_ledger.owner.to_bytes(),
+        snapshot.funding_ledger.key.to_bytes(),
+        snapshot.funding_ledger.lamports,
+        &snapshot.funding_ledger.data,
+    );
+    let activation_request = FundingActivationRequestV1 {
+        release_set: market.identity.selected_release_set.to_bytes(),
+        market: snapshot.market.key.to_bytes(),
+        generation: market.identity.generation,
+        role: role_request,
+        expected_market_state_digest: market_state_digest,
+        expected_source_state_digest: source_state_digest,
+        expected_pending_ledger_digest: receipt.pending_ledger_digest,
+        receipt: snapshot.activation_receipt.key.to_bytes(),
+    };
+    if receipt.request_digest
+        != activation_request
+            .digest()
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+        || receipt.release_set != market.identity.selected_release_set.to_bytes()
+        || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+        || receipt.market != snapshot.market.key.to_bytes()
+        || receipt.generation != market.identity.generation
+        || receipt.role != role_request
+        || receipt.market_state_digest != market_state_digest
+        || receipt.source_state_digest != source_state_digest
+        || receipt.active_ledger_digest != active_ledger_digest
+        || receipt.post_ledger_lamports != snapshot.funding_ledger.lamports
+        || receipt.producer != snapshot.resolution_program.key.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
     let (role_bytes, role_request_digest) = encode_funding_role_request(role_request)?;
     let caller_authority = core_caller_authority(
         market,
@@ -690,9 +769,257 @@ pub fn build_resolution_verify_fund_ready_v3(
         caller_authority,
         beneficiary: snapshot.beneficiary.key,
         funding_entry_indices: entries,
-        activation_slot: clock.slot,
-        expected_beneficiary_credit_lamports,
+        activation_slot: receipt.activation_slot,
+        expected_beneficiary_credit_lamports: receipt.beneficiary_credit_lamports,
         role_request_digest,
+    })
+}
+
+/// Construct the V7 permissionless direct Resolution Pending-to-Active mutation.
+pub fn build_resolution_activate_fund_v1(
+    snapshot: &ResolutionActivateFundSnapshotV1,
+) -> Result<ResolutionActivateFundReportV1, ResolutionCoreOperatorErrorV3> {
+    let pending = &snapshot.pending;
+    let observation = same_finalized_verify_observation(pending)?;
+    if snapshot.system_program.observation != observation {
+        return Err(ResolutionCoreOperatorErrorV3::Snapshot);
+    }
+    let market = CoreState::decode(&pending.market.data)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    authenticate_founding_market(
+        &pending.market,
+        &pending.registry_program,
+        &pending.core_program,
+        market,
+    )?;
+    authenticate_release_coordinates(
+        &pending.activation_cache,
+        &pending.registry_program,
+        &pending.core_program,
+        &pending.core_programdata,
+        &pending.resolution_program,
+        &pending.resolution_programdata,
+        market,
+    )?;
+    let rent =
+        decode_rent(&pending.rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let clock =
+        decode_clock(&pending.clock_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    authenticate_system(&snapshot.system_program)?;
+    if clock.slot == 0
+        || pending.beneficiary.key.to_bytes() != market.rent_beneficiary.to_bytes()
+        || pending.beneficiary.executable
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
+    let (material, _, entries) = authenticate_founding_records(
+        pending.registry_program.key,
+        &pending.source_material,
+        &pending.source_material_staging,
+        &pending.capability_manifest,
+        &pending.capability_manifest_staging,
+        &pending.recovery_policy,
+        &pending.recovery_policy_staging,
+        market,
+        &rent,
+    )?;
+    authenticate_primary_source(pending, market, &rent)?;
+    let manifest = CapabilityManifestV1::decode(&pending.capability_manifest.data)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    let manifest_id = CapabilityContentId::new(market.identity.capability_manifest.to_bytes())
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+    let role = funding_role_request(
+        ResolutionCoreActionV1::VerifyFundReady,
+        pending.source_state.key,
+        market,
+        pending.funding_ledger.key,
+        entries,
+    );
+    let expected_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            pending.market.key.as_ref(),
+            &market.identity.generation.to_le_bytes(),
+        ],
+        &pending.resolution_program.key,
+    )
+    .0;
+    if pending.activation_receipt.key != expected_receipt || pending.activation_receipt.executable {
+        return Err(ResolutionCoreOperatorErrorV3::Frame);
+    }
+    let (
+        expected_beneficiary_credit_lamports,
+        expected_pending_ledger_digest,
+        completed_request_digest,
+    ) = if pending.activation_receipt.owner == system_program::ID
+        && pending.activation_receipt.data.is_empty()
+    {
+        let mut activated = authenticate_pending_funding(
+            pending.market.key,
+            pending.resolution_program.key,
+            &pending.funding_ledger,
+            market.identity.generation,
+            manifest_id,
+            manifest,
+            funding_entry_mask(entries)?,
+            &rent,
+        )?;
+        let mut beneficiary_credit = 0_u64;
+        for entry_index in entries {
+            let debit = FundingLedgerV2::activate_in_place(
+                &mut activated,
+                manifest_id,
+                manifest,
+                entry_index,
+                clock.slot,
+            )
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+            beneficiary_credit = beneficiary_credit
+                .checked_add(debit.rent_lamports())
+                .and_then(|value| value.checked_add(debit.creation_lamports()))
+                .ok_or(ResolutionCoreOperatorErrorV3::Funding)?;
+        }
+        (
+            beneficiary_credit,
+            funding_lifecycle_account_digest_v1(
+                pending.funding_ledger.owner.to_bytes(),
+                pending.funding_ledger.key.to_bytes(),
+                pending.funding_ledger.lamports,
+                &pending.funding_ledger.data,
+            ),
+            None,
+        )
+    } else if pending.activation_receipt.owner == pending.resolution_program.key
+        && pending.activation_receipt.data.len() == FUNDING_ACTIVATION_RECEIPT_BYTES_V1
+        && rent.is_exempt(
+            pending.activation_receipt.lamports,
+            FUNDING_ACTIVATION_RECEIPT_BYTES_V1,
+        )
+    {
+        let active_entries = authenticate_active_funding_ledger(
+            pending.market.key,
+            pending.resolution_program.key,
+            &pending.funding_ledger,
+            market.identity.generation,
+            manifest_id,
+            manifest,
+            &rent,
+            false,
+        )?;
+        let receipt = FundingActivationReceiptV1::decode(&pending.activation_receipt.data)
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
+        let active_digest = funding_lifecycle_account_digest_v1(
+            pending.funding_ledger.owner.to_bytes(),
+            pending.funding_ledger.key.to_bytes(),
+            pending.funding_ledger.lamports,
+            &pending.funding_ledger.data,
+        );
+        if active_entries != entries
+            || receipt.release_set != market.identity.selected_release_set.to_bytes()
+            || receipt.resolution_release != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+            || receipt.market != pending.market.key.to_bytes()
+            || receipt.generation != market.identity.generation
+            || receipt.role != role
+            || receipt.market_state_digest != hash(&pending.market.data).to_bytes()
+            || receipt.source_state_digest != hash(&pending.source_state.data).to_bytes()
+            || receipt.active_ledger_digest != active_digest
+            || receipt.post_ledger_lamports != pending.funding_ledger.lamports
+            || receipt.producer != pending.resolution_program.key.to_bytes()
+        {
+            return Err(ResolutionCoreOperatorErrorV3::Funding);
+        }
+        // A completed activation replay changes no lamports. The receipt
+        // supplies the one exact Pending digest required to reproduce the
+        // original request and request_digest byte for byte.
+        (
+            0,
+            receipt.pending_ledger_digest,
+            Some(receipt.request_digest),
+        )
+    } else {
+        return Err(ResolutionCoreOperatorErrorV3::Frame);
+    };
+    let request = FundingActivationRequestV1 {
+        release_set: market.identity.selected_release_set.to_bytes(),
+        market: pending.market.key.to_bytes(),
+        generation: market.identity.generation,
+        role,
+        expected_market_state_digest: hash(&pending.market.data).to_bytes(),
+        expected_source_state_digest: hash(&pending.source_state.data).to_bytes(),
+        expected_pending_ledger_digest,
+        receipt: expected_receipt.to_bytes(),
+    };
+    let data = request
+        .encode()
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+        .to_vec();
+    let mut accounts = vec![
+        AccountMeta::new_readonly(pending.market.key, false),
+        AccountMeta::new_readonly(pending.activation_cache.key, false),
+        AccountMeta::new_readonly(pending.registry_program.key, false),
+        AccountMeta::new_readonly(pending.core_program.key, false),
+        AccountMeta::new_readonly(pending.core_programdata.key, false),
+        AccountMeta::new_readonly(pending.resolution_program.key, false),
+        AccountMeta::new_readonly(pending.resolution_programdata.key, false),
+        AccountMeta::new_readonly(pending.source_material.key, false),
+        AccountMeta::new_readonly(pending.source_material_staging.key, false),
+        AccountMeta::new_readonly(pending.capability_manifest.key, false),
+        AccountMeta::new_readonly(pending.capability_manifest_staging.key, false),
+        AccountMeta::new_readonly(pending.source_state.key, false),
+        AccountMeta::new(pending.funding_ledger.key, false),
+        AccountMeta::new(pending.beneficiary.key, false),
+        AccountMeta::new(pending.activation_receipt.key, false),
+        AccountMeta::new_readonly(pending.clock_sysvar.key, false),
+        AccountMeta::new_readonly(pending.rent_sysvar.key, false),
+        AccountMeta::new_readonly(snapshot.system_program.key, false),
+    ];
+    if material.recovery_policy().is_some() {
+        accounts.push(AccountMeta::new_readonly(
+            pending.recovery_policy.key,
+            false,
+        ));
+        accounts.push(AccountMeta::new_readonly(
+            pending.recovery_policy_staging.key,
+            false,
+        ));
+    }
+    let expected_count = if material.recovery_policy().is_some() {
+        RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1
+    } else {
+        RESOLUTION_ACTIVATE_FUND_ACCOUNT_COUNT_V1.saturating_sub(2)
+    };
+    if accounts.len() != expected_count
+        || accounts.iter().any(|account| account.is_signer)
+        || accounts.iter().enumerate().any(|(index, account)| {
+            account.is_writable != matches!(index, 12 | 13 | 14)
+                || accounts
+                    .iter()
+                    .skip(index.saturating_add(1))
+                    .any(|other| other.pubkey == account.pubkey)
+        })
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Frame);
+    }
+    let request_digest = request
+        .digest()
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    if completed_request_digest.is_some_and(|observed| observed != request_digest) {
+        return Err(ResolutionCoreOperatorErrorV3::Funding);
+    }
+    Ok(ResolutionActivateFundReportV1 {
+        instruction: Instruction {
+            program_id: pending.resolution_program.key,
+            accounts,
+            data,
+        },
+        observation,
+        activation_receipt: expected_receipt,
+        receipt_top_up_lamports: rent
+            .minimum_balance(FUNDING_ACTIVATION_RECEIPT_BYTES_V1)
+            .saturating_sub(pending.activation_receipt.lamports),
+        expected_beneficiary_credit_lamports,
+        request_digest,
+        funding_entry_indices: entries,
     })
 }
 
@@ -706,7 +1033,7 @@ pub fn build_resolution_admit_terminal_v3(
     if snapshot.market.owner != snapshot.core_program.key
         || snapshot.market.executable
         || snapshot.market.key.to_bytes() != market.identity.market_id.to_bytes()
-        || market.phase != Phase::Open
+        || !matches!(market.phase, Phase::Open | Phase::Terminal)
         || market.readiness != Readiness::Consumed
         || snapshot.registry_program.key.to_bytes() != market.identity.registry_program.to_bytes()
     {
@@ -798,6 +1125,12 @@ pub fn build_resolution_admit_terminal_v3(
     )
     .0;
     if snapshot.certificate.key != expected_certificate {
+        return Err(ResolutionCoreOperatorErrorV3::Terminal);
+    }
+    if market
+        .terminal_receipt
+        .is_some_and(|existing| existing.to_bytes() != snapshot.certificate.key.to_bytes())
+    {
         return Err(ResolutionCoreOperatorErrorV3::Terminal);
     }
     let entries = authenticate_funding(snapshot, market, &rent)?;
@@ -1177,6 +1510,124 @@ pub fn build_resolution_close_fund_v3(
     Ok(report)
 }
 
+/// Construct the V7 permissionless direct Resolution terminal close.
+pub fn build_resolution_direct_close_fund_v1(
+    snapshot: &ResolutionCloseFundSnapshotV3,
+) -> Result<ResolutionDirectCloseFundReportV1, ResolutionCoreOperatorErrorV3> {
+    // The V3 planner remains the semantic owner of the terminal certificate,
+    // exact three-slot discharge arithmetic, and retirement projection. V7
+    // changes only the execution boundary: the checked plan is sent directly
+    // to Resolution instead of reconstructing it on both sides of a Core CPI.
+    let planned = build_resolution_close_fund_v3(snapshot)?;
+    let role_offset = dclutch_market_core_codec::REQUEST_BYTES
+        .checked_add(dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1)
+        .and_then(|value| {
+            value.checked_add(dclutch_market_core_codec::CAPABILITY_FUNDING_HEADER_BYTES_V2)
+        })
+        .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?;
+    let role = ResolutionRoleRequestV2::decode(
+        planned
+            .instruction
+            .data
+            .get(role_offset..)
+            .ok_or(ResolutionCoreOperatorErrorV3::Encoding)?,
+    )
+    .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?;
+    let market = CoreState::decode(&snapshot.market.data)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Market)?;
+    let request = DirectFundingCloseRequestV1 {
+        release_set: market.identity.selected_release_set.to_bytes(),
+        market: snapshot.market.key.to_bytes(),
+        generation: market.identity.generation,
+        role,
+        market_state_digest: hash(&snapshot.market.data).to_bytes(),
+        source_state_digest: hash(&snapshot.source_state.data).to_bytes(),
+        funding_ledger_digest: funding_lifecycle_account_digest_v1(
+            snapshot.funding_ledger.owner.to_bytes(),
+            snapshot.funding_ledger.key.to_bytes(),
+            snapshot.funding_ledger.lamports,
+            &snapshot.funding_ledger.data,
+        ),
+        certificate_digest: hash(&snapshot.certificate.data).to_bytes(),
+        closure_prestate_digest: funding_lifecycle_account_digest_v1(
+            snapshot.closure_destination.owner.to_bytes(),
+            snapshot.closure_destination.key.to_bytes(),
+            snapshot.closure_destination.lamports,
+            &snapshot.closure_destination.data,
+        ),
+    };
+    let data = request
+        .encode()
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?
+        .to_vec();
+    if data.len() != DIRECT_FUNDING_CLOSE_REQUEST_BYTES_V1 {
+        return Err(ResolutionCoreOperatorErrorV3::Encoding);
+    }
+    let material = SourceMaterialV3::decode(&snapshot.source_material.data)
+        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let mut accounts = vec![
+        AccountMeta::new_readonly(snapshot.market.key, false),
+        AccountMeta::new_readonly(snapshot.activation_cache.key, false),
+        AccountMeta::new_readonly(snapshot.registry_program.key, false),
+        AccountMeta::new_readonly(snapshot.core_program.key, false),
+        AccountMeta::new_readonly(snapshot.core_programdata.key, false),
+        AccountMeta::new_readonly(snapshot.resolution_program.key, false),
+        AccountMeta::new_readonly(snapshot.resolution_programdata.key, false),
+        AccountMeta::new_readonly(snapshot.source_material.key, false),
+        AccountMeta::new_readonly(snapshot.source_material_staging.key, false),
+        AccountMeta::new_readonly(snapshot.capability_manifest.key, false),
+        AccountMeta::new_readonly(snapshot.capability_manifest_staging.key, false),
+        AccountMeta::new(snapshot.source_state.key, false),
+        AccountMeta::new(snapshot.funding_ledger.key, false),
+        AccountMeta::new_readonly(snapshot.certificate.key, false),
+        AccountMeta::new(snapshot.closure_destination.key, false),
+        AccountMeta::new(snapshot.beneficiary.key, false),
+        AccountMeta::new_readonly(snapshot.clock_sysvar.key, false),
+        AccountMeta::new_readonly(snapshot.rent_sysvar.key, false),
+        AccountMeta::new_readonly(snapshot.system_program.key, false),
+    ];
+    if material.recovery_policy().is_some() {
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy.key,
+            false,
+        ));
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy_staging.key,
+            false,
+        ));
+    }
+    let expected_count = if material.recovery_policy().is_some() {
+        RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1
+    } else {
+        RESOLUTION_DIRECT_CLOSE_FUND_ACCOUNT_COUNT_V1.saturating_sub(2)
+    };
+    if accounts.len() != expected_count
+        || accounts.iter().any(|account| account.is_signer)
+        || accounts.iter().enumerate().any(|(index, account)| {
+            account.is_writable != matches!(index, 11 | 12 | 14 | 15)
+                || accounts
+                    .iter()
+                    .skip(index.saturating_add(1))
+                    .any(|other| other.pubkey == account.pubkey)
+        })
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Frame);
+    }
+    Ok(ResolutionDirectCloseFundReportV1 {
+        instruction: Instruction {
+            program_id: snapshot.resolution_program.key,
+            accounts,
+            data,
+        },
+        observation: planned.observation,
+        closure_receipt: planned.closure_receipt,
+        request_digest: request
+            .digest()
+            .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+        expected_retirement_facts: planned.expected_retirement_facts,
+    })
+}
+
 /// Authenticate the persisted Resolution closure into retirement-waist facts.
 pub fn authenticate_resolution_retirement_receipt_v3(
     receipt: &ObservedAccount,
@@ -1272,6 +1723,50 @@ fn authenticate_founding_market(
         return Err(ResolutionCoreOperatorErrorV3::Market);
     }
     Ok(())
+}
+
+/// Authenticate the no-CPI accept route, including a completed Ready replay.
+///
+/// Ready is admitted only here. CreateFund and direct activation retain their
+/// narrower Pending/Open prestates, so replay cannot reopen funding mutation.
+fn authenticate_accept_market(
+    market_account: &ObservedAccount,
+    registry_program: &ObservedAccount,
+    core_program: &ObservedAccount,
+    market: CoreState,
+) -> Result<(), ResolutionCoreOperatorErrorV3> {
+    if market_account.owner != core_program.key
+        || market_account.executable
+        || market_account.key.to_bytes() != market.identity.market_id.to_bytes()
+        || market.terminal_receipt.is_some()
+        || !matches!(
+            (market.phase, market.readiness),
+            (Phase::Founding, Readiness::Prepaid)
+                | (Phase::Founding, Readiness::Ready)
+                | (Phase::Open, Readiness::Consumed)
+        )
+        || registry_program.key.to_bytes() != market.identity.registry_program.to_bytes()
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Market);
+    }
+    Ok(())
+}
+
+fn activation_receipt_market_digest(
+    market: CoreState,
+    current_bytes: &[u8],
+) -> Result<[u8; 32], ResolutionCoreOperatorErrorV3> {
+    if market.phase == Phase::Founding && market.readiness == Readiness::Ready {
+        let mut predecessor = market;
+        predecessor.readiness = Readiness::Prepaid;
+        return Ok(hash(
+            &predecessor
+                .encode()
+                .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
+        )
+        .to_bytes());
+    }
+    Ok(hash(current_bytes).to_bytes())
 }
 
 fn authenticate_system(system: &ObservedAccount) -> Result<(), ResolutionCoreOperatorErrorV3> {
@@ -1396,7 +1891,7 @@ fn select_resolution_funding_entries(
                     .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
                 for (slot, expected_config) in expected.iter().enumerate() {
                     if entry.config_id().to_bytes() == *expected_config
-                        && entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V5
+                        && entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7
                     {
                         let selection = selected
                             .get_mut(slot)
@@ -1437,7 +1932,7 @@ fn select_resolution_funding_entries(
                 let entry = manifest
                     .entry(entry_index)
                     .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
-                if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+                if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
                     if entry.config_id().to_bytes() == material_id {
                         if failure.replace(entry_index).is_some() {
                             return Err(ResolutionCoreOperatorErrorV3::Funding);
@@ -1815,10 +2310,11 @@ fn verify_accounts(
         AccountMeta::new_readonly(snapshot.capability_manifest.key, false),
         AccountMeta::new_readonly(snapshot.capability_manifest_staging.key, false),
         AccountMeta::new_readonly(snapshot.source_state.key, false),
-        AccountMeta::new(snapshot.funding_ledger.key, false),
-        AccountMeta::new(snapshot.beneficiary.key, false),
+        AccountMeta::new_readonly(snapshot.funding_ledger.key, false),
+        AccountMeta::new_readonly(snapshot.beneficiary.key, false),
         AccountMeta::new_readonly(snapshot.clock_sysvar.key, false),
         AccountMeta::new_readonly(snapshot.rent_sysvar.key, false),
+        AccountMeta::new_readonly(snapshot.activation_receipt.key, false),
     ];
     if has_recovery_policy {
         accounts.push(AccountMeta::new_readonly(
@@ -1854,7 +2350,7 @@ fn validate_funding_frame(
     let accounts = &instruction.accounts;
     let writable: &[usize] = match action {
         ResolutionCoreActionV1::CreateFund => &[1, 12],
-        ResolutionCoreActionV1::VerifyFundReady => &[1, 13, 14],
+        ResolutionCoreActionV1::VerifyFundReady => &[1],
         _ => return Err(ResolutionCoreOperatorErrorV3::Frame),
     };
     if accounts.len() != account_count
@@ -2062,10 +2558,23 @@ fn authenticate_role_deployment(
         .role(role)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Release)?;
     let release = activated.release();
+    authenticate_role_semantic_release(role, release.semantic_release_id().to_bytes())?;
     let observation = deployment_observation(program, programdata, release)?;
     activated
         .authenticate_current_deployment(observation)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Release)
+}
+
+fn authenticate_role_semantic_release(
+    role: ExecutionRoleV1,
+    semantic_release_id: [u8; 32],
+) -> Result<(), ResolutionCoreOperatorErrorV3> {
+    if role == ExecutionRoleV1::Resolution
+        && semantic_release_id != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    {
+        return Err(ResolutionCoreOperatorErrorV3::Release);
+    }
+    Ok(())
 }
 
 fn deployment_observation(
@@ -2318,7 +2827,7 @@ fn authenticate_close_funding(
                     .entry(index)
                     .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
                 if entry.config_id().to_bytes() != expected_config
-                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
                 {
                     return Err(ResolutionCoreOperatorErrorV3::Funding);
                 }
@@ -2334,7 +2843,7 @@ fn authenticate_close_funding(
                 let entry = manifest
                     .entry(index)
                     .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
-                if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
+                if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
                     return Err(ResolutionCoreOperatorErrorV3::Funding);
                 }
                 let config = configs
@@ -2499,6 +3008,7 @@ fn same_finalized_verify_observation(
         &snapshot.beneficiary,
         &snapshot.clock_sysvar,
         &snapshot.rent_sysvar,
+        &snapshot.activation_receipt,
         &snapshot.recovery_policy,
         &snapshot.recovery_policy_staging,
     ];
@@ -3617,6 +4127,29 @@ mod tests {
     fn funding_entry_set_must_be_exactly_three_distinct_rows() {
         assert!(distinct_funding_entries([3, 1, 2]));
         assert!(!distinct_funding_entries([3, 1, 3]));
+    }
+
+    #[test]
+    fn resolution_role_accepts_v6_and_refuses_v5_semantic_release() {
+        assert_eq!(
+            authenticate_role_semantic_release(
+                ExecutionRoleV1::Resolution,
+                RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            authenticate_role_semantic_release(
+                ExecutionRoleV1::Resolution,
+                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            ),
+            Err(ResolutionCoreOperatorErrorV3::Release)
+        );
+        assert_eq!(
+            authenticate_role_semantic_release(ExecutionRoleV1::Core, [0x5a; 32]),
+            Ok(()),
+            "Core remains bound by its source-derived semantic owner"
+        );
     }
 
     #[test]

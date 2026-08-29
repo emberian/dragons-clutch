@@ -12,10 +12,12 @@
 
 use core::convert::TryInto;
 
-/// Typed funding quotes, custody observations, PDA projections, and transitions.
-pub mod funding;
 /// Durable pre-Market controller-funding checkpoint contract.
 pub mod controller_funding_checkpoint;
+/// Terminal receipt for the second durable controller-funding cleanup transaction.
+pub mod controller_funding_cleanup_receipt;
+/// Typed funding quotes, custody observations, PDA projections, and transitions.
+pub mod funding;
 /// Lean-emitted byte coordinates for the `DCLTCAP1` manifest, the `DCLTFQ01`
 /// typed funding quote, the `DCLTCFS1` funding state, and the `DCLTMOR1`
 /// opening-readiness record.
@@ -32,8 +34,9 @@ pub mod readiness_instruction;
 /// Reusable capability templates and exact occurrence-manifest projection.
 pub mod template;
 
-pub use funding::*;
 pub use controller_funding_checkpoint::*;
+pub use controller_funding_cleanup_receipt::*;
+pub use funding::*;
 pub use template::*;
 
 pub use dclutch_core_contract::ContentId;
