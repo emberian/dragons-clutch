@@ -282,6 +282,17 @@ move together; nothing else does.
 `Token2022BehaviorProfileV2::check_mint`. That campaign already loads and
 digest-checks the real v11 ELF. It fails today.
 
+**RESOLVED 2026-08-29 (`f7c960b9`, `bb625688`) — see
+`docs/evidence/TOKEN_2022_MINT_EXTENSION_2026_08_29.md`.** The writer issues
+`permissioned_burn::initialize` and allocates 238 bytes; `closeable_mint` walks
+real TLV storage through the same shared parser `behavior_profile_v2` uses; the
+closing gate above is `assert_lifecycle_mint_is_terminally_burnable` and it now
+passes on real post-CPI bytes. The rent coupling was smaller than sized here:
+the tree pins no rent lamport figure for this account, so all three principals
+moved with the width without a value being restated. §4 below is this same
+defect from the wallet side and is **not** fixed — it now has an exact width to
+disagree with.
+
 ---
 
 <a name="3"></a>

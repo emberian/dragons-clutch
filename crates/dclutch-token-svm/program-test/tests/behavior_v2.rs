@@ -1,7 +1,10 @@
 //! Real Token-2022 processor execution for nonzero display decimals and exact
 //! base-unit transfer behavior.
 
-use dclutch_token_svm::{ACCOUNT_BYTES, TOKEN_2022_PROGRAM_ID, Token2022BehaviorProfileV2};
+use dclutch_token_svm::{
+    ACCOUNT_BYTES, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
+    Token2022BehaviorProfileV2,
+};
 use solana_program::{instruction::Instruction, pubkey::Pubkey};
 use solana_program_test::{ProgramTest, ProgramTestContext, processor};
 use solana_sdk::signature::{Keypair, Signer};
@@ -84,6 +87,11 @@ async fn real_token_2022_keeps_max_decimals_display_only_and_transfers_exact_bas
         ExtensionType::PermissionedBurn,
     ])
     .expect("Mint extension width");
+    // The width the Claims lifecycle allocates and computes rent from is the
+    // official library's own account length for these two extensions, not our
+    // arithmetic about it. If Token-2022 ever restates either extension's
+    // storage, this fails here rather than on a Mint nobody can burn.
+    assert_eq!(mint_bytes, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2);
     let rent = context.banks_client.get_rent().await.expect("Rent");
     let create_mint = create_account(
         &context.payer.pubkey(),
