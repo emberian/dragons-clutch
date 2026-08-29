@@ -18,11 +18,13 @@ describe('Rational representation successor workbench', () => {
     expect(html).toContain('K claim curves over a different N-way result partition');
     expect(html).toContain('zero is valid');
     expect(html).toContain('Rust-emitter gated');
-    expect(html).toContain('closure only; not a payout route');
+    expect(html).toContain('closure only · signing release-gated');
     expect(html).toContain('S is ordered nonzero support within representation K');
     expect(html).toContain('Wallet signing blocked by checked-release gate');
     expect(html).toContain('20 + 4S');
-    expect(html).not.toContain('Submit');
+    // Retirement submission exists but stays disabled until the exact V4
+    // route is authenticated; nothing else on the page submits.
+    expect(html).toContain('Submit fully signed retirement');
     expect(html).not.toContain('sample token balance');
     expect(html).not.toContain('Convert to atoms');
   });

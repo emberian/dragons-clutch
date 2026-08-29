@@ -3,18 +3,18 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify` (also wired into `tools/gauntlet` — see `tools/sbom/README.md`).
 
-**48 manifests, 1867 unique dependency rows (1041 cargo, 826 npm), 67 flagged for human review.**
+**50 manifests, 1871 unique dependency rows (1045 cargo, 826 npm), 67 flagged for human review.**
 
 ## Counts by license
 
 | License | Rows |
 |---|---|
-| `MIT` | 741 |
+| `MIT` | 742 |
 | `Apache-2.0` | 400 |
 | `MIT OR Apache-2.0` | 301 |
-| `AGPL-3.0-or-later` | 140 |
+| `AGPL-3.0-or-later` | 142 |
 | `MIT/Apache-2.0` | 55 |
-| `Apache-2.0 OR MIT` | 39 |
+| `Apache-2.0 OR MIT` | 40 |
 | `MPL-2.0` | 28 |
 | `ISC` | 21 |
 | `LGPL-3.0-or-later` | 20 |
@@ -344,6 +344,8 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-economic-slice-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-economic-slice-kernel` | declared |
 | `dclutch-effect-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-effect-kernel` | declared |
 | `dclutch-execution-strategy-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-execution-strategy-contract` | declared |
+| `dclutch-fractional-atomic-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/fractional-atomic` | inherited-default (publish=false, undeclared) |
+| `dclutch-fractional-atomic-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/fractional-atomic-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-fractional-claim-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claim-contract` | declared |
 | `dclutch-fractional-claim-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claim-kernel` | declared |
 | `dclutch-fractional-claim-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claim-operator` | declared |
@@ -533,6 +535,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `humantime` | 2.4.0 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hybrid-array` | 0.4.14 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hyper` | 1.11.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `hyper` | 1.11.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hyper-rustls` | 0.27.9 | `Apache-2.0 OR ISC OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `hyper-util` | 0.1.20 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `iana-time-zone` | 0.1.65 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -553,6 +556,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `include_dir` | 0.7.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `include_dir_macros` | 0.7.4 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `indexmap` | 2.14.0 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `indexmap` | 2.14.1 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `inout` | 0.1.4 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `io-uring` | 0.7.14 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `ipnet` | 2.12.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -2027,11 +2031,13 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `packages/dclutch-cli/package.json` | 299 |
 | `packages/dclutch-sdk/package.json` | 270 |
 | `programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml` | 772 |
+| `programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml` | 782 |
 | `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml` | 783 |
 | `programs/dclutch-claims-sbf/program-test/protocol-position/Cargo.toml` | 790 |
 | `programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml` | 790 |
 | `programs/dclutch-claims-sbf/program-test/sparse-chain/Cargo.toml` | 791 |
 | `programs/dclutch-claims-sbf/test-programs/affine-batch-caller/Cargo.toml` | 173 |
+| `programs/dclutch-claims-sbf/test-programs/fractional-atomic-caller/Cargo.toml` | 181 |
 | `programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller/Cargo.toml` | 182 |
 | `programs/dclutch-claims-sbf/test-programs/liability-basis-caller/Cargo.toml` | 181 |
 | `programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller/Cargo.toml` | 173 |
@@ -2040,7 +2046,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller/Cargo.toml` | 173 |
 | `programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml` | 175 |
 | `programs/dclutch-custody-sbf/test-programs/caller/Cargo.toml` | 165 |
-| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 804 |
+| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 802 |
 | `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml` | 201 |
 | `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 771 |
 | `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 803 |
@@ -2563,6 +2569,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - fastrand 2.5.0 (cargo)
 - idna_adapter 1.2.2 (cargo)
 - indexmap 2.14.0 (cargo)
+- indexmap 2.14.1 (cargo)
 - k256 0.13.4 (cargo)
 - keccak 0.1.6 (cargo)
 - object 0.39.1 (cargo)
@@ -3202,6 +3209,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - http-body-util 0.1.5 (cargo)
 - humanize-ms 1.2.1 (npm)
 - hyper 1.11.0 (cargo)
+- hyper 1.11.1 (cargo)
 - hyper-util 0.1.20 (cargo)
 - ignore 5.3.2 (npm)
 - ignore 7.0.6 (npm)
