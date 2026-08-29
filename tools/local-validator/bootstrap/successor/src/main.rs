@@ -16,6 +16,7 @@ mod direct_trade_setup;
 mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
 mod family_hot_campaign;
+mod general_settlement_fixture;
 mod flagship_resolution;
 mod funding_readiness;
 mod local_mutable;

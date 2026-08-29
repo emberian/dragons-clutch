@@ -87,6 +87,7 @@ use dclutch_general_adapter_contract::{
     },
     release_v3::GENERAL_ACTIONS_V3,
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2},
+    runtime_settlement::RuntimeSettlementActionV2,
     runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
     state_artifacts_v3::{GeneralReadonlyEvidenceKindV3, general_readonly_evidence_v3},
 };
@@ -111,6 +112,10 @@ use solana_sdk_ids::sysvar;
 use crate::{
     Error, Result,
     campaign::read_keypair_file,
+    general_settlement_fixture::{
+        frozen_selection_v1, initialized_cursor_v1, settle_native_v1, settlement_revision_v1,
+        settlement_rows_v1, terminal_fixture_v1,
+    },
     plan::hex,
     rpc::{Rpc, SignedVersionedPacketV1},
 };
@@ -517,25 +522,24 @@ fn run_general(arguments: &ArgumentsV1) -> Result<()> {
         (Some(path), true) => Some(Keypair::new_from_array(read_keypair_file(path, "payer")?)),
         _ => None,
     };
-    let mut evidence_actions = Vec::with_capacity(GENERAL_ACTIONS_V3.len());
-    for (index, action) in GENERAL_ACTIONS_V3.into_iter().enumerate() {
-        let index = u16::try_from(index).map_err(|_| Error::new("action index overflow"))?;
-        if let Some(finalized) = execute_general_action_v1(
-            rpc.as_mut(),
-            arguments,
-            payer.as_ref(),
-            authority,
-            action,
-            index,
-        )? {
+    // The whole native chain is derived before anything is signed. A refusal
+    // here means the campaign never reaches the validator, which is where a
+    // broken chain should be found.
+    let steps = general_campaign_steps_v1(arguments.outcome_count)?;
+    let mut evidence_actions = Vec::with_capacity(steps.len());
+    for step in &steps {
+        if let Some(finalized) =
+            execute_general_action_v1(rpc.as_mut(), arguments, payer.as_ref(), authority, step)?
+        {
             evidence_actions.push(finalized);
         }
     }
     if !arguments.execute {
         println!(
-            "prepared {} General actions: genesis accounts in {}, planned journals in {}. Start a \
-             validator with one --account ADDRESS FILE per file in the account directory, then \
-             rerun with --execute --rpc-url URL --payer-keypair PATH.",
+            "prepared {} General steps covering all {} authored actions: genesis accounts in {}, \
+             planned journals in {}. Start a validator with --account-dir pointed at the account \
+             directory, then rerun with --execute --rpc-url URL --payer-keypair PATH.",
+            steps.len(),
             GENERAL_ACTIONS_V3.len(),
             arguments.account_dir.display(),
             arguments.journal_dir.display()
@@ -563,20 +567,22 @@ fn execute_general_action_v1(
     arguments: &ArgumentsV1,
     payer: Option<&Keypair>,
     authority: Pubkey,
-    action: Action,
-    action_index: u16,
+    step: &GeneralStepV1,
 ) -> Result<Option<FamilyHotActionEvidenceV1>> {
     let width = arguments.outcome_count;
-    let label = format!("General {action:?} at runtime width {width}");
-    let journal_path = arguments
-        .journal_dir
-        .join(format!("general-{action_index:02}-{action:?}.json"));
+    let action = step.action;
+    let action_index = step.ordinal;
+    let label = format!("General {} at runtime width {width}", step.label);
+    let journal_path = arguments.journal_dir.join(format!(
+        "general-{action_index:02}-{}.json",
+        step.label.replace(' ', "-")
+    ));
 
-    let family_request = compile_general_request_v1(action)?;
+    let family_request = step.request_bytes.clone();
     let mut instruction_data = general_envelope_v1(&family_request)?;
     instruction_data.extend_from_slice(&family_request);
 
-    let bank = general_input_bank_v1(width, action, arguments.caller);
+    let bank = general_input_bank_v1(width, action, arguments.caller, step.coordinates);
     let bank_digest = ContentId::new(Sha256::digest(&bank).into())
         .map_err(|error| Error::new(format!("bank digest: {error:?}")))?;
     let scalar_count = general_hot_scalar_count_v3(width)
@@ -604,7 +610,7 @@ fn execute_general_action_v1(
     // Every account the accelerator reads is a genesis fixture owned by the
     // caller program, at a derived address both phases agree on without
     // exchanging a key. `prepare` writes them; the validator loads them.
-    let request_account = campaign_account_key_v1(arguments.caller, action, "request", 0);
+    let request_account = campaign_account_key_v1(arguments.caller, step.ordinal, "request", 0);
     if !arguments.execute {
         write_genesis_account_v1(
             &arguments.account_dir,
@@ -616,7 +622,7 @@ fn execute_general_action_v1(
 
     let mut page_keys = Vec::new();
     for page_index in 0..page_count {
-        let key = campaign_account_key_v1(arguments.caller, action, "scratch-page", page_index);
+        let key = campaign_account_key_v1(arguments.caller, step.ordinal, "scratch-page", page_index);
         if !arguments.execute {
             let page_bytes = general_scratch_page_v1(
                 &bank,
@@ -636,7 +642,7 @@ fn execute_general_action_v1(
         page_keys.push(key);
     }
 
-    let runtime_data = general_runtime_data_v1(action, width)?;
+    let runtime_data = step.runtime.clone();
 
     let fixed_count = usize::from(
         general_account_profile_fixed_count_v3(action)
@@ -656,7 +662,7 @@ fn execute_general_action_v1(
     for (coordinate, data) in runtime_data {
         let key = campaign_account_key_v1(
             arguments.caller,
-            action,
+            step.ordinal,
             "runtime",
             u32::from(coordinate),
         );
@@ -688,7 +694,7 @@ fn execute_general_action_v1(
     let mut journal = FamilyHotJournalV1 {
         schema: FamilyV1::General.journal_schema().to_owned(),
         family: FamilyV1::General.label().to_owned(),
-        action: format!("{action:?}"),
+        action: step.label.clone(),
         action_index,
         outcome_count: width,
         phase: FamilyHotPhaseV1::Planned,
@@ -801,7 +807,7 @@ fn execute_general_action_v1(
     write_json_atomic_v1(&journal_path, &journal)?;
 
     Ok(Some(FamilyHotActionEvidenceV1 {
-        action: format!("{action:?}"),
+        action: step.label.clone(),
         signature: packet.signature,
         finalized_slot: finalized.evidence.slot,
         compute_units_consumed: finalized.evidence.compute_units_consumed.unwrap_or_default(),
@@ -827,13 +833,13 @@ fn execute_general_action_v1(
 /// prepare and execute run in different processes and must agree on it without
 /// passing a key. Nothing signs as these accounts, so a domain-separated
 /// digest is the whole requirement.
-fn campaign_account_key_v1(caller: Pubkey, action: Action, role: &str, index: u32) -> Pubkey {
+fn campaign_account_key_v1(caller: Pubkey, ordinal: u16, role: &str, index: u32) -> Pubkey {
     let mut hasher = Sha256::new();
     hasher.update(b"dclutch/local-family-hot-campaign/account/v1");
     hasher.update([0]);
     hasher.update(caller.to_bytes());
     hasher.update([0]);
-    hasher.update([action as u8]);
+    hasher.update(ordinal.to_le_bytes());
     hasher.update([0]);
     hasher.update(role.as_bytes());
     hasher.update([0]);
@@ -893,32 +899,32 @@ fn general_envelope_v1(family_request: &[u8]) -> Result<Vec<u8>> {
     Ok(envelope.to_bytes().to_vec())
 }
 
-/// One exact General controller request for the given action.
+
+/// Encode one exact General controller request at named coordinates.
 ///
-/// The shape rules belong to `ControllerRequestV2::validate`, not to this
-/// caller, and they are not uniform across the seven: `Freeze` is the one
-/// action that must carry no candidate at all, `Close` is the one that must
-/// carry a nonzero terminal record bump, and only `Collect` and `Distribute`
-/// may name a manifest order. Encoding a request that violates any of those
-/// is refused here rather than on chain, which is where the campaign's own
-/// unit test found this the first time.
-fn compile_general_request_v1(action: Action) -> Result<Vec<u8>> {
+/// The coordinates are not decoration. A settlement step names the revision it
+/// expects, the candidate page its row came from, the execution within that
+/// page and the manifest ordinal — four independent authenticated facts, and
+/// deriving any one from another is refused on chain without a runtime write.
+fn general_request_v1(
+    action: Action,
+    candidate_id: Option<[u8; 32]>,
+    expected_revision: u64,
+    page_index: u32,
+    execution_index: u8,
+    manifest_order_index: u8,
+) -> Result<Vec<u8>> {
     let request = ControllerRequestV2 {
         action,
-        expected_revision: 1,
-        candidate_id: match action {
-            Action::Freeze => None,
-            // Consider names the candidate it is submitting, not the one the
-            // cursor already holds.
-            Action::Consider => Some(BEST_CANDIDATE_V1),
-            _ => Some(FIRST_CANDIDATE_V1),
-        },
-        // The page index is the submitted candidate's own coordinate.
-        page_index: u32::from(action == Action::Consider) * 2,
-        execution_index: 0,
-        manifest_order_index: 0,
+        expected_revision,
+        candidate_id,
+        page_index,
+        execution_index,
+        manifest_order_index,
         state_bump: 1,
-        terminal_record_bump: u8::from(action == Action::Close),
+        // Close is the one action that creates a terminal record, and the one
+        // that must carry a nonzero bump for it.
+        terminal_record_bump: if action == Action::Close { 2 } else { 0 },
     };
     Ok(request
         .to_bytes()
@@ -1084,61 +1090,295 @@ fn general_evidence_coordinate_v1(
     )))
 }
 
-/// The runtime accounts one action reads, by logical coordinate.
+/// One step of the General campaign.
 ///
-/// Only the selection tier is modelled. Freeze needs the open cursor alone;
-/// Consider additionally needs its policy and the candidate being submitted,
-/// and those two are what turn its typed refusal into an acceptance. The
-/// settlement five each need a settlement cursor, a runtime verifier and a
-/// manifest that this campaign does not build yet — they still execute, and
-/// their ACK says `refused` for exactly that reason rather than for a
-/// transport one.
-fn general_runtime_data_v1(action: Action, width: u32) -> Result<BTreeMap<u16, Vec<u8>>> {
-    let mut runtime = BTreeMap::new();
-    runtime.insert(RUNTIME_CONFIG_COORDINATE, general_config_v1(width)?);
-    runtime.insert(RUNTIME_PRODUCT_COORDINATE, general_product_record_v1());
-    let vacant = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
-    let first = general_verified_candidate_v1(width, FIRST_CANDIDATE_V1, 1, 1, 7, 7, 0)?;
-    let opened = general_selection_body_v1(&vacant, &first, 0)?;
-    match action {
-        Action::Consider => {
-            // The cursor already holds the first candidate; Consider submits a
-            // strictly better one and must replace it.
-            let better = general_verified_candidate_v1(width, BEST_CANDIDATE_V1, 2, 2, 9, 8, 0)?;
-            runtime.insert(
-                RUNTIME_PRIMARY_STATE_COORDINATE,
-                general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &opened)?,
-            );
-            runtime.insert(
-                general_evidence_coordinate_v1(
-                    action,
-                    GeneralReadonlyEvidenceKindV3::SelectionPolicy,
-                )?,
-                general_policy_v1()?
-                    .to_bytes()
-                    .map_err(|error| Error::new(format!("policy bytes: {error:?}")))?
-                    .to_vec(),
-            );
-            runtime.insert(
-                general_evidence_coordinate_v1(
-                    action,
-                    GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
-                )?,
-                better,
-            );
-        }
-        _ => {
-            runtime.insert(
-                RUNTIME_PRIMARY_STATE_COORDINATE,
-                general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &opened)?,
-            );
-        }
-    }
-    Ok(runtime)
+/// A step is not the same thing as an action. `Collect` and `Distribute` each
+/// consume three settlement rows, so the seven authored actions occupy eleven
+/// steps, and the settlement half of that list is a CHAIN: every step reads the
+/// cursor the previous one produced. A caller that submitted these as seven
+/// independent transactions would be correctly refused at the second one.
+pub(crate) struct GeneralStepV1 {
+    /// The authored action this step invokes.
+    action: Action,
+    /// Position in the campaign, and the journal's filename order.
+    ordinal: u16,
+    /// Human label distinguishing repeated actions ("Collect row 1").
+    label: String,
+    /// The exact compiled family request.
+    request_bytes: Vec<u8>,
+    /// The request's own page / execution / manifest-order coordinates.
+    ///
+    /// The register bank REPEATS these, and the accelerator authenticates the
+    /// two against each other. Building the bank without them left every
+    /// settlement row claiming coordinate zero while its request named a real
+    /// one, which is a disagreement the ELF is right to refuse.
+    coordinates: (u32, u8, u8),
+    /// The runtime accounts this step's frame carries.
+    runtime: BTreeMap<u16, Vec<u8>>,
 }
 
+/// Build the complete eleven-step General campaign.
+///
+/// The whole plan is derived up front, natively, before a single transaction is
+/// signed. That is deliberate: the settlement cursor each on-chain step reads
+/// is the output of the previous native transition, so the plan is where the
+/// chain's correctness lives. If the native chain refuses, the campaign never
+/// reaches the validator at all — which is the right place to find out.
+pub(crate) fn general_campaign_steps_v1(width: u32) -> Result<Vec<GeneralStepV1>> {
+    let product_id = general_product_id_v1();
+    let fixture = terminal_fixture_v1(width, product_id)?;
+    let rows = settlement_rows_v1(&fixture)?;
+    let config = general_config_v1(width)?;
+    let product = general_product_record_v1();
+    let mut steps: Vec<GeneralStepV1> = Vec::new();
+
+    let mut push = |action: Action,
+                    label: String,
+                    request_bytes: Vec<u8>,
+                    coordinates: (u32, u8, u8),
+                    runtime: BTreeMap<u16, Vec<u8>>|
+     -> Result<()> {
+        let ordinal = u16::try_from(steps.len()).map_err(|_| Error::new("step ordinal"))?;
+        steps.push(GeneralStepV1 {
+            action,
+            ordinal,
+            label,
+            request_bytes,
+            coordinates,
+            runtime,
+        });
+        Ok(())
+    };
+
+    // --- selection tier -----------------------------------------------------
+    let vacant = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    let incumbent = general_verified_candidate_v1(width, FIRST_CANDIDATE_V1, 1, 1, 7, 7, 0)?;
+    let opened = general_selection_body_v1(&vacant, &incumbent, 0)?;
+    let better = general_verified_candidate_v1(width, BEST_CANDIDATE_V1, 2, 2, 9, 8, 0)?;
+
+    let mut consider = BTreeMap::new();
+    consider.insert(RUNTIME_CONFIG_COORDINATE, config.clone());
+    consider.insert(RUNTIME_PRODUCT_COORDINATE, product.clone());
+    consider.insert(
+        RUNTIME_PRIMARY_STATE_COORDINATE,
+        general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &opened)?,
+    );
+    consider.insert(
+        general_evidence_coordinate_v1(Action::Consider, GeneralReadonlyEvidenceKindV3::SelectionPolicy)?,
+        general_policy_v1()?
+            .to_bytes()
+            .map_err(|error| Error::new(format!("policy bytes: {error:?}")))?
+            .to_vec(),
+    );
+    consider.insert(
+        general_evidence_coordinate_v1(
+            Action::Consider,
+            GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
+        )?,
+        better,
+    );
+    push(
+        Action::Consider,
+        "Consider".to_owned(),
+        general_request_v1(Action::Consider, Some(BEST_CANDIDATE_V1), 1, 2, 0, 0)?,
+        (2, 0, 0),
+        consider,
+    )?;
+
+    let mut freeze = BTreeMap::new();
+    freeze.insert(RUNTIME_CONFIG_COORDINATE, config.clone());
+    freeze.insert(RUNTIME_PRODUCT_COORDINATE, product.clone());
+    freeze.insert(
+        RUNTIME_PRIMARY_STATE_COORDINATE,
+        general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &opened)?,
+    );
+    push(
+        Action::Freeze,
+        "Freeze".to_owned(),
+        general_request_v1(Action::Freeze, None, 1, 0, 0, 0)?,
+        (0, 0, 0),
+        freeze,
+    )?;
+
+    // --- settlement tier ----------------------------------------------------
+    // Initialize reads the FROZEN selection of the real verified certificate,
+    // the verifier that minted it, and the certificate itself. It reads no
+    // primary state: the settlement state is what it is about to create.
+    let opened_for_verified = general_selection_body_v1(&vacant, &fixture.verified, 0)?;
+    let frozen = frozen_selection_v1(&opened_for_verified)?;
+    let mut initialize = BTreeMap::new();
+    initialize.insert(RUNTIME_CONFIG_COORDINATE, config.clone());
+    initialize.insert(RUNTIME_PRODUCT_COORDINATE, product.clone());
+    initialize.insert(
+        general_evidence_coordinate_v1(
+            Action::InitializeSettlement,
+            GeneralReadonlyEvidenceKindV3::FrozenSelection,
+        )?,
+        frozen.to_vec(),
+    );
+    initialize.insert(
+        general_evidence_coordinate_v1(
+            Action::InitializeSettlement,
+            GeneralReadonlyEvidenceKindV3::RuntimeVerifier,
+        )?,
+        fixture.verifier.clone(),
+    );
+    initialize.insert(
+        general_evidence_coordinate_v1(
+            Action::InitializeSettlement,
+            GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
+        )?,
+        fixture.verified.clone(),
+    );
+    push(
+        Action::InitializeSettlement,
+        "InitializeSettlement".to_owned(),
+        general_request_v1(
+            Action::InitializeSettlement,
+            Some(fixture.candidate_id),
+            0,
+            0,
+            0,
+            0,
+        )?,
+        (0, 0, 0),
+        initialize,
+    )?;
+
+    let mut cursor = initialized_cursor_v1(&fixture)?;
+    for (action, native) in [
+        (Action::Collect, RuntimeSettlementActionV2::Collect),
+        (Action::Distribute, RuntimeSettlementActionV2::Distribute),
+    ] {
+        // Materialize sits between the two row runs: the collected inventory
+        // has to exist as a complete set before anything is distributed.
+        if action == Action::Distribute {
+            let mut materialize = BTreeMap::new();
+            materialize.insert(RUNTIME_CONFIG_COORDINATE, config.clone());
+            materialize.insert(RUNTIME_PRODUCT_COORDINATE, product.clone());
+            materialize.insert(
+                RUNTIME_PRIMARY_STATE_COORDINATE,
+                general_local_state_v1(GeneralLocalStateKindV3::Settlement, width, &cursor)?,
+            );
+            materialize.insert(
+                general_evidence_coordinate_v1(
+                    Action::Materialize,
+                    GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
+                )?,
+                fixture.verified.clone(),
+            );
+            push(
+                Action::Materialize,
+                "Materialize".to_owned(),
+                general_request_v1(
+                    Action::Materialize,
+                    Some(fixture.candidate_id),
+                    settlement_revision_v1(&cursor)?,
+                    0,
+                    0,
+                    0,
+                )?,
+                (0, 0, 0),
+                materialize,
+            )?;
+            cursor = settle_native_v1(
+                &fixture,
+                &cursor,
+                RuntimeSettlementActionV2::Materialize,
+                None,
+                0,
+            )?;
+        }
+        for (index, row) in rows.iter().enumerate() {
+            let manifest = fixture
+                .manifests
+                .get(row.manifest_index)
+                .ok_or_else(|| Error::new("manifest absent"))?
+                .clone();
+            let mut runtime = BTreeMap::new();
+            runtime.insert(RUNTIME_CONFIG_COORDINATE, config.clone());
+            runtime.insert(RUNTIME_PRODUCT_COORDINATE, product.clone());
+            runtime.insert(
+                RUNTIME_PRIMARY_STATE_COORDINATE,
+                general_local_state_v1(GeneralLocalStateKindV3::Settlement, width, &cursor)?,
+            );
+            runtime.insert(
+                general_evidence_coordinate_v1(
+                    action,
+                    GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
+                )?,
+                fixture.verified.clone(),
+            );
+            runtime.insert(
+                general_evidence_coordinate_v1(
+                    action,
+                    GeneralReadonlyEvidenceKindV3::SettlementManifest,
+                )?,
+                manifest.clone(),
+            );
+            push(
+                action,
+                format!("{action:?} row {index}"),
+                general_request_v1(
+                    action,
+                    Some(fixture.candidate_id),
+                    settlement_revision_v1(&cursor)?,
+                    row.page_index,
+                    row.execution_index,
+                    row.manifest_order_index,
+                )?,
+                (row.page_index, row.execution_index, row.manifest_order_index),
+                runtime,
+            )?;
+            cursor = settle_native_v1(
+                &fixture,
+                &cursor,
+                native,
+                Some(&manifest),
+                u32::from(row.manifest_order_index),
+            )?;
+        }
+    }
+
+    let mut close = BTreeMap::new();
+    close.insert(RUNTIME_CONFIG_COORDINATE, config);
+    close.insert(RUNTIME_PRODUCT_COORDINATE, product);
+    close.insert(
+        RUNTIME_PRIMARY_STATE_COORDINATE,
+        general_local_state_v1(GeneralLocalStateKindV3::Settlement, width, &cursor)?,
+    );
+    close.insert(
+        general_evidence_coordinate_v1(
+            Action::Close,
+            GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate,
+        )?,
+        fixture.verified.clone(),
+    );
+    push(
+        Action::Close,
+        "Close".to_owned(),
+        general_request_v1(
+            Action::Close,
+            Some(fixture.candidate_id),
+            settlement_revision_v1(&cursor)?,
+            0,
+            0,
+            0,
+        )?,
+        (0, 0, 0),
+        close,
+    )?;
+    Ok(steps)
+}
+
+
 /// The canonical register bank one action reads.
-fn general_input_bank_v1(width: u32, action: Action, caller: Pubkey) -> Vec<u8> {
+fn general_input_bank_v1(
+    width: u32,
+    action: Action,
+    caller: Pubkey,
+    coordinates: (u32, u8, u8),
+) -> Vec<u8> {
     let len = general_hot_candidate_bank_len_v3(width).unwrap_or_default();
     let mut bank = vec![0_u8; len];
     let settlement = matches!(
@@ -1146,6 +1386,9 @@ fn general_input_bank_v1(width: u32, action: Action, caller: Pubkey) -> Vec<u8> 
         Action::Collect | Action::Materialize | Action::Distribute | Action::Close
     );
     let initialize = action == Action::InitializeSettlement;
+    let close = action == Action::Close;
+    let collect = action == Action::Collect;
+    let distribute = action == Action::Distribute;
     for (coordinate, value) in [
         (scalar::OUTCOME_COUNT, u64::from(width)),
         (scalar::GENERATION, 9),
@@ -1167,10 +1410,7 @@ fn general_input_bank_v1(width: u32, action: Action, caller: Pubkey) -> Vec<u8> 
         (scalar::CUSTODY_REPLAY_RENT_LAMPORTS, 303),
         (scalar::CUSTODY_VAULT_RENT_LAMPORTS, 404),
         (scalar::SETTLEMENT_POSITION_PRESENT, u64::from(settlement)),
-        (
-            scalar::POSITION_TABLE_COUNT,
-            u64::from(action != Action::Close),
-        ),
+        (scalar::POSITION_TABLE_COUNT, u64::from(!close)),
     ] {
         write_bank_scalar_v1(&mut bank, coordinate, value);
     }
@@ -1195,9 +1435,45 @@ fn general_input_bank_v1(width: u32, action: Action, caller: Pubkey) -> Vec<u8> 
             identity::PAYER,
             if initialize { [13; 32] } else { [0; 32] },
         ),
+        // The route-dependent identities. These are the ones a first pass
+        // silently leaves zero, and zero is not a neutral value here: for the
+        // two VAULT_CONTEXT registers it is what the ENABLED route requires,
+        // so the polarity is inverted and a missing write reads as "this route
+        // is live" on every action where it is not.
+        (
+            identity::RENT_REFUND,
+            if initialize || close { [14; 32] } else { [0; 32] },
+        ),
+        (
+            identity::CUSTODY_SOURCE_OWNER,
+            if collect { [19; 32] } else { [0; 32] },
+        ),
+        (
+            identity::SOURCE_VAULT_CONTEXT,
+            if collect { [0; 32] } else { [20; 32] },
+        ),
+        (
+            identity::CUSTODY_DESTINATION_OWNER,
+            if distribute || close { [21; 32] } else { [0; 32] },
+        ),
+        (
+            identity::DESTINATION_VAULT_CONTEXT,
+            if distribute || close { [0; 32] } else { [22; 32] },
+        ),
     ] {
         write_bank_identity_v1(&mut bank, width, coordinate, value);
     }
+    // The request's coordinates, repeated into the bank the accelerator reads.
+    // These are authenticated against the request, so a bank that left them
+    // zero would disagree with every settlement row it carried.
+    let (page_index, execution_index, manifest_order_index) = coordinates;
+    write_bank_scalar_v1(&mut bank, scalar::PAGE_INDEX, u64::from(page_index));
+    write_bank_scalar_v1(&mut bank, scalar::EXECUTION_INDEX, u64::from(execution_index));
+    write_bank_scalar_v1(
+        &mut bank,
+        scalar::MANIFEST_ORDER_INDEX,
+        u64::from(manifest_order_index),
+    );
     bank
 }
 
@@ -1402,7 +1678,18 @@ mod tests {
     #[test]
     fn every_authored_general_action_compiles_to_the_exact_request_width() {
         for action in GENERAL_ACTIONS_V3 {
-            let bytes = compile_general_request_v1(action).expect("request");
+            let bytes = general_request_v1(
+                action,
+                match action {
+                    Action::Freeze => None,
+                    _ => Some(FIRST_CANDIDATE_V1),
+                },
+                1,
+                0,
+                0,
+                0,
+            )
+            .expect("request");
             assert_eq!(bytes.len(), 64, "{action:?}");
             let decoded = ControllerRequestV2::decode(&bytes).expect("decode");
             assert_eq!(decoded.action, action);
@@ -1432,7 +1719,7 @@ mod tests {
             let expected = general_hot_candidate_bank_len_v3(width).expect("bank width");
             for action in GENERAL_ACTIONS_V3 {
                 assert_eq!(
-                    general_input_bank_v1(width, action, caller).len(),
+                    general_input_bank_v1(width, action, caller, (0, 0, 0)).len(),
                     expected,
                     "{action:?} at width {width}"
                 );
@@ -1501,6 +1788,56 @@ mod tests {
         assert_eq!(packet.last_valid_block_height, 7);
     }
 
+    /// The campaign plan covers every authored action, and chains settlement.
+    #[test]
+    fn the_step_plan_covers_all_seven_actions_and_advances_the_settlement_chain() {
+        let steps = general_campaign_steps_v1(1).expect("plan");
+        // Seven actions, eleven steps: Collect and Distribute each consume the
+        // three manifest rows.
+        assert_eq!(steps.len(), 11);
+        for action in GENERAL_ACTIONS_V3 {
+            assert!(
+                steps.iter().any(|step| step.action == action),
+                "{action:?} is not in the plan"
+            );
+        }
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| step.action == Action::Collect)
+                .count(),
+            3
+        );
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| step.action == Action::Distribute)
+                .count(),
+            3
+        );
+        // Materialize must sit between the last Collect and the first
+        // Distribute: the complete set has to exist before anything is paid
+        // out, and a plan that ordered them otherwise would refuse on chain.
+        let last_collect = steps
+            .iter()
+            .rposition(|step| step.action == Action::Collect)
+            .expect("collect");
+        let materialize = steps
+            .iter()
+            .position(|step| step.action == Action::Materialize)
+            .expect("materialize");
+        let first_distribute = steps
+            .iter()
+            .position(|step| step.action == Action::Distribute)
+            .expect("distribute");
+        assert!(last_collect < materialize && materialize < first_distribute);
+        // Every step has a distinct ordinal, which is what keeps their genesis
+        // accounts and journals from colliding.
+        let ordinals: std::collections::BTreeSet<u16> =
+            steps.iter().map(|step| step.ordinal).collect();
+        assert_eq!(ordinals.len(), steps.len());
+    }
+
     /// The selection-hook list is a checklist, not a mood.
     #[test]
     fn the_market_selection_hook_names_every_required_fact() {
@@ -1508,4 +1845,13 @@ mod tests {
         assert_eq!(requirements.len(), 6);
         assert!(requirements.iter().all(|line| !line.is_empty()));
     }
+}
+
+/// Open a selection cursor over one verified candidate, for fixture tests.
+#[cfg(test)]
+pub(crate) fn selection_body_for_tests_v1(
+    verified: &[u8],
+) -> Result<[u8; RUNTIME_SELECTION_CURSOR_BYTES_V2]> {
+    let vacant = [0_u8; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+    general_selection_body_v1(&vacant, verified, 0)
 }
