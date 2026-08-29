@@ -544,48 +544,61 @@ Then rerun phase 1's command with the three flags that make it write:
   --execute --rpc-url http://127.0.0.1:21400 --payer-keypair /absolute/payer.json
 ```
 
-### What it reaches, and what it does not
+### What it reaches
 
-Measured at runtime width 1, seven finalized transactions:
+Measured at runtime width 1, **eleven finalized transactions, all accepted**:
 
-| action | ACK | CU | legacy packet | accounts |
-|---|---|---:|---:|---:|
-| Consider | accepted | 34,825 | 863 | 33 |
-| Freeze | accepted | 31,371 | 797 | 31 |
-| InitializeSettlement | refused | 53,242 | 856 | 90 |
-| Collect | refused | 45,360 | 836 | 70 |
-| Materialize | refused | 44,504 | 834 | 68 |
-| Distribute | refused | 45,358 | 836 | 70 |
-| Close | refused | 52,704 | 853 | 87 |
+| step | action | ACK | CU | legacy packet |
+|---|---|---|---:|---:|
+| 0 | Consider | accepted | 34,825 | 863 |
+| 1 | Freeze | accepted | 31,371 | 797 |
+| 2 | InitializeSettlement | accepted | 60,466 | 920 |
+| 3–5 | Collect × 3 rows | accepted | 55,703 / 56,908 / 56,885 | 900 |
+| 6 | Materialize | accepted | 51,884 | 866 |
+| 7–9 | Distribute × 3 rows | accepted | 55,654 / 56,859 / 56,890 | 900 |
+| 10 | Close | accepted | 60,046 | 885 |
 
-**The width is not a preference.** Six of the seven serialise to 1,273–1,329
-bytes at N=258 against Solana's 1,232-byte legacy ceiling, so a campaign
-claiming that width would be recording routes no validator would accept. N=1
-is where the packet clause holds.
+**Seven actions, eleven steps.** `Collect` and `Distribute` each consume the
+three settlement manifest rows, and `Materialize` sits between them because the
+collected inventory has to exist as a complete set before anything is
+distributed. The settlement half is a *chain*: every step reads the cursor the
+previous one produced, and the whole chain is derived natively — in
+`general_settlement_fixture.rs` — before a single transaction is signed. A
+broken chain therefore fails on the host, which is where it should.
 
-**A refused ACK is a real result, not a failure.** The accelerator returns a
-semantic refusal as a typed acknowledgment on a *succeeding* transaction. The
-five settlement actions refuse because this campaign builds only the selection
-tier of the runtime frame — no settlement cursor, runtime verifier or manifest
-— and that is named in `general_runtime_data_v1` rather than left to be
-inferred. The verifier in particular comes from a real batch with real orders
-and real escrows, which is the next lane on this path.
+**The width is not a preference.** Six of the seven serialise past Solana's
+1,232-byte legacy ceiling at N=258, so a campaign claiming that width would be
+recording routes no validator would accept. N=1 is where the packet clause
+holds, and the caller refuses N=258 explicitly rather than discovering it.
 
-**This is the evaluation half of the family.** The accelerator owns no
-account, signs nothing and performs no CPI. The commit half — Trading's
+**Nothing in the settlement frame is a literal.** The verifier cursor, the
+verified-candidate certificate and the settlement manifests are outputs of a
+real collection half: a batch opened on a live root, three signed portfolio
+orders admitted into it, the batch closed, a candidate addressed by its own
+digest, a submission funded, and every row put through
+`verify_candidate_row_v1` — the protocol's own verification verb.
+
+**If you build a General Hot frame yourself, write all the bank identities.**
+Five of them are route-dependent, and for `SOURCE_VAULT_CONTEXT` and
+`DESTINATION_VAULT_CONTEXT` **zero is what the *enabled* route requires**. An
+unwritten register does not read as absent; it reads as live. That asymmetry is
+why a partially-filled bank looks like it is almost working — the actions whose
+zero defaults happen to be correct pass, and the rest refuse.
+
+### What it does not reach
+
+**This is the evaluation half of the family.** The accelerator owns no account,
+signs nothing and performs no CPI. The commit half — Trading's
 `process_hot_execution_v3` writing the capability root and returning a
 `DCLTHAK3` ack — additionally needs a founded Market whose capability manifest
 selects General, and no driver in this tree founds one.
 `general_market_selection_requirements_v1` states the six facts such a Market
 must carry.
 
-**Series compiles its wire and refuses.** Its `DCLTSIX3` requests for Prepare,
-Consume and Expire are built and round-tripped through the kernel's own
-decoder, and then the command refuses, because `build_series_*_hot_v3` has no
-caller anywhere in the tree and `projected_open_composition_v4` has none
-either. The executable Series surface today is the Core occurrence route in
-`dclutch-core-sbf`. A caller that "ran" against a route nobody dispatches
-would be evidence of nothing.
+**Series compiles its wire and refuses.** See that command's own refusal text
+for the exact reason; the short version is that the common authenticated Shadow
+callback Trading would need is not committed, so no Series action has a
+dispatched Hot route to run through at all.
 
 ### Resuming
 

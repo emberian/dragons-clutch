@@ -449,14 +449,20 @@ fn run_series(arguments: &ArgumentsV1) -> Result<()> {
     }
     Err(Error::new(format!(
         "REFUSED: compiled {} exact Series family requests (Prepare, Consume, Expire) and wrote \
-         their planned journals to {}, but this tree dispatches no route that would carry them. \
-         `build_series_prepare_hot_v3`, `build_series_consume_hot_v3` and \
-         `build_series_expire_hot_v3` in crates/dclutch-operator/src/series_hot_v3.rs have no \
-         caller anywhere, and `projected_open_composition_v4`, the Consume chain's terminal in \
-         programs/dclutch-trading-sbf, has none either. The executable Series surface today is \
-         the CORE occurrence route (series_consume/series_open/series_permit_expiry in \
-         dclutch-core-sbf), which needs a founded Market at generation occurrence+1 whose \
-         capability_manifest is the occurrence's own. Submitting anything here would be a caller \
+         their planned journals to {}, but NO Series action has a dispatched Hot route to run \
+         through. The blocker is not that the builders lack callers -- it is upstream of that. \
+         programs/dclutch-series-shadow-sbf/program-test/README.md states it plainly: \"Until the \
+         common authenticated Shadow callback is committed, this crate exposes only the real-ELF \
+         loader, selected-build gate, route-order contract, and rollback snapshot support. It does \
+         not install a provisional entrypoint or pass artifacts at runtime.\" Series is a \
+         ShadowAot family, so that callback is the seam every one of its actions would enter \
+         Trading through. Downstream of it, build_series_{{prepare,consume,expire}}_hot_v3 in \
+         crates/dclutch-operator/src/series_hot_v3.rs have no caller anywhere, and each would \
+         additionally need a SeriesOccurrenceHotStateV3: 38 family-neutral fixed accounts, seven \
+         Shadow strategy extras including a deployed accelerator Program and ProgramData, \
+         Registry-FINALIZED occurrence and Ticket records with their Merkle siblings, and two \
+         CheckedRelease values a release checker only mints after matching a finalized \
+         ArtifactRelease against live Loader metadata. Submitting anything here would be a caller \
          that ran against nothing, so it refuses instead.",
         compiled.len(),
         arguments.journal_dir.display()
