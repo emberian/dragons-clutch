@@ -2531,6 +2531,13 @@ mod tests {
     /// `classify_bank_transport_v2` selects; the instruction data is the exact
     /// hot envelope plus the exact 64-byte controller request. The recorded
     /// numbers are the wire this operator would actually submit.
+    ///
+    /// `InitializeSettlement` moved 119 -> 120 accounts and 920 -> 922 wire
+    /// bytes at `f581af6b`, which appended a rent-refund account to Custody
+    /// `InitializeReplay`. The physical count moving by the same one as the
+    /// logical count is the informative part: the new account **aliases
+    /// nothing already in the frame**, so it is a genuinely new key on the
+    /// wire rather than a second reference to a key the frame already carried.
     #[test]
     fn every_action_is_alt_packet_safe_at_the_canonical_runtime_width() {
         let payer = key(250);
@@ -2538,7 +2545,7 @@ mod tests {
         for (action, accounts, wire) in [
             (Action::Consider, 86, 664),
             (Action::Freeze, 84, 660),
-            (Action::InitializeSettlement, 119, 920),
+            (Action::InitializeSettlement, 120, 922),
             (Action::Collect, 114, 815),
             (Action::Materialize, 112, 811),
             (Action::Distribute, 114, 815),
@@ -2575,7 +2582,16 @@ mod tests {
     ///
     /// `docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md` recorded the
     /// instruction-account count of every N=258 action executed against the
-    /// real `dclutch_general_accelerator_sbf.so`. That frame is two harness
+    /// real `dclutch_general_accelerator_sbf.so`. Read the **2026-08-29
+    /// addendum**, not the superseded tables above it: `f581af6b` appended a
+    /// rent-refund account to Custody `InitializeReplay`, and
+    /// `InitializeSettlement` is the only General action that embeds that
+    /// operation, so it alone went 103 -> 104. This control is what caught it
+    /// -- it failed for a day while six of its seven numbers still reconciled,
+    /// which is only possible because the literals come from OUTSIDE this
+    /// crate. Re-measured against the real ELF at `bb4e83ca`; if you are
+    /// tempted to edit a number below to make this green, re-run the campaign
+    /// instead and move the evidence with it. That frame is two harness
     /// accounts (the request record and the accelerator program), then the
     /// admitted fixed frame, then one account per *logical* profile
     /// coordinate -- the accelerator reads an aliased coordinate as its own
@@ -2587,7 +2603,7 @@ mod tests {
         for (action, campaign_accounts) in [
             (Action::Consider, 47),
             (Action::Freeze, 45),
-            (Action::InitializeSettlement, 103),
+            (Action::InitializeSettlement, 104),
             (Action::Collect, 84),
             (Action::Materialize, 82),
             (Action::Distribute, 84),
