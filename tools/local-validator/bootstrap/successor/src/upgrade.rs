@@ -8186,7 +8186,10 @@ fn validate_receipt_binding(
         }
         ReceiptPhaseV1::Submitted => {
             let signed_shape_invalid = if receipt.buffer_adopted {
-                !no_unsigned || !no_signed
+                !no_unsigned
+                    || receipt.signed_packet_base64.is_some()
+                    || receipt.signed_packet_sha256.is_some()
+                    || receipt.transaction_signature.is_none()
             } else {
                 !has_unsigned || !has_signed
             };
@@ -8207,7 +8210,10 @@ fn validate_receipt_binding(
         }
         ReceiptPhaseV1::Complete => {
             let signed_shape_invalid = if receipt.buffer_adopted {
-                !no_unsigned || !no_signed
+                !no_unsigned
+                    || receipt.signed_packet_base64.is_some()
+                    || receipt.signed_packet_sha256.is_some()
+                    || receipt.transaction_signature.is_none()
             } else {
                 !has_unsigned || !has_signed
             };
@@ -12598,7 +12604,7 @@ mod tests {
             .expect("finalized CLI Upgrade attaches and refunds exact rent minus final fee");
         assert_eq!(complete.phase, ReceiptPhaseV1::Complete);
         assert_eq!(resume.send_count, 0);
-        let arithmetic = complete.arithmetic.expect("adopted arithmetic");
+        let arithmetic = complete.arithmetic.as_ref().expect("adopted arithmetic");
         assert_eq!(arithmetic.transaction_payer_pre_lamports, 1_000_000);
         assert_eq!(arithmetic.transaction_payer_post_lamports, 1_085_000);
         assert_eq!(arithmetic.transaction_fee_lamports, 15_000);
@@ -12620,6 +12626,19 @@ mod tests {
             complete.solana_cli_version,
             resume_args.expected_deployment_solana_cli_version
         );
+
+        let mut verify_args = resume_args.clone();
+        verify_args.adopt_finalized_cli_upgrade_signature = None;
+        let mut verify = FakeRunner::new(&fixture);
+        verify.version = verify_args.expected_deployment_solana_cli_version.clone();
+        verify.buffer_written = true;
+        verify.before_wallet = 1_100_000;
+        verify.after_wallet = 1_085_000;
+        verify.deployed = true;
+        let replay = execute_with_runner(&verify_args, &mut verify)
+            .expect("complete external CLI receipt reauthenticates without key reads");
+        assert_eq!(replay, complete);
+        assert_eq!(verify.send_count, 0);
     }
 
     #[test]
