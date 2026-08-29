@@ -44,6 +44,7 @@ use dclutch_resolution_codec::{
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    provider_resolution_direct_intent_digest_v1,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -116,8 +117,14 @@ pub(crate) fn process_provider_resolution_v3(
             }
             PROVIDER_RESOLUTION_TRADING_TAIL_START_V3
         }
+        ProviderCallerV3::Resolution => {
+            if accounts.len() != PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3 {
+                return Err(ResolutionError::AccountFrame.into());
+            }
+            PROVIDER_RESOLUTION_CORE_TAIL_START_V3
+        }
     };
-    authenticate_privileges(program_id, accounts, tail_start)?;
+    authenticate_privileges(program_id, accounts, tail_start, request.caller)?;
     let frame = ProviderFrameV3 {
         accounts,
         tail_start,
@@ -440,11 +447,13 @@ fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     tail_start: usize,
+    caller: ProviderCallerV3,
 ) -> ProgramResult {
     for (index, account) in accounts.iter().enumerate() {
         let expected_executable = matches!(index, 7 | 11 | 13 | 15)
             || matches!(index, value if value == tail_start + 1 || value == tail_start + 4 || value == tail_start + 8);
-        if account.is_signer != matches!(index, 0 | 1)
+        let expected_signer = index == 1 || (index == 0 && caller != ProviderCallerV3::Resolution);
+        if account.is_signer != expected_signer
             || account.is_writable != (matches!(index, 2 | 3) || index == tail_start - 1)
             || account.executable != expected_executable
             || accounts
@@ -638,12 +647,19 @@ fn authenticate_activation_and_caller(
     let caller_role = match request.caller {
         ProviderCallerV3::Core => ExecutionRoleV1::Core,
         ProviderCallerV3::Trading => ExecutionRoleV1::Trading,
+        ProviderCallerV3::Resolution => ExecutionRoleV1::Resolution,
     };
     let caller_program = match request.caller {
         ProviderCallerV3::Core => frame.account(11),
         ProviderCallerV3::Trading => frame.account(13),
+        ProviderCallerV3::Resolution => frame.account(15),
     };
-    if request.caller_program != caller_program.key.to_bytes() {
+    if request.caller_program != caller_program.key.to_bytes()
+        || (request.caller == ProviderCallerV3::Resolution
+            && provider_resolution_direct_intent_digest_v1(*request)
+                .map_err(|_| ResolutionError::Instruction)?
+                != request.parent_request_digest)
+    {
         return Err(ResolutionError::ResolutionRelease.into());
     }
     let seeds = CallerAuthoritySeedsV1::from_bytes(
@@ -717,6 +733,7 @@ const fn caller_executes_role(caller: ProviderCallerV3, role: ExecutionRoleV1) -
             (caller, role),
             (ProviderCallerV3::Core, ExecutionRoleV1::Core)
                 | (ProviderCallerV3::Trading, ExecutionRoleV1::Trading)
+                | (ProviderCallerV3::Resolution, ExecutionRoleV1::Core)
         )
 }
 

@@ -2184,7 +2184,24 @@ async fn current_resolution_creates_and_activates_exact_funding() {
 
     pyth_provider::submit(&mut context, &[provider_execute.instruction], &[&resolver])
         .await
-        .expect("Core consumes the authenticated provider result and admits terminal Market state");
+        .expect(
+            "Resolution consumes the authenticated provider result and persists its certificate",
+        );
+    let post_provider_market = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("post-provider Market")
+            .data,
+    )
+    .expect("post-provider Core state");
+    assert_eq!(post_provider_market.phase, Phase::Open);
+    assert!(post_provider_market.terminal_receipt.is_none());
+
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived no-CPI terminal certificate Accept");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core accepts the durable Resolution certificate and commits terminal state");
     let terminal_market = CoreState::decode(
         &observed(&mut context, fixture.market)
             .await
@@ -2194,6 +2211,18 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     .expect("terminal Core state");
     assert_eq!(terminal_market.phase, Phase::Terminal);
     assert!(terminal_market.terminal_receipt.is_some());
+    let after_terminal_accept = retirement_snapshot(&mut context, &fixture).await;
+    let admit_replay =
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+            .expect("terminal certificate Accept replay");
+    submit(&mut context, &[admit_replay.instruction])
+        .await
+        .expect("terminal certificate Accept replays without mutation");
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        after_terminal_accept,
+        "terminal Accept replay preserves every mutable lifecycle account"
+    );
     let resolved_source = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.source)
             .await
@@ -2212,8 +2241,8 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Consumed);
     assert_eq!(lifecycle.terminal_sequence, TERMINAL_SEQUENCE);
     assert!(
-        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
-        "after ExecuteProvider the Source and certificate are terminal but Core is already Terminal, so a second admission must refuse"
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_ok(),
+        "the exact terminal certificate Accept remains a reconstructable no-op after Core is Terminal"
     );
     assert_eq!(
         observed(&mut context, provider_submit.lifecycle)
@@ -2678,10 +2707,15 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
             post_update_body,
         },
     )
-    .expect("chain-derived Core provider execution");
+    .expect("chain-derived direct Resolution provider execution");
     pyth_provider::submit(&mut context, &[provider_execute.instruction], &[&resolver])
         .await
-        .expect("Core admits the terminal state of an atomically founded Market");
+        .expect("Resolution persists the atomically founded Market's terminal certificate");
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived atomically founded terminal Accept");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core accepts the terminal state of an atomically founded Market");
 
     let terminal = CoreState::decode(
         &observed(&mut context, fixture.market)

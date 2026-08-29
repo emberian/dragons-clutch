@@ -192,16 +192,38 @@ pub(crate) fn process(
         }
         return Ok(());
     }
-    let admit_projection = if resolution_request.action == ResolutionCoreActionV1::AdmitTerminal {
-        Some(authenticate_admit_projection(
+    if resolution_request.action == ResolutionCoreActionV1::AdmitTerminal {
+        // The provider transaction already persisted a Resolution-owned
+        // ResolutionCertificateV2. Core independently authenticates that
+        // durable poststate above/below and accepts it without asking
+        // Resolution to repeat the same release, product, Source, ledger, and
+        // certificate work in a child invocation.
+        let projection = authenticate_admit_projection(
             &frame,
             accounts,
             *authenticated.state,
             resolution_request,
-        )?)
-    } else {
-        None
-    };
+        )?;
+        require_market_unchanged(&frame, authenticated.state_bytes.as_ref())?;
+        if let Some(existing) = authenticated.state.terminal_receipt {
+            if existing != projection.receipt.receipt_id {
+                return Err(CoreSbfError::Transition.into());
+            }
+            return Ok(());
+        }
+        let mut candidate = *authenticated.state;
+        admit_terminal(
+            request,
+            &mut candidate,
+            *authenticated.target_admission,
+            projection.product,
+            true,
+            projection.receipt,
+        )
+        .map_err(|_| CoreSbfError::Transition)?;
+        persist_state(frame.market(), candidate)?;
+        return Ok(());
+    }
     let close_projection = if resolution_request.action == ResolutionCoreActionV1::CloseFund {
         Some(authenticate_close_prestate(
             &frame,
@@ -238,23 +260,10 @@ pub(crate) fn process(
         close_projection,
     )?;
 
-    let mut candidate = *authenticated.state;
     match resolution_request.action {
         ResolutionCoreActionV1::CreateFund => {}
         ResolutionCoreActionV1::VerifyFundReady => return Err(CoreSbfError::Instruction.into()),
-        ResolutionCoreActionV1::AdmitTerminal => {
-            let projection = admit_projection.ok_or(CoreSbfError::Transition)?;
-            admit_terminal(
-                request,
-                &mut candidate,
-                *authenticated.target_admission,
-                projection.product,
-                true,
-                projection.receipt,
-            )
-            .map_err(|_| CoreSbfError::Transition)?;
-            persist_state(frame.market(), candidate)?;
-        }
+        ResolutionCoreActionV1::AdmitTerminal => return Err(CoreSbfError::Instruction.into()),
         ResolutionCoreActionV1::CloseFund => {
             // CloseFund is one authenticated component of eventual Retire.
             // Claims and Custody closure are still required before Core may
@@ -369,7 +378,8 @@ fn authenticate_request_coordinates(
                 | (Phase::Open, Readiness::Consumed)
         ),
         ResolutionCoreActionV1::AdmitTerminal => {
-            state.phase == Phase::Open && state.readiness == Readiness::Consumed
+            matches!(state.phase, Phase::Open | Phase::Terminal)
+                && state.readiness == Readiness::Consumed
         }
         ResolutionCoreActionV1::CloseFund => {
             state.phase == Phase::Retiring && state.readiness == Readiness::Consumed

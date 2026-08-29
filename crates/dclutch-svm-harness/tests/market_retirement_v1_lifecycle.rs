@@ -777,7 +777,7 @@ async fn execute_same_lineage_real_provider(
             post_update_body,
         },
     )
-    .expect("chain-derived Core provider execution");
+    .expect("chain-derived direct Resolution provider execution");
     let before_inactive_role_substitution =
         provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await;
     let mut substituted_inactive_trading = execute_report.instruction.clone();
@@ -795,7 +795,12 @@ async fn execute_same_lineage_real_provider(
     );
     pyth_provider::submit(context, &[execute_report.instruction], &[&resolver])
         .await
-        .expect("Core consumes the authenticated provider result");
+        .expect("Resolution persists the authenticated provider result");
+    let accept = build_resolution_admit_terminal_v3(&admit_snapshot(context, &fixture.base).await)
+        .expect("chain-derived no-CPI terminal Accept");
+    submit(context, &[accept.instruction])
+        .await
+        .expect("Core accepts the durable provider certificate");
 
     let market = CoreState::decode(
         &observed(context, fixture.base.market)

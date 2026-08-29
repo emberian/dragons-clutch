@@ -1398,10 +1398,14 @@ pub(crate) fn process_core_effect(
         ResolutionRoleRequestV2::decode(request_bytes).map_err(|_| ResolutionError::Instruction)?;
     if matches!(
         request.action,
-        ResolutionCoreActionV1::VerifyFundReady | ResolutionCoreActionV1::CloseFund
+        ResolutionCoreActionV1::VerifyFundReady
+            | ResolutionCoreActionV1::AdmitTerminal
+            | ResolutionCoreActionV1::CloseFund
     ) {
-        // V7 owns both mutations as direct permissionless routes. No Core PDA
-        // can re-enable the superseded composed paths.
+        // V7 activation/close are direct permissionless routes. Terminal
+        // admission accepts the already-durable ResolutionCertificateV2 in
+        // Core without a duplicate child invocation. No Core PDA can
+        // re-enable any superseded composed path.
         return Err(ResolutionError::Instruction.into());
     }
     authenticate_action(envelope, request)?;

@@ -44,7 +44,7 @@ pub use provider_v3::{
     PROVIDER_RESOLUTION_SOURCE_RECORDS_START_V3, PROVIDER_RESOLUTION_SOURCE_STATE_ACCOUNT_V3,
     PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3, PROVIDER_RESOLUTION_TRADING_RECORDS_START_V3,
     PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, ProviderCallerV3, ProviderExecutionReceiptV3,
-    ProviderExecutionRequestV3,
+    ProviderExecutionRequestV3, provider_resolution_direct_intent_digest_v1,
 };
 pub use source_closure_receipt_v3::{
     SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_KIND_V3,

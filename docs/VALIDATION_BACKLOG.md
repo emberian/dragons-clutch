@@ -100,6 +100,47 @@ The checkpoint must include:
   price account. Preserve the exact v0 packet/signature, table body, rent, and
   fee arithmetic separately from protocol principal.
 
+## Resolution V7 split lifecycle convergence
+
+- Exercise the atomic-founding recovery order from one finalized successor
+  campaign: `DCLTCFQ1`, `DCLTPCB2`, `DCLTGMF2`, `core-funding-create-v1`,
+  `resolution-funding-activate-v1`, `core-funding-accept-v1`, then participant
+  admission and Direct. Create, activation, and Accept are three distinct
+  payer-only transactions. A projected Found37 Market is not a live Core
+  account, and DCLTGMF2 does not create `SourceResolutionStateV2`; neither may
+  be used to skip CreateFund. Crash after Create must resume activation from
+  the live Primary Source and Pending ledger. Crash after activation must
+  resume the Accept suffix from the immutable `DCLRFAR1` receipt and the live
+  Active ledger; exact activation and Ready/Consumed Accept replays are no-ops.
+- Preserve CreateFund's exact 16-account frame, or 18 accounts with recovery
+  policy, the direct activation's exact 18/20-account frame, and the no-CPI
+  Core Accept's exact 18/20-account frame. Record separate signatures,
+  finalized slots, fees, compute units, pre/post account digests, and durable
+  journal phases for `core-funding-create-v1`,
+  `resolution-funding-activate-v1`, and `core-funding-accept-v1`. Refuse a V6
+  release ID, writable or substituted beneficiary, mismatched receipt PDA or
+  request digest, Pending ledger at Accept, and any receipt/live-ledger digest
+  disagreement.
+- Exercise provider terminalization as two additional durable mutations:
+  `resolution-provider-execute-v1` owns Source, provider-lifecycle, and
+  `ResolutionCertificateV2`; `core-terminal-accept-v1` independently
+  authenticates that certificate and commits Core Terminal last without CPI.
+  Persist both transaction rows, including independent fees and compute units.
+  Crash after execute must resume Accept-only, must not authorize payout, and
+  exact Terminal Accept replay must be a no-op. The superseded Resolution child
+  route and Core `ExecuteProvider` wrapper must refuse.
+- Exercise permissionless `DCLRFCQ1` close directly against the 19-account
+  Resolution frame, or 21 accounts with recovery policy. Bind the immutable
+  beneficiary and preserve `SourceClosureReceiptV3` as the sole terminal fact.
+  Cover late Core-release substitution with whole-transaction rollback, exact
+  replay refusal after physical close, and restart from every submitted
+  boundary without a second signature or send.
+- At the final feature freeze, rebuild formatted Core and Resolution SBF, run
+  the complete all-13 frame diagnostic, then run the activation, funding
+  Accept, provider execute, terminal Accept, and direct-close controls under
+  M-61. Report pass count and the exact 20-seed arithmetic mean for every named
+  mutation; no single focused draw is an M-61 result.
+
 ## Provider genesis and closure
 
 - Generate Receiver and Router Program plus ProgramData JSON accounts into the

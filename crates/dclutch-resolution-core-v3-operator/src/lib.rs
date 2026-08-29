@@ -1033,7 +1033,7 @@ pub fn build_resolution_admit_terminal_v3(
     if snapshot.market.owner != snapshot.core_program.key
         || snapshot.market.executable
         || snapshot.market.key.to_bytes() != market.identity.market_id.to_bytes()
-        || market.phase != Phase::Open
+        || !matches!(market.phase, Phase::Open | Phase::Terminal)
         || market.readiness != Readiness::Consumed
         || snapshot.registry_program.key.to_bytes() != market.identity.registry_program.to_bytes()
     {
@@ -1125,6 +1125,12 @@ pub fn build_resolution_admit_terminal_v3(
     )
     .0;
     if snapshot.certificate.key != expected_certificate {
+        return Err(ResolutionCoreOperatorErrorV3::Terminal);
+    }
+    if market
+        .terminal_receipt
+        .is_some_and(|existing| existing.to_bytes() != snapshot.certificate.key.to_bytes())
+    {
         return Err(ResolutionCoreOperatorErrorV3::Terminal);
     }
     let entries = authenticate_funding(snapshot, market, &rent)?;
