@@ -6,7 +6,8 @@
 //! adapter. Once that authority is established, this wire prevents the
 //! producer, checkpoint, transcript, or candidate resources from being mixed.
 
-use super::{Error as CodecError, array_at, put, require_zero};
+use super::{Error as CodecError, array_at, byte_at, put, put_byte, require_zero};
+use crate::scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1;
 
 /// Canonical evaluation-receipt magic.
 pub const DEALER_SCENARIO_EVALUATION_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTDER1";
@@ -18,8 +19,9 @@ pub const DEALER_SCENARIO_EVALUATION_RECEIPT_BYTES_V1: usize = 336;
 pub const DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dclutch:dealer-eval:v1";
 
 const VERSION_OFFSET: usize = 8;
-const RESERVED_OFFSET: usize = 10;
-const RESERVED_BYTES: usize = 6;
+const EFFECT_COUNT_OFFSET: usize = 10;
+const RESERVED_OFFSET: usize = 11;
+const RESERVED_BYTES: usize = 5;
 const PRODUCER_OFFSET: usize = 16;
 const CHECKPOINT_OFFSET: usize = 48;
 const CHECKPOINT_PRESTATE_OFFSET: usize = 80;
@@ -34,6 +36,8 @@ const EFFECTS_OFFSET: usize = 304;
 /// Exact producer- and transcript-bound evaluation commitments.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerScenarioEvaluationReceiptV1 {
+    /// Number of canonical Custody effects requiring reservation.
+    pub custody_effect_count: u8,
     /// Release-authenticated evaluator Program expected to own this receipt.
     pub producer_program: [u8; 32],
     /// Trading-owned checkpoint this receipt evaluates.
@@ -42,9 +46,9 @@ pub struct DealerScenarioEvaluationReceiptV1 {
     pub checkpoint_prestate_digest: [u8; 32],
     /// Exact Dealer request digest bound at checkpoint creation.
     pub request_digest: [u8; 32],
-    /// Ordered Claims page-transcript digest.
+    /// Claims-domain digest of the complete ordered membership transcript.
     pub claims_prestate_digest: [u8; 32],
-    /// Ordered Custody page-transcript digest.
+    /// Custody-domain digest of the complete ordered membership transcript.
     pub custody_prestate_digest: [u8; 32],
     /// Exact selected scalar-then-identity candidate bank digest.
     pub candidate_bank_digest: [u8; 32],
@@ -94,6 +98,7 @@ impl DealerScenarioEvaluationReceiptV1 {
         }
         require_zero(bytes, RESERVED_OFFSET, RESERVED_BYTES)?;
         let value = Self {
+            custody_effect_count: byte_at(bytes, EFFECT_COUNT_OFFSET)?,
             producer_program: array_at(bytes, PRODUCER_OFFSET)?,
             checkpoint: array_at(bytes, CHECKPOINT_OFFSET)?,
             checkpoint_prestate_digest: array_at(bytes, CHECKPOINT_PRESTATE_OFFSET)?,
@@ -124,6 +129,7 @@ impl DealerScenarioEvaluationReceiptV1 {
             VERSION_OFFSET,
             &DEALER_SCENARIO_EVALUATION_RECEIPT_VERSION_V1.to_le_bytes(),
         )?;
+        put_byte(&mut bytes, EFFECT_COUNT_OFFSET, self.custody_effect_count)?;
         for (offset, value) in [
             (PRODUCER_OFFSET, self.producer_program),
             (CHECKPOINT_OFFSET, self.checkpoint),
@@ -145,19 +151,20 @@ impl DealerScenarioEvaluationReceiptV1 {
     }
 
     fn validate(self) -> Result<(), DealerScenarioEvaluationReceiptErrorV1> {
-        if [
-            self.producer_program,
-            self.checkpoint,
-            self.checkpoint_prestate_digest,
-            self.request_digest,
-            self.claims_prestate_digest,
-            self.custody_prestate_digest,
-            self.candidate_bank_digest,
-            self.candidate_obligation_digest,
-            self.claims_delta_digest,
-            self.effects_digest,
-        ]
-        .contains(&[0; 32])
+        if usize::from(self.custody_effect_count) > DEALER_SCENARIO_MAX_RESERVATIONS_V1
+            || [
+                self.producer_program,
+                self.checkpoint,
+                self.checkpoint_prestate_digest,
+                self.request_digest,
+                self.claims_prestate_digest,
+                self.custody_prestate_digest,
+                self.candidate_bank_digest,
+                self.candidate_obligation_digest,
+                self.claims_delta_digest,
+                self.effects_digest,
+            ]
+            .contains(&[0; 32])
         {
             Err(DealerScenarioEvaluationReceiptErrorV1::Coordinate)
         } else {
@@ -172,6 +179,7 @@ mod tests {
 
     fn receipt() -> DealerScenarioEvaluationReceiptV1 {
         DealerScenarioEvaluationReceiptV1 {
+            custody_effect_count: 3,
             producer_program: [1; 32],
             checkpoint: [2; 32],
             checkpoint_prestate_digest: [3; 32],

@@ -12,16 +12,23 @@ use dclutch_capability_program_contract::hot_v3::{
 use dclutch_dealer_codec::scenario_checkpoint_v1::{
     DEALER_SCENARIO_CHECKPOINT_PDA_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
 };
+use dclutch_dealer_codec::scenario_membership_manifest_v1::{
+    DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1, DEALER_SCENARIO_MEMBERSHIP_PAGE_DOMAIN_V1,
+    DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
+};
+use dclutch_dealer_codec::scenario_reservation_receipt_v1::DEALER_SCENARIO_MAX_RESERVATIONS_V1;
 use dclutch_trading_sbf::dealer::v3_trade_profile::{
     DEALER_SCENARIO_PROFILE_SPANS_V4, dealer_scenario_logical_frame_v4,
 };
 use dclutch_trading_sbf::dealer_scenario_checkpoint_v1::{
     DEALER_SCENARIO_CHECKPOINT_CLEANUP_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_CREATE_MAGIC_V1,
     DEALER_SCENARIO_CHECKPOINT_EVALUATE_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_PAGE_MAGIC_V1,
+    DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1, DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1,
 };
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
+    hash::hashv,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
@@ -45,6 +52,10 @@ pub enum DealerScenarioCheckpointRouteV1 {
     Evaluate,
     /// Close after expiry to the immutable beneficiary.
     Cleanup,
+    /// Ingest one Custody reservation receipt.
+    Reserve(u8),
+    /// Ingest one reverse-order Custody rollback receipt.
+    Rollback(u8),
 }
 
 /// Packet-safe unsigned route and its exact lock/signer geometry.
@@ -117,6 +128,30 @@ pub struct DealerScenarioFinalCommitTopologyV1 {
     pub unique_account_lock_count: usize,
     /// Whether one transaction fits devnet's current lock limit.
     pub fits_devnet_lock_limit: bool,
+}
+
+/// Reservation accounts replacing the repeated Custody transfer frames.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerScenarioReservedFinalAccountsV1 {
+    /// Common final-commit evidence accounts.
+    pub fixed: DealerScenarioFinalCommitFixedAccountsV1,
+    /// Release-selected Custody program activating every reservation in one CPI.
+    pub custody_program: Pubkey,
+    /// Exact ordered producer receipt accounts.
+    pub reservation_receipts: [Pubkey; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+    /// Exact ordered Custody reservation accounts.
+    pub reservation_states: [Pubkey; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+    /// Active prefix length selected by the admitted evaluator.
+    pub effect_count: u8,
+}
+
+/// Canonical six-page account partition and its producer-owned manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerScenarioCanonicalMembershipPagesV1 {
+    /// Typed manifest body the selected evaluator must publish.
+    pub manifest: DealerScenarioMembershipManifestV1,
+    /// Strictly increasing, deduplicated keys in six balanced pages.
+    pub pages: [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1],
 }
 
 /// Project the smallest one-transaction Claims/Custody effect topology.
@@ -212,6 +247,226 @@ pub fn project_dealer_scenario_final_commit_topology_v1(
     })
 }
 
+/// Project the bounded final topology after every Custody effect is reserved.
+///
+/// This remains topology evidence, not a final executor. The missing Custody
+/// batch route must activate the reservation states in the same rollback
+/// domain as Claims and the obligation write-last commit.
+pub fn project_dealer_scenario_reserved_final_topology_v1(
+    state: DealerScenarioHotMetaStateV4<'_>,
+    tail_count: u32,
+    spans: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
+    accounts: DealerScenarioReservedFinalAccountsV1,
+) -> Result<DealerScenarioFinalCommitTopologyV1, DealerScenarioCheckpointOperatorErrorV1> {
+    let effect_count = usize::from(accounts.effect_count);
+    if effect_count > DEALER_SCENARIO_MAX_RESERVATIONS_V1
+        || accounts.custody_program == Pubkey::default()
+        || accounts
+            .reservation_receipts
+            .iter()
+            .take(effect_count)
+            .chain(accounts.reservation_states.iter().take(effect_count))
+            .any(|key| *key == Pubkey::default())
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let profile_account = state
+        .fixed_accounts
+        .get(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3)
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    let profile = AccountProfileV2::decode(&profile_account.account.data)
+        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    let frame = dealer_scenario_logical_frame_v4(spans)
+        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Geometry)?;
+    let fixed = accounts.fixed;
+    let mut metas = Vec::new();
+    push_meta(&mut metas, AccountMeta::new(fixed.checkpoint, false));
+    for key in [
+        fixed.clock,
+        fixed.request,
+        fixed.evaluation_receipt,
+        fixed.candidate_bank,
+        fixed.candidate_obligation,
+        fixed.claims_delta,
+        fixed.effects,
+    ] {
+        push_meta(&mut metas, AccountMeta::new_readonly(key, false));
+    }
+    push_logical_meta(&mut metas, state, profile, tail_count, &spans, 0)?;
+    let claims_end = frame
+        .claims_positions_start
+        .checked_add(
+            *spans
+                .get(4)
+                .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?,
+        )
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+    for logical in frame.claims_fixed_start..claims_end {
+        push_logical_meta(&mut metas, state, profile, tail_count, &spans, logical)?;
+    }
+    push_logical_meta(
+        &mut metas,
+        state,
+        profile,
+        tail_count,
+        &spans,
+        frame.obligation,
+    )?;
+    push_meta(
+        &mut metas,
+        AccountMeta::new_readonly(accounts.custody_program, false),
+    );
+    for (receipt, reservation) in accounts
+        .reservation_receipts
+        .iter()
+        .zip(accounts.reservation_states.iter())
+        .take(effect_count)
+    {
+        push_meta(&mut metas, AccountMeta::new_readonly(*receipt, false));
+        push_meta(&mut metas, AccountMeta::new(*reservation, false));
+    }
+    let instruction = Instruction {
+        program_id: fixed.trading_program,
+        accounts: metas.clone(),
+        data: Vec::new(),
+    };
+    let census = census_dealer_scenario_transaction_locks_v1(
+        fixed.payer,
+        core::slice::from_ref(&instruction),
+    );
+    Ok(DealerScenarioFinalCommitTopologyV1 {
+        effect_accounts: metas,
+        unique_account_lock_count: census.unique_account_lock_count,
+        fits_devnet_lock_limit: census.unique_account_lock_count <= 64,
+    })
+}
+
+/// Derive the one canonical six-page membership partition.
+///
+/// The set is the complete physical Dealer frame after alias de-duplication.
+/// Sorting once across the whole set makes every page boundary strict, so a
+/// key cannot be repeated in another page. The balanced split is unique for a
+/// given set and keeps the largest page at or below 48 accounts.
+pub fn project_dealer_scenario_canonical_membership_pages_v1(
+    state: DealerScenarioHotMetaStateV4<'_>,
+    producer_program: Pubkey,
+    checkpoint: Pubkey,
+    request_digest: [u8; 32],
+) -> Result<DealerScenarioCanonicalMembershipPagesV1, DealerScenarioCheckpointOperatorErrorV1> {
+    if producer_program == Pubkey::default()
+        || checkpoint == Pubkey::default()
+        || request_digest == [0; 32]
+    {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let mut keys = state
+        .fixed_accounts
+        .iter()
+        .chain(state.strategy_accounts.iter())
+        .chain(state.runtime_suffix_accounts.iter())
+        .map(|meta| meta.account.key)
+        .collect::<Vec<_>>();
+    keys.sort_unstable_by_key(Pubkey::to_bytes);
+    keys.dedup();
+    let maximum = DEALER_SCENARIO_MEMBERSHIP_PAGES_V1
+        .checked_mul(usize::from(
+            dclutch_dealer_codec::scenario_membership_manifest_v1::DEALER_SCENARIO_MEMBERSHIP_PAGE_MAX_ACCOUNTS_V1,
+        ))
+        .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+    if keys.len() < DEALER_SCENARIO_MEMBERSHIP_PAGES_V1 || keys.len() > maximum {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let base = keys.len() / DEALER_SCENARIO_MEMBERSHIP_PAGES_V1;
+    let extra = keys.len() % DEALER_SCENARIO_MEMBERSHIP_PAGES_V1;
+    let mut cursor = 0_usize;
+    let mut pages: [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1] =
+        core::array::from_fn(|_| Vec::new());
+    for (page_index, page) in pages.iter_mut().enumerate() {
+        let count = base + usize::from(page_index < extra);
+        let end = cursor
+            .checked_add(count)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+        page.extend_from_slice(
+            keys.get(cursor..end)
+                .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)?,
+        );
+        cursor = end;
+    }
+    if cursor != keys.len() {
+        return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
+    }
+    let mut page_account_counts = [0_u8; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1];
+    let mut page_membership_digests = [[0_u8; 32]; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1];
+    for (page_index, page) in pages.iter().enumerate() {
+        let page_index_u8 = u8::try_from(page_index)
+            .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+        let count = u8::try_from(page.len())
+            .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+        *page_account_counts
+            .get_mut(page_index)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)? = count;
+        *page_membership_digests
+            .get_mut(page_index)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Geometry)? =
+            dealer_scenario_membership_page_digest_v1(
+                checkpoint,
+                request_digest,
+                page_index_u8,
+                page,
+            )?;
+    }
+    Ok(DealerScenarioCanonicalMembershipPagesV1 {
+        manifest: DealerScenarioMembershipManifestV1 {
+            producer_program: producer_program.to_bytes(),
+            checkpoint: checkpoint.to_bytes(),
+            request_digest,
+            total_account_count: u16::try_from(keys.len())
+                .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?,
+            page_account_counts,
+            page_membership_digests,
+        },
+        pages,
+    })
+}
+
+/// Producer-owned manifest PDA for one checkpoint and request.
+#[must_use]
+pub fn dealer_scenario_membership_manifest_address_v1(
+    producer_program: Pubkey,
+    checkpoint: Pubkey,
+    request_digest: [u8; 32],
+) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1,
+            checkpoint.as_ref(),
+            &request_digest,
+        ],
+        &producer_program,
+    )
+    .0
+}
+
+fn dealer_scenario_membership_page_digest_v1(
+    checkpoint: Pubkey,
+    request_digest: [u8; 32],
+    page_index: u8,
+    keys: &[Pubkey],
+) -> Result<[u8; 32], DealerScenarioCheckpointOperatorErrorV1> {
+    let page = [page_index];
+    let count = [u8::try_from(keys.len())
+        .map_err(|_| DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?];
+    let mut parts = vec![
+        DEALER_SCENARIO_MEMBERSHIP_PAGE_DOMAIN_V1,
+        checkpoint.as_ref(),
+        request_digest.as_slice(),
+        page.as_slice(),
+        count.as_slice(),
+    ];
+    parts.extend(keys.iter().map(Pubkey::as_ref));
+    Ok(hashv(&parts).to_bytes())
+}
+
 fn push_logical_meta(
     metas: &mut Vec<AccountMeta>,
     state: DealerScenarioHotMetaStateV4<'_>,
@@ -301,6 +556,8 @@ pub fn build_dealer_scenario_checkpoint_create_v1(
     clock: Pubkey,
     rent: Pubkey,
     system_program: Pubkey,
+    manifest_producer: Pubkey,
+    membership_manifest: Pubkey,
     recent_blockhash: Hash,
     lookup_tables: &[AddressLookupTableAccount],
 ) -> Result<DealerScenarioCheckpointPacketV1, DealerScenarioCheckpointOperatorErrorV1> {
@@ -317,6 +574,8 @@ pub fn build_dealer_scenario_checkpoint_create_v1(
             AccountMeta::new_readonly(clock, false),
             AccountMeta::new_readonly(rent, false),
             AccountMeta::new_readonly(system_program, false),
+            AccountMeta::new_readonly(manifest_producer, false),
+            AccountMeta::new_readonly(membership_manifest, false),
         ],
         data: DEALER_SCENARIO_CHECKPOINT_CREATE_MAGIC_V1.to_vec(),
     };
@@ -330,11 +589,13 @@ pub fn build_dealer_scenario_checkpoint_create_v1(
 }
 
 /// Build and compile one ordered readonly page transaction.
+#[allow(clippy::too_many_arguments)]
 pub fn build_dealer_scenario_checkpoint_page_v1(
     trading_program: Pubkey,
     payer: Pubkey,
     checkpoint: Pubkey,
     clock: Pubkey,
+    membership_manifest: Pubkey,
     page_index: u8,
     observations: &[Pubkey],
     recent_blockhash: Hash,
@@ -347,12 +608,14 @@ pub fn build_dealer_scenario_checkpoint_page_v1(
         || has_duplicate_keys(observations)
         || observations.contains(&checkpoint)
         || observations.contains(&clock)
+        || observations.contains(&membership_manifest)
     {
         return Err(DealerScenarioCheckpointOperatorErrorV1::Geometry);
     }
-    let mut accounts = Vec::with_capacity(2 + observations.len());
+    let mut accounts = Vec::with_capacity(3 + observations.len());
     accounts.push(AccountMeta::new(checkpoint, false));
     accounts.push(AccountMeta::new_readonly(clock, false));
+    accounts.push(AccountMeta::new_readonly(membership_manifest, false));
     accounts.extend(
         observations
             .iter()
@@ -408,6 +671,97 @@ pub fn build_dealer_scenario_checkpoint_evaluate_v1(
         DealerScenarioCheckpointRouteV1::Evaluate,
         payer,
         instruction,
+        recent_blockhash,
+        lookup_tables,
+    )
+}
+
+/// Build and compile one Custody reservation-receipt ingestion transaction.
+#[allow(clippy::too_many_arguments)]
+pub fn build_dealer_scenario_checkpoint_reserve_v1(
+    trading_program: Pubkey,
+    payer: Pubkey,
+    checkpoint: Pubkey,
+    clock: Pubkey,
+    custody_program: Pubkey,
+    reservation_receipt: Pubkey,
+    reservation_state: Pubkey,
+    effect_ordinal: u8,
+    recent_blockhash: Hash,
+    lookup_tables: &[AddressLookupTableAccount],
+) -> Result<DealerScenarioCheckpointPacketV1, DealerScenarioCheckpointOperatorErrorV1> {
+    build_dealer_scenario_checkpoint_reservation_route_v1(
+        DealerScenarioCheckpointRouteV1::Reserve(effect_ordinal),
+        DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1,
+        trading_program,
+        payer,
+        checkpoint,
+        clock,
+        custody_program,
+        reservation_receipt,
+        reservation_state,
+        recent_blockhash,
+        lookup_tables,
+    )
+}
+
+/// Build and compile one reverse-order rollback-receipt ingestion transaction.
+#[allow(clippy::too_many_arguments)]
+pub fn build_dealer_scenario_checkpoint_rollback_v1(
+    trading_program: Pubkey,
+    payer: Pubkey,
+    checkpoint: Pubkey,
+    clock: Pubkey,
+    custody_program: Pubkey,
+    rollback_receipt: Pubkey,
+    reservation_state: Pubkey,
+    effect_ordinal: u8,
+    recent_blockhash: Hash,
+    lookup_tables: &[AddressLookupTableAccount],
+) -> Result<DealerScenarioCheckpointPacketV1, DealerScenarioCheckpointOperatorErrorV1> {
+    build_dealer_scenario_checkpoint_reservation_route_v1(
+        DealerScenarioCheckpointRouteV1::Rollback(effect_ordinal),
+        DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1,
+        trading_program,
+        payer,
+        checkpoint,
+        clock,
+        custody_program,
+        rollback_receipt,
+        reservation_state,
+        recent_blockhash,
+        lookup_tables,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_dealer_scenario_checkpoint_reservation_route_v1(
+    route: DealerScenarioCheckpointRouteV1,
+    magic: [u8; 8],
+    trading_program: Pubkey,
+    payer: Pubkey,
+    checkpoint: Pubkey,
+    clock: Pubkey,
+    custody_program: Pubkey,
+    receipt: Pubkey,
+    reservation_state: Pubkey,
+    recent_blockhash: Hash,
+    lookup_tables: &[AddressLookupTableAccount],
+) -> Result<DealerScenarioCheckpointPacketV1, DealerScenarioCheckpointOperatorErrorV1> {
+    compile_checkpoint_packet(
+        route,
+        payer,
+        Instruction {
+            program_id: trading_program,
+            accounts: vec![
+                AccountMeta::new(checkpoint, false),
+                AccountMeta::new_readonly(clock, false),
+                AccountMeta::new_readonly(custody_program, false),
+                AccountMeta::new_readonly(receipt, false),
+                AccountMeta::new_readonly(reservation_state, false),
+            ],
+            data: magic.to_vec(),
+        },
         recent_blockhash,
         lookup_tables,
     )
@@ -544,6 +898,14 @@ pub struct DealerScenarioCheckpointJournalV1 {
     pub page_receipts: [[u8; 32]; DEALER_SCENARIO_PREPARATION_PAGES_V1],
     /// Sealed evaluation receipt digest, zero before evaluation.
     pub evaluation_receipt: [u8; 32],
+    /// Evaluator-selected Custody effect count.
+    pub custody_effect_count: u8,
+    /// Reservation receipt digests, overwritten by rollback receipts in reverse order.
+    pub reservation_receipts: [[u8; 32]; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+    /// Number of finalized reservation ingestions.
+    pub reservation_count: u8,
+    /// Number of finalized reverse-order rollback ingestions.
+    pub rollback_count: u8,
     /// Whether finalized cleanup observed the checkpoint vacant.
     pub cleaned: bool,
 }
@@ -564,6 +926,10 @@ impl DealerScenarioCheckpointJournalV1 {
             next_page: 0,
             page_receipts: [[0; 32]; DEALER_SCENARIO_PREPARATION_PAGES_V1],
             evaluation_receipt: [0; 32],
+            custody_effect_count: 0,
+            reservation_receipts: [[0; 32]; DEALER_SCENARIO_MAX_RESERVATIONS_V1],
+            reservation_count: 0,
+            rollback_count: 0,
             cleaned: false,
         })
     }
@@ -617,24 +983,100 @@ impl DealerScenarioCheckpointJournalV1 {
     pub fn record_evaluated(
         &mut self,
         evaluation_receipt: [u8; 32],
+        custody_effect_count: u8,
         checkpoint_poststate_digest: [u8; 32],
     ) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
         if usize::from(self.next_page) != DEALER_SCENARIO_PREPARATION_PAGES_V1
             || evaluation_receipt == [0; 32]
             || checkpoint_poststate_digest == [0; 32]
             || self.evaluation_receipt != [0; 32]
+            || usize::from(custody_effect_count) > DEALER_SCENARIO_MAX_RESERVATIONS_V1
             || self.cleaned
         {
             return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
         }
         self.evaluation_receipt = evaluation_receipt;
+        self.custody_effect_count = custody_effect_count;
+        self.checkpoint_digest = checkpoint_poststate_digest;
+        Ok(())
+    }
+
+    /// Record one finalized ordered Custody reservation.
+    pub fn record_reservation(
+        &mut self,
+        effect_ordinal: u8,
+        receipt_digest: [u8; 32],
+        checkpoint_poststate_digest: [u8; 32],
+    ) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
+        if self.evaluation_receipt == [0; 32]
+            || effect_ordinal != self.reservation_count
+            || effect_ordinal >= self.custody_effect_count
+            || receipt_digest == [0; 32]
+            || checkpoint_poststate_digest == [0; 32]
+            || self.rollback_count != 0
+            || self.cleaned
+        {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
+        }
+        let destination = self
+            .reservation_receipts
+            .get_mut(usize::from(effect_ordinal))
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Journal)?;
+        if *destination != [0; 32] {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
+        }
+        *destination = receipt_digest;
+        self.reservation_count = self
+            .reservation_count
+            .checked_add(1)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
+        self.checkpoint_digest = checkpoint_poststate_digest;
+        Ok(())
+    }
+
+    /// Record one finalized reverse-order Custody rollback.
+    pub fn record_rollback(
+        &mut self,
+        effect_ordinal: u8,
+        prior_receipt_digest: [u8; 32],
+        rollback_receipt_digest: [u8; 32],
+        checkpoint_poststate_digest: [u8; 32],
+    ) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
+        let expected = self
+            .reservation_count
+            .checked_sub(self.rollback_count)
+            .and_then(|value| value.checked_sub(1))
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Journal)?;
+        if effect_ordinal != expected
+            || prior_receipt_digest == [0; 32]
+            || rollback_receipt_digest == [0; 32]
+            || checkpoint_poststate_digest == [0; 32]
+            || self.cleaned
+        {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
+        }
+        let destination = self
+            .reservation_receipts
+            .get_mut(usize::from(effect_ordinal))
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Journal)?;
+        if *destination != prior_receipt_digest {
+            return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
+        }
+        *destination = rollback_receipt_digest;
+        self.rollback_count = self
+            .rollback_count
+            .checked_add(1)
+            .ok_or(DealerScenarioCheckpointOperatorErrorV1::Arithmetic)?;
         self.checkpoint_digest = checkpoint_poststate_digest;
         Ok(())
     }
 
     /// Record finalized expiry cleanup only after create occurred.
     pub fn record_cleaned(&mut self) -> Result<(), DealerScenarioCheckpointOperatorErrorV1> {
-        if self.checkpoint_digest == [0; 32] || self.cleaned {
+        if self.checkpoint_digest == [0; 32]
+            || self.reservation_count != self.rollback_count
+            || self.cleaned
+        {
             return Err(DealerScenarioCheckpointOperatorErrorV1::Journal);
         }
         self.cleaned = true;
@@ -668,6 +1110,8 @@ mod tests {
             key(9),
             key(10),
             key(11),
+            key(12),
+            key(13),
             blockhash(),
             &[],
         )
@@ -697,12 +1141,38 @@ mod tests {
             &[],
         )
         .expect("cleanup");
+        let reserve = build_dealer_scenario_checkpoint_reserve_v1(
+            key(1),
+            key(2),
+            key(5),
+            key(9),
+            key(18),
+            key(19),
+            key(20),
+            0,
+            blockhash(),
+            &[],
+        )
+        .expect("reserve");
+        let rollback = build_dealer_scenario_checkpoint_rollback_v1(
+            key(1),
+            key(2),
+            key(5),
+            key(9),
+            key(18),
+            key(21),
+            key(20),
+            0,
+            blockhash(),
+            &[],
+        )
+        .expect("rollback");
         assert_eq!(
             (
                 create.wire_bytes,
                 create.lock_census.unique_account_lock_count
             ),
-            (541, 11)
+            (607, 13)
         );
         assert_eq!(
             (
@@ -718,7 +1188,21 @@ mod tests {
             ),
             (278, 5)
         );
-        for packet in [create, evaluate, cleanup] {
+        assert_eq!(
+            (
+                reserve.wire_bytes,
+                reserve.lock_census.unique_account_lock_count
+            ),
+            (344, 7)
+        );
+        assert_eq!(
+            (
+                rollback.wire_bytes,
+                rollback.lock_census.unique_account_lock_count
+            ),
+            (344, 7)
+        );
+        for packet in [create, evaluate, reserve, rollback, cleanup] {
             assert!(packet.wire_bytes <= DEALER_SCENARIO_PACKET_BYTES_V1);
             assert!(packet.lock_census.unique_account_lock_count <= 64);
             assert_eq!(packet.loaded_addresses, 0);
@@ -737,15 +1221,16 @@ mod tests {
             key(2),
             key(3),
             key(4),
+            key(5),
             0,
             &observations,
             blockhash(),
             core::slice::from_ref(&table),
         )
         .expect("paged packet");
-        assert_eq!(packet.lock_census.unique_account_lock_count, 52);
+        assert_eq!(packet.lock_census.unique_account_lock_count, 53);
         assert_eq!(packet.loaded_addresses, 48);
-        assert_eq!(packet.wire_bytes, 376);
+        assert_eq!(packet.wire_bytes, 409);
         assert!(packet.wire_bytes <= DEALER_SCENARIO_PACKET_BYTES_V1);
 
         let mut too_many = observations;
@@ -756,6 +1241,7 @@ mod tests {
                 key(2),
                 key(3),
                 key(4),
+                key(5),
                 0,
                 &too_many,
                 blockhash(),
@@ -818,11 +1304,31 @@ mod tests {
             Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
         );
         journal
-            .record_evaluated([50; 32], [51; 32])
+            .record_evaluated([50; 32], 2, [51; 32])
             .expect("evaluation");
+        journal
+            .record_reservation(0, [60; 32], [61; 32])
+            .expect("reservation zero");
+        journal
+            .record_reservation(1, [62; 32], [63; 32])
+            .expect("reservation one");
+        assert_eq!(
+            journal.record_cleaned(),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
+        );
+        assert_eq!(
+            journal.record_rollback(0, [60; 32], [70; 32], [71; 32]),
+            Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
+        );
+        journal
+            .record_rollback(1, [62; 32], [72; 32], [73; 32])
+            .expect("rollback one");
+        journal
+            .record_rollback(0, [60; 32], [74; 32], [75; 32])
+            .expect("rollback zero");
         journal.record_cleaned().expect("cleanup");
         assert_eq!(
-            journal.record_evaluated([52; 32], [53; 32]),
+            journal.record_evaluated([52; 32], 2, [53; 32]),
             Err(DealerScenarioCheckpointOperatorErrorV1::Journal)
         );
     }

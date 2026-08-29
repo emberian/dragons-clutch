@@ -305,6 +305,22 @@ pub fn process_instruction(
         );
     }
     #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_reserve_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_rollback_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
     if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_cleanup_v1(instruction_data) {
         return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1(
             program_id,
