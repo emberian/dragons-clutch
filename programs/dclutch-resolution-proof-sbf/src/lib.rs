@@ -119,6 +119,21 @@ pub enum ResolutionError {
     ReleaseSuperseded = 0x8014,
     /// Sponsored-push candidate, head, release, or deadline authentication failed.
     SponsoredPush = 0x8015,
+    /// `RetireRecord` was aimed at evidence a still-live market could consume.
+    ///
+    /// Liveness census Y3 / queue Q9. `RetireRecord` is permissionless and it
+    /// CLOSES the account, so before this code existed anyone could delete a
+    /// fully sealed quorum observation for a transaction fee and force the
+    /// market onto the failure walk — where the walker collects a bounty and
+    /// the holders get the pre-disclosed failure outcome instead of the real
+    /// one. Retiring evidence that is not yet `Consumed` now requires the
+    /// Market to carry a terminal receipt.
+    ///
+    /// This is "not yet", not "never": consumption is itself permissionless,
+    /// the funded failure walk terminalizes the market with no identified
+    /// party's help, and once `terminal_receipt` is `Some` every phase retires
+    /// exactly as it always did. No rent is stranded, only deferred.
+    RecordStillConsumable = 0x8016,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -129,7 +144,7 @@ const _: () = assert!(
     "ResolutionError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (ResolutionError::SponsoredPush as u32)
+    (ResolutionError::RecordStillConsumable as u32)
         < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "ResolutionError must not run past its registered refusal band"
 );

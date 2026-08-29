@@ -165,33 +165,33 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `resolution/core_effect::process_core_effect` | entry | predicate `` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:192` |
-| `resolution/core_effect::process_direct_funding_activation_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:178` |
-| `resolution/core_effect::process_direct_funding_close_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:185` |
-| `resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:164` |
-| `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:171` |
+| `resolution/core_effect::process_core_effect` | entry | predicate `` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:207` |
+| `resolution/core_effect::process_direct_funding_activation_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:193` |
+| `resolution/core_effect::process_direct_funding_close_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:200` |
+| `resolution/pre_market_funding_abort_v1::process_pre_market_funding_abort_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:179` |
+| `resolution/pre_market_funding_v1::process_pre_market_funding_v2` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:186` |
 | `resolution/process_admit#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | blocked by rule `resolution/process_admit#AdmitTerminal`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1478` |
-| `resolution/process_append#AppendObservation` | action | variant `RelayInstructionV1::AppendObservation` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:175` |
+| `resolution/process_append#AppendObservation` | action | variant `RelayInstructionV1::AppendObservation` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:176` |
 | `resolution/process_capture#Capture` | action | variant `SponsoredPushActionV1::Capture` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:78` |
 | `resolution/process_close#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1487` |
 | `resolution/process_close_candidate#CloseCandidate` | action | variant `SponsoredPushActionV1::CloseCandidate` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:81` |
 | `resolution/process_close_head#CloseHead` | action | variant `SponsoredPushActionV1::CloseHead` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:83` |
-| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:185` |
+| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:186` |
 | `resolution/process_commit_failure#CommitFailure` | action | variant `SponsoredPushActionV1::CommitFailure` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:85` |
-| `resolution/process_consume#ConsumeRecord` | action | variant `RelayInstructionV1::ConsumeRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:182` |
+| `resolution/process_consume#ConsumeRecord` | action | variant `RelayInstructionV1::ConsumeRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:183` |
 | `resolution/process_create#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1460` |
-| `resolution/process_create_record#CreateRecord` | action | variant `RelayInstructionV1::CreateRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:172` |
+| `resolution/process_create_record#CreateRecord` | action | variant `RelayInstructionV1::CreateRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:173` |
 | `resolution/process_instruction` | entry | -- | executed (journey); executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:1` |
 | `resolution/process_reclaim#magic` | action | tag ``; magic `DCLTPRL3` | blocked by rule `resolution/process_reclaim#magic`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:81` |
-| `resolution/process_retire#RetireRecord` | action | variant `RelayInstructionV1::RetireRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:180` |
-| `resolution/process_seal#SealRecord` | action | variant `RelayInstructionV1::SealRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:178` |
+| `resolution/process_retire#RetireRecord` | action | variant `RelayInstructionV1::RetireRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:181` |
+| `resolution/process_seal#SealRecord` | action | variant `RelayInstructionV1::SealRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:179` |
 | `resolution/process_settle#Settle` | action | variant `SponsoredPushActionV1::Settle` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs:79` |
 | `resolution/process_submit#magic` | action | tag ``; magic `DCLTPSB3` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:78` |
 | `resolution/process_verify#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey); executed (relayed-vertical) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:1469` |
-| `resolution/provider_instruction_v3::process_provider_resolution_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:195` |
-| `resolution/provider_transport_v3::process_provider_transport_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:202` |
-| `resolution/relay_transport_v1::process_relay_transport_v1` | entry | predicate `` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:209` |
-| `resolution/sponsored_push_v1::process_sponsored_push_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:216` |
+| `resolution/provider_instruction_v3::process_provider_resolution_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:210` |
+| `resolution/provider_transport_v3::process_provider_transport_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:217` |
+| `resolution/relay_transport_v1::process_relay_transport_v1` | entry | predicate `` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:224` |
+| `resolution/sponsored_push_v1::process_sponsored_push_v1` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/lib.rs:231` |
 
 ## series-shadow
 

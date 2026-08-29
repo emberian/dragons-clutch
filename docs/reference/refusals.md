@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **211** codes, with meanings taken
+The tables below carry all **212** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -298,6 +298,7 @@ from the source code's own documentation.
 | `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits.  §12.3's third operator question. Unlike the first two this one is not "come back later": nothing about waiting changes it. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:111` |
 | `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:119` |
 | `0x8015` | `ResolutionError::SponsoredPush` | Sponsored-push candidate, head, release, or deadline authentication failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:121` |
+| `0x8016` | `ResolutionError::RecordStillConsumable` | `RetireRecord` was aimed at evidence a still-live market could consume.  Liveness census Y3 / queue Q9. `RetireRecord` is permissionless and it CLOSES the account, so before this code existed anyone could delete a fully sealed quorum observation for a transaction fee and force the market onto the failure walk — where the walker collects a bounty and the holders get the pre-disclosed failure outcome instead of the real one. Retiring evidence that is not yet `Consumed` now requires the Market to carry a terminal receipt.  This is "not yet", not "never": consumption is itself permissionless, the funded failure walk terminalizes the market with no identified party's help, and once `terminal_receipt` is `Some` every phase retires exactly as it always did. No rent is stranded, only deferred. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:136` |
 
 ## series-shadow
 

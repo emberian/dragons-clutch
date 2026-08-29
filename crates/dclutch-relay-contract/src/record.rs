@@ -736,20 +736,56 @@ pub fn consume_relayed_observation_in_place_v1(bytes: &mut [u8]) -> Result<()> {
 
 /// Retire one record into its pre-existing RentCredit beneficiary.
 ///
-/// Retirement is legal from `Collecting`, `Sealed` or `Consumed`.  A record
-/// abandoned mid-fill is exactly the wasted rent deposit a bad filler pays for.
+/// A record abandoned mid-fill is exactly the wasted rent deposit a bad filler
+/// pays for, so retirement stays permissionless and stays reachable from every
+/// phase. What it is NOT reachable from is a phase where the record could still
+/// answer a live market.
+///
+/// # Why `market_has_terminalized` is a parameter
+///
+/// Liveness census Y3 / queue Q9. Before this conjunct, retirement was legal
+/// from `Collecting` and `Sealed` at any moment, by anyone, for a transaction
+/// fee — and `close_to_beneficiary` then deleted the account. A `Sealed` record
+/// is one permissionless `ConsumeRecord` away from resolving its market
+/// SUCCESSFULLY, and consumption is only ever reachable through that success
+/// path (`commit_consumption`). So a stranger could delete a fully-sealed
+/// quorum observation seconds before it was consumed and force the market onto
+/// the failure walk instead. That is not a wasted deposit; that is a free
+/// griefing verb aimed at the outcome, and the failure walker is the one paid a
+/// bounty for the result it produces.
+///
+/// The conjunct is the smallest thing that closes it, and it is a *fact about
+/// the market*, not a new authority: while the market carries no terminal
+/// receipt, a record that is not already `Consumed` is still live evidence and
+/// may not be deleted. The caller authenticated that fact against a real Core
+/// Market account; this crate reads no accounts and re-derives nothing.
+///
+/// # Why this strands nothing
+///
+/// The rent is delayed, never lost. Every market terminalizes: the funded
+/// failure walk is permissionless and pays its caller, so `terminal_receipt`
+/// becomes `Some` with no identified party's help — and the one market shape
+/// that could NOT terminalize, a recovery-policy market, is no longer foundable
+/// (`CoreSbfError::RecoveryWalkUnavailable`, census R2/Q2). After that moment
+/// every phase retires exactly as before. A `Sealed` record also has a second
+/// way out that is strictly better for its holder: anyone may consume it.
 pub fn retire_relayed_observation_in_place_v1(
     bytes: &mut [u8],
     generation: u64,
     current_unix_seconds: i64,
+    market_has_terminalized: bool,
 ) -> Result<()> {
     {
         let view = RelayedObservationRecordViewV1::decode(bytes)?;
         if view.generation()? != generation {
             return Err(Error::RecordBindingMismatch);
         }
-        if view.phase()? == RelayedRecordPhaseV1::Retired {
+        let phase = view.phase()?;
+        if phase == RelayedRecordPhaseV1::Retired {
             return Err(Error::InvalidRecordTransition);
+        }
+        if !market_has_terminalized && phase != RelayedRecordPhaseV1::Consumed {
+            return Err(Error::RecordStillConsumable);
         }
         if current_unix_seconds < view.created_unix_seconds()? {
             return Err(Error::NonCanonicalRecord);
@@ -1313,16 +1349,27 @@ mod tests {
         assert_ne!(seeds, later);
     }
 
+    /// A terminalized market retires from every phase, exactly as before Q9.
     #[test]
     fn retirement_is_legal_from_every_live_phase_and_is_terminal() {
         let mut collecting = Record::create(1);
         assert!(
-            retire_relayed_observation_in_place_v1(&mut collecting.bytes, GENERATION, CREATED)
-                .is_ok()
+            retire_relayed_observation_in_place_v1(
+                &mut collecting.bytes,
+                GENERATION,
+                CREATED,
+                true
+            )
+            .is_ok()
         );
         assert_eq!(collecting.view().phase(), Ok(RelayedRecordPhaseV1::Retired));
         assert_eq!(
-            retire_relayed_observation_in_place_v1(&mut collecting.bytes, GENERATION, CREATED),
+            retire_relayed_observation_in_place_v1(
+                &mut collecting.bytes,
+                GENERATION,
+                CREATED,
+                true
+            ),
             Err(Error::InvalidRecordTransition)
         );
 
@@ -1338,8 +1385,69 @@ mod tests {
         .expect("seal");
         consume_relayed_observation_in_place_v1(&mut consumed.bytes).expect("consume");
         assert!(
-            retire_relayed_observation_in_place_v1(&mut consumed.bytes, GENERATION, CREATED)
+            retire_relayed_observation_in_place_v1(&mut consumed.bytes, GENERATION, CREATED, true)
                 .is_ok()
+        );
+    }
+
+    /// Census Y3/Q9: the free griefing verb, refused, and its rent still safe.
+    ///
+    /// The attack this pins is not hypothetical arithmetic — it is one
+    /// transaction. `RetireRecord` is permissionless and closes the account, so
+    /// a stranger who dislikes the honest outcome retires the sealed record
+    /// before anyone consumes it and the market falls to the failure walk,
+    /// where the walker collects a bounty. Both live phases are refused while
+    /// the market is live, and both become retirable the moment it is not.
+    #[test]
+    fn a_live_market_evidence_record_cannot_be_deleted_by_a_stranger() {
+        let mut collecting = Record::create(1);
+        let before = collecting.bytes;
+        assert_eq!(
+            retire_relayed_observation_in_place_v1(
+                &mut collecting.bytes,
+                GENERATION,
+                CREATED,
+                false
+            ),
+            Err(Error::RecordStillConsumable),
+            "a fill in progress is not a stranger's to delete"
+        );
+        assert_eq!(collecting.bytes, before, "a refused retirement wrote bytes");
+
+        let mut sealed = Record::create(1);
+        fill(&mut sealed);
+        seal_relayed_observation_in_place_v1(
+            &mut sealed.bytes,
+            binding(),
+            seal(body(0xa2)),
+            0,
+            CREATED,
+        )
+        .expect("seal");
+        assert_eq!(sealed.view().phase(), Ok(RelayedRecordPhaseV1::Sealed));
+        let before = sealed.bytes;
+        assert_eq!(
+            retire_relayed_observation_in_place_v1(&mut sealed.bytes, GENERATION, CREATED, false),
+            Err(Error::RecordStillConsumable),
+            "the whole attack: a sealed quorum deleted one block before consumption"
+        );
+        assert_eq!(sealed.bytes, before, "a refused retirement wrote bytes");
+
+        // Nothing is stranded, by either of the two ways out. Consumption is
+        // permissionless and needs no terminal receipt...
+        let mut consumable = sealed.bytes;
+        consume_relayed_observation_in_place_v1(&mut consumable).expect("consume");
+        assert!(
+            retire_relayed_observation_in_place_v1(&mut consumable, GENERATION, CREATED, false)
+                .is_ok(),
+            "a consumed record retires whether or not the market has terminalized"
+        );
+        // ...and the funded failure walk terminalizes the market with no
+        // identified party's help, which releases the sealed record too.
+        assert!(
+            retire_relayed_observation_in_place_v1(&mut sealed.bytes, GENERATION, CREATED, true)
+                .is_ok(),
+            "the refusal is not yet, never never"
         );
     }
 
@@ -1348,7 +1456,12 @@ mod tests {
         let mut record = Record::create(1);
         let before = record.bytes;
         assert_eq!(
-            retire_relayed_observation_in_place_v1(&mut record.bytes, GENERATION + 1, CREATED),
+            retire_relayed_observation_in_place_v1(
+                &mut record.bytes,
+                GENERATION + 1,
+                CREATED,
+                true
+            ),
             Err(Error::RecordBindingMismatch)
         );
         assert_eq!(record.bytes, before, "a refused retirement changed bytes");
