@@ -132,6 +132,28 @@ pub struct RationalLifecycleCompactArtifactInputV4<'a> {
     pub claims_program: Pubkey,
 }
 
+/// Market-free inputs for one compact RetireReceipt artifact set.
+///
+/// The V4 input reaches these same facts through a
+/// [`RepresentationDescriptorV2`], which carries the Core Market and therefore
+/// cannot be built before founding. Everything the compact encoders actually
+/// read is here instead: the ordered coefficients (which fix the nonzero
+/// support and the descriptor's own byte width) and the account observations.
+///
+/// The Claims program id is deliberately absent. It was only ever needed to
+/// derive the custody-owner PDA this module used to bake, and the effect now
+/// projects that owner from a supplied account -- so a compact artifact set no
+/// longer has any reason to know which Claims program will run it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalLifecycleCompactArtifactInputV6<'a> {
+    /// Exact logical account data lengths in injected-prefix plus Claims order.
+    pub logical_data_lengths: &'a [u32],
+    /// Exact finalized ProductBasisV3 bytes authenticated at logical account four.
+    pub product_basis: &'a [u8],
+    /// Ordered representation coefficients; its length is `K`.
+    pub coefficients: &'a [u64],
+}
+
 /// Exact compact account/request/transition/effect artifact bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RationalLifecycleCompactArtifactsV4 {
@@ -190,10 +212,33 @@ pub struct RationalLifecycleCompactBundleV4 {
 }
 
 /// Build exact stateless compact RetireReceipt artifacts.
+///
+/// Retained for callers holding a finalized descriptor; it reads the
+/// coefficients off that descriptor and delegates, so there is one encoder
+/// rather than two.
 pub fn encode_rational_lifecycle_compact_artifacts_v4(
     input: RationalLifecycleCompactArtifactInputV4<'_>,
 ) -> Result<RationalLifecycleCompactArtifactsV4> {
-    let rows = support_rows(input.descriptor)?;
+    if input.claims_program == Pubkey::default() {
+        return Err(Error::AccountObservation);
+    }
+    let coefficients = descriptor_coefficients(input.descriptor)?;
+    encode_rational_lifecycle_compact_artifacts_v6(RationalLifecycleCompactArtifactInputV6 {
+        logical_data_lengths: input.logical_data_lengths,
+        product_basis: input.product_basis,
+        coefficients: &coefficients,
+    })
+}
+
+/// Build exact stateless compact RetireReceipt artifacts, before founding.
+///
+/// This is the sole encoder. Its inputs cannot name a Market, so neither can
+/// its output -- which is what allows a Rational capability manifest entry to
+/// be derived before the Market that will select it exists.
+pub fn encode_rational_lifecycle_compact_artifacts_v6(
+    input: RationalLifecycleCompactArtifactInputV6<'_>,
+) -> Result<RationalLifecycleCompactArtifactsV4> {
+    let rows = support_rows(input.coefficients)?;
     let support_count = u32::try_from(rows.len()).map_err(|_| Error::InvalidLength)?;
     let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(rows.len());
     validate_inputs(input, rows.len())?;
@@ -289,6 +334,101 @@ pub fn build_rational_lifecycle_compact_bundle_v4(
         &bundle,
         input.authenticated_token_behavior,
     )?;
+    Ok(bundle)
+}
+
+/// Market-free inputs for one compact RetireReceipt capability bundle.
+///
+/// The V4 form takes an `AuthenticatedTokenBehaviorV2`, which can only be
+/// constructed from a finalized descriptor and an authenticated Market Realm --
+/// so it cannot exist before founding no matter how neutral the artifacts are.
+/// This takes the immutable Realm/release selection directly, which is the same
+/// record the descriptor's `config_schema` names and is derivable up front.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalLifecycleCompactBundleInputV6<'a> {
+    /// Market-free descriptor-shape and account observations.
+    pub artifacts: RationalLifecycleCompactArtifactInputV6<'a>,
+    /// Manifest-selected Rational lifecycle capability kind.
+    pub kind: [u8; 32],
+    /// Immutable Realm/release Token behavior selected before Market founding.
+    pub token_behavior_selection: TokenBehaviorSelectionV2,
+    /// Manifest-selected mutable root-tail schema.
+    pub root_schema: [u8; 32],
+    /// Exact finalized successor lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
+    /// Manifest-selected physical capacity profile.
+    pub capacity_profile: [u8; 32],
+    /// Exact mutable root-tail byte width.
+    pub root_state_bytes: u32,
+}
+
+/// Build one compact RetireReceipt bundle before the Market exists.
+///
+/// The sole builder; the V4 entry point narrows its descriptor-bearing input to
+/// this one. Nothing reachable from here names a Market, so the emitted
+/// descriptor identity -- and therefore the ProgramSet entry and the capability
+/// manifest `release_id` above it -- is fixed before founding.
+pub fn build_rational_lifecycle_compact_bundle_v6(
+    input: RationalLifecycleCompactBundleInputV6<'_>,
+) -> Result<RationalLifecycleCompactBundleV4> {
+    let artifacts = encode_rational_lifecycle_compact_artifacts_v6(input.artifacts)?;
+    let lifecycle_policy = Vec::from(input.lifecycle_policy);
+    let lifecycle_id = digest(&lifecycle_policy)?;
+    let strategy = ExecutionStrategyProgramV2::new(
+        StrategyDispositionV2::Interpreted,
+        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        digest(&artifacts.transition)?,
+        content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
+        None,
+        content(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2)?,
+        None,
+        content(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?,
+        content(ACCELERATOR_ACK_SCHEMA_ID_V2)?,
+    )
+    .map_err(Error::Strategy)?
+    .to_bytes();
+    let descriptor_value = CapabilityProgramV4::new(
+        content(input.kind)?,
+        content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
+        content(RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4)?,
+        content(input.root_schema)?,
+        lifecycle_id,
+        content(input.capacity_profile)?,
+        CapabilityArtifactsV4 {
+            account_profile: artifact(
+                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                digest(&artifacts.account_profile)?.to_bytes(),
+            )?,
+            request_profile: artifact(
+                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                digest(&artifacts.request_profile)?.to_bytes(),
+            )?,
+            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
+            strategy: artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&strategy)?.to_bytes(),
+            )?,
+            transition: artifact(
+                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&artifacts.transition)?.to_bytes(),
+            )?,
+            effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&artifacts.effect)?.to_bytes())?,
+        },
+        input.root_state_bytes,
+    )
+    .map_err(Error::Descriptor)?;
+    let bundle = RationalLifecycleCompactBundleV4 {
+        support_count: artifacts.support_count,
+        token_behavior_selection: input.token_behavior_selection.to_bytes(),
+        account_profile: artifacts.account_profile,
+        request_profile: artifacts.request_profile,
+        transition: artifacts.transition,
+        lifecycle_policy,
+        strategy,
+        effect: artifacts.effect,
+        descriptor: descriptor_value.encode(),
+    };
+    validate_rational_lifecycle_compact_bundle_v4(&bundle)?;
     Ok(bundle)
 }
 
@@ -465,7 +605,7 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
     ))
 }
 
-fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usize) -> Result<()> {
+fn validate_inputs(input: RationalLifecycleCompactArtifactInputV6<'_>, rows: usize) -> Result<()> {
     let basis =
         ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountObservation)?;
     let expected_accounts = VACANCY_LOGICAL_ACCOUNT_START
@@ -476,14 +616,14 @@ fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usi
         .ok_or(Error::InvalidLength)?;
     let descriptor_bytes = DESCRIPTOR_HEADER_BYTES
         .checked_add(
-            usize::try_from(input.descriptor.outcome_count())
-                .map_err(|_| Error::InvalidLength)?
+            input
+                .coefficients
+                .len()
                 .checked_mul(8)
                 .ok_or(Error::InvalidLength)?,
         )
         .ok_or(Error::InvalidLength)?;
-    if input.claims_program == Pubkey::default()
-        || rows == 0
+    if rows == 0
         || basis.basis_width() == 0
         || input.logical_data_lengths.len() != expected_accounts
         || input.logical_data_lengths.get(4).copied()
@@ -497,14 +637,18 @@ fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usi
     Ok(())
 }
 
-fn support_rows(descriptor: RepresentationDescriptorV2<'_>) -> Result<Vec<(u32, u64)>> {
+/// Ordered nonzero support of a coefficient vector.
+fn support_rows(coefficients: &[u64]) -> Result<Vec<(u32, u64)>> {
+    if coefficients.is_empty() || u32::try_from(coefficients.len()).is_err() {
+        return Err(Error::AccountObservation);
+    }
     let mut rows = Vec::new();
-    for outcome in 0..descriptor.outcome_count() {
-        let coefficient = descriptor
-            .coefficient(outcome)
-            .map_err(|_| Error::AccountObservation)?;
+    for (outcome, coefficient) in coefficients.iter().copied().enumerate() {
         if coefficient != 0 {
-            rows.push((outcome, coefficient));
+            rows.push((
+                u32::try_from(outcome).map_err(|_| Error::AccountObservation)?,
+                coefficient,
+            ));
         }
     }
     if rows.is_empty() {
@@ -513,8 +657,21 @@ fn support_rows(descriptor: RepresentationDescriptorV2<'_>) -> Result<Vec<(u32, 
     Ok(rows)
 }
 
+/// Read a finalized descriptor's coefficients into a market-free vector.
+fn descriptor_coefficients(descriptor: RepresentationDescriptorV2<'_>) -> Result<Vec<u64>> {
+    let mut coefficients = Vec::new();
+    for outcome in 0..descriptor.outcome_count() {
+        coefficients.push(
+            descriptor
+                .coefficient(outcome)
+                .map_err(|_| Error::AccountObservation)?,
+        );
+    }
+    Ok(coefficients)
+}
+
 fn encode_account_profile(
-    input: RationalLifecycleCompactArtifactInputV4<'_>,
+    input: RationalLifecycleCompactArtifactInputV6<'_>,
     layout: RationalLifecycleCompactHotRegisterLayoutV4,
 ) -> Result<Vec<u8>> {
     let mut rules = Vec::with_capacity(input.logical_data_lengths.len());
@@ -573,7 +730,7 @@ fn encode_account_profile(
         )?),
         data_offset: narrow_u32(BASIS_WIDTH_OFFSET_V3)?,
     });
-    let rows = support_rows(input.descriptor)?;
+    let rows = support_rows(input.coefficients)?;
     for (row, (outcome, _)) in rows.iter().copied().enumerate() {
         operations.push(AccountOperationInputV2::ProjectDataU64 {
             account: AccountCoordinateV2::fixed(14),

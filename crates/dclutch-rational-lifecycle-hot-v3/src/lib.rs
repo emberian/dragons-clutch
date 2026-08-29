@@ -26,12 +26,15 @@ mod selected_operator_v5;
 mod selected_operator_v6;
 mod selected_profile_v5;
 mod selected_set_v5;
+mod selected_set_v6;
 
 pub use compact_artifacts_v4::{
     RATIONAL_LIFECYCLE_COMPACT_DESCRIPTOR_BYTES_V4, RATIONAL_LIFECYCLE_COMPACT_STRATEGY_BYTES_V4,
-    RationalLifecycleCompactArtifactInputV4, RationalLifecycleCompactArtifactsV4,
-    RationalLifecycleCompactBundleInputV4, RationalLifecycleCompactBundleV4,
-    build_rational_lifecycle_compact_bundle_v4, encode_rational_lifecycle_compact_artifacts_v4,
+    RationalLifecycleCompactArtifactInputV4, RationalLifecycleCompactArtifactInputV6,
+    RationalLifecycleCompactArtifactsV4, RationalLifecycleCompactBundleInputV4,
+    RationalLifecycleCompactBundleInputV6, RationalLifecycleCompactBundleV4,
+    build_rational_lifecycle_compact_bundle_v4, build_rational_lifecycle_compact_bundle_v6,
+    encode_rational_lifecycle_compact_artifacts_v4, encode_rational_lifecycle_compact_artifacts_v6,
     validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4,
     validate_rational_lifecycle_compact_bundle_v4,
 };
@@ -72,6 +75,11 @@ pub use selected_profile_v5::{
 pub use selected_set_v5::{
     RationalLifecycleProgramSetInputV5, RationalLifecycleProgramSetV5,
     build_rational_lifecycle_program_set_v5, validate_rational_lifecycle_program_set_v5,
+};
+pub use selected_set_v6::{
+    RATIONAL_LIFECYCLE_SELECTED_ACTIONS_V6, RationalLifecycleProgramSetInputV6,
+    RationalLifecycleProgramSetV6, build_rational_lifecycle_program_set_v6,
+    validate_rational_lifecycle_program_set_v6,
 };
 
 use dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2;
