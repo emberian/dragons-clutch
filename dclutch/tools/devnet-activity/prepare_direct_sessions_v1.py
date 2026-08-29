@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize finite Direct private sessions before Activity V4 authorization.
+"""Materialize finite reachable Direct routes before Activity V4 authorization.
 
 This is deliberately a preparation-only adapter.  It invokes the accepted
 successor's key-free session producer, never opens a key file, calls no RPC,
@@ -18,8 +18,8 @@ from typing import Any, Mapping, Sequence
 
 ACTIVITY_PATH = Path(__file__).with_name("activity.py")
 SCHEMA = "dclutch-devnet-activity-direct-session-preparation-manifest-v1"
-JOURNAL_SCHEMA = "dclutch-devnet-direct-trade-session-producer-journal-v1"
-COMMAND = "devnet-direct-trade-session-produce-v1"
+JOURNAL_SCHEMA = "dclutch-devnet-direct-trade-producer-journal-v1"
+COMMAND = "devnet-direct-trade-produce-v1"
 
 
 class Refusal(RuntimeError):
@@ -97,7 +97,8 @@ def producer_state_sha256(value: Mapping[str, Any]) -> str:
 
 
 def finalize(producer: Mapping[str, Any], label: str) -> None:
-    journal_path = output_path(producer["producerJournal"], f"{label} producer journal")
+    output = activity.canonical_directory(producer["outputDir"], f"{label} output directory")
+    journal_path = output / "direct-trade-producer.json"
     if not journal_path.exists():
         raise Refusal(f"{label} producer did not create its durable journal")
     value = exact_object(activity.read_exact_json(journal_path, f"{label} producer journal"), f"{label} producer journal")
@@ -105,10 +106,16 @@ def finalize(producer: Mapping[str, Any], label: str) -> None:
         raise Refusal(f"{label} producer journal is not Finalized")
     if digest(value.get("stateSha256"), f"{label} producer state") != producer_state_sha256(value):
         raise Refusal(f"{label} producer journal state changed")
-    session = output_path(producer["session"], f"{label} session")
+    session = output / "direct-trade-session.json"
+    public = output / "direct-trade-public.json"
     session_sha = activity.sha256_file(session)
-    if value.get("privateSession") != str(session) or value.get("privateSessionSha256") != session_sha:
-        raise Refusal(f"{label} Finalized journal does not bind its produced session")
+    if (
+        value.get("privateSession") != str(session)
+        or value.get("privateSessionSha256") != session_sha
+        or value.get("publicManifest") != str(public)
+        or value.get("publicManifestSha256") != activity.sha256_file(public)
+    ):
+        raise Refusal(f"{label} Finalized journal does not bind its public/private outputs")
 
 
 def prepare(path: Path, expected_sha256: str) -> None:
@@ -127,28 +134,27 @@ def prepare(path: Path, expected_sha256: str) -> None:
         activity.stable_id(cycle["cycleId"], f"preparation cycle {cycle_index} id")
         for index, raw in enumerate(exact_list(cycle["producers"], f"preparation cycle {cycle_index} producers")):
             producer = exact_object(raw, f"preparation producer {cycle_index}/{index}")
-            exact_keys(producer, {"publicManifest", "plan", "marketInput", "sellerParticipant", "buyerParticipant", "payerKeypair", "journalDir", "evidenceFile", "session", "producerJournal"}, f"preparation producer {cycle_index}/{index}")
-            files = {key: accepted_file(producer[key], f"preparation {key}") for key in ("publicManifest", "plan", "marketInput", "sellerParticipant", "buyerParticipant")}
+            exact_keys(producer, {"rpcUrl", "plan", "marketInput", "campaignReport", "buyerParticipant", "checkedExecutionRelease", "sellerTicket", "buyerTicket", "payer", "payerKeypair", "outputDir"}, f"preparation producer {cycle_index}/{index}")
+            files = {key: accepted_file(producer[key], f"preparation {key}") for key in ("plan", "marketInput", "campaignReport", "buyerParticipant", "checkedExecutionRelease", "sellerTicket", "buyerTicket")}
             try:
                 payer = activity.canonical_existing_file(
                     producer["payerKeypair"], "preparation payer keypair"
                 )
             except activity.Refusal as error:
                 raise Refusal(str(error)) from error
-            # The producer authenticates the runtime key path but does not open it.
-            journal_dir = Path(producer["journalDir"])
-            if not journal_dir.is_absolute() or journal_dir.is_symlink() or not journal_dir.parent.is_dir():
-                raise Refusal("preparation journalDir is not an absolute safe target")
-            session = output_path(producer["session"], "preparation session")
-            journal = output_path(producer["producerJournal"], "preparation producer journal")
-            evidence = output_path(producer["evidenceFile"], "preparation evidence")
-            if len({session, journal, evidence}) != 3 or any(item in seen_outputs for item in (session, journal, evidence)):
-                raise Refusal("preparation producer outputs alias or repeat across cycles")
-            seen_outputs.update((session, journal, evidence))
-            argv = [str(successor), COMMAND, "--i-mean-devnet", activity.DEVNET_GENESIS_HASH]
-            for flag, key in (("--public-manifest", "publicManifest"), ("--plan", "plan"), ("--market-input", "marketInput"), ("--seller-participant", "sellerParticipant"), ("--buyer-participant", "buyerParticipant")):
+            output = activity.canonical_directory(producer["outputDir"], "preparation output directory")
+            if output in seen_outputs:
+                raise Refusal("preparation producer output directory repeats across cycles")
+            seen_outputs.add(output)
+            try:
+                activity.pubkey_text(producer["payer"], "preparation payer")
+                rpc_url = activity.validate_rpc_url(producer["rpcUrl"], "devnet")
+            except activity.Refusal as error:
+                raise Refusal(str(error)) from error
+            argv = [str(successor), COMMAND, "--rpc-url", rpc_url, "--i-mean-devnet", activity.DEVNET_GENESIS_HASH]
+            for flag, key in (("--plan", "plan"), ("--market-input", "marketInput"), ("--campaign-report", "campaignReport"), ("--buyer-participant", "buyerParticipant"), ("--checked-execution-release", "checkedExecutionRelease"), ("--seller-ticket", "sellerTicket"), ("--buyer-ticket", "buyerTicket")):
                 argv += [flag, str(files[key][0]), f"--expected-{flag[2:]}-sha256", files[key][1]]
-            argv += ["--payer-keypair", str(payer), "--journal-dir", str(journal_dir), "--evidence-file", str(evidence), "--session", str(session), "--producer-journal", str(journal)]
+            argv += ["--payer", producer["payer"], "--payer-keypair", str(payer), "--output-dir", str(output)]
             result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
             if result.returncode != 0:
                 raise Refusal(f"preparation producer {cycle_index}/{index} refused")

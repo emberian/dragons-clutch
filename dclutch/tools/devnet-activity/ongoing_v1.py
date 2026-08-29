@@ -40,9 +40,7 @@ V4_AUTHORIZATION_BODY_SCHEMA = (
 V4_AUTHORIZATION_SCHEMA = "dclutch-devnet-activity-live-authorization-v4"
 RUN_JOURNAL_SCHEMA = "dclutch-devnet-activity-ongoing-run-journal-v1"
 CYCLE_WORK_MARKER_SCHEMA = "dclutch-devnet-activity-cycle-work-marker-v1"
-DIRECT_SESSION_PRODUCER_JOURNAL_SCHEMA = (
-    "dclutch-devnet-direct-trade-session-producer-journal-v1"
-)
+DIRECT_PRODUCER_JOURNAL_SCHEMA = "dclutch-devnet-direct-trade-producer-journal-v1"
 VERIFIER_RESULT_SCHEMA = "dclutch-ed25519-verification-v1"
 AUTHORIZATION_PHRASE = "authorize-finite-devnet-activity-v4-live-send"
 BINARY_ROLES = ("dclutch", "successor", "solana-keygen", "solana")
@@ -438,21 +436,23 @@ def authenticate_finalized_direct_session_producer(
     except activity.Refusal as error:
         raise Refusal(str(error)) from error
     expected_keys = {
-        "schema", "phase", "cluster", "genesisHash", "publicManifest",
-        "publicManifestSha256", "plan", "planSha256", "marketInput",
-        "marketInputSha256", "checkedExecutionReleaseSha256", "checkedBinaries",
-        "payer", "payerKeypair", "seller", "buyer", "sellerTicketSha256",
-        "buyerTicketSha256", "journalDir", "evidenceFile", "privateSession",
-        "privateSessionSha256", "previousStateSha256", "stateSha256",
+        "schema", "phase", "cluster", "genesisHash", "plan", "planSha256",
+        "marketInput", "marketInputSha256", "campaignReport", "campaignReportSha256",
+        "buyerParticipant", "buyerParticipantSha256", "checkedExecutionRelease",
+        "checkedExecutionReleaseSha256", "sellerTicket", "sellerTicketSha256",
+        "buyerTicket", "buyerTicketSha256", "payer", "payerKeypair", "observationSlot",
+        "publicManifest", "publicManifestSha256", "publicManifestBase64", "privateSession",
+        "privateSessionSha256", "privateSessionBase64", "journalDir", "evidenceFile",
+        "previousStateSha256", "stateSha256",
     }
     exact_keys(value, expected_keys, label)
     if (
-        value["schema"] != DIRECT_SESSION_PRODUCER_JOURNAL_SCHEMA
+        value["schema"] != DIRECT_PRODUCER_JOURNAL_SCHEMA
         or value["phase"] != "finalized"
         or value["cluster"] != "devnet"
         or value["genesisHash"] != activity.DEVNET_GENESIS_HASH
     ):
-        raise Refusal(f"{label} is not one Finalized devnet Direct producer journal")
+        raise Refusal(f"{label} is not one Finalized reachable devnet Direct producer journal")
     if digest(value["stateSha256"], f"{label} state digest") != producer_state_sha256(value):
         raise Refusal(f"{label} state digest changed")
     previous = digest(value["previousStateSha256"], f"{label} prepared predecessor")

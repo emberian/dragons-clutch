@@ -112,7 +112,7 @@ can close the cycle and expose its successor.
 Before a V4 authorization is signed, every Direct progressive adapter in every
 cycle must already have its ordinary manifest-bound private-session file and
 one distinct successor
-`dclutch-devnet-direct-trade-session-producer-journal-v1` reference in that
+`dclutch-devnet-direct-trade-producer-journal-v1` reference in that
 cycle's `directSessionProducers` list.  Each entry is exactly
 `{adapterId,journal:{path,sha256}}`, in Direct-adapter order.  The finite-plan
 parser accepts only the producer's `finalized` phase and rechecks its state
@@ -127,10 +127,13 @@ adapter never introduces a second session authority or a runtime override.
 The preceding offline preparation manifest is separately versioned as
 `dclutch-devnet-activity-direct-session-preparation-manifest-v1`.  It names an
 accepted successor binary and finite `cycles[]`; each producer entry carries
-the five accepted input file/digest pairs (public manifest, plan, Market,
-seller participant, buyer participant), the runtime payer-keypair *path*, and
-three unique output paths.  Run it before generating the V3 manifests that
-bind those produced sessions:
+the seven accepted input file/digest pairs (plan, Market, finalized founding
+campaign, admitted buyer, checked execution release, seller ticket, buyer
+ticket), an explicit devnet RPC URL, payer public key and runtime keypair
+*path*, and one unique existing empty output directory. It produces both the
+public manifest and private session; the founding seller is derived from the
+Finalized campaign, never supplied as a second admission. Run it before
+generating the V3 manifests that bind those outputs:
 
 ```sh
 python3 tools/devnet-activity/prepare_direct_sessions_v1.py \
@@ -138,10 +141,10 @@ python3 tools/devnet-activity/prepare_direct_sessions_v1.py \
   --manifest-sha256 HEX64
 ```
 
-It invokes only `devnet-direct-trade-session-produce-v1`; that successor
-command is offline and does not read its payer key bytes, call RPC, sign, or
-submit. Repeating the preparer is a journal-authenticated producer resume, not
-a newly synthesized authority.
+It invokes only `devnet-direct-trade-produce-v1`; that successor command reads
+bounded devnet state to construct the route but does not read its payer key
+bytes, sign, or submit. Repeating the preparer is a journal-authenticated
+producer resume, not a newly synthesized authority.
 
 This rung does not itself sign, generate keys, call RPC, fund, or invoke the
 child supervisor. Direct-session production is a separately accepted,
