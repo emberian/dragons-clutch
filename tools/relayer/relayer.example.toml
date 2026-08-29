@@ -86,6 +86,13 @@ relayer_key_set_staging_vacancy = "11111111111111111111111111111115"  # PLACEHOL
 compute_unit_limit = 200000
 compute_unit_price_micro_lamports = 1
 
+# The addresses here are a CLAIM the daemon checks, not a fact it trusts: at
+# submit preparation the live table is read at finalized commitment and must be
+# owned by the address-lookup-table program, not deactivating, extended strictly
+# before the read slot, and hold EXACTLY these addresses in EXACTLY this order —
+# a v0 message compiles table indexes, so a permuted or extended live table
+# would deliver a permuted account frame. Fill `addresses` from the publisher's
+# canonical extended order, never from insertion order.
 # [submit.address_lookup_table]
 # key = "1111111111111111111111111111111B"                            # PLACEHOLDER
 # addresses = ["1111111111111111111111111111111C"]                    # PLACEHOLDER

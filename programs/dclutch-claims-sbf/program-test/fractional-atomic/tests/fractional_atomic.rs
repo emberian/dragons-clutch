@@ -102,8 +102,7 @@ fn selection_config_digest(terms_bytes: &[u8]) -> [u8; 32] {
         FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
         encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
     };
-    use sha2::{Digest as _, Sha256};
-    let terms_digest: [u8; 32] = Sha256::digest(terms_bytes).into();
+    let terms_digest: [u8; 32] = hash(terms_bytes).to_bytes();
     let terms = FractionalExposureTermsV2::decode(
         terms_bytes,
         FractionalExposureTermsAdmissionV2 {
@@ -123,7 +122,7 @@ fn selection_config_digest(terms_bytes: &[u8]) -> [u8; 32] {
         &mut config,
     )
     .expect("campaign selection config");
-    Sha256::digest(config).into()
+    hash(&config).to_bytes()
 }
 
 fn actor_keypair() -> Keypair {

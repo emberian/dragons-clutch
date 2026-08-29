@@ -112,6 +112,83 @@ pub fn is_loader_v3_programdata(expected_owner: &[u8; ID_BYTES], inline_len: u16
             == dclutch_relay_contract::LOADER_V3_PROGRAMDATA_METADATA_BYTES_V1
 }
 
+/// The address-lookup-table program, whose table accounts route the two
+/// oversized frames in this family.  Like the Loader V3 prefix above, only the
+/// runtime's own layout is named here — the table is *carried*, never
+/// interpreted: the daemon reads exactly the three fields it needs to refuse a
+/// table that would compile a wire the cluster cannot load.
+pub const ADDRESS_LOOKUP_TABLE_PROGRAM_ID_BASE58: &str =
+    "AddressLookupTab1e1111111111111111111111111";
+
+/// Bytes of [`ADDRESS_LOOKUP_TABLE_PROGRAM_ID_BASE58`].
+pub const ADDRESS_LOOKUP_TABLE_PROGRAM_ID: [u8; ID_BYTES] = [
+    2, 119, 166, 175, 151, 51, 155, 122, 200, 141, 24, 146, 201, 4, 70, 245, 0, 2, 48, 146, 102,
+    246, 46, 83, 193, 24, 36, 73, 130, 0, 0, 0,
+];
+
+/// The `ProgramState::LookupTable` discriminant, a `u32` LE at offset 0.
+pub const LOOKUP_TABLE_DISCRIMINANT: u32 = 1;
+
+/// Serialized width of `LookupTableMeta`; the address list begins here.
+pub const LOOKUP_TABLE_META_BYTES: usize = 56;
+
+/// Offset of `LookupTableMeta.deactivation_slot`, a `u64` LE.
+pub const LOOKUP_TABLE_DEACTIVATION_SLOT_OFFSET: usize = 4;
+
+/// Offset of `LookupTableMeta.last_extended_slot`, a `u64` LE.
+pub const LOOKUP_TABLE_LAST_EXTENDED_SLOT_OFFSET: usize = 12;
+
+/// The three facts of a live lookup table, read at pinned offsets.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LookupTableFacts {
+    /// `u64::MAX` for a live table; anything else is deactivating or dead.
+    pub deactivation_slot: u64,
+    /// The slot of the last extension; the table serves lookups only for
+    /// messages compiled against a slot strictly after this.
+    pub last_extended_slot: u64,
+    /// The stored addresses, in table order.
+    pub addresses: Vec<[u8; ID_BYTES]>,
+}
+
+/// Decode a lookup-table account's three routing-relevant facts.
+///
+/// Returns `None` for anything that is not an initialized lookup table with a
+/// whole number of stored addresses — a refusal, not a fallback, exactly as
+/// with the Loader V3 readers above.
+pub fn lookup_table_facts(account_data: &[u8]) -> Option<LookupTableFacts> {
+    let discriminant: [u8; 4] = account_data.get(..4)?.try_into().ok()?;
+    if u32::from_le_bytes(discriminant) != LOOKUP_TABLE_DISCRIMINANT {
+        return None;
+    }
+    let deactivation_slot = u64::from_le_bytes(
+        account_data
+            .get(LOOKUP_TABLE_DEACTIVATION_SLOT_OFFSET..LOOKUP_TABLE_DEACTIVATION_SLOT_OFFSET + 8)?
+            .try_into()
+            .ok()?,
+    );
+    let last_extended_slot = u64::from_le_bytes(
+        account_data
+            .get(
+                LOOKUP_TABLE_LAST_EXTENDED_SLOT_OFFSET..LOOKUP_TABLE_LAST_EXTENDED_SLOT_OFFSET + 8,
+            )?
+            .try_into()
+            .ok()?,
+    );
+    let stored = account_data.get(LOOKUP_TABLE_META_BYTES..)?;
+    if stored.len() % ID_BYTES != 0 {
+        return None;
+    }
+    let addresses = stored
+        .chunks_exact(ID_BYTES)
+        .map(|chunk| chunk.try_into().ok())
+        .collect::<Option<Vec<[u8; ID_BYTES]>>>()?;
+    Some(LookupTableFacts {
+        deactivation_slot,
+        last_extended_slot,
+        addresses,
+    })
+}
+
 /// The Instructions sysvar, used only to select the preceding precompile.
 pub const INSTRUCTIONS_SYSVAR_ID_BASE58: &str = "Sysvar1nstructions1111111111111111111111111";
 
@@ -186,6 +263,55 @@ mod tests {
             base58(&dclutch_relay_contract::signature::ED25519_PROGRAM_ID_3_0),
             "Ed25519SigVerify111111111111111111111111111"
         );
+    }
+
+    #[test]
+    fn the_lookup_table_program_id_is_its_base58_spelling() {
+        assert_eq!(
+            base58(&ADDRESS_LOOKUP_TABLE_PROGRAM_ID),
+            ADDRESS_LOOKUP_TABLE_PROGRAM_ID_BASE58
+        );
+    }
+
+    fn lookup_table_bytes(
+        deactivation_slot: u64,
+        last_extended_slot: u64,
+        addresses: &[[u8; ID_BYTES]],
+    ) -> Vec<u8> {
+        let mut data = vec![0u8; LOOKUP_TABLE_META_BYTES];
+        data[..4].copy_from_slice(&LOOKUP_TABLE_DISCRIMINANT.to_le_bytes());
+        data[LOOKUP_TABLE_DEACTIVATION_SLOT_OFFSET..LOOKUP_TABLE_DEACTIVATION_SLOT_OFFSET + 8]
+            .copy_from_slice(&deactivation_slot.to_le_bytes());
+        data[LOOKUP_TABLE_LAST_EXTENDED_SLOT_OFFSET..LOOKUP_TABLE_LAST_EXTENDED_SLOT_OFFSET + 8]
+            .copy_from_slice(&last_extended_slot.to_le_bytes());
+        for address in addresses {
+            data.extend_from_slice(address);
+        }
+        data
+    }
+
+    #[test]
+    fn a_lookup_table_yields_its_three_facts_in_stored_order() {
+        let stored = [[0x11u8; ID_BYTES], [0x22u8; ID_BYTES], [0x33u8; ID_BYTES]];
+        let data = lookup_table_bytes(u64::MAX, 4_242, &stored);
+        let facts = lookup_table_facts(&data).expect("an initialized table decodes");
+        assert_eq!(facts.deactivation_slot, u64::MAX);
+        assert_eq!(facts.last_extended_slot, 4_242);
+        assert_eq!(facts.addresses, stored.to_vec());
+    }
+
+    #[test]
+    fn a_lookup_table_that_is_not_one_refuses() {
+        // Uninitialized discriminant.
+        let mut data = lookup_table_bytes(u64::MAX, 1, &[[0x44u8; ID_BYTES]]);
+        data[..4].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(lookup_table_facts(&data), None);
+        // A torn address tail.
+        let mut torn = lookup_table_bytes(u64::MAX, 1, &[[0x44u8; ID_BYTES]]);
+        torn.truncate(torn.len() - 1);
+        assert_eq!(lookup_table_facts(&torn), None);
+        // Shorter than the meta itself.
+        assert_eq!(lookup_table_facts(&[1, 0, 0, 0]), None);
     }
 
     #[test]

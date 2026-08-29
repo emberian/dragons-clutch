@@ -17,7 +17,7 @@ use dclutch_relayer::artifacts::ArtifactWriter;
 use dclutch_relayer::config::{Config, endpoint_host_for_display};
 use dclutch_relayer::delivery::{
     DeliveryAction, DeliveryExpectation, DeliveryJournal, LaunchExpectation,
-    reconcile_finalized_record, require_live_launch_accounts,
+    reconcile_finalized_record, require_live_launch_accounts, require_live_lookup_table,
 };
 use dclutch_relayer::error::{RelayerError, Result};
 use dclutch_relayer::id32::{ID_BYTES, base58, parse_id32, to_hex};
@@ -613,6 +613,9 @@ async fn prepare_submission(config: &Config) -> Result<Submitter> {
         base58(&submit.expected_genesis_hash)
     );
     require_live_launch_contract(&rpc, submit, capability).await?;
+    if let Some(table) = submit.address_lookup_table.as_ref() {
+        require_live_lookup_table_contract(&rpc, table).await?;
+    }
 
     Ok(Submitter {
         rpc,
@@ -684,6 +687,49 @@ async fn require_live_launch_contract(
         to_hex(&capability.accepted_caller_receipt_sha256),
         capability.relay_program_deployment_slot,
         read.slot
+    );
+    Ok(())
+}
+
+/// Read the configured lookup table live and refuse a stale or permuted one.
+///
+/// Until this check the `[submit.address_lookup_table]` list was trusted
+/// verbatim.  A v0 message compiles table *indexes*, so a configured order
+/// that differs from the stored order delivers a permuted account frame the
+/// program refuses while the table looks healthy from every other angle.  The
+/// slice width is the exact expected table width; the full-width pin inside
+/// the gate makes a longer table refuse rather than truncate into a match.
+async fn require_live_lookup_table_contract(
+    rpc: &RpcClient,
+    table: &dclutch_relayer::config::AddressLookupTableConfig,
+) -> Result<()> {
+    let expected_len = dclutch_relayer::chain::LOOKUP_TABLE_META_BYTES
+        + dclutch_relayer::id32::ID_BYTES * table.addresses.len();
+    let slice_len = u16::try_from(expected_len).map_err(|_| {
+        RelayerError::MissingCapability(format!(
+            "configured lookup table {} would be {} bytes; no loadable table is that wide",
+            base58(&table.key),
+            expected_len
+        ))
+    })?;
+    let read = rpc
+        .get_multiple_accounts(&[table.key], slice_len, None)
+        .await?;
+    let live = read
+        .accounts
+        .first()
+        .and_then(Option::as_ref)
+        .ok_or_else(|| {
+            RelayerError::MissingCapability(format!(
+                "configured lookup table {} does not exist on the submit cluster",
+                base58(&table.key)
+            ))
+        })?;
+    require_live_lookup_table(table, live, read.slot)?;
+    println!(
+        "lookup table {}: live, activated, {} addresses in the configured order",
+        base58(&table.key),
+        table.addresses.len()
     );
     Ok(())
 }
