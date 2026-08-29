@@ -12,7 +12,7 @@ use dclutch_account_profile_contract::{
         CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
     },
     v2::{
-        AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+        AccountProfileV2, AliasKindV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
     },
 };
@@ -38,6 +38,7 @@ use solana_program::hash::hash;
 use crate::projected_market_v2::AuthenticatedFoundSpanV2;
 
 use super::{
+    account_profile_v4::SERIES_CONSUME_TICKET_REPLAY_COORDINATE_V4,
     artifacts_v3::{
         SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ACTION_SELECTOR_OFFSET_V3,
         SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
@@ -111,6 +112,15 @@ pub enum SeriesArtifactErrorV4 {
     AccountProfile,
     /// Lifecycle schema, content, hostile decoding, or action plan refused.
     Lifecycle,
+    /// A lifecycle plan claimed the Ticket replay coordinate.
+    ///
+    /// The Ticket's lamport flow has exactly one author — the funding path
+    /// (`super::commit_plans::PendingFundingPlanV3::ticket_capability_refund`).
+    /// A policy whose plan names the Ticket as its state, payer, or RentCredit
+    /// — directly or through a route alias — would be a second author for that
+    /// flow, so it is refused here as its own named wall rather than folded
+    /// into the generic lifecycle refusal.
+    TicketAuthorship,
     /// RequestProfile schema, content, hostile decoding, or projection refused.
     RequestProfile,
     /// ExecutionStrategy schema, content, or transport refused.
@@ -257,6 +267,7 @@ pub fn authenticate_series_consume_artifacts_v4<'a>(
     {
         return Err(SeriesArtifactErrorV4::Lifecycle);
     }
+    require_root_only_series_lifecycle(lifecycle_policy, account_profile)?;
 
     require_artifact(
         descriptor.request_profile(),
@@ -329,6 +340,71 @@ pub fn authenticate_series_consume_artifacts_v4<'a>(
         transition,
         effect,
     })
+}
+
+/// Refuse any lifecycle plan that claims the Ticket replay coordinate.
+///
+/// The 1b8228e9 ruling: the policy covers the states Series routes create and
+/// own — the root — while the Ticket appears in the Consume frame as a
+/// referenced coordinate only, its lamport flow authored solely by the
+/// funding path. This wall makes a second author *refused*, not merely
+/// unwritten: every plan of every declared Series action is walked, and a
+/// state, payer, or RentCredit coordinate that is the Ticket — or a route
+/// alias resolving to it — refuses with its own code.
+///
+/// The walk runs after `validate_account_profile` has already joined the
+/// policy to this exact profile, so item-scoped plans (impossible against a
+/// zero-stride profile) and out-of-range coordinates are refused before this
+/// is reached; the per-plan re-join inside `project_account_indices` is one
+/// extra pass over a policy this small.
+fn require_root_only_series_lifecycle(
+    policy: StateLifecyclePolicyV5<'_>,
+    profile: AccountProfileV2<'_>,
+) -> Result<()> {
+    let is_ticket = |index: usize| -> Result<bool> {
+        if index == usize::from(SERIES_CONSUME_TICKET_REPLAY_COORDINATE_V4) {
+            return Ok(true);
+        }
+        let coordinate =
+            u16::try_from(index).map_err(|_| SeriesArtifactErrorV4::TicketAuthorship)?;
+        let rule = profile
+            .rule(false, coordinate)
+            .map_err(|_| SeriesArtifactErrorV4::TicketAuthorship)?;
+        Ok(rule.alias_kind() == AliasKindV2::Fixed
+            && rule.alias_index() == SERIES_CONSUME_TICKET_REPLAY_COORDINATE_V4)
+    };
+    for action in [
+        SeriesActionV3::Prepare,
+        SeriesActionV3::Consume,
+        SeriesActionV3::Expire,
+        SeriesActionV3::Retire,
+        SeriesActionV3::Close,
+    ] {
+        let plans = policy
+            .action_plan_count(action as u32)
+            .map_err(|_| SeriesArtifactErrorV4::Lifecycle)?;
+        let mut ordinal = 0_u16;
+        while ordinal < plans {
+            let selected = policy
+                .action_plan(action as u32, ordinal)
+                .map_err(|_| SeriesArtifactErrorV4::Lifecycle)?;
+            let indices = selected
+                .project_account_indices(profile, 0, None)
+                .map_err(|_| SeriesArtifactErrorV4::Lifecycle)?;
+            for coordinate in [Some(indices.state()), indices.payer(), indices.rent_credit()]
+                .into_iter()
+                .flatten()
+            {
+                if is_ticket(coordinate)? {
+                    return Err(SeriesArtifactErrorV4::TicketAuthorship);
+                }
+            }
+            ordinal = ordinal
+                .checked_add(1)
+                .ok_or(SeriesArtifactErrorV4::Lifecycle)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
@@ -611,6 +687,127 @@ mod tests {
             ),
             Err(SeriesArtifactErrorV4::Effect)
         );
+    }
+
+    /// Encode one hostile V5 policy whose Consume plan names `state` and,
+    /// optionally, a RentCredit coordinate. Everything else is minimal and
+    /// well-formed, so the only wall left to refuse it is the Ticket pin.
+    fn hostile_policy(state: u16, rent_credit: Option<u16>) -> alloc::vec::Vec<u8> {
+        use dclutch_account_profile_contract::lifecycle_v3::{
+            ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
+            encode::{
+                LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
+                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
+                LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
+            },
+        };
+        use dclutch_series_v3_kernel::request::SeriesActionV3;
+
+        let recipes = [LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(state),
+            seed_start: 0,
+            seed_count: 2,
+            bump_offset: 1,
+            data_base: 64,
+            data_stride: 0,
+        }];
+        let seeds = [
+            LifecycleSeedInputV3::Literal(b"hostile-second-author"),
+            LifecycleSeedInputV3::CanonicalBump,
+        ];
+        // A refund claim needs a Close plan: the wire format itself refuses a
+        // RentCredit on an Authenticate plan, so the claiming shape is "close
+        // the state to the Ticket".
+        let plans = [match rent_credit {
+            None => LifecyclePlanInputV3 {
+                action: SeriesActionV3::Consume as u32,
+                operation: LifecycleOperationInputV3::Authenticate,
+                recipe: 0,
+                payer: None,
+                rent_credit: None,
+                principal: None,
+                beneficiary: None,
+                guard: LifecycleGuardInputV3::Always,
+            },
+            Some(credit) => LifecyclePlanInputV3 {
+                action: SeriesActionV3::Consume as u32,
+                operation: LifecycleOperationInputV3::Close,
+                recipe: 0,
+                payer: None,
+                rent_credit: Some(LifecycleAccountCoordinateV3::fixed(credit)),
+                principal: Some(LifecycleRegisterCoordinateV3::common(0)),
+                beneficiary: Some(LifecycleRegisterCoordinateV3::common(0)),
+                guard: LifecycleGuardInputV3::Always,
+            },
+        }];
+        let width =
+            HEADER_BYTES + RECIPE_BYTES + 2 * SEED_BYTES + ACTION_PLAN_BYTES + PROTECTED_OUTPUT_BYTES;
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_lifecycle_policy_v5_atomic(
+            &recipes, &seeds, &plans, &[None], &[], &[], &mut scratch, &mut output,
+        )
+        .expect("hostile policy encodes");
+        output
+    }
+
+    fn decoded_profile() -> alloc::vec::Vec<u8> {
+        let lengths = [0_u32; SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize];
+        let mut scratch = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        let mut bytes = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        encode_series_consume_account_profile_v4_atomic(
+            SeriesConsumeAccountProfileInputV4 {
+                fixed_data_lengths: &lengths,
+            },
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("Series Profile13");
+        bytes
+    }
+
+    /// A policy claiming the Ticket refuses at its own named wall — as the
+    /// plan's state, as its RentCredit, and through the route alias — while
+    /// the canonical root-only policy passes the same wall.
+    ///
+    /// The refusal CODE is asserted, not just failure: a hostile that only
+    /// proved "something refused" would stay green if the policy died at the
+    /// generic lifecycle join instead of at the second-author pin.
+    #[test]
+    fn a_ticket_claiming_policy_refuses_at_the_ticket_authorship_wall() {
+        let profile_bytes = decoded_profile();
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("Profile13");
+        let wall = |bytes: &[u8]| {
+            let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], bytes)
+                .expect("hostile policy decodes: the pin, not the decoder, must refuse it");
+            require_root_only_series_lifecycle(policy, profile)
+        };
+        // Claimed as the plan's own state.
+        assert_eq!(
+            wall(&hostile_policy(59, None)),
+            Err(SeriesArtifactErrorV4::TicketAuthorship)
+        );
+        // Claimed as the refund destination of a root plan.
+        assert_eq!(
+            wall(&hostile_policy(0, Some(59))),
+            Err(SeriesArtifactErrorV4::TicketAuthorship)
+        );
+        // Claimed through the authenticated route alias (140 -> 59).
+        assert_eq!(
+            wall(&hostile_policy(140, None)),
+            Err(SeriesArtifactErrorV4::TicketAuthorship)
+        );
+        // Control: the canonical root-only policy passes this exact wall.
+        let mut scratch =
+            vec![0_u8; crate::series::lifecycle_policy_v5::SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
+        let mut canonical =
+            vec![0_u8; crate::series::lifecycle_policy_v5::SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5];
+        crate::series::lifecycle_policy_v5::encode_series_consume_state_lifecycle_v5_atomic(
+            &mut scratch,
+            &mut canonical,
+        )
+        .expect("canonical policy");
+        assert_eq!(wall(&canonical), Ok(()));
     }
 
     #[test]

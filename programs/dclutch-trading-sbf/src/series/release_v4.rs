@@ -337,7 +337,7 @@ mod tests {
     /// The lifecycle spec is a checklist against the verifier, not prose.
     #[test]
     fn the_lifecycle_requirements_are_stated_as_a_checklist() {
-        assert_eq!(SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4.len(), 4);
+        assert_eq!(SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4.len(), 5);
         assert!(
             SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4
                 .iter()
@@ -411,20 +411,28 @@ mod tests {
 ///    likely to fail, and the reason the two artifacts cannot be authored
 ///    independently.
 /// 4. `action_plan_count(SeriesActionV3::Consume as u32) != 0` — the policy
-///    must declare at least one creation plan **for Consume specifically**. A
-///    policy that covered only Prepare or Expire would decode, validate
-///    against the profile, and still be refused here.
+///    must declare at least one plan **for Consume specifically**. A policy
+///    that covered only Prepare or Expire would decode, validate against the
+///    profile, and still be refused here.
+/// 5. `require_root_only_series_lifecycle` — no plan of any declared Series
+///    action may name the Ticket replay coordinate as its state, payer, or
+///    RentCredit, directly or through a route alias. The Ticket's lamport
+///    flow has one author (the funding path's `ticket_capability_refund`),
+///    and a second author refuses with its own code,
+///    `SeriesArtifactErrorV4::TicketAuthorship`.
 ///
-/// The open questions are which states step 3 must cover and who the refund
-/// beneficiary is; both are stated in this module's header. Step 4 is the one
-/// that makes the ruling urgent rather than cosmetic: without a Consume plan
-/// there is no admissible Series release at all, so this is not a field that
-/// can be left empty and filled in later.
-pub const SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4: [&str; 4] = [
+/// The questions this list once left open — which states step 3 covers and
+/// who receives the refund — were ruled (WAVE.md, 1b8228e9) and are answered
+/// by [`super::lifecycle_policy_v5`]: the root only, with the Ticket claim a
+/// pinned refusal (step 5), every pin derived at emit time, and the refund
+/// recipient a rule rather than an identity in the policy bytes.
+pub const SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4: [&str; 5] = [
     "descriptor lifecycle reference carries CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 and sha256 of \
      the exact policy bytes",
     "the bytes decode via StateLifecyclePolicyV5::decode_selected at that digest",
     "validate_account_profile accepts it against the Series Consume Profile13 this module emits",
     "action_plan_count(SeriesActionV3::Consume) is nonzero, so a Prepare-only or Expire-only \
      policy is refused",
+    "no plan names the Ticket replay coordinate as state, payer, or RentCredit - directly or via \
+     route alias - so a second author for the Ticket's lamport flow refuses as TicketAuthorship",
 ];
