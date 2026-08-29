@@ -20,6 +20,7 @@
 use std::vec::Vec;
 
 use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
+use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
     scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1,
@@ -32,7 +33,10 @@ use dclutch_dealer_codec::{
 use dclutch_operator::{
     dealer_scenario_checkpoint_v1::{
         DealerScenarioCheckpointJournalV1, DealerScenarioCheckpointRouteV1,
-        DealerScenarioEvaluationBodiesV1, build_dealer_scenario_checkpoint_create_v1,
+        DealerAcceptedEvaluationAccountsV4, DealerAcceptedReservationAccountsV4,
+        DealerAcceptedTranscriptInputV4, DealerScenarioCommitAccountsV1,
+        DealerScenarioCommitEffectAccountsV1, DealerScenarioEvaluationBodiesV1,
+        build_dealer_accepted_transcript_v4, build_dealer_scenario_checkpoint_create_v1,
         build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
         dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
         dealer_scenario_membership_manifest_address_v1,
@@ -58,12 +62,13 @@ use dclutch_trading_sbf::dealer::{
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
     hash::{Hash, hash},
-    instruction::Instruction,
+    instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
+use solana_message_v3::AddressLookupTableAccount;
 use solana_sdk::transaction::TransactionError;
 use solana_sdk_ids::{system_program, sysvar};
 use solana_transaction::Transaction;
@@ -935,4 +940,190 @@ fn custom_code(result: &Result<(), TransactionError>) -> Option<u32> {
         )) => Some(*code),
         _ => None,
     }
+}
+
+/// The exact Claims SignedDelta frame the final commit carries.
+///
+/// Every privilege and every role comes from the Claims frame specification;
+/// the campaign only supplies identities, and the one identity it is not free
+/// to choose is the caller program.
+fn claims_frame(trading_program: Pubkey) -> Vec<AccountMeta> {
+    let spec = SignedDeltaFrameSpecV3::new(2).expect("two-position Claims frame");
+    let count = spec.account_count().expect("frame width");
+    (0..count)
+        .map(|index| {
+            let account = spec.account(index).expect("frame account");
+            let key = if matches!(account.role(), ClaimsFrameRoleV1::CallerProgram) {
+                trading_program
+            } else {
+                let mut seed = [0_u8; 32];
+                seed[0] = 0x5c;
+                seed[1] = u8::try_from(index).expect("small frame index");
+                Pubkey::new_from_array(seed)
+            };
+            if account.privileges().writable() {
+                AccountMeta::new(key, false)
+            } else {
+                AccountMeta::new_readonly(key, false)
+            }
+        })
+        .collect()
+}
+
+/// A distinct campaign-owned identity for a route the transcript names.
+fn named(tag: u8) -> Pubkey {
+    let mut seed = [0_u8; 32];
+    seed[0] = 0x6d;
+    seed[1] = tag;
+    Pubkey::new_from_array(seed)
+}
+
+/// The address table a caller resolves the wide routes through.
+///
+/// The transition does not fit the 1,232-byte packet ceiling as static
+/// addresses, which is a fact about the transition and not about this harness:
+/// the operator refuses to emit a transcript whose legs cannot be sent.
+fn lookup_table(scenario: &Scenario, commit: &DealerScenarioCommitAccountsV1) -> AddressLookupTableAccount {
+    let mut addresses = scenario.membership.clone();
+    addresses.extend(commit.claims_accounts.iter().map(|meta| meta.pubkey));
+    addresses.extend([
+        scenario.membership_manifest,
+        commit.evaluation_receipt,
+        CANDIDATE_BANK,
+        CANDIDATE_OBLIGATION,
+        CLAIMS_DELTA,
+        EFFECTS,
+        EFFECT_BODY,
+        MANIFEST_PRODUCER,
+        BENEFICIARY,
+        commit.custody_program,
+        commit.custody_programdata,
+        commit.batch,
+        named(3),
+        named(4),
+        named(5),
+        named(6),
+    ]);
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    AddressLookupTableAccount {
+        key: Pubkey::new_from_array([0x7b; 32]),
+        addresses,
+    }
+}
+
+/// Build the complete accepted-transition transcript for this scenario.
+fn transcript(
+    scenario: &Scenario,
+    payer: Pubkey,
+    receipt_address: Pubkey,
+) -> dclutch_operator::dealer_scenario_checkpoint_v1::DealerAcceptedTranscriptV4 {
+    let reservations = [DealerAcceptedReservationAccountsV4 {
+        custody_program: named(1),
+        custody_programdata: named(2),
+        activation_cache: named(3),
+        registry_program: named(4),
+        reservation_receipt: named(5),
+        reservation_state: named(6),
+        effect_producer: MANIFEST_PRODUCER,
+        effect_manifest: EFFECTS,
+        effect_body: EFFECT_BODY,
+    }];
+    let commit = DealerScenarioCommitAccountsV1 {
+        trading_program: TRADING,
+        payer,
+        checkpoint: scenario.checkpoint,
+        clock: sysvar::clock::ID,
+        request: REQUEST,
+        evaluation_receipt: receipt_address,
+        candidate_bank: CANDIDATE_BANK,
+        candidate_obligation: CANDIDATE_OBLIGATION,
+        claims_delta: CLAIMS_DELTA,
+        effects: EFFECTS,
+        root: CHILD_ROOT,
+        obligation: scenario.obligation,
+        custody_program: named(1),
+        custody_programdata: named(2),
+        batch: named(7),
+        claims_accounts: claims_frame(TRADING),
+        effect_accounts: core::array::from_fn(|index| {
+            if index == 0 {
+                DealerScenarioCommitEffectAccountsV1 {
+                    reservation_receipt: named(5),
+                    reservation_state: named(6),
+                }
+            } else {
+                DealerScenarioCommitEffectAccountsV1::default()
+            }
+        }),
+        effect_count: 1,
+    };
+    let tables = [lookup_table(scenario, &commit)];
+    build_dealer_accepted_transcript_v4(DealerAcceptedTranscriptInputV4 {
+        trading_program: TRADING,
+        payer,
+        dealer_authority: scenario.dealer.pubkey(),
+        refund_beneficiary: BENEFICIARY,
+        request: REQUEST,
+        request_digest: scenario.request_digest,
+        root: CHILD_ROOT,
+        obligation: scenario.obligation,
+        clock: sysvar::clock::ID,
+        rent: sysvar::rent::ID,
+        system_program: system_program::ID,
+        manifest_producer: MANIFEST_PRODUCER,
+        membership_manifest: scenario.membership_manifest,
+        pages: &scenario.pages,
+        evaluation: DealerAcceptedEvaluationAccountsV4 {
+            producer_program: MANIFEST_PRODUCER,
+            evaluation_receipt: receipt_address,
+            candidate_bank: CANDIDATE_BANK,
+            candidate_obligation: CANDIDATE_OBLIGATION,
+            claims_delta: CLAIMS_DELTA,
+            effects: EFFECTS,
+        },
+        reservations: &reservations,
+        commit: &commit,
+        recent_blockhash: Hash::default(),
+        lookup_tables: &tables,
+    })
+    .expect("the whole accepted transition is one lock-bounded transcript")
+}
+
+#[tokio::test]
+async fn the_accepted_transcript_is_ordered_and_wholly_lock_bounded() {
+    let scenario = scenario();
+    let payer = Pubkey::new_from_array([0x7a; 32]);
+    let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
+        MANIFEST_PRODUCER,
+        scenario.checkpoint,
+        scenario.request_digest,
+    );
+    let transcript = transcript(&scenario, payer, receipt_address);
+    assert_eq!(transcript.checkpoint, scenario.checkpoint);
+    assert_eq!(
+        transcript.routes(),
+        vec![
+            DealerScenarioCheckpointRouteV1::Create,
+            DealerScenarioCheckpointRouteV1::Page(0),
+            DealerScenarioCheckpointRouteV1::Page(1),
+            DealerScenarioCheckpointRouteV1::Page(2),
+            DealerScenarioCheckpointRouteV1::Page(3),
+            DealerScenarioCheckpointRouteV1::Page(4),
+            DealerScenarioCheckpointRouteV1::Page(5),
+            DealerScenarioCheckpointRouteV1::Evaluate,
+            DealerScenarioCheckpointRouteV1::Reserve(0),
+            DealerScenarioCheckpointRouteV1::Commit,
+        ],
+        "the accepted transition has exactly one canonical route order"
+    );
+    assert!(
+        transcript.peak_account_lock_count() <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "the whole transition fits the ceiling the unsplit 121-lock instruction cannot: peak {}",
+        transcript.peak_account_lock_count()
+    );
+    assert_eq!(
+        transcript.journal.next_page, 0,
+        "the transcript hands back a journal positioned before its first submission"
+    );
 }
