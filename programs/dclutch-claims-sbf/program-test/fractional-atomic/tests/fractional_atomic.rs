@@ -313,18 +313,23 @@ fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
     bytes
 }
 
+/// One action's exact wrapper bytes and its release-scoped caller authority.
+struct ActionArm {
+    caller_authority: Pubkey,
+    wrapper: Vec<u8>,
+}
+
 struct Fixture {
     shared: NarrowFixtureV2,
     activation_cache: Pubkey,
-    caller_authority: Pubkey,
+    wrap: ActionArm,
+    unwrap: ActionArm,
     root: Pubkey,
     terms_record: NarrowRecordV2,
     behavior_record: NarrowRecordV2,
     shard_mint: Pubkey,
     holder_token: Pubkey,
     actor: Pubkey,
-    wrapper: Vec<u8>,
-    request: FractionalExposureRequestV2,
 }
 
 fn fixture() -> (ProgramTest, Fixture) {
@@ -522,71 +527,90 @@ fn fixture() -> (ProgramTest, Fixture) {
     );
     add_account(&mut test, actor, system_program::ID, Vec::new());
 
-    let request = FractionalExposureRequestV2::new(
-        FractionalExposureActionV2::Wrap,
-        FractionalExposureRequestInputV2 {
+    let mut arm = |action: FractionalExposureActionV2, test: &mut ProgramTest| -> ActionArm {
+        // Wrap counts native Claims; WholeUnwrap counts shard atoms, and
+        // divide_exposure_shards_v2 splits those back into whole Claims and
+        // change. The inverse of wrapping 7 Claims is unwrapping 7 * D shards.
+        let (source, destination, quantity) = match action {
+            FractionalExposureActionV2::Wrap => {
+                ([0; 32], holder_token.to_bytes(), WRAP_NATIVE_CLAIMS)
+            }
+            FractionalExposureActionV2::WholeUnwrap => (
+                holder_token.to_bytes(),
+                [0; 32],
+                WRAP_NATIVE_CLAIMS * DENOMINATOR,
+            ),
+            _ => panic!("this campaign drives only the two atomic open-market actions"),
+        };
+        let request = FractionalExposureRequestV2::new(
+            action,
+            FractionalExposureRequestInputV2 {
+                release_set,
+                market: core_market.to_bytes(),
+                product_record: shared.product.digest,
+                result_domain: shared.result_domain.digest,
+                terms: terms_record.digest,
+                token_behavior: behavior_record.digest,
+                exposure: [0x7a; 32],
+                owner: actor.to_bytes(),
+                source_token_account: source,
+                destination_token_account: destination,
+                terminal_digest: [0; 32],
+                expected_revision: ROOT_REVISION,
+                quantity,
+                representation_coordinate: OUTCOME,
+            },
+        )
+        .expect("canonical Fractional request");
+        let request_bytes = request.to_bytes().expect("request bytes");
+        let request_digest = hash(&request_bytes).to_bytes();
+        let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
             release_set,
-            market: core_market.to_bytes(),
-            product_record: shared.product.digest,
-            result_domain: shared.result_domain.digest,
-            terms: terms_record.digest,
-            token_behavior: behavior_record.digest,
-            exposure: [0x7a; 32],
-            owner: actor.to_bytes(),
-            source_token_account: [0; 32],
-            destination_token_account: holder_token.to_bytes(),
-            terminal_digest: [0; 32],
-            expected_revision: ROOT_REVISION,
-            quantity: WRAP_NATIVE_CLAIMS,
-            representation_coordinate: OUTCOME,
-        },
-    )
-    .expect("canonical Fractional wrap request");
-    let request_bytes = request.to_bytes().expect("request bytes");
-    let request_digest = hash(&request_bytes).to_bytes();
-
-    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
-        release_set,
-        core_market.to_bytes(),
-        ExecutionRoleV1::Trading,
-        terms_record.digest,
-        request_digest,
-    )
-    .expect("caller authority seeds");
-    let caller_authority =
-        Pubkey::find_program_address(&caller_seeds.as_slices(), &TEST_CALLER_PROGRAM_ID).0;
-    add_account(&mut test, caller_authority, system_program::ID, Vec::new());
-
-    let mut wrapper = Vec::with_capacity(FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES);
-    wrapper.push(0);
-    wrapper.extend_from_slice(&request_bytes);
-    assert_eq!(wrapper.len(), FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES);
+            core_market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            terms_record.digest,
+            request_digest,
+        )
+        .expect("caller authority seeds");
+        let caller_authority =
+            Pubkey::find_program_address(&caller_seeds.as_slices(), &TEST_CALLER_PROGRAM_ID).0;
+        add_account(test, caller_authority, system_program::ID, Vec::new());
+        let mut wrapper = Vec::with_capacity(FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES);
+        wrapper.push(0);
+        wrapper.extend_from_slice(&request_bytes);
+        assert_eq!(wrapper.len(), FRACTIONAL_ATOMIC_TEST_WRAPPER_BYTES);
+        ActionArm {
+            caller_authority,
+            wrapper,
+        }
+    };
+    let wrap = arm(FractionalExposureActionV2::Wrap, &mut test);
+    let unwrap = arm(FractionalExposureActionV2::WholeUnwrap, &mut test);
 
     (
         test,
         Fixture {
             shared,
             activation_cache: activation_cache_key,
-            caller_authority,
+            wrap,
+            unwrap,
             root,
             terms_record,
             behavior_record,
             shard_mint,
             holder_token,
             actor,
-            wrapper,
-            request,
         },
     )
 }
 
 /// The exact 31-account production frame, in contract coordinate order.
-fn child_accounts(fixture: &Fixture) -> Vec<AccountMeta> {
+fn child_accounts(fixture: &Fixture, arm: &ActionArm) -> Vec<AccountMeta> {
     let shared = &fixture.shared;
     // Claims recomputes the two Position coordinates sorted by owner bytes.
     let [position_0, position_1] = shared.ordered_positions();
     let accounts = vec![
-        AccountMeta::new_readonly(fixture.caller_authority, false),
+        AccountMeta::new_readonly(arm.caller_authority, false),
         AccountMeta::new(shared.claims_market, false),
         AccountMeta::new_readonly(shared.linked_basis.raw, false),
         AccountMeta::new_readonly(shared.linked_basis.staging, false),
@@ -622,11 +646,11 @@ fn child_accounts(fixture: &Fixture) -> Vec<AccountMeta> {
     accounts
 }
 
-fn instruction(fixture: &Fixture, fail_after: bool) -> Instruction {
+fn instruction(fixture: &Fixture, arm: &ActionArm, fail_after: bool) -> Instruction {
     let mut accounts = Vec::with_capacity(FRACTIONAL_ATOMIC_ACCOUNT_COUNT_V3 + 1);
     accounts.push(AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false));
-    accounts.extend(child_accounts(fixture));
-    let mut data = fixture.wrapper.clone();
+    accounts.extend(child_accounts(fixture, arm));
+    let mut data = arm.wrapper.clone();
     *data.first_mut().expect("control byte") = u8::from(fail_after);
     Instruction {
         program_id: TEST_CALLER_PROGRAM_ID,
@@ -642,6 +666,15 @@ async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
         .await
         .expect("account query")
         .expect("existing account")
+}
+
+/// Observe the four accounts a Fractional atomic action can move.
+async fn observe(context: &mut ProgramTestContext, keys: [Pubkey; 4]) -> [Account; 4] {
+    let mut observed = Vec::with_capacity(keys.len());
+    for key in keys {
+        observed.push(account(context, key).await);
+    }
+    observed.try_into().expect("four observed accounts")
 }
 
 async fn submit(
@@ -704,6 +737,11 @@ fn token_amount(account: &Account) -> u64 {
     u64::from_le_bytes(account.data[64..72].try_into().unwrap())
 }
 
+/// LBV2 Position replay revision.
+fn position_revision(account: &Account) -> u64 {
+    u64::from_le_bytes(account.data[16..24].try_into().unwrap())
+}
+
 fn root_revision(account: &Account) -> u64 {
     let at = FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4 + 112;
     u64::from_le_bytes(account.data[at..at + 8].try_into().unwrap())
@@ -739,7 +777,7 @@ async fn the_production_fractional_wrap_locks_native_claims_and_mints_the_denomi
     assert_eq!(balance(&reserve_before, OUTCOME as usize), 0);
     assert_eq!(root_revision(&root_before), ROOT_REVISION);
 
-    let (accepted, logs, units, result) = submit(&mut context, instruction(&fixture, false)).await;
+    let (accepted, logs, units, result) = submit(&mut context, instruction(&fixture, &fixture.wrap, false)).await;
     assert!(accepted, "the production Fractional wrap must commit: {result:?}");
     assert!(
         logs.iter()
@@ -813,7 +851,7 @@ async fn a_late_caller_refusal_after_the_real_claims_commit_rolls_everything_bac
         account(&mut context, reserve_account).await,
     ];
 
-    let (accepted, _logs, _units, result) = submit(&mut context, instruction(&fixture, true)).await;
+    let (accepted, _logs, _units, result) = submit(&mut context, instruction(&fixture, &fixture.wrap, true)).await;
     assert!(!accepted, "the deliberate late refusal must abort");
     assert_eq!(
         custom_refusal(&result),
@@ -830,6 +868,81 @@ async fn a_late_caller_refusal_after_the_real_claims_commit_rolls_everything_bac
         account(&mut context, reserve_account).await,
     ];
     assert_eq!(before, after, "a refused Fractional wrap leaves no trace");
+}
+
+/// Wrap then WholeUnwrap returns every account to its exact opening bytes.
+///
+/// WholeUnwrap is the published inverse of Wrap and has its own shipped handler,
+/// so the pair is the real conservation statement: the shards are burned rather
+/// than parked somewhere, and the native Claims come back out of the root's
+/// reserve to the actor. Two separate transactions against real ELFs, so the
+/// second one reads the first one's committed chain state rather than a fixture.
+#[tokio::test]
+async fn wrap_then_whole_unwrap_restores_the_exact_opening_state() {
+    let (test, fixture) = fixture();
+    let mut context = test.start_with_context().await;
+    let actor_account = fixture.shared.actor_position.account;
+    let reserve_account = fixture.shared.reserve_position.account;
+    let keys = [
+        fixture.shard_mint,
+        fixture.holder_token,
+        actor_account,
+        reserve_account,
+    ];
+
+    let opening = observe(&mut context, keys).await;
+
+    let (wrapped, _logs, _units, result) =
+        submit(&mut context, instruction(&fixture, &fixture.wrap, false)).await;
+    assert!(wrapped, "wrap must commit: {result:?}");
+    let mid = observe(&mut context, keys).await;
+    let expected_shards = WRAP_NATIVE_CLAIMS * DENOMINATOR;
+    assert_eq!(mint_supply(&mid[0]), expected_shards);
+    assert_eq!(token_amount(&mid[1]), expected_shards);
+    assert_eq!(balance(&mid[3], OUTCOME as usize), WRAP_NATIVE_CLAIMS);
+
+    let (unwrapped, logs, units, result) =
+        submit(&mut context, instruction(&fixture, &fixture.unwrap, false)).await;
+    assert!(unwrapped, "whole unwrap must commit: {result:?}");
+    assert!(
+        logs.iter()
+            .any(|line| line.contains(&CLAIMS_PROGRAM_ID.to_string())
+                && line.contains("invoke [2]")),
+        "the real Claims ELF must run the unwrap too"
+    );
+    assert!(units > 30_000, "{units} compute units");
+
+    let closing = observe(&mut context, keys).await;
+    assert_eq!(mint_supply(&closing[0]), 0, "every shard must be burned");
+    assert_eq!(token_amount(&closing[1]), 0);
+    assert_eq!(
+        balance(&closing[2], OUTCOME as usize),
+        ACTOR_FUNDED_BALANCE,
+        "the actor gets its native Claims back"
+    );
+    assert_eq!(balance(&closing[3], OUTCOME as usize), 0);
+
+    // Every balance is restored, but the pair is not a no-op: each committed
+    // transaction advances the Position replay revision, which is exactly what
+    // stops a wrap or an unwrap being replayed. Asserting raw byte equality
+    // here would be asserting that replay protection does not work.
+    for (open, close) in opening.iter().zip(closing.iter()) {
+        assert_eq!(open.data.len(), close.data.len());
+        assert_eq!(open.owner, close.owner);
+        assert_eq!(open.lamports, close.lamports);
+    }
+    for index in [2, 3] {
+        assert_eq!(
+            position_revision(&closing[index]),
+            position_revision(&opening[index]) + 2,
+            "each of the two committed transactions advances the Position revision"
+        );
+    }
+    assert_eq!(
+        opening[0].data[36..44],
+        closing[0].data[36..44],
+        "the Mint supply returns to its opening value"
+    );
 }
 
 /// The representation width bound is exactly 256, and it is load-bearing.
