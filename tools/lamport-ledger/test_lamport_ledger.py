@@ -415,6 +415,50 @@ class JournalFees(unittest.TestCase):
         self.assertEqual(sub.signature, "sig-activate")
         self.assertEqual(sub.resolution, "unresolved")
 
+    def test_a_driver_witnessed_landing_marker_is_a_named_fee(self):
+        """The driver's sealing pass can witness a landing while the chain
+        still serves the status; by ledger time the marker may be the ONLY
+        surviving witness, and a witnessed landing at a deterministic fee is a
+        named fee, not a bound."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ev = ll.load_evidence(run_root(tmp, [{
+                "operation": "resolution-funding-activate-v1",
+                "phase": "submitted",
+                "feeLamports": None,
+                "exactFeeLamports": 75_000,
+                "expectedSignature": "sig-activate",
+                "payer": PAYER,
+                "unresolvedFee": {
+                    "resolution": "chain-status-only",
+                    "statusSlot": 11_700,
+                    "unresolvedFeeBoundLamports": 75_000,
+                    "checkedAtSlot": 15_900,
+                },
+            }]))
+        self.assertEqual(ev.total_fees, 75_000)
+        self.assertEqual(ev.unresolved, [])
+        self.assertIn("driver-witnessed", ev.fees[0].source)
+
+    def test_a_chain_unserved_marker_stays_a_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ev = ll.load_evidence(run_root(tmp, [{
+                "operation": "resolution-funding-activate-v1",
+                "phase": "submitted",
+                "feeLamports": None,
+                "exactFeeLamports": 75_000,
+                "expectedSignature": "sig-activate",
+                "payer": PAYER,
+                "unresolvedFee": {
+                    "resolution": "chain-unserved",
+                    "statusSlot": None,
+                    "unresolvedFeeBoundLamports": 75_000,
+                    "checkedAtSlot": 15_900,
+                },
+            }]))
+        self.assertEqual(ev.total_fees, 0)
+        self.assertEqual(len(ev.unresolved), 1)
+        self.assertEqual(ev.unresolved[0].bound_lamports, 75_000)
+
     def test_a_finalized_journal_without_a_fee_is_the_same_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             ev = ll.load_evidence(run_root(tmp, [{

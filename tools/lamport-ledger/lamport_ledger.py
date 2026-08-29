@@ -569,15 +569,35 @@ def load_evidence(run_root: Path) -> Evidence:
                 # the driver's grammar forbids but this tool tolerates as the
                 # same unknown). Never dropped, never zero: a named bound.
                 bound = journal.get("exactFeeLamports")
+                bound = None if bound is None else integer(bound, f"{pointer}.exactFeeLamports")
+                marker = journal.get("unresolvedFee") or {}
+                if marker.get("resolution") == "chain-status-only" and bound is not None:
+                    # The driver's own sealing pass witnessed the landing while
+                    # the chain still served the status; by the time this tool
+                    # runs, the marker may be the ONLY surviving witness. A
+                    # driver-witnessed landing at a deterministic fee is a
+                    # named fee, and its source says which two facts joined.
+                    fees.append(
+                        FeeEvent(
+                            signature=journal.get("expectedSignature") or "<unknown>",
+                            slot=marker.get("statusSlot"),
+                            lamports=bound,
+                            label=operation,
+                            stage=stage,
+                            errored=False,
+                            source=(
+                                f"{pointer}.unresolvedFee (driver-witnessed "
+                                "landing) + exactFeeLamports (deterministic fee)"
+                            ),
+                            payer=journal_payer,
+                        )
+                    )
+                    continue
                 unresolved.append(
                     UnresolvedSubmission(
                         operation=operation,
                         signature=journal.get("expectedSignature"),
-                        bound_lamports=(
-                            None
-                            if bound is None
-                            else integer(bound, f"{pointer}.exactFeeLamports")
-                        ),
+                        bound_lamports=bound,
                         payer=journal_payer,
                         stage=stage,
                         source=pointer,
