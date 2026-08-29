@@ -1,5 +1,6 @@
 'use client';
 
+import Anchor from '@/components/Anchor';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useMemo, useState } from 'react';
 
@@ -205,7 +206,7 @@ export default function DirectTradeWorkspace() {
   return <main className="product-shell trade-v3-shell">
     <ConsoleHeader path="/trade" title="Direct trade" purpose="Check a route against live chain state and review one fill without signing or building a transaction." />
 
-    <section className="trade-v3-hero"><div><h1>Direct<br /><em>trade.</em></h1><p>You name a Market and a possible fill; the console reads its programs, route, and release evidence from the chain, then shows the exact collateral arithmetic. It does not create an intent, ask for a signature, build a packet, or submit a transaction.</p></div><aside><span>Execution boundary</span><strong>read-only until the finalizer lands</strong><p>Direct execution reopens only with a durable exact-packet journal, an authenticated Trading acknowledgement, and all ten writable poststates. Static account lists are never authority.</p></aside></section>
+    <section className="trade-v3-hero"><div><h1>Direct<br /><em>trade.</em></h1><p>You name a Market and a possible fill; the console reads its programs, route, and release evidence from the chain, then shows the exact collateral arithmetic. It does not create an intent, ask for a signature, build a packet, or submit a transaction.</p></div><aside><span>Where trading actually happens</span><strong>this console reads; the market page trades</strong><p>This is the workbench: it checks a route and shows you the arithmetic, and it never signs or sends. To actually place a trade, open the market you want on <Anchor href="/markets">Markets</Anchor> and use its trade panel, which asks your wallet to sign and sends the transaction once.</p></aside></section>
 
     <form className="trade-v3-card route-card" onSubmit={inspectRoute}>
       <header><span>01</span><div><h2>Acquire the action-selected route</h2><p>The address map is transport, not truth. Every account is reacquired and joined against the current Registry/Core/Trading state.</p></div></header>

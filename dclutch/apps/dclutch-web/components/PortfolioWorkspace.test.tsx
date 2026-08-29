@@ -14,7 +14,10 @@ describe('Portfolio route', () => {
 
   it('derives Position addresses instead of claiming an index it does not have', () => {
     expect(html).toContain('dClutch runs no indexer and this browser will not pretend to be one');
-    expect(html).toContain('program-derived address of the Position seed domain plus the exact Market and owner keys');
+    // The same fact, aimed at a reader: nothing is looked up, so an address
+    // is all this page needs.
+    expect(html).toContain('worked out from that market and your own address');
+    expect(html).toContain('nothing is looked up');
     expect(html).toContain('Derived Positions');
   });
 

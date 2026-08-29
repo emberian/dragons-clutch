@@ -15,7 +15,13 @@ describe('Direct V3 trade workbench', () => {
     expect(html).toContain('2,280 bytes');
     expect(html).toContain('Review exact arithmetic');
     expect(html).toContain('Execution remains closed');
-    expect(html).toContain('durable exact-packet journal');
+    // This console reads and never sends -- but it used to say "read-only
+    // until the finalizer lands", which reads as "trading does not work",
+    // while the market page's trade panel signs and submits. It now says
+    // which page trades.
+    expect(html).toContain('this console reads; the market page trades');
+    expect(html).toContain('href="/markets"');
+    expect(html).not.toContain('read-only until the finalizer lands');
     for (const forbidden of ['Connect identity', 'Sign this maker message', 'Sign as transaction payer', 'Download exact packet', 'Submit signed transaction']) {
       expect(html).not.toContain(forbidden);
     }
