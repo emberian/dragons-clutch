@@ -555,6 +555,7 @@ pub(crate) fn relayed_market_input(
         // the artifact-release schema by reading the provider release's own
         // extension.
         pyth_adapter_config_hex: hex(&venue_release_bytes),
+        pyth_sponsored_push_release_hex: String::new(),
         recovery_policy_hex: String::new(),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
@@ -683,6 +684,14 @@ mod tests {
             compiler,
         )
         .expect("relayed market input");
+        assert!(facts.input.pyth_sponsored_push_release_hex.is_empty());
+        assert!(
+            serde_json::to_value(&facts.input)
+                .expect("relayed JSON")
+                .get("pyth_sponsored_push_release_hex")
+                .is_none(),
+            "the optional sponsored field must not change legacy relayed inputs"
+        );
         let manifest = CapabilityManifestV1::decode(&facts.manifest_bytes)
             .expect("relayed capability manifest");
         assert_eq!(manifest.entry_count(), 3);

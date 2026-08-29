@@ -106,6 +106,12 @@ pub(crate) struct MarketRunInput {
     pub(crate) statistic_spec_hex: String,
     pub(crate) provider_release_hex: String,
     pub(crate) pyth_adapter_config_hex: String,
+    /// Exact canonical `PythSponsoredPushReleaseV1` body selected by a
+    /// `PythSponsoredPushSnapshot` source. Empty for every other access
+    /// profile. The body is published as its own Registry record; the
+    /// ProviderRelease names it by SHA-256.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) pyth_sponsored_push_release_hex: String,
     pub(crate) recovery_policy_hex: String,
     pub(crate) capability_manifest_hex: String,
     /// Complete Direct record closure selected by the one non-Resolution

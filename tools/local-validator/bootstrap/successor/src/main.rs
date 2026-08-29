@@ -101,6 +101,7 @@ fn run() -> Result<()> {
         Some("prepare") => run_prepare(arguments.collect()),
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("devnet-market") => run_devnet_market(arguments.collect()),
+        Some("devnet-sponsored-market") => run_devnet_sponsored_market(arguments.collect()),
         Some("graduation-market") => run_graduation_market(arguments.collect()),
         Some("ledger-census") => run_ledger_census(arguments.collect()),
         Some("wallet-terminal-payout-input") => {
@@ -511,6 +512,12 @@ fn direct_market_usage_v1() -> String {
          --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
          [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
          [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
+         dclutch-local-successor-bootstrap devnet-sponsored-market --registry-program-id PUBKEY \
+         --plan ABSOLUTE_JSON --rpc-url URL {ack} GENESIS_HASH \
+         --direct-fee-basis-points U16 --direct-fee-recipient PUBKEY \
+         --price-update ABSOLUTE_FILE --window-start UNIX_SECONDS [--window-width-seconds U32] \
+         [--max-age-seconds U32] [--cut-denominator U64] [--cuts I128,..] [--coefficients U64,..] \
+         [--product NAME] [--coordinate-domain NAME] [--feed LABEL] [--generation U64]\n  \
          dclutch-local-successor-bootstrap graduation-market --registry-program-id PUBKEY \
          --plan ABSOLUTE_JSON --rpc-url URL {ack} GENESIS_HASH \
          --direct-fee-basis-points U16 --direct-fee-recipient PUBKEY \
@@ -534,6 +541,14 @@ fn run_demo_market(_arguments: Vec<String>) -> Result<()> {
 /// refused below the measured cadence floor rather than founded into a market
 /// that fails for provider reasons.
 fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
+    run_devnet_pyth_market(arguments, false)
+}
+
+fn run_devnet_sponsored_market(arguments: Vec<String>) -> Result<()> {
+    run_devnet_pyth_market(arguments, true)
+}
+
+fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()> {
     let mut registry = None;
     let mut price_update = None;
     let mut window_start = None;
@@ -567,7 +582,14 @@ fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
             "--generation" => Some(&mut generation),
             _ => direct.slot(&argument),
         }
-        .ok_or_else(|| Error::new(format!("unknown devnet-market argument: {argument}")))?;
+        .ok_or_else(|| {
+            let command = if sponsored {
+                "devnet-sponsored-market"
+            } else {
+                "devnet-market"
+            };
+            Error::new(format!("unknown {command} argument: {argument}"))
+        })?;
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
@@ -626,7 +648,11 @@ fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
         },
     };
     let direct = direct.load(registry)?;
-    let input = market::devnet_market_input(spec, direct.compiler())?;
+    let input = if sponsored {
+        market::devnet_sponsored_market_input(spec, direct.compiler())?
+    } else {
+        market::devnet_market_input(spec, direct.compiler())?
+    };
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
     stdout.write_all(b"\n")?;
