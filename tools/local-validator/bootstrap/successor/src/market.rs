@@ -6462,11 +6462,17 @@ fn execute_projected_custody_bootstrap(
     }
     if lane == PrestateLaneV1::Founding {
         let root = Pubkey::new_from_array(coordinates.found.capability_root().to_bytes());
-        let root_account = rpc.required_account(root, "direct_capability_root")?;
-        accounts.insert(
-            "direct_capability_root".into(),
-            account_evidence(root, &root_account),
-        );
+        // Under transaction publication the Direct capability root is created
+        // permissionlessly on FIRST USE by the Direct exterior, so at founding
+        // time its absence is the expected state, not missing evidence. The
+        // checkpoint carries the coordinate either way; the account row joins
+        // the evidence only where a genesis pre-created the root.
+        if let Some(root_account) = rpc.account(root)? {
+            accounts.insert(
+                "direct_capability_root".into(),
+                account_evidence(root, &root_account),
+            );
+        }
         let trading = pubkey(&plan.trading.program_id)?;
         let trading_ledger = coordinates
             .funding_ledgers
