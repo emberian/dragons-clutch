@@ -493,6 +493,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-fractional-claim-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-request-profile-contract",
+ "dclutch-token-svm",
+ "dclutch-transition-vm",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-fractional-claim-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
 name = "dclutch-general-adapter-contract"
 version = "0.1.0"
 dependencies = [
@@ -1058,6 +1082,7 @@ dependencies = [
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
+ "dclutch-fractional-claim-contract",
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-svm-reader",
