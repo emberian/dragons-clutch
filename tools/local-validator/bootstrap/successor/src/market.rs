@@ -2441,7 +2441,7 @@ fn authenticate_prepared_resume_assets_v1(
         rpc,
         plan,
         &context.coordinates,
-        projection_witness,
+        payer.pubkey(),
         ControllerFundingCheckpointPhaseV1::Prepared,
     )?;
     Ok(())
@@ -4222,8 +4222,12 @@ const PROJECTED_CUSTODY_BOOTSTRAP_COMPLETE_KEYS_V2: usize = 60;
 const DEVNET_ACCOUNT_LOCK_LIMIT_V1: usize = 64;
 
 const CONTROLLER_FUNDING_PREPARE_MAGIC_V1: [u8; 8] = *b"DCLTCFQ1";
-const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 47;
+const CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1: usize = 48;
 const CONTROLLER_FUNDING_PREPARE_COMPLETE_KEYS_V1: usize = 49;
+const CONTROLLER_FUNDING_PREPARE_FUNDING_SOURCE_V1: usize = 11;
+const CONTROLLER_FUNDING_PREPARE_FOUND_START_V1: usize = 12;
+const CONTROLLER_FUNDING_PREPARE_FOUND_RENT_CREDIT_V1: usize =
+    CONTROLLER_FUNDING_PREPARE_FOUND_START_V1 + 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompiledMessageGeometryV1 {
@@ -4876,6 +4880,7 @@ fn build_controller_funding_prepare_v1(
     records: &MarketRecords,
     found_raw: Pubkey,
     lock_raw: Pubkey,
+    funding_source: Pubkey,
     projection_witness: Pubkey,
 ) -> Result<Instruction> {
     let trading = pubkey(&plan.trading.program_id)?;
@@ -4902,7 +4907,7 @@ fn build_controller_funding_prepare_v1(
         project_found,
         manifest: records.manifest.digest,
         selected_mask: resolution_ledger.selected_mask,
-        funding_source: projection_witness.to_bytes(),
+        funding_source: funding_source.to_bytes(),
         ledger: resolution_ledger.address.to_bytes(),
         prestate_digest: pre_market_funding_prestate_digest_v1(
             resolution_ledger.address.to_bytes(),
@@ -4940,6 +4945,7 @@ fn build_controller_funding_prepare_v1(
         AccountMeta::new(resolution_ledger.address, false),
         AccountMeta::new(trading_ledger.address, false),
         AccountMeta::new(coordinates.controller_funding_checkpoint, false),
+        AccountMeta::new(funding_source, true),
     ];
     for (index, key) in ordinary_project_found_snapshot_keys_v2(
         plan,
@@ -4957,11 +4963,11 @@ fn build_controller_funding_prepare_v1(
             _ => AccountMeta::new_readonly(key, false),
         });
     }
-    if accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 {
-        return Err(Error::new(
-            "assembled controller-funding prepare frame did not match 47 accounts",
-        ));
-    }
+    authenticate_controller_funding_prepare_frame_v1(
+        &accounts,
+        funding_source,
+        projection_witness,
+    )?;
     Ok(Instruction {
         program_id: trading,
         accounts,
@@ -4969,11 +4975,43 @@ fn build_controller_funding_prepare_v1(
     })
 }
 
+fn authenticate_controller_funding_prepare_frame_v1(
+    accounts: &[AccountMeta],
+    funding_source: Pubkey,
+    projection_witness: Pubkey,
+) -> Result<()> {
+    let source = accounts
+        .get(CONTROLLER_FUNDING_PREPARE_FUNDING_SOURCE_V1)
+        .ok_or_else(|| Error::new("DCLTCFQ1 omitted its distinct funding source"))?;
+    let found_payer = accounts
+        .get(CONTROLLER_FUNDING_PREPARE_FOUND_START_V1)
+        .ok_or_else(|| Error::new("DCLTCFQ1 omitted its ProjectFound payer"))?;
+    let rent_credit = accounts
+        .get(CONTROLLER_FUNDING_PREPARE_FOUND_RENT_CREDIT_V1)
+        .ok_or_else(|| Error::new("DCLTCFQ1 omitted its ProjectFound RentCredit"))?;
+    if accounts.len() != CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1
+        || source.pubkey != funding_source
+        || !source.is_signer
+        || !source.is_writable
+        || found_payer.pubkey != projection_witness
+        || !found_payer.is_signer
+        || !found_payer.is_writable
+        || source.pubkey == found_payer.pubkey
+        || rent_credit.is_signer
+        || !rent_credit.is_writable
+    {
+        return Err(Error::new(
+            "assembled DCLTCFQ1 frame changed its source, ProjectFound payer, RentCredit, or 48-account geometry",
+        ));
+    }
+    Ok(())
+}
+
 fn authenticate_controller_funding_checkpoint_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     coordinates: &FoundingCoordinates,
-    projection_witness: Pubkey,
+    funding_source: Pubkey,
     expected_phase: ControllerFundingCheckpointPhaseV1,
 ) -> Result<ControllerFundingCheckpointV1> {
     let trading = pubkey(&plan.trading.program_id)?;
@@ -5031,7 +5069,7 @@ fn authenticate_controller_funding_checkpoint_v1(
         || input.resolution_ledger_digest != resolution_ledger_digest
         || input.trading_ledger != trading_ledger.address.to_bytes()
         || input.trading_ledger_digest != trading_ledger_digest
-        || input.funding_source != projection_witness.to_bytes()
+        || input.funding_source != funding_source.to_bytes()
         || input.rent_credit != coordinates.credit.to_bytes()
         || input.project_found_receipt_digest != coordinates.lock.projection_receipt_digest
         || input.expiry_slot != coordinates.lock.expiry_slot
@@ -5658,17 +5696,7 @@ fn execute_projected_custody_bootstrap(
         expiry_slot,
     )?;
     let principal = coordinates.lock.amount;
-    let controller_funding_lamports = coordinates
-        .funding_ledgers
-        .iter()
-        .try_fold(
-            rpc.minimum_balance(CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1)?,
-            |total, ledger| total.checked_add(ledger.required_lamports),
-        )
-        .ok_or_else(|| Error::new("controller funding capacity overflow"))?;
-    let projection_witness_lamports = market_rent
-        .checked_add(controller_funding_lamports)
-        .ok_or_else(|| Error::new("projection witness capacity overflow"))?;
+    let projection_witness_lamports = market_rent;
 
     // One Token-2022 account owned by the party the principal is refundable to.
     let source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER);
@@ -5857,6 +5885,7 @@ fn execute_projected_custody_bootstrap(
         records,
         found_record.raw,
         lock_record.raw,
+        payer.pubkey(),
         projection_witness.pubkey(),
     )?;
     let controller_funding_prepare_geometry =
@@ -5923,6 +5952,7 @@ fn execute_projected_custody_bootstrap(
         .iter()
         .map(|ledger| ledger.address)
         .chain(std::iter::once(coordinates.controller_funding_checkpoint))
+        .chain(std::iter::once(payer.pubkey()))
         .chain(std::iter::once(projection_witness.pubkey()))
         .chain(std::iter::once(coordinates.credit))
         .collect::<Vec<_>>();
@@ -5966,6 +5996,10 @@ fn execute_projected_custody_bootstrap(
                     coordinates.controller_funding_checkpoint.to_string(),
                 );
                 recovery_accounts.insert(
+                    "founding_controller_funding_source".into(),
+                    payer.pubkey().to_string(),
+                );
+                recovery_accounts.insert(
                     "founding_projection_witness".into(),
                     projection_witness.pubkey().to_string(),
                 );
@@ -6005,7 +6039,7 @@ fn execute_projected_custody_bootstrap(
                         rpc,
                         plan,
                         &coordinates,
-                        projection_witness.pubkey(),
+                        payer.pubkey(),
                         ControllerFundingCheckpointPhaseV1::Prepared,
                     )
                     .map(|_| ())
@@ -6047,7 +6081,7 @@ fn execute_projected_custody_bootstrap(
         rpc,
         plan,
         &coordinates,
-        projection_witness.pubkey(),
+        payer.pubkey(),
         ControllerFundingCheckpointPhaseV1::Prepared,
     )?;
     if !resume_prepared
@@ -6110,7 +6144,7 @@ fn execute_projected_custody_bootstrap(
             rpc,
             plan,
             &coordinates,
-            projection_witness.pubkey(),
+            payer.pubkey(),
             ControllerFundingCheckpointPhaseV1::Prepared,
         )?;
         completed.push(format!(
@@ -6195,7 +6229,7 @@ fn execute_projected_custody_bootstrap(
             rpc,
             plan,
             &coordinates,
-            projection_witness.pubkey(),
+            payer.pubkey(),
             ControllerFundingCheckpointPhaseV1::Prepared,
         )?;
         Ok(())
@@ -6401,7 +6435,7 @@ fn execute_projected_custody_bootstrap(
         rpc,
         plan,
         &coordinates,
-        projection_witness.pubkey(),
+        payer.pubkey(),
         ControllerFundingCheckpointPhaseV1::CustodyStaged,
     )?;
     let prefix = lane.evidence_prefix();
@@ -11098,7 +11132,7 @@ mod tests {
         let mut accounts = (0_u8..CONTROLLER_FUNDING_PREPARE_ACCOUNTS_V1 as u8)
             .map(|index| {
                 let key = Pubkey::new_from_array([index.saturating_add(1); 32]);
-                if matches!(index, 8 | 9 | 10 | 13) {
+                if matches!(index, 8 | 9 | 10 | 11 | 12 | 14) {
                     AccountMeta::new(key, false)
                 } else {
                     AccountMeta::new_readonly(key, false)
@@ -11106,7 +11140,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         accounts[6].pubkey = program_id;
-        accounts[11] = AccountMeta::new(projection_witness, true);
+        accounts[CONTROLLER_FUNDING_PREPARE_FUNDING_SOURCE_V1] = AccountMeta::new(payer, true);
+        accounts[CONTROLLER_FUNDING_PREPARE_FOUND_START_V1] =
+            AccountMeta::new(projection_witness, true);
         (
             payer,
             Instruction {
@@ -11448,6 +11484,38 @@ mod tests {
     #[test]
     fn controller_funding_prepare_compiler_census_pins_the_49_64_65_wall() {
         let (payer, prepare) = controller_funding_prepare_census_fixture_v1();
+        let projection_witness = prepare.accounts[CONTROLLER_FUNDING_PREPARE_FOUND_START_V1].pubkey;
+        authenticate_controller_funding_prepare_frame_v1(
+            &prepare.accounts,
+            payer,
+            projection_witness,
+        )
+        .expect("canonical 48-account prepare frame");
+
+        let mut aliased_source = prepare.accounts.clone();
+        aliased_source[CONTROLLER_FUNDING_PREPARE_FUNDING_SOURCE_V1].pubkey = projection_witness;
+        assert!(
+            authenticate_controller_funding_prepare_frame_v1(
+                &aliased_source,
+                projection_witness,
+                projection_witness,
+            )
+            .is_err(),
+            "the controller funding source must not alias the ProjectFound payer"
+        );
+
+        let mut readonly_rent_credit = prepare.accounts.clone();
+        readonly_rent_credit[CONTROLLER_FUNDING_PREPARE_FOUND_RENT_CREDIT_V1].is_writable = false;
+        assert!(
+            authenticate_controller_funding_prepare_frame_v1(
+                &readonly_rent_credit,
+                payer,
+                projection_witness,
+            )
+            .is_err(),
+            "Resolution must receive the ProjectFound RentCredit as writable"
+        );
+
         let base = projected_bootstrap_compiled_geometry_v2(payer, &prepare).expect("base census");
         let admitted = projected_bootstrap_compiled_geometry_v2(
             payer,
@@ -11467,8 +11535,8 @@ mod tests {
         assert_eq!(base.static_keys, 4);
         assert_eq!(base.loaded_writable, 4);
         assert_eq!(base.loaded_readonly, 41);
-        assert_eq!(base.message_bytes, 332);
-        assert_eq!(base.packet_bytes, 461);
+        assert_eq!(base.message_bytes, 333);
+        assert_eq!(base.packet_bytes, 462);
         assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
         assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
     }

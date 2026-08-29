@@ -112,7 +112,8 @@ const PREPARE_TRADING_PROGRAMDATA: usize = 7;
 const PREPARE_RESOLUTION_LEDGER: usize = 8;
 const PREPARE_TRADING_LEDGER: usize = 9;
 const PREPARE_CHECKPOINT: usize = 10;
-const PREPARE_FOUND_START: usize = 11;
+const PREPARE_FUNDING_SOURCE: usize = 11;
+const PREPARE_FOUND_START: usize = 12;
 const PREPARE_FOUND_ACCOUNT_COUNT: usize = PROJECT_FOUND_ACCOUNT_COUNT_V2;
 
 /// Exact separate controller-funding preparation frame.
@@ -293,6 +294,16 @@ pub fn process_controller_funding_prepare_v1(
     let found_request = decode_found_request(&found_raw)?;
     let lock = decode_projected_request(&lock_raw)?;
     let found = subslice(accounts, PREPARE_FOUND_START, PREPARE_FOUND_ACCOUNT_COUNT)?;
+    let funding_source = account(accounts, PREPARE_FUNDING_SOURCE)?;
+    if !funding_source.is_signer
+        || !funding_source.is_writable
+        || funding_source.executable
+        || found
+            .iter()
+            .any(|found_account| found_account.key == funding_source.key)
+    {
+        return Err(TradingSbfError::Content.into());
+    }
     let core_program = account(found, 25)?;
     authenticate_projected_lock_join_v1(program_id, core_program.key, &found_request, &lock)?;
     let facts = founding_funding_facts_v2(&found_request)?;
@@ -342,6 +353,7 @@ pub fn process_controller_funding_prepare_v1(
         program_id,
         accounts,
         found,
+        funding_source,
         &facts,
         project_found,
         lock.projection_receipt_digest,
@@ -353,7 +365,7 @@ pub fn process_controller_funding_prepare_v1(
     let trading_poststate = create_trading_ledger_dust_tolerant_v1(
         program_id,
         trading_ledger,
-        account(found, 0)?,
+        funding_source,
         account(found, 2)?,
         account(found, 28)?,
         manifest,
@@ -379,7 +391,7 @@ pub fn process_controller_funding_prepare_v1(
         resolution_ledger_digest: resolution_poststate.poststate_digest,
         trading_ledger: trading_ledger.key.to_bytes(),
         trading_ledger_digest: trading_poststate,
-        funding_source: account(found, 0)?.key.to_bytes(),
+        funding_source: funding_source.key.to_bytes(),
         rent_credit: account(found, 2)?.key.to_bytes(),
         lock_request_digest: hash(&lock_raw).to_bytes(),
         expiry_slot: lock.expiry_slot,
@@ -392,7 +404,7 @@ pub fn process_controller_funding_prepare_v1(
     create_prepared_checkpoint_v1(
         program_id,
         account(accounts, PREPARE_CHECKPOINT)?,
-        account(found, 0)?,
+        funding_source,
         account(found, 2)?,
         account(found, 28)?,
         &rent,
@@ -2516,6 +2528,7 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'info>],
     found: &[AccountInfo<'info>],
+    funding_source: &AccountInfo<'info>,
     facts: &FoundingFundingFactsV1,
     project_found: ProjectFoundRequestV2,
     expected_project_found_receipt_digest: [u8; 32],
@@ -2528,7 +2541,6 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
     let resolution_programdata = account(accounts, PREPARE_RESOLUTION_PROGRAMDATA)?;
     let caller_program = account(accounts, PREPARE_TRADING_PROGRAM)?;
     let caller_programdata = account(accounts, PREPARE_TRADING_PROGRAMDATA)?;
-    let funding_source = account(found, 0)?;
     let target = account(accounts, PREPARE_RESOLUTION_LEDGER)?;
     let authority = account(accounts, PREPARE_CALLER_AUTHORITY)?;
     if !resolution_program.executable
@@ -2595,11 +2607,13 @@ fn initialize_resolution_ledger_prepare_v2<'info>(
         AccountMeta::new(*funding_source.key, true),
         AccountMeta::new(*target.key, false),
     ]);
-    metas.extend(
-        found
-            .iter()
-            .map(|value| AccountMeta::new_readonly(*value.key, false)),
-    );
+    metas.extend(found.iter().enumerate().map(|(index, value)| {
+        if index == 2 {
+            AccountMeta::new(*value.key, false)
+        } else {
+            AccountMeta::new_readonly(*value.key, false)
+        }
+    }));
     let instruction = Instruction {
         program_id: *resolution_program.key,
         accounts: metas,
@@ -3123,8 +3137,9 @@ mod tests {
             b'D', b'C', b'L', b'T', b'C', b'F', b'Q', b'1', 0
         ]));
         assert_eq!(CONTROLLER_FUNDING_PREPARE_INSTRUCTION_BYTES_V1, 8);
-        assert_eq!(CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1, 47);
-        assert_eq!(PREPARE_FOUND_START, 11);
+        assert_eq!(CONTROLLER_FUNDING_PREPARE_ACCOUNT_COUNT_V1, 48);
+        assert_eq!(PREPARE_FUNDING_SOURCE, 11);
+        assert_eq!(PREPARE_FOUND_START, 12);
         assert_eq!(PREPARE_FOUND_ACCOUNT_COUNT, 36);
     }
 
