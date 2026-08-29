@@ -209,6 +209,48 @@ class FeeEvent:
 
 
 @dataclass
+class UnresolvedSubmission:
+    """A submission journal the run never saw finalize, accounted as a BOUND.
+
+    The driver computes a transaction's exact fee at message-build time
+    (`exactFeeLamports`; run.py's founding gate asserts it equals the finalized
+    fee, so its determinism is house-verified). A submitted-never-observed
+    transaction therefore has a two-point fee: 0 if it never landed, or exactly
+    `bound_lamports` if it did. This tool never guesses which; it states the
+    bound, attempts a chain lookup, and lets the conservation verdict say
+    whether the funders' balances select one of the two points.
+    """
+
+    operation: str
+    signature: str | None  # expectedSignature; the durable identity of the send
+    bound_lamports: int | None  # exactFeeLamports, or None if the journal omits it
+    payer: str
+    stage: str
+    source: str
+    # unresolved -> never looked up; chain-served -> fee read from the chain;
+    # chain-status-only -> the chain confirms it LANDED but no longer serves its
+    # metadata, so the deterministic bound IS its fee; chain-unserved -> the
+    # chain neither confirms nor denies (history purged or never landed);
+    # rpc-refused -> the endpoint could not answer.
+    resolution: str = "unresolved"
+    resolved_fee: int | None = None
+    resolved_slot: int | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "operation": self.operation,
+            "signature": self.signature,
+            "boundLamports": None if self.bound_lamports is None else str(self.bound_lamports),
+            "payer": self.payer,
+            "stage": self.stage,
+            "source": self.source,
+            "resolution": self.resolution,
+            "resolvedFeeLamports": None if self.resolved_fee is None else str(self.resolved_fee),
+            "resolvedSlot": self.resolved_slot,
+        }
+
+
+@dataclass
 class Divergence:
     """A gap the statement refuses to absorb, named by class and accounts."""
 
@@ -280,8 +322,10 @@ class Evidence:
     # carries a null fee because the driver never read the transaction's
     # metadata -- but the chain charged for it all the same if it landed. These
     # are the first suspects whenever a funder is poorer than its accounts
-    # explain. Captured at load time: this tool reads its evidence once.
-    unfinalized: list[dict[str, Any]] = field(default_factory=list)
+    # explain. Captured at load time as structured BOUNDS, each carrying the
+    # deterministic fee the transaction pays IF it landed; the statement then
+    # closes EXACT or names this bound, never silently absorbing the gap.
+    unresolved: list[UnresolvedSubmission] = field(default_factory=list)
 
     @property
     def total_fees(self) -> int:
@@ -460,6 +504,7 @@ def load_evidence(run_root: Path) -> Evidence:
     fees: list[FeeEvent] = []
     named: dict[str, tuple[str, str]] = {}
     journal_lamports: dict[str, tuple[int, str]] = {}
+    unresolved: list[UnresolvedSubmission] = []
 
     stage_payers: dict[str, str] = {}
 
@@ -482,6 +527,63 @@ def load_evidence(run_root: Path) -> Evidence:
         stage_payers[stage] = stage_payer
 
         rows = execution.get("transactions") or []
+
+        # The submission journals are a fee source of their own, and they are
+        # read BEFORE the empty-execution fallback below: the exact runs that
+        # finish with `execution` empty are the ones whose journals hold the
+        # only record of these fees. The funding readiness ops are driven over
+        # a durable-packet path that never prints the stage's
+        # `campaign transaction:` line, so their fees appear ONLY here -- on
+        # the selseam-hold-01 evidence that was 310,000 lamports recorded in
+        # founding.json and counted by nothing, most of LEDGER's -385,000
+        # residual. When `execution.transactions` IS populated the journals
+        # JOIN it by signature (run.py's founding gate asserts exactly that
+        # join), so a signature already counted there is skipped.
+        row_signatures = {
+            row.get("signature")
+            for row in rows
+            if isinstance(row, dict) and row.get("signature")
+        }
+        for index, journal in enumerate(document.get("foundingSubmissionJournals") or []):
+            pointer = f"{path}#foundingSubmissionJournals[{index}]"
+            operation = journal.get("operation", f"journal-{index}")
+            journal_payer = journal.get("payer") or stage_payer
+            fee = journal.get("feeLamports")
+            if journal.get("phase") == "finalized" and fee is not None:
+                signature = journal.get("expectedSignature")
+                if signature not in row_signatures:
+                    fees.append(
+                        FeeEvent(
+                            signature=signature or "<unknown>",
+                            slot=journal.get("finalizedSlot"),
+                            lamports=integer(fee, f"{pointer}.feeLamports"),
+                            label=operation,
+                            stage=stage,
+                            errored=False,
+                            source=f"{pointer}.feeLamports",
+                            payer=journal_payer,
+                        )
+                    )
+            else:
+                # Submitted-and-never-observed (or finalized with no fee, which
+                # the driver's grammar forbids but this tool tolerates as the
+                # same unknown). Never dropped, never zero: a named bound.
+                bound = journal.get("exactFeeLamports")
+                unresolved.append(
+                    UnresolvedSubmission(
+                        operation=operation,
+                        signature=journal.get("expectedSignature"),
+                        bound_lamports=(
+                            None
+                            if bound is None
+                            else integer(bound, f"{pointer}.exactFeeLamports")
+                        ),
+                        payer=journal_payer,
+                        stage=stage,
+                        source=pointer,
+                    )
+                )
+
         if not rows:
             # A resumed or recovered run can finish with `execution` empty while
             # the stage's own stderr still holds the complete per-transaction
@@ -543,16 +645,17 @@ def load_evidence(run_root: Path) -> Evidence:
                     )
 
         for index, journal in enumerate(document.get("foundingSubmissionJournals") or []):
+            pointer = f"{path}#foundingSubmissionJournals[{index}]"
+            operation = journal.get("operation", f"journal-{index}")
             for jndex, poststate in enumerate(journal.get("finalizedPoststates") or []):
                 address = poststate.get("address")
                 if not address:
                     continue
-                pointer = f"{path}#foundingSubmissionJournals[{index}].finalizedPoststates[{jndex}]"
-                operation = journal.get("operation", f"journal-{index}")
-                named.setdefault(address, (f"{operation}:poststate", pointer))
+                post_pointer = f"{pointer}.finalizedPoststates[{jndex}]"
+                named.setdefault(address, (f"{operation}:poststate", post_pointer))
                 if "lamports" in poststate:
                     journal_lamports.setdefault(
-                        address, (integer(poststate["lamports"], pointer + ".lamports"), pointer + ".lamports")
+                        address, (integer(poststate["lamports"], post_pointer + ".lamports"), post_pointer + ".lamports")
                     )
 
     return Evidence(
@@ -569,11 +672,7 @@ def load_evidence(run_root: Path) -> Evidence:
         stage_payers=stage_payers,
         harvested=harvested,
         source_opening=source_opening,
-        unfinalized=[
-            journal
-            for journal in founding.get("foundingSubmissionJournals") or []
-            if journal.get("phase") != "finalized"
-        ],
+        unresolved=unresolved,
     )
 
 
@@ -610,6 +709,28 @@ class Rpc:
             fail(f"RPC {method} refused: {payload['error']}")
         self.calls += 1
         return payload["result"]
+
+    def try_call(self, method: str, params: list[Any]) -> tuple[Any, str | None]:
+        """Like `call`, but an RPC-level refusal is a RESULT, not a fatality.
+
+        The signature-resolution pass asks a resumed validator questions it may
+        be unable to answer (`getTransaction` without transaction history, for
+        one). A refused lookup must degrade an unresolved fee back to its bound,
+        not kill the whole statement.
+        """
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+        request = urllib.request.Request(
+            self.url, data=body, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.load(response)
+        except (urllib.error.URLError, TimeoutError) as error:
+            return None, f"RPC {method} failed: {error}"
+        self.calls += 1
+        if "error" in payload:
+            return None, f"RPC {method} refused: {payload['error']}"
+        return payload["result"], None
 
     def genesis_hash(self) -> str:
         return self.call("getGenesisHash", [])
@@ -728,6 +849,7 @@ class Statement:
     divergences: list[Divergence] = field(default_factory=list)
     universe_complete: bool = False
     capitalization: int | None = None
+    conservation: dict[str, Any] | None = None
 
     def by_class(self) -> dict[str, list[AccountRow]]:
         grouped: dict[str, list[AccountRow]] = defaultdict(list)
@@ -792,6 +914,83 @@ class Statement:
         )
 
 
+def resolve_unobserved_submissions(evidence: Evidence, rpc: Rpc) -> None:
+    """Ask the chain about every submission the run never saw finalize.
+
+    Three honest outcomes per signature, in decreasing order of knowledge:
+    the chain serves the transaction (fee READ, promoted to a first-class fee
+    event); the chain confirms the status but no longer serves the metadata
+    (it LANDED, so the deterministic `exactFeeLamports` IS its fee -- the
+    driver computes fees at message-build time and run.py's founding gate
+    asserts that equality on every finalized journal); or the chain neither
+    confirms nor denies (blockstore purged, or the send truly never landed),
+    in which case the bound STANDS and the verdict below must carry it.
+    """
+    for sub in evidence.unresolved:
+        if not sub.signature:
+            sub.resolution = "no-signature"
+            continue
+        statuses, error = rpc.try_call(
+            "getSignatureStatuses",
+            [[sub.signature], {"searchTransactionHistory": True}],
+        )
+        if error:
+            sub.resolution = f"rpc-refused: {error}"
+            continue
+        status = ((statuses or {}).get("value") or [None])[0]
+        if status is None:
+            sub.resolution = "chain-unserved"
+            continue
+        transaction, error = rpc.try_call(
+            "getTransaction",
+            [sub.signature, {
+                "encoding": "json",
+                "commitment": "finalized",
+                "maxSupportedTransactionVersion": 0,
+            }],
+        )
+        meta = (transaction or {}).get("meta") if isinstance(transaction, dict) else None
+        fee = meta.get("fee") if isinstance(meta, dict) else None
+        if fee is None:
+            # Landed, metadata gone. The deterministic bound is now a fact --
+            # but only if the journal stated one.
+            sub.resolution = "chain-status-only"
+            sub.resolved_slot = status.get("slot")
+            if sub.bound_lamports is not None:
+                sub.resolved_fee = sub.bound_lamports
+                evidence.fees.append(
+                    FeeEvent(
+                        signature=sub.signature,
+                        slot=sub.resolved_slot,
+                        lamports=sub.bound_lamports,
+                        label=sub.operation,
+                        stage=sub.stage,
+                        errored=status.get("err") is not None,
+                        source=(
+                            f"chain:getSignatureStatuses:{sub.signature} (landed) + "
+                            f"{sub.source}.exactFeeLamports (deterministic fee)"
+                        ),
+                        payer=sub.payer,
+                    )
+                )
+        else:
+            sub.resolution = "chain-served"
+            sub.resolved_fee = integer(fee, f"chain:getTransaction:{sub.signature}#meta.fee")
+            sub.resolved_slot = transaction.get("slot")
+            evidence.fees.append(
+                FeeEvent(
+                    signature=sub.signature,
+                    slot=sub.resolved_slot,
+                    lamports=sub.resolved_fee,
+                    label=sub.operation,
+                    stage=sub.stage,
+                    errored=(meta.get("err") is not None),
+                    source=f"chain:getTransaction:{sub.signature}#meta.fee",
+                    payer=sub.payer,
+                )
+            )
+
+
 def build_statement(
     evidence: Evidence, rpc: Rpc, universe: Path | None, capitalization: int | None = None
 ) -> Statement:
@@ -804,6 +1003,11 @@ def build_statement(
             f"{evidence.genesis_hash}, endpoint says {genesis_hash}. A statement "
             "joining two different chains would be fiction."
         )
+
+    # Fees must be TOTAL before any identity is computed: every submission the
+    # run never saw finalize gets its chain lookup here, and what cannot be
+    # resolved stays a named bound for the conservation verdict below.
+    resolve_unobserved_submissions(evidence, rpc)
 
     program_ids = {program: role for role, program in evidence.roles.items()}
 
@@ -856,12 +1060,117 @@ def build_statement(
         universe_complete=complete,
         capitalization=capitalization,
     )
+    statement.conservation = compute_conservation(statement)
     detect_divergences(statement)
     return statement
 
 
+def compute_conservation(statement: Statement) -> dict[str, Any]:
+    """The statement's one-line answer: EXACT, BOUNDED, or DIVERGENT.
+
+    The bar this encodes: a conservation statement on a founding closes exact
+    or names its bound with a reason -- it never reports a residual and shrugs.
+    `bounded` means the entire miss lies within the deterministic fees of
+    submissions the run sent and never observed, each one named with its
+    signature; `divergent` means lamports moved that NOTHING in the record can
+    explain, which is a finding, not a bound.
+    """
+    evidence = statement.evidence
+    if evidence.opening is None:
+        return {
+            "verdict": "inapplicable",
+            "reason": "this run states no opening balance, so there is no "
+            "external inflow to conserve against",
+        }
+    implied, _lines = statement.rent_implied_by_all_funders()
+    observed = statement.campaign_created_rent
+    residual = observed - implied
+    open_subs = [sub for sub in evidence.unresolved if sub.resolved_fee is None]
+    unbounded = [sub for sub in open_subs if sub.bound_lamports is None]
+    bound_total = sum(
+        sub.bound_lamports for sub in open_subs if sub.bound_lamports is not None
+    )
+    identity_payers = {evidence.payer, evidence.funding_source} - {None}
+    result: dict[str, Any] = {
+        "residualLamports": str(residual),
+        "unresolvedFeeBoundLamports": str(bound_total),
+        "unobservedSubmissions": [sub.as_json() for sub in evidence.unresolved],
+    }
+    if residual == 0:
+        result["verdict"] = "exact"
+        if not open_subs:
+            result["reason"] = (
+                "every lamport the funders spent is accounted for in a named "
+                "account or a named fee, to the lamport"
+            )
+        else:
+            inside = [sub for sub in open_subs if sub.payer in identity_payers]
+            outside = [sub for sub in open_subs if sub.payer not in identity_payers]
+            reason = "the identity closes exactly"
+            if inside:
+                reason += (
+                    f"; the chain's own arithmetic proves the {len(inside)} "
+                    "unresolved submission(s) paid by an identity funder never "
+                    "landed (a landed one would have left its funder poorer "
+                    "than this closure explains)"
+                )
+            if outside:
+                reason += (
+                    f"; {len(outside)} unresolved submission(s) are paid by "
+                    "keys OUTSIDE the identity and this closure cannot rule on "
+                    "them"
+                )
+            result["reason"] = reason
+    elif residual < 0 and unbounded:
+        result["verdict"] = "unbounded-unknown"
+        result["reason"] = (
+            f"the funders are {-residual} lamports poorer than the record "
+            f"explains and {len(unbounded)} unobserved submission(s) state no "
+            "exactFeeLamports, so no bound can be named: "
+            + "; ".join(f"{sub.operation} ({sub.source})" for sub in unbounded)
+        )
+    elif residual < 0 and -residual <= bound_total:
+        result["verdict"] = "bounded"
+        suspects = ", ".join(
+            f"{sub.operation} (deterministic fee {sub.bound_lamports}, "
+            f"signature {sub.signature}, {sub.resolution})"
+            for sub in open_subs
+        )
+        reason = (
+            f"the entire {-residual}-lamport miss lies within the "
+            f"{bound_total}-lamport deterministic fee bound of {len(open_subs)} "
+            f"submission(s) the run sent and never observed: {suspects}"
+        )
+        if -residual == bound_total:
+            reason += (
+                ". The residual equals the bound EXACTLY: the funders' own "
+                "balances select the landed point of every two-point fee, "
+                "which is consistent only with every unobserved submission "
+                "having landed at its deterministic fee"
+            )
+        result["reason"] = reason
+    else:
+        result["verdict"] = "divergent"
+        if residual > 0:
+            result["reason"] = (
+                f"accounts hold {residual} lamports more than the funders' "
+                "movement explains: an unnamed funder paid, or an account "
+                "counted as campaign-created predates the campaign"
+            )
+        else:
+            result["reason"] = (
+                f"the funders are {-residual} lamports poorer than the record "
+                f"explains and only {bound_total} lamports of that lie within "
+                "the unobserved-submission bound; the rest left the funders "
+                "and arrived nowhere this statement can name"
+            )
+    return result
+
+
 def detect_divergences(statement: Statement) -> None:
     evidence = statement.evidence
+    if statement.conservation is None:
+        statement.conservation = compute_conservation(statement)
 
     # (1) Accounts nothing claims.
     unclassified = [row for row in statement.rows if row.flow_class == "unclassified"]
@@ -902,8 +1211,12 @@ def detect_divergences(statement: Statement) -> None:
             )
         )
 
-    # (3) The payer identity. This is the statement's spine.
-    if evidence.opening is not None:
+    # (3) The payer identity. This is the statement's spine. A miss that lies
+    # WITHIN the named unobserved-submission bound is a closed-with-bound
+    # statement (the conservation verdict carries it, suspect by suspect); a
+    # miss BEYOND that bound is a divergence nothing in the record explains.
+    verdict = (statement.conservation or {}).get("verdict")
+    if evidence.opening is not None and verdict in ("divergent", "unbounded-unknown"):
         implied_rent, _lines = statement.rent_implied_by_all_funders()
         observed_rent = statement.campaign_created_rent
         gap = observed_rent - implied_rent
@@ -925,34 +1238,34 @@ def detect_divergences(statement: Statement) -> None:
                     "account counted as campaign-created predates the campaign"
                 )
             else:
-                # The funders are POORER than the accounts explain. Lamports left
-                # them and did not arrive anywhere the closure can see. On a
-                # chain the only such destination is a transaction fee -- so this
-                # is the campaign's own fee record being INCOMPLETE, which is
-                # precisely the failure L7 exists to catch and has never been in
-                # a position to.
+                # The funders are POORER than the accounts explain, BEYOND the
+                # bound of every unobserved submission. Lamports left them and
+                # did not arrive anywhere the closure can see. On a chain the
+                # only such destination is a transaction fee -- so this is the
+                # campaign's own fee record being INCOMPLETE past even its own
+                # unresolved markers, which is precisely the failure L7 exists
+                # to catch and has never been in a position to.
                 kind = "spend-exceeds-observed-holdings"
                 explanation = (
                     f"the funders are {-gap} lamports poorer than the accounts "
                     "they created can explain. Lamports left a funder and "
                     "arrived nowhere in the closure; on a chain the only such "
                     "destination is a transaction fee. The campaign's own fee "
-                    "record is therefore a LOWER BOUND: it logs a transaction "
-                    "when the driver observes it confirm, so a transaction that "
-                    "was submitted and never observed is charged by the chain "
-                    "and never counted here"
+                    "record is therefore a LOWER BOUND, and its unresolved-"
+                    "submission bound does not cover this miss"
                 )
-                unfinalized = [
-                    f"{journal.get('operation')} phase={journal.get('phase')} "
-                    f"feeLamports={journal.get('feeLamports')}"
-                    for journal in evidence.unfinalized
+                open_subs = [
+                    f"{sub.operation} bound={sub.bound_lamports} "
+                    f"resolution={sub.resolution}"
+                    for sub in evidence.unresolved
+                    if sub.resolved_fee is None
                 ]
                 tiers = sorted({event.lamports for event in evidence.fees if event.lamports})
-                candidates = unfinalized + [
+                candidates = open_subs + [
                     f"observed fee tiers in this run: {tiers}",
                     f"unaccounted {-gap} lamports is "
                     + (
-                        f"{-gap // tiers[0]}-{-gap // tiers[-1]} transactions at those tiers"
+                        f"{-gap // tiers[-1]}-{-gap // tiers[0]} transactions at those tiers"
                         if tiers
                         else "unattributable without a fee tier"
                     ),
@@ -962,6 +1275,37 @@ def detect_divergences(statement: Statement) -> None:
                     kind=kind, lamports=gap, explanation=explanation, accounts=candidates
                 )
             )
+
+    # (3b) A journal fee that may ALSO be a stage-log line. Stage-log events
+    # carry no signature, so the join is by (slot, fee) and only ever ambiguous
+    # in one direction: if a finalized journal's slot+fee coincide with a
+    # printed line, the total MAY count one transaction twice, and the
+    # statement says so rather than picking silently.
+    log_pairs = {
+        (event.slot, event.lamports)
+        for event in evidence.fees
+        if "#line-match[" in event.source
+    }
+    collisions = [
+        f"{event.label} slot={event.slot} fee={event.lamports} ({event.source})"
+        for event in evidence.fees
+        if "#foundingSubmissionJournals[" in event.source
+        and (event.slot, event.lamports) in log_pairs
+    ]
+    if collisions:
+        statement.divergences.append(
+            Divergence(
+                kind="journal-fee-possible-double-count",
+                lamports=0,
+                explanation=(
+                    "a finalized submission journal's slot and fee coincide "
+                    "with a stage-log transaction line; the log carries no "
+                    "signature, so the two records cannot be proven distinct "
+                    "and the fee total may count one transaction twice"
+                ),
+                accounts=collisions,
+            )
+        )
 
     missing_fee = [event for event in evidence.fees if "fee unavailable" in event.source]
     if missing_fee:
@@ -1044,6 +1388,27 @@ def render_text(statement: Statement) -> str:
         if difference == 0:
             add("  EVERY LAMPORT THE FUNDERS SPENT IS ACCOUNTED FOR IN A NAMED ACCOUNT.")
     add("")
+
+    if statement.conservation is not None:
+        conservation = statement.conservation
+        add("-" * 96)
+        add(f"  CONSERVATION VERDICT: {conservation['verdict'].upper()}")
+        add("-" * 96)
+        add(f"  {conservation['reason']}")
+        for sub_json in conservation.get("unobservedSubmissions") or []:
+            add(
+                f"    unobserved submission: {sub_json['operation']} "
+                f"bound={sub_json['boundLamports']} "
+                f"resolution={sub_json['resolution']}"
+                + (
+                    f" resolvedFee={sub_json['resolvedFeeLamports']}"
+                    if sub_json["resolvedFeeLamports"] is not None
+                    else ""
+                )
+            )
+            add(f"      signature {sub_json['signature']}")
+            add(f"      journal   {sub_json['source']}")
+        add("")
 
     add("-" * 96)
     add("  HOLDINGS — every lamport in the closure, by flow class")
@@ -1165,6 +1530,7 @@ def render_json(statement: Statement) -> dict[str, Any]:
             }
             for flow_class, rows in sorted(grouped.items())
         },
+        "conservation": statement.conservation,
         "accounts": [row.as_json() for row in sorted(statement.rows, key=lambda r: -r.lamports)],
         "fees": [
             {
@@ -1382,13 +1748,21 @@ def main(argv: list[str] | None = None) -> int:
         args.trace.write_text(json.dumps(render_trace(statement), indent=1, sort_keys=True) + "\n")
         print(f"  wrote {args.trace}")
 
-    if args.strict and statement.divergences:
-        print(
-            f"\nrefusal: {len(statement.divergences)} divergence(s); "
-            "the statement does not close",
-            file=sys.stderr,
-        )
-        return 1
+    if args.strict:
+        # A statement closes EXACT or closes WITH A NAMED BOUND; either is a
+        # closure. Divergent or unbounded is not, and neither is any divergence.
+        verdict = (statement.conservation or {}).get("verdict")
+        failures: list[str] = []
+        if verdict in ("divergent", "unbounded-unknown"):
+            failures.append(f"conservation verdict is {verdict}")
+        if statement.divergences:
+            failures.append(f"{len(statement.divergences)} divergence(s)")
+        if failures:
+            print(
+                f"\nrefusal: {'; '.join(failures)}; the statement does not close",
+                file=sys.stderr,
+            )
+            return 1
     return 0
 
 

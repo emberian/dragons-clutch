@@ -99,21 +99,50 @@ It refuses a non-loopback endpoint without `--allow-remote-rpc`, refuses mainnet
 outright, and refuses a chain whose genesis hash is not the one the run was
 driven against — a statement joining two chains would be fiction.
 
-## Fee evidence, and its known limit
+## Fee evidence, its known limit, and the verdict that carries it
 
-Fees come from `execution.transactions[].fee_lamports` when the run populated
-it. A resumed or recovered run can finish with `execution` empty while the
-stage's own stderr still holds the complete record the driver printed as it
-went (`campaign transaction: slot=N fee=N compute_units=N LABEL`); that log is a
-*superset*, so it is a fallback, never a preference, and the statement says
-which it used.
+Fees come from three places, and the statement cites which for every event:
 
-Both are **lower bounds**, and the tool says so. The driver logs a transaction
-when it observes it confirm, so a transaction submitted and never observed is
-charged by the chain and never counted. On `selseam-hold-01` this is exactly the
-−385,000 residual, and the statement names its suspect: the run's fifth
-submission journal, `resolution-funding-activate-v1`, sits in phase `submitted`
-with a null fee.
+1. `execution.transactions[].fee_lamports` when the run populated it;
+2. the stage's own stderr when `execution` is empty (`campaign transaction:
+   slot=N fee=N compute_units=N LABEL`) — a *superset*, so a fallback, never a
+   preference;
+3. **the founding submission journals**. The funding-readiness ops are driven
+   over a durable-packet path that never prints the stage line, so a finalized
+   journal's `feeLamports` appears nowhere else. On `selseam-hold-01` that was
+   310,000 lamports recorded in `founding.json` and counted by nothing — most
+   of the original −385,000 residual. When `execution.transactions` is
+   populated the journals join it by signature (run.py's founding gate asserts
+   exactly that join) and the fee counts once; a journal whose slot+fee
+   coincide with an unsigned stage-log line is flagged as a possible double
+   count rather than silently blended.
+
+What remains after all three is the true limit: a journal in phase `submitted`
+whose transaction the driver never observed. Its fee is **two-point** — 0 if
+the send never landed, or exactly the journal's own `exactFeeLamports` if it
+did (the driver computes fees at message-build time; run.py asserts that
+equality on every finalized journal). The tool asks the chain
+(`getSignatureStatuses` with history search, then `getTransaction`), and every
+outcome is stated: `chain-served` promotes the bound to a read fee;
+`chain-status-only` proves it landed and the deterministic fee stands as fact;
+`chain-unserved` (purged history) leaves a named bound.
+
+The **conservation verdict** then closes the statement one of three ways:
+
+- `exact` — every lamport is in a named account or a named fee;
+- `bounded` — the entire miss lies within the unresolved submissions'
+  deterministic fee bound, each suspect named with its signature. When the
+  residual equals the bound *exactly*, the funders' own balances have selected
+  the landed point of every two-point fee, and the verdict says so;
+- `divergent` / `unbounded-unknown` — lamports moved that nothing in the
+  record explains, or a bound the record cannot state. These fail `--strict`;
+  the first two do not, because a closure with a named bound IS a closure.
+
+On `selseam-hold-01` the verdict is `bounded` at −75,000 against the 75,000
+bound of `resolution-funding-activate-v1` (signature chain-unserved: the
+blockstore purges below slot 15361, and every founding transaction sits below
+it) — the original −385,000 resolved to 310,000 of named journal fees plus
+this one exactly-selected bound.
 
 ## Feeding the existing oracle
 

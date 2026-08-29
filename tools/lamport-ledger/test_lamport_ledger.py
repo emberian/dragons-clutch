@@ -22,6 +22,7 @@ Run:  python3 -m unittest tools.lamport-ledger.test_lamport_ledger   (or)
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -329,6 +330,305 @@ class TraceEmission(unittest.TestCase):
         self.assertEqual(
             len(accounts), len(set(accounts)), "check-lamports requires unique rent accounts"
         )
+
+
+def run_root(tmp: str, journals: list, transactions: list | None = None) -> Path:
+    """A minimal run directory: enough evidence for load_evidence, no more."""
+    root = Path(tmp)
+    (root / "mutable").mkdir(parents=True)
+    (root / "mutable" / "plan.json").write_text(json.dumps({"genesis_accounts": {}}))
+    founding: dict = {
+        "roles": [{"role": "registry", "program_id": REGISTRY}],
+        "payer": PAYER,
+        "foundingSubmissionJournals": journals,
+    }
+    if transactions is not None:
+        founding["execution"] = {"transactions": transactions}
+    (root / "founding.json").write_text(json.dumps(founding))
+    return root
+
+
+class JournalFees(unittest.TestCase):
+    """The defect these controls pin: the -385,000 residual on selseam-hold-01.
+
+    310,000 of it was four FINALIZED submission journals whose fees sat in
+    founding.json and were counted by NOTHING (the funding-readiness ops are
+    driven over a path that never prints the stage's `campaign transaction:`
+    line); the last 75,000 was a submitted-never-observed journal whose
+    deterministic fee the record stated and the statement ignored.
+    """
+
+    def test_a_finalized_journal_fee_is_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ev = ll.load_evidence(run_root(tmp, [{
+                "operation": "dcltcfq1",
+                "phase": "finalized",
+                "feeLamports": 80_000,
+                "exactFeeLamports": 80_000,
+                "expectedSignature": "sig-cfq1",
+                "finalizedSlot": 10_633,
+                "payer": PAYER,
+            }]))
+        self.assertEqual(ev.total_fees, 80_000)
+        self.assertEqual(ev.fees[0].payer, PAYER)
+        self.assertIn("foundingSubmissionJournals[0]", ev.fees[0].source)
+        self.assertEqual(ev.unresolved, [])
+
+    def test_a_journal_joined_to_an_execution_row_is_not_double_counted(self):
+        """run.py's founding gate asserts journals JOIN execution.transactions
+        by signature; when both records exist the fee must count ONCE."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ev = ll.load_evidence(run_root(
+                tmp,
+                [{
+                    "operation": "dcltcfq1",
+                    "phase": "finalized",
+                    "feeLamports": 80_000,
+                    "expectedSignature": "sig-cfq1",
+                    "finalizedSlot": 10_633,
+                    "payer": PAYER,
+                }],
+                transactions=[{
+                    "signature": "sig-cfq1",
+                    "slot": 10_633,
+                    "fee_lamports": 80_000,
+                    "label": "founding-core-funding-create",
+                }],
+            ))
+        self.assertEqual(ev.total_fees, 80_000, "one transaction, one fee")
+        self.assertEqual(len(ev.fees), 1)
+
+    def test_a_submitted_journal_is_a_bound_never_zero_never_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ev = ll.load_evidence(run_root(tmp, [{
+                "operation": "resolution-funding-activate-v1",
+                "phase": "submitted",
+                "feeLamports": None,
+                "exactFeeLamports": 75_000,
+                "expectedSignature": "sig-activate",
+                "payer": PAYER,
+            }]))
+        self.assertEqual(ev.total_fees, 0, "an unresolved fee is never guessed")
+        self.assertEqual(len(ev.unresolved), 1)
+        sub = ev.unresolved[0]
+        self.assertEqual(sub.bound_lamports, 75_000)
+        self.assertEqual(sub.signature, "sig-activate")
+        self.assertEqual(sub.resolution, "unresolved")
+
+    def test_a_finalized_journal_without_a_fee_is_the_same_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ev = ll.load_evidence(run_root(tmp, [{
+                "operation": "broken",
+                "phase": "finalized",
+                "feeLamports": None,
+                "exactFeeLamports": 75_000,
+                "expectedSignature": "sig-broken",
+            }]))
+        self.assertEqual(ev.total_fees, 0)
+        self.assertEqual(len(ev.unresolved), 1)
+
+
+class ConservationVerdict(unittest.TestCase):
+    """The bar: a statement on a founding closes EXACT or names its bound
+    with a reason. It never reports a residual and shrugs."""
+
+    def _statement(self, ev, rows):
+        for account in rows:
+            ll.classify(account, ev, {REGISTRY: "registry"})
+        statement = ll.Statement(
+            slot=100, genesis_hash=ev.genesis_hash, evidence=ev, rows=rows
+        )
+        ll.detect_divergences(statement)
+        return statement
+
+    def _unresolved(self, bound, payer=PAYER, resolved_fee=None):
+        return ll.UnresolvedSubmission(
+            operation="resolution-funding-activate-v1",
+            signature="sig-activate",
+            bound_lamports=bound,
+            payer=payer,
+            stage="founding",
+            source="founding.json#foundingSubmissionJournals[4]",
+            resolved_fee=resolved_fee,
+        )
+
+    def test_exact_when_everything_is_named(self):
+        ev = evidence(
+            fees=[ll.FeeEvent("a", 1, 20_000, "l", "founding", False, "s", PAYER)],
+            harvested={RECORD},
+        )
+        rows = [
+            row(PAYER, 100_000_000_000 - 20_000 - 300_000, ll.SYSTEM_PROGRAM),
+            row(RECORD, 300_000, REGISTRY),
+        ]
+        statement = self._statement(ev, rows)
+        self.assertEqual(statement.conservation["verdict"], "exact")
+        self.assertEqual(statement.divergences, [])
+
+    def test_a_miss_equal_to_the_bound_closes_bounded_with_the_suspect_named(self):
+        """The selseam-hold-01 shape: the funders are poorer by EXACTLY the
+        deterministic fee of the one submission the run never observed."""
+        ev = evidence(
+            fees=[ll.FeeEvent("a", 1, 20_000, "l", "founding", False, "s", PAYER)],
+            harvested={RECORD},
+            unresolved=[self._unresolved(75_000)],
+        )
+        rows = [
+            row(PAYER, 100_000_000_000 - 20_000 - 300_000 - 75_000, ll.SYSTEM_PROGRAM),
+            row(RECORD, 300_000, REGISTRY),
+        ]
+        statement = self._statement(ev, rows)
+        conservation = statement.conservation
+        self.assertEqual(conservation["verdict"], "bounded")
+        self.assertIn("resolution-funding-activate-v1", conservation["reason"])
+        self.assertIn("sig-activate", conservation["reason"])
+        self.assertIn("EXACTLY", conservation["reason"])
+        self.assertNotIn(
+            "spend-exceeds-observed-holdings",
+            [d.kind for d in statement.divergences],
+            "a miss the bound covers is CLOSED WITH A BOUND, not a divergence",
+        )
+
+    def test_a_miss_beyond_the_bound_is_still_a_divergence(self):
+        ev = evidence(
+            fees=[ll.FeeEvent("a", 1, 20_000, "l", "founding", False, "s", PAYER)],
+            harvested={RECORD},
+            unresolved=[self._unresolved(75_000)],
+        )
+        rows = [
+            row(PAYER, 100_000_000_000 - 20_000 - 300_000 - 200_000, ll.SYSTEM_PROGRAM),
+            row(RECORD, 300_000, REGISTRY),
+        ]
+        statement = self._statement(ev, rows)
+        self.assertEqual(statement.conservation["verdict"], "divergent")
+        self.assertIn(
+            "spend-exceeds-observed-holdings",
+            [d.kind for d in statement.divergences],
+        )
+
+    def test_zero_residual_proves_an_identity_funders_submission_never_landed(self):
+        ev = evidence(
+            fees=[ll.FeeEvent("a", 1, 20_000, "l", "founding", False, "s", PAYER)],
+            harvested={RECORD},
+            unresolved=[self._unresolved(75_000)],
+        )
+        rows = [
+            row(PAYER, 100_000_000_000 - 20_000 - 300_000, ll.SYSTEM_PROGRAM),
+            row(RECORD, 300_000, REGISTRY),
+        ]
+        statement = self._statement(ev, rows)
+        conservation = statement.conservation
+        self.assertEqual(conservation["verdict"], "exact")
+        self.assertIn("never", conservation["reason"])
+
+    def test_a_bound_the_journal_cannot_state_is_unbounded_not_bounded(self):
+        ev = evidence(
+            fees=[ll.FeeEvent("a", 1, 20_000, "l", "founding", False, "s", PAYER)],
+            harvested={RECORD},
+            unresolved=[self._unresolved(None)],
+        )
+        rows = [
+            row(PAYER, 100_000_000_000 - 20_000 - 300_000 - 75_000, ll.SYSTEM_PROGRAM),
+            row(RECORD, 300_000, REGISTRY),
+        ]
+        statement = self._statement(ev, rows)
+        self.assertEqual(statement.conservation["verdict"], "unbounded-unknown")
+        self.assertIn(
+            "spend-exceeds-observed-holdings",
+            [d.kind for d in statement.divergences],
+        )
+
+    def test_a_journal_fee_sharing_slot_and_fee_with_a_stage_log_line_is_flagged(self):
+        ev = evidence(
+            fees=[
+                ll.FeeEvent(
+                    "<unsigned:06-founding:0>", 10_633, 80_000, "l", "founding",
+                    False, "stages/06-founding/stderr.bin#line-match[0]", PAYER,
+                ),
+                ll.FeeEvent(
+                    "sig-cfq1", 10_633, 80_000, "dcltcfq1", "founding", False,
+                    "founding.json#foundingSubmissionJournals[0].feeLamports", PAYER,
+                ),
+            ],
+        )
+        rows = [row(PAYER, 100_000_000_000 - 160_000, ll.SYSTEM_PROGRAM)]
+        statement = self._statement(ev, rows)
+        self.assertIn(
+            "journal-fee-possible-double-count",
+            [d.kind for d in statement.divergences],
+        )
+
+
+class FakeRpc:
+    """Scripted try_call answers, in the shape the real endpoint returns."""
+
+    def __init__(self, script: dict):
+        self.script = script
+
+    def try_call(self, method, params):
+        answer = self.script.get(method, (None, f"unscripted method {method}"))
+        return answer
+
+
+class Resolution(unittest.TestCase):
+    def _sub(self, bound=75_000):
+        return ll.UnresolvedSubmission(
+            operation="resolution-funding-activate-v1",
+            signature="sig-activate",
+            bound_lamports=bound,
+            payer=PAYER,
+            stage="founding",
+            source="founding.json#foundingSubmissionJournals[4]",
+        )
+
+    def test_a_chain_served_lookup_promotes_the_bound_to_a_named_fee(self):
+        ev = evidence(unresolved=[self._sub()])
+        rpc = FakeRpc({
+            "getSignatureStatuses": ({"value": [{"slot": 11_700, "err": None}]}, None),
+            "getTransaction": ({"slot": 11_700, "meta": {"fee": 75_000, "err": None}}, None),
+        })
+        ll.resolve_unobserved_submissions(ev, rpc)
+        sub = ev.unresolved[0]
+        self.assertEqual(sub.resolution, "chain-served")
+        self.assertEqual(sub.resolved_fee, 75_000)
+        self.assertEqual(ev.total_fees, 75_000)
+        self.assertIn("chain:getTransaction", ev.fees[0].source)
+
+    def test_a_status_without_metadata_uses_the_deterministic_fee(self):
+        """The chain confirms it LANDED but no longer serves the transaction:
+        the deterministic exactFeeLamports IS the fee, and the source says
+        exactly which two facts were joined to conclude that."""
+        ev = evidence(unresolved=[self._sub()])
+        rpc = FakeRpc({
+            "getSignatureStatuses": ({"value": [{"slot": 11_700, "err": None}]}, None),
+            "getTransaction": (None, "RPC getTransaction refused: history off"),
+        })
+        ll.resolve_unobserved_submissions(ev, rpc)
+        sub = ev.unresolved[0]
+        self.assertEqual(sub.resolution, "chain-status-only")
+        self.assertEqual(sub.resolved_fee, 75_000)
+        self.assertEqual(ev.total_fees, 75_000)
+        self.assertIn("deterministic fee", ev.fees[0].source)
+
+    def test_an_unserved_signature_keeps_its_bound(self):
+        ev = evidence(unresolved=[self._sub()])
+        rpc = FakeRpc({
+            "getSignatureStatuses": ({"value": [None]}, None),
+        })
+        ll.resolve_unobserved_submissions(ev, rpc)
+        self.assertEqual(ev.unresolved[0].resolution, "chain-unserved")
+        self.assertIsNone(ev.unresolved[0].resolved_fee)
+        self.assertEqual(ev.total_fees, 0)
+
+    def test_a_refused_endpoint_degrades_to_the_bound_never_kills(self):
+        ev = evidence(unresolved=[self._sub()])
+        rpc = FakeRpc({
+            "getSignatureStatuses": (None, "RPC getSignatureStatuses failed: down"),
+        })
+        ll.resolve_unobserved_submissions(ev, rpc)
+        self.assertTrue(ev.unresolved[0].resolution.startswith("rpc-refused"))
+        self.assertIsNone(ev.unresolved[0].resolved_fee)
+        self.assertEqual(ev.total_fees, 0)
 
 
 class Safety(unittest.TestCase):
