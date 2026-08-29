@@ -7105,7 +7105,12 @@ fn execute_source_abort_v1(
         &[beneficiary],
         routing,
         &tables,
-    )?;
+    )?
+    // CustodySbfError::Expiry. The kernel distinguishes "too early" from every
+    // other reason an abort can be refused, and this probe is about the clock
+    // alone -- a selection or frame refusal here would mean the abort never
+    // reached the expiry gate and the wait below proves nothing.
+    .refusing(0x600B)?;
     let fee_only = refused.fee_only_balance_change;
     if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
         return Err(Error::new(format!(
