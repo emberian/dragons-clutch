@@ -198,8 +198,8 @@ describe('the DCLTGMF3 outer frame', () => {
   });
 
   it('sums its six stage widths to the total the reference client pins', () => {
-    // 129 is transcribed in `market.rs` as one number. If a stage width moves
-    // and that number does not, this is where the two disagree.
+    // The fixed total is transcribed in `market.rs` as one number. If a stage
+    // width moves and that number does not, this is where the two disagree.
     const stages = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3
       + PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1
       + GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1

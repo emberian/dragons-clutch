@@ -1843,7 +1843,7 @@ pub(crate) fn initialize_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
 /// Is this market input's founding already on the chain?
 ///
 /// Complete is the market-account core of the executor's own
-/// `authenticate_open_market_poststate_v1`: the DCLTGMF1 Market exists at its
+/// `authenticate_open_market_poststate_v1`: the DCLTGMF3 Market exists at its
 /// derived address, Core-owned, Open, readiness consumed, identity equal.
 /// Partial is anything the founding creates short of that — and the executor
 /// REFUSES a partial founding rather than resuming into it, because the
