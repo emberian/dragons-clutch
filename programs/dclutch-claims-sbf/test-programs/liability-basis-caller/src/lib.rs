@@ -15,6 +15,11 @@ use alloc::vec::Vec;
 use core::convert::TryInto;
 
 use dclutch_core_contract::ContentId;
+use dclutch_fractional_claim_contract::{
+    FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3, FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3,
+    FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3, FractionalRetirementRequestV3,
+    decode_fractional_capability_root_v4,
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
@@ -94,9 +99,15 @@ pub fn process_instruction(
 
     let protocol_position = request.len() == PROTOCOL_POSITION_BYTES_V2
         && request.get(..PROTOCOL_POSITION_MAGIC_V2.len()) == Some(PROTOCOL_POSITION_MAGIC_V2);
+    let fractional_retirement = request.len() == FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3
+        && request.get(..FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.len())
+            == Some(FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3.as_slice());
     let mut metas = Vec::with_capacity(forwarded.len());
     for (index, account) in forwarded.iter().enumerate() {
-        let signer = account.is_signer || protocol_position && index == 0;
+        let signer = account.is_signer
+            || protocol_position && index == 0
+            || fractional_retirement
+                && (index == 0 || index == FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3);
         metas.push(if account.is_writable {
             AccountMeta::new(*account.key, signer)
         } else {
@@ -111,7 +122,70 @@ pub fn process_instruction(
     let mut infos = Vec::with_capacity(accounts.len());
     infos.extend_from_slice(forwarded);
     infos.push(claims_program.clone());
-    if protocol_position {
+    if fractional_retirement {
+        let retirement = FractionalRetirementRequestV3::decode(request)
+            .map_err(|_| LiabilityBasisTestCallerError::Instruction)?;
+        let input = retirement.input();
+        let caller = CallerAuthoritySeedsV1::new(
+            ContentId::new(input.release_set)
+                .map_err(|_| LiabilityBasisTestCallerError::Instruction)?,
+            input.market,
+            ExecutionRoleV1::Trading,
+            input.terms,
+            hash(request).to_bytes(),
+        )
+        .map_err(|_| LiabilityBasisTestCallerError::Instruction)?;
+        let caller_bump = [Pubkey::find_program_address(&caller.as_slices(), program_id).1];
+        let [caller_domain, release, market, role, context, digest] = caller.as_slices();
+        let root_account = forwarded
+            .get(FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3)
+            .ok_or(LiabilityBasisTestCallerError::AccountFrame)?;
+        let root_data = root_account
+            .try_borrow_data()
+            .map_err(|_| LiabilityBasisTestCallerError::AccountFrame)?;
+        let root = decode_fractional_capability_root_v4(&root_data)
+            .ok_or(LiabilityBasisTestCallerError::AccountFrame)?;
+        let root_seeds = root.header().seeds();
+        let root_bump = [root.state().input().bump];
+        let [
+            root_domain,
+            root_market,
+            generation,
+            manifest,
+            entry,
+            kind,
+            root_release,
+            config,
+        ] = root_seeds.as_slices();
+        drop(root_data);
+        invoke_signed(
+            &instruction,
+            &infos,
+            &[
+                &[
+                    caller_domain,
+                    release,
+                    market,
+                    role,
+                    context,
+                    digest,
+                    &caller_bump,
+                ],
+                &[
+                    root_domain,
+                    root_market,
+                    generation,
+                    manifest,
+                    entry,
+                    kind,
+                    root_release,
+                    config,
+                    &root_bump,
+                ],
+            ],
+        )
+        .map_err(|_| LiabilityBasisTestCallerError::ClaimsCpi)?;
+    } else if protocol_position {
         let release_set = array::<32>(request, 16)?;
         let market = array::<32>(request, 48)?;
         let position_owner = array::<32>(request, 80)?;
