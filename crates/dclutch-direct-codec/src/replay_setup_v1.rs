@@ -22,6 +22,11 @@ pub const DIRECT_REPLAY_SETUP_VERSION_V1: u16 = 1;
 /// Domain separating the synthetic Custody parent digest.
 pub const DIRECT_REPLAY_SETUP_PARENT_DOMAIN_V1: &[u8] = b"dclutch/direct/replay-setup-parent/v1";
 
+/// Width of one identity field. Every 32-byte field in both records is one.
+const IDENTITY_BYTES: usize = 32;
+/// Width of one little-endian u64 field.
+const SCALAR_BYTES: usize = 8;
+
 const MARKET_OFFSET: usize = 16;
 const MAKER_OFFSET: usize = 48;
 const MARKET_DIGEST_OFFSET: usize = 80;
@@ -207,34 +212,53 @@ impl DirectReplaySetupReceiptV1 {
         output[..8].copy_from_slice(&DIRECT_REPLAY_SETUP_RECEIPT_MAGIC_V1);
         output[8..10].copy_from_slice(&DIRECT_REPLAY_SETUP_VERSION_V1.to_le_bytes());
         output[12..16].copy_from_slice(&DIRECT_REPLAY_SETUP_SELECTOR_V1.to_le_bytes());
-        for (offset, value) in [
-            (RECEIPT_REQUEST_DIGEST_OFFSET, self.request_digest),
-            (RECEIPT_MARKET_OFFSET, self.market),
-            (RECEIPT_MAKER_OFFSET, self.maker),
-            (RECEIPT_MAKER_ROOT_OFFSET, self.maker_root),
-            (RECEIPT_CUSTODY_REPLAY_OFFSET, self.custody_replay),
-            (RECEIPT_RENT_REFUND_OFFSET, self.rent_refund),
-            (RECEIPT_PAYER_OFFSET, self.payer),
-            (
-                RECEIPT_CUSTODY_REQUEST_DIGEST_OFFSET,
-                self.custody_request_digest,
-            ),
-            (RECEIPT_CUSTODY_POSTSTATE_OFFSET, self.custody_poststate),
-            (
-                RECEIPT_CUSTODY_REPLAY_DIGEST_OFFSET,
-                self.custody_replay_digest,
-            ),
-        ] {
-            output[offset..offset + 32].copy_from_slice(&value);
+        // The receipt is two gapless runs: ten identities from the request
+        // digest up to the lamport block, then five little-endian u64s filling
+        // the record to its end. Each run's offsets were the previous plus the
+        // field width, so listing the fields in order tiles the run exactly.
+        // The asserts are what keep that quiet failure loud: zip truncates, so
+        // a field added without widening the record would silently vanish from
+        // the receipt rather than panic. They compile out of the SBF release
+        // build, so the ELF pays nothing for them.
+        let identities = [
+            self.request_digest,
+            self.market,
+            self.maker,
+            self.maker_root,
+            self.custody_replay,
+            self.rent_refund,
+            self.payer,
+            self.custody_request_digest,
+            self.custody_poststate,
+            self.custody_replay_digest,
+        ];
+        debug_assert!(
+            RECEIPT_OBSERVED_LAMPORTS_OFFSET.saturating_sub(RECEIPT_REQUEST_DIGEST_OFFSET)
+                == identities.len().saturating_mul(IDENTITY_BYTES)
+        );
+        for (slot, value) in output[RECEIPT_REQUEST_DIGEST_OFFSET..RECEIPT_OBSERVED_LAMPORTS_OFFSET]
+            .chunks_exact_mut(IDENTITY_BYTES)
+            .zip(identities.iter())
+        {
+            slot.copy_from_slice(value);
         }
-        for (offset, value) in [
-            (RECEIPT_OBSERVED_LAMPORTS_OFFSET, self.observed_lamports),
-            (RECEIPT_PAYER_TOP_UP_OFFSET, self.payer_top_up),
-            (RECEIPT_REFUNDED_EXCESS_OFFSET, self.refunded_excess),
-            (RECEIPT_EXACT_RENT_OFFSET, self.exact_rent),
-            (RECEIPT_POST_LAMPORTS_OFFSET, self.post_lamports),
-        ] {
-            output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        let scalars = [
+            self.observed_lamports,
+            self.payer_top_up,
+            self.refunded_excess,
+            self.exact_rent,
+            self.post_lamports,
+        ];
+        debug_assert!(
+            DIRECT_REPLAY_SETUP_RECEIPT_BYTES_V1.saturating_sub(RECEIPT_OBSERVED_LAMPORTS_OFFSET)
+                == scalars.len().saturating_mul(SCALAR_BYTES)
+        );
+        for (slot, value) in output
+            [RECEIPT_OBSERVED_LAMPORTS_OFFSET..DIRECT_REPLAY_SETUP_RECEIPT_BYTES_V1]
+            .chunks_exact_mut(SCALAR_BYTES)
+            .zip(scalars.iter())
+        {
+            slot.copy_from_slice(&value.to_le_bytes());
         }
         Ok(output)
     }

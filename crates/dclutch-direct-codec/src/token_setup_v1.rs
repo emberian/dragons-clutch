@@ -28,6 +28,14 @@ pub const DIRECT_TOKEN_SETUP_FRAME_DOMAIN_V1: &[u8] = b"dclutch/direct/token-set
 /// PDA domain shared by the two role-separated token accounts.
 pub const DIRECT_TOKEN_ACCOUNT_PDA_DOMAIN_V1: &[u8] = b"dclutch:direct-token:v1";
 
+/// Width of the fixed magic/version/reserved/selector header both records open
+/// with, and so the offset of each record's first field.
+const HEADER_BYTES: usize = 16;
+/// Width of one identity field. Every 32-byte field in both records is one.
+const IDENTITY_BYTES: usize = 32;
+/// Width of one encoded [`DirectTokenRentNormalizationV1`]: five u64s.
+const NORMALIZATION_BYTES: usize = 40;
+
 const MARKET_OFFSET: usize = 16;
 const MARKET_DIGEST_OFFSET: usize = 48;
 const ROOT_DIGEST_OFFSET: usize = 80;
@@ -138,22 +146,27 @@ impl DirectTokenSetupRequestV1 {
     pub fn to_bytes(self) -> Result<[u8; DIRECT_TOKEN_SETUP_REQUEST_BYTES_V1]> {
         Self::new(self)?;
         let mut output = [0; DIRECT_TOKEN_SETUP_REQUEST_BYTES_V1];
-        write_header(&mut output, DIRECT_TOKEN_SETUP_REQUEST_MAGIC_V1);
-        for (offset, value) in [
-            (MARKET_OFFSET, self.market),
-            (MARKET_DIGEST_OFFSET, self.expected_market_digest),
-            (ROOT_DIGEST_OFFSET, self.expected_root_digest),
-            (
-                CLAIMS_AGGREGATE_DIGEST_OFFSET,
-                self.expected_claims_aggregate_digest,
-            ),
-            (SELLER_OWNER_OFFSET, self.seller_owner),
-            (
-                SELLER_POSITION_DIGEST_OFFSET,
-                self.expected_seller_position_digest,
-            ),
-        ] {
-            output[offset..offset + 32].copy_from_slice(&value);
+        output[..HEADER_BYTES].copy_from_slice(&header(DIRECT_TOKEN_SETUP_REQUEST_MAGIC_V1));
+        // The six identities occupy MARKET_OFFSET..GENERATION_OFFSET with no
+        // gaps, so the offsets were never independent facts -- each was the
+        // previous plus 32. In order, they tile that region exactly.
+        let identities = [
+            self.market,
+            self.expected_market_digest,
+            self.expected_root_digest,
+            self.expected_claims_aggregate_digest,
+            self.seller_owner,
+            self.expected_seller_position_digest,
+        ];
+        debug_assert!(
+            GENERATION_OFFSET.saturating_sub(MARKET_OFFSET)
+                == identities.len().saturating_mul(IDENTITY_BYTES)
+        );
+        for (slot, value) in output[MARKET_OFFSET..GENERATION_OFFSET]
+            .chunks_exact_mut(IDENTITY_BYTES)
+            .zip(identities.iter())
+        {
+            slot.copy_from_slice(value);
         }
         output[GENERATION_OFFSET..GENERATION_OFFSET + 8]
             .copy_from_slice(&self.generation.to_le_bytes());
@@ -323,47 +336,47 @@ impl DirectTokenSetupReceiptV1 {
     pub fn to_bytes(self) -> Result<[u8; DIRECT_TOKEN_SETUP_RECEIPT_BYTES_V1]> {
         Self::new(self)?;
         let mut output = [0; DIRECT_TOKEN_SETUP_RECEIPT_BYTES_V1];
-        write_header(&mut output, DIRECT_TOKEN_SETUP_RECEIPT_MAGIC_V1);
-        for (offset, value) in [
-            (RECEIPT_REQUEST_DIGEST_OFFSET, self.request_digest),
-            (RECEIPT_FRAME_DIGEST_OFFSET, self.frame_digest),
-            (RECEIPT_MARKET_OFFSET, self.market),
-            (RECEIPT_RELEASE_SET_OFFSET, self.release_set),
-            (RECEIPT_REALM_OFFSET, self.realm),
-            (RECEIPT_DIRECT_CONFIG_OFFSET, self.direct_config),
-            (RECEIPT_CLAIMS_AGGREGATE_OFFSET, self.claims_aggregate),
-            (RECEIPT_SELLER_POSITION_OFFSET, self.seller_position),
-            (RECEIPT_COLLATERAL_MINT_OFFSET, self.collateral_mint),
-            (RECEIPT_TOKEN_PROGRAM_OFFSET, self.token_program),
-            (RECEIPT_SELLER_OWNER_OFFSET, self.seller_owner),
-            (RECEIPT_FEE_RECIPIENT_OFFSET, self.fee_recipient),
-            (RECEIPT_SELLER_TOKEN_OFFSET, self.seller_token),
-            (RECEIPT_FEE_TOKEN_OFFSET, self.fee_token),
-            (RECEIPT_RENT_REFUND_OFFSET, self.rent_refund),
-            (RECEIPT_PAYER_OFFSET, self.payer),
-            (
-                RECEIPT_SELLER_POSTSTATE_DIGEST_OFFSET,
-                self.seller_poststate_digest,
-            ),
-            (
-                RECEIPT_FEE_POSTSTATE_DIGEST_OFFSET,
-                self.fee_poststate_digest,
-            ),
-        ] {
-            output[offset..offset + 32].copy_from_slice(&value);
+        output[..HEADER_BYTES].copy_from_slice(&header(DIRECT_TOKEN_SETUP_RECEIPT_MAGIC_V1));
+        // Eighteen identities tile RECEIPT_REQUEST_DIGEST_OFFSET up to the
+        // fee-basis-points scalar with no gaps, so listing them in order says
+        // once what eighteen separate offsets said eighteen times.
+        let identities = [
+            self.request_digest,
+            self.frame_digest,
+            self.market,
+            self.release_set,
+            self.realm,
+            self.direct_config,
+            self.claims_aggregate,
+            self.seller_position,
+            self.collateral_mint,
+            self.token_program,
+            self.seller_owner,
+            self.fee_recipient,
+            self.seller_token,
+            self.fee_token,
+            self.rent_refund,
+            self.payer,
+            self.seller_poststate_digest,
+            self.fee_poststate_digest,
+        ];
+        debug_assert!(
+            RECEIPT_FEE_BASIS_POINTS_OFFSET.saturating_sub(RECEIPT_REQUEST_DIGEST_OFFSET)
+                == identities.len().saturating_mul(IDENTITY_BYTES)
+        );
+        for (slot, value) in output[RECEIPT_REQUEST_DIGEST_OFFSET..RECEIPT_FEE_BASIS_POINTS_OFFSET]
+            .chunks_exact_mut(IDENTITY_BYTES)
+            .zip(identities.iter())
+        {
+            slot.copy_from_slice(value);
         }
         output[RECEIPT_FEE_BASIS_POINTS_OFFSET..RECEIPT_FEE_BASIS_POINTS_OFFSET + 2]
             .copy_from_slice(&self.fee_basis_points.to_le_bytes());
-        put_normalization(
-            &mut output,
-            RECEIPT_SELLER_OBSERVED_OFFSET,
-            self.seller_normalization,
-        );
-        put_normalization(
-            &mut output,
-            RECEIPT_FEE_OBSERVED_OFFSET,
-            self.fee_normalization,
-        );
+        output
+            [RECEIPT_SELLER_OBSERVED_OFFSET..RECEIPT_SELLER_OBSERVED_OFFSET + NORMALIZATION_BYTES]
+            .copy_from_slice(&normalization_bytes(self.seller_normalization));
+        output[RECEIPT_FEE_OBSERVED_OFFSET..RECEIPT_FEE_OBSERVED_OFFSET + NORMALIZATION_BYTES]
+            .copy_from_slice(&normalization_bytes(self.fee_normalization));
         Ok(output)
     }
 }
@@ -457,11 +470,19 @@ pub fn direct_token_setup_frame_digest_v1(
     const PRIVILEGES: [u8; DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1] = [
         0, 4, 4, 0, 4, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 3, 2, 0, 4, 4,
     ];
+    let privileges: &'static [u8; DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1] = &PRIVILEGES;
+    // After the domain, the preimage is one address then its one privilege
+    // byte, per account, in frame order -- which is exactly what flattening the
+    // zipped pairs produces. Filling the tail in order writes the same parts the
+    // computed `1 + index * 2` / `2 + index * 2` slots did, with no index.
     let mut parts: [&[u8]; 1 + DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1 * 2] =
         [DIRECT_TOKEN_SETUP_FRAME_DOMAIN_V1; 1 + DIRECT_TOKEN_SETUP_ACCOUNT_COUNT_V1 * 2];
-    for (index, account) in accounts.iter().enumerate() {
-        parts[1 + index * 2] = account;
-        parts[2 + index * 2] = &PRIVILEGES[index..index + 1];
+    let tail = accounts
+        .iter()
+        .zip(privileges.iter())
+        .flat_map(|(account, privilege)| [account.as_slice(), core::slice::from_ref(privilege)]);
+    for (slot, part) in parts.iter_mut().skip(1).zip(tail) {
+        *slot = part;
     }
     digestv(&parts)
 }
@@ -487,10 +508,19 @@ fn require_header(input: &[u8], magic: [u8; 8], width: usize) -> Result<()> {
     Ok(())
 }
 
-fn write_header(output: &mut [u8], magic: [u8; 8]) {
-    output[..8].copy_from_slice(&magic);
-    output[8..10].copy_from_slice(&DIRECT_TOKEN_SETUP_VERSION_V1.to_le_bytes());
-    output[12..16].copy_from_slice(&DIRECT_TOKEN_SETUP_SELECTOR_V1.to_le_bytes());
+/// Build the fixed record header: magic, version, two reserved zero bytes,
+/// selector.
+///
+/// Written into a local buffer of the header's exact width rather than into a
+/// caller's slice, so the compiler can see that every range is in bounds. Bytes
+/// 10..12 stay zero exactly as they did when the caller's zeroed record was
+/// written in place.
+fn header(magic: [u8; 8]) -> [u8; HEADER_BYTES] {
+    let mut head = [0_u8; HEADER_BYTES];
+    head[..8].copy_from_slice(&magic);
+    head[8..10].copy_from_slice(&DIRECT_TOKEN_SETUP_VERSION_V1.to_le_bytes());
+    head[12..16].copy_from_slice(&DIRECT_TOKEN_SETUP_SELECTOR_V1.to_le_bytes());
+    head
 }
 
 fn normalization_at(input: &[u8], offset: usize) -> Result<DirectTokenRentNormalizationV1> {
@@ -503,16 +533,26 @@ fn normalization_at(input: &[u8], offset: usize) -> Result<DirectTokenRentNormal
     })
 }
 
-fn put_normalization(output: &mut [u8], offset: usize, value: DirectTokenRentNormalizationV1) {
-    for (relative, scalar) in [
-        (0, value.observed_lamports),
-        (8, value.payer_top_up),
-        (16, value.refunded_excess),
-        (24, value.exact_rent),
-        (32, value.post_lamports),
-    ] {
-        output[offset + relative..offset + relative + 8].copy_from_slice(&scalar.to_le_bytes());
+/// Build one normalization block: five little-endian u64s that tile its exact
+/// width, so `chunks_exact_mut` yields exactly five slots and the zip is total.
+///
+/// The assert is what stops the tiling from going quiet: zip truncates, so
+/// adding a scalar without widening the block would silently drop it from the
+/// receipt rather than panic. It compiles out of the SBF release build.
+fn normalization_bytes(value: DirectTokenRentNormalizationV1) -> [u8; NORMALIZATION_BYTES] {
+    let scalars = [
+        value.observed_lamports,
+        value.payer_top_up,
+        value.refunded_excess,
+        value.exact_rent,
+        value.post_lamports,
+    ];
+    let mut block = [0_u8; NORMALIZATION_BYTES];
+    debug_assert!(block.len() == scalars.len().saturating_mul(8));
+    for (slot, scalar) in block.chunks_exact_mut(8).zip(scalars.iter()) {
+        slot.copy_from_slice(&scalar.to_le_bytes());
     }
+    block
 }
 
 fn require_nonzero(value: [u8; 32]) -> Result<()> {
