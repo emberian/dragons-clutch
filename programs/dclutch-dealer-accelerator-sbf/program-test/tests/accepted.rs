@@ -36,7 +36,8 @@ use dclutch_operator::{
         DealerAcceptedEvaluationAccountsV4, DealerAcceptedReservationAccountsV4,
         DealerAcceptedTranscriptInputV4, DealerScenarioCommitAccountsV1,
         DealerScenarioCommitEffectAccountsV1, DealerScenarioEvaluationBodiesV1,
-        build_dealer_accepted_transcript_v4, build_dealer_scenario_checkpoint_create_v1,
+        build_dealer_accepted_transcript_v4, build_dealer_scenario_checkpoint_cleanup_v1,
+        build_dealer_scenario_checkpoint_create_v1,
         build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
         dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
         dealer_scenario_membership_manifest_address_v1,
@@ -104,9 +105,13 @@ const EFFECT_BODY: Pubkey = Pubkey::new_from_array([0xdc; 32]);
 const TRADING_CONTENT: u32 = 0x4003;
 /// The refusal Trading raises when a checked data-defined transition refuses.
 const TRADING_TRANSITION: u32 = 0x4004;
+/// The refusal Trading raises when a projected physical mutation cannot commit.
+const TRADING_COMMIT: u32 = 0x4005;
 
 /// Runtime Product outcome width this scenario transitions.
 const WIDTH: u32 = 3;
+/// Last slot at which this scenario's checkpoint may still be advanced.
+const SCENARIO_EXPIRES_AT: u64 = 25;
 
 fn observation() -> Observation {
     Observation {
@@ -250,7 +255,7 @@ fn scenario() -> Scenario {
         claims_revision: 8,
         generation: 17,
         now: 20,
-        expires_at: 25,
+        expires_at: SCENARIO_EXPIRES_AT,
         terminal: false,
     };
     let intent = ScenarioTradeIntentV3 {
@@ -1125,5 +1130,232 @@ async fn the_accepted_transcript_is_ordered_and_wholly_lock_bounded() {
     assert_eq!(
         transcript.journal.next_page, 0,
         "the transcript hands back a journal positioned before its first submission"
+    );
+}
+
+
+/// Drive creation, the whole membership transcript, and the sealed evaluation.
+///
+/// This is the same route order the executed campaign pins; the cases below use
+/// it to reach a prepared-but-uncommitted checkpoint, which is the state the
+/// abandonment path exists for.
+async fn prepare_through_evaluation(
+    context: &mut ProgramTestContext,
+    scenario: &Scenario,
+) -> DealerScenarioCheckpointJournalV1 {
+    let mut journal = DealerScenarioCheckpointJournalV1::planned(TRADING, scenario.request_digest)
+        .expect("planned journal");
+    create_checkpoint(context, scenario).await;
+    journal
+        .record_created(hash(&checkpoint_body(context, scenario).await).to_bytes())
+        .expect("journal records creation");
+    let payer = context.payer.pubkey();
+    for (page_index, page) in scenario.pages.iter().enumerate() {
+        let ordinal = u8::try_from(page_index).expect("six pages");
+        let (instruction, _) = page_instruction(scenario, payer, ordinal, page);
+        let processed = submit(context, instruction, &[])
+            .await
+            .expect("ProgramTest processing");
+        processed.result.expect("every page must commit");
+        let returned = processed
+            .metadata
+            .as_ref()
+            .and_then(|value| value.return_data.as_ref())
+            .map(|value| value.data.clone())
+            .expect("page receipt digest");
+        let digest = <[u8; 32]>::try_from(returned.as_slice()).expect("32-byte page receipt");
+        journal
+            .record_page(
+                ordinal,
+                digest,
+                hash(&checkpoint_body(context, scenario).await).to_bytes(),
+            )
+            .expect("journal records the page");
+    }
+    let read_back = checkpoint_body(context, scenario).await;
+    let evidence = evaluation_evidence(scenario, &read_back);
+    for (key, body) in evidence.installed.iter() {
+        context.set_account(
+            key,
+            &AccountSharedData::from(data_account(MANIFEST_PRODUCER, body.clone())),
+        );
+    }
+    let packet = build_dealer_scenario_checkpoint_evaluate_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        sysvar::clock::ID,
+        MANIFEST_PRODUCER,
+        evidence.receipt_address,
+        CANDIDATE_BANK,
+        CANDIDATE_OBLIGATION,
+        CLAIMS_DELTA,
+        EFFECTS,
+        Hash::default(),
+        &[],
+    )
+    .expect("evaluate packet");
+    let processed = submit(context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    processed.result.expect("evaluation must seal");
+    journal
+        .record_evaluated(
+            hash(&evidence.receipt_body).to_bytes(),
+            1,
+            hash(&checkpoint_body(context, scenario).await).to_bytes(),
+        )
+        .expect("journal records the evaluation");
+    journal
+}
+
+#[tokio::test]
+async fn an_expired_uncommitted_checkpoint_closes_to_its_immutable_beneficiary() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let mut journal = prepare_through_evaluation(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+
+    let rent_held = context
+        .banks_client
+        .get_account(scenario.checkpoint)
+        .await
+        .expect("checkpoint query")
+        .expect("checkpoint exists")
+        .lamports;
+    assert!(rent_held > 0, "the checkpoint holds the rent it must return");
+    let beneficiary_before = context
+        .banks_client
+        .get_account(BENEFICIARY)
+        .await
+        .expect("beneficiary query")
+        .expect("beneficiary exists")
+        .lamports;
+
+    // Abandonment is a time transition, not an authority: nobody signs for it,
+    // and the rent can only ever go to the beneficiary named at creation.
+    context
+        .warp_to_slot(SCENARIO_EXPIRES_AT + 8)
+        .expect("warp past expiry");
+    let packet = build_dealer_scenario_checkpoint_cleanup_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        BENEFICIARY,
+        sysvar::clock::ID,
+        Hash::default(),
+        &[],
+    )
+    .expect("cleanup packet");
+    assert_eq!(packet.route, DealerScenarioCheckpointRouteV1::Cleanup);
+    assert!(
+        packet.lock_census.unique_account_lock_count <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "cleanup must be lock-bounded"
+    );
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert!(
+        processed.result.is_ok(),
+        "an expired uncommitted checkpoint must close; observed {:?} logs {:?}",
+        processed.result,
+        processed.metadata.as_ref().map(|value| &value.log_messages)
+    );
+
+    let closed = context
+        .banks_client
+        .get_account(scenario.checkpoint)
+        .await
+        .expect("checkpoint query");
+    assert!(
+        closed.is_none_or(|account| account.data.is_empty() && account.lamports == 0),
+        "a cleaned checkpoint keeps neither state nor rent"
+    );
+    let beneficiary_after = context
+        .banks_client
+        .get_account(BENEFICIARY)
+        .await
+        .expect("beneficiary query")
+        .expect("beneficiary exists")
+        .lamports;
+    assert_eq!(
+        beneficiary_after,
+        beneficiary_before + rent_held,
+        "every lamport the checkpoint held reaches the immutable beneficiary"
+    );
+    journal.record_cleaned().expect("journal records the close");
+}
+
+#[tokio::test]
+async fn a_checkpoint_cannot_be_closed_before_it_expires() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    prepare_through_evaluation(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+    let before = checkpoint_body(&mut context, &scenario).await;
+
+    let packet = build_dealer_scenario_checkpoint_cleanup_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        BENEFICIARY,
+        sysvar::clock::ID,
+        Hash::default(),
+        &[],
+    )
+    .expect("cleanup packet");
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "closing a live checkpoint must refuse on transition; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        before,
+        "a refused close must leave the checkpoint intact"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_checkpoint_refuses_a_substituted_rent_beneficiary() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    prepare_through_evaluation(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+    context
+        .warp_to_slot(SCENARIO_EXPIRES_AT + 8)
+        .expect("warp past expiry");
+    let before = checkpoint_body(&mut context, &scenario).await;
+
+    // Expiry is reached, so the only thing left to get wrong is where the rent
+    // goes. The beneficiary was fixed at creation and is not a caller choice.
+    let thief = Pubkey::new_from_array([0x9e; 32]);
+    let packet = build_dealer_scenario_checkpoint_cleanup_v1(
+        TRADING,
+        payer,
+        scenario.checkpoint,
+        thief,
+        sysvar::clock::ID,
+        Hash::default(),
+        &[],
+    )
+    .expect("cleanup packet");
+    let processed = submit(&mut context, packet.instruction, &[])
+        .await
+        .expect("ProgramTest processing");
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_COMMIT),
+        "a substituted rent beneficiary must refuse; observed {:?}",
+        processed.result
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        before,
+        "a refused close must leave the checkpoint intact"
     );
 }
