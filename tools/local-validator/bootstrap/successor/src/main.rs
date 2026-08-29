@@ -240,22 +240,34 @@ fn run_runtime(arguments: Vec<String>) -> Result<()> {
 /// about the chain, and the fix is to change the chain or the plan, never to
 /// tell the tool to stop noticing.
 fn run_campaign(arguments: Vec<String>) -> Result<()> {
+    campaign::execute(parse_campaign_args_v1(arguments)?)
+}
+
+fn parse_campaign_args_v1(arguments: Vec<String>) -> Result<campaign::CampaignArgsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut plan = None;
     let mut market = None;
     let mut evidence = None;
     let mut through = None;
+    let mut founding_founder = None;
+    let mut substituted_founder = None;
     let mut execute = false;
+    let mut founding_only = false;
     let mut keypairs = std::collections::BTreeMap::new();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
-        // The one valueless flag, matched before anything demands a value.
-        if argument == "--execute" {
-            if execute {
-                return Err(Error::new("--execute may be supplied only once"));
+        // Valueless flags are matched before anything demands a value.
+        if matches!(argument.as_str(), "--execute" | "--founding-only") {
+            let (seen, label) = if argument == "--execute" {
+                (&mut execute, "--execute")
+            } else {
+                (&mut founding_only, "--founding-only")
+            };
+            if *seen {
+                return Err(Error::new(format!("{label} may be supplied only once")));
             }
-            execute = true;
+            *seen = true;
             continue;
         }
         let value = iterator
@@ -289,6 +301,8 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
             "--market" => &mut market,
             "--evidence" => &mut evidence,
             "--through" => &mut through,
+            "--founding-founder" => &mut founding_founder,
+            "--substituted-founder" => &mut substituted_founder,
             _ => {
                 return Err(Error::new(format!("unknown campaign argument: {argument}")));
             }
@@ -297,29 +311,126 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
     }
+    let mode = if founding_only {
+        campaign::CampaignModeV1::FoundingOnly
+    } else {
+        campaign::CampaignModeV1::Administration
+    };
+    let through = match (mode, through.as_deref()) {
+        (campaign::CampaignModeV1::Administration, None) => campaign::StageV1::Activation,
+        (campaign::CampaignModeV1::FoundingOnly, None) => campaign::StageV1::Founding,
+        (_, Some(value)) => campaign::StageV1::parse(value)?,
+    };
+    let market_path = market
+        .map(|path| absolute(Some(path), "--market"))
+        .transpose()?;
+    let founding_founder = founding_founder.as_deref().map(plan::pubkey).transpose()?;
+    let substituted_founder = substituted_founder
+        .as_deref()
+        .map(plan::pubkey)
+        .transpose()?;
+    match mode {
+        campaign::CampaignModeV1::Administration => {
+            if through > campaign::StageV1::Activation {
+                return Err(Error::new(
+                    "administration mode is infrastructure-only and stops at activation; pass --founding-only for a Market founding",
+                ));
+            }
+            if market_path.is_some() || founding_founder.is_some() || substituted_founder.is_some()
+            {
+                return Err(Error::new(
+                    "administration mode refuses --market, --founding-founder, and --substituted-founder; pass --founding-only for a Market founding",
+                ));
+            }
+            if let Some(role) = keypairs
+                .keys()
+                .find(|role| role.as_str() != seed::role::CORE_UPGRADE_AUTHORITY)
+            {
+                return Err(Error::new(format!(
+                    "administration mode refuses --keypair-{role}; its only signer path is --keypair-core-upgrade-authority"
+                )));
+            }
+        }
+        campaign::CampaignModeV1::FoundingOnly => {
+            if through != campaign::StageV1::Founding {
+                return Err(Error::new(
+                    "--founding-only requires --through founding; it never owns an infrastructure prefix",
+                ));
+            }
+            if market_path.is_none() {
+                return Err(Error::new(
+                    "--founding-only requires --market ABSOLUTE_JSON",
+                ));
+            }
+            let founder = founding_founder
+                .ok_or_else(|| Error::new("--founding-only requires --founding-founder PUBKEY"))?;
+            let substituted = substituted_founder.ok_or_else(|| {
+                Error::new("--founding-only requires --substituted-founder PUBKEY")
+            })?;
+            if founder == Pubkey::default()
+                || substituted == Pubkey::default()
+                || founder == substituted
+            {
+                return Err(Error::new(
+                    "--founding-founder and --substituted-founder must be nonzero, distinct public identities",
+                ));
+            }
+            if keypairs.contains_key(seed::role::CORE_UPGRADE_AUTHORITY) {
+                return Err(Error::new(
+                    "--founding-only refuses --keypair-core-upgrade-authority; infrastructure must already be Complete",
+                ));
+            }
+            let missing = campaign::FOUNDING_REQUIRED_ROLES
+                .iter()
+                .filter(|role| !keypairs.contains_key(**role))
+                .copied()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(Error::new(format!(
+                    "--founding-only omitted required keypair paths: {}",
+                    missing.join(", ")
+                )));
+            }
+            for role in keypairs.keys() {
+                if !campaign::FOUNDING_REQUIRED_ROLES.contains(&role.as_str())
+                    && role != crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1
+                    && role != crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1
+                {
+                    return Err(Error::new(format!(
+                        "--founding-only refuses --keypair-{role}; it is not one of the exact founding signer paths"
+                    )));
+                }
+            }
+            let fixture_owner =
+                keypairs.contains_key(crate::market::LOCAL_PARTICIPANT_FIXTURE_OWNER_ROLE_V1);
+            let fixture_source =
+                keypairs.contains_key(crate::market::LOCAL_PARTICIPANT_FIXTURE_SOURCE_ROLE_V1);
+            if fixture_owner != fixture_source {
+                return Err(Error::new(
+                    "local participant fixture owner and source keypair paths must be supplied together",
+                ));
+            }
+        }
+    }
     let origin = cluster::ClusterOriginV1::parse(
         &required(rpc_url, "--rpc-url")?,
         acknowledgment.as_deref(),
     )?;
-    let args = campaign::CampaignArgsV1 {
+    Ok(campaign::CampaignArgsV1 {
         origin,
+        mode,
         plan_path: absolute(plan, "--plan")?,
-        market_path: match market {
-            None => None,
-            Some(path) => Some(absolute(Some(path), "--market")?),
-        },
+        market_path,
         evidence_path: match evidence {
             None => None,
             Some(path) => Some(absolute(Some(path), "--evidence")?),
         },
+        founding_founder,
+        substituted_founder,
         keypairs,
         execute,
-        through: match through.as_deref() {
-            None => campaign::StageV1::Founding,
-            Some(value) => campaign::StageV1::parse(value)?,
-        },
-    };
-    campaign::execute(args)
+        through,
+    })
 }
 
 #[derive(Default)]
@@ -1334,6 +1445,45 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
     plan::pubkey(&required(value, label)?)
 }
 
+fn campaign_usage_v1() -> String {
+    format!(
+        "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] \
+         --plan ABSOLUTE_JSON [--evidence ABSOLUTE_JSON] [--through STAGE] [--execute] \
+         [--keypair-core-upgrade-authority ABSOLUTE_KEYPAIR_JSON]\n\
+         \n  dclutch-local-successor-bootstrap campaign --founding-only --rpc-url URL \
+         [{ack} GENESIS_HASH] --plan ABSOLUTE_JSON --market ABSOLUTE_JSON \
+         --keypair-campaign-payer ABSOLUTE_KEYPAIR_JSON \
+         --keypair-collateral-mint ABSOLUTE_KEYPAIR_JSON \
+         --keypair-collateral-wallet ABSOLUTE_KEYPAIR_JSON \
+         --keypair-founding-beneficiary ABSOLUTE_KEYPAIR_JSON \
+         --founding-founder PUBKEY \
+         --keypair-founding-projection-witness ABSOLUTE_KEYPAIR_JSON \
+         --keypair-founding-source-funder ABSOLUTE_KEYPAIR_JSON \
+         --substituted-founder PUBKEY [--evidence ABSOLUTE_JSON] [--execute]\n\n\
+         The campaign command is the EXTERNAL-CLUSTER driver. Default is an infrastructure-only \
+         administration preflight through activation. Its only possible signer is the Core upgrade \
+         authority, loaded lazily only when execution has an incomplete admitted stage. \
+         --founding-only is a disjoint path: publication, profile initialization, and activation \
+         must already read Complete before any key file opens. It never accepts an upgrade-authority \
+         path. Its campaign payer is disposable after terminal completion; its five created signer \
+         coordinates must start vacant and are not wallets to pre-fund. The founder and substituted \
+         founder are public identities and never keypair files. Default is PREFLIGHT: read-only RPC \
+         is enforced; --execute opts into writing.\n\nORIGIN. A loopback origin needs no ceremony. \
+         Any other origin is refused unless {ack} names devnet's genesis hash in full, and the \
+         cluster's own getGenesisHash is checked against it at connect. {help}\n\nSTAGES: \
+         {stages}. Every stage detects its own completion by reading the chain. substrate never \
+         writes. Under decision 0012 every slot, authority, Loader owner, privilege, and complete \
+         live ELF mismatch is fail-closed. There is no --keypair-seed on this public driver.",
+        ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
+        help = campaign::acknowledgment_help(),
+        stages = campaign::StageV1::ORDER
+            .iter()
+            .map(|stage| stage.name())
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
 fn usage() {
     usage_supervisor();
     println!("{}", local_mutable::usage());
@@ -1363,37 +1513,7 @@ fn usage() {
     println!("{}", wallet_terminal_payout_exterior::usage());
     println!("{}", direct_trade::usage());
     println!("{}", direct_trade_producer::usage());
-    println!(
-        "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
-         ABSOLUTE_JSON [--market ABSOLUTE_JSON] --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... \
-         [--evidence ABSOLUTE_JSON] [--through STAGE] [--execute]\n\nThe campaign command is the \
-         EXTERNAL-CLUSTER driver. It \
-         launches no validator, holds no ephemeral authority, and signs only with keypair files \
-         you hold. Default is PREFLIGHT: the connection is opened read-only and a method \
-         allowlist refuses anything that is not a read, so a preflight cannot write rather than \
-         intending not to. --execute opts into writing.\n\nORIGIN. A loopback origin needs no \
-         ceremony. Any other origin is refused unless {ack} names devnet's genesis hash in full, \
-         and the cluster's own getGenesisHash is checked against it at connect. {help}\n\nSTAGES \
-         (--through, default founding): {stages}. Every stage detects its own completion by \
-         READING THE CHAIN, never from a state file, so re-running after any failure is always \
-         safe -- which is the shape devnet requires, because devnet dies mid-ladder. `substrate` \
-         never writes: this driver does not deploy programs and has no code path that could. It \
-         reports each role's observed deployment slot, exact upgrade authority, Loader owner, \
-         ProgramData privilege, and complete live ELF digest against the release pins. Under \
-         decision 0012 any mismatch is fail-closed, not a deploy error.\n\nROLES for \
-         --keypair-ROLE: {roles}. Index 0 of each role is that \
-         file's own key, so the address `solana address -k FILE` prints is the address you fund. \
-         There is no --keypair-seed here: a reproducible private key on a public cluster is the \
-         footgun seed.rs documents.",
-        ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
-        help = campaign::acknowledgment_help(),
-        stages = campaign::StageV1::ORDER
-            .iter()
-            .map(|stage| stage.name())
-            .collect::<Vec<_>>()
-            .join(", "),
-        roles = campaign::KEYPAIR_ROLES.join(", "),
-    );
+    println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \
          --rpc-url URL [{ack} GENESIS_HASH] --mint PUBKEY --payer PUBKEY --hoard PUBKEY \
@@ -1425,6 +1545,147 @@ fn usage_supervisor() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn founding_campaign_cli_v1() -> Vec<String> {
+        let founder = Pubkey::new_from_array([0x31; 32]).to_string();
+        let substituted = Pubkey::new_from_array([0x32; 32]).to_string();
+        let mut arguments = vec![
+            "--founding-only".to_owned(),
+            "--rpc-url".to_owned(),
+            "http://127.0.0.1:20890/".to_owned(),
+            "--plan".to_owned(),
+            "/campaign-plan-must-not-be-read.json".to_owned(),
+            "--market".to_owned(),
+            "/campaign-market-must-not-be-read.json".to_owned(),
+            "--founding-founder".to_owned(),
+            founder,
+            "--substituted-founder".to_owned(),
+            substituted,
+        ];
+        for role in campaign::FOUNDING_REQUIRED_ROLES {
+            arguments.extend([
+                format!("--keypair-{role}"),
+                format!("/campaign-{role}-must-not-be-read.json"),
+            ]);
+        }
+        arguments
+    }
+
+    fn remove_campaign_argument_v1(arguments: &mut Vec<String>, label: &str) {
+        let index = arguments
+            .iter()
+            .position(|value| value == label)
+            .expect("fixture argument");
+        arguments.drain(index..=index + 1);
+    }
+
+    #[test]
+    fn campaign_cli_modes_are_disjoint_and_default_admin_stops_at_activation() {
+        let admin = parse_campaign_args_v1(vec![
+            "--rpc-url".into(),
+            "http://127.0.0.1:20890/".into(),
+            "--plan".into(),
+            "/campaign-plan-must-not-be-read.json".into(),
+        ])
+        .expect("key-free administration parse");
+        assert_eq!(admin.mode, campaign::CampaignModeV1::Administration);
+        assert_eq!(admin.through, campaign::StageV1::Activation);
+        assert!(admin.keypairs.is_empty());
+        assert!(admin.market_path.is_none());
+
+        let founding = parse_campaign_args_v1(founding_campaign_cli_v1())
+            .expect("exact founding-only surface");
+        assert_eq!(founding.mode, campaign::CampaignModeV1::FoundingOnly);
+        assert_eq!(founding.through, campaign::StageV1::Founding);
+        assert_eq!(
+            founding.keypairs.len(),
+            campaign::FOUNDING_REQUIRED_ROLES.len()
+        );
+        assert_ne!(founding.founding_founder, founding.substituted_founder);
+    }
+
+    #[test]
+    fn founding_only_cli_refuses_authority_alias_missing_and_legacy_secret_paths() {
+        let mut missing = founding_campaign_cli_v1();
+        remove_campaign_argument_v1(&mut missing, "--keypair-campaign-payer");
+        assert!(
+            parse_campaign_args_v1(missing)
+                .expect_err("missing payer path")
+                .0
+                .contains("campaign-payer")
+        );
+
+        let mut authority = founding_campaign_cli_v1();
+        authority.extend([
+            "--keypair-core-upgrade-authority".into(),
+            "/upgrade-authority-must-not-be-read.json".into(),
+        ]);
+        assert!(
+            parse_campaign_args_v1(authority)
+                .expect_err("upgrade authority path")
+                .0
+                .contains("refuses --keypair-core-upgrade-authority")
+        );
+
+        for legacy in [
+            "--keypair-founding-founder",
+            "--keypair-substituted-founder",
+        ] {
+            let mut arguments = founding_campaign_cli_v1();
+            arguments.extend([legacy.into(), "/legacy-secret-must-not-be-read.json".into()]);
+            let refusal = parse_campaign_args_v1(arguments).expect_err("legacy secret path");
+            assert!(refusal.0.contains("names no campaign role"), "{refusal:?}");
+        }
+
+        let mut alias = founding_campaign_cli_v1();
+        let founder = alias
+            .iter()
+            .position(|value| value == "--founding-founder")
+            .and_then(|index| alias.get(index + 1))
+            .cloned()
+            .expect("founder value");
+        let substituted = alias
+            .iter()
+            .position(|value| value == "--substituted-founder")
+            .expect("substituted flag");
+        alias[substituted + 1] = founder;
+        assert!(
+            parse_campaign_args_v1(alias)
+                .expect_err("actor alias")
+                .0
+                .contains("distinct public identities")
+        );
+
+        let mut prefix = founding_campaign_cli_v1();
+        prefix.extend(["--through".into(), "activation".into()]);
+        assert!(
+            parse_campaign_args_v1(prefix)
+                .expect_err("founding prefix")
+                .0
+                .contains("requires --through founding")
+        );
+    }
+
+    #[test]
+    fn campaign_help_names_exact_eight_identity_founding_manifest() {
+        let help = campaign_usage_v1();
+        for required in [
+            "--founding-only",
+            "--keypair-campaign-payer",
+            "--keypair-collateral-mint",
+            "--keypair-collateral-wallet",
+            "--keypair-founding-beneficiary",
+            "--founding-founder PUBKEY",
+            "--keypair-founding-projection-witness",
+            "--keypair-founding-source-funder",
+            "--substituted-founder PUBKEY",
+        ] {
+            assert!(help.contains(required), "help omitted {required}");
+        }
+        assert!(!help.contains("--keypair-founding-founder"));
+        assert!(!help.contains("--keypair-substituted-founder"));
+        assert!(help.contains("never accepts an upgrade-authority path"));
+    }
 
     fn checked(extra: &[&str]) -> Vec<String> {
         let mut arguments = vec![
