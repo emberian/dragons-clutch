@@ -35,14 +35,15 @@ extern crate alloc;
 use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_capability_contract::{
-    CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1,
-    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId,
-    ControllerFundingCheckpointAbortKindV1, ControllerFundingCheckpointDerivationV1,
-    ControllerFundingCheckpointInputV1, ControllerFundingCheckpointPhaseV1,
-    ControllerFundingCheckpointV1, ControllerFundingCleanupTerminalReceiptInputV1,
-    ControllerFundingCleanupTerminalReceiptV1, ControllerFundingControllerV1,
-    FundingLedgerStatusV2, FundingLedgerV2, controller_funding_ledger_account_digest_v1,
-    funding_ledger_bytes_v2, validate_funding_ledger_masks_v2,
+    CONTROLLER_FUNDING_CHECKPOINT_BYTES_V1, CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+    CONTROLLER_FUNDING_CUSTODY_LADDER_DIGEST_DOMAIN_V1, CapabilityFundingLedgerDerivationV2,
+    CapabilityManifestV1, ContentId, ControllerFundingCheckpointAbortKindV1,
+    ControllerFundingCheckpointDerivationV1, ControllerFundingCheckpointInputV1,
+    ControllerFundingCheckpointPhaseV1, ControllerFundingCheckpointV1,
+    ControllerFundingCleanupTerminalReceiptInputV1, ControllerFundingCleanupTerminalReceiptV1,
+    ControllerFundingControllerV1, FundingLedgerStatusV2, FundingLedgerV2,
+    controller_funding_ledger_account_digest_v1, funding_ledger_bytes_v2,
+    validate_funding_ledger_masks_v2,
 };
 use dclutch_custody_contract::{
     FoundingPrestateStageV1, INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
@@ -635,6 +636,8 @@ fn authenticate_expired_checkpoint_v1(
         .map_err(|_| TradingSbfError::Content)?;
     let checkpoint = ControllerFundingCheckpointV1::decode(&checkpoint_data)
         .map_err(|_| TradingSbfError::Content)?;
+    let checkpoint_digest = hash(&checkpoint_data).to_bytes();
+    drop(checkpoint_data);
     let clock = Clock::from_account_info(account(accounts, FUNDING_ABORT_CLOCK)?)
         .map_err(|_| TradingSbfError::Content)?;
     if checkpoint
@@ -696,8 +699,51 @@ fn authenticate_expired_checkpoint_v1(
     {
         return Err(TradingSbfError::Content.into());
     }
-    authenticate_resolution_abort_authority_v1(program_id, accounts, checkpoint)?;
+    if expected_kind == ControllerFundingCheckpointAbortKindV1::CustodyStagedExpired {
+        authenticate_custody_staged_abort_anchor_v1(
+            program_id,
+            accounts,
+            checkpoint,
+            checkpoint_digest,
+        )?;
+    } else {
+        authenticate_resolution_abort_authority_v1(program_id, accounts, checkpoint)?;
+    }
     Ok(checkpoint)
+}
+
+/// Authenticate the phase-2 Custody abort without fabricating a Resolution
+/// cleanup authorization.
+///
+/// Resolution's canonical abort packet begins at phase 3, after Custody has
+/// committed its SourceAbort receipt and poststate into the checkpoint. The
+/// phase-2 transaction instead binds account zero to the exact pre-abort
+/// checkpoint. The Trading-owned PDA is not a signer and grants no child
+/// authority; it only prevents a caller from substituting an unrelated route
+/// account into the fixed cleanup frame.
+fn authenticate_custody_staged_abort_anchor_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    checkpoint: ControllerFundingCheckpointV1,
+    checkpoint_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    if checkpoint.phase() != ControllerFundingCheckpointPhaseV1::CustodyStaged {
+        return Err(TradingSbfError::Content.into());
+    }
+    let checkpoint_key = account(accounts, FUNDING_ABORT_CHECKPOINT)?.key;
+    let expected = Pubkey::find_program_address(
+        &[
+            CONTROLLER_FUNDING_CUSTODY_ABORT_ANCHOR_DOMAIN_V1,
+            checkpoint_key.as_ref(),
+            &checkpoint_digest,
+        ],
+        program_id,
+    )
+    .0;
+    if expected != *account(accounts, FUNDING_ABORT_CALLER_AUTHORITY)?.key {
+        return Err(TradingSbfError::Release.into());
+    }
+    Ok(())
 }
 
 /// Re-pin both programs that can mutate one controller-cleanup transaction.
@@ -1411,9 +1457,6 @@ fn persist_projected_custody_abort_prefix_v1(
     let lock_data = raw_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
-    let raw_digest = hash(&lock_data).to_bytes();
-    let abort = decode_projected_request(&lock_data)?.founding_source_abort_v1();
-    drop(lock_data);
     let custody_program = account(accounts, ABORT_CUSTODY_PROGRAM)?;
     let sub_frame = subslice(
         accounts,
@@ -1425,25 +1468,8 @@ fn persist_projected_custody_abort_prefix_v1(
     {
         return Err(TradingSbfError::Transition.into());
     }
-    let receipt = ProjectedCustodyReceiptV1::decode(&receipt_bytes)
-        .map_err(|_| TradingSbfError::Transition)?;
-    let expected_receipt = ProjectedCustodyReceiptV1 {
-        realized: false,
-        aborted_open: false,
-        market: abort.market,
-        release_set: abort.release_set,
-        parent_capability_root: abort.parent_capability_root,
-        context_digest: abort.context_digest,
-        hoard_vault: abort.hoard_vault,
-        amount: abort.amount,
-        request_digest: raw_digest,
-        market_state_digest: [0; 32],
-        rent_credit: abort.rent_credit,
-        resulting_revision: abort.resulting_revision,
-    };
-    if receipt != expected_receipt {
-        return Err(TradingSbfError::Transition.into());
-    }
+    authenticate_projected_custody_abort_receipt_v1(&lock_data, &receipt_bytes)?;
+    drop(lock_data);
     let checkpoint_account = account(funding, FUNDING_ABORT_CHECKPOINT)?;
     let checkpoint_data = checkpoint_account
         .try_borrow_data()
@@ -1463,6 +1489,44 @@ fn persist_projected_custody_abort_prefix_v1(
         .map_err(|_| TradingSbfError::Transition)?;
     write_checkpoint_last_v1(program_id, checkpoint_account, checkpoint, next)?;
     set_return_data(&next.encode());
+    Ok(())
+}
+
+/// Reconstruct and authenticate Custody's exact terminal SourceAbort receipt
+/// outside the checkpoint-heavy persistence frame.
+///
+/// The child hashes the derived AbortSource request, not the founding Lock
+/// request from which Trading derives it. Keeping this reconstruction in a
+/// separate frame both preserves that semantic join and leaves measurable SBF
+/// stack headroom for the durable checkpoint transition.
+#[inline(never)]
+fn authenticate_projected_custody_abort_receipt_v1(
+    lock_data: &[u8],
+    receipt_bytes: &[u8],
+) -> Result<(), ProgramError> {
+    let abort = decode_projected_request(lock_data)?.founding_source_abort_v1();
+    let abort_bytes = encode_projected_request_boxed(&abort)?;
+    let abort_request_digest = hash(abort_bytes.as_slice()).to_bytes();
+    drop(abort_bytes);
+    let receipt = ProjectedCustodyReceiptV1::decode(receipt_bytes)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let expected = ProjectedCustodyReceiptV1 {
+        realized: false,
+        aborted_open: false,
+        market: abort.market,
+        release_set: abort.release_set,
+        parent_capability_root: abort.parent_capability_root,
+        context_digest: abort.context_digest,
+        hoard_vault: abort.hoard_vault,
+        amount: abort.amount,
+        request_digest: abort_request_digest,
+        market_state_digest: [0; 32],
+        rent_credit: abort.rent_credit,
+        resulting_revision: abort.resulting_revision,
+    };
+    if receipt != expected {
+        return Err(TradingSbfError::Transition.into());
+    }
     Ok(())
 }
 
