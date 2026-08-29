@@ -906,6 +906,9 @@ pub(crate) struct LocalMutablePrepareReportV1 {
     /// Exact campaign flag surface, projected from the campaign role owner.
     /// The lifecycle supervisor must not grow its own stale copy of this list.
     pub(crate) campaign_keypairs: BTreeMap<String, String>,
+    /// Public-only founding identities. Their secret material is never exposed
+    /// through the campaign keypair surface.
+    pub(crate) campaign_public_identities: BTreeMap<String, String>,
 }
 
 const LOCAL_ID_DOMAIN_V1: &[u8] = b"dclutch/private-validator-lifecycle/program-id/v1";
@@ -930,6 +933,36 @@ fn local_key_roles_v1() -> BTreeSet<&'static str> {
         .copied()
         .chain(EXTRA_KEY_ROLES_V1)
         .collect()
+}
+
+fn local_campaign_public_identities_v1(seed: [u8; 32]) -> Result<BTreeMap<String, String>> {
+    let founder = Keypair::new_from_array(derive(
+        LOCAL_KEY_DOMAIN_V1,
+        seed,
+        crate::seed::role::FOUNDING_FOUNDER,
+    ))
+    .pubkey();
+    let substituted_founder = Keypair::new_from_array(derive(
+        LOCAL_KEY_DOMAIN_V1,
+        seed,
+        crate::seed::role::SUBSTITUTED_FOUNDER,
+    ))
+    .pubkey();
+    if founder == substituted_founder {
+        return Err(Error::new(
+            "local founding and substituted-founder public identities aliased",
+        ));
+    }
+    Ok(BTreeMap::from([
+        (
+            crate::seed::role::FOUNDING_FOUNDER.into(),
+            founder.to_string(),
+        ),
+        (
+            crate::seed::role::SUBSTITUTED_FOUNDER.into(),
+            substituted_founder.to_string(),
+        ),
+    ]))
 }
 
 /// Prepare one exact checked mutable plan and its disposable role key files.
@@ -1046,6 +1079,24 @@ pub(crate) fn prepare_local_mutable_v1(
         crate::seed::role::CORE_UPGRADE_AUTHORITY,
     )?;
     let authority = Keypair::new_from_array(authority_secret).pubkey();
+    let founder_path = keypairs
+        .get(crate::seed::role::FOUNDING_FOUNDER)
+        .ok_or_else(|| Error::new("local role derivation omitted the founding founder"))?;
+    let founder_secret = crate::campaign::read_keypair_file(
+        Path::new(founder_path),
+        crate::seed::role::FOUNDING_FOUNDER,
+    )?;
+    let founder = Keypair::new_from_array(founder_secret).pubkey();
+    let campaign_public_identities = local_campaign_public_identities_v1(seed)?;
+    if campaign_public_identities
+        .get(crate::seed::role::FOUNDING_FOUNDER)
+        .map(String::as_str)
+        != Some(founder.to_string().as_str())
+    {
+        return Err(Error::new(
+            "local founding public identity changed from its retained signer",
+        ));
+    }
 
     let mut programs = BTreeMap::new();
     let mut artifacts = BTreeMap::new();
@@ -1181,6 +1232,7 @@ pub(crate) fn prepare_local_mutable_v1(
                     })
             })
             .collect::<Result<BTreeMap<_, _>>>()?,
+        campaign_public_identities,
         keypairs,
     };
     Ok(report)
@@ -1484,6 +1536,34 @@ mod tests {
             campaign_roles.len() + roles.len() - 2,
             "the local key surface is the canonical set union, not a sequence that writes shared roles twice"
         );
+    }
+
+    #[test]
+    fn local_campaign_projects_two_public_founders_without_a_substituted_signer_file() {
+        let roles = local_key_roles_v1();
+        assert!(roles.contains(crate::seed::role::FOUNDING_FOUNDER));
+        assert!(!roles.contains(crate::seed::role::SUBSTITUTED_FOUNDER));
+        assert!(
+            !crate::campaign::KEYPAIR_ROLES.contains(&crate::seed::role::FOUNDING_FOUNDER)
+                && !crate::campaign::KEYPAIR_ROLES
+                    .contains(&crate::seed::role::SUBSTITUTED_FOUNDER)
+        );
+        let public = local_campaign_public_identities_v1([0x73; 32])
+            .expect("two public founding identities");
+        assert_eq!(
+            public.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                crate::seed::role::FOUNDING_FOUNDER,
+                crate::seed::role::SUBSTITUTED_FOUNDER,
+            ]
+        );
+        let founder = public[crate::seed::role::FOUNDING_FOUNDER]
+            .parse::<Pubkey>()
+            .expect("founder public key");
+        let substituted = public[crate::seed::role::SUBSTITUTED_FOUNDER]
+            .parse::<Pubkey>()
+            .expect("substituted-founder public key");
+        assert_ne!(founder, substituted);
     }
 
     #[test]
