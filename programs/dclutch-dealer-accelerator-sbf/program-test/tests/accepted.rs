@@ -26,13 +26,17 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
 };
 use dclutch_claims_svm::frame_spec_v1::{ClaimsFrameRoleV1, SignedDeltaFrameSpecV3};
+use dclutch_claims_svm::signed_delta_v3::SignedDeltaPlanV3;
 use dclutch_custody_contract::{CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_dealer_codec::{
     scenario::ClaimsInventoryObservation,
     scenario_checkpoint_v1::DEALER_SCENARIO_PREPARATION_PAGES_V1,
     scenario_custody_reservation_v1::{
-        DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1, DealerScenarioCustodyEffectManifestV1,
+        DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1,
+        DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1, DealerScenarioCustodyEffectManifestV1,
         DealerScenarioCustodyEffectV1, DealerScenarioCustodyRequestKindV1,
+        DealerScenarioReservationBatchStatusV1, DealerScenarioReservationBatchV1,
+        DealerScenarioReservationStateStatusV1, DealerScenarioReservationStateV1,
     },
     scenario_membership_manifest_v1::{
         DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
@@ -50,8 +54,10 @@ use dclutch_operator::{
         DealerScenarioCommitEffectAccountsV1, DealerScenarioEvaluationBodiesV1,
         build_dealer_accepted_transcript_v4, build_dealer_scenario_checkpoint_cleanup_v1,
         build_dealer_scenario_checkpoint_create_v1, build_dealer_scenario_checkpoint_reserve_v1,
+        build_dealer_scenario_commit_v1,
         build_dealer_scenario_checkpoint_evaluate_v1, build_dealer_scenario_checkpoint_page_v1,
         dealer_scenario_checkpoint_address_v1, dealer_scenario_evaluation_receipt_address_v1,
+        dealer_scenario_reservation_batch_address_v1,
         dealer_scenario_membership_manifest_address_v1,
         derive_dealer_scenario_evaluation_receipt_v1,
         project_dealer_scenario_canonical_membership_pages_v1,
@@ -70,13 +76,14 @@ use dclutch_registry_contract::{
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
+    ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use dclutch_core_contract::ContentId;
 use dclutch_trading_sbf::dealer::{
     v3_composer::{ScenarioCollateralFrameV3, ScenarioComposerContextV3},
+    v3_obligation::stage_scenario_obligation_replacement_v3,
     v3_trade_profile::{
         DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DEALER_SCENARIO_PROFILE_SPANS_V4,
         DealerScenarioAccountProfileInputV4, encode_dealer_scenario_account_profile_v4_atomic,
@@ -88,6 +95,7 @@ use dclutch_trading_sbf::dealer::{
     },
     v3_trade::{
         DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3,
+        DealerScenarioTradeRequestV3,
         ScenarioTradeChainProjectionV3, ScenarioTradeDirectionV3, ScenarioTradeIntentV3,
         build_scenario_trade_request_v3, scenario_trade_max_request_bytes_v3,
     },
@@ -101,8 +109,12 @@ use solana_program::{
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
-use solana_message_v3::AddressLookupTableAccount;
+use solana_message::{VersionedMessage, v0};
+use solana_message_v3::AddressLookupTableAccount as OperatorLookupTable;
+use solana_message::AddressLookupTableAccount;
+use solana_transaction::versioned::VersionedTransaction;
 use solana_sdk::transaction::TransactionError;
+use solana_address_lookup_table_interface::instruction::{create_lookup_table, extend_lookup_table};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
 
@@ -482,6 +494,7 @@ struct Scenario {
     pages: [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1],
     membership: Vec<Pubkey>,
     frame_accounts: Vec<(Pubkey, Account)>,
+    candidate_obligation_bytes: Vec<u8>,
     unsplit_account_lock_count: usize,
     waist: ReleaseWaist,
 }
@@ -553,6 +566,16 @@ fn scenario() -> Scenario {
         .expect("chain-derived request");
     request_bytes.truncate(built.request_bytes);
     let request_digest = hash(&request_bytes).to_bytes();
+    // The candidate obligation is not a fixture choice: commit re-derives it
+    // from the current body and the request's own candidate vector, and refuses
+    // anything whose bytes or digest differ.
+    let mut candidate_obligation_bytes = vec![0_u8; obligation_state.len()];
+    stage_scenario_obligation_replacement_v3(
+        current_obligation,
+        intent.candidate_obligations,
+        &mut candidate_obligation_bytes,
+    )
+    .expect("candidate obligation replacement");
     let checkpoint = dealer_scenario_checkpoint_address_v1(TRADING, request_digest);
     let membership_manifest =
         dealer_scenario_membership_manifest_address_v1(MANIFEST_PRODUCER, checkpoint, request_digest);
@@ -697,6 +720,7 @@ fn scenario() -> Scenario {
         pages: canonical.pages,
         membership,
         frame_accounts,
+        candidate_obligation_bytes,
         unsplit_account_lock_count: unsplit.unique_account_lock_count,
         waist,
     }
@@ -1048,8 +1072,12 @@ async fn real_trading_elf_executes_the_accepted_transition_through_reservation()
     // Custody to learn this: it authenticates the Custody-owned receipt out of
     // the activated release set, then re-reads the reservation account and
     // refuses any poststate the receipt did not commit.
-    let reservation =
-        reservation_evidence(&scenario, &after_evaluation, evidence.effects_digest);
+    let reservation = reservation_evidence(
+        &scenario,
+        &after_evaluation,
+        evidence.effects_digest,
+        evidence.effect_digest,
+    );
     for (key, body) in reservation.installed.iter() {
         context.set_account(
             key,
@@ -1122,6 +1150,7 @@ struct EvaluationEvidence {
     receipt_address: Pubkey,
     receipt_body: Vec<u8>,
     effects_digest: [u8; 32],
+    effect_digest: [u8; 32],
     installed: Vec<(Pubkey, Vec<u8>)>,
 }
 
@@ -1172,7 +1201,7 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
     );
     let effects_body = manifest.encode().expect("effect manifest encodes").to_vec();
     let candidate_bank = vec![0xc1; 64];
-    let candidate_obligation = vec![0xc2; 32];
+    let candidate_obligation = scenario.candidate_obligation_bytes.clone();
     let claims_delta = vec![0xc3; 48];
     let receipt = derive_dealer_scenario_evaluation_receipt_v1(
         TRADING,
@@ -1197,6 +1226,7 @@ fn evaluation_evidence(scenario: &Scenario, checkpoint_body: &[u8]) -> Evaluatio
         receipt_address,
         receipt_body: receipt_body.clone(),
         effects_digest: hash(&effects_body).to_bytes(),
+        effect_digest: hash(&effect_body).to_bytes(),
         installed: vec![
             (receipt_address, receipt_body),
             (CANDIDATE_BANK, candidate_bank),
@@ -1459,7 +1489,7 @@ fn named(tag: u8) -> Pubkey {
 /// The transition does not fit the 1,232-byte packet ceiling as static
 /// addresses, which is a fact about the transition and not about this harness:
 /// the operator refuses to emit a transcript whose legs cannot be sent.
-fn lookup_table(scenario: &Scenario, commit: &DealerScenarioCommitAccountsV1) -> AddressLookupTableAccount {
+fn lookup_table(scenario: &Scenario, commit: &DealerScenarioCommitAccountsV1) -> OperatorLookupTable {
     let mut addresses = scenario.membership.clone();
     addresses.extend(commit.claims_accounts.iter().map(|meta| meta.pubkey));
     addresses.extend([
@@ -1482,7 +1512,7 @@ fn lookup_table(scenario: &Scenario, commit: &DealerScenarioCommitAccountsV1) ->
     ]);
     addresses.sort_unstable_by_key(Pubkey::to_bytes);
     addresses.dedup();
-    AddressLookupTableAccount {
+    OperatorLookupTable {
         key: Pubkey::new_from_array([0x7b; 32]),
         addresses,
     }
@@ -1833,35 +1863,73 @@ async fn an_expired_checkpoint_refuses_a_substituted_rent_beneficiary() {
 struct ReservationEvidence {
     receipt_address: Pubkey,
     reservation_state: Pubkey,
+    batch: Pubkey,
     installed: Vec<(Pubkey, Vec<u8>)>,
 }
 
-/// Publish the Custody reservation receipt Trading will accept for one effect.
+/// Publish the Custody reservation receipt, state and locked batch.
 ///
-/// The receipt is Custody-owned and Custody-derived: its address is scoped to
-/// the checkpoint, the request, the action and the ordinal, and it commits both
-/// the exact checkpoint bytes Custody observed and the reservation account's
-/// poststate. Trading re-reads the reservation account and refuses any receipt
-/// whose poststate does not match what is actually on chain.
+/// These are real protocol bodies, not opaque blobs: reservation ingests the
+/// receipt, and commit later decodes the state and the batch and cross-checks
+/// all three against the checkpoint. The order is forced by what commits to
+/// what -- the state names the batch, the receipt commits the state's poststate,
+/// and the batch records the receipt's digest -- which is exactly why the state
+/// cannot carry its own receipt digest.
 fn reservation_evidence(
     scenario: &Scenario,
     checkpoint_body: &[u8],
     effects_digest: [u8; 32],
+    effect_digest: [u8; 32],
 ) -> ReservationEvidence {
-    let reservation_state = Pubkey::new_from_array([0xe8; 32]);
-    let reservation_body = vec![0xe9_u8; 64];
+    let custody = scenario.waist.custody_program;
+    let batch = dealer_scenario_reservation_batch_address_v1(custody, scenario.checkpoint);
+    let reservation_state = Pubkey::find_program_address(
+        &[
+            DEALER_SCENARIO_RESERVATION_STATE_PDA_DOMAIN_V1,
+            scenario.checkpoint.as_ref(),
+            &[0],
+        ],
+        &custody,
+    )
+    .0;
+    let state_body = DealerScenarioReservationStateV1 {
+        status: DealerScenarioReservationStateStatusV1::Active,
+        ordinal: 0,
+        effect_count: 1,
+        batch: batch.to_bytes(),
+        checkpoint: scenario.checkpoint.to_bytes(),
+        request_digest: scenario.request_digest,
+        effects_digest,
+        effect_digest,
+        source: [0xf3; 32],
+        destination: [0xf4; 32],
+        escrow: [0xf5; 32],
+        mint: [0xf6; 32],
+        token_program: [0xf7; 32],
+        source_prestate_digest: [0xf8; 32],
+        destination_prestate_digest: [0xf9; 32],
+        effect_poststate_digest: [0xfa; 32],
+        source_poststate_digest: [0xfb; 32],
+        amount: 10,
+        source_after: 90,
+        destination_before: 100,
+        escrow_after: 10,
+    }
+    .encode()
+    .expect("reservation state encodes")
+    .to_vec();
     let receipt = DealerScenarioReservationReceiptV1 {
         action: DealerScenarioReservationActionV1::Reserve,
         effect_ordinal: 0,
         effect_count: 1,
-        producer_program: scenario.waist.custody_program.to_bytes(),
+        producer_program: custody.to_bytes(),
         checkpoint: scenario.checkpoint.to_bytes(),
         checkpoint_prestate_digest: hash(checkpoint_body).to_bytes(),
         request_digest: scenario.request_digest,
         effects_digest,
         reservation: reservation_state.to_bytes(),
         reservation_prestate_digest: hash(&[] as &[u8]).to_bytes(),
-        reservation_poststate_digest: hash(&reservation_body).to_bytes(),
+        reservation_poststate_digest: hash(&state_body).to_bytes(),
         prior_receipt_digest: [0_u8; 32],
     };
     let receipt_address = Pubkey::find_program_address(
@@ -1872,20 +1940,57 @@ fn reservation_evidence(
             &[DealerScenarioReservationActionV1::Reserve as u8],
             &[0],
         ],
-        &scenario.waist.custody_program,
+        &custody,
     )
     .0;
     let receipt_body = receipt.encode().expect("reservation receipt encodes").to_vec();
+    let batch_body = DealerScenarioReservationBatchV1 {
+        status: DealerScenarioReservationBatchStatusV1::Reserved,
+        effect_count: 1,
+        reserved_count: 1,
+        rollback_count: 0,
+        release_set: scenario.waist.release_set_id,
+        market: MARKET.to_bytes(),
+        realm: [0xb6; 32],
+        trading_program: TRADING.to_bytes(),
+        checkpoint: scenario.checkpoint.to_bytes(),
+        request_digest: scenario.request_digest,
+        effects_digest,
+        replay: [0xfc; 32],
+        replay_prestate_digest: [0xfd; 32],
+        refund_beneficiary: BENEFICIARY.to_bytes(),
+        expires_at: SCENARIO_EXPIRES_AT,
+        generation: 17,
+        reservation_states: core::array::from_fn(|index| {
+            if index == 0 {
+                reservation_state.to_bytes()
+            } else {
+                [0_u8; 32]
+            }
+        }),
+        receipt_digests: core::array::from_fn(|index| {
+            if index == 0 {
+                hash(&receipt_body).to_bytes()
+            } else {
+                [0_u8; 32]
+            }
+        }),
+        last_prestate_digest: [0xfe; 32],
+    }
+    .encode()
+    .expect("reservation batch encodes")
+    .to_vec();
     ReservationEvidence {
         receipt_address,
         reservation_state,
+        batch,
         installed: vec![
             (receipt_address, receipt_body),
-            (reservation_state, reservation_body),
+            (reservation_state, state_body),
+            (batch, batch_body),
         ],
     }
 }
-
 
 /// Build one reservation route over a caller-supplied release waist.
 ///
@@ -1929,8 +2034,13 @@ async fn evaluated_with_reservation_evidence(
     let mut journal = prepare_through_evaluation(context, scenario).await;
     let _ = &mut journal;
     let after_evaluation = checkpoint_body(context, scenario).await;
-    let effects_digest = evaluation_evidence(scenario, &after_evaluation).effects_digest;
-    let reservation = reservation_evidence(scenario, &after_evaluation, effects_digest);
+    let evidence = evaluation_evidence(scenario, &after_evaluation);
+    let reservation = reservation_evidence(
+        scenario,
+        &after_evaluation,
+        evidence.effects_digest,
+        evidence.effect_digest,
+    );
     for (key, body) in reservation.installed.iter() {
         context.set_account(
             key,
@@ -2117,4 +2227,254 @@ async fn a_commit_refuses_before_any_value_is_locked() {
         before,
         "a refused commit must not advance the checkpoint"
     );
+}
+
+
+/// Derive the request-scoped Trading caller authority the Claims frame requires.
+///
+/// Commit refuses unless the frame's first account is exactly this PDA, so the
+/// authority is a consequence of the request rather than a caller's choice.
+fn claims_caller_authority(scenario: &Scenario) -> Pubkey {
+    let request = DealerScenarioTradeRequestV3::decode(&scenario.request_bytes)
+        .expect("canonical request decodes");
+    let plan = SignedDeltaPlanV3::decode(request.claims_packet()).expect("claims plan decodes");
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(plan.release_set()).expect("release set"),
+        plan.market(),
+        ExecutionRoleV1::Trading,
+        plan.request_id(),
+        hash(request.claims_packet()).to_bytes(),
+    )
+    .expect("caller authority seeds");
+    Pubkey::find_program_address(&seeds.as_slices(), &TRADING).0
+}
+
+/// The exact Claims SignedDelta frame this scenario commits through.
+fn commit_claims_frame(scenario: &Scenario) -> Vec<AccountMeta> {
+    let mut frame = claims_frame(TRADING);
+    let authority = claims_caller_authority(scenario);
+    *frame.first_mut().expect("caller authority coordinate") =
+        AccountMeta::new_readonly(authority, false);
+    frame
+}
+
+/// The complete commit bank for this scenario's locked value.
+fn commit_bank(
+    scenario: &Scenario,
+    payer: Pubkey,
+    receipt_address: Pubkey,
+    reservation: &ReservationEvidence,
+) -> DealerScenarioCommitAccountsV1 {
+    DealerScenarioCommitAccountsV1 {
+        trading_program: TRADING,
+        payer,
+        checkpoint: scenario.checkpoint,
+        clock: sysvar::clock::ID,
+        request: REQUEST,
+        evaluation_receipt: receipt_address,
+        candidate_bank: CANDIDATE_BANK,
+        candidate_obligation: CANDIDATE_OBLIGATION,
+        claims_delta: CLAIMS_DELTA,
+        effects: EFFECTS,
+        root: CHILD_ROOT,
+        obligation: scenario.obligation,
+        custody_program: scenario.waist.custody_program,
+        custody_programdata: scenario.waist.custody_programdata,
+        batch: reservation.batch,
+        claims_accounts: commit_claims_frame(scenario),
+        effect_accounts: core::array::from_fn(|index| {
+            if index == 0 {
+                DealerScenarioCommitEffectAccountsV1 {
+                    reservation_receipt: reservation.receipt_address,
+                    reservation_state: reservation.reservation_state,
+                }
+            } else {
+                DealerScenarioCommitEffectAccountsV1::default()
+            }
+        }),
+        effect_count: 1,
+    }
+}
+
+#[tokio::test]
+async fn the_commit_clears_phase_geometry_and_privileges_and_stops_at_the_claims_waist() {
+    let scenario = scenario();
+    let mut context = program_test(&scenario).start_with_context().await;
+    let (reservation, after_evaluation) =
+        evaluated_with_reservation_evidence(&mut context, &scenario).await;
+    let payer = context.payer.pubkey();
+    let instruction = reserve_instruction(
+        &scenario,
+        payer,
+        &reservation,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        scenario.waist.activation_cache,
+    );
+    submit(&mut context, instruction, &[])
+        .await
+        .expect("ProgramTest processing")
+        .result
+        .expect("the reservation must be ingested");
+    let reserved = checkpoint_body(&mut context, &scenario).await;
+    assert_ne!(reserved, after_evaluation, "the checkpoint is now reserved");
+
+    let receipt_address = dealer_scenario_evaluation_receipt_address_v1(
+        TRADING,
+        scenario.checkpoint,
+        scenario.request_digest,
+    );
+    let bank = commit_bank(&scenario, payer, receipt_address, &reservation);
+    // Everything the commit names except the fee payer and the invoked program
+    // resolves through the table, which is the only shape that fits a packet.
+    let mut addresses = bank
+        .claims_accounts
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    addresses.extend([
+        scenario.checkpoint,
+        sysvar::clock::ID,
+        REQUEST,
+        receipt_address,
+        CANDIDATE_BANK,
+        CANDIDATE_OBLIGATION,
+        CLAIMS_DELTA,
+        EFFECTS,
+        CHILD_ROOT,
+        scenario.obligation,
+        scenario.waist.custody_program,
+        scenario.waist.custody_programdata,
+        reservation.batch,
+        reservation.receipt_address,
+        reservation.reservation_state,
+    ]);
+    addresses.retain(|key| *key != payer && *key != TRADING);
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    let packet = build_dealer_scenario_commit_v1(
+        bank,
+        Hash::default(),
+        &[OperatorLookupTable {
+            key: Pubkey::new_from_array([0x7b; 32]),
+            addresses: addresses.clone(),
+        }],
+    )
+    .expect("commit packet");
+    assert!(
+        packet.lock_census.unique_account_lock_count <= SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1,
+        "commit must be lock-bounded"
+    );
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let processed = submit_v0(&mut context, packet.instruction, table, &addresses)
+        .await
+        .expect("ProgramTest processing");
+
+    // What this pins is depth, not success. Reaching a Release refusal means
+    // commit already accepted the checkpoint phase -- so the reservation really
+    // happened -- then the account count, the absence of duplicates, the fixed
+    // privileges, and every privilege the Claims frame specification requires.
+    // It stops in authenticate_commit_releases_v1 because the Claims frame's
+    // release accounts are still campaign identities: the activation cache,
+    // Registry, Claims and Core coordinates are not yet a real multi-role
+    // release set. That is the named next wall, and it is the same Product-graph
+    // waist tests/frontier.rs stops at.
+    assert_eq!(
+        custom_code(&processed.result),
+        Some(TRADING_RELEASE),
+        "commit must reach the Claims frame release waist and stop there; observed {:?} logs {:?}",
+        processed.result,
+        processed.metadata.as_ref().map(|value| &value.log_messages)
+    );
+    assert_ne!(
+        custom_code(&processed.result),
+        Some(TRADING_TRANSITION),
+        "no Trading-owned transition check may refuse this commit"
+    );
+    assert_ne!(
+        custom_code(&processed.result),
+        Some(TRADING_CONTENT),
+        "the commit frame's shape and privileges must be accepted"
+    );
+    assert_eq!(
+        checkpoint_body(&mut context, &scenario).await,
+        reserved,
+        "a commit that does not complete must not advance the checkpoint"
+    );
+}
+
+
+/// Create a real on-chain address lookup table and activate its addresses.
+///
+/// This is not harness convenience. The commit route resolves more addresses
+/// than a static message can carry, so a caller that cannot build a table
+/// cannot commit at all; creating one here is part of the evidence.
+async fn create_live_lookup_table(
+    context: &mut ProgramTestContext,
+    addresses: &[Pubkey],
+) -> Pubkey {
+    let clock = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .expect("Clock sysvar");
+    context
+        .warp_to_slot(clock.slot + 1)
+        .expect("make the lookup-table slot recent");
+    let payer = context.payer.pubkey();
+    let (create, table) = create_lookup_table(payer, payer, clock.slot);
+    submit(context, create, &[])
+        .await
+        .expect("ProgramTest processing")
+        .result
+        .expect("create the lookup table");
+    for chunk in addresses.chunks(20) {
+        submit(
+            context,
+            extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+            &[],
+        )
+        .await
+        .expect("ProgramTest processing")
+        .result
+        .expect("extend the lookup table");
+    }
+    let extended = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .expect("post-extension Clock");
+    context
+        .warp_to_slot(extended.slot + 1)
+        .expect("activate the lookup addresses");
+    table
+}
+
+/// Submit one route as a v0 transaction resolved through a live table.
+async fn submit_v0(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    table: Pubkey,
+    addresses: &[Pubkey],
+) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
+    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            &context.payer.pubkey(),
+            &[instruction],
+            &[AddressLookupTableAccount {
+                key: table,
+                addresses: addresses.to_vec(),
+            }],
+            blockhash,
+        )
+        .expect("v0 message"),
+    );
+    let payer = context.payer.insecure_clone();
+    let transaction =
+        VersionedTransaction::try_new(message, &[&payer]).expect("signed v0 transaction");
+    context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
 }
