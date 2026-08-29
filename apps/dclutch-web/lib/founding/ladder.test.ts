@@ -39,7 +39,7 @@ describe('the founding ladder', () => {
       'collateral',
       'records',
       'rent-credit',
-      'found31',
+      'found37',
       'custody-bootstrap',
       'founding-requests',
       'prefunding',
@@ -51,14 +51,14 @@ describe('the founding ladder', () => {
 
   it('offers exactly the three rungs a browser drives today, in execution order', () => {
     // The routing table joined them once the browser could build one, and that
-    // is the whole reason Found31 is drivable at all: it does not fit a packet
+    // is the whole reason Found37 is drivable at all: it does not fit a packet
     // inline with the ComputeBudget limit it cannot execute without.
-    expect(browserDrivableRungsV1().map((rung) => rung.id)).toEqual(['rent-credit', 'found31', 'routing-table']);
+    expect(browserDrivableRungsV1().map((rung) => rung.id)).toEqual(['rent-credit', 'found37', 'routing-table']);
   });
 
   it('marks the three rungs that ride a lookup table', () => {
     expect(FOUNDING_LADDER_V1.filter((rung) => rung.lookupTable).map((rung) => rung.id))
-      .toEqual(['found31', 'custody-bootstrap', 'dcltgmf3']);
+      .toEqual(['found37', 'custody-bootstrap', 'dcltgmf3']);
   });
 
   it('has unique rung identifiers', () => {
