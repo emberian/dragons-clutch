@@ -108,7 +108,12 @@ use solana_sdk::{
 };
 use solana_sdk_ids::sysvar;
 
-use crate::{Error, Result, campaign::read_keypair_file, plan::hex, rpc::Rpc};
+use crate::{
+    Error, Result,
+    campaign::read_keypair_file,
+    plan::hex,
+    rpc::{Rpc, SignedVersionedPacketV1},
+};
 
 /// Command that drives the General family's seven authored actions.
 pub(crate) const GENERAL_COMMAND_V1: &str = "local-private-validator-general-hot-campaign-v1";
@@ -707,32 +712,60 @@ fn execute_general_action_v1(
         return_data_base64: None,
         ack_disposition: None,
     };
-    write_json_atomic_v1(&journal_path, &journal)?;
+
+    // A journal already on disk is the authority on where this action got to,
+    // and it is read BEFORE anything is written: writing `Planned` first would
+    // erase the very packet this run is supposed to resend. Reading it before
+    // touching a key is what makes the ladder a resume rather than a restart.
+    let resumed = read_journal_v1(&journal_path)?;
+    if let Some(previous) = &resumed {
+        authenticate_resumed_journal_v1(previous, &journal, &label)?;
+    } else {
+        write_json_atomic_v1(&journal_path, &journal)?;
+    }
 
     let (Some(rpc), Some(payer)) = (rpc, payer) else {
         return Ok(None);
     };
+    let packet = match resumed.as_ref().and_then(persisted_packet_v1) {
+        Some(packet) => {
+            // Reauthenticate the persisted bytes against this run's rebuilt
+            // instruction before trusting them. A journal whose packet no
+            // longer matches the frame it claims is a refusal, not a resend.
+            Rpc::authenticate_signed_legacy_packet(&label, &packet)?;
+            journal = resumed.clone().unwrap_or(journal);
+            packet
+        }
+        None => {
+            // Prepared: the exact bytes are durable before the first send.
+            let packet =
+                rpc.prepare_signed_legacy_packet(&label, &[instruction.clone()], payer)?;
+            journal.phase = FamilyHotPhaseV1::Prepared;
+            journal.legacy_packet_bytes = Some(
+                BASE64
+                    .decode(&packet.packet_base64)
+                    .map_err(|error| Error::new(format!("{label}: packet base64: {error}")))?
+                    .len(),
+            );
+            journal.signed_packet_base64 = Some(packet.packet_base64.clone());
+            journal.signed_packet_sha256 = Some(packet.packet_sha256.clone());
+            journal.expected_signature = Some(packet.signature.clone());
+            journal.last_valid_block_height = Some(packet.last_valid_block_height);
+            write_json_atomic_v1(&journal_path, &journal)?;
+            packet
+        }
+    };
 
-    // Prepared: the exact bytes are durable before the first send.
-    let packet = rpc.prepare_signed_legacy_packet(&label, &[instruction.clone()], payer)?;
-    journal.phase = FamilyHotPhaseV1::Prepared;
-    journal.legacy_packet_bytes = Some(
-        BASE64
-            .decode(&packet.packet_base64)
-            .map_err(|error| Error::new(format!("{label}: packet base64: {error}")))?
-            .len(),
-    );
-    journal.signed_packet_base64 = Some(packet.packet_base64.clone());
-    journal.signed_packet_sha256 = Some(packet.packet_sha256.clone());
-    journal.expected_signature = Some(packet.signature.clone());
-    journal.last_valid_block_height = Some(packet.last_valid_block_height);
-    write_json_atomic_v1(&journal_path, &journal)?;
-
-    // Submitted: those exact bytes, once. A resend of the same signature is
-    // deduplicated by the cluster, which is what makes a crash here safe.
-    rpc.submit_signed_legacy_packet(&label, &packet)?;
-    journal.phase = FamilyHotPhaseV1::Submitted;
-    write_json_atomic_v1(&journal_path, &journal)?;
+    // A finalized journal is already the answer; polling it again is free and
+    // is what makes rerunning a completed campaign a no-op instead of a second
+    // set of transactions.
+    if journal.phase != FamilyHotPhaseV1::Finalized {
+        // Submitted: those exact bytes, once. A resend of the same signature is
+        // deduplicated by the cluster, which is what makes a crash here safe.
+        rpc.submit_signed_legacy_packet(&label, &packet)?;
+        journal.phase = FamilyHotPhaseV1::Submitted;
+        write_json_atomic_v1(&journal_path, &journal)?;
+    }
 
     // Finalized: poll only. This never rebuilds a signature.
     let finalized = rpc.confirm_signed_legacy_packet(&label, &packet)?;
@@ -1281,6 +1314,54 @@ pub(crate) fn general_market_selection_requirements_v1() -> Vec<&'static str> {
     ]
 }
 
+/// Read one durable journal, if this action has been attempted before.
+fn read_journal_v1(path: &Path) -> Result<Option<FamilyHotJournalV1>> {
+    match fs::read(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::new(format!("{}: {error}", path.display()))),
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+    }
+}
+
+/// Refuse a journal that describes a different action than the one being run.
+///
+/// Resuming is only safe when the thing on disk is the same intent. The
+/// request digest is the strongest cheap statement of that: it covers the
+/// action, the candidate, the revision and every coordinate the family request
+/// carries. A journal-directory reuse across widths or callers is a mistake
+/// worth catching before a key is opened, not after a second signature exists.
+fn authenticate_resumed_journal_v1(
+    previous: &FamilyHotJournalV1,
+    current: &FamilyHotJournalV1,
+    label: &str,
+) -> Result<()> {
+    if previous.family != current.family
+        || previous.action != current.action
+        || previous.outcome_count != current.outcome_count
+        || previous.caller_program != current.caller_program
+        || previous.accelerator_program != current.accelerator_program
+        || previous.family_request_sha256 != current.family_request_sha256
+        || previous.instruction_data_sha256 != current.instruction_data_sha256
+    {
+        return Err(Error::new(format!(
+            "{label}: the journal already in this directory describes a different action; \
+             prepare a new campaign under a new journal directory rather than resuming across \
+             intents"
+        )));
+    }
+    Ok(())
+}
+
+/// The durable packet a resumed journal carries, if it reached `Prepared`.
+fn persisted_packet_v1(journal: &FamilyHotJournalV1) -> Option<SignedVersionedPacketV1> {
+    Some(SignedVersionedPacketV1 {
+        signature: journal.expected_signature.clone()?,
+        packet_base64: journal.signed_packet_base64.clone()?,
+        packet_sha256: journal.signed_packet_sha256.clone()?,
+        last_valid_block_height: journal.last_valid_block_height?,
+    })
+}
+
 fn write_json_atomic_v1<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
@@ -1357,6 +1438,67 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn journal_for(action: Action, request_digest: &str) -> FamilyHotJournalV1 {
+        FamilyHotJournalV1 {
+            schema: GENERAL_JOURNAL_SCHEMA_V1.to_owned(),
+            family: "General".to_owned(),
+            action: format!("{action:?}"),
+            action_index: 0,
+            outcome_count: 1,
+            phase: FamilyHotPhaseV1::Planned,
+            caller_program: "caller".to_owned(),
+            accelerator_program: "accelerator".to_owned(),
+            family_request_base64: String::new(),
+            family_request_sha256: request_digest.to_owned(),
+            instruction_data_sha256: request_digest.to_owned(),
+            accelerator_request_sha256: String::new(),
+            input_bank_sha256: String::new(),
+            scratch_page_count: 0,
+            account_count: 0,
+            legacy_packet_bytes: None,
+            signed_packet_base64: None,
+            signed_packet_sha256: None,
+            expected_signature: None,
+            last_valid_block_height: None,
+            finalized_slot: None,
+            compute_units_consumed: None,
+            return_data_producer: None,
+            return_data_base64: None,
+            ack_disposition: None,
+        }
+    }
+
+    /// Resuming across two different intents is a refusal, not a resend.
+    #[test]
+    fn a_journal_describing_another_action_refuses_to_be_resumed() {
+        let mine = journal_for(Action::Freeze, "aa");
+        assert!(authenticate_resumed_journal_v1(&mine, &mine, "test").is_ok());
+        let other_action = journal_for(Action::Consider, "aa");
+        assert!(authenticate_resumed_journal_v1(&other_action, &mine, "test").is_err());
+        let other_request = journal_for(Action::Freeze, "bb");
+        assert!(authenticate_resumed_journal_v1(&other_request, &mine, "test").is_err());
+        let mut other_width = journal_for(Action::Freeze, "aa");
+        other_width.outcome_count = 258;
+        assert!(authenticate_resumed_journal_v1(&other_width, &mine, "test").is_err());
+    }
+
+    /// A journal below `Prepared` carries no packet to resend.
+    #[test]
+    fn only_a_prepared_journal_offers_a_packet_to_resume() {
+        let mut journal = journal_for(Action::Freeze, "aa");
+        assert!(persisted_packet_v1(&journal).is_none());
+        journal.expected_signature = Some("signature".to_owned());
+        journal.signed_packet_base64 = Some("packet".to_owned());
+        journal.signed_packet_sha256 = Some("digest".to_owned());
+        // Still none: the last-valid height is what bounds the resend, and a
+        // packet without it cannot be told from an expired one.
+        assert!(persisted_packet_v1(&journal).is_none());
+        journal.last_valid_block_height = Some(7);
+        let packet = persisted_packet_v1(&journal).expect("packet");
+        assert_eq!(packet.signature, "signature");
+        assert_eq!(packet.last_valid_block_height, 7);
     }
 
     /// The selection-hook list is a checklist, not a mood.
