@@ -63,10 +63,10 @@ use sha2::{Digest as _, Sha256};
 use solana_sdk::{
     hash::Hash,
     instruction::{AccountMeta, Instruction},
-    message::VersionedMessage,
+    message::{Message, VersionedMessage},
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
-    transaction::VersionedTransaction,
+    transaction::{Transaction, VersionedTransaction},
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::create_account_with_seed;
@@ -600,6 +600,41 @@ fn run_with_expected_cluster(
     let snapshot = acquire_snapshot(&mut rpc, &arguments, &plan, coordinates, &evidence)?;
     let unsigned = plan_user_position_admission_v1(&snapshot.operator)
         .map_err(|error| Error::new(format!("User Position admission plan refused: {error:?}")))?;
+    // The admission frame requires the owner to sign READONLY, and a System
+    // transfer debiting the owner in the same transaction forces message-level
+    // owner writability - the founding pays its allocated accounts in a
+    // separate transaction for exactly this reason. When the Position or
+    // admission still owes rent, pay it first in its own finalized transfer,
+    // then re-snapshot: the plan then carries zero top-ups and a
+    // single-instruction message the frame authenticates.
+    let (snapshot, unsigned) = if arguments.execute
+        && unsigned
+            .position_top_up_lamports
+            .checked_add(unsigned.admission_top_up_lamports)
+            .ok_or_else(|| Error::new("admission top-up overflow"))?
+            != 0
+    {
+        prefund_admission_rents_v1(&mut rpc, &arguments, &unsigned)?;
+        let snapshot = acquire_snapshot(&mut rpc, &arguments, &plan, coordinates, &evidence)?;
+        let unsigned = plan_user_position_admission_v1(&snapshot.operator).map_err(|error| {
+            Error::new(format!(
+                "User Position admission plan refused after prefund: {error:?}"
+            ))
+        })?;
+        if unsigned
+            .position_top_up_lamports
+            .checked_add(unsigned.admission_top_up_lamports)
+            .ok_or_else(|| Error::new("admission top-up overflow"))?
+            != 0
+        {
+            return Err(Error::new(
+                "admission rents still owed after the finalized prefund transfer",
+            ));
+        }
+        (snapshot, unsigned)
+    } else {
+        (snapshot, unsigned)
+    };
     let mut report = build_report(
         &mut rpc,
         &arguments,
@@ -4469,6 +4504,63 @@ fn finalized_transaction(rpc: &mut Rpc, signature: &str) -> Result<Option<Value>
         ));
     }
     Ok(Some(transaction))
+}
+
+/// Pay the Position and admission rents from the owner in one finalized
+/// transaction of its own, so the admission message never debits the owner.
+fn prefund_admission_rents_v1(
+    rpc: &mut Rpc,
+    arguments: &ArgumentsV1,
+    unsigned: &UserPositionAdmissionPlanV1,
+) -> Result<()> {
+    let owner = read_expected_keypair(
+        &arguments.position_owner_keypair,
+        arguments.position_owner,
+        "prefund owner",
+    )?;
+    let mut instructions = Vec::new();
+    if unsigned.position_top_up_lamports != 0 {
+        instructions.push(solana_system_interface::instruction::transfer(
+            &arguments.position_owner,
+            &unsigned.position,
+            unsigned.position_top_up_lamports,
+        ));
+    }
+    if unsigned.admission_top_up_lamports != 0 {
+        instructions.push(solana_system_interface::instruction::transfer(
+            &arguments.position_owner,
+            &unsigned.admission,
+            unsigned.admission_top_up_lamports,
+        ));
+    }
+    let (recent_blockhash, _) = latest_blockhash(rpc)?;
+    let mut signers: Vec<&dyn Signer> = vec![&owner];
+    let payer;
+    let payer_key = if arguments.fee_payer == arguments.position_owner {
+        arguments.position_owner
+    } else {
+        payer = read_expected_keypair(
+            &arguments.fee_payer_keypair,
+            arguments.fee_payer,
+            "prefund fee payer",
+        )?;
+        signers.insert(0, &payer);
+        arguments.fee_payer
+    };
+    let message = Message::new_with_blockhash(&instructions, Some(&payer_key), &recent_blockhash);
+    let transaction = Transaction::new(&signers, message, recent_blockhash);
+    let wire = bincode::serialize(&transaction)
+        .map_err(|error| Error::new(format!("serialize prefund: {error}")))?;
+    let returned = rpc.call_once(
+        "sendTransaction",
+        &json!([BASE64.encode(&wire), {"encoding": "base64", "preflightCommitment": "finalized"}]),
+    )?;
+    let signature = returned
+        .as_str()
+        .ok_or_else(|| Error::new("prefund sendTransaction result was not a signature"))?;
+    eprintln!("admission prefund transfer submitted: {signature}");
+    wait_finalized(rpc, signature)?;
+    Ok(())
 }
 
 fn wait_finalized(rpc: &mut Rpc, signature: &str) -> Result<()> {
