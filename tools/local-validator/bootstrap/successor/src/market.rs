@@ -7768,6 +7768,49 @@ const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3: usize = 2;
 const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3: usize = 12;
 const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3: usize = 58;
 
+/// Stage-1 split founding instruction: Lock, Found, Realize, Claims, permit
+/// escrowed, no Open.
+///
+/// Owned by `programs/dclutch-trading-sbf/src/generic_founding_stages_v1.rs`
+/// (`GENERIC_FOUND_AND_PERMIT_MAGIC_V1`); restated here because a localhost
+/// host utility does not depend on an SBF program crate.
+const GENERIC_FOUND_AND_PERMIT_MAGIC_V1: [u8; 8] = *b"DCLTGFP1";
+const GENERIC_FOUND_AND_PERMIT_CALLER_BUMP_COUNT_V1: usize = 4;
+const GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1: usize =
+    8 + GENERIC_FOUND_AND_PERMIT_CALLER_BUMP_COUNT_V1;
+
+/// Exact width of the composed frame's commit-last Core Open window.
+const GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1: usize = 21;
+
+/// Exact `DCLTGFP1` frame width before the founding's FundingLedgerV2 tail:
+/// the composed `DCLTGMF3` frame minus its Core Open window, checkpoint last.
+const GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1: usize =
+    GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+
+/// The Open caller PDA is the only key unique to the Open window — every other
+/// Open-window key already appears in the Lock, Found, Realize, or Claims
+/// windows — so the stage-1 census is the composed census minus exactly one
+/// readonly loaded key, and the twelve distinct writable keys are unchanged.
+const GENERIC_FOUND_AND_PERMIT_COMPLETE_KEYS_V1: usize =
+    GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3 - 1;
+
+/// Stage-2 split founding instruction: the commit-last Core Open alone,
+/// consuming the escrowed permit.
+///
+/// Owned by `programs/dclutch-trading-sbf/src/generic_founding_stages_v1.rs`
+/// (`GENERIC_MARKET_OPEN_MAGIC_V1`).
+const GENERIC_MARKET_OPEN_MAGIC_V1: [u8; 8] = *b"DCLTGMO1";
+const GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1: usize = 8 + 1;
+
+/// Two readonly raw requests — the selected Found artifact and the Claims
+/// request — then Core's exact 21-account Open window. Small enough for
+/// inline v0 with no lookup table and no extended heap.
+const GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1: usize =
+    2 + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+
+/// The Market, the permit, and the RentCredit: Core Open's sole mutations.
+const GENERIC_MARKET_OPEN_DISTINCT_WRITABLE_V1: usize = 3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GenericMarketFoundingLockExpectationV3 {
     frame_digest: [u8; 32],
@@ -8693,6 +8736,434 @@ fn build_generic_market_founding_v3(
         },
         instruction,
     })
+}
+
+/// Build the exact 104 + physical-funding-count account `DCLTGFP1` frame.
+///
+/// This is a second independent derivation of the composed `DCLTGMF3` frame
+/// with its 21-account Core Open window removed and the controller-funding
+/// checkpoint kept last, and the corpus asserts the splice equality against
+/// `build_generic_market_founding_v3` meta for meta. The union-writability
+/// discipline and the twelve distinct writable keys are unchanged, because
+/// every writable Open-window key — the Market, the permit, the RentCredit,
+/// the projected replay, the Hoard and source vaults, and the three Claims
+/// accounts — is already writable in an earlier window; only the readonly
+/// Open caller PDA leaves the frame.
+// Wired by the split campaign path next; the corpus below executes it today.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+fn build_generic_found_and_permit_v3(
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    outer: &FoundingOuterV1,
+    records: &MarketRecords,
+    requests: [Pubkey; 4],
+    founder: Pubkey,
+    mint: Pubkey,
+) -> Result<PreparedGenericMarketFoundingV3> {
+    let trading = pubkey(&plan.trading.program_id)?;
+    let trading_programdata = pubkey(&plan.trading.programdata_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let core_programdata = pubkey(&plan.core.programdata_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let claims_programdata = pubkey(&plan.claims.programdata_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let custody_programdata = pubkey(&plan.custody.programdata_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let cache = pubkey(&plan.activation)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+
+    let mut accounts: Vec<AccountMeta> = Vec::with_capacity(
+        GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1
+            .checked_add(coordinates.funding_ledgers.len())
+            .ok_or_else(|| Error::new("DCLTGFP1 frame width overflow"))?,
+    );
+    let push = |key: Pubkey, writable: bool, accounts: &mut Vec<AccountMeta>| {
+        accounts.push(if writable {
+            AccountMeta::new(key, false)
+        } else {
+            AccountMeta::new_readonly(key, false)
+        });
+    };
+
+    // Four readonly content-addressed requests, then the instructions sysvar
+    // the heap-frame admission reads the transaction's grant back out of.
+    for request in requests {
+        push(request, false, &mut accounts);
+    }
+    push(sysvar::instructions::ID, false, &mut accounts);
+
+    // Lock: LockHoardAndCloseSource, 14 accounts.
+    push(outer.lock_caller, false, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.source_vault, true, &mut accounts);
+    push(coordinates.custody_authority, false, &mut accounts);
+    push(mint, false, &mut accounts);
+    push(token_program, false, &mut accounts);
+    push(coordinates.source_replay, true, &mut accounts);
+    push(coordinates.market, false, &mut accounts);
+
+    // Found: Core's compact 24-account ProjectedFound V2 frame, then Trading,
+    // this founding's FundingLedgerV2 tail, and the fifteen-account suffix.
+    for (index, key) in projected_found_snapshot_keys_v2(
+        plan,
+        outer.found_authority,
+        coordinates.market,
+        coordinates.credit,
+        records,
+    )?
+    .into_iter()
+    .enumerate()
+    {
+        // Index 0 is the payer and the Trading caller PDA in one slot; index 1
+        // is the Market the stage creates.
+        push(key, index < 2, &mut accounts);
+    }
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    for funding in &coordinates.funding_ledgers {
+        push(funding.address, false, &mut accounts);
+    }
+    push(outer.permit, true, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.source_vault, true, &mut accounts);
+    push(coordinates.source_replay, true, &mut accounts);
+    push(records.basis.raw, false, &mut accounts);
+    push(records.basis.staging, false, &mut accounts);
+    push(claims, false, &mut accounts);
+    push(claims_programdata, false, &mut accounts);
+    push(custody, false, &mut accounts);
+    push(custody_programdata, false, &mut accounts);
+    push(outer.aggregate, true, &mut accounts);
+    push(outer.position, true, &mut accounts);
+    push(outer.admission, true, &mut accounts);
+    push(founder, false, &mut accounts);
+
+    // Realize: RealizeAndClose, 12 accounts.
+    push(outer.realize_caller, false, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.market, false, &mut accounts);
+    push(coordinates.custody_authority, false, &mut accounts);
+    push(mint, false, &mut accounts);
+    push(token_program, false, &mut accounts);
+
+    // Claims FoundingV5, 31 accounts.
+    push(outer.claims_caller, false, &mut accounts);
+    push(outer.permit, true, &mut accounts);
+    push(outer.aggregate, true, &mut accounts);
+    push(outer.position, true, &mut accounts);
+    push(outer.admission, true, &mut accounts);
+    push(coordinates.source_vault, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(records.basis.raw, false, &mut accounts);
+    push(records.basis.staging, false, &mut accounts);
+    push(records.product.raw, false, &mut accounts);
+    push(records.product.staging, false, &mut accounts);
+    push(records.domain.raw, false, &mut accounts);
+    push(records.domain.staging, false, &mut accounts);
+    push(records.portfolio.raw, false, &mut accounts);
+    push(records.portfolio.staging, false, &mut accounts);
+    push(system_program::ID, false, &mut accounts);
+    push(coordinates.market, false, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(claims, false, &mut accounts);
+    push(claims_programdata, false, &mut accounts);
+    push(core, false, &mut accounts);
+    push(core_programdata, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(custody, false, &mut accounts);
+    push(custody_programdata, false, &mut accounts);
+    push(founder, false, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(rent_program, false, &mut accounts);
+
+    // No Open window: the escrowed permit carries the founding to the
+    // `DCLTGMO1` stage. The durable CustodyStaged checkpoint is still
+    // authenticated before Lock and consumed by THIS stage — it binds the
+    // pre-Lock custody prestate, which this transaction is what consumes —
+    // so it stays the final physical account, writable for its close-last
+    // transition.
+    push(
+        coordinates.controller_funding_checkpoint,
+        true,
+        &mut accounts,
+    );
+
+    let expected = GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1
+        .checked_add(coordinates.funding_ledgers.len())
+        .ok_or_else(|| Error::new("DCLTGFP1 frame width overflow"))?;
+    if accounts.len() != expected {
+        return Err(Error::new(format!(
+            "assembled DCLTGFP1 frame did not match its exact width: assembled {}, expected {} ({} fixed + {} funding ledgers)",
+            accounts.len(),
+            expected,
+            GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1,
+            coordinates.funding_ledgers.len(),
+        )));
+    }
+
+    // One key, one privilege: union writability so a key writable in any stage
+    // is writable everywhere the message names it.
+    let writable: Vec<Pubkey> = accounts
+        .iter()
+        .filter(|meta| meta.is_writable)
+        .map(|meta| meta.pubkey)
+        .collect();
+    for meta in &mut accounts {
+        if writable.contains(&meta.pubkey) {
+            meta.is_writable = true;
+        }
+    }
+    let mut distinct_writable: Vec<Pubkey> = Vec::new();
+    for key in &writable {
+        if !distinct_writable.contains(key) {
+            distinct_writable.push(*key);
+        }
+    }
+    // The same twelve keys as the composed route: removing the Open window
+    // removes no writable key. A different count here means the shared
+    // windows drifted, not that this assertion needs adjusting.
+    if distinct_writable.len() != GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 {
+        return Err(Error::new(format!(
+            "the DCLTGFP1 frame declared {} writable keys, not the twelve the outer requires",
+            distinct_writable.len()
+        )));
+    }
+    let mut data = Vec::with_capacity(GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1);
+    data.extend_from_slice(&GENERIC_FOUND_AND_PERMIT_MAGIC_V1);
+    data.extend_from_slice(&[
+        outer.lock_caller_bump,
+        outer.found_authority_bump,
+        outer.realize_caller_bump,
+        outer.claims_caller_bump,
+    ]);
+    if data.len() != GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1 {
+        return Err(Error::new("DCLTGFP1 caller-bump encoding width changed"));
+    }
+    let instruction = Instruction {
+        program_id: trading,
+        accounts,
+        data,
+    };
+    Ok(PreparedGenericMarketFoundingV3 {
+        lock_expectation: GenericMarketFoundingLockExpectationV3 {
+            frame_digest: exact_instruction_frame_digest_v1(&instruction),
+        },
+        instruction,
+    })
+}
+
+/// Build the exact 23-account `DCLTGMO1` frame: two readonly raw requests,
+/// then Core's 21-account Open window.
+///
+/// The window is byte-identical in key order to the composed route's Open
+/// section, and the corpus asserts that equality. Writability differs by
+/// design: standalone, only the Market, the permit, and the RentCredit are
+/// writable — the exact three accounts Core Open mutates — where the composed
+/// frame carried union privileges from its earlier windows.
+// Wired by the split campaign path next; the corpus below executes it today.
+#[allow(dead_code)]
+fn build_generic_market_open_v1(
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    outer: &FoundingOuterV1,
+    found_raw_account: Pubkey,
+    claims_raw_account: Pubkey,
+) -> Result<PreparedGenericMarketFoundingV3> {
+    if found_raw_account == claims_raw_account {
+        return Err(Error::new(
+            "DCLTGMO1 requires two distinct readonly raw requests",
+        ));
+    }
+    let trading = pubkey(&plan.trading.program_id)?;
+    let trading_programdata = pubkey(&plan.trading.programdata_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let core_programdata = pubkey(&plan.core.programdata_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let claims_programdata = pubkey(&plan.claims.programdata_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let custody_programdata = pubkey(&plan.custody.programdata_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let cache = pubkey(&plan.activation)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+
+    let mut accounts: Vec<AccountMeta> = Vec::with_capacity(GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1);
+    let push = |key: Pubkey, writable: bool, accounts: &mut Vec<AccountMeta>| {
+        accounts.push(if writable {
+            AccountMeta::new(key, false)
+        } else {
+            AccountMeta::new_readonly(key, false)
+        });
+    };
+
+    push(found_raw_account, false, &mut accounts);
+    push(claims_raw_account, false, &mut accounts);
+
+    // Core Open, commit-last, 21 accounts: the composed route's exact window.
+    push(outer.open_authority, false, &mut accounts);
+    push(coordinates.market, true, &mut accounts);
+    push(outer.permit, true, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(rent_program, false, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(claims, false, &mut accounts);
+    push(claims_programdata, false, &mut accounts);
+    push(custody, false, &mut accounts);
+    push(custody_programdata, false, &mut accounts);
+    push(core, false, &mut accounts);
+    push(core_programdata, false, &mut accounts);
+    push(coordinates.projected_replay, false, &mut accounts);
+    push(coordinates.hoard_vault, false, &mut accounts);
+    push(coordinates.source_vault, false, &mut accounts);
+    push(outer.aggregate, false, &mut accounts);
+    push(outer.position, false, &mut accounts);
+    push(outer.admission, false, &mut accounts);
+
+    if accounts.len() != GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1 {
+        return Err(Error::new(format!(
+            "assembled DCLTGMO1 frame did not match its exact width: assembled {}, expected {}",
+            accounts.len(),
+            GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1,
+        )));
+    }
+    let mut distinct_writable: Vec<Pubkey> = Vec::new();
+    for meta in &accounts {
+        if meta.is_writable && !distinct_writable.contains(&meta.pubkey) {
+            distinct_writable.push(meta.pubkey);
+        }
+    }
+    if distinct_writable.len() != GENERIC_MARKET_OPEN_DISTINCT_WRITABLE_V1 {
+        return Err(Error::new(format!(
+            "the DCLTGMO1 frame declared {} writable keys, not the three Core Open mutates",
+            distinct_writable.len()
+        )));
+    }
+    let data = {
+        let mut data = Vec::with_capacity(GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1);
+        data.extend_from_slice(&GENERIC_MARKET_OPEN_MAGIC_V1);
+        data.push(outer.open_authority_bump);
+        if data.len() != GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1 {
+            return Err(Error::new("DCLTGMO1 caller-bump encoding width changed"));
+        }
+        data
+    };
+    let instruction = Instruction {
+        program_id: trading,
+        accounts,
+        data,
+    };
+    Ok(PreparedGenericMarketFoundingV3 {
+        lock_expectation: GenericMarketFoundingLockExpectationV3 {
+            frame_digest: exact_instruction_frame_digest_v1(&instruction),
+        },
+        instruction,
+    })
+}
+
+/// The `DCLTGFP1` analogue of the composed route's compiled lock census.
+// Wired by the split campaign path next; the corpus below executes it today.
+#[allow(dead_code)]
+fn authenticate_generic_found_and_permit_lock_census_v3(
+    payer: Pubkey,
+    prepared: &PreparedGenericMarketFoundingV3,
+) -> Result<CompleteLockCensusV1> {
+    let instruction = &prepared.instruction;
+    let expected_frame = GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1
+        .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3)
+        .ok_or_else(|| Error::new("DCLTGFP1 expected frame overflow"))?;
+    if instruction.data.len() != GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1
+        || instruction.data.get(..8) != Some(GENERIC_FOUND_AND_PERMIT_MAGIC_V1.as_slice())
+        || instruction.accounts.len() != expected_frame
+        || instruction.accounts.iter().any(|meta| meta.is_signer)
+        || instruction.accounts.iter().any(|meta| meta.pubkey == payer)
+        || exact_instruction_frame_digest_v1(instruction) != prepared.lock_expectation.frame_digest
+    {
+        return Err(Error::new(
+            "DCLTGFP1 exact frame/key/order/privilege expectation changed before compilation",
+        ));
+    }
+    let census = compiled_complete_lock_census_v1(payer, instruction)?;
+    require_devnet_complete_key_limit_v1(census)?;
+    if census.complete_keys != GENERIC_FOUND_AND_PERMIT_COMPLETE_KEYS_V1
+        || census.required_signatures != 1
+        || census.static_keys != 3
+        || census.loaded_writable != GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3
+        || census.loaded_readonly != 42
+    {
+        return Err(Error::new(format!(
+            "DCLTGFP1 compiled lock census refused: {} complete, {} static, {} writable loaded, {} readonly loaded, {} signatures",
+            census.complete_keys,
+            census.static_keys,
+            census.loaded_writable,
+            census.loaded_readonly,
+            census.required_signatures,
+        )));
+    }
+    Ok(census)
+}
+
+/// Frame admission for the inline `DCLTGMO1` stage-2 transaction.
+///
+/// No lookup-table census: 23 frame keys plus the payer and the ComputeBudget
+/// program lock 25 complete keys, under the devnet 64-key limit by simple
+/// arithmetic, and the frame carries no loaded accounts at all.
+// Wired by the split campaign path next; the corpus below executes it today.
+#[allow(dead_code)]
+fn authenticate_generic_market_open_frame_v1(
+    payer: Pubkey,
+    prepared: &PreparedGenericMarketFoundingV3,
+) -> Result<()> {
+    let instruction = &prepared.instruction;
+    let mut distinct: Vec<Pubkey> = Vec::new();
+    let mut distinct_writable: Vec<Pubkey> = Vec::new();
+    for meta in &instruction.accounts {
+        if !distinct.contains(&meta.pubkey) {
+            distinct.push(meta.pubkey);
+        }
+        if meta.is_writable && !distinct_writable.contains(&meta.pubkey) {
+            distinct_writable.push(meta.pubkey);
+        }
+    }
+    // Payer, ComputeBudget, and the Trading program id (already a frame key).
+    let complete = distinct
+        .len()
+        .checked_add(2)
+        .ok_or_else(|| Error::new("DCLTGMO1 complete-key census overflow"))?;
+    if instruction.data.len() != GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1
+        || instruction.data.get(..8) != Some(GENERIC_MARKET_OPEN_MAGIC_V1.as_slice())
+        || instruction.accounts.len() != GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1
+        || instruction.accounts.iter().any(|meta| meta.is_signer)
+        || instruction.accounts.iter().any(|meta| meta.pubkey == payer)
+        || exact_instruction_frame_digest_v1(instruction) != prepared.lock_expectation.frame_digest
+        || distinct.len() != GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1
+        || distinct_writable.len() != GENERIC_MARKET_OPEN_DISTINCT_WRITABLE_V1
+        || complete > DEVNET_ACCOUNT_LOCK_LIMIT_V1
+    {
+        return Err(Error::new(
+            "DCLTGMO1 exact frame/key/order/privilege expectation refused",
+        ));
+    }
+    Ok(())
 }
 
 fn funding_readiness_coordinates_v1(
@@ -11154,6 +11625,504 @@ mod tests {
                 lock_expectation,
             },
         )
+    }
+
+    /// One coherent synthetic founding input set: a distinct key per protocol
+    /// role, real PDA derivations where the builders verify them, and the
+    /// exact two-ledger physical funding profile the censuses pin. Built once
+    /// so the composed and split builders are fed byte-identical coordinates.
+    struct SplitFoundingFixtureV1 {
+        plan: SuccessorPlan,
+        coordinates: FoundingCoordinates,
+        records: MarketRecords,
+        outer: FoundingOuterV1,
+        requests: [Pubkey; 4],
+        founder: Pubkey,
+        mint: Pubkey,
+        payer: Pubkey,
+    }
+
+    fn split_founding_fixture_v1() -> SplitFoundingFixtureV1 {
+        use crate::model::{CoreBootstrapPin, InfrastructureProfilePin, ProgramPin, RecordPair};
+
+        fn pin(program_id: Pubkey, programdata_id: Pubkey) -> ProgramPin {
+            ProgramPin {
+                program_id: program_id.to_string(),
+                programdata_id: programdata_id.to_string(),
+                elf_path: String::new(),
+                elf_sha256: String::new(),
+                checked_candidate_elf_path: String::new(),
+                checked_candidate_elf_sha256: String::new(),
+                live_elf_sha256: String::new(),
+                live_elf_padding_bytes: 0,
+                semantic_release_id: String::new(),
+                artifact_release_id: String::new(),
+                upgrade_authority: None,
+                deployment_slot: 0,
+                deployment_source: String::new(),
+                programdata_sha256: String::new(),
+            }
+        }
+        fn published(seed: u8) -> PublishedRecord {
+            PublishedRecord {
+                schema: [seed; 32],
+                digest: [seed.wrapping_add(1); 32],
+                raw: Pubkey::new_unique(),
+                staging: Pubkey::new_unique(),
+            }
+        }
+        fn identity(byte: u8) -> Identity {
+            Identity::new([byte; 32]).expect("nonzero identity")
+        }
+
+        let registry = Pubkey::new_unique();
+        let artifact_record = |schema: [u8; 32], content: [u8; 32]| RecordPair {
+            raw: Pubkey::find_program_address(
+                &[RAW_RECORD_PDA_SEED_V1, &schema, &content],
+                &registry,
+            )
+            .0
+            .to_string(),
+            staging: Pubkey::find_program_address(
+                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &content],
+                &registry,
+            )
+            .0
+            .to_string(),
+            schema_id: hex(&schema),
+            content_sha256: hex(&content),
+            body_hex: String::new(),
+        };
+        let mut plan_records = BTreeMap::new();
+        plan_records.insert(
+            "registry_artifact_release".to_string(),
+            artifact_record([0x51; 32], [0x52; 32]),
+        );
+        plan_records.insert(
+            "rent_artifact_release".to_string(),
+            artifact_record([0x53; 32], [0x54; 32]),
+        );
+        let plan = SuccessorPlan {
+            schema: String::new(),
+            genesis_boundary: Vec::new(),
+            bootstrap_order: Vec::new(),
+            execution_blocker: String::new(),
+            account_dir: String::new(),
+            registry: pin(registry, Pubkey::new_unique()),
+            core: pin(Pubkey::new_unique(), Pubkey::new_unique()),
+            claims: pin(Pubkey::new_unique(), Pubkey::new_unique()),
+            trading: pin(Pubkey::new_unique(), Pubkey::new_unique()),
+            resolution: pin(Pubkey::new_unique(), Pubkey::new_unique()),
+            custody: pin(Pubkey::new_unique(), Pubkey::new_unique()),
+            rent_credit: pin(Pubkey::new_unique(), Pubkey::new_unique()),
+            activation: Pubkey::new_unique().to_string(),
+            release_set_id: String::new(),
+            core_bootstrap: CoreBootstrapPin {
+                upgrade_authority: String::new(),
+                genesis_programdata_sha256: String::new(),
+                post_revoke_programdata_sha256: String::new(),
+                release_recognition_requires_revoke: false,
+            },
+            checked_upgrade_set: None,
+            checked_local_mutable_set: None,
+            infrastructure_profile: InfrastructureProfilePin {
+                address: Pubkey::new_unique().to_string(),
+                schema_id: String::new(),
+                body_sha256: String::new(),
+                body_hex: String::new(),
+                registry_artifact_release_id: String::new(),
+                rent_artifact_release_id: String::new(),
+            },
+            records: plan_records,
+            record_publication: "genesis".to_string(),
+            provider_release_id: String::new(),
+            fixture_publish_time: 0,
+            genesis_accounts: BTreeMap::new(),
+        };
+
+        let records = MarketRecords {
+            realm: published(0x60),
+            product: published(0x62),
+            domain: published(0x64),
+            portfolio: published(0x66),
+            source: published(0x68),
+            source_capacity_profile: published(0x6a),
+            manipulation_floor: None,
+            recovery: None,
+            manifest: published(0x6c),
+            basis: published(0x6e),
+            source_spec: published(0x70),
+            window_spec: published(0x72),
+            statistic_spec: published(0x74),
+            provider_release: published(0x76),
+            adapter_config: published(0x78),
+            sponsored_push_release: None,
+            direct: BTreeMap::new(),
+            principal_cap_sets: 1,
+        };
+
+        let found = GenericFoundingRequestV1::new(
+            GenericFoundingStageV1::FoundAndPermit,
+            2,
+            identity(0x01),
+            identity(0x02),
+            identity(0x03),
+            identity(0x04),
+            identity(0x05),
+            identity(0x06),
+            identity(0x07),
+            identity(0x08),
+            identity(0x09),
+            identity(0x0a),
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            2,
+            1,
+        )
+        .expect("canonical found request");
+        let lock = ProjectedCustodyRequestV1 {
+            operation: ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            caller_role: ProjectedCallerRoleV1::TradingCapability,
+            market: [0x02; 32],
+            generation: 11,
+            realm: [0x11; 32],
+            product_record: [0x12; 32],
+            product: [0x13; 32],
+            source: [0x14; 32],
+            release_set: [0x01; 32],
+            projection_receipt_digest: [0x15; 32],
+            parent_capability_root: [0x03; 32],
+            context_digest: [0x16; 32],
+            caller_program: [0x17; 32],
+            payer: [0x18; 32],
+            core_program: [0x19; 32],
+            rent_program: [0x1a; 32],
+            refund_owner: [0x06; 32],
+            rent_credit: [0x1b; 32],
+            hoard_vault: [0x08; 32],
+            funding_source_vault: [0x07; 32],
+            funding_source_context: [0x04; 32],
+            funding_source_compartment: CompartmentV1::External,
+            mint: [0x1c; 32],
+            token_program: [0x1d; 32],
+            collateral_release: [0x1e; 32],
+            expiry_slot: 14,
+            expected_revision: 3,
+            resulting_revision: 4,
+            amount: 156,
+            state_rent_lamports: 1,
+            vault_rent_lamports: 1,
+            funding_source_replay_revision: 1,
+            funding_source_state_rent_lamports: 1,
+            funding_source_vault_rent_lamports: 1,
+        };
+        let coordinates = FoundingCoordinates {
+            generation: 11,
+            identity: MarketIdentity {
+                market_id: identity(0x02),
+                realm_id: identity(0x11),
+                product_record: identity(0x12),
+                product_id: identity(0x13),
+                resolution_policy: identity(0x14),
+                capability_manifest: identity(0x1f),
+                selected_release_set: identity(0x01),
+                registry_program: Identity::new(registry.to_bytes()).expect("registry identity"),
+                generation: 11,
+            },
+            market: Pubkey::new_unique(),
+            credit: Pubkey::new_unique(),
+            hoard_vault: Pubkey::new_unique(),
+            source_vault: Pubkey::new_unique(),
+            source_replay: Pubkey::new_unique(),
+            projected_replay: Pubkey::new_unique(),
+            custody_authority: Pubkey::new_unique(),
+            controller_funding_checkpoint: Pubkey::new_unique(),
+            context: [0x04; 32],
+            principal_cap_sets: 1,
+            capability_entry_count: 2,
+            capability_entry_index: 1,
+            funding_ledgers: vec![
+                FoundingFundingLedgerV2 {
+                    address: Pubkey::new_unique(),
+                    controller: Pubkey::new_unique(),
+                    selected_mask: 1,
+                    bytes: Vec::new(),
+                    required_lamports: 1,
+                },
+                FoundingFundingLedgerV2 {
+                    address: Pubkey::new_unique(),
+                    controller: Pubkey::new_unique(),
+                    selected_mask: 2,
+                    bytes: Vec::new(),
+                    required_lamports: 1,
+                },
+            ],
+            found,
+            lock,
+        };
+        let outer = FoundingOuterV1 {
+            found_raw: vec![0x21; 4],
+            lock_raw: vec![0x22; 4],
+            realize_raw: vec![0x23; 4],
+            claims_raw: vec![0x24; 4],
+            substituted_claims_raw: vec![0x25; 4],
+            lock_caller: Pubkey::new_unique(),
+            lock_caller_bump: 251,
+            realize_caller: Pubkey::new_unique(),
+            realize_caller_bump: 252,
+            claims_caller: Pubkey::new_unique(),
+            claims_caller_bump: 253,
+            found_authority: Pubkey::new_unique(),
+            found_authority_bump: 254,
+            open_authority: Pubkey::new_unique(),
+            open_authority_bump: 255,
+            permit: Pubkey::new_unique(),
+            aggregate: Pubkey::new_unique(),
+            position: Pubkey::new_unique(),
+            admission: Pubkey::new_unique(),
+            aggregate_width: 258,
+            position_width: 258,
+            market_rent: 15,
+            permit_rent: 16,
+        };
+        SplitFoundingFixtureV1 {
+            plan,
+            coordinates,
+            records,
+            outer,
+            requests: [
+                Pubkey::new_unique(),
+                Pubkey::new_unique(),
+                Pubkey::new_unique(),
+                Pubkey::new_unique(),
+            ],
+            founder: Pubkey::new_unique(),
+            mint: Pubkey::new_unique(),
+            payer: Pubkey::new_unique(),
+        }
+    }
+
+    #[test]
+    fn split_stage1_frame_is_the_composed_frame_without_its_open_window() {
+        let fixture = split_founding_fixture_v1();
+        let composed = build_generic_market_founding_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("composed frame");
+        let stage1 = build_generic_found_and_permit_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("stage-1 frame");
+
+        // Splice the 21-account Open window out of the composed frame; the
+        // stage-1 assembly must reproduce the remainder meta for meta,
+        // privilege for privilege — the shared windows were not perturbed.
+        let open_start = composed.instruction.accounts.len()
+            - 1
+            - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+        let mut spliced = composed.instruction.accounts.clone();
+        spliced.drain(open_start..open_start + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1);
+        assert_eq!(spliced, stage1.instruction.accounts);
+        assert_eq!(
+            stage1.instruction.accounts.len(),
+            GENERIC_FOUND_AND_PERMIT_FIXED_ACCOUNTS_V1
+                + GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V3
+        );
+
+        // Same program, same bumps in execution order, no Open bump.
+        assert_eq!(stage1.instruction.program_id, composed.instruction.program_id);
+        let mut expected_data = GENERIC_FOUND_AND_PERMIT_MAGIC_V1.to_vec();
+        expected_data.extend_from_slice(&[
+            fixture.outer.lock_caller_bump,
+            fixture.outer.found_authority_bump,
+            fixture.outer.realize_caller_bump,
+            fixture.outer.claims_caller_bump,
+        ]);
+        assert_eq!(stage1.instruction.data, expected_data);
+
+        // The spliced-out window is exactly the composed Open section: its
+        // first account is the Open caller PDA, the key the split retires
+        // from stage 1.
+        assert_eq!(
+            composed.instruction.accounts[open_start].pubkey,
+            fixture.outer.open_authority
+        );
+    }
+
+    #[test]
+    fn split_stage2_frame_carries_the_composed_open_window_behind_two_raws() {
+        let fixture = split_founding_fixture_v1();
+        let composed = build_generic_market_founding_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("composed frame");
+        let found_raw_account = fixture.requests[0];
+        let claims_raw_account = fixture.requests[3];
+        let stage2 = build_generic_market_open_v1(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            found_raw_account,
+            claims_raw_account,
+        )
+        .expect("stage-2 frame");
+
+        assert_eq!(
+            stage2.instruction.accounts.len(),
+            GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1
+        );
+        assert_eq!(stage2.instruction.accounts[0].pubkey, found_raw_account);
+        assert_eq!(stage2.instruction.accounts[1].pubkey, claims_raw_account);
+        assert!(!stage2.instruction.accounts[0].is_writable);
+        assert!(!stage2.instruction.accounts[1].is_writable);
+
+        // Key order of the window is byte-identical to the composed route's
+        // Open section; writability is the standalone minimum instead of the
+        // composed frame's union privileges.
+        let open_start = composed.instruction.accounts.len()
+            - 1
+            - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+        let composed_window: Vec<Pubkey> = composed.instruction.accounts
+            [open_start..open_start + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1]
+            .iter()
+            .map(|meta| meta.pubkey)
+            .collect();
+        let stage2_window: Vec<Pubkey> = stage2.instruction.accounts[2..]
+            .iter()
+            .map(|meta| meta.pubkey)
+            .collect();
+        assert_eq!(composed_window, stage2_window);
+        for (index, meta) in stage2.instruction.accounts[2..].iter().enumerate() {
+            // Window positions 1, 2, 3: the Market, the permit, the RentCredit.
+            assert_eq!(meta.is_writable, matches!(index, 1 | 2 | 3), "window index {index}");
+        }
+
+        let mut expected_data = GENERIC_MARKET_OPEN_MAGIC_V1.to_vec();
+        expected_data.push(fixture.outer.open_authority_bump);
+        assert_eq!(stage2.instruction.data, expected_data);
+
+        // Aliased raw requests refuse at assembly.
+        assert!(
+            build_generic_market_open_v1(
+                &fixture.plan,
+                &fixture.coordinates,
+                &fixture.outer,
+                found_raw_account,
+                found_raw_account,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn split_stage1_census_is_the_composed_census_minus_the_open_caller() {
+        let fixture = split_founding_fixture_v1();
+        let composed = build_generic_market_founding_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("composed frame");
+        let stage1 = build_generic_found_and_permit_v3(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            &fixture.records,
+            fixture.requests,
+            fixture.founder,
+            fixture.mint,
+        )
+        .expect("stage-1 frame");
+
+        // The synthetic fixture reproduces the exact live census the composed
+        // authenticator pins, which is what makes the stage-1 delta meaningful.
+        let composed_census =
+            authenticate_generic_market_founding_lock_census_v3(fixture.payer, &composed)
+                .expect("composed census");
+        let stage1_census =
+            authenticate_generic_found_and_permit_lock_census_v3(fixture.payer, &stage1)
+                .expect("stage-1 census");
+        assert_eq!(
+            composed_census.complete_keys,
+            GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V3
+        );
+        assert_eq!(
+            stage1_census.complete_keys,
+            GENERIC_FOUND_AND_PERMIT_COMPLETE_KEYS_V1
+        );
+        // Exactly one readonly loaded key — the Open caller PDA — leaves the
+        // census; the twelve distinct writable keys are untouched.
+        assert_eq!(
+            composed_census.complete_keys - stage1_census.complete_keys,
+            1
+        );
+        assert_eq!(composed_census.loaded_writable, stage1_census.loaded_writable);
+        assert_eq!(
+            composed_census.loaded_readonly - stage1_census.loaded_readonly,
+            1
+        );
+    }
+
+    #[test]
+    fn split_stage2_frame_admission_holds_and_pins_three_writable_keys() {
+        let fixture = split_founding_fixture_v1();
+        let stage2 = build_generic_market_open_v1(
+            &fixture.plan,
+            &fixture.coordinates,
+            &fixture.outer,
+            fixture.requests[0],
+            fixture.requests[3],
+        )
+        .expect("stage-2 frame");
+        authenticate_generic_market_open_frame_v1(fixture.payer, &stage2)
+            .expect("stage-2 frame admission");
+
+        let writable: Vec<Pubkey> = stage2
+            .instruction
+            .accounts
+            .iter()
+            .filter(|meta| meta.is_writable)
+            .map(|meta| meta.pubkey)
+            .collect();
+        assert_eq!(
+            writable,
+            vec![
+                fixture.coordinates.market,
+                fixture.outer.permit,
+                fixture.coordinates.credit,
+            ]
+        );
+
+        // A frame whose digest moved after preparation refuses admission.
+        let mut tampered = stage2.clone();
+        tampered.instruction.accounts[2].pubkey = Pubkey::new_unique();
+        assert!(authenticate_generic_market_open_frame_v1(fixture.payer, &tampered).is_err());
     }
 
     fn controller_funding_prepare_census_fixture_v1() -> (Pubkey, Instruction) {
