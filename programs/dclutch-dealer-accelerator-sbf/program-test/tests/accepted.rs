@@ -47,7 +47,18 @@ use dclutch_operator::{
     dealer_scenario_hot_v4::{DealerScenarioHotMetaStateV4, SOLANA_DEVNET_ACCOUNT_LOCK_LIMIT_V1},
     direct_inline_v3::ObservedAccountMetaV3,
 };
+use dclutch_registry_activation_auth_v1::activation_cache_address_v1;
+use dclutch_registry_contract::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    activate_execution_role_into_v1, initialize_activation_cache_v1,
+};
+use dclutch_release_set_contract::{
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ProgramIdentityV1,
+};
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
+use dclutch_core_contract::ContentId;
 use dclutch_trading_sbf::dealer::{
     v3_obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
@@ -71,7 +82,7 @@ use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_message_v3::AddressLookupTableAccount;
 use solana_sdk::transaction::TransactionError;
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
 
 /// Release-selected Trading program the campaign installs the real ELF at.
@@ -112,6 +123,144 @@ const TRADING_COMMIT: u32 = 0x4005;
 const WIDTH: u32 = 3;
 /// Last slot at which this scenario's checkpoint may still be advanced.
 const SCENARIO_EXPIRES_AT: u64 = 25;
+
+/// The five execution roles one activated release set binds.
+const ALL_ROLES: [ExecutionRoleV1; 5] = [
+    ExecutionRoleV1::Core,
+    ExecutionRoleV1::Claims,
+    ExecutionRoleV1::Trading,
+    ExecutionRoleV1::Resolution,
+    ExecutionRoleV1::Custody,
+];
+
+/// Deployment slot every role in this release set is pinned to.
+const WAIST_SLOT: u64 = 77;
+
+/// The genuine release waist the reservation route authenticates against.
+///
+/// This is not a stand-in. Reservation reaches the Registry-owned activation
+/// cache through `authenticate_activated_role_v1`, which derives the cache
+/// address from the release set, requires the Registry to own it, hostile-
+/// decodes the whole fixed-width record, and then pins the Custody role to the
+/// exact Loader V3 deployment slot its activation observed. Every one of those
+/// facts is staged here the way the Registry writes them.
+struct ReleaseWaist {
+    registry: Pubkey,
+    release_set_id: [u8; 32],
+    custody_program: Pubkey,
+    custody_programdata: Pubkey,
+    activation_cache: Pubkey,
+    cache_body: Vec<u8>,
+    program_body: Vec<u8>,
+    programdata_body: Vec<u8>,
+}
+
+/// The exact 36-byte Loader V3 Program account body.
+fn loader_program_body(programdata: Pubkey) -> Vec<u8> {
+    let mut output = vec![0_u8; 36];
+    output
+        .get_mut(..4)
+        .expect("variant")
+        .copy_from_slice(&2_u32.to_le_bytes());
+    output
+        .get_mut(4..36)
+        .expect("link")
+        .copy_from_slice(programdata.as_ref());
+    output
+}
+
+/// The exact 45-byte Loader V3 ProgramData metadata span, then the ELF.
+fn loader_programdata_body(slot: u64, authority: Option<[u8; 32]>, elf: &[u8]) -> Vec<u8> {
+    let mut output = vec![0_u8; 45 + elf.len()];
+    output
+        .get_mut(..4)
+        .expect("variant")
+        .copy_from_slice(&3_u32.to_le_bytes());
+    output
+        .get_mut(4..12)
+        .expect("slot")
+        .copy_from_slice(&slot.to_le_bytes());
+    if let Some(authority) = authority {
+        output
+            .get_mut(12..13)
+            .expect("option tag")
+            .copy_from_slice(&[1]);
+        output
+            .get_mut(13..45)
+            .expect("authority")
+            .copy_from_slice(&authority);
+    }
+    output.get_mut(45..).expect("elf").copy_from_slice(elf);
+    output
+}
+
+/// Build one whole activated release set, exactly as the Registry writes it.
+///
+/// The release set identity is derived, never chosen: it is the digest of the
+/// release set body, and the cache address is derived from that. A scenario
+/// therefore adopts its release set rather than naming one.
+fn release_waist() -> ReleaseWaist {
+    let registry = Pubkey::new_from_array([0xe0; 32]);
+    let custody_program = Pubkey::new_from_array([0xe1; 32]);
+    let custody_programdata =
+        Pubkey::find_program_address(&[custody_program.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let elf = vec![0xe2_u8; 96];
+    let release = ArtifactReleaseV1::new(
+        ProgramIdentityV1::new(custody_program.to_bytes()).expect("program identity"),
+        ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity"),
+        custody_programdata.to_bytes(),
+        ContentId::new([0xe3; 32]).expect("semantic release"),
+        hash(&elf).to_bytes(),
+        WAIST_SLOT,
+        ArtifactUpgradePolicyV1::Immutable,
+        None,
+    )
+    .expect("artifact release");
+    let artifact_id =
+        ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact id");
+    let binding = ExecutionRoleBindingV1::new(release.program(), artifact_id);
+    let release_set = ExecutionReleaseSetV1::new(binding, binding, binding, binding, binding)
+        .expect("aliased release set");
+    let release_set_id =
+        ContentId::new(hash(&release_set.to_bytes()).to_bytes()).expect("release set id");
+    let observation = DeploymentObservationV1::new(
+        custody_program.to_bytes(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        true,
+        custody_programdata.to_bytes(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        false,
+        custody_programdata.to_bytes(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        WAIST_SLOT,
+        hash(&elf).to_bytes(),
+        None,
+    )
+    .expect("deployment observation");
+    let input = ArtifactActivationInputV1::new(artifact_id, release, observation);
+    let mut cache_body = vec![0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+    initialize_activation_cache_v1(&mut cache_body, release_set_id).expect("initialize cache");
+    for role in ALL_ROLES {
+        activate_execution_role_into_v1(
+            &mut cache_body,
+            release_set_id,
+            &release_set,
+            role,
+            &input,
+        )
+        .expect("activate role");
+    }
+    ReleaseWaist {
+        registry,
+        release_set_id: release_set_id.to_bytes(),
+        custody_program,
+        custody_programdata,
+        activation_cache: activation_cache_address_v1(&registry, &release_set_id.to_bytes()),
+        cache_body,
+        program_body: loader_program_body(custody_programdata),
+        programdata_body: loader_programdata_body(WAIST_SLOT, None, &elf),
+    }
+}
 
 fn observation() -> Observation {
     Observation {
@@ -206,10 +355,12 @@ struct Scenario {
     manifest_bytes: Vec<u8>,
     pages: [Vec<Pubkey>; DEALER_SCENARIO_MEMBERSHIP_PAGES_V1],
     membership: Vec<Pubkey>,
+    waist: ReleaseWaist,
 }
 
 /// Derive one complete scenario: request, checkpoint, canonical membership.
 fn scenario() -> Scenario {
+    let waist = release_waist();
     let dealer = Keypair::new();
     let dealer_owner = dealer.pubkey().to_bytes();
     let market = MARKET.to_bytes();
@@ -226,7 +377,7 @@ fn scenario() -> Scenario {
     let counterparty_inventory = [20, 5, 9];
     let chain = ScenarioTradeChainProjectionV3 {
         trading_program: TRADING.to_bytes(),
-        release_set: [0xb3; 32],
+        release_set: waist.release_set_id,
         market,
         child_root: child,
         obligation_address: obligation.to_bytes(),
@@ -336,6 +487,7 @@ fn scenario() -> Scenario {
         manifest_bytes,
         pages: canonical.pages,
         membership,
+        waist,
     }
 }
 
@@ -368,8 +520,35 @@ fn program_test(scenario: &Scenario) -> ProgramTest {
         data_account(system_program::ID, Vec::new()),
     );
     add_executable(&mut test, MANIFEST_PRODUCER);
+    // The genuine release waist reservation authenticates against.
+    test.add_account(scenario.waist.registry, Account {
+        lamports: 1,
+        data: Vec::new(),
+        owner: solana_sdk_ids::native_loader::ID,
+        executable: true,
+        rent_epoch: 0,
+    });
+    test.add_account(scenario.waist.custody_program, Account {
+        lamports: Rent::default().minimum_balance(scenario.waist.program_body.len()).max(1),
+        data: scenario.waist.program_body.clone(),
+        owner: bpf_loader_upgradeable::ID,
+        executable: true,
+        rent_epoch: 0,
+    });
+    test.add_account(
+        scenario.waist.custody_programdata,
+        data_account(bpf_loader_upgradeable::ID, scenario.waist.programdata_body.clone()),
+    );
+    test.add_account(
+        scenario.waist.activation_cache,
+        data_account(scenario.waist.registry, scenario.waist.cache_body.clone()),
+    );
     for key in &scenario.membership {
         if *key == TRADING
+            || *key == scenario.waist.registry
+            || *key == scenario.waist.custody_program
+            || *key == scenario.waist.custody_programdata
+            || *key == scenario.waist.activation_cache
             || *key == REQUEST
             || *key == CHILD_ROOT
             || *key == scenario.obligation
