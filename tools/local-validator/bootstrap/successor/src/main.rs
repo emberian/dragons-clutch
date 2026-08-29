@@ -14,6 +14,7 @@ mod direct_trade_setup;
 mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
 mod flagship_resolution;
+mod funding_readiness;
 mod local_mutable;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
