@@ -141,6 +141,33 @@ The checkpoint must include:
   M-61. Report pass count and the exact 20-seed arithmetic mean for every named
   mutation; no single focused draw is an M-61 result.
 
+## SourceAbort interruption convergence
+
+- After the checked SBF/source family freezes, run one disposable Agave 4.0.2
+  SourceAbort campaign through the three owned-loopback driver stops in
+  `fixtures/source-abort/interruption-contract-v1.json`. Copy the evidence after
+  terminal `source-abort-controller-terminal-v1` reaches `Planned`; restart the
+  same ledger and immutable invocation to `Dispatching`, copy again; restart to
+  `Submitted`, and copy a third time. `Planned` may reauthenticate the
+  predecessor and sign once; `Dispatching` must poll first and may resend only
+  the byte-identical persisted packet; `Submitted` is permanently poll-only.
+- Run `source-abort-interruption-audit-v1` over those three canonical evidence
+  copies, the checked
+  `fixtures/source-abort/interruption-contract-v1.json`, and their embedded
+  finalized `dclutch-source-abort-frozen-union-alt-capture-v1`. Require the ALT
+  to be frozen, active, activated, sorted, duplicate-free, byte-pinned by every
+  evidence copy, and exactly equal to the canonical non-signer address union of
+  DCLTPCA1, DCLTCF1A, and DCLTCF2A. Preserve all three independently verified
+  v0 packets, signatures, fees, CU fields, and the unchanged finalized
+  two-operation prefix.
+- Reconfirm DCLTPCA1 at 36 physical/33 unique keys with +31 admitted at 64 and
+  +32 refused at 65, and both cleanup messages at 19 unique keys. A killed or
+  partial prefix must not authorize Open, terminal, payout, activity success,
+  or completion. Completion remains last and requires all three distinct
+  finalized receipts plus exact principal, controller-native, and rent
+  conservation. Batch this private interruption evidence with the final SBF
+  campaign; the static audit is not validator evidence.
+
 ## Activity V3 devnet convergence
 
 - With one accepted V3 manifest, checked release, Market, harness digest, CLI
