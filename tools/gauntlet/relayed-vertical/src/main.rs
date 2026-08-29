@@ -38,6 +38,12 @@ mod cluster;
 #[path = "../../../local-validator/bootstrap/successor/src/direct_market.rs"]
 #[allow(dead_code)]
 mod direct_market;
+#[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
+#[allow(dead_code)]
+mod funding_readiness;
+#[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
+#[allow(dead_code)]
+mod general_market;
 #[path = "../../../local-validator/bootstrap/successor/src/local_mutable.rs"]
 #[allow(dead_code)]
 mod local_mutable;
@@ -50,12 +56,21 @@ mod model;
 #[path = "../../../local-validator/bootstrap/successor/src/plan.rs"]
 #[allow(dead_code)]
 mod plan;
+#[path = "../../../local-validator/bootstrap/successor/src/rational_market.rs"]
+#[allow(dead_code)]
+mod rational_market;
 #[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
 #[allow(dead_code)]
 mod relayed;
+#[path = "../../../local-validator/bootstrap/successor/src/release_identity.rs"]
+#[allow(dead_code)]
+mod release_identity;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
+#[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
+#[allow(dead_code)]
+mod selected_capability;
 #[path = "../../../local-validator/bootstrap/successor/src/runtime.rs"]
 #[allow(dead_code)]
 mod runtime;
@@ -78,6 +93,8 @@ mod daemon;
 mod input;
 #[allow(dead_code)]
 mod relayworld;
+#[allow(dead_code)]
+mod substrate;
 #[allow(dead_code)]
 mod twin;
 #[allow(dead_code)]
@@ -140,33 +157,101 @@ fn run() -> Result<()> {
     }
 }
 
-fn run_vertical(_arguments: Vec<String>) -> Result<()> {
-    Err(Error::new(
-        "relayed-vertical is parked: Direct is deployment-bound, but this runner compiles its \
-         replacement market before a checked local mutable plan and live loopback substrate \
-         exist. Restore it only as prepare-mutable -> authenticate live substrate -> compile \
-         market -> found -> relay; fixture Direct identities are refused",
-    ))
+fn required<'a>(
+    values: &'a std::collections::BTreeMap<String, String>,
+    flag: &str,
+) -> Result<&'a str> {
+    values
+        .get(flag)
+        .map(String::as_str)
+        .ok_or_else(|| Error::new(format!("{flag} is required")))
+}
+
+fn absolute(value: &str, flag: &str) -> Result<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err(Error::new(format!("{flag} must be an absolute path")));
+    }
+    Ok(path)
+}
+
+/// The restored vertical, in exactly the order the park banner prescribed:
+/// prepare-mutable -> authenticate live substrate -> compile market -> found
+/// -> relay. Fixture Direct identities remain refused: the market compiler is
+/// `DirectMarketCompilerOwnedV1::load_local`, which authenticates the checked
+/// local mutable plan against the gate on disk and observes the LIVE loopback
+/// deployment before anything compiles.
+fn run_vertical(arguments: Vec<String>) -> Result<()> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(flag) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
+        }
+    }
+    let walk = match required(&values, "--walk")? {
+        "success" => vertical::WalkV1::Success,
+        "failure" => vertical::WalkV1::Failure,
+        other => return Err(Error::new(format!("--walk must be success or failure: {other}"))),
+    };
+    let rpc_port: u16 = required(&values, "--rpc-port")?
+        .parse()
+        .map_err(|_| Error::new("--rpc-port must be a port number"))?;
+    let request = vertical::VerticalRequestV1 {
+        walk,
+        transcript: absolute(required(&values, "--transcript")?, "--transcript")?,
+        relayer_bin: absolute(required(&values, "--relayer-bin")?, "--relayer-bin")?,
+        work: absolute(required(&values, "--work")?, "--work")?,
+        rpc_port,
+        checked_release_gate: absolute(
+            required(&values, "--checked-release-gate")?,
+            "--checked-release-gate",
+        )?,
+        expected_gate_sha256: required(&values, "--expected-gate-sha256")?.to_owned(),
+        expected_source_revision: required(&values, "--expected-source-revision")?.to_owned(),
+        expected_source_tree_sha256: required(&values, "--expected-source-tree-sha256")?.to_owned(),
+        seed: required(&values, "--seed")?.to_owned(),
+    };
+    vertical::execute(request).map(|_| ())
 }
 
 fn usage() {
     println!(
-        "PARKED: this command refuses before reading files or starting a validator. Direct is \
-         deployment-bound now; restore this runner only as prepare checked substrate, authenticate \
-         live loopback accounts, compile with DirectMarketCompilerOwnedV1::load_local, then found \
-         and relay. Do not substitute fixture identities.\n\nHistorical interface (not executable):"
-    );
-    println!(
-        "Usage:\n  dclutch-relayed-vertical-campaign run --walk success|failure \\\n      --spec-template ABSOLUTE_JSON --transcript ABSOLUTE_NEW_JSON \\\n      --relayer-bin ABSOLUTE_DCLUTCH_RELAYER --work ABSOLUTE_DIR \\\n      [--keypair-seed 64_LOWERCASE_HEX]\n\nThe spec template is a `dclutch-local-successor-run-spec-v2` document whose\n`market` field this campaign REPLACES with the relayed graduation market it\ncompiles at run time (the market's terminal window is wall-clock content and\nthe relayer key set is generated per run, so the input cannot be static).\nEverything runs on 127.0.0.1: the successor validator on the template's own\nport block, and the mainnet twin on a port this campaign binds under --work.\nNothing here signs with a persisted key or touches a public cluster."
+        "Usage:\n  dclutch-relayed-vertical-campaign run --walk success|failure \\\n      \
+         --transcript ABSOLUTE_NEW_JSON --relayer-bin ABSOLUTE_DCLUTCH_RELAYER \\\n      \
+         --work ABSOLUTE_DIR --rpc-port PORT \\\n      \
+         --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
+         --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \
+         --expected-source-tree-sha256 HEX64 --seed HEX64\n\nThe campaign brings up its own \
+         checked-mutable loopback substrate from the named\nchecked release gate \
+         (local-mutable-prepare-v1), boots a fresh solana-test-validator\nover the prepared \
+         account directory, runs the administration campaign through\nactivation, compiles the \
+         relayed graduation market against the LIVE deployment\n(load_local; fixture Direct \
+         identities are refused), founds it with\ncampaign --founding-only, and only then \
+         relays. Everything runs on 127.0.0.1:\nthe successor validator on --rpc-port and the \
+         mainnet twin on a port this\ncampaign binds under --work. The prepared keys are \
+         disposable loopback-only\nfiles under --work; nothing here touches a public cluster."
     );
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn relayed_vertical_refuses_pre_plan_direct_compilation() {
-        let error = super::run_vertical(Vec::new()).expect_err("parked vertical must refuse");
-        assert!(error.0.contains("before a checked local mutable plan"));
-        assert!(error.0.contains("fixture Direct identities are refused"));
+    fn the_vertical_refuses_missing_and_relative_arguments_before_any_work() {
+        let error = super::run_vertical(Vec::new()).expect_err("no arguments must refuse");
+        assert!(error.0.contains("--walk is required"));
+        let error = super::run_vertical(vec![
+            "--walk".into(),
+            "failure".into(),
+            "--rpc-port".into(),
+            "21000".into(),
+            "--transcript".into(),
+            "relative.json".into(),
+        ])
+        .expect_err("a relative transcript must refuse");
+        assert!(error.0.contains("--transcript must be an absolute path"));
     }
 }

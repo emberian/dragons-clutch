@@ -49,7 +49,8 @@ use crate::relayworld::{
     self, RESOLUTION_FAILURE_KIND, RESOLUTION_SUCCESS_KIND, RecordPairV1, RelayAddressBookV1,
 };
 use crate::rpc::Rpc;
-use crate::runtime::{OpenMarketSessionV1, found_through_open, publish_record};
+use crate::runtime::publish_record;
+use crate::substrate::{self, SubstrateRequestV1};
 use crate::twin;
 use crate::{Error, Result};
 
@@ -62,11 +63,62 @@ pub(crate) enum WalkV1 {
 
 pub(crate) struct VerticalRequestV1 {
     pub(crate) walk: WalkV1,
-    pub(crate) spec_template: PathBuf,
     pub(crate) transcript: PathBuf,
     pub(crate) relayer_bin: PathBuf,
     pub(crate) work: PathBuf,
-    pub(crate) keypair_seed: Option<String>,
+    /// The successor validator's RPC port; the twin allocates around it.
+    pub(crate) rpc_port: u16,
+    /// The checked release gate the substrate is prepared from, with its
+    /// pinned identity — the same four facts the lifecycle driver demands.
+    pub(crate) checked_release_gate: PathBuf,
+    pub(crate) expected_gate_sha256: String,
+    pub(crate) expected_source_revision: String,
+    pub(crate) expected_source_tree_sha256: String,
+    /// The prepare seed (64 lowercase hex): loopback-only determinism for the
+    /// disposable role keys.
+    pub(crate) seed: String,
+}
+
+/// A live campaign session over the checked-mutable substrate.
+///
+/// The shape `found_through_open` used to return, rebuilt from the campaign
+/// evidence instead: the validator is this driver's own child, the plan is
+/// the checked-mutable plan, and the authority is the retained upgrade
+/// authority whose key file the prepare stage wrote. Unlike the tier-1
+/// session, the keys here ARE persisted (disposable, loopback-only, under the
+/// prepare work dir), and the evidence says so instead of claiming otherwise.
+pub(crate) struct RelaySessionV1 {
+    /// Kept solely to own the child's lifetime; `Drop` kills the validator.
+    #[allow(dead_code)]
+    pub(crate) validator: substrate::ValidatorGuardV1,
+    pub(crate) rpc: Rpc,
+    pub(crate) plan: crate::model::SuccessorPlan,
+    pub(crate) plan_sha256: String,
+    pub(crate) authority: Keypair,
+    pub(crate) output: PathBuf,
+    pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
+    pub(crate) accounts: std::collections::BTreeMap<String, crate::model::AccountEvidence>,
+    pub(crate) completed: Vec<String>,
+    pub(crate) founding_custody_context: String,
+    pub(crate) direct_selected_manifest_entry_index: u16,
+}
+
+impl RelaySessionV1 {
+    fn evidence_json(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "schema": "dclutch-relayed-vertical-session-evidence-v1",
+            "rpc_url": self.rpc.url(),
+            "plan_sha256": self.plan_sha256,
+            "authority_pubkey": self.authority.pubkey().to_string(),
+            "private_key_persisted": true,
+            "keypair_derivation": "prepared-disposable-loopback-roles",
+            "founding_custody_context": self.founding_custody_context,
+            "direct_selected_manifest_entry_index": self.direct_selected_manifest_entry_index,
+            "completed": self.completed,
+            "transactions": serde_json::to_value(&self.transactions)?,
+            "accounts": serde_json::to_value(&self.accounts)?,
+        }))
+    }
 }
 
 #[derive(Serialize)]
@@ -81,26 +133,18 @@ fn now_unix() -> Result<i64> {
     i64::try_from(elapsed.as_secs()).map_err(|_| Error::new("wall clock out of range"))
 }
 
-/// The whole vertical.
-pub(crate) fn execute(
-    request: VerticalRequestV1,
-    direct: &crate::direct_market::DirectMarketCompilerOwnedV1,
-) -> Result<serde_json::Value> {
+/// The whole vertical, in the order the park banner prescribed: prepare the
+/// checked substrate, authenticate it live, compile the market against it,
+/// found, then relay.
+pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     std::fs::create_dir_all(&request.work)?;
     let mut stages: Vec<StageV1> = Vec::new();
     let start_unix = now_unix()?;
 
     // ---------------------------------------------------------- 1. the twin
-    // The successor validator's base is allocated by the runner but not yet
+    // The successor validator's base is chosen by the runner but not yet
     // bound; the twin's allocator must not take that block.
-    let template_probe: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&request.spec_template)?)?;
-    let successor_base = template_probe
-        .get("rpc_url")
-        .and_then(|value| value.as_str())
-        .and_then(|url| url.rsplit(':').next())
-        .and_then(|tail| tail.trim_end_matches('/').parse::<u16>().ok());
-    let twin = twin::start(&request.work, start_unix, successor_base)?;
+    let twin = twin::start(&request.work, start_unix, Some(request.rpc_port))?;
     stages.push(StageV1 {
         stage: "mainnet twin".into(),
         outcome: "running".into(),
@@ -114,26 +158,58 @@ pub(crate) fn execute(
         ),
     });
 
-    // ---------------------------------------------- 2. keys and the market
+    // ----------------------------------- 2. the checked-mutable substrate
+    // prepare-mutable -> spawn -> authenticate -> campaign activation. Only
+    // after this does a live loopback deployment exist for the deployment-
+    // bound Direct compiler to observe.
+    let substrate_dir = request.work.join("substrate");
+    std::fs::create_dir_all(&substrate_dir)?;
+    let checked = substrate::bring_up(&SubstrateRequestV1 {
+        work: &substrate_dir,
+        checked_release_gate: &request.checked_release_gate,
+        expected_gate_sha256: &request.expected_gate_sha256,
+        expected_source_revision: &request.expected_source_revision,
+        expected_source_tree_sha256: &request.expected_source_tree_sha256,
+        seed: &request.seed,
+        rpc_port: request.rpc_port,
+    })?;
+    stages.push(StageV1 {
+        stage: "checked-mutable substrate".into(),
+        outcome: "executed".into(),
+        note: format!(
+            "local-mutable-prepare-v1 derived the seven-role mutable substrate from the checked \
+             release gate ({}), a fresh solana-test-validator booted the prepared account \
+             directory (no --upgradeable-program, so the retained tag-0 authority survives), the \
+             plan re-authenticated against the gate on disk, and the administration campaign \
+             published, initialized and activated through the retained authority.",
+            request.expected_gate_sha256
+        ),
+    });
+
+    // ------------------------------------------- 3. keys and the market
     // The relayer's attestation key is FOUNDING CONTENT (the key-set record's
-    // digest seeds half the graph), so it is generated before the spec exists
-    // and disclosed through the records rather than through any wallet store.
+    // digest seeds half the graph), so it is generated before the market
+    // compiles and disclosed through the records rather than any wallet store.
     let attestation = Keypair::new();
     let fee_payer = Keypair::new();
     let keys_dir = request.work.join("relayer-keys");
     let attestation_path = daemon::write_keypair_file(&keys_dir, "attestation.json", &attestation)?;
     let fee_payer_path = daemon::write_keypair_file(&keys_dir, "fee-payer.json", &fee_payer)?;
 
-    let template: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&request.spec_template)?)?;
-    let registry = pubkey(
-        template
-            .get("registry")
-            .and_then(|role| role.get("program_id"))
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| Error::new("the spec template names no registry program id"))?,
-    )?;
+    let registry = pubkey(&checked.plan.registry.program_id)?;
     let window_choice = input::window_choice(start_unix, request.walk == WalkV1::Success);
+    // The deployment-bound compiler, observing the LIVE checked substrate —
+    // the exact ordering the park banner demanded. The fee recipient is a
+    // fresh disposable identity; the scenario's 50 bps mirrors the published
+    // graduation fixture.
+    let fee_recipient = Keypair::new();
+    let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
+        &checked.plan_path,
+        &checked.rpc_url,
+        registry,
+        Some(50),
+        Some(fee_recipient.pubkey()),
+    )?;
     let facts = input::relayed_market_input(
         registry,
         attestation.pubkey().to_bytes(),
@@ -141,21 +217,61 @@ pub(crate) fn execute(
         direct.compiler(),
     )?;
 
-    let mut spec_value = template;
-    spec_value["market"] = serde_json::to_value(&facts.input)?;
-    spec_value["record_publication"] = serde_json::Value::String("transaction".into());
-    let spec_path = request.work.join("spec.json");
-    std::fs::write(&spec_path, serde_json::to_vec_pretty(&spec_value)?)?;
+    // The graduation wrapper, exactly as the shipped `graduation-market`
+    // subcommand emits it; the founding campaign authenticates the whole
+    // envelope back into the inner source graph.
+    let market_path = request.work.join("market.json");
+    let wrapper = serde_json::json!({
+        "schema": "dclutch-graduation-market-input-v1",
+        "market": facts.input,
+        "account_set_id": hex(&facts.account_set_id),
+        "relayer_attestation": attestation.pubkey().to_string(),
+        "relayer_key_set_hex": hex(&facts.relayer_key_set_bytes),
+        "relayer_key_set_digest": hex(&facts.relayer_key_set_digest),
+        "venue_release_digest": hex(&facts.venue_release_digest),
+        "relayed_adapter_config_digest": hex(&facts.relayed_adapter_config_digest),
+        "source_spec_digest": hex(&facts.source_spec_digest),
+        "window": {
+            "start_unix_seconds": window_choice.start_unix_seconds,
+            "end_unix_seconds": window_choice.end_unix_seconds,
+            "max_age_seconds": window_choice.max_age_seconds,
+        },
+        "walk_bounty_lamports": WALK_BOUNTY_LAMPORTS,
+        "admitted_principal_atoms": facts.admitted_principal_atoms.to_string(),
+        "admitted_principal_cap_atoms": facts.admitted_principal_cap_atoms.to_string(),
+        "disclosed_failure_conflation": DISCLOSED_FAILURE_CONFLATION,
+    });
+    std::fs::write(&market_path, serde_json::to_vec_pretty(&wrapper)?)?;
 
-    // ------------------------------------------------------- 3. the founding
-    let mut session = found_through_open(&spec_path, request.keypair_seed.as_deref())?;
+    // ------------------------------------------------------- 4. the founding
+    let mut rpc = Rpc::connect(&checked.rpc_url)?;
+    let founding = substrate::found_market(
+        &checked,
+        &mut rpc,
+        &market_path,
+        &request.work.join("founding-evidence.json"),
+    )?;
+    let authority_keypair = substrate::authority_keypair(&checked)?;
+    let mut session = RelaySessionV1 {
+        validator: checked.validator,
+        rpc,
+        plan: checked.plan,
+        plan_sha256: checked.plan_sha256,
+        authority: authority_keypair,
+        output: request.work.join("session-evidence.json"),
+        transactions: founding.transactions,
+        accounts: founding.market.accounts,
+        completed: founding.market.completed,
+        founding_custody_context: founding.market.founding_custody_context,
+        direct_selected_manifest_entry_index: founding.market.direct_selected_manifest_entry_index,
+    };
     stages.push(StageV1 {
         stage: "founding through Open".into(),
         outcome: "executed".into(),
         note: format!(
-            "The tier-1 producer's own campaign, transaction-only record publication, founding \
-             the zero-cut graduation Product with NO recovery policy. {} transactions to here. \
-             Disclosed at founding: {DISCLOSED_FAILURE_CONFLATION}",
+            "campaign --founding-only over the live checked substrate, transaction-only record \
+             publication, founding the zero-cut graduation Product with NO recovery policy. {} \
+             transactions to here. Disclosed at founding: {DISCLOSED_FAILURE_CONFLATION}",
             session.transactions.len()
         ),
     });
@@ -502,6 +618,15 @@ pub(crate) fn execute(
         source_state,
         funding,
         rent_beneficiary,
+        Pubkey::find_program_address(
+            &[
+                dclutch_resolution_codec::FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+                market.as_ref(),
+                &generation.to_le_bytes(),
+            ],
+            &resolution_program,
+        )
+        .0,
     )?)
     .map_err(|error| Error::new(format!("chain-derived VerifyFundReady: {error:?}")))?;
     validate_resolution_verify_fund_ready_report_v3(&verify)
@@ -669,11 +794,8 @@ pub(crate) fn execute(
     // ------------------------------------------------------- 7. the verdict
     let violations = ledger.violations();
     let conserved = violations.is_empty();
-    let evidence = session.evidence();
-    std::fs::write(
-        &session.spec.output,
-        serde_json::to_vec_pretty(&serde_json::to_value(&evidence)?)?,
-    )?;
+    let evidence = session.evidence_json()?;
+    std::fs::write(&session.output, serde_json::to_vec_pretty(&evidence)?)?;
 
     let transcript = serde_json::json!({
         "schema": "dclutch-relayed-vertical-transcript-v1",
@@ -727,7 +849,7 @@ pub(crate) fn execute(
 fn success_walk(
     request: &VerticalRequestV1,
     twin: &twin::MainnetTwinV1,
-    session: &mut OpenMarketSessionV1,
+    session: &mut RelaySessionV1,
     facts: &RelayedMarketFactsV1,
     authority: &Keypair,
     fee_payer: &Keypair,
@@ -1043,7 +1165,7 @@ fn success_walk(
 /// The silent-relayer sibling: nobody observes, the deadline passes, the
 /// funded walk pays a walker on a bare legacy transaction.
 fn failure_walk(
-    session: &mut OpenMarketSessionV1,
+    session: &mut RelaySessionV1,
     facts: &RelayedMarketFactsV1,
     _authority: &Keypair,
     book_template: impl Fn(Pubkey, u8) -> RelayAddressBookV1,
@@ -1303,6 +1425,7 @@ fn verify_snapshot(
     source_state: Pubkey,
     funding: Pubkey,
     rent_beneficiary: Pubkey,
+    activation_receipt: Pubkey,
 ) -> Result<ResolutionVerifyFundReadySnapshotV3> {
     let (observation, present) = rpc.finalized_observed_accounts(
         &[
@@ -1346,6 +1469,8 @@ fn verify_snapshot(
         beneficiary: at(11)?,
         rent_sysvar: at(12)?,
         clock_sysvar: at(13)?,
+        // Verification precedes activation, so the receipt PDA is vacant.
+        activation_receipt: vacant(observation, activation_receipt),
         recovery_policy: at(7)?,
         recovery_policy_staging: vacant(observation, material.staging),
     })
