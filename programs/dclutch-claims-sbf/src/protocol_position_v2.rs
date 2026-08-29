@@ -203,6 +203,23 @@ struct CloseAccounts<'accounts, 'info> {
     rent_program: &'accounts AccountInfo<'info>,
 }
 
+/// Exact enclosing Trading request already authenticated by the Fractional
+/// Claims route.
+///
+/// This capability is crate-private: it cannot turn the public Position-close
+/// entry into an alternate authorization mode. The outer route owns the exact
+/// parent request digest and context, while this adapter still authenticates
+/// the current Trading/Claims releases and every Position lifecycle fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // Consumed by the Fractional retirement caller landed next.
+pub(crate) struct AuthenticatedProtocolPositionCloseParentV2 {
+    pub(crate) release_set: [u8; 32],
+    pub(crate) market: [u8; 32],
+    pub(crate) parent_context: [u8; 32],
+    pub(crate) parent_request_digest: [u8; 32],
+    pub(crate) trading_root: [u8; 32],
+}
+
 /// Execute one exact admission or close.
 #[inline(never)]
 pub fn process(
@@ -463,6 +480,61 @@ fn process_close(
         request,
         request_digest,
     )?;
+    let (_, receipt_bytes) = execute_close_authenticated(
+        program_id,
+        accounts,
+        instruction_data,
+        request,
+        sparse_receipt,
+    )?;
+    set_return_data(&receipt_bytes);
+    Ok(())
+}
+
+/// Close one zero ProtocolPosition under an exact already-authenticated
+/// Fractional parent request.
+///
+/// The physical Trading root arrives writable and signed because the outer
+/// Trading instruction revises it and uses it as Token-2022 MintCloseAuthority.
+/// Claims receives only a cloned readonly, non-signer owner view for its
+/// semantic owner check. No Claims close operation borrows or mutates the root.
+#[allow(dead_code)] // Consumed by the Fractional retirement caller landed next.
+pub(crate) fn execute_parent_authenticated_close(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+    parent: AuthenticatedProtocolPositionCloseParentV2,
+) -> Result<ProtocolPositionCloseReceiptV2, ProgramError> {
+    if instruction_data.len() != PROTOCOL_POSITION_REQUEST_BYTES_V2 {
+        return Err(ProtocolPositionSbfErrorV2::Instruction.into());
+    }
+    let request = ProtocolPositionRequestV2::decode(instruction_data)
+        .map_err(|_| ProtocolPositionSbfErrorV2::Instruction)?;
+    if request.action != ProtocolPositionActionV2::Close {
+        return Err(ProtocolPositionSbfErrorV2::Instruction.into());
+    }
+    authenticate_parent_close_frame_spec(account_infos)?;
+    let accounts = CloseAccounts::parse(account_infos)?;
+    authenticate_close_privileges(program_id, accounts)?;
+    authenticate_parent_authority(accounts, request, parent)?;
+    execute_close_authenticated(program_id, accounts, instruction_data, request, None)
+        .map(|(receipt, _)| receipt)
+}
+
+fn execute_close_authenticated(
+    program_id: &Pubkey,
+    accounts: CloseAccounts<'_, '_>,
+    instruction_data: &[u8],
+    request: ProtocolPositionRequestV2,
+    sparse_receipt: Option<SparseNativeTransferReceiptV1>,
+) -> Result<
+    (
+        ProtocolPositionCloseReceiptV2,
+        [u8; PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2],
+    ),
+    ProgramError,
+> {
+    let request_digest = hash(instruction_data).to_bytes();
     authenticate_releases_close(accounts, request)?;
     let (market, market_digest) = authenticate_market(
         program_id,
@@ -470,12 +542,7 @@ fn process_close(
         accounts.registry,
         request,
     )?;
-    authenticate_owner(
-        accounts.owner_identity,
-        accounts.trading_program,
-        accounts.claims_program,
-        request,
-    )?;
+    authenticate_owner_readonly_view(accounts, request)?;
     let rent_credit_data =
         authenticate_rent_credit(accounts.rent_credit, accounts.rent_program, request)?;
 
@@ -562,16 +629,18 @@ fn process_close(
             rent_credit_after: rent_after,
         },
     )
-    .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?
-    .to_bytes()
     .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
+    // Serialize before the first lifecycle mutation. A future receipt-layout
+    // error can therefore never strand a closed Position without evidence.
+    let receipt_bytes = receipt
+        .to_bytes()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
 
     close_pair(accounts, rent_after)?;
     if account_digest(accounts.common.market)? != market_digest {
         return Err(ProtocolPositionSbfErrorV2::Commit.into());
     }
-    set_return_data(&receipt);
-    Ok(())
+    Ok((receipt, receipt_bytes))
 }
 
 fn authenticate_admit_privileges(
@@ -664,6 +733,38 @@ fn authenticate_frame_spec(
     Ok(())
 }
 
+fn authenticate_parent_close_frame_spec(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
+    let spec = ClaimsFrameSpecV1::protocol_position(ProtocolPositionActionV2::Close);
+    let count = usize::from(
+        spec.account_count()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?,
+    );
+    if accounts.len() != count || count != PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2 {
+        return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+    }
+    for (index, observed) in accounts.iter().enumerate() {
+        let coordinate = u16::try_from(index).map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+        let expected = spec
+            .account(coordinate)
+            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?
+            .privileges();
+        let (signer, writable) = if index == CLOSE_OWNER_IDENTITY {
+            // The outer Trading route owns this privilege. Claims explicitly
+            // downgrades its view before authenticating the semantic owner.
+            (true, true)
+        } else {
+            (expected.signer(), expected.writable())
+        };
+        if observed.is_signer != signer
+            || observed.is_writable != writable
+            || observed.executable != expected.executable()
+        {
+            return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+        }
+    }
+    Ok(())
+}
+
 fn authenticate_authority(
     authority: &AccountInfo<'_>,
     trading_program: &AccountInfo<'_>,
@@ -680,6 +781,44 @@ fn authenticate_authority(
     .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
     let expected = Pubkey::find_program_address(&seeds.as_slices(), trading_program.key).0;
     if authority.key != &expected {
+        return Err(ProtocolPositionSbfErrorV2::Release.into());
+    }
+    Ok(())
+}
+
+fn authenticate_parent_authority(
+    accounts: CloseAccounts<'_, '_>,
+    request: ProtocolPositionRequestV2,
+    parent: AuthenticatedProtocolPositionCloseParentV2,
+) -> Result<(), ProgramError> {
+    if request.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord
+        || request.release_set != parent.release_set
+        || request.market != parent.market
+        || request.position_owner != parent.trading_root
+        || request.parent_request_digest != parent.parent_request_digest
+        || parent.parent_context == [0; 32]
+        || parent.trading_root == [0; 32]
+    {
+        return Err(ProtocolPositionSbfErrorV2::Release.into());
+    }
+    let seeds = CallerAuthoritySeedsV1::from_bytes(
+        parent.release_set,
+        parent.market,
+        ExecutionRoleV1::Trading,
+        parent.parent_context,
+        parent.parent_request_digest,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
+    let expected = Pubkey::find_program_address(&seeds.as_slices(), accounts.trading_program.key).0;
+    if accounts.common.authority.key != &expected
+        || !accounts.common.authority.is_signer
+        || accounts.owner_identity.key.to_bytes() != parent.trading_root
+        || !accounts.owner_identity.is_signer
+        || !accounts.owner_identity.is_writable
+        || accounts.owner_identity.owner != accounts.trading_program.key
+        || accounts.owner_identity.executable
+        || accounts.owner_identity.data_is_empty()
+    {
         return Err(ProtocolPositionSbfErrorV2::Release.into());
     }
     Ok(())
@@ -815,6 +954,21 @@ fn authenticate_owner(
         }
     }
     Ok(())
+}
+
+fn authenticate_owner_readonly_view(
+    accounts: CloseAccounts<'_, '_>,
+    request: ProtocolPositionRequestV2,
+) -> Result<(), ProgramError> {
+    let mut owner_view = accounts.owner_identity.clone();
+    owner_view.is_signer = false;
+    owner_view.is_writable = false;
+    authenticate_owner(
+        &owner_view,
+        accounts.trading_program,
+        accounts.claims_program,
+        request,
+    )
 }
 
 fn authenticate_rent_credit(
@@ -1123,12 +1277,135 @@ fn account<'accounts, 'info>(
 
 #[cfg(test)]
 mod tests {
+    use std::{boxed::Box, vec::Vec};
+
     use super::*;
+
+    fn test_account(
+        key: Pubkey,
+        owner: Pubkey,
+        signer: bool,
+        writable: bool,
+        executable: bool,
+        data: Vec<u8>,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            signer,
+            writable,
+            Box::leak(Box::new(1)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(owner)),
+            executable,
+        )
+    }
+
+    fn parent_fixture() -> (
+        Pubkey,
+        Vec<AccountInfo<'static>>,
+        ProtocolPositionRequestV2,
+        AuthenticatedProtocolPositionCloseParentV2,
+    ) {
+        let program_id = Pubkey::new_from_array([21; 32]);
+        let trading_program = Pubkey::new_from_array([22; 32]);
+        let release_set = [1; 32];
+        let market = [2; 32];
+        let parent_context = [3; 32];
+        let parent_request_digest = [4; 32];
+        let trading_root = [5; 32];
+        let request = ProtocolPositionRequestV2 {
+            action: ProtocolPositionActionV2::Close,
+            owner_kind: ProtocolPositionOwnerKindV2::TradingRecord,
+            presence: ProtocolPositionPresenceV2::Existing,
+            release_set,
+            market,
+            position_owner: trading_root,
+            parent_request_digest,
+            rent_credit: [6; 32],
+            rent_program: [7; 32],
+            generation: 1,
+            expected_market_revision: 2,
+            expected_position_revision: 3,
+            observed_position_lamports: 10,
+            observed_admission_lamports: 11,
+            position_rent_principal: 10,
+            admission_rent_principal: 11,
+            capability_descriptor: [0; 32],
+            capability_outcome: 0,
+        }
+        .new()
+        .expect("canonical close request");
+        let parent = AuthenticatedProtocolPositionCloseParentV2 {
+            release_set,
+            market,
+            parent_context,
+            parent_request_digest,
+            trading_root,
+        };
+        let authority_seeds = CallerAuthoritySeedsV1::from_bytes(
+            release_set,
+            market,
+            ExecutionRoleV1::Trading,
+            parent_context,
+            parent_request_digest,
+        )
+        .expect("caller seeds");
+        let authority =
+            Pubkey::find_program_address(&authority_seeds.as_slices(), &trading_program).0;
+        let spec = ClaimsFrameSpecV1::protocol_position(ProtocolPositionActionV2::Close);
+        let mut accounts = Vec::with_capacity(PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2);
+        for index in 0..PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2 {
+            let frame = spec
+                .account(u16::try_from(index).expect("coordinate"))
+                .expect("frame account");
+            let privileges = frame.privileges();
+            let key = match index {
+                AUTHORITY => authority,
+                MARKET => Pubkey::new_from_array(market),
+                CLOSE_RENT => sysvar::rent::ID,
+                CLOSE_SYSTEM => system_program::ID,
+                CLOSE_TRADING_PROGRAM => trading_program,
+                CLOSE_CLAIMS_PROGRAM => program_id,
+                CLOSE_OWNER_IDENTITY => Pubkey::new_from_array(trading_root),
+                _ => Pubkey::new_from_array([u8::try_from(index).expect("small index") + 40; 32]),
+            };
+            let owner = match index {
+                MARKET | POSITION | ADMISSION => program_id,
+                CLOSE_OWNER_IDENTITY => trading_program,
+                _ => system_program::ID,
+            };
+            let signer = if index == CLOSE_OWNER_IDENTITY {
+                true
+            } else {
+                privileges.signer()
+            };
+            let writable = if index == CLOSE_OWNER_IDENTITY {
+                true
+            } else {
+                privileges.writable()
+            };
+            let data = if index == CLOSE_OWNER_IDENTITY {
+                vec![1]
+            } else {
+                Vec::new()
+            };
+            accounts.push(test_account(
+                key,
+                owner,
+                signer,
+                writable,
+                privileges.executable(),
+                data,
+            ));
+        }
+        (program_id, accounts, request, parent)
+    }
 
     #[test]
     fn account_frames_are_action_specific_and_minimal() {
         assert_eq!(PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2, 26);
         assert_eq!(PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2, 15);
+        assert!(PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2 <= 64);
         assert_ne!(PROTOCOL_POSITION_REQUEST_MAGIC_V2, *b"DCLPPR01");
     }
 
@@ -1144,5 +1421,83 @@ mod tests {
         let position = Pubkey::find_program_address(&position_seeds.as_slices(), &program).0;
         let admission = Pubkey::find_program_address(&admission_seeds.as_slices(), &program).0;
         assert_ne!(position, admission);
+    }
+
+    #[test]
+    fn parent_close_frame_is_exact_and_owner_is_explicitly_downgraded() {
+        let (program_id, accounts, request, parent) = parent_fixture();
+        authenticate_parent_close_frame_spec(&accounts).expect("exact parent frame");
+        let close = CloseAccounts::parse(&accounts).expect("close accounts");
+        authenticate_close_privileges(&program_id, close).expect("distinct close accounts");
+        authenticate_parent_authority(close, request, parent).expect("parent authority");
+        assert_eq!(
+            authenticate_owner(
+                close.owner_identity,
+                close.trading_program,
+                close.claims_program,
+                request,
+            ),
+            Err(ProtocolPositionSbfErrorV2::Position.into())
+        );
+        authenticate_owner_readonly_view(close, request).expect("Claims readonly owner view");
+    }
+
+    #[test]
+    fn parent_close_refuses_foreign_parent_digest_context_and_root() {
+        let (_, accounts, request, parent) = parent_fixture();
+        let close = CloseAccounts::parse(&accounts).expect("close accounts");
+        for hostile in [
+            AuthenticatedProtocolPositionCloseParentV2 {
+                release_set: [9; 32],
+                ..parent
+            },
+            AuthenticatedProtocolPositionCloseParentV2 {
+                market: [9; 32],
+                ..parent
+            },
+            AuthenticatedProtocolPositionCloseParentV2 {
+                parent_context: [9; 32],
+                ..parent
+            },
+            AuthenticatedProtocolPositionCloseParentV2 {
+                parent_request_digest: [9; 32],
+                ..parent
+            },
+            AuthenticatedProtocolPositionCloseParentV2 {
+                trading_root: [9; 32],
+                ..parent
+            },
+        ] {
+            assert_eq!(
+                authenticate_parent_authority(close, request, hostile),
+                Err(ProtocolPositionSbfErrorV2::Release.into())
+            );
+        }
+    }
+
+    #[test]
+    fn parent_close_refuses_signer_loss_alias_and_replayed_request() {
+        let (program_id, mut accounts, _, _) = parent_fixture();
+        accounts[CLOSE_OWNER_IDENTITY].is_signer = false;
+        assert_eq!(
+            authenticate_parent_close_frame_spec(&accounts),
+            Err(ProtocolPositionSbfErrorV2::Accounts.into())
+        );
+        accounts[CLOSE_OWNER_IDENTITY].is_signer = true;
+        let authority_key = accounts[AUTHORITY].key;
+        accounts[CLOSE_OWNER_IDENTITY].key = authority_key;
+        let close = CloseAccounts::parse(&accounts).expect("close accounts");
+        assert_eq!(
+            authenticate_close_privileges(&program_id, close),
+            Err(ProtocolPositionSbfErrorV2::Accounts.into())
+        );
+
+        let (_, fresh_accounts, mut replayed, parent) = parent_fixture();
+        replayed.parent_request_digest = [10; 32];
+        let close = CloseAccounts::parse(&fresh_accounts).expect("close accounts");
+        assert_eq!(
+            authenticate_parent_authority(close, replayed, parent),
+            Err(ProtocolPositionSbfErrorV2::Release.into())
+        );
     }
 }
