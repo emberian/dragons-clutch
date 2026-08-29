@@ -7231,7 +7231,7 @@ fn decode_claims_composition_boxed_v3<'request>(
         };
         if request.input().release_set != parent.release_set
             || request.input().market != parent.market
-            || hash(family_request).to_bytes() != parent.parent_request_digest
+            || dclutch_sha256_adapter::digest(family_request) != parent.parent_request_digest
         {
             return Err(TradingSbfError::Content.into());
         }

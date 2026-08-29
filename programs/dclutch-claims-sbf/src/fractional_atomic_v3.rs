@@ -40,13 +40,13 @@ use dclutch_fractional_claims_kernel::{
     fractional_exposure_signed_delta_shape_v2, prepare_fractional_exposure_signed_delta_v2,
     validate_fractional_exposure_signed_delta_postcondition_v2,
 };
+use dclutch_sha256_adapter::{digest, digestv};
 use dclutch_token_svm::{
     MINT_BYTES, Mint, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
     TokenBehaviorSelectionV2,
 };
 use solana_program::{
     account_info::AccountInfo,
-    hash::{hash, hashv},
     program::{invoke, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
@@ -343,7 +343,7 @@ fn process_open(
         .get(..FRACTIONAL_ATOMIC_SIGNED_DELTA_ACCOUNT_COUNT_V3)
         .ok_or(ClaimsSbfError::Accounts)?;
     authenticate_parent_releases(program_id, signed_accounts, &packet)?;
-    let request_digest = hash(instruction_data).to_bytes();
+    let request_digest = digest(instruction_data);
     let signed_receipt = execute_signed_delta_boxed(
         program_id,
         signed_accounts,
@@ -408,7 +408,7 @@ fn process_open(
     if exact_holder.amount != expected_holder {
         return Err(ClaimsSbfError::Token.into());
     }
-    let token_post_digest = hashv(&[TOKEN_POST_DOMAIN, &post_mint, &post_holder]).to_bytes();
+    let token_post_digest = digestv(&[TOKEN_POST_DOMAIN, &post_mint, &post_holder]);
 
     let post_market = account(accounts, MARKET)?
         .try_borrow_data()
@@ -483,7 +483,7 @@ fn validate_open_and_emit(
         request.action(),
         request_digest,
         signed_receipt.packet_digest(),
-        hash(&signed_receipt_bytes).to_bytes(),
+        digest(&signed_receipt_bytes),
         token_post_digest,
         signed_receipt.post_resource_digest(),
         root,
@@ -684,7 +684,7 @@ fn process_terminal(
     let basis_data = account(accounts, 2)?
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    let outer_digest = hash(instruction_data).to_bytes();
+    let outer_digest = digest(instruction_data);
     let terminal_request = Box::new(
         TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
             caller_role: CallerRole::Trading,
@@ -694,7 +694,7 @@ fn process_terminal(
             parent_context: outer_digest,
             product_record_digest: request.input().product_record,
             exposure_id: request.input().exposure,
-            exposure_digest: hash(&exposure_data).to_bytes(),
+            exposure_digest: digest(&exposure_data),
             terminal_record_digest: request.input().terminal_digest,
             owner: root_account.key.to_bytes(),
             position: account(accounts, POSITION_0)?.key.to_bytes(),
@@ -705,7 +705,7 @@ fn process_terminal(
             collateral_mint: account(accounts, COLLATERAL_MINT)?.key.to_bytes(),
             token_program: token_program.key.to_bytes(),
             semantic_basis_id: terms.representation_basis(),
-            linked_basis_record_digest: hash(&basis_data).to_bytes(),
+            linked_basis_record_digest: digest(&basis_data),
             generation: market.generation,
             expected_market_revision: market.revision,
             expected_position_revision: position.revision,
@@ -779,7 +779,7 @@ fn process_terminal(
     if post.base_amount() != expected_holder {
         return Err(ClaimsSbfError::Token.into());
     }
-    let token_post_digest = hashv(&[TOKEN_POST_DOMAIN, &post_mint, &post_source]).to_bytes();
+    let token_post_digest = digestv(&[TOKEN_POST_DOMAIN, &post_mint, &post_source]);
     emit_terminal_receipt(
         request.action(),
         outer_digest,
@@ -797,7 +797,7 @@ fn process_terminal(
 fn terminal_request_digest(
     request: &dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestV3,
 ) -> [u8; 32] {
-    hash(&request.to_bytes()).to_bytes()
+    digest(&request.to_bytes())
 }
 
 #[inline(never)]
@@ -839,7 +839,7 @@ fn emit_terminal_receipt(
         action,
         request_digest,
         terminal_request_digest,
-        hash(&terminal_bytes).to_bytes(),
+        digest(&terminal_bytes),
         terminal_evidence.post_resource_digest,
         token_post_digest,
         root,

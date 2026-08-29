@@ -42,6 +42,7 @@ dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-sha256-adapter = { path = "../../crates/dclutch-sha256-adapter" }
 dclutch-source-contract = { path = "../../crates/dclutch-source-contract" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
