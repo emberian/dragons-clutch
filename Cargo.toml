@@ -113,7 +113,3 @@ float_arithmetic = "deny"
 indexing_slicing = "deny"
 panic = "deny"
 unwrap_used = "deny"
-
-[profile.release]
-codegen-units = 1
-lto = "fat"
