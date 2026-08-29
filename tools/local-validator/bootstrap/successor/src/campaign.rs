@@ -2650,9 +2650,10 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                 crate::market::founding_submission_journal::founding_submission_recovery_v1(
                     &binding, &journal,
                 )?;
-            let finalized = match action {
+            let mut completed_locally = false;
+            let finalized_packet = match action {
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::SignOnce
-                | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch => false,
+                | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::BeginDispatch => None,
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::Complete => {
                     crate::market::authenticate_completed_founding_submission_v1(
                         &mut rpc,
@@ -2660,7 +2661,8 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                         &binding,
                         &journal,
                     )?;
-                    true
+                    completed_locally = true;
+                    None
                 }
                 crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::ResendIdenticalPacket
                 | crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::PollOnly => {
@@ -2670,20 +2672,83 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
                         .ok_or_else(|| Error::new("ambiguous founding journal omitted signature"))?
                         .parse::<solana_sdk::signature::Signature>()
                         .map_err(|error| Error::new(format!("ambiguous founding signature: {error}")))?;
-                    rpc.finalized_signed_packet(operation.label(), signature, false)?.is_some()
+                    rpc.finalized_signed_packet(operation.label(), signature, false)?
                 }
             };
-            if finalized {
-                if operation == crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltpcb2
-                    && compatible_checkpoint.is_none()
+            if let Some(finalized) = finalized_packet {
+                let persistence = observed_finalization_persistence_v1(journal.phase)?;
+                // A chain-finalized Dispatching packet first advances through
+                // the adjacent Submitted phase locally. Neither transition
+                // opens a key or a send path, and each is fsynced separately.
+                if persistence
+                    == ObservedFinalizationPersistenceV1::SubmittedThenFinalizedThenCheckpoint
                 {
-                    let checkpoint = crate::market::materialize_dcltpcb2_checkpoint_v1(
-                        &mut rpc,
-                        &binding,
-                        &journal,
+                    let signature = journal.expected_signature.clone().ok_or_else(|| {
+                        Error::new("Dispatching founding journal omitted signature")
+                    })?;
+                    journal =
+                        crate::market::founding_submission_journal::submit_founding_submission_v1(
+                            &binding, &journal, &signature,
+                        )?;
+                    founding_submission_journals.insert(operation, journal.clone());
+                    report["foundingSubmissionJournals"] = serde_json::to_value(
+                        founding_submission_journals
+                            .values()
+                            .cloned()
+                            .collect::<Vec<_>>(),
                     )?;
+                    write_evidence_atomically(evidence_path, &report)?;
+                }
+                journal = crate::market::finalize_observed_founding_submission_v1(
+                    &mut rpc, &binding, &journal, &finalized,
+                )?;
+                founding_submission_journals.insert(operation, journal.clone());
+                report["foundingSubmissionJournals"] = serde_json::to_value(
+                    founding_submission_journals
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )?;
+                write_evidence_atomically(evidence_path, &report)?;
+                crate::market::authenticate_completed_founding_submission_v1(
+                    &mut rpc,
+                    operation.label(),
+                    &binding,
+                    &journal,
+                )?;
+                completed_locally = true;
+                action = crate::market::founding_submission_journal::FoundingSubmissionRecoveryV1::Complete;
+            }
+            if completed_locally {
+                let materialized = match operation {
+                    crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltcfq1
+                        if compatible_checkpoint.is_none() =>
+                    {
+                        Some(crate::market::materialize_dcltcfq1_checkpoint_v1(
+                            &mut rpc,
+                            &binding,
+                            &journal,
+                        )?)
+                    }
+                    crate::market::founding_submission_journal::FoundingSubmissionOperationV1::Dcltpcb2
+                        if compatible_checkpoint.as_ref().is_none_or(|checkpoint| {
+                            checkpoint.schema
+                                != crate::market::DCLTPCB2_CHECKPOINT_SCHEMA_V1
+                        }) =>
+                    {
+                        Some(crate::market::materialize_dcltpcb2_checkpoint_v1(
+                            &mut rpc,
+                            &binding,
+                            &journal,
+                        )?)
+                    }
+                    _ => None,
+                };
+                if let Some(checkpoint) = materialized {
                     report["foundingCheckpoint"] = serde_json::to_value(&checkpoint)?;
                     compatible_checkpoint = Some(checkpoint);
+                    // The journal is already durably Finalized. Checkpoint
+                    // materialization is always the strictly later fsync.
                     write_evidence_atomically(evidence_path, &report)?;
                 }
                 continue;
@@ -2981,6 +3046,50 @@ pub(crate) struct CampaignExecutionEvidenceV1 {
     pub(crate) recovered_finalized_founding: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FoundingCheckpointResumeV1 {
+    PreparedControllerFunding,
+    CustodyStaged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservedFinalizationPersistenceV1 {
+    SubmittedThenFinalizedThenCheckpoint,
+    FinalizedThenCheckpoint,
+}
+
+fn observed_finalization_persistence_v1(
+    phase: crate::market::founding_submission_journal::FoundingSubmissionPhaseV1,
+) -> Result<ObservedFinalizationPersistenceV1> {
+    match phase {
+        crate::market::founding_submission_journal::FoundingSubmissionPhaseV1::Dispatching => {
+            Ok(ObservedFinalizationPersistenceV1::SubmittedThenFinalizedThenCheckpoint)
+        }
+        crate::market::founding_submission_journal::FoundingSubmissionPhaseV1::Submitted => {
+            Ok(ObservedFinalizationPersistenceV1::FinalizedThenCheckpoint)
+        }
+        _ => Err(Error::new(
+            "observed finalized packet did not start from Dispatching or Submitted",
+        )),
+    }
+}
+
+fn founding_checkpoint_resume_v1(
+    checkpoint: &crate::market::MarketExecutionCheckpointV1,
+) -> Result<FoundingCheckpointResumeV1> {
+    match checkpoint.schema.as_str() {
+        crate::market::DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1 => {
+            Ok(FoundingCheckpointResumeV1::PreparedControllerFunding)
+        }
+        crate::market::DCLTPCB2_CHECKPOINT_SCHEMA_V1 => {
+            Ok(FoundingCheckpointResumeV1::CustodyStaged)
+        }
+        schema => Err(Error::new(format!(
+            "partial founding checkpoint uses unsupported schema {schema}"
+        ))),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_stages(
     rpc: &mut Rpc,
@@ -3097,16 +3206,33 @@ fn execute_stages(
                                 "this founding has STARTED on this chain ({detail}), but no compatible durable DCLTPCB2 checkpoint authenticates a safe suffix resume"
                             ))
                         })?;
-                        crate::market::resume_found_market_from_checkpoint(
-                            rpc,
-                            plan,
-                            input,
-                            authority,
-                            forge,
-                            &mut transactions,
-                            saved,
-                            submission_recorder.as_deref_mut(),
-                        )?
+                        match founding_checkpoint_resume_v1(saved)? {
+                            FoundingCheckpointResumeV1::PreparedControllerFunding => {
+                                crate::market::resume_found_market_from_prepared_checkpoint(
+                                    rpc,
+                                    plan,
+                                    input,
+                                    authority,
+                                    forge,
+                                    &mut transactions,
+                                    saved,
+                                    checkpoint,
+                                    submission_recorder.as_deref_mut(),
+                                )?
+                            }
+                            FoundingCheckpointResumeV1::CustodyStaged => {
+                                crate::market::resume_found_market_from_checkpoint(
+                                    rpc,
+                                    plan,
+                                    input,
+                                    authority,
+                                    forge,
+                                    &mut transactions,
+                                    saved,
+                                    submission_recorder.as_deref_mut(),
+                                )?
+                            }
+                        }
                     }
                     StageStateV1::Absent if compatible_checkpoint.is_some() => {
                         return Err(Error::new(
@@ -3673,6 +3799,54 @@ mod tests {
             "accounts": {},
             "completed": ["DCLTPCB2 finalized"],
         })
+    }
+
+    #[test]
+    fn partial_founding_routes_only_the_two_durable_checkpoint_schemas() {
+        let custody: crate::market::MarketExecutionCheckpointV1 =
+            serde_json::from_value(checkpoint_value()).expect("custody checkpoint");
+        assert_eq!(
+            founding_checkpoint_resume_v1(&custody).expect("custody route"),
+            FoundingCheckpointResumeV1::CustodyStaged
+        );
+
+        let mut prepared = custody.clone();
+        prepared.schema = crate::market::DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1.into();
+        assert_eq!(
+            founding_checkpoint_resume_v1(&prepared).expect("Prepared route"),
+            FoundingCheckpointResumeV1::PreparedControllerFunding
+        );
+
+        prepared.schema = "dclutch-market-shadow-checkpoint-v1".into();
+        let refusal = founding_checkpoint_resume_v1(&prepared)
+            .expect_err("unknown checkpoint schema must refuse");
+        assert!(refusal.0.contains("unsupported schema"), "{refusal:?}");
+    }
+
+    #[test]
+    fn observed_finalization_preserves_adjacent_fsync_order_without_a_send_route() {
+        use crate::market::founding_submission_journal::FoundingSubmissionPhaseV1;
+
+        assert_eq!(
+            observed_finalization_persistence_v1(FoundingSubmissionPhaseV1::Dispatching)
+                .expect("Dispatching recovery"),
+            ObservedFinalizationPersistenceV1::SubmittedThenFinalizedThenCheckpoint
+        );
+        assert_eq!(
+            observed_finalization_persistence_v1(FoundingSubmissionPhaseV1::Submitted)
+                .expect("Submitted recovery"),
+            ObservedFinalizationPersistenceV1::FinalizedThenCheckpoint
+        );
+        for phase in [
+            FoundingSubmissionPhaseV1::Planned,
+            FoundingSubmissionPhaseV1::Prepared,
+            FoundingSubmissionPhaseV1::Finalized,
+        ] {
+            assert!(
+                observed_finalization_persistence_v1(phase).is_err(),
+                "{phase:?} must not acquire an observed-finalization path"
+            );
+        }
     }
 
     fn terminal_consumable_report(path: &Path, checkpoint: Value) -> Value {

@@ -236,6 +236,22 @@ struct Dcltpcb2RecoveryPayloadV1 {
     completion_accounts: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Dcltcfq1RecoveryPayloadV1 {
+    schema: String,
+    checkpoint: MarketExecutionCheckpointV1,
+    completion_accounts: BTreeMap<String, String>,
+}
+
+pub(crate) const DCLTCFQ1_RECOVERY_PAYLOAD_SCHEMA_V1: &str =
+    "dclutch-market-dcltcfq1-recovery-payload-v1";
+pub(crate) const DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1: &str =
+    "dclutch-market-dcltcfq1-prepared-checkpoint-v1";
+pub(crate) const DCLTPCB2_RECOVERY_PAYLOAD_SCHEMA_V1: &str =
+    "dclutch-market-dcltpcb2-recovery-payload-v1";
+pub(crate) const DCLTPCB2_CHECKPOINT_SCHEMA_V1: &str = "dclutch-market-dcltpcb2-checkpoint-v1";
+
 /// The campaign report owns the filesystem and its exclusive lease; this
 /// adapter lets each split founding send advance its embedded journal without
 /// giving `market.rs` a second file format or lock implementation.
@@ -578,6 +594,49 @@ fn finish_durable_founding_v1(
     Ok(finalized.evidence)
 }
 
+/// Derive the Finalized journal row for an already-finalized exact packet.
+///
+/// The campaign owns persistence and must fsync an adjacent Submitted row
+/// before calling this helper. This helper performs no signing and no send;
+/// it binds the chain packet and exact completion poststates into the next
+/// journal row so that checkpoint materialization cannot race ahead of local
+/// Finalized durability.
+pub(crate) fn finalize_observed_founding_submission_v1(
+    rpc: &mut Rpc,
+    binding: &FoundingSubmissionBindingV1,
+    submitted: &FoundingSubmissionJournalV1,
+    finalized: &crate::rpc::FinalizedSignedPacketV1,
+) -> Result<FoundingSubmissionJournalV1> {
+    if submitted.phase != FoundingSubmissionPhaseV1::Submitted {
+        return Err(Error::new(
+            "observed founding finalization requires a durably Submitted journal",
+        ));
+    }
+    let poststates = capture_founding_poststates_v1(rpc, submitted)?;
+    let packet_sha256 = hex(&Sha256::digest(&finalized.packet));
+    let fee_lamports = finalized
+        .evidence
+        .fee_lamports
+        .ok_or_else(|| Error::new("finalized founding transaction omitted fee"))?;
+    let compute_units_consumed = finalized
+        .evidence
+        .compute_units_consumed
+        .ok_or_else(|| Error::new("finalized founding transaction omitted compute units"))?;
+    finalize_founding_submission_v1(
+        binding,
+        submitted,
+        FoundingFinalizationV1 {
+            signature: finalized.evidence.signature.clone(),
+            finalized_slot: finalized.evidence.slot,
+            transaction_sha256: packet_sha256,
+            fee_lamports,
+            compute_units_consumed,
+            completion_contract_sha256: submitted.completion_contract_sha256.clone(),
+            poststates,
+        },
+    )
+}
+
 fn finalize_existing_founding_submission_v1(
     rpc: &mut Rpc,
     label: &str,
@@ -750,6 +809,123 @@ fn founding_instruction_account_digest_v1(payer: Pubkey, instruction: &Instructi
     hex(&hasher.finalize())
 }
 
+fn materialize_founding_checkpoint_v1(
+    rpc: &mut Rpc,
+    binding: &FoundingSubmissionBindingV1,
+    journal: &FoundingSubmissionJournalV1,
+    expected_operation: FoundingSubmissionOperationV1,
+    expected_checkpoint_schema: &str,
+    mut checkpoint: MarketExecutionCheckpointV1,
+    completion_accounts: BTreeMap<String, String>,
+) -> Result<MarketExecutionCheckpointV1> {
+    authenticate_founding_submission_v1(binding, journal)?;
+    if journal.operation != expected_operation
+        || journal.phase != FoundingSubmissionPhaseV1::Finalized
+        || checkpoint.schema != expected_checkpoint_schema
+        || completion_accounts.is_empty()
+    {
+        return Err(Error::new(format!(
+            "{} checkpoint recovery requires its exact Finalized journal and schema {}",
+            expected_operation.label(),
+            expected_checkpoint_schema,
+        )));
+    }
+    let mut unique = completion_accounts
+        .values()
+        .map(|value| {
+            value.parse::<Pubkey>().map_err(|error| {
+                Error::new(format!(
+                    "{} recovery account: {error}",
+                    expected_operation.label()
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    unique.sort_unstable();
+    unique.dedup();
+    let mut journal_accounts = journal
+        .completion_accounts
+        .iter()
+        .map(|value| {
+            value.parse::<Pubkey>().map_err(|error| {
+                Error::new(format!(
+                    "{} journal account: {error}",
+                    expected_operation.label()
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    journal_accounts.sort_unstable();
+    if unique != journal_accounts
+        || founding_completion_contract_v1(expected_operation, &unique)?
+            != journal.completion_contract_sha256
+    {
+        return Err(Error::new(format!(
+            "{} recovery account set changed from its completion contract",
+            expected_operation.label()
+        )));
+    }
+    let finalized_poststates = founding_submission_finalized_poststates_v1(binding, journal)?;
+    let expected_by_address = finalized_poststates
+        .into_iter()
+        .map(|evidence| (evidence.address.clone(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    if expected_by_address.len() != journal_accounts.len() {
+        return Err(Error::new(format!(
+            "{} finalized poststate set did not cover its completion contract",
+            expected_operation.label()
+        )));
+    }
+    for (label, address) in completion_accounts {
+        if checkpoint.accounts.contains_key(&label) {
+            return Err(Error::new(format!(
+                "{} recovery attempted to overwrite checkpoint label {label}",
+                expected_operation.label()
+            )));
+        }
+        let address = address.parse::<Pubkey>().map_err(|error| {
+            Error::new(format!(
+                "{} recovery account: {error}",
+                expected_operation.label()
+            ))
+        })?;
+        let account = rpc.required_account(address, &label)?;
+        let observed = account_evidence(address, &account);
+        if expected_by_address.get(&address.to_string()) != Some(&observed) {
+            return Err(Error::new(format!(
+                "{} recovery account {label} changed after journal finalization",
+                expected_operation.label()
+            )));
+        }
+        checkpoint.accounts.insert(label, observed);
+    }
+    Ok(checkpoint)
+}
+
+/// Rebuild the already-finalized DCLTCFQ1 Prepared checkpoint from its
+/// immutable Planned payload and the exact Finalized poststates.
+pub(crate) fn materialize_dcltcfq1_checkpoint_v1(
+    rpc: &mut Rpc,
+    binding: &FoundingSubmissionBindingV1,
+    journal: &FoundingSubmissionJournalV1,
+) -> Result<MarketExecutionCheckpointV1> {
+    let payload = founding_submission_recovery_payload_v1(binding, journal)?;
+    let payload: Dcltcfq1RecoveryPayloadV1 = serde_json::from_slice(&payload)
+        .map_err(|error| Error::new(format!("DCLTCFQ1 recovery payload: {error}")))?;
+    if payload.schema != DCLTCFQ1_RECOVERY_PAYLOAD_SCHEMA_V1 {
+        return Err(Error::new("DCLTCFQ1 recovery payload identity changed"));
+    }
+    materialize_founding_checkpoint_v1(
+        rpc,
+        binding,
+        journal,
+        FoundingSubmissionOperationV1::Dcltcfq1,
+        DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1,
+        payload.checkpoint,
+        payload.completion_accounts,
+    )
+}
+
 /// Rebuild the already-finalized DCLTPCB2 checkpoint from its Planned payload
 /// and the exact accounts now visible on chain. The normal checkpoint resume
 /// subsequently re-derives every coordinate and runs the full projected-
@@ -759,67 +935,21 @@ pub(crate) fn materialize_dcltpcb2_checkpoint_v1(
     binding: &FoundingSubmissionBindingV1,
     journal: &FoundingSubmissionJournalV1,
 ) -> Result<MarketExecutionCheckpointV1> {
-    authenticate_founding_submission_v1(binding, journal)?;
-    if journal.operation != FoundingSubmissionOperationV1::Dcltpcb2
-        || journal.phase == FoundingSubmissionPhaseV1::Planned
-    {
-        return Err(Error::new(
-            "DCLTPCB2 checkpoint recovery requires one exact ambiguous or finalized packet",
-        ));
-    }
     let payload = founding_submission_recovery_payload_v1(binding, journal)?;
-    let mut payload: Dcltpcb2RecoveryPayloadV1 = serde_json::from_slice(&payload)
+    let payload: Dcltpcb2RecoveryPayloadV1 = serde_json::from_slice(&payload)
         .map_err(|error| Error::new(format!("DCLTPCB2 recovery payload: {error}")))?;
-    if payload.schema != "dclutch-market-dcltpcb2-recovery-payload-v1"
-        || payload.completion_accounts.is_empty()
-    {
+    if payload.schema != DCLTPCB2_RECOVERY_PAYLOAD_SCHEMA_V1 {
         return Err(Error::new("DCLTPCB2 recovery payload identity changed"));
     }
-    let mut unique = payload
-        .completion_accounts
-        .values()
-        .map(|value| {
-            value
-                .parse::<Pubkey>()
-                .map_err(|error| Error::new(format!("DCLTPCB2 recovery account: {error}")))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    unique.sort_unstable();
-    unique.dedup();
-    let mut journal_accounts = journal
-        .completion_accounts
-        .iter()
-        .map(|value| {
-            value
-                .parse::<Pubkey>()
-                .map_err(|error| Error::new(format!("DCLTPCB2 journal account: {error}")))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    journal_accounts.sort_unstable();
-    if unique != journal_accounts
-        || founding_completion_contract_v1(FoundingSubmissionOperationV1::Dcltpcb2, &unique)?
-            != journal.completion_contract_sha256
-    {
-        return Err(Error::new(
-            "DCLTPCB2 recovery account set changed from its completion contract",
-        ));
-    }
-    for (label, address) in payload.completion_accounts {
-        if payload.checkpoint.accounts.contains_key(&label) {
-            return Err(Error::new(format!(
-                "DCLTPCB2 recovery attempted to overwrite checkpoint label {label}"
-            )));
-        }
-        let address = address
-            .parse::<Pubkey>()
-            .map_err(|error| Error::new(format!("DCLTPCB2 recovery account: {error}")))?;
-        let account = rpc.required_account(address, &label)?;
-        payload
-            .checkpoint
-            .accounts
-            .insert(label, account_evidence(address, &account));
-    }
-    Ok(payload.checkpoint)
+    materialize_founding_checkpoint_v1(
+        rpc,
+        binding,
+        journal,
+        FoundingSubmissionOperationV1::Dcltpcb2,
+        DCLTPCB2_CHECKPOINT_SCHEMA_V1,
+        payload.checkpoint,
+        payload.completion_accounts,
+    )
 }
 
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
@@ -1436,6 +1566,7 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
             collateral_wallet,
             market,
             lane,
+            None,
             payer,
             forge,
             transactions,
@@ -1466,8 +1597,11 @@ pub(crate) fn execute_found_market_with_checkpoint_and_journal(
 struct RecoveredFoundingContextV1 {
     records: MarketRecords,
     coordinates: FoundingCoordinates,
+    identity_template: MarketIdentity,
     product: ProductContentId,
     mint: Pubkey,
+    collateral_wallet: Pubkey,
+    found31_market: Pubkey,
     founder: Pubkey,
     found_record: Pubkey,
     lock_record: Pubkey,
@@ -1511,7 +1645,7 @@ fn authenticate_checkpoint_record_graph(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reconstruct_dcltpcb2_checkpoint_v1(
+fn reconstruct_founding_checkpoint_v1(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     input: &MarketRunInput,
@@ -1519,8 +1653,12 @@ fn reconstruct_dcltpcb2_checkpoint_v1(
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
     checkpoint: &MarketExecutionCheckpointV1,
+    consume_role_keys: bool,
 ) -> Result<RecoveredFoundingContextV1> {
-    if checkpoint.schema != "dclutch-market-dcltpcb2-checkpoint-v1" {
+    if !matches!(
+        checkpoint.schema.as_str(),
+        DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1 | DCLTPCB2_CHECKPOINT_SCHEMA_V1
+    ) {
         return Err(Error::new(
             "founding checkpoint is not the resumable DCLTPCB2 checkpoint schema",
         ));
@@ -1671,9 +1809,17 @@ fn reconstruct_dcltpcb2_checkpoint_v1(
         ));
     }
 
-    let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY);
-    let founder = forge.keypair(role::FOUNDING_FOUNDER);
-    let _projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS);
+    let (beneficiary, founder) = if consume_role_keys {
+        let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY).pubkey();
+        let founder = forge.keypair(role::FOUNDING_FOUNDER).pubkey();
+        let _projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS);
+        (beneficiary, founder)
+    } else {
+        (
+            forge.peek_pubkey(role::FOUNDING_BENEFICIARY)?,
+            forge.peek_pubkey(role::FOUNDING_FOUNDER)?,
+        )
+    };
     let coordinates = derive_founding_coordinates(
         rpc,
         plan,
@@ -1683,12 +1829,14 @@ fn reconstruct_dcltpcb2_checkpoint_v1(
         product,
         mint,
         payer.pubkey(),
-        founder.pubkey(),
-        beneficiary.pubkey(),
+        founder,
+        beneficiary,
         PrestateLaneV1::Founding.generation(input)?,
         checkpoint.expiry_slot,
     )?;
-    let _source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER);
+    if consume_role_keys {
+        let _source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER);
+    }
 
     let trading = pubkey(&plan.trading.program_id)?;
     let trading_ledger = coordinates
@@ -1741,12 +1889,200 @@ fn reconstruct_dcltpcb2_checkpoint_v1(
     Ok(RecoveredFoundingContextV1 {
         records,
         coordinates,
+        identity_template,
         product,
         mint,
-        founder: founder.pubkey(),
+        collateral_wallet: wallet,
+        found31_market,
+        founder,
         found_record: found_record.raw,
         lock_record: lock_record.raw,
         claim_count,
+    })
+}
+
+fn authenticate_prepared_resume_assets_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    checkpoint: &MarketExecutionCheckpointV1,
+    context: &RecoveredFoundingContextV1,
+) -> Result<()> {
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+    let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY).pubkey();
+    let source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER).pubkey();
+    let projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS).pubkey();
+    for (label, key) in [
+        ("collateral_wallet", context.collateral_wallet),
+        ("founding_source_funder", source_funder),
+        ("founding_projection_witness", projection_witness),
+        (
+            "founding_prepared_lifecycle_rent_credit",
+            context.coordinates.credit,
+        ),
+    ] {
+        let expected = checkpoint.accounts.get(label).ok_or_else(|| {
+            Error::new(format!(
+                "Prepared checkpoint omitted exact {label} evidence"
+            ))
+        })?;
+        let account = rpc.required_account(key, label)?;
+        if expected.address != key.to_string() || *expected != account_evidence(key, &account) {
+            return Err(Error::new(format!(
+                "Prepared checkpoint {label} changed before suffix resume"
+            )));
+        }
+    }
+    let source_account = rpc.required_account(source_funder, "founding_source_funder")?;
+    let source = TokenAccount::parse(&source_account.data)
+        .map_err(|error| Error::new(format!("Prepared source funder: {error:?}")))?;
+    let wallet_account = rpc.required_account(context.collateral_wallet, "collateral_wallet")?;
+    let wallet = TokenAccount::parse(&wallet_account.data)
+        .map_err(|error| Error::new(format!("Prepared collateral wallet: {error:?}")))?;
+    let expected_wallet_atoms = input
+        .initial_collateral_atoms
+        .checked_sub(context.coordinates.lock.amount)
+        .ok_or_else(|| Error::new("Prepared wallet principal arithmetic underflow"))?;
+    if source_account.owner != token_program
+        || source.mint != context.mint.to_bytes()
+        || source.owner != beneficiary.to_bytes()
+        || source.amount != context.coordinates.lock.amount
+        || source.state != AccountState::Initialized
+        || !source.delegate.is_none()
+        || source.delegated_amount != 0
+        || !source.native_reserve.is_none()
+        || !source.close_authority.is_none()
+        || wallet.owner != payer.pubkey().to_bytes()
+        || wallet.amount != expected_wallet_atoms
+    {
+        return Err(Error::new(
+            "Prepared principal supplier or collateral wallet changed before suffix resume",
+        ));
+    }
+    let witness = rpc.required_account(projection_witness, "founding_projection_witness")?;
+    if witness.owner != system_program::ID
+        || witness.executable
+        || !witness.data.is_empty()
+        || witness.lamports != rpc.minimum_balance(STATE_BYTES)?
+    {
+        return Err(Error::new(
+            "Prepared projection witness no longer holds the exact retained Market rent",
+        ));
+    }
+    authenticate_controller_funding_checkpoint_v1(
+        rpc,
+        plan,
+        &context.coordinates,
+        projection_witness,
+        ControllerFundingCheckpointPhaseV1::Prepared,
+    )?;
+    Ok(())
+}
+
+/// Resume after DCLTCFQ1 finalized but before DCLTPCB2 was planned. The
+/// durable checkpoint reconstructs every prefix coordinate and exact mutable
+/// balance; this route enters at DCLTPCB2 and never recreates collateral,
+/// records, Found37, the RentCredit, the supplier, or DCLTCFQ1.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resume_found_market_from_prepared_checkpoint(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    transactions: &mut Vec<TransactionEvidence>,
+    prepared_checkpoint: &MarketExecutionCheckpointV1,
+    checkpoint: &mut dyn FnMut(&MarketExecutionCheckpointV1) -> Result<()>,
+    mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
+) -> Result<MarketExecutionEvidence> {
+    if prepared_checkpoint.schema != DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1 {
+        return Err(Error::new(
+            "Prepared suffix resume requires the DCLTCFQ1 checkpoint schema",
+        ));
+    }
+    let context = reconstruct_founding_checkpoint_v1(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        transactions,
+        prepared_checkpoint,
+        false,
+    )?;
+    authenticate_prepared_resume_assets_v1(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        prepared_checkpoint,
+        &context,
+    )?;
+    if rpc.finalized_slot()? > prepared_checkpoint.expiry_slot {
+        return Err(Error::new(
+            "the Prepared controller-funding checkpoint expired before DCLTPCB2 resume",
+        ));
+    }
+    let mut accounts = prepared_checkpoint.accounts.clone();
+    let mut completed = prepared_checkpoint.completed.clone();
+    let founding_context = execute_projected_custody_bootstrap(
+        rpc,
+        plan,
+        input,
+        &context.records,
+        context.identity_template,
+        context.product,
+        context.mint,
+        context.collateral_wallet,
+        context.found31_market,
+        PrestateLaneV1::Founding,
+        Some(prepared_checkpoint),
+        payer,
+        forge,
+        transactions,
+        &mut accounts,
+        &mut completed,
+        prepared_checkpoint
+            .local_participant_fixture_liquidity
+            .as_ref(),
+        checkpoint,
+        submission_recorder.as_deref_mut(),
+    )?;
+    execute_projected_custody_bootstrap(
+        rpc,
+        plan,
+        input,
+        &context.records,
+        context.identity_template,
+        context.product,
+        context.mint,
+        context.collateral_wallet,
+        context.found31_market,
+        PrestateLaneV1::SourceAbort,
+        None,
+        payer,
+        forge,
+        transactions,
+        &mut accounts,
+        &mut completed,
+        prepared_checkpoint
+            .local_participant_fixture_liquidity
+            .as_ref(),
+        checkpoint,
+        submission_recorder.as_deref_mut(),
+    )?;
+    Ok(MarketExecutionEvidence {
+        completed,
+        accounts,
+        founding_custody_context: hex(&founding_context),
+        direct_selected_manifest_entry_index: prepared_checkpoint
+            .direct_selected_manifest_entry_index,
+        local_participant_fixture_liquidity: prepared_checkpoint
+            .local_participant_fixture_liquidity
+            .clone(),
     })
 }
 
@@ -1762,7 +2098,12 @@ pub(crate) fn resume_found_market_from_checkpoint(
     checkpoint: &MarketExecutionCheckpointV1,
     mut submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
-    let context = reconstruct_dcltpcb2_checkpoint_v1(
+    if checkpoint.schema != DCLTPCB2_CHECKPOINT_SCHEMA_V1 {
+        return Err(Error::new(
+            "custody-staged resume requires the DCLTPCB2 checkpoint schema",
+        ));
+    }
+    let context = reconstruct_founding_checkpoint_v1(
         rpc,
         plan,
         input,
@@ -1770,6 +2111,7 @@ pub(crate) fn resume_found_market_from_checkpoint(
         forge,
         transactions,
         checkpoint,
+        true,
     )?;
     if rpc.finalized_slot()? > checkpoint.expiry_slot {
         return Err(Error::new(
@@ -1857,7 +2199,12 @@ pub(crate) fn recover_completed_market_from_checkpoint(
     checkpoint: &MarketExecutionCheckpointV1,
     submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<MarketExecutionEvidence> {
-    let context = reconstruct_dcltpcb2_checkpoint_v1(
+    if checkpoint.schema != DCLTPCB2_CHECKPOINT_SCHEMA_V1 {
+        return Err(Error::new(
+            "completed founding recovery requires the DCLTPCB2 checkpoint schema",
+        ));
+    }
+    let context = reconstruct_founding_checkpoint_v1(
         rpc,
         plan,
         input,
@@ -1865,6 +2212,7 @@ pub(crate) fn recover_completed_market_from_checkpoint(
         forge,
         transactions,
         checkpoint,
+        true,
     )?;
     let poststate = derive_founding_poststate_expectation_v1(
         plan,
@@ -4712,6 +5060,7 @@ fn execute_projected_custody_bootstrap(
     collateral_wallet: Pubkey,
     found31_market: Pubkey,
     lane: PrestateLaneV1,
+    prepared_checkpoint: Option<&MarketExecutionCheckpointV1>,
     payer: &Keypair,
     forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
@@ -4733,10 +5082,19 @@ fn execute_projected_custody_bootstrap(
     let founder = forge.keypair(role::FOUNDING_FOUNDER);
     let projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS);
     let market_rent = rpc.minimum_balance(STATE_BYTES)?;
-    let expiry_slot = rpc
-        .finalized_slot()?
-        .checked_add(lane.expiry_slots(input)?)
-        .ok_or_else(|| Error::new("founding expiry slot overflow"))?;
+    let resume_prepared = prepared_checkpoint.is_some();
+    if resume_prepared && lane != PrestateLaneV1::Founding {
+        return Err(Error::new(
+            "only the founding lane admits a DCLTCFQ1 Prepared checkpoint",
+        ));
+    }
+    let expiry_slot = match prepared_checkpoint {
+        Some(checkpoint) => checkpoint.expiry_slot,
+        None => rpc
+            .finalized_slot()?
+            .checked_add(lane.expiry_slots(input)?)
+            .ok_or_else(|| Error::new("founding expiry slot overflow"))?,
+    };
 
     let coordinates = derive_founding_coordinates(
         rpc,
@@ -4767,116 +5125,118 @@ fn execute_projected_custody_bootstrap(
 
     // One Token-2022 account owned by the party the principal is refundable to.
     let source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER);
-    let wallet_rent = rpc.minimum_balance(ACCOUNT_BYTES)?;
-    let mut initialize_wallet = Vec::with_capacity(33);
-    initialize_wallet.push(18);
-    initialize_wallet.extend_from_slice(beneficiary.pubkey().as_ref());
-    let mut transfer_checked = Vec::with_capacity(10);
-    transfer_checked.push(12);
-    transfer_checked.extend_from_slice(&principal.to_le_bytes());
-    transfer_checked.push(input.collateral_display_decimals);
-    transactions.push(rpc.send_with_signers(
-        "fund the founding principal supplier and its rent-capacity witness",
-        &[
-            transfer(
-                &payer.pubkey(),
-                &projection_witness.pubkey(),
-                projection_witness_lamports,
-            ),
-            create_account(
-                &payer.pubkey(),
-                &source_funder.pubkey(),
-                wallet_rent,
-                ACCOUNT_BYTES as u64,
-                &token_program,
-            ),
-            Instruction {
-                program_id: token_program,
-                accounts: vec![
-                    AccountMeta::new(source_funder.pubkey(), false),
-                    AccountMeta::new_readonly(mint, false),
-                ],
-                data: initialize_wallet,
-            },
-            Instruction {
-                program_id: token_program,
-                accounts: vec![
-                    AccountMeta::new(collateral_wallet, false),
-                    AccountMeta::new_readonly(mint, false),
-                    AccountMeta::new(source_funder.pubkey(), false),
-                    AccountMeta::new_readonly(payer.pubkey(), true),
-                ],
-                data: transfer_checked,
-            },
-        ],
-        payer,
-        &[&source_funder],
-    )?);
+    if !resume_prepared {
+        let wallet_rent = rpc.minimum_balance(ACCOUNT_BYTES)?;
+        let mut initialize_wallet = Vec::with_capacity(33);
+        initialize_wallet.push(18);
+        initialize_wallet.extend_from_slice(beneficiary.pubkey().as_ref());
+        let mut transfer_checked = Vec::with_capacity(10);
+        transfer_checked.push(12);
+        transfer_checked.extend_from_slice(&principal.to_le_bytes());
+        transfer_checked.push(input.collateral_display_decimals);
+        transactions.push(rpc.send_with_signers(
+            "fund the founding principal supplier and its rent-capacity witness",
+            &[
+                transfer(
+                    &payer.pubkey(),
+                    &projection_witness.pubkey(),
+                    projection_witness_lamports,
+                ),
+                create_account(
+                    &payer.pubkey(),
+                    &source_funder.pubkey(),
+                    wallet_rent,
+                    ACCOUNT_BYTES as u64,
+                    &token_program,
+                ),
+                Instruction {
+                    program_id: token_program,
+                    accounts: vec![
+                        AccountMeta::new(source_funder.pubkey(), false),
+                        AccountMeta::new_readonly(mint, false),
+                    ],
+                    data: initialize_wallet,
+                },
+                Instruction {
+                    program_id: token_program,
+                    accounts: vec![
+                        AccountMeta::new(collateral_wallet, false),
+                        AccountMeta::new_readonly(mint, false),
+                        AccountMeta::new(source_funder.pubkey(), false),
+                        AccountMeta::new_readonly(payer.pubkey(), true),
+                    ],
+                    data: transfer_checked,
+                },
+            ],
+            payer,
+            &[&source_funder],
+        )?);
+    }
 
     // The founding generation's own lifecycle credit, refundable to the
     // beneficiary the artifact names.
-    let keys = found_snapshot_keys(
-        plan,
-        projection_witness.pubkey(),
-        coordinates.market,
-        coordinates.credit,
-        records,
-    )?;
-    let mut snapshot_keys = keys.clone();
-    for extra in [payer.pubkey(), beneficiary.pubkey()] {
-        if !snapshot_keys.contains(&extra) {
-            snapshot_keys.push(extra);
+    let claim_count = if resume_prepared {
+        u32::try_from(input.cuts.len().saturating_add(2))
+            .map_err(|_| Error::new("checkpoint Product outcome width overflow"))?
+    } else {
+        let keys = found_snapshot_keys(
+            plan,
+            projection_witness.pubkey(),
+            coordinates.market,
+            coordinates.credit,
+            records,
+        )?;
+        let mut snapshot_keys = keys.clone();
+        for extra in [payer.pubkey(), beneficiary.pubkey()] {
+            if !snapshot_keys.contains(&extra) {
+                snapshot_keys.push(extra);
+            }
         }
-    }
-    let minimum_slot = transactions
-        .last()
-        .map(|transaction| transaction.slot)
-        .ok_or_else(|| Error::new("founding stage had no finalized predecessor"))?;
-    let snapshot = finalized_snapshot(rpc, &snapshot_keys, minimum_slot)?;
-    let projection_state = projection_state(
-        rpc,
-        plan,
-        &snapshot,
-        projection_witness.pubkey(),
-        coordinates.market,
-        records,
-    )?;
-    let projection = project_found_v2(coordinates.generation, projection_state)
-        .map_err(|error| Error::new(format!("chain-derived founding projection: {error:?}")))?;
-    if projection.market_address != coordinates.market {
-        return Err(Error::new(
-            "founding projection changed the derived Market address",
-        ));
-    }
-    // The runtime outcome width is what Core reads out of the published Product
-    // record, and it fixes the widths of the three accounts Claims allocates
-    // and therefore the rents Core folds into the request it commits to. It is
-    // taken from the authenticated graph and cross-checked against the run
-    // spec's own cut list, so a spec that disagreed with what it published
-    // refuses here instead of moving a digest three stages later.
-    let claim_count = projection.outcome_count;
-    if usize::try_from(claim_count) != Ok(input.cuts.len().saturating_add(2)) {
-        return Err(Error::new(
-            "the published Product's outcome width disagrees with the run spec's cut list",
-        ));
-    }
-    let create = build_lifecycle_rent_create_v2(
-        &projection,
-        LifecycleRentCreateStateV2 {
-            payer: snapshot.observation(payer.pubkey())?,
-            credit_destination: snapshot.observation(coordinates.credit)?,
-            refund_wallet: snapshot.observation(beneficiary.pubkey())?,
-            rent_program: snapshot.observation(rent_program)?,
-            system_program: snapshot.observation(system_program::ID)?,
-            rent: snapshot.observation(sysvar::rent::ID)?,
-        },
-    )
-    .map_err(|error| Error::new(format!("chain-derived founding RentV2 Create: {error:?}")))?;
-    transactions.push(rpc.send(
-        "create the founding generation's lifecycle RentCreditV2",
-        std::slice::from_ref(&create.instruction),
-        payer,
-    )?);
+        let minimum_slot = transactions
+            .last()
+            .map(|transaction| transaction.slot)
+            .ok_or_else(|| Error::new("founding stage had no finalized predecessor"))?;
+        let snapshot = finalized_snapshot(rpc, &snapshot_keys, minimum_slot)?;
+        let projection_state = projection_state(
+            rpc,
+            plan,
+            &snapshot,
+            projection_witness.pubkey(),
+            coordinates.market,
+            records,
+        )?;
+        let projection = project_found_v2(coordinates.generation, projection_state)
+            .map_err(|error| Error::new(format!("chain-derived founding projection: {error:?}")))?;
+        if projection.market_address != coordinates.market {
+            return Err(Error::new(
+                "founding projection changed the derived Market address",
+            ));
+        }
+        let claim_count = projection.outcome_count;
+        if usize::try_from(claim_count) != Ok(input.cuts.len().saturating_add(2)) {
+            return Err(Error::new(
+                "the published Product's outcome width disagrees with the run spec's cut list",
+            ));
+        }
+        let create = build_lifecycle_rent_create_v2(
+            &projection,
+            LifecycleRentCreateStateV2 {
+                payer: snapshot.observation(payer.pubkey())?,
+                credit_destination: snapshot.observation(coordinates.credit)?,
+                refund_wallet: snapshot.observation(beneficiary.pubkey())?,
+                rent_program: snapshot.observation(rent_program)?,
+                system_program: snapshot.observation(system_program::ID)?,
+                rent: snapshot.observation(sysvar::rent::ID)?,
+            },
+        )
+        .map_err(|error| Error::new(format!("chain-derived founding RentV2 Create: {error:?}")))?;
+        transactions.push(rpc.send(
+            "create the founding generation's lifecycle RentCreditV2",
+            std::slice::from_ref(&create.instruction),
+            payer,
+        )?);
+        claim_count
+    };
 
     // Publish the artifact and the terminal Lock request as content-addressed
     // readonly records, plus one non-terminal prestate the bootstrap must
@@ -4894,27 +5254,43 @@ fn execute_projected_custody_bootstrap(
         .founding_prestate_stage_v1(FoundingPrestateStageV1::OpenHoard)
         .and_then(|request| request.encode())
         .map_err(|error| Error::new(format!("OpenHoard prestate encoding: {error:?}")))?;
-    let found_record = publish_record(
-        rpc,
-        registry,
-        payer,
-        raw_request_schema_v1("generic-founding-artifact"),
-        &found_raw_bytes,
-        None,
-        transactions,
-    )?;
-    let lock_record = publish_record(
-        rpc,
-        registry,
-        payer,
-        raw_request_schema_v1("projected-custody-terminal-lock"),
-        &lock_raw_bytes,
-        None,
-        transactions,
-    )?;
+    let found_record = if resume_prepared {
+        derive_raw_request_record_v1(registry, "generic-founding-artifact", &found_raw_bytes)?
+    } else {
+        publish_record(
+            rpc,
+            registry,
+            payer,
+            raw_request_schema_v1("generic-founding-artifact"),
+            &found_raw_bytes,
+            None,
+            transactions,
+        )?
+    };
+    let lock_record = if resume_prepared {
+        derive_raw_request_record_v1(registry, "projected-custody-terminal-lock", &lock_raw_bytes)?
+    } else {
+        publish_record(
+            rpc,
+            registry,
+            payer,
+            raw_request_schema_v1("projected-custody-terminal-lock"),
+            &lock_raw_bytes,
+            None,
+            transactions,
+        )?
+    };
+    if let Some(checkpoint) = prepared_checkpoint
+        && (checkpoint.found_record != found_record.raw.to_string()
+            || checkpoint.lock_record != lock_record.raw.to_string())
+    {
+        return Err(Error::new(
+            "Prepared checkpoint found/Lock records changed during suffix reconstruction",
+        ));
+    }
     // Published only where it is used: it exists to be substituted into the
     // founding lane's hostile case, and publishing it costs three transactions.
-    let open_hoard_record = if lane == PrestateLaneV1::Founding {
+    let open_hoard_record = if lane == PrestateLaneV1::Founding && !resume_prepared {
         Some(publish_record(
             rpc,
             registry,
@@ -4984,13 +5360,17 @@ fn execute_projected_custody_bootstrap(
             }
         }
     }
-    let (prepare_routing, prepare_tables) = publish_routing_table(
-        rpc,
-        payer,
-        "DCLTCFQ1",
-        std::slice::from_ref(&controller_funding_prepare),
-        transactions,
-    )?;
+    let prepare_route = if resume_prepared {
+        None
+    } else {
+        Some(publish_routing_table(
+            rpc,
+            payer,
+            "DCLTCFQ1",
+            std::slice::from_ref(&controller_funding_prepare),
+            transactions,
+        )?)
+    };
     let prepare_accounts = coordinates
         .funding_ledgers
         .iter()
@@ -4999,103 +5379,122 @@ fn execute_projected_custody_bootstrap(
         .chain(std::iter::once(projection_witness.pubkey()))
         .chain(std::iter::once(coordinates.credit))
         .collect::<Vec<_>>();
-    let prepare_honest = match submission_recorder.as_deref_mut() {
-        Some(recorder) if lane == PrestateLaneV1::Founding => {
-            let recovery_payload = serde_json::to_vec(&serde_json::json!({
-                "schema": "dclutch-market-controller-funding-prepare-recovery-v1",
-                "lane": lane.evidence_prefix(),
-                "checkpoint": coordinates.controller_funding_checkpoint.to_string(),
-                "ledgers": coordinates
+    let prepare_honest = if resume_prepared {
+        None
+    } else {
+        let (prepare_routing, prepare_tables) = prepare_route
+            .as_ref()
+            .ok_or_else(|| Error::new("fresh DCLTCFQ1 omitted its routing table"))?;
+        Some(match submission_recorder.as_deref_mut() {
+            Some(recorder) if lane == PrestateLaneV1::Founding => {
+                // The supplier transfer happened before this journal. Refresh the
+                // one previously-captured mutable wallet and add the supplier's
+                // exact Token-2022 poststate so Prepared recovery can prove that
+                // no principal-funding prefix is replayed.
+                for (label, key) in [
+                    ("collateral_wallet", collateral_wallet),
+                    ("founding_source_funder", source_funder.pubkey()),
+                ] {
+                    let account = rpc.required_account(key, label)?;
+                    accounts.insert(label.into(), account_evidence(key, &account));
+                }
+                let root = Pubkey::new_from_array(coordinates.found.capability_root().to_bytes());
+                let trading = pubkey(&plan.trading.program_id)?;
+                let trading_ledger = coordinates
                     .funding_ledgers
                     .iter()
-                    .map(|ledger| ledger.address.to_string())
-                    .collect::<Vec<_>>(),
-            }))?;
-            let mut completion = |rpc: &mut Rpc| {
-                authenticate_controller_funding_checkpoint_v1(
+                    .find(|ledger| ledger.controller == trading)
+                    .ok_or_else(|| {
+                        Error::new("DCLTCFQ1 recovery omitted Trading FundingLedgerV2")
+                    })?;
+                let mut recovery_accounts = BTreeMap::new();
+                for (index, funding) in coordinates.funding_ledgers.iter().enumerate() {
+                    recovery_accounts.insert(
+                        format!("founding_prepared_funding_ledger_v2_{index}"),
+                        funding.address.to_string(),
+                    );
+                }
+                recovery_accounts.insert(
+                    "founding_controller_funding_checkpoint".into(),
+                    coordinates.controller_funding_checkpoint.to_string(),
+                );
+                recovery_accounts.insert(
+                    "founding_projection_witness".into(),
+                    projection_witness.pubkey().to_string(),
+                );
+                recovery_accounts.insert(
+                    "founding_prepared_lifecycle_rent_credit".into(),
+                    coordinates.credit.to_string(),
+                );
+                let mut recovery_completed = completed.clone();
+                recovery_completed.push(format!(
+                "executed DCLTCFQ1: exact Resolution and Trading Pending ledgers plus their Prepared checkpoint; compiled {} complete keys, {} signatures, {} message bytes, {} packet bytes",
+                controller_funding_prepare_geometry.complete_keys,
+                controller_funding_prepare_geometry.required_signatures,
+                controller_funding_prepare_geometry.message_bytes,
+                controller_funding_prepare_geometry.packet_bytes,
+            ));
+                let recovery_payload = serde_json::to_vec(&Dcltcfq1RecoveryPayloadV1 {
+                    schema: DCLTCFQ1_RECOVERY_PAYLOAD_SCHEMA_V1.into(),
+                    checkpoint: MarketExecutionCheckpointV1 {
+                        schema: DCLTCFQ1_PREPARED_CHECKPOINT_SCHEMA_V1.into(),
+                        market: coordinates.market.to_string(),
+                        founding_custody_context: hex(&coordinates.context),
+                        direct_selected_manifest_entry_index: coordinates.capability_entry_index,
+                        direct_capability_root: root.to_string(),
+                        direct_trading_funding_ledger: trading_ledger.address.to_string(),
+                        expiry_slot,
+                        found_record: found_record.raw.to_string(),
+                        lock_record: lock_record.raw.to_string(),
+                        local_participant_fixture_liquidity: local_participant_fixture_liquidity
+                            .cloned(),
+                        accounts: accounts.clone(),
+                        completed: recovery_completed,
+                    },
+                    completion_accounts: recovery_accounts,
+                })?;
+                let mut completion = |rpc: &mut Rpc| {
+                    authenticate_controller_funding_checkpoint_v1(
+                        rpc,
+                        plan,
+                        &coordinates,
+                        projection_witness.pubkey(),
+                        ControllerFundingCheckpointPhaseV1::Prepared,
+                    )
+                    .map(|_| ())
+                };
+                send_durable_founding_v1(
                     rpc,
-                    plan,
-                    &coordinates,
-                    projection_witness.pubkey(),
-                    ControllerFundingCheckpointPhaseV1::Prepared,
-                )
-                .map(|_| ())
-            };
-            send_durable_founding_v1(
-                rpc,
+                    "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
+                    FoundingSubmissionOperationV1::Dcltcfq1,
+                    std::slice::from_ref(&controller_funding_prepare),
+                    &[payer, &projection_witness],
+                    *prepare_routing,
+                    prepare_tables,
+                    founding_instruction_account_digest_v1(
+                        payer.pubkey(),
+                        &controller_funding_prepare,
+                    ),
+                    &prepare_accounts,
+                    &prepare_accounts,
+                    recovery_payload,
+                    recorder,
+                    &mut completion,
+                )?
+            }
+            Some(_) | None => rpc.send_v0_on_founding_heap_with_signers(
                 "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
-                FoundingSubmissionOperationV1::Dcltcfq1,
                 std::slice::from_ref(&controller_funding_prepare),
-                &[payer, &projection_witness],
-                prepare_routing,
-                &prepare_tables,
-                founding_instruction_account_digest_v1(payer.pubkey(), &controller_funding_prepare),
-                &prepare_accounts,
-                &prepare_accounts,
-                recovery_payload,
-                recorder,
-                &mut completion,
-            )?
-        }
-        Some(_) | None => rpc.send_v0_on_founding_heap_with_signers(
-            "prepare exact controller funding ledgers and checkpoint (DCLTCFQ1)",
-            std::slice::from_ref(&controller_funding_prepare),
-            payer,
-            &[&projection_witness],
-            prepare_routing,
-            &prepare_tables,
-        )?,
+                payer,
+                &[&projection_witness],
+                *prepare_routing,
+                prepare_tables,
+            )?,
+        })
     };
-    transactions.push(prepare_honest);
-    authenticate_controller_funding_checkpoint_v1(
-        rpc,
-        plan,
-        &coordinates,
-        projection_witness.pubkey(),
-        ControllerFundingCheckpointPhaseV1::Prepared,
-    )?;
-    let prepared_abort = build_controller_funding_cleanup_v1(
-        rpc,
-        plan,
-        records,
-        &coordinates,
-        ControllerFundingCheckpointPhaseV1::Prepared,
-        CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
-    )?;
-    let prepared_abort_geometry =
-        projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &prepared_abort)?;
-    authenticate_cleanup_compiled_census_v1(
-        payer.pubkey(),
-        &prepared_abort,
-        prepared_abort_geometry,
-    )?;
-    let (prepared_abort_routing, prepared_abort_tables) = publish_routing_table(
-        rpc,
-        payer,
-        "DCLTCF1A",
-        std::slice::from_ref(&prepared_abort),
-        transactions,
-    )?;
-    let prepared_abort_probe = crate::seed::fresh_probe_address();
-    let refused_prepared_abort = rpc.send_v0_expected_failure_with_signers(
-        "DCLTCF1A refuses to close the first controller ledger before checkpoint expiry",
-        &[
-            transfer(&payer.pubkey(), &prepared_abort_probe, 1),
-            prepared_abort,
-        ],
-        payer,
-        &[],
-        prepared_abort_routing,
-        &prepared_abort_tables,
-    )?;
-    if rpc.account(prepared_abort_probe)?.is_some()
-        || refused_prepared_abort.fee_only_balance_change != Some(true)
-    {
-        return Err(Error::new(
-            "pre-expiry DCLTCF1A did not roll its whole transaction back",
-        ));
+    if let Some(prepare_honest) = prepare_honest {
+        transactions.push(prepare_honest);
     }
-    transactions.push(refused_prepared_abort);
     authenticate_controller_funding_checkpoint_v1(
         rpc,
         plan,
@@ -5103,20 +5502,84 @@ fn execute_projected_custody_bootstrap(
         projection_witness.pubkey(),
         ControllerFundingCheckpointPhaseV1::Prepared,
     )?;
-    completed.push(format!(
+    if !resume_prepared
+        && lane == PrestateLaneV1::Founding
+        && let Some(recorder) = submission_recorder.as_deref_mut()
+    {
+        let journal = recorder
+            .current(FoundingSubmissionOperationV1::Dcltcfq1)
+            .cloned()
+            .ok_or_else(|| Error::new("DCLTCFQ1 finalized without its durable journal"))?;
+        let prepared = materialize_dcltcfq1_checkpoint_v1(rpc, &recorder.binding, &journal)?;
+        // The Finalized journal was fsynced inside send_durable_founding_v1;
+        // this callback atomically persists the strictly later checkpoint.
+        checkpoint(&prepared)?;
+    }
+    if !resume_prepared {
+        let prepared_abort = build_controller_funding_cleanup_v1(
+            rpc,
+            plan,
+            records,
+            &coordinates,
+            ControllerFundingCheckpointPhaseV1::Prepared,
+            CONTROLLER_FUNDING_CLEANUP_STEP1_MAGIC_V1,
+        )?;
+        let prepared_abort_geometry =
+            projected_bootstrap_compiled_geometry_v2(payer.pubkey(), &prepared_abort)?;
+        authenticate_cleanup_compiled_census_v1(
+            payer.pubkey(),
+            &prepared_abort,
+            prepared_abort_geometry,
+        )?;
+        let (prepared_abort_routing, prepared_abort_tables) = publish_routing_table(
+            rpc,
+            payer,
+            "DCLTCF1A",
+            std::slice::from_ref(&prepared_abort),
+            transactions,
+        )?;
+        let prepared_abort_probe = crate::seed::fresh_probe_address();
+        let refused_prepared_abort = rpc.send_v0_expected_failure_with_signers(
+            "DCLTCF1A refuses to close the first controller ledger before checkpoint expiry",
+            &[
+                transfer(&payer.pubkey(), &prepared_abort_probe, 1),
+                prepared_abort,
+            ],
+            payer,
+            &[],
+            prepared_abort_routing,
+            &prepared_abort_tables,
+        )?;
+        if rpc.account(prepared_abort_probe)?.is_some()
+            || refused_prepared_abort.fee_only_balance_change != Some(true)
+        {
+            return Err(Error::new(
+                "pre-expiry DCLTCF1A did not roll its whole transaction back",
+            ));
+        }
+        transactions.push(refused_prepared_abort);
+        authenticate_controller_funding_checkpoint_v1(
+            rpc,
+            plan,
+            &coordinates,
+            projection_witness.pubkey(),
+            ControllerFundingCheckpointPhaseV1::Prepared,
+        )?;
+        completed.push(format!(
         "executed DCLTCFQ1: exact Resolution and Trading Pending ledgers plus their Prepared checkpoint; compiled {} complete keys, {} signatures, {} message bytes, {} packet bytes",
         controller_funding_prepare_geometry.complete_keys,
         controller_funding_prepare_geometry.required_signatures,
         controller_funding_prepare_geometry.message_bytes,
         controller_funding_prepare_geometry.packet_bytes,
     ));
-    completed.push(format!(
+        completed.push(format!(
         "proved DCLTCF1A refuses before expiry with full rollback; compiled {} complete keys, {} signatures, {} message bytes, {} packet bytes",
         prepared_abort_geometry.complete_keys,
         prepared_abort_geometry.required_signatures,
         prepared_abort_geometry.message_bytes,
         prepared_abort_geometry.packet_bytes,
-    ));
+        ));
+    }
 
     let bootstrap = build_projected_custody_bootstrap_v2(
         plan,
@@ -5196,7 +5659,7 @@ fn execute_projected_custody_bootstrap(
     // Both bootstrap hostile cases belong to the founding lane. Re-running
     // them for the abort lane's prestate would cost two transactions and
     // 700,000 compute units to re-prove a coordinate that has not moved.
-    if lane == PrestateLaneV1::Founding && !recovering_stage {
+    if lane == PrestateLaneV1::Founding && !resume_prepared && !recovering_stage {
         // The bootstrap admits exactly one request: the terminal Lock this
         // founding determines. A well-formed non-terminal prestate is refused.
         let mut non_terminal = bootstrap.clone();
@@ -5301,7 +5764,7 @@ fn execute_projected_custody_bootstrap(
                     coordinates.credit.to_string(),
                 );
                 recovery_accounts.insert(
-                    "founding_source_funder".into(),
+                    "founding_source_funder_after_dcltpcb2".into(),
                     source_funder.pubkey().to_string(),
                 );
                 let mut completion_addresses = recovery_accounts
@@ -5428,6 +5891,11 @@ fn execute_projected_custody_bootstrap(
     accounts.insert(
         format!("{prefix}_lifecycle_rent_credit"),
         account_evidence(coordinates.credit, &credit_account),
+    );
+    let staged_source = rpc.required_account(source_funder.pubkey(), "staged source funder")?;
+    accounts.insert(
+        format!("{prefix}_source_funder_after_dcltpcb2"),
+        account_evidence(source_funder.pubkey(), &staged_source),
     );
     completed.extend(dcltpcb2_completion_lines_v1(bootstrap_geometry));
 
