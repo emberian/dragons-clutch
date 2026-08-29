@@ -31,9 +31,10 @@ use dclutch_fractional_claim_kernel::{
     fractional_exposure_terms_bytes_v2,
 };
 use dclutch_fractional_claim_operator::{
-    FRACTIONAL_SELECTED_ACTION_COUNT_V4, FRACTIONAL_SELECTED_ACTIONS_V4,
-    FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4, FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4,
-    FractionalFrameWidthsV4, FractionalSelectedReleaseErrorV4, FractionalSelectedReleaseInputV4,
+    FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4, FRACTIONAL_SELECTED_ACTION_COUNT_V4,
+    FRACTIONAL_SELECTED_ACTIONS_V4, FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4,
+    FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4, FractionalFrameWidthsV4,
+    FractionalSelectedReleaseErrorV4, FractionalSelectedReleaseInputV4,
     fractional_claims_frame_spec_v4, fractional_selected_release_v4,
     validate_fractional_selected_release_v4,
 };
@@ -468,5 +469,98 @@ fn substituted_bundles_program_set_bytes_and_publication_identities_refuse() {
     assert_eq!(
         validate_fractional_selected_release_v4(&release, rewidened).unwrap_err(),
         FractionalSelectedReleaseErrorV4::Bundle
+    );
+}
+
+/// A release refuses to publish a capability it could never settle.
+///
+/// The four published actions include the two terminal ones, so a Fractional
+/// capability whose representation is wider than a terminal settlement can
+/// execute is a capability that admits wraps and forbids exits. The open-market
+/// actions do no Product evaluation and would happily accept that Market, so
+/// nothing downstream refuses until holders try to redeem. This is the earliest
+/// point the trap can be closed, and it is closed by refusing to compile.
+#[test]
+fn a_representation_wider_than_a_terminal_settlement_is_refused_at_publication() {
+    let mints: Vec<[u8; 32]> = (0..=FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4)
+        .map(|index| {
+            let mut bytes = [0x21_u8; 32];
+            bytes[0..4].copy_from_slice(&index.to_le_bytes());
+            bytes
+        })
+        .collect();
+    assert_eq!(
+        u32::try_from(mints.len()).unwrap(),
+        FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4 + 1
+    );
+    let width = fractional_exposure_terms_bytes_v2(mints.len()).unwrap();
+    let mut scratch = vec![0; width];
+    let mut output = vec![0; width];
+    encode_fractional_exposure_terms_v2(
+        FractionalExposureTermsInputV2 {
+            market: MARKET,
+            product_record: PRODUCT,
+            result_domain: DOMAIN,
+            release_set: RELEASE,
+            token_program: TOKEN_2022_PROGRAM_ID,
+            token_behavior: TOKEN_BEHAVIOR,
+            exposure_id: EXPOSURE,
+            product_basis: [32; 32],
+            representation_basis: [33; 32],
+            graph_id: [34; 32],
+            product_width: PRODUCT_WIDTH,
+            denominator: DENOMINATOR,
+            shard_mints: &mints,
+        },
+        &mut scratch,
+        &mut output,
+    )
+    .expect("the terms codec itself admits this width");
+
+    // The terms are canonical -- this is not a codec refusal being borrowed.
+    let over = FractionalSelectedReleaseInputV4 {
+        terms: terms(&output),
+        capacity_profile: CAPACITY,
+        widths: widths(),
+    };
+    assert_eq!(
+        fractional_selected_release_v4(over).unwrap_err(),
+        FractionalSelectedReleaseErrorV4::Unsettleable
+    );
+
+    // And the widest settleable representation still publishes.
+    let at_bound = &mints[..usize::try_from(FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4).unwrap()];
+    let width = fractional_exposure_terms_bytes_v2(at_bound.len()).unwrap();
+    let mut scratch = vec![0; width];
+    let mut output = vec![0; width];
+    encode_fractional_exposure_terms_v2(
+        FractionalExposureTermsInputV2 {
+            market: MARKET,
+            product_record: PRODUCT,
+            result_domain: DOMAIN,
+            release_set: RELEASE,
+            token_program: TOKEN_2022_PROGRAM_ID,
+            token_behavior: TOKEN_BEHAVIOR,
+            exposure_id: EXPOSURE,
+            product_basis: [32; 32],
+            representation_basis: [33; 32],
+            graph_id: [34; 32],
+            product_width: PRODUCT_WIDTH,
+            denominator: DENOMINATOR,
+            shard_mints: at_bound,
+        },
+        &mut scratch,
+        &mut output,
+    )
+    .unwrap();
+    let release = fractional_selected_release_v4(FractionalSelectedReleaseInputV4 {
+        terms: terms(&output),
+        capacity_profile: CAPACITY,
+        widths: widths(),
+    })
+    .expect("the widest settleable representation must still publish");
+    assert_eq!(
+        release.publication.representation_width,
+        FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4
     );
 }

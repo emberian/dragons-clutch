@@ -90,6 +90,34 @@ pub const FRACTIONAL_SELECTED_ACTIONS_V4: [FractionalExposureActionV2;
     FractionalExposureActionV2::TerminalZeroBurn,
 ];
 
+/// The widest representation a published Fractional capability may name.
+///
+/// This is not the index space's bound. The `U8` action selector, the terms
+/// codec, and `MAX_COMPOSITION_REPRESENTATION_WIDTH_V3` all admit 256, and none
+/// of them is wrong. The bound here is narrower because a *terminal settlement*
+/// translates every Product result coordinate onto every Claims representation
+/// root, and that work grows until it exhausts a transaction:
+///
+/// ```text
+///   width   8   16   32   48   64    96      98      99
+///   units 463k 519k 593k 731k 897k 1356k   1393k   exhausted
+/// ```
+///
+/// Measured against real ELFs by
+/// `the_terminal_settlement_fits_to_width_98_and_no_further` in
+/// `programs/dclutch-claims-sbf/program-test/fractional-atomic/`.
+///
+/// A release publishes `TerminalRedeem` and `TerminalZeroBurn` among its four
+/// actions, so publishing above this width would publish a capability that can
+/// be wrapped into and never redeemed from -- the open-market actions do no
+/// Product evaluation and stay cheap, so nothing would refuse until holders
+/// tried to exit. Refusing here is the earliest point that trap can be closed.
+///
+/// This constant and the campaign that measures it must move together: if the
+/// terminal path's compute cost changes, that test fails rather than this
+/// number silently becoming a lie.
+pub const FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4: u32 = 98;
+
 /// Canonical publication magic.
 pub const FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4: [u8; 8] = *b"DCFRPB04";
 /// Exact canonical publication width.
@@ -263,6 +291,11 @@ pub enum FractionalSelectedReleaseErrorV4 {
     Terms,
     /// A release-selected external byte width was zero.
     Widths,
+    /// The representation is wider than a terminal settlement can execute.
+    ///
+    /// See [`FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4`]. Such a capability would
+    /// admit wraps it could never settle.
+    Unsettleable,
     /// Canonical Claims frame derivation refused.
     Frame,
     /// One action bundle did not compile or rejoin under its own compiler.
@@ -309,6 +342,9 @@ pub fn fractional_selected_release_v4(
         || input.terms.representation_width() == 0
     {
         return Err(FractionalSelectedReleaseErrorV4::Terms);
+    }
+    if input.terms.representation_width() > FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4 {
+        return Err(FractionalSelectedReleaseErrorV4::Unsettleable);
     }
     let profile = widths.profile();
     let mut bundles = Vec::with_capacity(FRACTIONAL_SELECTED_ACTION_COUNT_V4);
