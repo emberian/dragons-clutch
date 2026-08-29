@@ -910,7 +910,8 @@ pub(crate) struct LocalMutablePrepareReportV1 {
 
 const LOCAL_ID_DOMAIN_V1: &[u8] = b"dclutch/private-validator-lifecycle/program-id/v1";
 const LOCAL_KEY_DOMAIN_V1: &[u8] = b"dclutch/private-validator-lifecycle/keypair/v1";
-const EXTRA_KEY_ROLES_V1: [&str; 8] = [
+const EXTRA_KEY_ROLES_V1: [&str; 9] = [
+    crate::seed::role::FOUNDING_FOUNDER,
     "participant",
     "direct-seller",
     "direct-buyer",
@@ -1456,12 +1457,17 @@ mod tests {
     fn local_lifecycle_roles_include_distinct_vacant_pyth_accounts() {
         let roles = EXTRA_KEY_ROLES_V1.into_iter().collect::<BTreeSet<_>>();
         assert_eq!(roles.len(), EXTRA_KEY_ROLES_V1.len());
+        assert!(roles.contains(crate::seed::role::FOUNDING_FOUNDER));
         assert!(roles.contains("pyth-encoded-vaa"));
         assert!(roles.contains("pyth-update-account"));
         let campaign_roles = crate::campaign::KEYPAIR_ROLES
             .iter()
             .copied()
             .collect::<BTreeSet<_>>();
+        assert!(
+            !campaign_roles.contains(crate::seed::role::FOUNDING_FOUNDER),
+            "the later lifecycle keeps the founder signer, but public founding receives only its pubkey"
+        );
         assert_eq!(
             roles
                 .intersection(&campaign_roles)
