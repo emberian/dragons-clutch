@@ -42,6 +42,7 @@ import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
 import DClutchSemantics.GeneralV5Assurance
 import DClutchSemantics.GeneralControllerAbi
+import DClutchSemantics.GeneralControllerRequestV3
 import DClutchSemantics.GeneralConfigAbi
 import DClutchSemantics.GeneralConfigV3Abi
 import DClutchSemantics.GeneralRequestProfilesV1

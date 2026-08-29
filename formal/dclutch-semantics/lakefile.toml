@@ -151,6 +151,10 @@ name = "emit-general-controller-abi-rust"
 root = "EmitGeneralControllerAbiRust"
 
 [[lean_exe]]
+name = "emit-general-controller-request-v3-rust"
+root = "EmitGeneralControllerRequestV3Rust"
+
+[[lean_exe]]
 name = "emit-general-request-profiles-v1-rust"
 root = "EmitGeneralRequestProfilesV1Rust"
 

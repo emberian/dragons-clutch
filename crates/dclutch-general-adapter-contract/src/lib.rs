@@ -32,6 +32,8 @@ pub mod collection_v1;
 pub mod effect_artifacts_v3;
 /// The escrow's compartment authority and its physical balance discipline.
 pub mod escrow_v1;
+/// Exact request topology for GEN-SEVEN plus revised Consider and Candidate close.
+pub mod gen_seven_v1;
 /// Complete General Hot38 candidate register ABI for exact child packets.
 pub mod hot_candidate_v3;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
