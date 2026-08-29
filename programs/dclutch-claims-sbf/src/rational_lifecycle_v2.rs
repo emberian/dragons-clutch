@@ -1056,6 +1056,14 @@ fn protocol_position_accounts<'info>(
 /// third instruction below is what makes the family's terminal path reachable
 /// at all. Both extension authorities are the representation authority, the
 /// same key that holds the Mint authority.
+///
+/// This set and `TOKEN_2022_CLOSEABLE_MINT_BYTES_V2` are one decision, not two.
+/// Token-2022 requires the allocated length to be exactly the length the
+/// initialized extensions imply, so 238 bytes without `PermissionedBurn` is
+/// refused at `InitializeMint2` with `InvalidAccountData`, and
+/// `PermissionedBurn` at 202 bytes has nowhere to live (measured, 2026-08-29).
+/// Changing either half alone does not create a subtly wrong Mint; it creates
+/// no Mint at all. Change both together.
 fn initialize_closeable_mint<'info>(
     common: CommonAccounts<'_, 'info>,
     mint: &AccountInfo<'info>,

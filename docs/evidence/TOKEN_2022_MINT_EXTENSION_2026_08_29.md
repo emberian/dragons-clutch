@@ -92,6 +92,44 @@ as to the lifecycle's own profile. It admits them. No fixture is involved on
 either side of that assertion; it is one route's real output read by the other
 route's real reader.
 
+### The controls, and what they found instead
+
+Run in an isolated worktree, never by mutating the shared tree. A green campaign
+plus the author's say-so is not a verification, so the question was whether the
+new assertion actually fails on the old writer or would have passed either way.
+
+**Control A — "238 bytes, extension removed" is not a constructible state.**
+The intent was to separate the width from the extension. Token-2022 v11 does not
+permit the separation: `InitializeMint2` refuses with `InvalidAccountData` on a
+238-byte account carrying only the one `MintCloseAuthority` TLV. The program
+requires the allocated length to be exactly the length its initialized
+extensions imply.
+
+**That is a structural guarantee, and it is the most useful thing these controls
+produced.** The width and the extension set are atomic: 238 bytes without
+`PermissionedBurn` cannot be initialized, and `PermissionedBurn` at 202 bytes
+has nowhere to live. A future edit that gets either half of this pair wrong
+does not produce a subtly broken Mint — it produces no Mint at all, and the
+transaction fails at the Token program. The defect that this document exists to
+fix cannot silently recur in that direction.
+
+**Control B — the old writer, exactly (two CPIs, 202 bytes) — refuses on-chain
+at `0x5216` before any test looks at bytes.** That is
+`RationalLifecycleSbfErrorV2::Token` raised by the program's *own* post-create
+reader `authenticate_closeable_mint`, which now calls the strengthened profile.
+So on the fixed program the old writer cannot commit at all; the on-chain gate
+is strictly stronger than the campaign's assertion, which is why neither A nor B
+ever reaches the assertion under test.
+
+**Control C — the one that actually answers the question.** Old writer plus
+`authenticate_closeable_mint` stubbed to `Ok(())`, so the old bytes commit and
+the helper finally runs. It fails inside
+`assert_lifecycle_mint_is_terminally_burnable` with
+`closeable lifecycle Mint profile: InvalidExtensionLayout` — **after** the
+`"lifecycle Mint width"` assert has passed, because 202 == 202 was true at that
+moment. The refusal is a pure extension fact and not a size fact. The assertion
+is load-bearing and is not a tautology.
+
 **Cost.** The added CPI consumes 1,067 CU inside Token-2022, ~2,321 with CPI
 overhead, per Mint. Committed legs: `activate_receipt` 254,337,
 `activate_coordinate` 405,138, `retire_coordinate` 340,832, `retire_receipt`
