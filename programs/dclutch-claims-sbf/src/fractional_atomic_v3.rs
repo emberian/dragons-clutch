@@ -965,7 +965,7 @@ fn authenticate_tail_privileges(
         }
     }
     if !root.is_signer
-        || root.is_writable
+        || !root.is_writable
         || root.executable
         || !actor.is_signer
         || actor.is_writable
@@ -1023,7 +1023,7 @@ fn authenticate_terminal_tail_privileges(
     let mint = account(accounts, FRACTIONAL_TERMINAL_SHARD_MINT_V3)?;
     let source = account(accounts, FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3)?;
     if !root.is_signer
-        || root.is_writable
+        || !root.is_writable
         || root.executable
         || !actor.is_signer
         || actor.is_writable

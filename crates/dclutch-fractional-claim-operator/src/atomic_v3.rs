@@ -193,7 +193,7 @@ pub fn build_fractional_atomic_claims_instruction_v3(
         (FRACTIONAL_ATOMIC_TERMS_STAGING_V3, false, false),
         (FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_RAW_V3, false, false),
         (FRACTIONAL_ATOMIC_TOKEN_BEHAVIOR_STAGING_V3, false, false),
-        (FRACTIONAL_ATOMIC_ROOT_V3, true, false),
+        (FRACTIONAL_ATOMIC_ROOT_V3, true, true),
         (FRACTIONAL_ATOMIC_ACTOR_V3, true, false),
         (FRACTIONAL_ATOMIC_SHARD_MINT_V3, false, true),
         (FRACTIONAL_ATOMIC_HOLDER_TOKEN_V3, false, true),
@@ -394,7 +394,7 @@ pub fn build_fractional_terminal_atomic_claims_instruction_v3(
         (FRACTIONAL_TERMINAL_TERMS_STAGING_V3, false, false),
         (FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_RAW_V3, false, false),
         (FRACTIONAL_TERMINAL_TOKEN_BEHAVIOR_STAGING_V3, false, false),
-        (FRACTIONAL_TERMINAL_ROOT_V3, true, false),
+        (FRACTIONAL_TERMINAL_ROOT_V3, true, true),
         (FRACTIONAL_TERMINAL_ACTOR_V3, true, false),
         (FRACTIONAL_TERMINAL_SHARD_MINT_V3, false, true),
         (FRACTIONAL_TERMINAL_SOURCE_TOKEN_V3, false, true),
@@ -595,6 +595,7 @@ mod tests {
             Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
             false,
         ));
+        accounts[FRACTIONAL_ATOMIC_ROOT_V3].is_writable = true;
         accounts[REGISTRY].pubkey = registry;
         accounts[TRADING_PROGRAM].pubkey = trading;
         accounts[CLAIMS_PROGRAM].pubkey = claims;
@@ -798,6 +799,7 @@ mod tests {
         accounts[TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3].pubkey =
             Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
         accounts[FRACTIONAL_TERMINAL_ROOT_V3].pubkey = root_key;
+        accounts[FRACTIONAL_TERMINAL_ROOT_V3].is_writable = true;
         accounts[FRACTIONAL_TERMINAL_ACTOR_V3].pubkey =
             Pubkey::new_from_array(terminal_input.owner);
         accounts[FRACTIONAL_TERMINAL_SHARD_MINT_V3].pubkey = Pubkey::new_from_array(id(8));
@@ -854,6 +856,7 @@ mod tests {
         assert_eq!(instruction.accounts.len(), 31);
         assert!(instruction.accounts[0].is_signer);
         assert!(instruction.accounts[FRACTIONAL_ATOMIC_ROOT_V3].is_signer);
+        assert!(instruction.accounts[FRACTIONAL_ATOMIC_ROOT_V3].is_writable);
         assert!(instruction.accounts[FRACTIONAL_ATOMIC_ACTOR_V3].is_signer);
         assert_eq!(instruction.data.len(), 416);
     }
@@ -908,6 +911,7 @@ mod tests {
         assert_eq!(instruction.accounts.len(), 44);
         assert!(instruction.accounts[0].is_signer);
         assert!(instruction.accounts[FRACTIONAL_TERMINAL_ROOT_V3].is_signer);
+        assert!(instruction.accounts[FRACTIONAL_TERMINAL_ROOT_V3].is_writable);
         assert!(instruction.accounts[FRACTIONAL_TERMINAL_ACTOR_V3].is_signer);
         assert_eq!(instruction.data.len(), 416);
     }
