@@ -12,6 +12,7 @@
     "lib/directCodec.ts\tDCLTDIR3",
     "lib/directHotChain.ts\tDCLTACT1",
     "lib/directHotChain.ts\tDCLTCOR2",
+    "lib/directHotChain.ts\tDCLTCSL1",
     "lib/directHotChain.ts\tDCLTPRM2",
     "lib/directInlineV3.ts\tDCLTAP02",
     "lib/directMakerReplay.ts\tDCLTDMR1",
@@ -44,9 +45,11 @@
     "lib/releaseRegistry.ts\tDCLTRLS1"
   ],
   "domains": [
+    "lib/coldClientJourney.ts\tdclutch/cold-client-journey/v1",
     "lib/dealerEquityChain.ts\tdclutch/schema/request-profile-v1",
     "lib/dealerEquityChain.ts\tdclutch/schema/request-profile-v3-borrowed-witness-v1",
     "lib/directHotChain.ts\tdclutch/product-basis/semantic/v3",
+    "lib/directHotChain.ts\tdclutch:capability-seal:v1",
     "lib/directMakerReplay.ts\tdclutch:direct-maker:v1",
     "lib/directTicket.ts\tdclutch/direct-intent-ticket/v1",
     "lib/directTransaction.ts\tdclutch/direct-replay/v3",
@@ -69,7 +72,8 @@
     "lib/rationalRetireReceiptV4.ts\tdclutch:release-activation:v1",
     "lib/rationalRetireReceiptV4.ts\tdclutch:role-authority:v1",
     "lib/registeredDirect.ts\tdclutch/direct-registered/v1",
-    "lib/releaseRegistry.ts\tdclutch:release-activation:v1"
+    "lib/releaseRegistry.ts\tdclutch:release-activation:v1",
+    "lib/walletTerminalPayoutV3.ts\tdclutch/schema/product-representation-exposure-bundle-v3"
   ],
   "offsets": {
     "lib/coreFound.ts": 40,
@@ -78,7 +82,7 @@
     "lib/dealerEquityV3.ts": 30,
     "lib/decoders.ts": 14,
     "lib/directCodec.ts": 18,
-    "lib/directHotChain.ts": 36,
+    "lib/directHotChain.ts": 46,
     "lib/directMakerReplay.ts": 2,
     "lib/generalPlanV5.ts": 20,
     "lib/infrastructure.ts": 15,
@@ -90,6 +94,7 @@
     "lib/rationalTerminalHotV3.ts": 7,
     "lib/rationalTokenV2.ts": 33,
     "lib/registeredDirect.ts": 6,
-    "lib/releaseRegistry.ts": 54
+    "lib/releaseRegistry.ts": 54,
+    "lib/walletTerminalPayoutV3.ts": 10
   }
 }

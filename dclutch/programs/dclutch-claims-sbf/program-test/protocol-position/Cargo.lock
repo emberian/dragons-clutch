@@ -1577,14 +1577,19 @@ dependencies = [
 name = "dclutch-claims-protocol-position-program-test"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-program-contract",
  "dclutch-claims-affine-batch-program-test",
  "dclutch-claims-sbf",
  "dclutch-claims-svm",
  "dclutch-core-contract",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
  "dclutch-program-test-evidence",
+ "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
+ "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-address-lookup-table-interface",
  "solana-message 4.4.1",

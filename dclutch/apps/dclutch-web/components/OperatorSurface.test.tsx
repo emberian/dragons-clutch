@@ -22,7 +22,7 @@ describe('operator surface presentation', () => {
     expect(html).toContain('Create registered order');
     expect(html).toContain('Initialize / collect / materialize / distribute');
     expect(html).toContain('Inventory-bounded immediate trade');
-    expect(html).toContain('Redeem terminal Rational / Bearer representation');
+    expect(html).toContain('Redeem a terminal Claims Position');
     expect(html).toContain('Inspect and export an unsigned transaction');
     expect(html).toContain('No chain state has been read.');
     expect(html).not.toContain('Illustrative');

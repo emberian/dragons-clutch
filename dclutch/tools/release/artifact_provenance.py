@@ -549,6 +549,178 @@ def select_gate_role(
     }
 
 
+def emit_gate(arguments: argparse.Namespace) -> None:
+    """Emit the canonical all-link gate from already verified link evidence.
+
+    This is the reusable form of the byte-for-byte gate construction formerly
+    embedded in checked-release-candidate.sh.  It performs no builds and does
+    not infer evidence from adjacent target directories.
+    """
+
+    root = Path(arguments.root).resolve(strict=True)
+    if not root.is_dir() or Path(arguments.root) != root:
+        refuse("--root must be an exact canonical directory")
+    if not HEX40.fullmatch(arguments.source_revision):
+        refuse("source revision is not full 40-digit lowercase hex")
+    if not HEX64.fullmatch(arguments.source_tree_sha256):
+        refuse("source tree SHA-256 is malformed")
+    if not HEX64.fullmatch(arguments.build_run_id):
+        refuse("build run ID is malformed")
+    if not arguments.solana_cli_version or "\n" in arguments.solana_cli_version:
+        refuse("Solana CLI version is empty or multiline")
+
+    source_tree = root_path(root, "source-tree.txt", "source tree manifest")
+    if sha256_file(source_tree) != arguments.source_tree_sha256:
+        refuse("source tree manifest SHA-256 differs")
+    build_links_path = root_path(root, "build-links.tsv", "build links manifest")
+    build_run_path = root_path(root, "build-run.txt", "build run manifest")
+    diagnostics_path = root_path(
+        root, "build-diagnostics.txt", "build diagnostics manifest"
+    )
+    if read_lines(build_run_path, "build run manifest") != [
+        f"dclutch-sbf-build-run-v1={arguments.build_run_id}"
+    ]:
+        refuse("build run manifest differs from the admitted run")
+
+    build_links: list[tuple[str, str]] = []
+    for line in read_lines(build_links_path, "build links manifest"):
+        if line.count("\t") != 1:
+            refuse("build links manifest row is malformed")
+        label, package = line.split("\t", 1)
+        build_links.append((label, package))
+    expected_links = [(label, package) for label, package, _ in SHIPPED_LINKS]
+    if build_links != expected_links:
+        refuse("build links manifest is not the canonical all-13 order")
+
+    diagnostics: dict[str, int] = {}
+    for line in read_lines(diagnostics_path, "build diagnostics manifest"):
+        if line.count("=") != 1:
+            refuse("build diagnostics row is malformed")
+        label, count_text = line.split("=", 1)
+        if label in diagnostics or not count_text.isascii() or not count_text.isdigit():
+            refuse("build diagnostics row is duplicated or noncanonical")
+        diagnostics[label] = int(count_text)
+    if list(diagnostics) != [label for label, _ in expected_links]:
+        refuse("build diagnostics manifest is not the canonical all-13 order")
+
+    artifact_roles = {
+        package: label
+        for label, package, produces_artifact in SHIPPED_LINKS
+        if produces_artifact
+    }
+    links: list[dict[str, Any]] = []
+    for label, package, produces_artifact in SHIPPED_LINKS:
+        if diagnostics[label] != 0:
+            refuse(f"gate refuses nonzero SBF diagnostics for {label}")
+        build_log_relative = f"build-{label}.log"
+        frame_log_relative = f"frame-build-{label}.log"
+        frame_report_relative = f"frame/{label}.txt"
+        provenance_relative = f"provenance/{label}.json"
+        build_log = root_path(root, build_log_relative, f"{label} build log")
+        frame_log = root_path(root, frame_log_relative, f"{label} frame build log")
+        frame_report = root_path(
+            root, frame_report_relative, f"{label} frame report"
+        )
+        descriptor_path = root_path(
+            root, provenance_relative, f"{label} provenance"
+        )
+        descriptor = verify_descriptor(
+            root,
+            descriptor_path,
+            expected_label=label,
+            expected_package=package,
+            expected_source_revision=arguments.source_revision,
+            expected_source_tree_sha256=arguments.source_tree_sha256,
+            expected_build_run_id=arguments.build_run_id,
+        )
+        build_pattern = re.compile(
+            rf"^\s*Compiling\s+{re.escape(package)}\s+v\S+(?:\s|$)"
+        )
+        build_markers = [
+            line
+            for line in read_lines(build_log, f"{label} build log")
+            if build_pattern.match(line)
+        ]
+        frame_markers = [
+            line
+            for line in read_lines(frame_log, f"{label} frame build log")
+            if build_pattern.match(line)
+        ]
+        if not build_markers or not frame_markers:
+            refuse(f"missing canonical compile marker for {label}")
+        fields = frame_fields(frame_report)
+        try:
+            frame_count = int(fields["frame_count"])
+            frame_bound = int(fields["frame_bound_bytes"])
+            frames_over = int(fields["frames_at_or_over_bound"])
+            deepest = int(fields["deepest_frame_bytes"])
+        except ValueError:
+            refuse(f"frame report integers are malformed for {label}")
+        if frame_bound != 4096 or frames_over != 0:
+            refuse(f"frame report is not admitted for {label}")
+
+        role = artifact_roles.get(package)
+        elf_evidence = evidence(root, f"elf/{role}.so", f"{label} ELF") if role else None
+        if produces_artifact:
+            if descriptor["elf_path"] != root / f"elf/{role}.so":
+                refuse(f"{label} descriptor selects a different ELF")
+            checked_manifest = evidence(
+                root, f"evidence/{role}/checked.bin", f"{label} checked manifest"
+            )
+        else:
+            if descriptor["elf_path"] is not None:
+                refuse(f"frame-only {label} descriptor claims an ELF")
+            checked_manifest = None
+        links.append(
+            {
+                "label": label,
+                "package": package,
+                "build_log": evidence(root, build_log_relative, f"{label} build log"),
+                "compile_marker": build_markers[-1],
+                "sbf_diagnostics_count": diagnostics[label],
+                "frame_build_log": evidence(
+                    root, frame_log_relative, f"{label} frame build log"
+                ),
+                "frame_compile_marker": frame_markers[-1],
+                "frame_report": evidence(
+                    root, frame_report_relative, f"{label} frame report"
+                ),
+                "artifact_provenance": evidence(
+                    root, provenance_relative, f"{label} provenance"
+                ),
+                "frame_count": frame_count,
+                "frame_bound_bytes": frame_bound,
+                "frames_at_or_over_bound": frames_over,
+                "deepest_frame_bytes": deepest,
+                "elf": elf_evidence,
+                "checked_manifest": checked_manifest,
+            }
+        )
+
+    gate = {
+        "schema": GATE_SCHEMA,
+        "source_revision": arguments.source_revision,
+        "source_tree_sha256": arguments.source_tree_sha256,
+        "solana_cli_version": arguments.solana_cli_version,
+        "build_run_id": arguments.build_run_id,
+        "link_count": len(links),
+        "source_tree_manifest": evidence(
+            root, "source-tree.txt", "source tree manifest"
+        ),
+        "build_links_manifest": evidence(
+            root, "build-links.tsv", "build links manifest"
+        ),
+        "build_run_manifest": evidence(root, "build-run.txt", "build run manifest"),
+        "diagnostics_manifest": evidence(
+            root, "build-diagnostics.txt", "build diagnostics manifest"
+        ),
+        "links": links,
+    }
+    target = root / "CHECKED_UPGRADE_GATE.json"
+    atomic_new(target, gate)
+    print(f"checked Upgrade gate sha256={sha256_file(target)}")
+
+
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(description=__doc__)
     commands = top.add_subparsers(dest="command", required=True)
@@ -583,6 +755,12 @@ def parser() -> argparse.ArgumentParser:
     select.add_argument("--gate", required=True)
     select.add_argument("--gate-sha256", required=True)
     select.add_argument("--role", required=True)
+    gate = commands.add_parser("emit-gate")
+    gate.add_argument("--root", required=True)
+    gate.add_argument("--source-revision", required=True)
+    gate.add_argument("--source-tree-sha256", required=True)
+    gate.add_argument("--solana-cli-version", required=True)
+    gate.add_argument("--build-run-id", required=True)
     return top
 
 
@@ -635,6 +813,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+            return 0
+        if arguments.command == "emit-gate":
+            emit_gate(arguments)
             return 0
         selected = select_gate_role(
             Path(arguments.gate).resolve(strict=True),

@@ -675,99 +675,12 @@ fi
 # symlinks/escapes, and rehashes every named file.
 if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ] \
     && [ "$PREBUILT_TOOL" = "false" ]; then
-    GATE_ROOT="$WORK" GATE_ROLES="$ROLES" GATE_SOURCE_REVISION="$SOURCE_REVISION" \
-    GATE_SOURCE_TREE_SHA256="$SOURCE_DIGEST" GATE_SOLANA_VERSION="$SOLANA_VERSION" \
-    GATE_BUILD_RUN_ID="$BUILD_RUN_ID" python3 - <<'PY'
-import hashlib
-import json
-import os
-import re
-from pathlib import Path
-
-root = Path(os.environ["GATE_ROOT"]).resolve(strict=True)
-roles = {}
-for entry in os.environ["GATE_ROLES"].split():
-    role, package, _stem = entry.split(":", 2)
-    roles[package] = role
-
-def evidence(relative: str) -> dict:
-    path = root / relative
-    if path.is_symlink() or not path.is_file():
-        raise SystemExit(f"gate evidence is not one regular file: {path}")
-    resolved = path.resolve(strict=True)
-    if resolved.parent != root and root not in resolved.parents:
-        raise SystemExit(f"gate evidence escapes root: {path}")
-    data = path.read_bytes()
-    return {
-        "canonical_path": relative,
-        "bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
-    }
-
-links = []
-diagnostics = {}
-for line in (root / "build-diagnostics.txt").read_text().splitlines():
-    label, count = line.split("=", 1)
-    diagnostics[label] = int(count)
-
-for row in (root / "build-links.tsv").read_text().splitlines():
-    label, package = row.split("\t")
-    build_log_path = root / f"build-{label}.log"
-    compile_lines = [
-        line for line in build_log_path.read_text().splitlines()
-        if re.match(rf"^\s*Compiling\s+{re.escape(package)}\s+v\S+(?:\s|$)", line)
-    ]
-    if not compile_lines:
-        raise SystemExit(f"missing canonical compile marker for {label}")
-    frame_build_log_path = root / f"frame-build-{label}.log"
-    frame_compile_lines = [
-        line for line in frame_build_log_path.read_text().splitlines()
-        if re.match(rf"^\s*Compiling\s+{re.escape(package)}\s+v\S+(?:\s|$)", line)
-    ]
-    if not frame_compile_lines:
-        raise SystemExit(f"missing canonical frame compile marker for {label}")
-    frame_fields = {}
-    for line in (root / "frame" / f"{label}.txt").read_text().splitlines()[1:10]:
-        key, value = line.split("=", 1)
-        frame_fields[key] = value
-    role = roles.get(package)
-    links.append({
-        "label": label,
-        "package": package,
-        "build_log": evidence(f"build-{label}.log"),
-        "compile_marker": compile_lines[-1],
-        "sbf_diagnostics_count": diagnostics[label],
-        "frame_build_log": evidence(f"frame-build-{label}.log"),
-        "frame_compile_marker": frame_compile_lines[-1],
-        "frame_report": evidence(f"frame/{label}.txt"),
-        "artifact_provenance": evidence(f"provenance/{label}.json"),
-        "frame_count": int(frame_fields["frame_count"]),
-        "frame_bound_bytes": int(frame_fields["frame_bound_bytes"]),
-        "frames_at_or_over_bound": int(frame_fields["frames_at_or_over_bound"]),
-        "deepest_frame_bytes": int(frame_fields["deepest_frame_bytes"]),
-        "elf": evidence(f"elf/{role}.so") if role else None,
-        "checked_manifest": evidence(f"evidence/{role}/checked.bin") if role else None,
-    })
-
-gate = {
-    "schema": "dclutch-checked-upgrade-gate-v1",
-    "source_revision": os.environ["GATE_SOURCE_REVISION"],
-    "source_tree_sha256": os.environ["GATE_SOURCE_TREE_SHA256"],
-    "solana_cli_version": os.environ["GATE_SOLANA_VERSION"],
-    "build_run_id": os.environ["GATE_BUILD_RUN_ID"],
-    "link_count": len(links),
-    "source_tree_manifest": evidence("source-tree.txt"),
-    "build_links_manifest": evidence("build-links.tsv"),
-    "build_run_manifest": evidence("build-run.txt"),
-    "diagnostics_manifest": evidence("build-diagnostics.txt"),
-    "links": links,
-}
-target = root / "CHECKED_UPGRADE_GATE.json"
-temporary = root / ".CHECKED_UPGRADE_GATE.json.tmp"
-temporary.write_text(json.dumps(gate, indent=2, sort_keys=True) + "\n")
-os.replace(temporary, target)
-print(f"checked Upgrade gate sha256={hashlib.sha256(target.read_bytes()).hexdigest()}")
-PY
+    python3 "$PROVENANCE_TOOL" emit-gate \
+        --root "$WORK" \
+        --source-revision "$SOURCE_REVISION" \
+        --source-tree-sha256 "$SOURCE_DIGEST" \
+        --solana-cli-version "$SOLANA_VERSION" \
+        --build-run-id "$BUILD_RUN_ID"
     printf 'checked_upgrade_gate_sha256=%s\n' "$(sha256 "$UPGRADE_GATE")" >> "$SUMMARY"
 elif [ "$PREBUILT_TOOL" = "true" ]; then
     echo "checked Upgrade gate: not emitted because --tool is not a source-pinned host-tool build" >&2

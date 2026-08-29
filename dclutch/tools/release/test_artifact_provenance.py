@@ -41,6 +41,10 @@ def create_fixture(
     label: str = "trading",
     package: str = "dclutch-trading-sbf",
     produces_artifact: bool = True,
+    *,
+    source: str = SOURCE,
+    tree: str = TREE,
+    run: str = RUN,
 ) -> Path:
     build_invocation = BUILD_INVOCATION.replace("trading", label).replace(
         "dclutch-trading-sbf", package
@@ -52,7 +56,7 @@ def create_fixture(
     write(
         root / f"build-{label}.log",
         (
-            f"dclutch-sbf-build-run-v1={RUN}\n"
+            f"dclutch-sbf-build-run-v1={run}\n"
             f"dclutch-sbf-build-invocation-v1={build_invocation}\n"
             f"{marker}\nFinished\n"
         ).encode(),
@@ -60,7 +64,7 @@ def create_fixture(
     write(
         root / f"frame-build-{label}.log",
         (
-            f"dclutch-sbf-frame-run-v1={RUN}\n"
+            f"dclutch-sbf-frame-run-v1={run}\n"
             f"dclutch-sbf-frame-invocation-v1={frame_invocation}\n"
             f"{marker}\nFinished\n"
         ).encode(),
@@ -76,8 +80,8 @@ def create_fixture(
             "dclutch-sbf-frame-report-v1\n"
             f"label={label}\n"
             f"package={package}\n"
-            f"source_tree_sha256={TREE}\n"
-            f"build_run_id={RUN}\n"
+            f"source_tree_sha256={tree}\n"
+            f"build_run_id={run}\n"
             "frame_count=3\n"
             "frame_bound_bytes=4096\n"
             "frames_at_or_over_bound=0\n"
@@ -98,9 +102,9 @@ def create_fixture(
             label=label,
             package=package,
             artifact_stem=package.replace("-", "_") if produces_artifact else None,
-            source_revision=SOURCE,
-            source_tree_sha256=TREE,
-            build_run_id=RUN,
+            source_revision=source,
+            source_tree_sha256=tree,
+            build_run_id=run,
             build_invocation=build_invocation,
             build_log=f"build-{label}.log",
             build_compile_marker=marker,
@@ -160,6 +164,84 @@ def gate(root: Path, provenance: Path) -> tuple[Path, str]:
 
 
 class ArtifactProvenanceTests(unittest.TestCase):
+    def test_reusable_gate_emitter_preserves_the_canonical_all_link_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text).resolve()
+            source_tree_bytes = b"canonical source tree manifest\n"
+            tree = MODULE.sha256_bytes(source_tree_bytes)
+            write(root / "source-tree.txt", source_tree_bytes)
+            write(
+                root / "build-links.tsv",
+                "".join(
+                    f"{label}\t{package}\n"
+                    for label, package, _produces in MODULE.SHIPPED_LINKS
+                ).encode(),
+            )
+            write(root / "build-run.txt", f"dclutch-sbf-build-run-v1={RUN}\n".encode())
+            write(
+                root / "build-diagnostics.txt",
+                "".join(
+                    f"{label}=0\n" for label, _package, _produces in MODULE.SHIPPED_LINKS
+                ).encode(),
+            )
+            for label, package, produces_artifact in MODULE.SHIPPED_LINKS:
+                create_fixture(
+                    root,
+                    label,
+                    package,
+                    produces_artifact,
+                    tree=tree,
+                )
+                if produces_artifact:
+                    write(root / f"evidence/{label}/checked.bin", label.encode())
+
+            MODULE.emit_gate(
+                argparse.Namespace(
+                    root=str(root),
+                    source_revision=SOURCE,
+                    source_tree_sha256=tree,
+                    solana_cli_version="solana-cli 4.0.2 (fixture)",
+                    build_run_id=RUN,
+                )
+            )
+            gate_path = root / "CHECKED_UPGRADE_GATE.json"
+            value = json.loads(gate_path.read_text())
+            self.assertEqual(gate_path.read_bytes(), MODULE.canonical_json(value))
+            self.assertEqual(
+                set(value),
+                {
+                    "schema",
+                    "source_revision",
+                    "source_tree_sha256",
+                    "solana_cli_version",
+                    "build_run_id",
+                    "link_count",
+                    "source_tree_manifest",
+                    "build_links_manifest",
+                    "build_run_manifest",
+                    "diagnostics_manifest",
+                    "links",
+                },
+            )
+            self.assertEqual(
+                [(link["label"], link["package"]) for link in value["links"]],
+                [(label, package) for label, package, _ in MODULE.SHIPPED_LINKS],
+            )
+            selected = MODULE.select_gate_role(
+                gate_path, MODULE.sha256_file(gate_path), "trading"
+            )
+            self.assertEqual(selected["elf_path"], str(root / "elf/trading.so"))
+            with self.assertRaisesRegex(MODULE.Refusal, "already exists"):
+                MODULE.emit_gate(
+                    argparse.Namespace(
+                        root=str(root),
+                        source_revision=SOURCE,
+                        source_tree_sha256=tree,
+                        solana_cli_version="solana-cli 4.0.2 (fixture)",
+                        build_run_id=RUN,
+                    )
+                )
+
     def test_exact_descriptor_and_gate_role_select(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text).resolve()

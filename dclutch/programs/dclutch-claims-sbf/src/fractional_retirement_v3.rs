@@ -490,7 +490,7 @@ fn execute_mint_close(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> 
     let token_program = account(accounts, TOKEN_PROGRAM)?;
     let mint_account = account(accounts, SHARD_MINT)?;
     let root_account = account(accounts, ROOT)?;
-    let close_mint = token_instruction::close_account(
+    let mut close_mint = token_instruction::close_account(
         token_program.key,
         mint_account.key,
         account(accounts, RENT_CREDIT)?.key,
@@ -498,6 +498,14 @@ fn execute_mint_close(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> 
         &[],
     )
     .map_err(|_| ClaimsSbfError::Token)?;
+    // The preceding native close moved lamports from Position and admission
+    // into RentCredit. Include the complete conservation set as trailing CPI
+    // metas while the runtime synchronizes account state before Token-2022.
+    // Both remain Claims-owned; Token receives no authority to mutate them.
+    close_mint.accounts.extend([
+        solana_program::instruction::AccountMeta::new(*account(accounts, POSITION)?.key, false),
+        solana_program::instruction::AccountMeta::new(*account(accounts, ADMISSION)?.key, false),
+    ]);
     invoke(
         &close_mint,
         &[
@@ -505,6 +513,8 @@ fn execute_mint_close(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> 
             account(accounts, RENT_CREDIT)?.clone(),
             root_account.clone(),
             token_program.clone(),
+            account(accounts, POSITION)?.clone(),
+            account(accounts, ADMISSION)?.clone(),
         ],
     )
     .map_err(|_| ClaimsSbfError::Token)?;

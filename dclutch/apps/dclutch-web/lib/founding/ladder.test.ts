@@ -44,9 +44,9 @@ describe('the founding ladder', () => {
       'founding-requests',
       'prefunding',
       'routing-table',
-      'dcltgmf1',
+      'dcltgmf3',
     ]);
-    expect(FOUNDING_LADDER_V1.at(-1)?.id).toBe('dcltgmf1');
+    expect(FOUNDING_LADDER_V1.at(-1)?.id).toBe('dcltgmf3');
   });
 
   it('offers exactly the three rungs a browser drives today, in execution order', () => {
@@ -58,7 +58,7 @@ describe('the founding ladder', () => {
 
   it('marks the three rungs that ride a lookup table', () => {
     expect(FOUNDING_LADDER_V1.filter((rung) => rung.lookupTable).map((rung) => rung.id))
-      .toEqual(['found31', 'custody-bootstrap', 'dcltgmf1']);
+      .toEqual(['found31', 'custody-bootstrap', 'dcltgmf3']);
   });
 
   it('has unique rung identifiers', () => {

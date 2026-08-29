@@ -65,6 +65,7 @@ import {
   REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1,
   REPLAY_ACCOUNT_CUSTODY_REPLAY_V1,
   REPLAY_ACCOUNT_PAYER_V1,
+  REPLAY_ACCOUNT_RENT_REFUND_V1,
   REPLAY_ACCOUNT_REALM_STAGING_V1,
   REPLAY_ACCOUNT_REALM_V1,
   REPLAY_ACCOUNT_REGISTRY_PROGRAM_V1,
@@ -73,6 +74,7 @@ import {
 } from './generated/claimsCustodyReplayV1';
 import { REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
 import {
+  decodeMarketCoreStateV2,
   decodeClaimsAggregateV2,
   deriveClaimsAggregateAddressV2,
   type ClaimsAggregateV2,
@@ -187,6 +189,7 @@ export type ClaimsCustodyRequestInputV1 = Readonly<{
   context: Uint8Array;
   claimsProgram: Uint8Array;
   payer: Uint8Array;
+  rentRefund: Uint8Array;
   generation: bigint;
   rentLamports: bigint;
 }>;
@@ -202,6 +205,7 @@ export async function encodeExpectedCustodyRequestV1(input: ClaimsCustodyRequest
   for (const [value, field] of [
     [input.releaseSet, 'release set'], [input.market, 'market'], [input.realm, 'realm'],
     [input.context, 'custody context'], [input.claimsProgram, 'Claims program'], [input.payer, 'payer'],
+    [input.rentRefund, 'RentCredit refund beneficiary'],
   ] as const) {
     if (value.length !== 32 || isZero(value)) throw new Error(`Custody request ${field} must be one nonzero 32-byte identity`);
   }
@@ -214,6 +218,7 @@ export async function encodeExpectedCustodyRequestV1(input: ClaimsCustodyRequest
     input.releaseSet,
     input.context,
     input.payer,
+    input.rentRefund,
     rentLe,
   ));
   const output = new Uint8Array(CUSTODY_REQUEST_BYTES_V1);
@@ -230,7 +235,7 @@ export async function encodeExpectedCustodyRequestV1(input: ClaimsCustodyRequest
   output.set(input.claimsProgram, CUSTODY_REQUEST_CALLER_PROGRAM_OFFSET_V1);
   output.set(parentRequestDigest, CUSTODY_REQUEST_PARENT_REQUEST_DIGEST_OFFSET_V1);
   output.set(input.payer, CUSTODY_REQUEST_PAYER_OFFSET_V1);
-  output.set(input.payer, CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1);
+  output.set(input.rentRefund, CUSTODY_REQUEST_RENT_REFUND_OFFSET_V1);
   putU64(output, CUSTODY_REQUEST_EXPECTED_REVISION_OFFSET_V1, 0n);
   putU64(output, CUSTODY_REQUEST_RESULTING_REVISION_OFFSET_V1, 1n);
   putU64(output, CUSTODY_REQUEST_GENERATION_OFFSET_V1, input.generation);
@@ -248,6 +253,7 @@ export type ClaimsCustodyReplayPlanV1 = Readonly<{
   claimsProgramDataAddress: string;
   realmRecordAddress: string;
   realmStagingAddress: string;
+  rentRefundAddress: string;
   payer: string;
   rentLamports: string;
   custodyRequestBytes: Uint8Array;
@@ -295,8 +301,9 @@ export async function inspectClaimsCustodyReplayV1(
 
     const aggregateAddress = deriveClaimsAggregateAddressV2(claimsProgram.toBase58(), marketAddress);
     const floor = await client.finalizedSlot();
-    const observation = await client.multipleAccounts([aggregateAddress], floor);
+    const observation = await client.multipleAccounts([aggregateAddress, marketAddress], floor);
     const aggregateAccount = observation.accounts[0]?.account ?? null;
+    const marketAccount = observation.accounts[1]?.account ?? null;
     if (aggregateAccount === null) {
       return Object.freeze({ status: 'refused', reason: `no Claims aggregate exists at ${aggregateAddress}, the address this Market derives under the selected Claims program — without the aggregate there is no persisted Custody namespace to open a replay in` });
     }
@@ -323,6 +330,17 @@ export async function inspectClaimsCustodyReplayV1(
       || isZero(new PublicKey(aggregate.registryProgram).toBytes())) {
       return Object.freeze({ status: 'refused', reason: 'the Claims aggregate contains a zero identity that the Rust aggregate codec refuses' });
     }
+    if (marketAccount === null) return Object.freeze({ status: 'refused', reason: 'the Core Market that selects the immutable RentCredit is absent' });
+    requireMaterialAccount(marketAccount, 'Core Market');
+    const market = decodeMarketCoreStateV2(marketAddress, marketAccount.data);
+    if (market.marketId !== marketAddress
+      || market.identity.selectedReleaseSetId !== aggregate.selectedReleaseSetId
+      || market.identity.registryProgram !== registryProgram.toBase58()
+      || market.identity.realmId !== aggregate.realmId
+      || market.identity.generation !== aggregate.generation) {
+      return Object.freeze({ status: 'refused', reason: 'the Core Market does not agree with the Claims aggregate on its immutable lifecycle identities' });
+    }
+    const rentRefund = exactKey(market.rentBeneficiary, 'Core Market RentCredit').toBytes();
 
     const marketBytes = new PublicKey(marketAddress).toBytes();
     const [replay] = PublicKey.findProgramAddressSync([
@@ -393,6 +411,7 @@ export async function inspectClaimsCustodyReplayV1(
       context,
       claimsProgram: claimsProgram.toBytes(),
       payer: payer.toBytes(),
+      rentRefund,
       generation: BigInt(aggregate.generation),
       rentLamports: BigInt(rent.lamports),
     });
@@ -427,6 +446,7 @@ export async function inspectClaimsCustodyReplayV1(
     keys[REPLAY_ACCOUNT_PAYER_V1] = { pubkey: payer, isSigner: true, isWritable: true };
     keys[REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1] = { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isSigner: false, isWritable: false };
     keys[REPLAY_ACCOUNT_RENT_SYSVAR_V1] = { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false };
+    keys[REPLAY_ACCOUNT_RENT_REFUND_V1] = { pubkey: new PublicKey(rentRefund), isSigner: false, isWritable: true };
     keys[REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1] = { pubkey: custodyProgram, isSigner: false, isWritable: false };
     keys[REPLAY_ACCOUNT_AGGREGATE_V1] = { pubkey: new PublicKey(aggregateAddress), isSigner: false, isWritable: false };
 
@@ -453,7 +473,7 @@ export async function inspectClaimsCustodyReplayV1(
     }
     return Object.freeze({
       status: 'creatable',
-      note: `No Claims-role replay exists at ${replayAddress}. One ${wireBytes.length}-byte legacy transaction creates it from prepaid rent (${rent.lamports} lamports), payable and refundable to the connected wallet.`,
+      note: `No Claims-role replay exists at ${replayAddress}. One ${wireBytes.length}-byte legacy transaction creates it from prepaid rent (${rent.lamports} lamports); the immutable Core Market lifecycle RentCredit remains its refund beneficiary.`,
       plan: Object.freeze({
         marketAddress,
         aggregateAddress,
@@ -464,6 +484,7 @@ export async function inspectClaimsCustodyReplayV1(
         claimsProgramDataAddress: claimsProgramData.toBase58(),
         realmRecordAddress: realmRecord.record,
         realmStagingAddress: realmRecord.staging,
+        rentRefundAddress: new PublicKey(rentRefund).toBase58(),
         payer: payer.toBase58(),
         rentLamports: rent.lamports,
         custodyRequestBytes,
