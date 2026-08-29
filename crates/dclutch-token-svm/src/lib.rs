@@ -13,8 +13,9 @@
 //!
 //! Ordinary Token-2022 transfer state is accepted only at the exact legacy
 //! base widths. The separately named closeable-Mint lifecycle profile admits
-//! one additional exact representation: the sole `MintCloseAuthority`
-//! extension, with no unparsed storage or other extension.
+//! one additional exact representation: the two lifecycle extensions the
+//! protocol's own terminal path requires — `MintCloseAuthority` and
+//! `PermissionedBurn` — with no unparsed storage or other extension.
 
 #[cfg(test)]
 extern crate std;
@@ -33,6 +34,7 @@ pub mod profile;
 pub mod release;
 /// Exact Mint and base Account state parsers.
 pub mod state;
+mod tlv;
 
 pub use behavior_binding_v2::{
     TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_MAGIC_V2,

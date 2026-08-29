@@ -49,7 +49,10 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
-use spl_token_2022_interface::instruction as token_instruction;
+use spl_token_2022_interface::{
+    extension::permissioned_burn::instruction as permissioned_burn_instruction,
+    instruction as token_instruction,
+};
 
 use super::authenticate_activated_role;
 use crate::{
@@ -1043,6 +1046,16 @@ fn protocol_position_accounts<'info>(
     output
 }
 
+/// Initialize one lifecycle Mint with both extensions its terminal path needs.
+///
+/// `PermissionedBurn` is not optional decoration. `BurnReceipt`, `BurnShard`
+/// and the Fractional `WholeUnwrap` all retire these exact PDAs through
+/// `permissioned_burn` burn instructions, and Token-2022 extensions can only be
+/// initialized before `InitializeMint2`. A Mint this function created without
+/// the extension could never be burned and could never be repaired, so the
+/// third instruction below is what makes the family's terminal path reachable
+/// at all. Both extension authorities are the representation authority, the
+/// same key that holds the Mint authority.
 fn initialize_closeable_mint<'info>(
     common: CommonAccounts<'_, 'info>,
     mint: &AccountInfo<'info>,
@@ -1052,6 +1065,11 @@ fn initialize_closeable_mint<'info>(
             common.token_program.key,
             mint.key,
             Some(common.representation_authority.key),
+        ),
+        permissioned_burn_instruction::initialize(
+            common.token_program.key,
+            mint.key,
+            common.representation_authority.key,
         ),
         token_instruction::initialize_mint2(
             common.token_program.key,
@@ -1098,6 +1116,7 @@ fn authenticate_closeable_mint(
     Token2022CloseableMintProfileV2::check_mint(
         common.token_program.key.to_bytes(),
         &data,
+        common.representation_authority.key.to_bytes(),
         common.representation_authority.key.to_bytes(),
         common.representation_authority.key.to_bytes(),
         expected_supply,

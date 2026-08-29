@@ -20,6 +20,12 @@ use core::{convert::TryInto, str};
 use crate::{
     Address, COption, Error, MINT_BYTES, Mint, Result, TOKEN_2022_PROGRAM_ID, TokenAccount,
     state::AccountState,
+    tlv::{
+        ACCOUNT_TYPE_OFFSET, AUTHORITY_EXTENSION_BYTES, BASE_ACCOUNT_BYTES,
+        METADATA_POINTER_EXTENSION, MINT_ACCOUNT_TYPE, MINT_CLOSE_AUTHORITY_EXTENSION,
+        PERMISSIONED_BURN_EXTENSION, TLV_START_OFFSET, TOKEN_METADATA_EXTENSION, TlvCursor,
+        require_extension, require_extension_at_least, require_key,
+    },
 };
 
 /// Canonical semantic preimage for the first lifted Token-2022 behavior
@@ -45,16 +51,6 @@ pub const MAX_DISPLAY_DECIMALS_V2: u8 = u8::MAX;
 /// slice.
 pub const MAX_INERT_METADATA_VALUE_BYTES_V2: usize = 65_535;
 
-const BASE_ACCOUNT_BYTES: usize = 165;
-const ACCOUNT_TYPE_OFFSET: usize = BASE_ACCOUNT_BYTES;
-const TLV_START_OFFSET: usize = 166;
-const MINT_ACCOUNT_TYPE: u8 = 1;
-
-const MINT_CLOSE_AUTHORITY_EXTENSION: u16 = 3;
-const METADATA_POINTER_EXTENSION: u16 = 18;
-const TOKEN_METADATA_EXTENSION: u16 = 19;
-const PERMISSIONED_BURN_EXTENSION: u16 = 28;
-const AUTHORITY_EXTENSION_BYTES: usize = 32;
 const METADATA_POINTER_BYTES: usize = 64;
 const TOKEN_METADATA_FIXED_BYTES: usize = 80;
 
@@ -293,76 +289,6 @@ impl Token2022BehaviorProfileV2 {
     }
 }
 
-#[derive(Clone, Copy)]
-struct TlvEntry<'a> {
-    extension_type: u16,
-    value: &'a [u8],
-}
-
-struct TlvCursor<'a> {
-    remaining: &'a [u8],
-}
-
-impl<'a> TlvCursor<'a> {
-    const fn new(remaining: &'a [u8]) -> Self {
-        Self { remaining }
-    }
-
-    fn next(&mut self) -> Result<Option<TlvEntry<'a>>> {
-        if self.remaining.is_empty() {
-            return Ok(None);
-        }
-        let extension_type = read_u16(self.remaining, 0)?;
-        let length = usize::from(read_u16(self.remaining, 2)?);
-        if extension_type == 0 {
-            return Err(Error::InvalidExtensionLayout);
-        }
-        let end = 4usize
-            .checked_add(length)
-            .ok_or(Error::InvalidExtensionLayout)?;
-        let value = self
-            .remaining
-            .get(4..end)
-            .ok_or(Error::InvalidExtensionLayout)?;
-        self.remaining = self
-            .remaining
-            .get(end..)
-            .ok_or(Error::InvalidExtensionLayout)?;
-        Ok(Some(TlvEntry {
-            extension_type,
-            value,
-        }))
-    }
-}
-
-fn require_extension(entry: TlvEntry<'_>, extension_type: u16, length: usize) -> Result<()> {
-    if entry.extension_type != extension_type || entry.value.len() != length {
-        return Err(Error::InvalidExtensionLayout);
-    }
-    Ok(())
-}
-
-fn require_extension_at_least(
-    entry: TlvEntry<'_>,
-    extension_type: u16,
-    minimum_length: usize,
-) -> Result<()> {
-    if entry.extension_type != extension_type || entry.value.len() < minimum_length {
-        return Err(Error::InvalidExtensionLayout);
-    }
-    Ok(())
-}
-
-fn require_key(bytes: &[u8], expected: Address) -> Result<()> {
-    let observed: Address = bytes
-        .try_into()
-        .map_err(|_| Error::InvalidExtensionLayout)?;
-    if observed != expected {
-        return Err(Error::AuthorityMismatch);
-    }
-    Ok(())
-}
-
 fn require_immutable_self_pointer(bytes: &[u8], mint_key: Address) -> Result<()> {
     let authority = bytes.get(..32).ok_or(Error::InvalidExtensionLayout)?;
     let address = bytes.get(32..64).ok_or(Error::InvalidExtensionLayout)?;
@@ -408,15 +334,6 @@ fn consume_borsh_string(bytes: &[u8], offset: usize) -> Result<usize> {
     let value = bytes.get(start..end).ok_or(Error::InvalidExtensionLayout)?;
     str::from_utf8(value).map_err(|_| Error::InvalidExtensionLayout)?;
     Ok(end)
-}
-
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    bytes
-        .get(offset..offset.checked_add(2).ok_or(Error::InvalidExtensionLayout)?)
-        .ok_or(Error::InvalidExtensionLayout)?
-        .try_into()
-        .map(u16::from_le_bytes)
-        .map_err(|_| Error::InvalidExtensionLayout)
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
