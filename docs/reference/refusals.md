@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **212** codes, with meanings taken
+The tables below carry all **213** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -66,6 +66,7 @@ from the source code's own documentation.
 | `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | `programs/dclutch-claims-sbf/src/lib.rs:182` |
 | `0x5009` | `ClaimsSbfError::Token` | Token-2022 mint/account profile or CPI refused. | `programs/dclutch-claims-sbf/src/lib.rs:184` |
 | `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-claims-sbf/src/lib.rs:192` |
+| `0x500B` | `ClaimsSbfError::SelectionConfig` | The execution terms disagree with the Market-selected config.  Distinct from [`ClaimsSbfError::Representation`] because the cause and the fix are different. Representation means a record was substituted or a root did not authenticate; this means both records are authentic and the Market selected a DIFFERENT INSTRUMENT than the terms describe -- a different denominator, width, Token program, or source graph. It is the runtime half of the Fractional config split, and it is the check that keeps a market-free manifest config honest about the market-bearing terms it admits. | `programs/dclutch-claims-sbf/src/lib.rs:203` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::Instruction` | Instruction bytes were not the sole canonical V2 action. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:53` |
 | `0x5101` | `LiabilityBasisSbfErrorV2::Accounts` | Account count, order, privilege, owner, or alias checks refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:55` |
 | `0x5102` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:57` |
