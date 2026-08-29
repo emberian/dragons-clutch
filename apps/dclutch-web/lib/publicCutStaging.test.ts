@@ -8,10 +8,24 @@ import {
 } from './publicCutStaging';
 
 describe('public devnet cut staging', () => {
-  it('keeps the published cut honestly pending until one manifest update names a Market', () => {
-    expect(PUBLIC_DEVNET_CUT_V1.market).toBeNull();
-    expect(publicCutMarketHrefV1()).toBe('/markets');
-    expect(publicCutExplorerHrefV1()).toBe('/explorer');
+  it('routes a pending cut to the walking surfaces, and the open cut to its Market', () => {
+    // The pending face, pinned as a literal now that the published fixture
+    // names a Market: a cut with no Market walks the reader to /markets.
+    const pending = parsePublicDevnetCutV1({
+      schema: 'dclutch-public-cut-v1',
+      cluster: 'devnet',
+      market: null,
+      activity: { found: null, trade: null, resolve: null, redeem: null },
+    });
+    expect(publicCutMarketHrefV1(pending)).toBe('/markets');
+    expect(publicCutExplorerHrefV1(pending)).toBe('/explorer');
+    // The published cut itself: the first open devnet market, founded by the
+    // atomic DCLTGMF3 whose signature the cut carries.
+    expect(PUBLIC_DEVNET_CUT_V1.market).toBe('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC');
+    expect(PUBLIC_DEVNET_CUT_V1.activity.found).not.toBeNull();
+    expect(publicCutMarketHrefV1()).toBe(
+      '/market?address=7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC',
+    );
   });
 
   it('refuses activity without a Market and unknown manifest fields', () => {

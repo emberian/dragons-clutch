@@ -1,10 +1,22 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import SiteLanding from './SiteLanding';
-
-// The front door against the real public cut. Its companion,
+// The front door's closed face, pinned against a mock pending cut now that
+// the published fixture names a Market. Its companion,
 // SiteLanding.opened.test.tsx, renders the same page with a market named.
+
+vi.mock('@/lib/publicCutStaging', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/publicCutStaging')>('@/lib/publicCutStaging');
+  const cut = actual.parsePublicDevnetCutV1({
+    schema: 'dclutch-public-cut-v1',
+    cluster: 'devnet',
+    market: null,
+    activity: { found: null, trade: null, resolve: null, redeem: null },
+  });
+  return { ...actual, PUBLIC_DEVNET_CUT_V1: cut };
+});
+
+const { default: SiteLanding } = await import('./SiteLanding');
 
 describe('the front door', () => {
   const html = renderToStaticMarkup(<SiteLanding />);
