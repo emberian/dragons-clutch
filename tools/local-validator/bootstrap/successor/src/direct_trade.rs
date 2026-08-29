@@ -3342,6 +3342,51 @@ fn direct_claim_balances_v1(
     Ok(balances)
 }
 
+fn authenticate_direct_claim_schedule_v1(evidence: &DirectTradeFinalizedEvidenceV1) -> Result<()> {
+    let seller_claim_count = usize::try_from(evidence.outcome_count)
+        .map_err(|_| refusal("Direct outcome count does not fit this host"))?;
+    let expected_claim_count = seller_claim_count
+        .checked_add(1)
+        .ok_or_else(|| refusal("Direct claim schedule count overflowed"))?;
+    if evidence.claim_balances.len() != expected_claim_count {
+        return Err(refusal(
+            "Direct terminal claim schedule is not the exact K+1 partition",
+        ));
+    }
+    for (claim_index, row) in evidence
+        .claim_balances
+        .iter()
+        .take(seller_claim_count)
+        .enumerate()
+    {
+        if row.owner != evidence.seller_owner
+            || row.position != evidence.seller_position
+            || row.recipient_token != evidence.seller_collateral_destination
+            || usize::try_from(row.claim_index).ok() != Some(claim_index)
+            || row.quantity_atoms == 0
+        {
+            return Err(refusal(
+                "Direct terminal seller claim schedule is not every outcome in canonical order",
+            ));
+        }
+    }
+    let buyer = evidence
+        .claim_balances
+        .last()
+        .ok_or_else(|| refusal("Direct terminal claim schedule omitted the buyer fill"))?;
+    if buyer.owner != evidence.buyer_owner
+        || buyer.position != evidence.buyer_position
+        || buyer.recipient_token != evidence.buyer_collateral_source
+        || buyer.claim_index != evidence.outcome_index
+        || buyer.quantity_atoms == 0
+    {
+        return Err(refusal(
+            "Direct terminal buyer claim schedule is not the one filled outcome",
+        ));
+    }
+    Ok(())
+}
+
 fn latest_direct_blockhash_v1(rpc: &mut Rpc) -> Result<(SolanaHash, u64)> {
     let result = rpc.call("getLatestBlockhash", &json!([{"commitment":"finalized"}]))?;
     let value = result
@@ -4295,6 +4340,7 @@ fn publish_direct_evidence_v1(
         poststates: journal.finalized_poststates.clone(),
         evidence_sha256: String::new(),
     };
+    authenticate_direct_claim_schedule_v1(&evidence)?;
     evidence.evidence_sha256 = direct_evidence_digest_v1(&evidence)?;
     write_create_only_json_v1(path, &evidence)
 }
@@ -4454,6 +4500,7 @@ fn authenticate_persisted_direct_evidence_v1(
             "Direct finalized evidence identity or digest changed",
         ));
     }
+    authenticate_direct_claim_schedule_v1(&evidence)?;
     let entries = journal_entries_v1(validated)?;
     let last = entries
         .last()
@@ -4684,6 +4731,7 @@ fn authenticate_embedded_direct_evidence_identity_v1(
             "embedded Direct finalized evidence identity, geometry, or digest changed",
         ));
     }
+    authenticate_direct_claim_schedule_v1(evidence)?;
     for row in &evidence.mutations {
         expected_cluster
             .authenticate_finalized_fee(row.fee_lamports, "Direct mutation evidence")?;
@@ -6241,7 +6289,8 @@ mod tests {
         DirectTradeJournalV1, DirectTradeObservedPoststateV1, DirectTradeStageV1,
         JOURNAL_SCHEMA_V1, OWNED_EVIDENCE_SCHEMA_V1, OWNED_JOURNAL_SCHEMA_V1,
         OWNED_PRIVATE_SESSION_SCHEMA_V1, OWNED_PUBLIC_MANIFEST_SCHEMA_V1,
-        authenticate_direct_history_v1, authenticate_embedded_direct_evidence_identity_v1,
+        authenticate_direct_claim_schedule_v1, authenticate_direct_history_v1,
+        authenticate_embedded_direct_evidence_identity_v1,
         authenticate_lookup_activation_slot_order_v1, direct_evidence_digest_v1,
         direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
         direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
@@ -6302,6 +6351,8 @@ mod tests {
         let seller_position = Pubkey::new_unique().to_string();
         let buyer_owner = Pubkey::new_unique().to_string();
         let buyer_position = Pubkey::new_unique().to_string();
+        let buyer_recipient = Pubkey::new_unique().to_string();
+        let seller_recipient = Pubkey::new_unique().to_string();
         let expected = DirectTradeExpectedPoststateV1 {
             address: Pubkey::new_unique().to_string(),
             owner: Pubkey::new_unique().to_string(),
@@ -6349,8 +6400,8 @@ mod tests {
             seller_position: seller_position.clone(),
             buyer_position: buyer_position.clone(),
             buyer_owner: buyer_owner.clone(),
-            buyer_collateral_source: Pubkey::new_unique().to_string(),
-            seller_collateral_destination: Pubkey::new_unique().to_string(),
+            buyer_collateral_source: buyer_recipient.clone(),
+            seller_collateral_destination: seller_recipient.clone(),
             fee_token_account: Pubkey::new_unique().to_string(),
             fee_basis_points_per_side: 50,
             fee_recipient: Pubkey::new_unique().to_string(),
@@ -6402,13 +6453,43 @@ mod tests {
                     post_data_base64: BASE64.encode([6]),
                 },
             ],
-            claim_balances: vec![DirectClaimBalanceEvidenceV1 {
-                owner: buyer_owner,
-                position: buyer_position,
-                recipient_token: Pubkey::new_unique().to_string(),
-                claim_index: 0,
-                quantity_atoms: 1,
-            }],
+            claim_balances: vec![
+                DirectClaimBalanceEvidenceV1 {
+                    owner: seller_owner.clone(),
+                    position: seller_position.clone(),
+                    recipient_token: seller_recipient.clone(),
+                    claim_index: 0,
+                    quantity_atoms: 9,
+                },
+                DirectClaimBalanceEvidenceV1 {
+                    owner: seller_owner.clone(),
+                    position: seller_position.clone(),
+                    recipient_token: seller_recipient.clone(),
+                    claim_index: 1,
+                    quantity_atoms: 10,
+                },
+                DirectClaimBalanceEvidenceV1 {
+                    owner: seller_owner.clone(),
+                    position: seller_position.clone(),
+                    recipient_token: seller_recipient.clone(),
+                    claim_index: 2,
+                    quantity_atoms: 10,
+                },
+                DirectClaimBalanceEvidenceV1 {
+                    owner: seller_owner,
+                    position: seller_position,
+                    recipient_token: seller_recipient,
+                    claim_index: 3,
+                    quantity_atoms: 10,
+                },
+                DirectClaimBalanceEvidenceV1 {
+                    owner: buyer_owner,
+                    position: buyer_position,
+                    recipient_token: buyer_recipient,
+                    claim_index: 0,
+                    quantity_atoms: 1,
+                },
+            ],
             final_accounts: vec![expected; 10],
             poststates: vec![observed; 10],
             evidence_sha256: String::new(),
@@ -6529,6 +6610,38 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn terminal_claim_schedule_requires_canonical_k_plus_one_and_losing_burns() {
+        let exact = terminal_evidence();
+        authenticate_direct_claim_schedule_v1(&exact).expect("exact K+1 claim schedule");
+        assert_eq!(exact.claim_balances.len(), 5);
+        assert!(
+            exact.claim_balances[..4]
+                .iter()
+                .filter(|row| row.claim_index != exact.outcome_index)
+                .all(|row| row.quantity_atoms != 0),
+            "every losing seller claim remains scheduled for its zero-collateral burn"
+        );
+
+        let mut missing_losing = exact.clone();
+        missing_losing.claim_balances.remove(2);
+        assert!(authenticate_direct_claim_schedule_v1(&missing_losing).is_err());
+
+        let mut zero_losing = exact.clone();
+        zero_losing.claim_balances[2].quantity_atoms = 0;
+        assert!(authenticate_direct_claim_schedule_v1(&zero_losing).is_err());
+
+        let mut reordered = exact.clone();
+        reordered.claim_balances.swap(1, 2);
+        assert!(authenticate_direct_claim_schedule_v1(&reordered).is_err());
+
+        let mut extra_buyer = exact;
+        let mut row = extra_buyer.claim_balances[4].clone();
+        row.claim_index = 1;
+        extra_buyer.claim_balances.push(row);
+        assert!(authenticate_direct_claim_schedule_v1(&extra_buyer).is_err());
     }
 
     #[test]
