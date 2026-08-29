@@ -43,6 +43,28 @@ pub const LIFECYCLE_COMMON_ACCOUNT_COUNT_V2: usize = 20;
 pub const LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2: usize = 34;
 /// Exact physical account count added per proven-vacant retirement row.
 pub const LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2: usize = 4;
+/// Domain preimage for the Rational lifecycle capability-kind identity.
+///
+/// Rational has executed for a long time without one of these, because a
+/// capability kind is not needed to CALL a family -- only to let a founded
+/// Market SELECT it. The Market's capability manifest keys each entry by
+/// `kind_id`, refuses two entries of one kind, and orders entries by kind, so
+/// a family with no kind identity cannot appear in a manifest at all.
+///
+/// Domain-separated in the tree's house form (`dclutch/<family>/…/v<n>`), so
+/// distinctness from the other capability kinds rests on SHA-256 over
+/// distinct preimages rather than on anyone comparing four literals.
+pub const RATIONAL_LIFECYCLE_CAPABILITY_KIND_PREIMAGE_V1: &[u8] =
+    b"dclutch/rational-lifecycle/capability-kind/v1";
+/// SHA-256 of [`RATIONAL_LIFECYCLE_CAPABILITY_KIND_PREIMAGE_V1`].
+///
+/// The identity a Rational manifest entry carries, and the value a selected
+/// `CapabilityProgramV4` descriptor names as its `kind`.
+pub const RATIONAL_LIFECYCLE_CAPABILITY_KIND_ID_V1: [u8; 32] = [
+    0x70, 0xe0, 0x60, 0x27, 0x47, 0xdc, 0xe1, 0xc4, 0x56, 0x50, 0x70, 0x40, 0xc5, 0x9b, 0xbe, 0xba,
+    0xc1, 0x3b, 0xc7, 0x43, 0xc9, 0xc9, 0xdb, 0xd3, 0x7e, 0xa0, 0x72, 0x7b, 0xa0, 0x2e, 0x6a, 0x01,
+];
+
 /// Lifecycle request magic.
 pub const LIFECYCLE_REQUEST_MAGIC_V2: [u8; 8] = *b"DCRRLC02";
 /// Lifecycle receipt magic.
