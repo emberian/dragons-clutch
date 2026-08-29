@@ -48,7 +48,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
-    ResolutionError, authenticate_clock, authenticate_rent, deployment_observation,
+    ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
     provider_instruction_v3::{authenticate_provider_program, authenticate_record},
 };
@@ -473,10 +473,10 @@ fn authenticate_infrastructure<'info>(
     }
     require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::ResolutionRelease)?;
     artifact
-        .authenticate_deployment(deployment_observation(
+        .authenticate_deployment(cached_deployment_observation(
             registry,
             registry_programdata,
-            artifact.programdata(),
+            artifact,
         )?)
         .map_err(pinned_deployment_refusal)?;
     let activation_data = activation
@@ -523,10 +523,10 @@ fn authenticate_infrastructure<'info>(
             return Err(ResolutionError::ResolutionRelease.into());
         }
         selected
-            .authenticate_current_deployment(deployment_observation(
+            .authenticate_current_deployment(cached_deployment_observation(
                 role_program,
                 programdata,
-                selected.release().programdata(),
+                selected.release(),
             )?)
             .map_err(|_| ResolutionError::ResolutionDeployment)?;
     }
@@ -1054,10 +1054,10 @@ fn authenticate_reclaim_release(
         return Err(ResolutionError::ResolutionRelease.into());
     }
     selected
-        .authenticate_current_deployment(deployment_observation(
+        .authenticate_current_deployment(cached_deployment_observation(
             frame.account(9),
             frame.account(10),
-            selected.release().programdata(),
+            selected.release(),
         )?)
         .map_err(|_| ResolutionError::ResolutionDeployment)?;
 

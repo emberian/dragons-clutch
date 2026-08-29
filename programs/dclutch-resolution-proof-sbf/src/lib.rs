@@ -13,13 +13,12 @@ use dclutch_registry_activation_auth_v1::{
     ActivationAuthErrorV1, cached_role_deployment_observation_v1,
 };
 use dclutch_registry_contract::{ArtifactReleaseV1, DeploymentObservationV1};
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_source_contract::{RecoveryPolicyV2, SourceMaterialV3};
 use solana_program::{
     account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,
     program_error::ProgramError, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_sdk_ids::{system_program, sysvar};
 
 mod core_effect;
 /// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
@@ -713,11 +712,12 @@ fn authenticate_resolution_release_v5_legacy(
     let release = role.release();
     if release.program().to_bytes() != program_id.to_bytes()
         || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
-        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.loader_program().to_bytes()
+            != solana_sdk_ids::bpf_loader_upgradeable::ID.to_bytes()
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    let observation = deployment_observation(program, programdata, release.programdata())?;
+    let observation = cached_deployment_observation(program, programdata, release)?;
     role.authenticate_current_deployment(observation)
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
@@ -737,52 +737,6 @@ pub(crate) const fn pinned_deployment_refusal(
         }
         _ => ResolutionError::ResolutionDeployment,
     }
-}
-
-pub(crate) fn deployment_observation(
-    program: &AccountInfo<'_>,
-    programdata: &AccountInfo<'_>,
-    expected_programdata: [u8; 32],
-) -> Result<DeploymentObservationV1, ProgramError> {
-    if program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-        || !program.executable
-        || programdata.executable
-        || programdata.key.to_bytes() != expected_programdata
-    {
-        return Err(ResolutionError::ResolutionDeployment.into());
-    }
-    let program_bytes = program
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let program_view =
-        ProgramV3View::parse(&program_bytes).map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let expected_derived =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata_key() != expected_programdata
-        || programdata.key != &expected_derived
-    {
-        return Err(ResolutionError::ResolutionDeployment.into());
-    }
-    let programdata_bytes = programdata
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let view = ProgramDataV3View::parse(&programdata_bytes)
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        program_view.programdata_key(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        view.deployment_slot(),
-        hash(view.elf()).to_bytes(),
-        view.upgrade_authority(),
-    )
-    .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
 
 /// Re-observe one activation-pinned deployment without re-hashing its ELF.
@@ -1011,6 +965,9 @@ fn authenticate_provider_loader(
     expected_programdata: [u8; 32],
     expected_slot: u64,
 ) -> ProgramResult {
+    use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
+    use solana_sdk_ids::bpf_loader_upgradeable;
+
     if program.owner != &bpf_loader_upgradeable::ID
         || programdata.owner != &bpf_loader_upgradeable::ID
         || !program.executable

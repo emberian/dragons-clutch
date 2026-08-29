@@ -514,6 +514,8 @@ fn recurring_resolution_deployment_auth_caller_census_is_exact() {
     let core_effect = include_str!("core_effect.rs");
     let pre_market = include_str!("pre_market_funding_v1.rs");
     let pre_market_abort = include_str!("pre_market_funding_abort_v1.rs");
+    let provider_transport = include_str!("provider_transport_v3.rs");
+    let provider_instruction = include_str!("provider_instruction_v3.rs");
     assert_eq!(
         core_effect
             .matches("cached_deployment_observation(")
@@ -546,18 +548,37 @@ fn recurring_resolution_deployment_auth_caller_census_is_exact() {
     }
 
     assert_eq!(
-        include_str!("provider_transport_v3.rs")
+        provider_transport
+            .matches("cached_deployment_observation(")
+            .count(),
+        3,
+        "provider submission binds Registry, Core, and Resolution; reclaim binds Resolution",
+    );
+    assert_eq!(
+        provider_instruction
+            .matches("cached_deployment_observation(")
+            .count(),
+        2,
+        "provider execution binds Registry plus Resolution and the active caller",
+    );
+    assert_eq!(
+        provider_transport
             .matches("deployment_observation(")
             .count(),
         3,
-        "provider transport remains an explicitly excluded oracle-owned seam",
+        "provider transport must not regain a full-ELF deployment observation",
     );
     assert_eq!(
-        include_str!("provider_instruction_v3.rs")
+        provider_instruction
             .matches("deployment_observation(")
             .count(),
         2,
-        "provider instruction remains an explicitly excluded oracle-owned seam",
+        "provider execution must not regain a full-ELF deployment observation",
+    );
+    assert_eq!(
+        [6, 2, 2, 3, 2].into_iter().sum::<usize>(),
+        15,
+        "all recurring Resolution release/profile observations are enumerated",
     );
 }
 
