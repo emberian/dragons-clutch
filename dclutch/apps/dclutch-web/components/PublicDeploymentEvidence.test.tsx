@@ -45,7 +45,11 @@ describe('public deployment evidence', () => {
       <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />,
     );
     expect(devnet).toContain('Read the checked deployment record');
-    expect(devnet).toContain('Download the seven addresses and observed slots');
+    expect(devnet).toContain('Download the seven addresses and their first deployment slots');
+    // The slots are DEPLOY-1's. The programs have been upgraded in place twice
+    // since, keeping their addresses, so an unqualified "observed slot" reads
+    // as current chain state and is off by hundreds of thousands of slots.
+    expect(devnet).not.toContain('and observed slots');
     expect(devnet).toContain('download="dclutch-devnet-deployment-evidence-v1.json"');
 
     const local = renderToStaticMarkup(
