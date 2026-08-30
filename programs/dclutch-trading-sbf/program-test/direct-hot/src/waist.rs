@@ -14,7 +14,7 @@
 //! alone, and for that reason.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::indexing_slicing)]
 
-use std::{collections::HashSet, env, fs, path::PathBuf};
+use std::{cell::Cell, collections::HashSet, env, fs, path::PathBuf};
 
 use crate::{
     DirectHotDeploymentWidthsV5,
@@ -562,6 +562,40 @@ pub fn add_release_waist_v2(
     }
 }
 
+thread_local! {
+    /// In-process seed override. `None` defers to `DCLUTCH_FIXTURE_SEED`.
+    static FIXTURE_SEED_OVERRIDE: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Restores the previous override however [`with_fixture_seed`] leaves.
+struct FixtureSeedGuard(Option<u64>);
+
+impl Drop for FixtureSeedGuard {
+    fn drop(&mut self) {
+        FIXTURE_SEED_OVERRIDE.with(|cell| cell.set(self.0));
+    }
+}
+
+/// Draw every fixture key from `seed` for the duration of `body`.
+///
+/// `DCLUTCH_FIXTURE_SEED` sweeps one seed per PROCESS, which is right for a
+/// human bisecting by hand and useless for a checked-in gate that has to sweep
+/// many seeds inside one `cargo test`. The obvious reach is `env::set_var`,
+/// which Rust 2024 makes unsafe -- correctly, because another thread reading
+/// the environment concurrently is a data race and this binary links a runtime
+/// that does read it.
+///
+/// So the sweep does not touch the environment at all. A thread-local carries
+/// the override: `#[tokio::test]` is a current-thread runtime, every fixture
+/// key is drawn on that thread during the synchronous fixture build, and no
+/// other thread can observe or race it. The guard restores the prior value even
+/// if `body` panics, so one failing seed cannot silently reseed the next.
+pub fn with_fixture_seed<R>(seed: u64, body: impl FnOnce() -> R) -> R {
+    let restore = FIXTURE_SEED_OVERRIDE.with(|cell| cell.replace(Some(seed)));
+    let _guard = FixtureSeedGuard(restore);
+    body()
+}
+
 /// One fixture keypair, derived from a PINNED seed rather than drawn fresh.
 ///
 /// # Why this is not `Keypair::new()` any more
@@ -586,9 +620,13 @@ pub fn add_release_waist_v2(
 /// by hashing them -- so a low-entropy seed still produces a public key that is
 /// a fair sample for a bump search.
 fn fixture_keypair(role: u8) -> Keypair {
-    let seed = env::var("DCLUTCH_FIXTURE_SEED")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
+    let seed = FIXTURE_SEED_OVERRIDE
+        .with(Cell::get)
+        .or_else(|| {
+            env::var("DCLUTCH_FIXTURE_SEED")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+        })
         .unwrap_or(0);
     let mut secret = [0_u8; 32];
     secret[0] = role;
