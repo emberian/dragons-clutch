@@ -87,7 +87,7 @@ land and the measured worst clears ~1,353,000.
 | BUMPREC | `a2bb9fa1946bb506f` | the 18 constant record searches |
 | census | `a465c2a63f6f1d864` | record-PDA search census against the margin gate |
 | HEAPRED | `a41fbc198c5a2207c` | diagnose red `hot_heap_frame_is_inert` + fix-or-retire evidence for the Registry outer composition (ruling stays ember's) |
-| CI-2 | `a8abf0f1f1f6b761a` | wiring the four gates that exist and do not run |
+| CI-2 | `a8abf0f1f1f6b761a` | DONE — `tools/ci/run.sh` tiered runner (6d599ef8) + `.github/workflows/rust.yml` (2c4a0473, committed NOT pushed); five gates proven red-and-prerequisite-missing with distinct exit codes; `emission_guard.py` exit-code defect fixed. Its margin-gate red at `8d3ca1f9` (worst seed 8 CU under budget, next seed over) independently confirms the CU wall. Its bisect handoff to CUCUT is deliberately DROPPED: while the rebuild lottery is live, bisecting per-commit CU bisects a hash draw, not a regression — the fix is the carry wave. Queued sizes it named: 4 more program-test suites in CI (~afternoon, mechanical — resume CI-2 when a build lane frees); pre-commit hook left OFF (would override ember's global `core.hooksPath`) — ember's call. |
 | MEMBRANE | `a5e9b10376d59fbf3` | Structured publication/authenticator/seam module; Rational founded market via `DCLUTCH_RATIONAL_COLLATERAL_MINT`; General hot commit half. No report yet. |
 | STORY-2 | `ae1b54b8aaee446db` | graduation wall (Core `0x3003`, identity linkage, evidence `/tank/dregg-build/story-walk3/run.log` on hbox); relayer public submission run; story-page truthfulness. No report yet. |
 
