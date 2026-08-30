@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Plan to compost at least three</title>
+  <meta name="description" content="Notes on building a market protocol three times on purpose—and treating every implementation as compost for the next one.">
+  <style>
+    :root {
+      --ink: #17170f;
+      --paper: #f2eddf;
+      --paper-2: #e8e0cc;
+      --night: #11120d;
+      --green: #9fc55b;
+      --deep-green: #486231;
+      --orange: #e56f3d;
+      --yellow: #edc85d;
+      --blue: #6e91aa;
+      --muted: #68675d;
+      --rule: rgba(23, 23, 15, 0.21);
+      --night-rule: rgba(242, 237, 223, 0.18);
+      --display: "Arial Narrow", "Avenir Next Condensed", "Roboto Condensed", Impact, sans-serif;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Iowan Old Style, "Palatino Linotype", Palatino, Georgia, serif;
+      --mono: "SFMono-Regular", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--night); scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    ::selection { color: var(--night); background: var(--green); }
+
+    a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 0.2em; }
+    p, h1, h2, h3, blockquote, figure { margin-top: 0; }
+    p { margin-bottom: 1.35em; }
+
+    .reading-line {
+      position: fixed;
+      z-index: 30;
+      inset: 0 0 auto 0;
+      height: 4px;
+      background: var(--orange);
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+
+    .rail {
+      position: fixed;
+      z-index: 20;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 80px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 28px 0 24px;
+      color: #dcd5c4;
+      background: var(--night);
+      border-right: 1px solid rgba(255,255,255,0.09);
+    }
+    .rail-mark {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      text-transform: uppercase;
+    }
+    .rail nav { display: grid; gap: 17px; }
+    .rail nav a {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      color: #88897f;
+      border: 1px solid #3d3f35;
+      border-radius: 50%;
+      font: 700 11px/1 var(--mono);
+      text-decoration: none;
+      transition: 150ms ease;
+    }
+    .rail nav a:hover { color: var(--night); background: var(--green); border-color: var(--green); }
+    .rail-date { color: #797a72; font: 10px/1 var(--mono); writing-mode: vertical-rl; }
+
+    .page { margin-left: 80px; }
+    .wrap { width: min(1160px, calc(100vw - 140px)); margin: 0 auto; }
+
+    .hero {
+      position: relative;
+      min-height: 100svh;
+      overflow: hidden;
+      color: var(--paper);
+      background:
+        radial-gradient(circle at 88% 16%, rgba(229,111,61,0.19), transparent 29%),
+        radial-gradient(circle at 22% 96%, rgba(159,197,91,0.13), transparent 32%),
+        var(--night);
+      border-bottom: 10px solid var(--green);
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      right: -9vw;
+      width: 48vw;
+      height: 48vw;
+      border: 1px solid rgba(242,237,223,0.12);
+      border-radius: 45% 55% 61% 39%;
+      transform: rotate(22deg);
+      box-shadow:
+        inset 0 0 0 4vw rgba(229,111,61,0.035),
+        inset 0 0 0 9vw rgba(159,197,91,0.025);
+    }
+    .hero .wrap {
+      min-height: 100svh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 34px 0 38px;
+    }
+    .masthead {
+      display: flex;
+      justify-content: space-between;
+      gap: 30px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--night-rule);
+      font: 750 11px/1.3 var(--mono);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .masthead .signal { color: var(--green); }
+    .hero-copy { align-self: center; padding: 72px 0 54px; }
+    .eyebrow {
+      margin: 0 0 26px;
+      color: var(--green);
+      font: 800 13px/1.2 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 9.6ch;
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(82px, 12.5vw, 178px);
+      font-stretch: condensed;
+      font-weight: 900;
+      line-height: 0.77;
+      letter-spacing: -0.065em;
+      text-transform: uppercase;
+    }
+    h1 .soft { color: #77796d; }
+    h1 .hot { color: var(--orange); }
+    .hero-bottom {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 70px;
+      align-items: end;
+      border-top: 1px solid var(--night-rule);
+      padding-top: 25px;
+    }
+    .dek {
+      max-width: 47ch;
+      margin: 0;
+      color: #d8d2c3;
+      font: 400 clamp(20px, 2.1vw, 30px)/1.25 var(--serif);
+      letter-spacing: -0.02em;
+    }
+    .hero-note {
+      max-width: 43ch;
+      justify-self: end;
+      margin: 0;
+      color: #999a91;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .abstract {
+      padding: 115px 0 124px;
+      background:
+        linear-gradient(90deg, transparent 49.92%, rgba(23,23,15,0.08) 50%, transparent 50.08%),
+        var(--paper);
+    }
+    .abstract-grid {
+      display: grid;
+      grid-template-columns: 0.65fr 1.35fr;
+      gap: 86px;
+      align-items: start;
+    }
+    .section-label {
+      display: flex;
+      gap: 11px;
+      align-items: center;
+      margin: 0;
+      color: var(--deep-green);
+      font: 800 12px/1.2 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .section-label::before { content: ""; width: 30px; height: 3px; background: currentColor; }
+    .abstract-copy > p:first-child {
+      margin-bottom: 0.8em;
+      font: 500 clamp(31px, 4.1vw, 56px)/1.04 var(--serif);
+      letter-spacing: -0.038em;
+    }
+    .abstract-copy > p:first-child em { color: var(--orange); font-style: italic; }
+    .abstract-copy .small {
+      max-width: 61ch;
+      margin-left: 25%;
+      color: #55554c;
+      font-size: 17px;
+      line-height: 1.65;
+    }
+
+    .questions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      color: var(--paper);
+      background: var(--night);
+      border-top: 1px solid var(--night-rule);
+      border-bottom: 1px solid var(--night-rule);
+    }
+    .question {
+      min-height: 390px;
+      padding: 48px 42px;
+      border-right: 1px solid var(--night-rule);
+    }
+    .question:last-child { border-right: 0; }
+    .question .n { color: var(--accent); font: 900 84px/0.86 var(--display); letter-spacing: -0.06em; }
+    .question h2 {
+      max-width: 9ch;
+      margin: 62px 0 17px;
+      font: 850 clamp(33px, 3.3vw, 50px)/0.94 var(--display);
+      letter-spacing: -0.045em;
+      text-transform: uppercase;
+    }
+    .question p { max-width: 30ch; margin: 0; color: #a9aa9f; font-size: 15px; line-height: 1.55; }
+
+    .act { position: relative; padding: 140px 0 150px; }
+    .act-one { background: var(--paper); }
+    .act-two { background: var(--paper-2); }
+    .act-three { color: var(--paper); background: var(--night); }
+    .act-grid { display: grid; grid-template-columns: 0.54fr 1.46fr; gap: 80px; }
+    .act-index { position: sticky; top: 64px; align-self: start; }
+    .act-index .num {
+      display: block;
+      color: var(--accent);
+      font: 900 clamp(116px, 15vw, 214px)/0.72 var(--display);
+      letter-spacing: -0.08em;
+    }
+    .act-index .verb {
+      display: block;
+      margin-top: 25px;
+      padding-top: 16px;
+      border-top: 5px solid var(--accent);
+      font: 850 19px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .act-copy h2 {
+      max-width: 11ch;
+      margin: 0 0 43px;
+      font: 900 clamp(53px, 7vw, 88px)/0.88 var(--display);
+      letter-spacing: -0.052em;
+      text-transform: uppercase;
+    }
+    .act-copy .lead {
+      max-width: 43ch;
+      font: 500 clamp(25px, 3vw, 39px)/1.12 var(--serif);
+      letter-spacing: -0.025em;
+    }
+    .act-copy .body-copy {
+      columns: 2;
+      column-gap: 48px;
+      max-width: 76ch;
+      margin-top: 48px;
+      font-size: 16px;
+      line-height: 1.68;
+    }
+    .body-copy p { break-inside: avoid; }
+    .act-three .body-copy { color: #c4c0b5; }
+
+    .pullquote {
+      position: relative;
+      margin: 74px 0 58px;
+      padding: 40px 0 39px 56px;
+      border-top: 1px solid currentColor;
+      border-bottom: 1px solid currentColor;
+      color: var(--accent);
+    }
+    .pullquote::before {
+      content: "“";
+      position: absolute;
+      top: 22px;
+      left: -4px;
+      font: 900 74px/1 var(--serif);
+    }
+    .pullquote p {
+      max-width: 28ch;
+      margin: 0;
+      font: 600 clamp(28px, 3.4vw, 46px)/1.05 var(--serif);
+      letter-spacing: -0.025em;
+    }
+    .pullquote cite {
+      display: block;
+      margin-top: 20px;
+      font: 700 10px/1.3 var(--mono);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .keep-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1px;
+      margin-top: 60px;
+      background: var(--rule);
+      border: 1px solid var(--rule);
+    }
+    .keep-card { padding: 31px; background: var(--paper); }
+    .act-two .keep-card { background: var(--paper-2); }
+    .keep-card .tag { color: var(--accent); font: 800 10px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; }
+    .keep-card h3 { margin: 22px 0 10px; font-size: 20px; line-height: 1.08; }
+    .keep-card p { margin: 0; color: #5e5d53; font-size: 13px; line-height: 1.55; }
+
+    .diagnostic {
+      margin: 86px 0 12px;
+      color: var(--paper);
+      background: var(--night);
+      box-shadow: 22px 22px 0 var(--orange);
+    }
+    .diagnostic-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 25px;
+      padding: 22px 28px;
+      border-bottom: 1px solid var(--night-rule);
+      font: 750 10px/1.3 var(--mono);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .diagnostic-body {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 38px;
+      padding: 38px 28px 43px;
+    }
+    .giant-stat { color: var(--orange); font: 900 clamp(70px, 11vw, 132px)/0.76 var(--display); letter-spacing: -0.07em; }
+    .giant-stat small { display: block; margin-top: 19px; color: #a7a89e; font: 500 12px/1.5 var(--mono); letter-spacing: 0.02em; }
+    .diagnostic-copy { align-self: end; }
+    .diagnostic-copy p { margin-bottom: 16px; color: #c9c5b9; font: 500 20px/1.38 var(--serif); }
+    .diagnostic-copy p:last-child { margin-bottom: 0; color: #8f9187; font: 500 11px/1.55 var(--mono); }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 86px 1fr;
+      gap: 26px;
+      align-items: center;
+      margin: 62px 0 25px;
+    }
+    .architecture .machine {
+      min-height: 230px;
+      padding: 30px;
+      border: 1px solid var(--night-rule);
+      background: #171912;
+    }
+    .architecture .machine span { color: var(--green); font: 750 10px/1.2 var(--mono); letter-spacing: 0.13em; text-transform: uppercase; }
+    .architecture .machine h3 { margin: 28px 0 14px; font: 850 27px/1 var(--display); text-transform: uppercase; }
+    .architecture .machine p { margin: 0; color: #a9aa9f; font-size: 13px; line-height: 1.56; }
+    .architecture .arrow { color: var(--orange); font: 900 46px/1 var(--mono); text-align: center; }
+
+    .boundary {
+      margin-top: 62px;
+      padding: 26px 29px;
+      border-left: 5px solid var(--yellow);
+      background: rgba(255,255,255,0.045);
+    }
+    .boundary h3 { margin: 0 0 12px; color: var(--yellow); font: 800 12px/1.3 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; }
+    .boundary p { max-width: 65ch; margin: 0; color: #bcbaaf; font-size: 14px; line-height: 1.6; }
+
+    .interlude {
+      position: relative;
+      overflow: hidden;
+      padding: 145px 0 155px;
+      color: var(--ink);
+      background: var(--green);
+    }
+    .interlude::after {
+      content: "COMPOST";
+      position: absolute;
+      right: -0.06em;
+      bottom: -0.22em;
+      color: rgba(23,23,15,0.075);
+      font: 900 26vw/1 var(--display);
+      letter-spacing: -0.08em;
+    }
+    .interlude .wrap { position: relative; z-index: 1; }
+    .interlude blockquote {
+      max-width: 15ch;
+      margin: 0;
+      font: 900 clamp(58px, 8vw, 112px)/0.87 var(--display);
+      letter-spacing: -0.052em;
+      text-transform: uppercase;
+    }
+    .interlude .strike { text-decoration: line-through; text-decoration-thickness: 0.08em; }
+    .interlude .swap { color: #f5efe1; }
+    .interlude p { max-width: 52ch; margin: 50px 0 0 34%; font: 500 20px/1.46 var(--serif); }
+
+    .ledger { padding: 140px 0; background: var(--paper); }
+    .ledger-head { display: grid; grid-template-columns: 0.58fr 1.42fr; gap: 80px; margin-bottom: 66px; }
+    .ledger h2 {
+      max-width: 10ch;
+      margin: 0;
+      font: 900 clamp(54px, 7vw, 90px)/0.88 var(--display);
+      letter-spacing: -0.055em;
+      text-transform: uppercase;
+    }
+    .ledger-head p { max-width: 43ch; align-self: end; margin: 0; color: #55554b; font: 500 21px/1.42 var(--serif); }
+    .ledger-table { border-top: 5px solid var(--ink); }
+    .ledger-row {
+      display: grid;
+      grid-template-columns: 180px 1fr 1fr;
+      gap: 30px;
+      align-items: baseline;
+      padding: 22px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .ledger-row .type { font: 800 10px/1.3 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; }
+    .ledger-row .bury { color: #8a5140; }
+    .ledger-row .save { color: var(--deep-green); }
+    .ledger-row strong { font-size: 17px; }
+    .ledger-row span:last-child { color: #67665c; font-size: 14px; line-height: 1.4; }
+
+    .method {
+      padding: 140px 0 155px;
+      color: var(--paper);
+      background: var(--night);
+    }
+    .method h2 {
+      max-width: 13ch;
+      margin: 0 0 72px;
+      font: 900 clamp(56px, 7vw, 92px)/0.88 var(--display);
+      letter-spacing: -0.055em;
+      text-transform: uppercase;
+    }
+    .loop {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      border: 1px solid var(--night-rule);
+    }
+    .loop-step {
+      position: relative;
+      min-height: 205px;
+      padding: 26px 20px;
+      border-right: 1px solid var(--night-rule);
+    }
+    .loop-step:last-child { border-right: 0; }
+    .loop-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -13px;
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      color: var(--orange);
+      background: var(--night);
+      font: 800 17px/1 var(--mono);
+    }
+    .loop-step .n { color: #6f7168; font: 800 10px/1 var(--mono); }
+    .loop-step strong { display: block; margin-top: 69px; font: 800 15px/1.05 var(--display); letter-spacing: 0.02em; text-transform: uppercase; }
+    .method-notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; margin-top: 75px; }
+    .method-note { padding-top: 20px; border-top: 4px solid var(--tone); }
+    .method-note h3 { margin: 0 0 14px; font-size: 19px; }
+    .method-note p { margin: 0; color: #a8aa9f; font-size: 14px; line-height: 1.6; }
+
+    .evidence { padding: 140px 0 148px; background: var(--paper-2); }
+    .evidence-head { display: grid; grid-template-columns: 1fr 1fr; gap: 70px; align-items: end; }
+    .evidence h2 { margin: 0; font: 900 clamp(54px, 7vw, 88px)/0.88 var(--display); letter-spacing: -0.052em; text-transform: uppercase; }
+    .evidence-head p { max-width: 48ch; margin: 0; color: #5d5c52; font-size: 16px; line-height: 1.62; }
+    .evidence-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 70px; background: var(--rule); border: 1px solid var(--rule); }
+    .evidence-card { min-height: 260px; padding: 27px; background: var(--paper-2); }
+    .evidence-card .top { color: var(--orange); font: 900 42px/0.95 var(--display); letter-spacing: -0.045em; }
+    .evidence-card h3 { margin: 62px 0 10px; font-size: 17px; }
+    .evidence-card p { margin: 0; color: #636258; font-size: 12px; line-height: 1.55; }
+    .evidence-card .honesty { display: inline-block; margin-top: 14px; color: var(--deep-green); font: 750 9px/1.2 var(--mono); letter-spacing: 0.09em; text-transform: uppercase; }
+
+    .ending {
+      position: relative;
+      min-height: 92svh;
+      display: grid;
+      align-items: center;
+      overflow: hidden;
+      color: var(--paper);
+      background:
+        radial-gradient(circle at 8% 105%, rgba(159,197,91,0.19), transparent 34%),
+        radial-gradient(circle at 93% -5%, rgba(229,111,61,0.18), transparent 30%),
+        var(--night);
+    }
+    .ending .wrap { padding-top: 110px; padding-bottom: 110px; }
+    .ending .kicker { color: var(--green); }
+    .ending h2 {
+      max-width: 11ch;
+      margin: 0 0 48px;
+      font: 900 clamp(66px, 10vw, 140px)/0.8 var(--display);
+      letter-spacing: -0.065em;
+      text-transform: uppercase;
+    }
+    .ending h2 em { color: var(--orange); font-style: normal; }
+    .ending-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 80px; align-items: end; }
+    .ending-grid .big { margin: 0; color: #d9d4c6; font: 500 27px/1.3 var(--serif); }
+    .ending-grid .small { margin: 0; color: #8f9187; font-size: 13px; line-height: 1.6; }
+
+    .sources {
+      padding: 55px 0 70px;
+      color: #8f9187;
+      background: #0b0c09;
+      border-top: 1px solid var(--night-rule);
+    }
+    .sources-grid { display: grid; grid-template-columns: 0.55fr 1.45fr; gap: 80px; }
+    .sources h2 { margin: 0; color: #d7d1c2; font: 800 13px/1.2 var(--mono); letter-spacing: 0.13em; text-transform: uppercase; }
+    .sources p { margin: 0 0 12px; font: 500 11px/1.65 var(--mono); }
+    .sources code { color: var(--green); font: inherit; }
+
+    @media (max-width: 980px) {
+      .rail { display: none; }
+      .page { margin-left: 0; }
+      .wrap { width: min(100% - 44px, 760px); }
+      .hero-bottom, .abstract-grid, .act-grid, .ledger-head, .evidence-head, .ending-grid, .sources-grid { grid-template-columns: 1fr; gap: 38px; }
+      .hero-note { justify-self: start; }
+      .questions { grid-template-columns: 1fr; }
+      .question { min-height: 0; border-right: 0; border-bottom: 1px solid var(--night-rule); }
+      .question:last-child { border-bottom: 0; }
+      .question h2 { margin-top: 25px; }
+      .act-index { position: static; display: flex; align-items: end; gap: 25px; }
+      .act-index .num { font-size: 100px; }
+      .act-index .verb { flex: 1; margin-bottom: 4px; }
+      .act-copy .body-copy { columns: 1; }
+      .abstract-copy .small { margin-left: 0; }
+      .loop { grid-template-columns: repeat(2, 1fr); }
+      .loop-step { border-bottom: 1px solid var(--night-rule); }
+      .loop-step:nth-child(2n) { border-right: 0; }
+      .loop-step::after { display: none !important; }
+      .method-notes, .evidence-strip { grid-template-columns: repeat(2, 1fr); }
+      .architecture { grid-template-columns: 1fr; }
+      .architecture .arrow { transform: rotate(90deg); }
+      .ledger-row { grid-template-columns: 120px 1fr; }
+      .ledger-row span:last-child { grid-column: 2; }
+    }
+
+    @media (max-width: 600px) {
+      .wrap { width: min(100% - 30px, 520px); }
+      .hero .wrap { padding-top: 22px; padding-bottom: 26px; }
+      .masthead { font-size: 9px; }
+      .hero-copy { padding: 55px 0 38px; }
+      h1 { font-size: clamp(66px, 22vw, 100px); }
+      .abstract, .act, .ledger, .method, .evidence { padding-top: 90px; padding-bottom: 95px; }
+      .keep-grid, .method-notes, .evidence-strip { grid-template-columns: 1fr; }
+      .diagnostic-body { grid-template-columns: 1fr; }
+      .loop { grid-template-columns: 1fr; }
+      .loop-step { min-height: 140px; border-right: 0; }
+      .loop-step strong { margin-top: 35px; }
+      .ledger-row { grid-template-columns: 1fr; gap: 8px; }
+      .ledger-row span:last-child { grid-column: auto; }
+      .interlude p { margin-left: 0; }
+      .pullquote { padding-left: 42px; }
+    }
+
+    @media print {
+      .rail, .reading-line { display: none; }
+      .page { margin-left: 0; }
+      .hero, .questions, .act, .interlude, .ledger, .method, .evidence, .ending, .sources { break-inside: avoid; }
+      * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="reading-line" aria-hidden="true"></div>
+  <aside class="rail" aria-label="Article navigation">
+    <div class="rail-mark">dClutch field notes</div>
+    <nav>
+      <a href="#mine" aria-label="Attempt one: Mine">01</a>
+      <a href="#shape" aria-label="Attempt two: Shape">02</a>
+      <a href="#prove" aria-label="Attempt three: Prove">03</a>
+      <a href="#method" aria-label="The compost method">↻</a>
+    </nav>
+    <div class="rail-date">25 · 08 · 2026</div>
+  </aside>
+
+  <main class="page">
+    <header class="hero">
+      <div class="wrap">
+        <div class="masthead">
+          <span class="signal">Development notes / dClutch</span>
+          <span>Protocol design as material inquiry</span>
+        </div>
+        <div class="hero-copy">
+          <p class="eyebrow">A field guide to deliberate rewrites</p>
+          <h1>Plan to <span class="soft">compost</span> at least <span class="hot">three.</span></h1>
+        </div>
+        <div class="hero-bottom">
+          <p class="dek">We built a market protocol twice before reaching for formal methods. That was not a detour. It was how the object became visible.</p>
+          <p class="hero-note">The first build mined possibility. The second extracted constraints. The third is turning those constraints into machine-reasonable semantics—and will probably deserve to be composted too.</p>
+        </div>
+      </div>
+    </header>
+
+    <section class="abstract">
+      <div class="wrap abstract-grid">
+        <p class="section-label">Thesis</p>
+        <div class="abstract-copy">
+          <p>A prototype is not a smaller product. It is an instrument for discovering <em>what the product is.</em></p>
+          <p class="small">The usual advice is to plan to throw one away. But throwing away code discards only the implementation; it says nothing about what must survive. Compost is a better metaphor. The structure breaks down. The nutrients—requirements, invariants, counterexamples, measurements, vocabulary—return in a form the next system can actually use.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="questions" aria-label="The three questions">
+      <article class="question" style="--accent: var(--orange)">
+        <span class="n">01</span>
+        <h2>What could exist?</h2>
+        <p>Mine the model’s latent design space. Give every ambition a body. Learn the language of the problem by building too much of it.</p>
+      </article>
+      <article class="question" style="--accent: var(--green)">
+        <span class="n">02</span>
+        <h2>What must be true?</h2>
+        <p>Reason against the whole, now-visible shape. Separate essential constraints from the accidental machinery that first revealed them.</p>
+      </article>
+      <article class="question" style="--accent: var(--yellow)">
+        <span class="n">03</span>
+        <h2>What can a machine check?</h2>
+        <p>Make the semantics executable, the interfaces structural, and the assurance boundary precise—without sanctifying the third prototype.</p>
+      </article>
+    </section>
+
+    <section class="act act-one" id="mine" style="--accent: var(--orange)">
+      <div class="wrap act-grid">
+        <div class="act-index">
+          <span class="num">01</span>
+          <span class="verb">Mine</span>
+        </div>
+        <div class="act-copy">
+          <p class="eyebrow">Dragon’s Clutch / the latent-space build</p>
+          <h2>First, make the ghosts physical.</h2>
+          <p class="lead">At the beginning, the design existed as ambition, analogy, and pressure in a series of prompts. The only way to argue with it was to give it mass.</p>
+
+          <div class="body-copy">
+            <p>The first Dragon’s Clutch tried to hold the whole thought at once: categorical claims, structured payoffs, direct trading, batch clearing, dealer liquidity, real oracle resolution, funding, recovery, replay, retirement, operators, and a user interface. A swarm pulled possibility out of language and made it compile.</p>
+            <p>This kind of first build is not architecture in the mature sense. It is excavation. The design is still haunted by “illusory ghosts”: requirements that sound necessary only because no complete system exists yet to contradict them. So we materialized the ghosts—roughly fifty protocol accounts, a cumulative 51-action namespace, many lifecycle families—and watched what they did.</p>
+            <p>The excess was productive. It revealed hard things that had been easy to blur in prose: collateral and liveness funding are different substances; resolution failure needs a real outcome; a state partition must be canonical before it can mint liabilities; a clearing candidate can be valid without being globally optimal; retirement and replay need an owner.</p>
+            <p>It also revealed accidental things: semantic separation had become separate rent-bearing accounts; the internal workflow graph had become the public protocol; old and successor authorities coexisted; mocks persisted after their questions were answered; project lanes became an archipelago.</p>
+          </div>
+
+          <blockquote class="pullquote">
+            <p>Sometimes we just need to build a bad first version, before you can understand what I’m trying to say in my prompts.</p>
+            <cite>Project conversation · 24 August 2026</cite>
+          </blockquote>
+
+          <div class="keep-grid">
+            <article class="keep-card">
+              <span class="tag">Mined constraint</span>
+              <h3>Collateral is physical</h3>
+              <p>A liability is meaningful only when its backing, custody, and conservation rule are explicit.</p>
+            </article>
+            <article class="keep-card">
+              <span class="tag">Mined constraint</span>
+              <h3>Meaning needs one owner</h3>
+              <p>Duplicated account projections cannot become parallel authorities for the same persisted fact.</p>
+            </article>
+            <article class="keep-card">
+              <span class="tag">Mined warning</span>
+              <h3>Validation can become theater</h3>
+              <p>Rerunning evidence is not progress when known lifecycle gaps remain unimplemented.</p>
+            </article>
+            <article class="keep-card">
+              <span class="tag">Mined warning</span>
+              <h3>Parallelism can become topology</h3>
+              <p>Agent isolation is useful only until its seams start shaping the protocol itself.</p>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="act act-two" id="shape" style="--accent: var(--deep-green)">
+      <div class="wrap act-grid">
+        <div class="act-index">
+          <span class="num">02</span>
+          <span class="verb">Shape</span>
+        </div>
+        <div class="act-copy">
+          <p class="eyebrow">dClutch / the constraint build</p>
+          <h2>Rebuild from what refused to bend.</h2>
+          <p class="lead">The second implementation did not begin from the old module tree. It began from the facts the old tree had made impossible to ignore.</p>
+
+          <div class="body-copy">
+            <p>The fresh repository was a change in conduct as much as code. Dragon’s Clutch became compost, not a compatibility target. The new universal core became small. Trading, clearing, liquidity, transferable claims, and resolution became optional capabilities. Direct signed trading became the ordinary path; sophisticated batch clearing became a venue rather than the ontology of every market.</p>
+            <p>Provider data stopped being a mock authority. Product became the single owner of its finite result domain, including the failure outcome. Funding became typed: collateral, rent, liveness, fees, reserves, and bounties could no longer borrow each other’s names or balances. A small terminal root could retain replay authority instead of an elaborate closing ritual recovering every lamport.</p>
+            <p>This is why a second build can be more intelligent than a refactor. We could now reason against the entire visible shape, compare it to other protocols, and distinguish an essential market invariant from the scar tissue of the first route that happened to implement it.</p>
+            <p>But the second build also became a new instrument. Rust const generics specialized widths, actions, codecs, and account frames into machine code. The semantics were cleaner; the artifact was not. A complete old-style monolith grew past ten megabytes when every supposedly implemented capability was finally made reachable.</p>
+          </div>
+
+          <blockquote class="pullquote">
+            <p>Our protocol seems shaped kinda weird right now. I wonder if we did folly.</p>
+            <cite>Project conversation · 24 August 2026</cite>
+          </blockquote>
+
+          <div class="diagnostic">
+            <div class="diagnostic-head">
+              <span>Architecture diagnostic / integrated Rust monolith</span>
+              <span>Not a release</span>
+            </div>
+            <div class="diagnostic-body">
+              <div class="giant-stat">10.93 MB<small>After making Structured actually reachable through the public entrypoint.</small></div>
+              <div class="diagnostic-copy">
+                <p>Binary size was not an optimization footnote. It was the ontology leaving a footprint.</p>
+                <p>The dominant cause was repeated N=2…16 monomorphization across General, Dealer, Structured, Bearer, and Position machinery—not debug information and not one unusually bad function.</p>
+              </div>
+            </div>
+          </div>
+
+          <p class="lead" style="margin-top: 80px">The second system found the next true constraint: <em>put what varies in data; keep only universal invariants in code.</em></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="act act-three" id="prove" style="--accent: var(--yellow)">
+      <div class="wrap act-grid">
+        <div class="act-index">
+          <span class="num">03</span>
+          <span class="verb">Prove</span>
+        </div>
+        <div class="act-copy">
+          <p class="eyebrow">The formal turn / a semantic specializer</p>
+          <h2>Make meaning executable.</h2>
+          <p class="lead">The third build starts over again—this time with better instruments and fewer excuses.</p>
+
+          <div class="body-copy">
+            <p>The promising architecture is not “write the same protocol in Lean,” and it is not “have Lean print a great deal of Rust.” Either could reproduce the same forest more ceremonially. The semantic source should instead emit compact canonical data: typed schemas, transition bytecode, certificates, builders, hostile vectors, and proof obligations.</p>
+            <p>A small fixed-memory interpreter can execute the variable part. Small physical adapters can own the irreducibly Solana-shaped parts: signatures, account memory, token custody, provider calls, and CPI postconditions. Translation validation can compare the generated semantics to the safe-Rust interpreter and then pin the exact SBF artifact path.</p>
+            <p>This is “ABI via data structures” with consequences. The account frame stops being forty handwritten positional beliefs. A market transition stops being one more action number. Product widths stop multiplying the binary. The same semantic object can drive the onchain checker, operator, interface, documentation, tests, and machine proofs.</p>
+            <p>And the third attempt is still a prototype. Formal technology does not make an immature language good, a narrow theorem broad, or an adapter trustworthy. It lets us name the claim, its digest, its assumptions, and the boundary where ordinary engineering resumes. That is higher assurance—not absolution.</p>
+          </div>
+
+          <div class="architecture" aria-label="Successor architecture">
+            <div class="machine">
+              <span>Semantic side</span>
+              <h3>Meaning as data</h3>
+              <p>Lean-owned economic transitions, canonical bytecode, typed schemas, boundedness and conservation certificates.</p>
+            </div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="machine">
+              <span>Physical side</span>
+              <h3>Small machines</h3>
+              <p>One reusable safe-Rust interpreter plus narrow claims, custody, resolution, and runtime adapters.</p>
+            </div>
+          </div>
+
+          <div class="boundary">
+            <h3>Assurance boundary, stated honestly</h3>
+            <p>The current work is a proof-producing successor architecture, not a claim that dClutch is formally verified. Individual theorems cover named semantic transitions and generated artifacts. Rust decoding, the interpreter, compiler path, SBF runtime, Solana, CPI programs, and operational deployment remain separately measured or explicitly trusted until each connection is established.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="interlude">
+      <div class="wrap">
+        <blockquote><span class="strike">Plan to throw one away.</span><br><span class="swap">Plan to compost at least three.</span></blockquote>
+        <p>“Three” is not a magic number or a release plan. It is permission to stop defending an implementation merely because it taught us something expensive.</p>
+      </div>
+    </section>
+
+    <section class="ledger">
+      <div class="wrap">
+        <div class="ledger-head">
+          <h2>The compost ledger</h2>
+          <p>Compost is selective continuity. Keep the knowledge that survived contact with reality. Let the machinery that merely carried it lose its privileged place.</p>
+        </div>
+        <div class="ledger-table" role="table" aria-label="What is buried and what is retained">
+          <div class="ledger-row" role="row">
+            <span class="type" role="cell">Public shape</span>
+            <strong class="bury" role="cell">Bury: cumulative action numbers</strong>
+            <span role="cell">Save: the user-visible operations and lifecycle promises they were trying to express.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="type" role="cell">Authority</span>
+            <strong class="bury" role="cell">Bury: parallel DTO truths</strong>
+            <span role="cell">Save: one semantic owner, plus authenticated projections that are allowed to be wrong.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="type" role="cell">Infrastructure</span>
+            <strong class="bury" role="cell">Bury: mock sources as destinations</strong>
+            <span role="cell">Save: reproducible fixtures, real provider boundaries, and the refusal cases they exposed.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="type" role="cell">Implementation</span>
+            <strong class="bury" role="cell">Bury: width × action code forests</strong>
+            <span role="cell">Save: exact integer kernels, effect vocabulary, measurements, and adversarial vectors.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="type" role="cell">Process</span>
+            <strong class="bury" role="cell">Bury: the agent archipelago</strong>
+            <span role="cell">Save: bounded parallel inquiry converging through one semantic source and one canonical workstream.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="type" role="cell">History</span>
+            <strong class="save" role="cell">Retain: every contradiction</strong>
+            <span role="cell">The commit graph and conversations are part of the research record, not debris to be squashed away.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="method" id="method">
+      <div class="wrap">
+        <p class="eyebrow">A repeatable development loop</p>
+        <h2>Build until the medium argues back.</h2>
+        <div class="loop" aria-label="The compost loop">
+          <div class="loop-step"><span class="n">01</span><strong>Prompt</strong></div>
+          <div class="loop-step"><span class="n">02</span><strong>Swarm</strong></div>
+          <div class="loop-step"><span class="n">03</span><strong>Execute</strong></div>
+          <div class="loop-step"><span class="n">04</span><strong>Contradict</strong></div>
+          <div class="loop-step"><span class="n">05</span><strong>Name constraints</strong></div>
+          <div class="loop-step"><span class="n">06</span><strong>Compost</strong></div>
+          <div class="loop-step"><span class="n">07</span><strong>Rebuild</strong></div>
+        </div>
+
+        <div class="method-notes">
+          <article class="method-note" style="--tone: var(--orange)">
+            <h3>Breadth is for discovery.</h3>
+            <p>Swarm widely enough to force interactions into the open. Then converge at semantic interfaces before the temporary work graph becomes product architecture.</p>
+          </article>
+          <article class="method-note" style="--tone: var(--green)">
+            <h3>Evidence must change a decision.</h3>
+            <p>A build, benchmark, test, or proof earns its place by closing uncertainty. Repetition without an implementation decision is validation theater.</p>
+          </article>
+          <article class="method-note" style="--tone: var(--yellow)">
+            <h3>No generation is sacred.</h3>
+            <p>A formal prototype can be wrong in more disciplined ways. Its artifacts should make the fourth build easier—not make the third impossible to question.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="evidence">
+      <div class="wrap">
+        <div class="evidence-head">
+          <h2>What the builds actually bought us.</h2>
+          <p>The numbers are not victory banners. They are traces of learning. Each measurement is paired with the limitation that keeps it honest.</p>
+        </div>
+        <div class="evidence-strip">
+          <article class="evidence-card">
+            <div class="top">51</div>
+            <h3>Named actions</h3>
+            <p>The first architecture made its internal workflow graph public.</p>
+            <span class="honesty">Useful semantic inventory</span>
+          </article>
+          <article class="evidence-card">
+            <div class="top">10.93 MB</div>
+            <h3>Integrated monolith</h3>
+            <p>The second architecture made product width and capability breadth into repeated machine code.</p>
+            <span class="honesty">Negative evidence, not a release</span>
+          </article>
+          <article class="evidence-card">
+            <div class="top">107,752 B</div>
+            <h3>Three-program slice</h3>
+            <p>Controller, claims executor, and custody adapter executed one real signed Direct fill.</p>
+            <span class="honesty">Architecture proof, not parity</span>
+          </article>
+          <article class="evidence-card">
+            <div class="top">1 source</div>
+            <h3>Semantic narrow waist</h3>
+            <p>Typed schemas and transition programs begin replacing repeated ABI beliefs.</p>
+            <span class="honesty">Still crossing trust boundaries</span>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="ending">
+      <div class="wrap">
+        <p class="eyebrow kicker">The project is not the current tree</p>
+        <h2>Keep the learning. <em>Release the form.</em></h2>
+        <div class="ending-grid">
+          <p class="big">A protocol becomes legible by surviving implementations that are allowed to die. The ambition is continuous. The code is seasonal.</p>
+          <p class="small">On 25 August, the dClutch history was grafted back beneath Dragon’s Clutch as a subtree. The compost and its successor now share a literal history without pretending they share one architecture. That feels about right.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="sources">
+      <div class="wrap sources-grid">
+        <h2>Field notes</h2>
+        <div>
+          <p>Written from the project’s conversation archive and implementation record, 22–25 August 2026. Key conversation IDs: <code>01a02ad0-653f-7a63-aeeb-6151f7d65ca7</code>, <code>01a02e1a-2f71-7ee2-a96f-89c9497f08ae</code>, <code>01a03498-b8a6-7290-887c-4900801f9f72</code>, and <code>01a03498-966d-7301-8d6c-110c0a5ee645</code>.</p>
+          <p>Measurements describe development artifacts, not deployed releases. “Formal” describes the method and named proof artifacts; it is not a blanket formal-verification claim.</p>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    const line = document.querySelector('.reading-line');
+    const updateProgress = () => {
+      const root = document.documentElement;
+      const distance = root.scrollHeight - root.clientHeight;
+      const progress = distance > 0 ? root.scrollTop / distance : 0;
+      line.style.transform = `scaleX(${progress})`;
+    };
+    addEventListener('scroll', updateProgress, { passive: true });
+    updateProgress();
+  </script>
+</body>
+</html>
