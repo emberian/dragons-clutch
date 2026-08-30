@@ -86,6 +86,7 @@ land and the measured worst clears ~1,353,000.
 | CUCUT | `ada700a9591280bf4` | DONE — design doc landed, carries deferred to the carry wave |
 | BUMPREC | `a2bb9fa1946bb506f` | the 18 constant record searches |
 | census | `a465c2a63f6f1d864` | record-PDA search census against the margin gate |
+| HEAPRED | `a41fbc198c5a2207c` | diagnose red `hot_heap_frame_is_inert` + fix-or-retire evidence for the Registry outer composition (ruling stays ember's) |
 | CI-2 | `a8abf0f1f1f6b761a` | wiring the four gates that exist and do not run |
 | MEMBRANE | `a5e9b10376d59fbf3` | Structured publication/authenticator/seam module; Rational founded market via `DCLUTCH_RATIONAL_COLLATERAL_MINT`; General hot commit half. No report yet. |
 | STORY-2 | `ae1b54b8aaee446db` | graduation wall (Core `0x3003`, identity linkage, evidence `/tank/dregg-build/story-walk3/run.log` on hbox); relayer public submission run; story-page truthfulness. No report yet. |
