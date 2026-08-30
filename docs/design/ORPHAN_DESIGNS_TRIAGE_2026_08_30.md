@@ -207,6 +207,49 @@ capable as generation one on shaped dynamics?"* is still **no**.
 > this wave. Pair the ruling with M-4's correction: tell ember that ramps and
 > tents ship today and the unreached capability is curvature, so he is ruling
 > on the real question.
+>
+> **STATUS: THE DESIGN IS WRITTEN — `623101b2`,
+> `docs/design/BASIS_ABI_UNIFICATION_V1.md` (FRONTIER-2, 2026-08-30).** M-4's
+> correction landed separately at `1b49b0b9`. The ruling is still owed; what is
+> no longer owed is the analysis it needs.
+>
+> **Five things in this section the design's own measurement contradicts.** They
+> are listed here rather than silently fixed above, because this section's
+> errors are the instructive part — every one came from a search whose *method*
+> could not see the thing it was looking for:
+>
+> 1. **"the kernel: `evaluate_spline_v2`, Lean-emitted, byte-guarded" (§2.3
+>    table) is false.** `spline.rs` is 628 **handwritten** lines and says so in
+>    its own header; only `generated_spline.rs` is emitted, and it holds
+>    constants and corpora, no algorithm. 70% of the kernel is handwritten. So
+>    the unification is not "guarded artifact versus unguarded handwritten one"
+>    — it is two handwritten evaluators, of which the **on-chain** one is the
+>    one with no specification.
+> 2. **"`DCLTPGT1` … not even the Rust" is false.** The magic is live at
+>    `generated_price_gate.rs:29` as a hex byte array behind ~1,500 lines of
+>    Rust. An ASCII `rg` cannot see a hex-encoded magic. *"No instruction, no
+>    account"* is correct and is the real finding.
+> 3. **"112 match sites across 61 files" is misleading by an order of
+>    magnitude.** Of 13 `match` expressions over `BasisKindV3`, **10 are
+>    exhaustive and the other 3 are fail-closed** — so a third variant cannot
+>    silently mis-evaluate anywhere. `programs/dclutch-claims-sbf` holds
+>    **one** exhaustive match, not six; the other five files mention the type
+>    only in doc comments. The weeks are in the evaluator, not the enum.
+> 4. **The U-013 field table's payout-scale and basis-identity citations point
+>    at Lean kernel structs, not `CoreState`** — which carries no basis field at
+>    all. Corrected in `docs/OMISSION_INDEX.md` under U-013.
+> 5. **A surface this section did not count at all:** the basis-kind tag has
+>    **four independent authors** — handwritten Rust, a Lean-emitted file that
+>    *nothing re-runs*, and two byte-identical TypeScript copies with
+>    `tag !== 1 && tag !== 2` hardcoded.
+>
+> **And the sizing conclusion inverts.** This section says the ruling is one
+> conversation and the work is "weeks, and it is a wire-format change… not
+> safely concurrent with a live founding lane." The first half stands. The
+> second is half wrong: **five of the design's ten commits change no wire bytes
+> and are landable under a live founding lane today**, and one of them — putting
+> a byte guard on the unguarded second author of the kind tag — is free and is a
+> precondition for doing the risky half safely.
 
 ---
 
@@ -374,6 +417,22 @@ fix is days if v1 survives, zero if it does not.**
 > spare hour and a Kani toolchain; it is the only item in the thirteen where
 > "run the thing that is already committed" is the whole step. The bridge is
 > Tier 3 (ember).
+>
+> **CHARTER SHARPENED 2026-08-30 (FRONTIER-2): "a spare hour and a Kani
+> toolchain" is doing real work in that sentence, and the toolchain is not
+> present.** `which kani cargo-kani` → **not found** on this machine. So the
+> row is not "run the harnesses"; it is "install a verifier, then run them",
+> and the install is the part with the risk: `cargo install --locked
+> kani-verifier` followed by `cargo kani setup` pulls a **pinned Rust toolchain
+> and a CBMC build**, which is a multi-GB download and a toolchain that must
+> agree with the crate's edition. **Check free disk before starting** — this
+> machine's data volume was at **100% (689 MiB free of 7.3 TiB)** when this row
+> was sharpened, which is on its own enough to fail the install halfway and
+> leave a confusing mess.
+> **The honest size is therefore hours-to-a-day, most of it environment**, and
+> a lane that budgets one hour will abandon it partway. If the harnesses do run,
+> the deliverable is the evidence file the eight `kani::proof` attributes have
+> never produced.
 
 ### 3.7 Retirement has never run anywhere, on any substrate
 
@@ -460,6 +519,22 @@ fix is days if v1 survives, zero if it does not.**
 > **TARGET.** Pairs with CI (§3.13 note) — both are assurance rungs that matter
 > *because* the deployment is already public. This is the cheapest credible
 > "our releases are reproducible" claim available, and it is one hbox run.
+>
+> **CHARTER SHARPENED 2026-08-30 (FRONTIER-2): "one hbox run" is true and the
+> precondition is not currently met.** Measured today, hbox is at **104 GiB used
+> of 123 GiB** — codex owns the datacake HOL build there and is co-tenant. A
+> checked-release reproduction started into 19 GiB of headroom is how a box gets
+> power-cycled, and `AGENTS.md`'s box-safety rule exists because that has
+> already happened once. **So the row's real first step is a scheduling
+> handshake, not a command**: confirm hbox is quiet, then run under
+> `swarm-build` (never bare `taskset` — it caps CPU affinity only, and memory is
+> what kills the box), with `SWARM_MEM_MAX` set deliberately.
+> **Two things worth pinning before the run, so the comparison means
+> something:** the toolchain pins must transfer verbatim (the script's own
+> capitals at `:6` say it produces a *local* candidate, so "reproducible" is
+> exactly the claim under test), and the digests to compare must be recorded
+> from a local run *first* — otherwise a mismatch is unattributable between the
+> two hosts and the run has to happen twice.
 
 ### 3.12 Gen-1's ratified commit/reveal subdivision did not cross the generation boundary
 
@@ -477,6 +552,40 @@ fix is days if v1 survives, zero if it does not.**
 > **unpriced adversary in a live venue design**. It belongs in the same
 > conversation as §3.4 (General's collection half), because authoring the seven
 > actions without deciding the withholding question bakes the omission in.
+>
+> **CHARTER SHARPENED — the premise is wrong, and the next lane should not
+> spend an hour rediscovering that (FRONTIER-2, 2026-08-30).** This row says
+> *"no record says why"* the commit/reveal subdivision was dropped. **A record
+> exists, and it is a good one**, in the code rather than in a doc —
+> `crates/dclutch-general-adapter-contract/src/candidate_v1.rs:274-295`:
+>
+> > *"Permissionless and UNBONDED, which is gen-2's answer and the family's:
+> > every verb in its collection half was permissionless, gated on windows and
+> > counters rather than on identity, and gen-2 carried no bond anywhere. **A
+> > bond is a fee on being right as much as on being wrong** — a solver whose
+> > valid candidate simply loses the comparison has done the protocol a service
+> > — and slashing the honest case is what makes an open solver set close. […]
+> > What replaces it is gen-2's real invention: a COMPARTMENTALIZED, FULLY
+> > REFUNDABLE WORK ESCROW."*
+>
+> It goes on to record that the escrow closes a liveness gap gen-2 had: gen-2's
+> consideration was permissionless and **unpaid**, so a valid candidate nobody
+> cranked before the window closed never competed, and a censored submitter had
+> no recourse.
+>
+> So the honest row is narrower and more interesting. The **proposer-bond** half
+> of ADR 0006 was dropped deliberately, with a reason, and the reason is
+> defensible. The **commit/reveal** half — withholding, which the work escrow
+> does not address at all, because an escrow prices *cranking* rather than
+> *disclosure* — is the part with no record. `rg -li 'commit.?reveal'` over
+> every non-doc file in gen-3 is still **zero**.
+>
+> **What the next lane inherits, then, is one question rather than an
+> archaeology task:** *does the work-escrow design leave a solver free to
+> withhold a better candidate at no cost, and if so is that priced anywhere?*
+> That is answerable against `candidate_v1.rs` and `collection_v1.rs` in an
+> afternoon, and it is the only part of ADR 0006 that did not cross the
+> generation boundary with its reasoning intact.
 
 ### 3.13 Three cheap honesty repairs
 
@@ -498,8 +607,37 @@ fix is days if v1 survives, zero if it does not.**
 > cheapest kind of debt to discharge honestly (write the plan, or amend the
 > promise).
 
-**And a fourteenth, which the dig files under B.6 but belongs here:** there is
-no CI. No `.github` directory exists in the live tree at all;
+**And a fourteenth, which the dig files under B.6 but belongs here:** ~~there is
+no CI.~~ **CHARTER SHARPENED 2026-08-30 (FRONTIER-2): CI now exists, and the
+useful statement is what it deliberately excludes.** `9f48f148` — *"ci: the
+first checks this repository has ever had"* — added `.github/workflows/checks.yml`
+and `pages.yml` **to `~/dev/dragons-clutch`, the publishing repo**, which
+vendors this tree as a lagging subtree at `dclutch/`. The live tree still has no
+`.github` of its own, which is why the row read as false rather than stale.
+Three facts the next lane needs, all verified today:
+>
+> 1. **No Lean tier, and the file says why.** `checks.yml:20-28`: *"No Lean
+>    build. The `check-generated.sh` byte-identity scripts and the four
+>    `lean-emit.mjs` verifiers all shell out to `lake`. That is not
+>    unaffordable … but it is minutes, and it belongs on a tier that has earned
+>    it rather than in the first CI this repo has ever had."* That is a
+>    documented tier decision, not an oversight — so the work is *earning the
+>    tier*, not arguing for it.
+> 2. **The one census step is a no-op today.** `checks.yml:116-123` runs
+>    `emission_guard.py --verify` under `if [ -f … ]`, and
+>    `dragons-clutch/dclutch/tools/emission-guard` **does not exist** — the
+>    directory is not in the published subtree. It emits a warning and gates
+>    nothing. **The cheapest real win in this row is refreshing the subtree so
+>    that step starts running**, and it needs no new workflow.
+> 3. And `--verify` is the *census* ratchet, not a byte check — `COVERAGE.md`'s
+>    own words: *"A green census does not mean the bytes match. It means we know
+>    which bytes nobody is checking."*
+>
+> So the row is no longer "write the first workflow." It is: **refresh the
+> subtree so the census gate stops being inert, then earn the Lean tier.** The
+> original text follows for the record.
+>
+> ~~No `.github` directory exists in the live tree at all;~~
 `checked-release-candidate.sh` greps clean for `lake`, `check-generated` and
 `emission_guard`. Every gate this project is proud of runs only when a person
 runs it. This is cycle-3 item 4's (SEAM-CI) missing substrate: SEAM-CI built
