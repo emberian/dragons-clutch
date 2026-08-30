@@ -6420,3 +6420,120 @@ async fn a_cross_market_position_is_not_payable_here() {
             .expect("pre Claims-role replay"),
     );
 }
+
+/// THE OTHER REDEMPTION ROUTE ALSO SURVIVES A STRANGER'S RETIREMENT.
+///
+/// `a_stranger_who_begins_retiring_cannot_end_a_holders_redemption` drives the
+/// wallet payout, which submits a `TerminalSettlementRequestV3` straight to
+/// Claims and is gated by `terminal_settlement_v3::authenticate_core`. It never
+/// reaches `rational_product_v3::authenticate_core`, which is the phase gate on
+/// the RationalRepresentation `RedeemTerminal` arm -- a fifth site with the same
+/// defect and, until this test, the one welded site nobody had watched redeem in
+/// `Retiring`.
+///
+/// A weld with an untested arm is how the original defect survived a design
+/// document that named three files. So this drives the second route through the
+/// same stranger's transition and asserts the same thing: the phase moved, the
+/// holder was still paid, and the debits are the ones the Terminal-phase
+/// redemption makes.
+#[tokio::test]
+async fn the_representation_redemption_also_survives_a_strangers_retirement() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let created = create_claims_custody_replay(&mut context, &fixture).await;
+    assert!(
+        created.accepted,
+        "the Claims-role Custody replay must be creatable: {}",
+        created.logs.join("\n")
+    );
+
+    let positive = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::RedeemTerminal,
+        0,
+        false,
+        None,
+        None,
+    );
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        fixture.actor.pubkey(),
+        &[positive.clone()],
+    );
+    let (table, _) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: retiring representation redemption",
+    )
+    .await;
+
+    assert_eq!(
+        core_phase(&mut context, fixture.market).await,
+        CorePhase::Terminal
+    );
+    a_stranger_begins_retiring(&mut context, &fixture).await;
+    assert_eq!(
+        core_phase(&mut context, fixture.market).await,
+        CorePhase::Retiring,
+        "the stranger must actually have moved the phase, or this test proves nothing"
+    );
+
+    let before = snapshot(&mut context, &fixture).await;
+    let accepted = submit_v0(
+        &mut context,
+        &fixture,
+        positive,
+        table,
+        &addresses,
+        "claims rational-representation-v2: representation redemption after a stranger retired",
+    )
+    .await
+    .expect("terminal transaction");
+    assert!(
+        accepted.accepted,
+        "the representation route must redeem in Retiring too:\n{}",
+        accepted.logs.join("\n")
+    );
+
+    // Conservation, over acceptance: exactly the moves the Terminal-phase
+    // redemption makes, and nothing the retirement could have changed.
+    let after = snapshot(&mut context, &fixture).await;
+    assert_eq!(replay_revision(&after.replay), 1);
+    assert_eq!(lbv2_revision(&after.aggregate.data), 1);
+    assert_eq!(
+        lbv2_position_quantity(
+            &after.positions.get(WINNERS).expect("winner Position").data,
+            WINNER,
+        ),
+        CUSTODY_CLAIMS[WINNERS] - 1
+    );
+    assert_eq!(
+        mint_supply(after.shard_mints.get(WINNERS).expect("winner Mint")),
+        shard_supply(WINNERS) - DENOMINATOR
+    );
+    assert_eq!(
+        token_amount(after.actor_shards.get(WINNERS).expect("winner actor shards")),
+        actor_shards()[WINNERS] - DENOMINATOR
+    );
+    // Structured custody is untouched, exactly as in the Terminal-phase run:
+    // the receipts it backs are still outstanding.
+    assert_eq!(
+        token_amount(
+            after
+                .structured_shards
+                .get(WINNERS)
+                .expect("winner structured shards"),
+        ),
+        structured_shards()[WINNERS]
+    );
+    assert_eq!(mint_supply(&after.receipt_mint), RECEIPT_SUPPLY);
+    for index in 0..K {
+        if index == WINNERS {
+            continue;
+        }
+        assert_account_content_eq(
+            after.shard_mints.get(index).expect("shard Mint"),
+            before.shard_mints.get(index).expect("pre shard Mint"),
+        );
+    }
+}
