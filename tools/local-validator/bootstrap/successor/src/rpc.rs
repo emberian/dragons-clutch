@@ -46,11 +46,16 @@ const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 /// and its allocator (`programs/dclutch-trading-sbf/src/entrypoint_adapter.rs`),
 /// and `admit_heap_frame_v1` re-derives the grant from the instructions sysvar
 /// the runtime itself serialized, applying agave's own
-/// `sanitize_requested_heap_size`. Exactly two routes declare the extended
-/// profile — `DCLTGMF3` and `DCLTPCB2` — and both now carry the instructions
-/// sysvar in their frame so the adapter can find it. The Hot execution path is
-/// deliberately **not** on that list and keeps the 32 KiB discipline, so this
-/// constant is applied per transaction and never globally.
+/// `sanitize_requested_heap_size`. Three routes declare the extended profile:
+/// the two founding routes `DCLTGMF3` and `DCLTPCB2`, and — since 2026-08-30 —
+/// `DCLTHOT3`, Hot execution. All carry the instructions sysvar in their frame
+/// so the adapter can find it, so this constant is applied per transaction and
+/// never globally.
+///
+/// Hot was deliberately OFF that list until a top-level submission was actually
+/// executed: invoking Trading directly makes two Registry reauthentication CPIs
+/// a continuation never makes, and that route does not fit the 32 KiB default.
+/// A CONTINUATION submission still fits it and still carries no grant.
 ///
 /// Chain-derived: agave's `MAX_HEAP_FRAME_BYTES`. The adapter refuses anything
 /// outside `[32 KiB, 256 KiB]` or not a multiple of 1 KiB, which are the same
@@ -1446,12 +1451,17 @@ impl Rpc {
 
     /// Submit one routed v0 transaction on a runtime-granted extended heap.
     ///
-    /// Only the two founding routes may use this: `DCLTGMF3` and `DCLTPCB2`
-    /// are the exhaustive list in
-    /// `entrypoint_adapter::declares_extended_heap_profile_v1`, and each
-    /// presents the instructions sysvar in its own frame so the program can
-    /// re-derive the grant. A route not on that list keeps the 32 KiB
-    /// structural discipline and the instruction would be dead weight.
+    /// Only routes on `entrypoint_adapter::declares_extended_heap_profile_v1`
+    /// may use this: the two founding routes `DCLTGMF3` and `DCLTPCB2`, and
+    /// `DCLTHOT3` for a TOP-LEVEL Hot submission. Each presents the
+    /// instructions sysvar in its own frame so the program can re-derive the
+    /// grant. A route not on that list keeps the 32 KiB structural discipline
+    /// and the instruction would be dead weight.
+    ///
+    /// Note this helper prepends, so it is NOT the mechanism for the top-level
+    /// Direct route: that transaction carries a signature precompile whose
+    /// evidence binds instruction indices, and its grant is placed by the
+    /// operator's builder at a fixed position instead.
     pub(crate) fn send_v0_on_founding_heap_with_signers(
         &mut self,
         label: &str,
