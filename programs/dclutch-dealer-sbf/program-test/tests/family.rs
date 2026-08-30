@@ -16,11 +16,21 @@
 //!
 //! It is real-ELF execution evidence for the Dealer family route's
 //! authentication prefix: instruction shape, account frame, account identity,
-//! actor identity, Clock binding, and the Registry reauthentication CPI. It is
-//! NOT evidence that any Dealer action commits, because no accepted transition
-//! is reachable without a complete activated release set, a Core Market in an
-//! admitting phase, and Claims/Custody prestate. Those are recorded as blocked
-//! rather than asserted here.
+//! actor identity, Clock binding, and the release waist. It is NOT evidence
+//! that any Dealer action commits, because no accepted transition is reachable
+//! without a complete activated release set, a Core Market in an admitting
+//! phase, and Claims/Custody prestate. Those are recorded as blocked rather
+//! than asserted here.
+//!
+//! The release waist is a cache READ, not a CPI. `c202ee3d` retired the
+//! `RegistryInstructionV1::Reauthenticate` invocation this campaign was
+//! originally written against — it was reentrancy, because Dealer runs as a
+//! child of a Registry continuation that already sits at CPI depth one — and
+//! Dealer now authenticates against the Registry-owned cache using the
+//! Registry's own crate (`dealer-sbf/src/lib.rs:1167-1198`). The campaign's
+//! cache is a deliberate stub, so every case in the release loop stops at the
+//! waist; making it a real cache is named debt, with the recipe, in
+//! `docs/design/DEALER_EXIT_AFFORDABILITY_V1.md`.
 //!
 //! `solana-program-test` submits no packet, so this campaign cannot observe a
 //! frame that exceeds the legacy 1,232-byte transaction limit; the Dealer
@@ -59,7 +69,12 @@ use solana_transaction::Transaction;
 
 /// Census program label for the Dealer family artifact.
 const DEALER_LABEL: &str = "dealer";
-/// Census program label for the Registry artifact this campaign CPIs into.
+/// Census program label for the Registry artifact.
+///
+/// The Registry is staged as a real executable and owns the activation cache
+/// the release waist reads, but this campaign no longer invokes it: `c202ee3d`
+/// retired that CPI as reentrancy. It is here because the census program map
+/// names the artifacts a tier is evidence about, not only the ones it calls.
 const REGISTRY_LABEL: &str = "registry";
 
 /// The Dealer family handler owns the canonical Trading controller identity,
@@ -920,35 +935,35 @@ async fn real_dealer_elf_refuses_every_unauthenticated_family_request() {
     let mut deepest = 0_u64;
     for (label, request) in [
         (
-            "dealer family drives ScheduleReplacement into the real Registry reauthentication",
+            "dealer family drives ScheduleReplacement into the release waist",
             schedule_request(actor.to_bytes(), slot),
         ),
         (
-            "dealer family drives Fill into the real Registry reauthentication",
+            "dealer family drives Fill into the release waist",
             fill_request(slot),
         ),
         (
-            "dealer family drives ActivateReplacement into the real Registry reauthentication",
+            "dealer family drives ActivateReplacement into the release waist",
             activate_request(slot),
         ),
         (
-            "dealer family drives EnterTerminal into the real Registry reauthentication",
+            "dealer family drives EnterTerminal into the release waist",
             enter_terminal_request(),
         ),
         (
-            "dealer family drives Unwind into the real Registry reauthentication",
+            "dealer family drives Unwind into the release waist",
             unwind_request(),
         ),
         (
-            "dealer family drives Retire into the real Registry reauthentication",
+            "dealer family drives Retire into the release waist",
             retire_request(),
         ),
         (
-            "dealer family drives AddLiquidity into the real Registry reauthentication",
+            "dealer family drives AddLiquidity into the release waist",
             liquidity_request(Action::AddLiquidity, actor.to_bytes(), 0),
         ),
         (
-            "dealer family drives RemoveLiquidity into the real Registry reauthentication",
+            "dealer family drives RemoveLiquidity into the release waist",
             liquidity_request(Action::RemoveLiquidity, actor.to_bytes(), 0),
         ),
     ] {
@@ -962,12 +977,33 @@ async fn real_dealer_elf_refuses_every_unauthenticated_family_request() {
         )
         .await
         .expect("ProgramTest processing");
+        // This loop used to additionally assert `observed.invoked(REGISTRY_PROGRAM_ID)` —
+        // that the release refusal arrived from a real Registry CPI rather than
+        // from Dealer's own opinion of the activation cache. That assertion
+        // outlived its architecture and had been failing since `c202ee3d`
+        // ("families: read the activation cache the Registry owns, and stop
+        // calling it"), which retired the CPI for a reason stated at
+        // `dealer-sbf/src/lib.rs:1167-1175`: Dealer is reached as a child of a
+        // Registry continuation with the Registry already at CPI depth one, so
+        // `RegistryInstructionV1::Reauthenticate` was reentrancy and Solana
+        // refused it before Dealer could do any work. Dealer now reads the
+        // Registry-OWNED cache through `dclutch-registry-activation-auth-v1`,
+        // which is the Registry's own code — so there is legitimately no
+        // `invoke [2]` to observe, and the campaign was red rather than
+        // protective.
+        //
+        // What is still asserted is the refusal code, and that is currently the
+        // whole of it: every failure reachable through this path folds to
+        // `Release` (`ActivationAuthErrorV1::{AccountFrame, ActivationCache,
+        // Deployment}` all map through the `_` arm at `lib.rs:162-171`), so no
+        // stub cache can discriminate one gate from another by code alone.
+        //
+        // The stronger campaign this wants is written up as named debt in
+        // `docs/design/DEALER_EXIT_AFFORDABILITY_V1.md`: stage a VALID cache and
+        // show the refusal move past the release waist entirely. Until then this
+        // case reaches the release waist and stops there, which is what it now
+        // claims and no more.
         let units = refused(&observed, REFUSAL_RELEASE, label);
-        assert!(
-            observed.invoked(REGISTRY_PROGRAM_ID),
-            "{label}: the release refusal must come from a real Registry CPI, not from Dealer's \
-             own opinion of the activation cache"
-        );
         deepest = deepest.max(units);
     }
 

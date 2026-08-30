@@ -384,6 +384,58 @@ Custody ELF, ~200-300 lines, one new route, and four hostiles.
   campaign write-up presents `run-program-test.sh` as *the* one-command
   reproduction for the Dealer family, and a reader taking that at face value
   never builds the Dealer program at all.
+- **The Dealer gauntlet tier was dark for three days, and the repair here is
+  partial.** `tools/gauntlet/dealer/run-dealer.sh` — the only runner that loads
+  `dclutch_dealer_sbf.so` — failed at `family.rs`, and the cause was not a
+  regression but a **retired mechanism**: `c202ee3d` ("families: read the
+  activation cache the Registry owns, and stop calling it") removed the
+  `RegistryInstructionV1::Reauthenticate` CPI because Dealer runs as a child of
+  a Registry continuation already at CPI depth one, so the invocation was
+  reentrancy Solana refused before Dealer could do any work
+  (`dealer-sbf/src/lib.rs:1167-1175`). The campaign still asserted that a
+  Registry CPI must appear. That commit changed the release path in six SBF
+  programs and updated no campaign; `0e34c036` then did the same for the slot
+  pin across seven. **A commit that retires a mechanism leaves tests asserting
+  it, and those tests fail only inside runners nothing routinely runs** — so
+  they neither block the change nor get updated with it.
+
+  The assertion is corrected and the tier is green, but it is now weaker than it
+  should be, and the reason is worth stating precisely: **every failure
+  reachable through the release waist folds to one code.**
+  `ActivationAuthErrorV1::{AccountFrame, ActivationCache, Deployment}` all map
+  through the `_` arm at `dealer-sbf/src/lib.rs:162-171` to `Release` (`0x7005`);
+  only `ReleaseSuperseded` (`0x700A`) is distinct, and it is unreachable in this
+  fixture. So no stub cache can discriminate one gate from another.
+
+  **The real repair, with the recipe, so the next lane does not redo the
+  archaeology.** Stage a *valid* cache and show the refusal move past the waist
+  entirely. The working precedent is
+  `crates/dclutch-registry-activation-auth-v1/src/tests.rs:137-215`
+  (`Fixture::build`) — the only construction in the tree that passes
+  `authenticate_activated_role_v1`, and a faithful template. What it needs:
+  build one `ArtifactReleaseV1::new` per role with `deployment_slot = 0`,
+  `Immutable`, authority `None` — because `family.rs`'s `immutable_programdata`
+  hard-codes exactly that (`:169-181`) — over the real program ids, remembering
+  that **Dealer occupies the Trading role** (`authenticate_receipt_join` pins
+  `receipts.trading.program() == program_id`, `lib.rs:1211`); assemble
+  `ExecutionReleaseSetV1::new` (Claims and Resolution need their own distinct
+  synthetic releases, because `validate_aliases` requires same-program iff
+  same-release); fill a 1288-byte buffer
+  (`ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1`, header 48 + 5×248) with
+  `initialize_activation_cache_v1` + `activate_execution_role_into_v1`; and
+  place it at `activation_cache_address_v1(&registry, &release_set_id)`, owned
+  by the Registry. The one coupling to plan for: `release_set_id` is
+  `ContentId::new(hash(release_set.to_bytes()))`, so the fixture's
+  `RELEASE_SET_ID` constant must be *derived* from the built set rather than
+  chosen, which means `policy()` and `dealer_state()` derive from it too. The
+  current stub trips the very first conjunct — the cache address
+  (`auth lib.rs:188-194`) — so nothing after it has ever executed.
+
+  This is a rewrite of the campaign's spine rather than a patch, which is why it
+  is recorded rather than done: it changes what the eight release-loop cases
+  refuse with, and it is the work `c202ee3d` deferred across every family, not
+  just this one.
+
 - **No accepted Dealer transition is executed against a real ELF anywhere.**
   `family.rs` says so in its own header: it is evidence for the authentication
   prefix, and *"NOT evidence that any Dealer action commits"*. So Rulings 1 and 2
