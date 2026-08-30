@@ -38,6 +38,8 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
 pub mod affine_batch_v2;
+pub mod claim_check_compaction_v1;
+pub mod claim_check_redemption_v1;
 pub mod custody_replay_v1;
 pub mod founding_v5;
 pub mod fractional_atomic_v3;
