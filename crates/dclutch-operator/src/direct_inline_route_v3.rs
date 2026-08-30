@@ -2422,7 +2422,7 @@ fn authenticate_report_route(
         &report.instructions,
     )
     .map_err(|_| DirectInlineRoutedTransactionErrorV3::Instruction)?;
-    let [_compute, _native, trading] = &report.instructions;
+    let [_compute, _heap, _native, trading] = &report.instructions;
     if trading.data != report.hot_instruction_data {
         return Err(DirectInlineRoutedTransactionErrorV3::Instruction);
     }
@@ -3170,6 +3170,7 @@ mod tests {
             compile_direct_inline_request_v3,
         },
     };
+    use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
 
     fn key(byte: u8) -> Pubkey {
         Pubkey::new_from_array([byte; 32])
@@ -4587,6 +4588,7 @@ mod tests {
         let report = DirectInlineHotReportV3 {
             instructions: [
                 ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1),
+                ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
                 Instruction {
                     program_id: ed25519_program::ID,
                     accounts: Vec::new(),
@@ -4784,6 +4786,7 @@ mod tests {
         let report = DirectInlineHotReportV3 {
             instructions: [
                 ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1),
+                ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
                 Instruction {
                     program_id: ed25519_program::ID,
                     accounts: Vec::new(),
