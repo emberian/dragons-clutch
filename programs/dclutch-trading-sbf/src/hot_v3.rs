@@ -1338,6 +1338,30 @@ fn authenticate_accelerator_top_level_v4(
     Ok(hot_instruction)
 }
 
+/// Proof that this execution has already held the activation cache account to
+/// its address, its owner, and its privileges.
+///
+/// Only [`require_activation_cache_account_v3`] produces one, so a reader of
+/// the cache either takes the check or takes this — there is no third way to
+/// get at the bytes, and "someone earlier already checked it" stops being a
+/// claim in a comment that a later edit can quietly falsify.
+///
+/// # Why the witness rather than just calling the check again
+///
+/// The check contains a `find_program_address`, and that search costs 1,500 CU
+/// per attempt it has to make. Its seeds are `[domain, release_set]` under the
+/// Registry, and the release set is a property of the DEPLOYED ELVES, not of
+/// the caller — so every execution against one deployment pays the same depth,
+/// and repeating the search repeats that cost exactly.
+///
+/// The public top-level route used to run it three times: once inside each of
+/// the two [`reauthenticate_role`] calls, and once more inside
+/// [`authenticate_activated_child_programs_v3`]. Three searches, one address,
+/// one answer. This type is how the other two went away without anybody having
+/// to trust that they were redundant.
+#[derive(Clone, Copy)]
+struct ActivationCacheAuthenticatedV1(());
+
 /// Hold the activation cache account to its address, its owner, and its
 /// privileges, before anything reads a byte out of it.
 ///
@@ -1345,19 +1369,18 @@ fn authenticate_accelerator_top_level_v4(
 /// account must be the Registry-owned PDA for THIS market's release set, and
 /// must arrive neither signing nor writable nor executable.
 ///
-/// `inline(always)` is not a hint here, it is a budget. This path runs at
-/// 1,336,865-1,386,359 CU against a 1,400,000 ceiling depending on which keys
-/// the makers hold (see `tests/hot_heap_frame_is_inert.rs`), so extracting
-/// these checks as an ordinary call is enough to push the continuation route
-/// over the meter -- measured, not feared: it took the canonical trade from
-/// passing to `consumed 1399850 of 1399850`. Inlined, the codegen at the
-/// original call site is what it always was, and the checks still have one
-/// author.
+/// `inline(always)` is not a hint here, it is a budget. This path runs close
+/// enough to the 1,400,000 ceiling (see
+/// `tests/direct_hot_top_level_margin_gate.rs`) that extracting these checks as
+/// an ordinary call is enough to push the continuation route over the meter --
+/// measured, not feared: it took the canonical trade from passing to
+/// `consumed 1399850 of 1399850`. Inlined, the codegen at the original call
+/// site is what it always was, and the checks still have one author.
 #[inline(always)]
 fn require_activation_cache_account_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
-) -> Result<(), ProgramError> {
+) -> Result<ActivationCacheAuthenticatedV1, ProgramError> {
     let expected_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &envelope.release_set()],
         frame.registry.key,
@@ -1371,7 +1394,7 @@ fn require_activation_cache_account_v3(
     {
         return Err(TradingSbfError::Release.into());
     }
-    Ok(())
+    Ok(ActivationCacheAuthenticatedV1(()))
 }
 
 /// The Claims and Custody programs this execution may CPI, read from the
@@ -1391,8 +1414,8 @@ fn require_activation_cache_account_v3(
 fn authenticate_activated_child_programs_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
+    _cache: ActivationCacheAuthenticatedV1,
 ) -> Result<AuthenticatedChildProgramsV3, ProgramError> {
-    require_activation_cache_account_v3(frame, envelope)?;
     let data = frame
         .activation_cache
         .try_borrow_data()
@@ -3368,12 +3391,20 @@ fn reauthenticate_top_level_root_roles_v3(
     // spends that budget on. Refusing here costs a caller who forgot the grant
     // one comparison instead of a million compute units and an unnamed abort.
     crate::entrypoint_adapter::require_extended_heap_admitted_v1()?;
+    // Once, for all three readers below. This used to happen three times --
+    // inside each `reauthenticate_role` and again inside the child-program
+    // decode -- and all three searched for the same address, because the seeds
+    // are the same seeds. Holding the account here instead refuses a wrong
+    // cache EARLIER than any of them did, and on the stricter of the two check
+    // sets that were in play.
+    let cache = require_activation_cache_account_v3(frame, envelope)?;
     let core_receipt = reauthenticate_role(
         frame,
         ExecutionRoleV1::Core,
         frame.core_program,
         frame.core_programdata,
         envelope.release_set(),
+        cache,
     )?;
     if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
         return Err(TradingSbfError::Release.into());
@@ -3384,10 +3415,11 @@ fn reauthenticate_top_level_root_roles_v3(
         frame.trading_program,
         frame.trading_programdata,
         envelope.release_set(),
+        cache,
     )?;
     Ok((
         trading_receipt,
-        authenticate_activated_child_programs_v3(frame, envelope)?,
+        authenticate_activated_child_programs_v3(frame, envelope, cache)?,
     ))
 }
 
@@ -10282,23 +10314,23 @@ fn authenticate_market(
     Ok(state)
 }
 
+/// Ask the Registry, live, whether `role` is still the deployment it was.
+///
+/// The cache account this hands the Registry arrives already held to its
+/// address, its owner and its privileges -- that is what
+/// [`ActivationCacheAuthenticatedV1`] is for, and it is a strictly stronger
+/// set of checks than the address-and-owner pair this function used to run for
+/// itself. What it bought by giving them up is the `find_program_address` that
+/// came with them: the caller now searches once for an address that both roles
+/// and the child-program decode all share.
 fn reauthenticate_role<'accounts, 'info>(
     frame: HotFrameV3<'accounts, 'info>,
     role: ExecutionRoleV1,
     role_program: &AccountInfo<'info>,
     role_programdata: &AccountInfo<'info>,
     release_set: [u8; 32],
+    _cache: ActivationCacheAuthenticatedV1,
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    let expected_cache = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
-        frame.registry.key,
-    )
-    .0;
-    if frame.activation_cache.key != &expected_cache
-        || frame.activation_cache.owner != frame.registry.key
-    {
-        return Err(TradingSbfError::Release.into());
-    }
     let instruction = Instruction {
         program_id: *frame.registry.key,
         accounts: vec![

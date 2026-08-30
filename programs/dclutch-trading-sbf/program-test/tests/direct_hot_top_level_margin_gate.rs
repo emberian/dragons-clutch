@@ -56,6 +56,29 @@ use dclutch_direct_hot_program_test_support::waist::{
 ///
 /// Thirty-two is not magic either. It is enough draws for the band to stop
 /// moving much, and the cost is about forty seconds.
+///
+/// # The lottery this sweep CANNOT see, which is not the maker's keys
+///
+/// Redrawing the fixture seed redraws the payer and the two makers. It does not
+/// redraw the other input to every bump search on this route: `release_set_id`
+/// is `hash(ExecutionReleaseSetV1)` over the deployed ELF DIGESTS, and it seeds
+/// the activation cache directly and the Market identity transitively -- and
+/// the Market PDA seeds the Claims market, the positions, the maker replays and
+/// every caller authority downstream of them.
+///
+/// So a REBUILD redraws all of it, with no source change at all. Measured on
+/// this route: the activation cache's bump was 254 for one build of a tree and
+/// 255 for a build whose only source difference was caller-side, and that one
+/// step moved five separate searches (three in Trading, two inside the Registry
+/// CPIs) for 7,500 CU before anything else was counted. The whole 32-seed
+/// distribution shifted with it, and its band went 36,001 -> 42,000.
+///
+/// This is almost certainly what an earlier lane recorded as "codegen noise of
+/// +-20,000 CU between builds of the same source". It is not codegen and it is
+/// not noise: it is this, and it means two CU figures taken from two builds are
+/// not comparable, however careful the rest of the method was.
+/// `direct_hot_pda_depth_census.rs` reports the depth outright so the two
+/// effects can be told apart.
 const GATE_SEEDS: u64 = 32;
 
 /// Ceiling this route's worst swept seed must stay under.
@@ -63,13 +86,29 @@ const GATE_SEEDS: u64 = 32;
 /// Measured at `fd8cad39`, all five ELFs built from that commit: 32/32 pass,
 /// 1,341,077 to 1,381,576 CU, mean 1,360,206.
 ///
-/// This sits 8,424 CU above that worst observation, deliberately: `df404c56`
+/// This sat 8,424 CU above that worst observation, deliberately: `df404c56`
 /// cost 7,520 CU while believing it changed no program at all, so a change of
 /// that size has to trip this rather than disappear into the margin. It is not
-/// the protocol ceiling -- it stands 10,000 CU below it -- and it must never be
-/// raised to meet a regression. Raising it IS the act of spending margin, and
-/// it should cost a decision and a sentence saying what got cheaper in
-/// exchange.
+/// the protocol ceiling -- and it must never be raised to meet a regression.
+/// Raising it IS the act of spending margin, and it should cost a decision and
+/// a sentence saying what got cheaper in exchange.
+///
+/// # Why this is 1,387,000 and not this build's worst draw
+///
+/// The public route used to search for the activation cache's address THREE
+/// times per execution -- inside each of the two `reauthenticate_role` calls
+/// and again in the child-program decode -- for one address with one answer.
+/// It now searches once. A bump search costs 1,500 CU per attempt and makes at
+/// least one attempt, so removing two of them is worth AT LEAST 2 x 1 x 1,500
+/// = 3,000 CU against the same build, whatever depth that build happens to
+/// draw. 1,390,000 - 3,000 is the tightening that argument supports, and it
+/// cannot manufacture a red that the old number would not also have taken.
+///
+/// It is deliberately NOT set from the sweep this change was measured on, which
+/// came back at a worst draw of 1,380,178. Most of that headroom is not the
+/// change: it is the redraw described under `GATE_SEEDS`, and pinning a gate to
+/// it would go red on the next rebuild with nothing wrong. That is the exact
+/// mistake this file was already written to warn about, one level further out.
 ///
 /// # What this gate does NOT do, stated because it would otherwise be assumed
 ///
@@ -81,16 +120,51 @@ const GATE_SEEDS: u64 = 32;
 /// protocol ceiling and refuse a real user's trade, and nothing in this file
 /// would have said so.
 ///
+/// # What the band is made of, measured rather than supposed
+///
+/// All of it is `find_program_address` depth. The search walks bump 255 down
+/// and pays 1,500 CU per candidate it rejects, and every gap between two
+/// distinct observations in this sweep is a multiple of 1,500 -- there is no
+/// other component. Decomposed from the runtime's own per-CPI accounting over
+/// the 32 transactions: Claims carries a band of 16,499 CU, Custody 13,500,
+/// Trading's own code about 6,000, and the Registry exactly ZERO, because the
+/// only address it derives is seeded by the release set, which no key draw
+/// moves.
+///
+/// One transaction makes roughly fifty of these searches and about twenty of
+/// them move with the keys. The cure is not to make them cheaper, it is to stop
+/// searching: `Pubkey::create_program_address` at a bump the caller already
+/// holds costs one attempt instead of however many, and a wrong bump reproduces
+/// a different address and refuses, so the derivation is still the check. This
+/// route already does that in one place -- see `borrow_finalized_record_at` in
+/// `hot_v3.rs` -- and the remaining duplicates are almost all across a CPI
+/// boundary: Trading finds an address, discards the bump, and the child program
+/// it calls searches for the very same address again. The Market PDA alone is
+/// searched four times per transaction from identical seeds.
+///
 /// That gap is not a defect in the gate; it is the finding the gate exposed,
 /// and it is why `tools/gauntlet/CU_BUDGETS.json`'s own tolerance rule cannot
 /// write a budget for this route at all: `roundup(40499, 10000) + 10000` is a
 /// 60,000 CU tolerance, and 1,381,576 + 60,000 is past 1,400,000. That file
 /// says a budget above the ceiling is how it "says out loud that a transaction
 /// has stopped fitting". This route is there.
-const TOP_LEVEL_CU_GATE_V1: u64 = 1_390_000;
+const TOP_LEVEL_CU_GATE_V1: u64 = 1_387_000;
 
 /// The protocol maximum a transaction may consume.
 const PROTOCOL_CEILING: u64 = 1_400_000;
+
+/// `tools/gauntlet/CU_BUDGETS.json`'s tolerance, for the band this sweep saw.
+///
+/// The rule is `roundup(band, 10000) + 10000`, floor 15,000, and a budget of
+/// `measured + tolerance` above the ceiling is that file "saying out loud that
+/// a transaction has stopped fitting". This route says it. The sweep prints the
+/// verdict rather than asserting it, because the assertion that would fail is
+/// the one this gate already makes -- and a second red row saying the same
+/// thing in different words teaches a reader to skip both.
+fn cu_budgets_tolerance(band: u64) -> u64 {
+    let rounded = band.div_ceil(10_000).saturating_mul(10_000);
+    rounded.saturating_add(10_000).max(15_000)
+}
 
 #[tokio::test]
 async fn the_public_direct_route_holds_its_compute_margin_across_thirty_two_seeds() {
@@ -151,10 +225,26 @@ async fn the_public_direct_route_holds_its_compute_margin_across_thirty_two_seed
         .expect("the sweep ran at least one seed");
     let mean = observations.iter().map(|(_, units)| *units).sum::<u64>() / GATE_SEEDS;
 
+    for (seed, units) in &observations {
+        println!("SEEDCU\t{seed}\t{units}");
+    }
+    let band = worst.saturating_sub(best);
+    let tolerance = cu_budgets_tolerance(band);
     println!(
         "public Direct route across {GATE_SEEDS} seeds: {best} to {worst} CU, mean {mean}, \
-         worst margin {} of {PROTOCOL_CEILING}",
+         band {band}, worst margin {} of {PROTOCOL_CEILING}",
         PROTOCOL_CEILING.saturating_sub(worst),
+    );
+    println!(
+        "CU_BUDGETS tolerance for a band of {band} is {tolerance}; a budget for this route \
+         would be {} against a ceiling of {PROTOCOL_CEILING} -- {}",
+        worst.saturating_add(tolerance),
+        if worst.saturating_add(tolerance) > PROTOCOL_CEILING {
+            "OVER: by that file's own rule this transaction has stopped fitting, and the \
+             band is the reason, not the mean"
+        } else {
+            "under: the route fits for an arbitrary key draw, not merely for these ones"
+        },
     );
 
     assert!(
