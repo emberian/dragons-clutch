@@ -12,6 +12,7 @@ import {
   requiredBackingMeaningV1,
   type MarketDetailV1,
 } from '@/lib/marketDetail';
+import { MARKET_EDITORIAL_NOTE_V1, marketEditorialV1 } from '@/lib/marketRegistry';
 import {
   provenanceChipV1,
   shortAddressV1,
@@ -155,6 +156,10 @@ function Realm({ collateral }: Readonly<{ collateral: MarketCollateralV1 }>) {
 
 export default function MarketDetailWorkspace({ address }: Readonly<{ address: string }>) {
   const deployment = useDeploymentV1();
+  // Editorial words for this address, if the shipped registry has any. They
+  // never gate a read and never stand in for one: an unregistered market
+  // renders its address, exactly as before.
+  const editorial = marketEditorialV1(address);
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this Market at the finalized floor…' });
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
@@ -206,7 +211,10 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow"><Anchor href="/markets">← all Markets</Anchor> · one Market, decoded field by field</p>
-        <h1>{shortAddressV1(address, 8)}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : card !== null && card.status === 'refused' ? 'refused' : 'unread') : decoded.phase}</em></h1>
+        <h1>{editorial === null ? shortAddressV1(address, 8) : editorial.title}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : card !== null && card.status === 'refused' ? 'refused' : 'unread') : decoded.phase}</em></h1>
+        {editorial !== null && <p className="market-question">{editorial.question}</p>}
+        {editorial !== null && editorial.story !== null && <p className="market-story">{editorial.story}</p>}
+        {editorial !== null && <p className="market-editorial-note">{MARKET_EDITORIAL_NOTE_V1}</p>}
         <p>Every field below is decoded from a finalized account this browser read, or the section carries REFUSED and its exact reason. Nothing here is aggregated, estimated, or carried over from a previous observation, and no sub-state renders as empty-but-fine.</p>
       </div>
       <aside>
@@ -301,23 +309,30 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               requiredBackingAtoms={decoded.liability.requiredBackingAtoms}
               requiredBackingNote={requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}
               caption="Each cell is one claim across this Market&rsquo;s outcome domain; heights are issued claim atoms from the Claims aggregate, against the exact required-backing line."
-              notes={decoded.liability.supplyAtoms.map((_, index) => (
-                decoded.settlement.status === 'terminal'
+              notes={decoded.liability.supplyAtoms.map((_, index) => {
+                const outcome = editorial?.outcomes?.[index];
+                const status = decoded.settlement.status === 'terminal'
                   ? (decoded.settlement.winner === index
                     ? 'winning · pays out under the Market’s own basis (one atom per claim atom when categorical)'
                     : 'losing · pays zero')
-                  : 'unsettled · the terminal receipt decides what this claim pays'
-              ))}
+                  : 'unsettled · the terminal receipt decides what this claim pays';
+                return outcome === undefined ? status : `${outcome} (editorial name) · ${status}`;
+              })}
             />
             <ol className="outcome-vector">
-              {decoded.liability.supplyAtoms.map((amount, index) => (
+              {decoded.liability.supplyAtoms.map((amount, index) => {
+                const outcomeName = editorial !== null && editorial.outcomes !== null ? editorial.outcomes[index] : undefined;
+                return (
                 <li key={index} className={decoded.settlement.status === 'terminal' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
-                  <span>claim {index}</span>
+                  <span>claim {index}{outcomeName === undefined ? '' : ` · ${outcomeName}`}</span>
                   <strong>{amount}</strong>
                   {decoded.settlement.status === 'terminal' && <small>{decoded.settlement.winner === index ? 'winning · pays out under the Market\u2019s own basis (one atom per claim atom when categorical)' : 'losing · pays zero'}</small>}
                 </li>
-              ))}
+                );
+              })}
             </ol>
+            {editorial !== null && editorial.outcomes !== null
+              && <p className="market-editorial-note">The outcome names beside the claim indices are this site&apos;s editorial; the indices, atoms, and every figure above are the chain&apos;s.</p>}
             <h3 className="detail-subhead">Hoard</h3>
             {decoded.hoard.status === 'derived'
               ? <dl className="detail-facts">

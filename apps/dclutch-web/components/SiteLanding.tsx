@@ -5,6 +5,7 @@ import LandingPulse from '@/components/charts/LandingPulse';
 
 import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
+import { marketEditorialV1 } from '@/lib/marketRegistry';
 import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@/lib/publicCutStaging';
 
 /**
@@ -22,6 +23,12 @@ import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@/lib/publicCutStag
  * No chain is read here and no address is asked for. Every card is a link.
  */
 export default function SiteLanding() {
+  // The featured market's editorial name, when the shipped registry has one.
+  // The cut names the address; the registry names the market. Either can be
+  // absent and the sentence below stays true without it.
+  const featuredTitle = PUBLIC_DEVNET_CUT_V1.market === null
+    ? null
+    : marketEditorialV1(PUBLIC_DEVNET_CUT_V1.market)?.title ?? null;
   return <main className="product-shell trade-v3-shell">
     <Nav current="/" status="live devnet programs" />
 
@@ -47,7 +54,7 @@ export default function SiteLanding() {
         tokens are worthless by construction. The programs are deployed{' '}
         {PUBLIC_DEVNET_CUT_V1.market === null
           ? <>and the first markets are being set up.</>
-          : <>and the first market is <Anchor href={publicCutMarketHrefV1(PUBLIC_DEVNET_CUT_V1)}>open</Anchor>.</>} There
+          : <>and the first market is <Anchor href={publicCutMarketHrefV1(PUBLIC_DEVNET_CUT_V1)}>open{featuredTitle === null ? '' : ` — ${featuredTitle}`}</Anchor>.</>} There
         is no token, nothing to buy, and no value at risk anywhere.</p>
       </aside>
     </section>

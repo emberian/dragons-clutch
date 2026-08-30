@@ -21,6 +21,7 @@ import {
   type MarketListingV1,
 } from '@/lib/marketDiscovery';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
+import { fallbackMarketTitleV1, marketEditorialV1 } from '@/lib/marketRegistry';
 import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
@@ -63,12 +64,19 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
       <p className="market-observation">Finalized observation slot {card.observedSlot}</p>
     </article>;
   }
+  // The name is the one editorial fact on the card: the chain stores no
+  // titles, so a market the registry knows gets its registered name and
+  // question, and one it does not gets a generated label that says exactly
+  // what it is instead of pretending to a name.
+  const editorial = marketEditorialV1(card.address);
   return <article className="market-discovery-card">
     <div className="market-card-top">
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
       <span className={`phase-chip phase-${card.phase.toLowerCase()}`}>{card.phase}</span>
     </div>
-    <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
+    <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{editorial === null ? fallbackMarketTitleV1(card.phase, card.address) : editorial.title}</Anchor></h3>
+    {editorial !== null && <p className="market-question">{editorial.question}</p>}
+    <p className="market-card-address" title={card.address}>{shortAddressV1(card.address, 10)}</p>
     <dl className="market-card-facts">
       <div><dt>Generation</dt><dd>{card.generation}</dd></div>
       <div><dt>Founding readiness</dt><dd>{card.readiness}</dd></div>
@@ -301,7 +309,7 @@ export default function MarketDiscoveryWorkspace() {
     <section className="trade-v3-card">
       <header>
         <span>01</span>
-        <div><h2>The markets that are open</h2><p>One card per market that has finished founding, enumerated from the Core program itself — no index, no curation of which facts you see. A card is either read or refused; it is never partly invented. Claim counts come from the accounts that actually hold the claims, in raw units.</p></div>
+        <div><h2>The markets that are open</h2><p>One card per market that has finished founding, enumerated from the Core program itself — no index, no curation of which facts you see. A card is either read or refused; it is never partly invented. Claim counts come from the accounts that actually hold the claims, in raw units. The name and question at the top of a card are this site&apos;s editorial — the chain stores no names; everything else on the card is read from the chain.</p></div>
         <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read the chain'}</button></div>
       </header>
       {state.kind === 'refused'

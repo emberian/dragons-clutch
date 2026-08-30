@@ -64,3 +64,38 @@ describe('Market detail route', () => {
     expect(html).not.toContain('Submit');
   });
 });
+
+/**
+ * The editorial layer on detail: a registered market leads with its name,
+ * question, and story — and in the same breath says whose words those are.
+ * The words render before any read succeeds, because they are not chain data
+ * and must never pretend to be gated on it.
+ */
+describe('a market the shipped registry names', () => {
+  const FLAGSHIP = '7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC';
+  const html = renderToStaticMarkup(<MarketDetailWorkspace address={FLAGSHIP} />);
+
+  it('leads with the registered name and question', () => {
+    expect(html).toContain('SOL/USD range — the first public market');
+    expect(html).toContain('Where does the SOL/USD price finish this market&#x27;s window');
+    // The address does not disappear behind the name.
+    expect(html).toContain(FLAGSHIP);
+  });
+
+  it('tells the permanent disposition as history, not breakage', () => {
+    expect(html).toContain('never switched on');
+    expect(html).toContain('readable forever');
+    expect(html).not.toContain('broken');
+  });
+
+  it('says whose words the name and story are, right where they render', () => {
+    expect(html).toContain('the chain stores no names');
+  });
+
+  it('renders no editorial words for an address the registry does not know', () => {
+    const bare = renderToStaticMarkup(<MarketDetailWorkspace address={ADDRESS} />);
+    expect(bare).not.toContain('market-question');
+    expect(bare).not.toContain('market-story');
+    expect(bare).not.toContain('the chain stores no names');
+  });
+});
