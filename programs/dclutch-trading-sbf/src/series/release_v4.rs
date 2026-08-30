@@ -287,7 +287,10 @@ pub fn assemble_series_consume_descriptor_v4(
                 supplied.request_profile_schema,
                 emitted.request_profile_id(),
             )?,
-            lifecycle: reference(supplied.lifecycle_schema, hash(supplied.lifecycle).to_bytes())?,
+            lifecycle: reference(
+                supplied.lifecycle_schema,
+                hash(supplied.lifecycle).to_bytes(),
+            )?,
             strategy: reference(supplied.strategy_schema, hash(supplied.strategy).to_bytes())?,
             transition: reference(supplied.transition_schema, emitted.transition_id())?,
             effect: reference(supplied.effect_schema, hash(supplied.effect).to_bytes())?,
@@ -375,8 +378,7 @@ pub struct SeriesConsumeSelectedPublicationV4 {
 /// Canonical publication magic.
 pub const SERIES_CONSUME_PUBLICATION_MAGIC_V4: [u8; 8] = *b"DCSRPB04";
 /// Exact canonical publication width.
-pub const SERIES_CONSUME_PUBLICATION_BYTES_V4: usize =
-    16 + PUBLICATION_IDENTITY_COUNT * 32 + 8;
+pub const SERIES_CONSUME_PUBLICATION_BYTES_V4: usize = 16 + PUBLICATION_IDENTITY_COUNT * 32 + 8;
 
 const PUBLICATION_VERSION: u16 = 4;
 const PUBLICATION_IDENTITY_COUNT: usize = 10;
@@ -457,9 +459,8 @@ pub fn encode_series_consume_strategy_v4(
     shadow_certificate_program: ContentId,
     transition_program: ContentId,
 ) -> SelectedResult<[u8; EXECUTION_STRATEGY_PROGRAM_BYTES_V2]> {
-    let schema = |bytes: [u8; 32]| {
-        ContentId::new(bytes).map_err(|_| SeriesSelectedReleaseErrorV4::Strategy)
-    };
+    let schema =
+        |bytes: [u8; 32]| ContentId::new(bytes).map_err(|_| SeriesSelectedReleaseErrorV4::Strategy);
     Ok(ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::ShadowAot,
         schema(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
@@ -538,7 +539,8 @@ fn encode_series_consume_descriptor_framed_v4(
         hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes(),
         hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes(),
         template.to_bytes(),
-        u32::try_from(SERIES_STATE_BYTES_V3).map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?,
+        u32::try_from(SERIES_STATE_BYTES_V3)
+            .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?,
     )
     .map_err(|_| SeriesSelectedReleaseErrorV4::Descriptor)?
     .encode())
@@ -591,7 +593,11 @@ pub fn series_consume_selected_release_v4(
     )?;
 
     let descriptor = encode_series_consume_descriptor_framed_v4(
-        &emitted, &effect, &lifecycle, &strategy, input.template,
+        &emitted,
+        &effect,
+        &lifecycle,
+        &strategy,
+        input.template,
     )?;
 
     let descriptor_id = hash(&descriptor).to_bytes();
@@ -690,10 +696,7 @@ mod tests {
         .expect("emit");
         AccountProfileV2::decode(&emitted.account_profile).expect("account profile decodes");
         RequestProfileV1::decode(&emitted.request_profile).expect("request profile decodes");
-        assert_eq!(
-            emitted.transition.len(),
-            SERIES_CONSUME_TRANSITION_BYTES_V4
-        );
+        assert_eq!(emitted.transition.len(), SERIES_CONSUME_TRANSITION_BYTES_V4);
     }
 
     /// Emission is deterministic, which is what lets a digest address it.
@@ -895,8 +898,7 @@ mod tests {
         // joins the profile, and is still refused at the nonzero-Consume-plan
         // conjunct.
         for action in [SeriesActionV3::Prepare, SeriesActionV3::Expire] {
-            let single_action =
-                crate::series::artifacts_v4::tests::hostile_policy(action, 0, None);
+            let single_action = crate::series::artifacts_v4::tests::hostile_policy(action, 0, None);
             let (descriptor, program_set) = release_around_lifecycle(&release, &single_action);
             assert_eq!(
                 authenticate(&release, &single_action, &descriptor, &program_set),
@@ -1007,14 +1009,7 @@ mod tests {
         };
         assert_eq!(
             assemble_series_consume_descriptor_v4(
-                &emitted,
-                supplied,
-                [9; 32],
-                [10; 32],
-                [11; 32],
-                [12; 32],
-                [13; 32],
-                64,
+                &emitted, supplied, [9; 32], [10; 32], [11; 32], [12; 32], [13; 32], 64,
             ),
             Err(SeriesReleaseErrorV4::EmptyArtifact)
         );

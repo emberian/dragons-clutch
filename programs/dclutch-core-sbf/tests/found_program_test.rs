@@ -2468,16 +2468,14 @@ async fn a_strangers_lamport_cannot_strand_a_scheduled_series_occurrence() {
     context
         .banks_client
         .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
-            &[
-                solana_system_interface::instruction::transfer(
-                    &payer,
-                    &griefer.pubkey(),
-                    Rent::default()
-                        .minimum_balance(0)
-                        .checked_mul(64)
-                        .expect("griefer funding"),
-                ),
-            ],
+            &[solana_system_interface::instruction::transfer(
+                &payer,
+                &griefer.pubkey(),
+                Rent::default()
+                    .minimum_balance(0)
+                    .checked_mul(64)
+                    .expect("griefer funding"),
+            )],
             Some(&payer),
             &[&context.payer],
             blockhash,
@@ -2595,5 +2593,8 @@ async fn a_market_short_of_its_occurrences_budgeted_rent_still_refuses() {
         "the fault must actually have been applied"
     );
     assert_eq!(market.owner, system_program::ID);
-    assert!(market.data.is_empty(), "the refused found allocated nothing");
+    assert!(
+        market.data.is_empty(),
+        "the refused found allocated nothing"
+    );
 }

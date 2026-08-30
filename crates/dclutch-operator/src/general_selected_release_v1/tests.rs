@@ -133,7 +133,10 @@ fn the_publication_satisfies_the_market_selection_hook() {
     assert_eq!(publication.selector_width, 1);
 
     // (3) one entry per authored action.
-    assert_eq!(usize::from(publication.action_count), GENERAL_ACTIONS_V3.len());
+    assert_eq!(
+        usize::from(publication.action_count),
+        GENERAL_ACTIONS_V3.len()
+    );
     let set = CapabilityProgramSetV2::decode(&release.program_set).expect("set");
     assert_eq!(usize::from(set.entry_count()), GENERAL_ACTIONS_V3.len());
     assert_eq!(
@@ -199,7 +202,10 @@ fn the_release_is_reproducible_and_moves_with_every_named_fact() {
         other.publication.publication_id(),
         first.publication.publication_id()
     );
-    assert_ne!(other.publication.program_set_id, first.publication.program_set_id);
+    assert_ne!(
+        other.publication.program_set_id,
+        first.publication.program_set_id
+    );
 
     // So must a config coordinate, which travels through the config digest.
     let mut regenerated = input();
@@ -390,7 +396,10 @@ fn the_publication_record_list_names_every_record_under_a_derived_schema() {
     // the config raw record under -- not a constant restated here.
     let first = CapabilityProgramV4::decode(&release.bundles[0].descriptor).expect("descriptor");
     assert_eq!(records[1].schema, first.config_schema().to_bytes());
-    assert_eq!(first.config_schema().to_bytes(), GENERAL_CONFIG_SCHEMA_ID_V3);
+    assert_eq!(
+        first.config_schema().to_bytes(),
+        GENERAL_CONFIG_SCHEMA_ID_V3
+    );
 
     // And the lifecycle record travels under the V5 selected-lifecycle schema
     // the descriptor names, which is the artifact carrying the seed order.

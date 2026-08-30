@@ -616,8 +616,8 @@ mod tests {
 
     use super::*;
     use crate::series::{
-        generated,
         commit_plans::{plan_close, plan_retire},
+        generated,
         state::TicketPhaseV3,
     };
 

@@ -14,6 +14,14 @@ pub mod accounts;
 pub mod artifacts_v3;
 /// Schema-bound V4 descriptor and global DCE5 Consume artifact admission.
 pub mod artifacts_v4;
+/// Commit-last occurrence, funding, and terminal plans for recurring Series V3.
+///
+/// This module is deliberately NOT named "lifecycle": the protocol-wide term
+/// means the `StateLifecyclePolicyV5` artifact a capability release binds
+/// (see [`release_v4`]), while everything here plans the FUNDING and
+/// commit-last replay flows — `FundingStateV1` top-ups, Ticket refunds,
+/// occurrence commits, retirement, and closure.
+pub mod commit_plans;
 /// Canonical typed emitters for the occurrence-specific Consume artifacts.
 pub mod consume_artifacts_v4;
 /// Complete Core/Custody/replay physical plans behind authenticated actions.
@@ -29,14 +37,6 @@ pub mod instruction;
 mod kernel_adapter;
 /// The Series `StateLifecyclePolicyV5`: root-only, derived, lamport-silent.
 pub mod lifecycle_policy_v5;
-/// Commit-last occurrence, funding, and terminal plans for recurring Series V3.
-///
-/// This module is deliberately NOT named "lifecycle": the protocol-wide term
-/// means the `StateLifecyclePolicyV5` artifact a capability release binds
-/// (see [`release_v4`]), while everything here plans the FUNDING and
-/// commit-last replay flows — `FundingStateV1` top-ups, Ticket refunds,
-/// occurrence commits, retirement, and closure.
-pub mod commit_plans;
 /// Chain-derived unsigned hot-action request construction.
 pub mod operator;
 /// Canonical projected-Hoard Custody request construction.

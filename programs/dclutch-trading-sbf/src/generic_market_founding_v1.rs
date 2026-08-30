@@ -1273,7 +1273,9 @@ pub(crate) fn raw_account_bytes(
         .map_err(|_| TradingSbfError::Content.into())
 }
 
-pub(crate) fn decode_found_request(bytes: &[u8]) -> Result<Box<GenericFoundingRequestV1>, ProgramError> {
+pub(crate) fn decode_found_request(
+    bytes: &[u8],
+) -> Result<Box<GenericFoundingRequestV1>, ProgramError> {
     let request = GenericFoundingRequestV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
     if request.stage() != GenericFoundingStageV1::FoundAndPermit {
         return Err(TradingSbfError::Content.into());
@@ -1281,13 +1283,17 @@ pub(crate) fn decode_found_request(bytes: &[u8]) -> Result<Box<GenericFoundingRe
     Ok(Box::new(request))
 }
 
-pub(crate) fn decode_projected_request(bytes: &[u8]) -> Result<Box<ProjectedCustodyRequestV1>, ProgramError> {
+pub(crate) fn decode_projected_request(
+    bytes: &[u8],
+) -> Result<Box<ProjectedCustodyRequestV1>, ProgramError> {
     ProjectedCustodyRequestV1::decode(bytes)
         .map(Box::new)
         .map_err(|_| TradingSbfError::Content.into())
 }
 
-pub(crate) fn decode_claims_request(bytes: &[u8]) -> Result<Box<ClaimsFoundingRequestV5>, ProgramError> {
+pub(crate) fn decode_claims_request(
+    bytes: &[u8],
+) -> Result<Box<ClaimsFoundingRequestV5>, ProgramError> {
     ClaimsFoundingRequestV5::decode(bytes)
         .map(Box::new)
         .map_err(|_| TradingSbfError::Content.into())
