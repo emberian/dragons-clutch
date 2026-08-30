@@ -277,7 +277,17 @@ if stage_needed archive "$SOURCE_DIGEST"; then
     say "stage archive"
     rm -rf "$SOURCE"
     mkdir -p "$SOURCE"
-    git -C "$REPO" archive "$SOURCE_REVISION" | tar -x -C "$SOURCE"
+    # `-m` -- extract at NOW, not at the commit's timestamp.
+    #
+    # `git archive` stamps every file with the commit time, and the build
+    # target directory lives outside $SOURCE and survives across commits. So a
+    # newly extracted tree whose commit predates the last build looks OLDER
+    # than that build's outputs, cargo rebuilds nothing, and the ELF stage
+    # copies and digests the PREVIOUS commit's artifact -- replaying its cached
+    # warnings and its frame diagnostics as though they were this commit's.
+    # Caught 2026-08-30: a fix for seven frame diagnostics reported seven,
+    # under an ELF digest identical to the unfixed build's.
+    git -C "$REPO" archive "$SOURCE_REVISION" | tar -xm -C "$SOURCE"
     stage_done archive "$SOURCE_DIGEST"
 else
     echo "stage archive: up to date"
@@ -320,8 +330,15 @@ if [ "$MODE" = "full" ]; then
             cp "$BUILD_TARGET/deploy/$stem.so" "$ELF_DIR/$role.so"
             count="$(grep -c "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
             printf '%s=%s\n' "$role" "$count" >> "$WORK/build-diagnostics.txt"
-            printf '  %s  %s (%s frame diagnostics)\n' \
-                "$(sha256 "$ELF_DIR/$role.so")" "$role" "$count"
+            # Whether this build actually compiled the crate. cargo replays a
+            # cached build's warnings AND the SBF backend's frame errors, so a
+            # count from a build that recompiled nothing is the previous
+            # commit's answer wearing this one's name. Reported, not refused:
+            # on an unchanged source digest, reusing is correct.
+            fresh="reused"
+            grep -q "Compiling $package " "$LOGS/build-$role.log" && fresh="recompiled"
+            printf '  %s  %s (%s frame diagnostics, %s)\n' \
+                "$(sha256 "$ELF_DIR/$role.so")" "$role" "$count" "$fresh"
         done
         stage_done elf "$SOURCE_DIGEST"
     else
