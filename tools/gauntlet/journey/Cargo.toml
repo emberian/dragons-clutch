@@ -25,7 +25,9 @@ dclutch-capability-program-contract = { path = "../../../crates/dclutch-capabili
 dclutch-claims-svm = { path = "../../../crates/dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
+dclutch-general-adapter-contract = { path = "../../../crates/dclutch-general-adapter-contract" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
+dclutch-operator = { path = "../../../crates/dclutch-operator" }
 dclutch-market-founding-v1-operator = { path = "../../../crates/dclutch-market-founding-v1-operator" }
 dclutch-product-runtime-v2 = { path = "../../../crates/dclutch-product-runtime-v2" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
@@ -52,6 +54,9 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
 sha2 = "=0.10.9"
 solana-hash = "=4.6.0"
+# `market.rs` checks an address-lookup-table's owner. Pinned to the same
+# version the successor pins, because these two compile the same file.
+solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-loader-v3-interface = { version = "=6.1.0", features = ["bincode"] }
 solana-sdk = "=3.0.0"
