@@ -15,16 +15,20 @@ import { docsIndexHrefV1 } from '@/lib/flags';
  * ends that class of drift: a page states which path it is and the rest is
  * decided here.
  *
- * The canonical set is the product: Markets · Design · Portfolio · Explorer ·
- * Docs — plus one Console entry for the operator workspaces, which are indexed
- * at /console instead of competing for top-level slots. A console route lights
- * the Console entry so the reader always knows which side of the site they are
- * on.
+ * The canonical set is the product: Live · Markets · Pulse · Activity ·
+ * Design · Portfolio · Explorer · Docs — plus one Console entry for the
+ * operator workspaces, which are indexed at /console instead of competing for
+ * top-level slots. A console route lights the Console entry so the reader
+ * always knows which side of the site they are on. Pulse and Activity are the
+ * two aliveness surfaces; they earned their slots the day they became
+ * reachable only by typing a URL.
  */
 
 const PRODUCT_ITEMS = [
   { href: '/live', label: 'Live' },
   { href: '/markets', label: 'Markets' },
+  { href: '/pulse', label: 'Pulse' },
+  { href: '/activity', label: 'Activity' },
   { href: '/create', label: 'Design' },
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/explorer', label: 'Explorer' },

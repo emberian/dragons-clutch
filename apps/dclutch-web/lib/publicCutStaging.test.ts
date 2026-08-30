@@ -23,8 +23,10 @@ describe('public devnet cut staging', () => {
     // atomic DCLTGMF3 whose signature the cut carries.
     expect(PUBLIC_DEVNET_CUT_V1.market).toBe('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC');
     expect(PUBLIC_DEVNET_CUT_V1.activity.found).not.toBeNull();
+    // The featured market is registry-named, so its permalink is the exported
+    // per-market page that carries its own title and share card.
     expect(publicCutMarketHrefV1()).toBe(
-      '/market?address=7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC',
+      '/markets/7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC',
     );
   });
 

@@ -59,6 +59,23 @@ export default function SiteLanding() {
       </aside>
     </section>
 
+    {/* The key art: the one image on the site, and it is the thesis — a
+        claw holding a faceted gem the way every market holds the collateral
+        that backs its claims. Serves the webp cut (a tenth the bytes); the
+        PNG master lives beside it in public/art/ for anyone who wants it. */}
+    <figure className="landing-key-art">
+      {/* eslint-disable-next-line @next/next/no-img-element -- the static
+          export has no image optimizer; the webp IS the optimized cut. */}
+      <img
+        src="/art/dragons-clutch-key-art-v1-1672w.webp"
+        alt="A dragon's claw cradling a glowing, faceted gem against a dark field — the dClutch key art."
+        width={1672}
+        height={941}
+        loading="lazy"
+      />
+      <figcaption>The clutch: every claim fully backed by collateral the market holds like treasure, paid out on the answer.</figcaption>
+    </figure>
+
     <section className="trade-v3-card">
       <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it; a zero means we read a zero. Where a total would have to span two different tokens you get both of them, each in its own units, because one figure covering both would be in no unit at all.</p></div></header>
       {/* FE-CHART mount: LandingPulse reads the counts from the active

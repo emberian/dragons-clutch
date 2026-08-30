@@ -11,7 +11,7 @@ import Nav from './Nav';
 describe('the site nav', () => {
   it('renders the canonical product set plus one Console entry, nothing else', () => {
     const html = renderToStaticMarkup(<Nav current="/markets" />);
-    for (const label of ['Live', 'Markets', 'Design', 'Portfolio', 'Explorer', 'Docs', 'Console']) {
+    for (const label of ['Live', 'Markets', 'Pulse', 'Activity', 'Design', 'Portfolio', 'Explorer', 'Docs', 'Console']) {
       expect(html).toContain(`>${label}</a>`);
     }
     // The retired per-page item sets must not creep back in.
