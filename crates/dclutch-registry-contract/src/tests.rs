@@ -2,8 +2,8 @@ extern crate std;
 
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
+    ArtifactReleaseIdV1, EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1,
+    ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 
 use crate::{
@@ -12,8 +12,10 @@ use crate::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, Error, ExecutionReleaseActivationInputsV1,
-    activate_execution_release_set_v1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
+    RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_MAGIC_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
+    RELEASE_LINEAGE_PDA_SEED_COUNT_V1, RELEASE_LINEAGE_PROFILE_V1,
+    RELEASE_LINEAGE_SCHEMA_VERSION_V1, ReleaseLineageV1, activate_execution_release_set_v1,
+    activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 
 const ROLE_CACHE_HEADER_BYTES: usize = 48;
@@ -735,4 +737,316 @@ fn activation_cache_decoder_refuses_malformed_headers_and_role_identities() {
             dclutch_release_set_contract::Error::ZeroArtifactReleaseId
         ))
     );
+}
+
+// ---------------------------------------------------------------------------
+// Release-set lineage
+// ---------------------------------------------------------------------------
+
+const LINEAGE_MOVED_ROLES_OFFSET: usize = 80;
+const LINEAGE_AUTHORITIES_OFFSET: usize = 88;
+
+fn lineage_consent(
+    moved: [bool; EXECUTION_ROLE_COUNT_V1],
+) -> [Option<[u8; 32]>; EXECUTION_ROLE_COUNT_V1] {
+    let mut consent = [None; EXECUTION_ROLE_COUNT_V1];
+    for role in EXECUTION_ROLE_ORDER_V1 {
+        let index = role.role_index();
+        if let Some(slot) = consent.get_mut(index).filter(|_| copied(&moved, index)) {
+            // A distinct authority per role, so a test that swapped two slots
+            // would be caught instead of comparing equal.
+            *slot = Some(bytes(0xa0 + u8::try_from(index).expect("role index is small")));
+        }
+    }
+    consent
+}
+
+fn lineage_fixture() -> ReleaseLineageV1 {
+    // Core and Trading moved; Claims, Resolution and Custody did not.
+    ReleaseLineageV1::new(
+        content(0x11),
+        content(0x22),
+        lineage_consent([true, false, true, false, false]),
+    )
+    .expect("canonical lineage fixture")
+}
+
+#[test]
+fn lineage_layout_is_the_wire_contract() {
+    assert_eq!(RELEASE_LINEAGE_BYTES_V1, 248);
+    assert_eq!(RELEASE_LINEAGE_MAGIC_V1, *b"DCLTRLN1");
+    assert_eq!(RELEASE_LINEAGE_PDA_DOMAIN_V1.len(), 26);
+    assert_eq!(RELEASE_LINEAGE_PDA_SEED_COUNT_V1, 2);
+    assert_eq!(
+        RELEASE_LINEAGE_PDA_DOMAIN_V1.as_slice(),
+        b"dclutch:release-lineage:v1".as_slice()
+    );
+
+    let encoded = lineage_fixture().to_bytes();
+    assert_eq!(encoded.len(), RELEASE_LINEAGE_BYTES_V1);
+    assert_eq!(
+        encoded.get(..8).expect("magic is in bounds"),
+        RELEASE_LINEAGE_MAGIC_V1.as_slice()
+    );
+    assert_eq!(
+        encoded.get(8..10).expect("schema is in bounds"),
+        RELEASE_LINEAGE_SCHEMA_VERSION_V1.to_le_bytes().as_slice()
+    );
+    assert_eq!(
+        encoded.get(10..12).expect("profile is in bounds"),
+        RELEASE_LINEAGE_PROFILE_V1.to_le_bytes().as_slice()
+    );
+    assert!(
+        encoded
+            .get(12..16)
+            .expect("header reserve is in bounds")
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    assert_eq!(
+        encoded.get(16..48).expect("predecessor is in bounds"),
+        bytes(0x11).as_slice()
+    );
+    assert_eq!(
+        encoded.get(48..80).expect("successor is in bounds"),
+        bytes(0x22).as_slice()
+    );
+    // Core and Trading moved; the other three did not, and the three bytes
+    // after the mask are reserve, not a sixth role.
+    assert_eq!(
+        encoded.get(80..85).expect("moved mask is in bounds"),
+        [1_u8, 0, 1, 0, 0].as_slice()
+    );
+    assert!(
+        encoded
+            .get(85..88)
+            .expect("mask reserve is in bounds")
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    assert_eq!(
+        encoded.get(88..120).expect("Core authority is in bounds"),
+        bytes(0xa0).as_slice()
+    );
+    assert!(
+        encoded
+            .get(120..152)
+            .expect("Claims authority is in bounds")
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    assert_eq!(
+        encoded.get(152..184).expect("Trading authority is in bounds"),
+        bytes(0xa2).as_slice()
+    );
+}
+
+#[test]
+fn lineage_roundtrips_and_reads_back_per_role() {
+    let lineage = lineage_fixture();
+    let decoded = ReleaseLineageV1::decode(&lineage.to_bytes()).expect("canonical lineage decodes");
+    assert_eq!(decoded, lineage);
+    assert_eq!(decoded.predecessor(), content(0x11));
+    assert_eq!(decoded.successor(), content(0x22));
+    assert_eq!(decoded.to_bytes(), lineage.to_bytes());
+
+    for (role, moved) in [
+        (ExecutionRoleV1::Core, true),
+        (ExecutionRoleV1::Claims, false),
+        (ExecutionRoleV1::Trading, true),
+        (ExecutionRoleV1::Resolution, false),
+        (ExecutionRoleV1::Custody, false),
+    ] {
+        assert_eq!(decoded.moved(role), moved, "{role:?} moved verdict");
+        assert_eq!(
+            decoded.consenting_authority(role).is_some(),
+            moved,
+            "{role:?} consent presence follows its moved verdict"
+        );
+    }
+    assert_eq!(
+        decoded.consenting_authority(ExecutionRoleV1::Core),
+        Some(bytes(0xa0))
+    );
+    assert_eq!(
+        decoded.consenting_authority(ExecutionRoleV1::Trading),
+        Some(bytes(0xa2))
+    );
+    assert_eq!(decoded.consenting_authority(ExecutionRoleV1::Claims), None);
+}
+
+#[test]
+fn lineage_header_hostiles_each_refuse_at_their_own_field() {
+    let encoded = lineage_fixture().to_bytes();
+    assert!(ReleaseLineageV1::decode(&encoded).is_ok());
+
+    for (offset, expected) in [
+        (0, Error::InvalidMagic),
+        (8, Error::UnsupportedSchema),
+        (10, Error::UnsupportedArtifactProfile),
+        (12, Error::NonCanonicalReservedBytes),
+        (85, Error::NonCanonicalReservedBytes),
+    ] {
+        let mut hostile = encoded;
+        flip_at(&mut hostile, offset);
+        assert_eq!(
+            ReleaseLineageV1::decode(&hostile),
+            Err(expected),
+            "flipping byte {offset} must refuse as {expected:?}"
+        );
+    }
+
+    let truncated = encoded
+        .get(..encoded.len() - 1)
+        .expect("truncated lineage slice is in bounds");
+    assert_eq!(
+        ReleaseLineageV1::decode(truncated),
+        Err(Error::InvalidLength)
+    );
+    let mut extended = encoded.to_vec();
+    extended.push(0);
+    assert_eq!(
+        ReleaseLineageV1::decode(&extended),
+        Err(Error::InvalidLength)
+    );
+    assert_eq!(ReleaseLineageV1::decode(&[]), Err(Error::InvalidLength));
+}
+
+#[test]
+fn lineage_refuses_a_zero_endpoint() {
+    for offset in [16, 48] {
+        let mut hostile = lineage_fixture().to_bytes();
+        zero_range(&mut hostile, offset, 32);
+        assert_eq!(
+            ReleaseLineageV1::decode(&hostile),
+            Err(Error::ZeroIdentity),
+            "a zero endpoint at {offset} is not an identity"
+        );
+    }
+}
+
+#[test]
+fn lineage_refuses_self_succession() {
+    assert_eq!(
+        ReleaseLineageV1::new(
+            content(0x11),
+            content(0x11),
+            lineage_consent([true, false, false, false, false]),
+        ),
+        Err(Error::LineageSelfSuccession)
+    );
+
+    // And on the wire, where the constructor was never called.
+    let mut hostile = lineage_fixture().to_bytes();
+    let predecessor = bytes(0x11);
+    hostile
+        .get_mut(48..80)
+        .expect("successor is in bounds")
+        .copy_from_slice(&predecessor);
+    assert_eq!(
+        ReleaseLineageV1::decode(&hostile),
+        Err(Error::LineageSelfSuccession)
+    );
+}
+
+#[test]
+fn lineage_refuses_a_hop_that_moved_nothing() {
+    assert_eq!(
+        ReleaseLineageV1::new(content(0x11), content(0x22), [None; EXECUTION_ROLE_COUNT_V1]),
+        Err(Error::LineageWithoutMovedRole)
+    );
+
+    let mut hostile = lineage_fixture().to_bytes();
+    zero_range(&mut hostile, LINEAGE_MOVED_ROLES_OFFSET, 5);
+    zero_range(
+        &mut hostile,
+        LINEAGE_AUTHORITIES_OFFSET,
+        EXECUTION_ROLE_COUNT_V1 * 32,
+    );
+    assert_eq!(
+        ReleaseLineageV1::decode(&hostile),
+        Err(Error::LineageWithoutMovedRole)
+    );
+}
+
+#[test]
+fn lineage_refuses_consent_that_disagrees_with_its_mask() {
+    // A role claimed as moved whose consent slot is empty: the forgery H2
+    // describes, seen by a reader who holds only the record.
+    let mut moved_without_authority = lineage_fixture().to_bytes();
+    zero_range(&mut moved_without_authority, LINEAGE_AUTHORITIES_OFFSET, 32);
+    assert_eq!(
+        ReleaseLineageV1::decode(&moved_without_authority),
+        Err(Error::NonCanonicalLineageConsent)
+    );
+
+    // A key recorded for a role that did not move: consent nobody asked for.
+    let mut authority_without_move = lineage_fixture().to_bytes();
+    authority_without_move
+        .get_mut(LINEAGE_AUTHORITIES_OFFSET + 32..LINEAGE_AUTHORITIES_OFFSET + 64)
+        .expect("Claims authority is in bounds")
+        .copy_from_slice(&bytes(0xbb));
+    assert_eq!(
+        ReleaseLineageV1::decode(&authority_without_move),
+        Err(Error::NonCanonicalLineageConsent)
+    );
+
+    // The mask is a canonical boolean, not any nonzero byte.
+    for hostile_byte in [2_u8, 0xff] {
+        let mut hostile = lineage_fixture().to_bytes();
+        if let Some(mask) = hostile.get_mut(LINEAGE_MOVED_ROLES_OFFSET + 1) {
+            *mask = hostile_byte;
+        }
+        assert_eq!(
+            ReleaseLineageV1::decode(&hostile),
+            Err(Error::NonCanonicalLineageConsent),
+            "mask byte {hostile_byte} is not a canonical moved flag"
+        );
+    }
+
+    // And the constructor cannot be handed a zero key wearing `Some`.
+    let mut consent = lineage_consent([true, false, false, false, false]);
+    if let Some(slot) = consent.get_mut(0) {
+        *slot = Some([0; 32]);
+    }
+    assert_eq!(
+        ReleaseLineageV1::new(content(0x11), content(0x22), consent),
+        Err(Error::NonCanonicalLineageConsent)
+    );
+}
+
+#[test]
+fn lineage_consent_is_indexed_by_the_canonical_role_order() {
+    // The record's authority table is role-indexed, so a consumer that walked
+    // it in any other order would read another role's consent. This pins the
+    // order to its sole author rather than to a second copy of it here.
+    let consent = lineage_consent([false, true, false, false, true]);
+    let lineage =
+        ReleaseLineageV1::new(content(0x33), content(0x44), consent).expect("lineage constructs");
+    let encoded = lineage.to_bytes();
+    for role in EXECUTION_ROLE_ORDER_V1 {
+        let index = role.role_index();
+        let slot = encoded
+            .get(LINEAGE_AUTHORITIES_OFFSET + index * 32..LINEAGE_AUTHORITIES_OFFSET + (index + 1) * 32)
+            .expect("authority slot is in bounds");
+        match lineage.consenting_authority(role) {
+            Some(authority) => assert_eq!(slot, authority.as_slice(), "{role:?} authority slot"),
+            None => assert!(
+                slot.iter().all(|byte| *byte == 0),
+                "{role:?} slot must stay zero"
+            ),
+        }
+        assert_eq!(
+            copied(
+                encoded
+                    .get(LINEAGE_MOVED_ROLES_OFFSET..LINEAGE_MOVED_ROLES_OFFSET + 5)
+                    .and_then(|mask| <[u8; 5]>::try_from(mask).ok())
+                    .as_ref()
+                    .expect("mask is exactly five bytes"),
+                index
+            ) == 1,
+            lineage.moved(role),
+            "{role:?} mask byte must sit at its own role index"
+        );
+    }
 }
