@@ -392,15 +392,44 @@ tier_programs() {
     fi
   fi
 
-  local manifest built_all=1
+  # WHY THE BUILD OUTPUT IS READ AND NOT DISCARDED.
+  #
+  # `cargo build-sbf` exits ZERO when the SBF backend reports that a call
+  # overwrites its own stack frame and "may cause undefined behavior during
+  # execution". The ELF that comes out is well formed and every downstream
+  # check passes on it, so the diagnostic is the only signal there is -- and
+  # this loop used to send stdout to /dev/null, which meant the one gate that
+  # builds the DEPLOYED role links could not see it even in principle.
+  #
+  # It went unseen on 2026-08-30: seven diagnostics on the shipped Trading
+  # link, in `direct_replay_setup_v1::invoke_replay_child_v1`, introduced by an
+  # eight-byte account widening that pushed a 4,088-byte frame to 4,096. The
+  # accelerator links have had a hard gate since 2026-08-27
+  # (programs/dclutch-trading-sbf/program-test/run-program-test.sh); the role
+  # links had one nowhere, and a lane found these by reading build output on
+  # the way past.
+  #
+  # The count is a detector, not a measurement -- it counts call sites inside
+  # an already-over-bound function, so it says nothing until the wall is hit.
+  # `tools/sbf-frame-sizes.py` measures the frames themselves and is what to
+  # reach for after this refuses.
+  local diagnostic_pattern='overwrites values in the frame'
+  local manifest built_all=1 frame_diagnostics=0 link count
   for manifest in $PROGRAM_MANIFESTS; do
-    note "build $(basename "$(dirname "$manifest")")"
+    link="$(basename "$(dirname "$manifest")")"
+    note "build $link"
     if ! (cd "$build_root" && cargo build-sbf --manifest-path "$manifest" \
-      --sbf-out-dir "$elf_dir" >/dev/null 2>"$elf_dir/build.err"); then
+      --sbf-out-dir "$elf_dir" >"$elf_dir/build-$link.log" 2>&1); then
       note "BUILD FAILED: $manifest"
-      tail -n 40 "$elf_dir/build.err" >&2
+      tail -n 40 "$elf_dir/build-$link.log" >&2
       built_all=0
       break
+    fi
+    count="$(grep -c "$diagnostic_pattern" "$elf_dir/build-$link.log" || true)"
+    if [ "${count:-0}" != 0 ]; then
+      note "$link: $count SBF stack-frame-overwrite diagnostics"
+      grep "$diagnostic_pattern" "$elf_dir/build-$link.log" | sort -u >&2
+      frame_diagnostics=$((frame_diagnostics + count))
     fi
   done
 
@@ -408,6 +437,18 @@ tier_programs() {
     # A build failure IS a gate failure, not a missing prerequisite: the
     # toolchain was present and this tree did not compile.
     record programs $EXIT_GATE_FAILED "an SBF program did not build"
+    [ -n "$owned" ] && rm -rf -- "$elf_dir"
+    [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
+    return
+  fi
+
+  if [ "$frame_diagnostics" != 0 ]; then
+    note "REFUSING: $frame_diagnostics SBF stack-frame-overwrite diagnostics on"
+    note "a link this gate builds. The toolchain says these calls may cause"
+    note "undefined behavior during execution, so no measurement is taken on"
+    note "top of them. Measure the frames with tools/sbf-frame-sizes.py."
+    record programs $EXIT_GATE_FAILED \
+      "$frame_diagnostics SBF stack-frame-overwrite diagnostics"
     [ -n "$owned" ] && rm -rf -- "$elf_dir"
     [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
     return

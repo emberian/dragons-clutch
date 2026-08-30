@@ -327,15 +327,33 @@ if [ "$MODE" = "full" ]; then
     else
         echo "stage elf: up to date"
     fi
-    # Say it once more, loudly and in aggregate. `cargo build-sbf` exits zero
-    # on these, so the only thing standing between a potentially-undefined
-    # artifact and a campaign is somebody reading the build output.
+    # And REFUSE, in aggregate. This was a warning until 2026-08-30, on the
+    # reasoning that the campaign is evidence and evidence should still be
+    # produced. That reasoning was wrong twice over: evidence gathered on an
+    # artifact the toolchain calls potentially-undefined is evidence about
+    # nothing in particular, and a warning in the output of a tool that prints
+    # thousands of lines is read by whoever happens to be looking.
+    #
+    # It was not read. Seven diagnostics rode the shipped Trading link -- in
+    # `direct_replay_setup_v1::invoke_replay_child_v1`, from an eight-byte
+    # account widening that pushed a 4,088-byte frame to 4,096 -- and were
+    # found by a lane reading this build output while answering an unrelated
+    # question. `run-program-test.sh` has refused on the ACCELERATOR links
+    # since 2026-08-27 and says in its own header why the role links matter
+    # too; this closes that half.
+    #
+    # `tools/sbf-frame-sizes.py` measures the frames themselves, which is the
+    # number to reach for once this refuses: the count below is a detector at
+    # the wall, not a distance to it.
     if [ -f "$WORK/build-diagnostics.txt" ]; then
         noisy="$(awk -F= '$2 != 0 {printf "%s(%s) ", $1, $2}' "$WORK/build-diagnostics.txt")"
         if [ -n "$noisy" ]; then
-            echo "gauntlet WARNING: SBF stack-frame-overwrite diagnostics: $noisy" >&2
-            echo "gauntlet WARNING: the toolchain says these calls may cause undefined behavior during execution." >&2
+            echo "gauntlet: SBF stack-frame-overwrite diagnostics: $noisy" >&2
             grep -h "$DIAGNOSTIC_PATTERN" "$LOGS"/build-*.log | sort -u >&2
+            # Drop the stage stamp, or the next run reads "stage elf: up to
+            # date" and never rebuilds the link it just refused.
+            rm -f "$STAMPS/elf"
+            die "the toolchain says these calls may cause undefined behavior during execution. Refusing to run a campaign on them; measure the frames with tools/sbf-frame-sizes.py."
         fi
     fi
 fi
