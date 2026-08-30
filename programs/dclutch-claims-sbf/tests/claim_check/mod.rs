@@ -1437,3 +1437,148 @@ async fn the_escrow_closes_once_its_last_claim_check_is_redeemed() {
         "and paid no more than the two accounts actually held"
     );
 }
+
+// ------------------------------------------------------------- the whole arc
+
+/// THE END-TO-END ARC: A MARKET RETIRES ITS SLEEPING HOLDER'S POSITION, AND
+/// THE HOLDER STILL GETS PAID.
+///
+/// Census R3 says this is impossible: "one sleeping holder blocks retirement
+/// forever." Every step below runs against the real Claims, Core, Custody,
+/// Registry, Resolution and Token-2022 ELFs, in one context, in order.
+///
+/// resolve -> the holder sleeps -> a stranger opens the escrow -> the deadline
+/// elapses -> a stranger cranks -> the position and its admission close and the
+/// supply they held is retired -> the holder returns to a market whose
+/// machinery is gone and is paid -> the escrow closes and nothing remains.
+///
+/// # What this proves about R3, exactly
+///
+/// The claim is scoped deliberately. R3's blocker is a live position holding
+/// supply that only its absent owner can retire; what this asserts is that
+/// after the crank, that position does not exist and the supply it held is
+/// gone from the aggregate — so the sleeping holder is no longer a reason
+/// retirement cannot proceed. The remaining reasons are other rows.
+///
+/// # What it does NOT drive, and why
+///
+/// `market_closure_v1` itself is not called here, and that is a property of
+/// this fixture rather than of the feature. Its market carries Claims
+/// capability Positions (it is the representation campaign), and V1 compaction
+/// refuses those by design — section 10 says so and predicts exactly this: "a
+/// market with one unredeemed fractional shard still blocks retirement
+/// forever." Retiring THIS market needs the fractional route, not this one. A
+/// campaign whose market is all-native would close the final step, and nothing
+/// in the routes below would change.
+#[tokio::test]
+async fn a_market_retires_a_sleeping_holders_position_and_the_holder_is_still_paid() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let holder = fixture.actor.pubkey();
+    let holder_tokens = fixture
+        .terminal_accounts
+        .expect("terminal fixture")
+        .recipient;
+    let cranker = context.payer.pubkey();
+    let escrow = escrow_address(fixture.aggregate);
+    let vault = vault_address(fixture.aggregate);
+    let record = claim_check_address(fixture.aggregate, holder.to_bytes());
+    let admission = admission_address(fixture.aggregate, holder.to_bytes());
+
+    create_claims_custody_replay(&mut context, &fixture).await;
+    plant_admission(&mut context, &fixture).await;
+
+    // The holder's claims, and the supply the aggregate is carrying for them.
+    let opening = snapshot(&mut context, &fixture).await;
+    let owed_claims = lbv2_position_quantity(&opening.actor_position.data, WINNER);
+    let supply_before = lbv2_market_supply(&opening.aggregate.data, WINNER);
+    let hoard_before = token_amount(opening.hoard.as_ref().expect("Hoard"));
+    let tokens_before = token_amount(&observed(&mut context, holder_tokens).await);
+    assert_eq!(owed_claims, ACTOR_CLAIMS[WINNERS]);
+
+    // --- the holder sleeps; a stranger starts the clock ----------------------
+    open_and_elapse(&mut context, &fixture).await;
+
+    // --- a stranger turns the crank -----------------------------------------
+    let prestate = wallet_payout_prestate(&mut context, &fixture, fixture.actor_position).await;
+    let instruction = compaction_instruction(&fixture, cranker, &prestate);
+    let addresses = lookup_addresses(cranker, holder, &[instruction.clone()]);
+    let (table, _) =
+        create_live_lookup_table(&mut context, &addresses, "claims claim-check: the arc").await;
+    let cranked = submit_compaction(&mut context, instruction, table, &addresses, "the arc").await;
+    assert!(cranked.accepted, "the crank must commit");
+
+    // *** THE R3 CLAIM. *** The sleeping holder's position is gone and the
+    // supply it held is retired, so it is no longer a reason this market
+    // cannot retire.
+    for closed in [fixture.actor_position, admission] {
+        assert!(
+            maybe_observed(&mut context, closed)
+                .await
+                .is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
+            "the sleeping holder's accounts are gone"
+        );
+    }
+    let after_crank = observed(&mut context, fixture.aggregate).await;
+    assert_eq!(
+        lbv2_market_supply(&after_crank.data, WINNER),
+        supply_before - owed_claims,
+        "the aggregate no longer carries the sleeper's liability"
+    );
+    // Their collateral moved to an escrow only they can open -- it did not stay
+    // in the Hoard and it did not go to the cranker.
+    let escrowed = token_amount(&observed(&mut context, vault).await);
+    assert_eq!(escrowed, owed_claims, "the payout is in the vault");
+    assert_eq!(
+        token_amount(&observed(&mut context, fixture.terminal_accounts.expect("t").hoard).await),
+        hoard_before - owed_claims
+    );
+    assert_eq!(
+        token_amount(&observed(&mut context, holder_tokens).await),
+        tokens_before,
+        "and not one atom reached the holder yet -- nobody spent it for them"
+    );
+
+    // --- the holder returns, to a market whose machinery is gone -------------
+    let redeemed = submit_holder_signed(
+        &mut context,
+        &fixture,
+        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default()),
+        "claims claim-check: the sleeper finally returns",
+    )
+    .await;
+    assert!(redeemed.accepted, "the holder must be paid, however late");
+    assert_eq!(
+        token_amount(&observed(&mut context, holder_tokens).await),
+        tokens_before + owed_claims,
+        "paid exactly what a redemption in time would have paid"
+    );
+
+    // --- and the residue reaches zero ---------------------------------------
+    let closed = submit_opener_signed(
+        &mut context,
+        close_escrow_instruction(&fixture, cranker, holder_tokens),
+        "claims claim-check: the escrow closes",
+    )
+    .await;
+    assert!(closed.accepted, "a settled escrow must close");
+    for gone in [escrow, vault, record] {
+        assert!(
+            maybe_observed(&mut context, gone)
+                .await
+                .is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
+            "nothing of the claim-check machinery survives its last holder"
+        );
+    }
+
+    // Both ledgers close over the whole run: every atom the Hoard gave up
+    // reached the holder, and nothing is left in between.
+    assert_eq!(
+        token_amount(&observed(&mut context, holder_tokens).await) - tokens_before,
+        hoard_before
+            - token_amount(
+                &observed(&mut context, fixture.terminal_accounts.expect("t").hoard).await
+            ),
+        "collateral is conserved end to end"
+    );
+}
