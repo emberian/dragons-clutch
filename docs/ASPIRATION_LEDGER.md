@@ -41,7 +41,11 @@ calls *"the concrete expansion program"* —
 `docs/research/EXPANSION_FRONTIER_2026_08_25.md`, eight frontiers and a six-step
 implementation order — is referenced by exactly one file in the repository (the
 index), has never been amended in 1,209 commits, and the word "frontier" appears
-in `WAVE.md` **zero** times. Four kernels are proved and consumed by nothing.
+in `WAVE.md` **zero** times. ~~Four kernels are proved and consumed by
+nothing.~~ **Corrected 2026-08-30 (FRONTIER-2): one kernel is —
+`dclutch-liability-basis-v2-kernel`, 4,491 LOC, one dependency edge and that
+edge is the workspace member list. See M-9's dated amendment for the
+re-measurement of all four.**
 
 **2. Gen-1 and gen-2's stated intentions.** `WAVE.md:169` says *"Sweep of all
 1,509 commit messages."* That is gen-3. Dragons-Clutch's **5,106** commits, and
@@ -511,6 +515,43 @@ operations — they need a `FixedRole::Claims` child, and decision 0011 §3a
 records the open choice between adopting the Rational child ABI (which already
 executes all six, four of them under names that say "Structured") and giving
 Structured its own. That choice sits ahead of every artifact.
+
+**THE HEADLINE IS AMENDED, 2026-08-30 (FRONTIER-2). It is one kernel, not
+four, and the count in the table above is stale by more than a factor of two
+for the row it was most confident about.** Re-measured at HEAD by dependency
+edge — `rg -l '<crate>' --glob 'Cargo.toml'`, minus each crate's own manifest:
+
+| Crate | Referring manifests | Verdict |
+|---|---:|---|
+| `dclutch-liability-basis-v2-kernel` | **1** — the root workspace member list (`Cargo.toml:22`) and nothing else | **CONFIRMED ORPHAN.** 4,491 LOC |
+| `dclutch-structured-v2-kernel` | 4, including `programs/dclutch-claims-sbf/Cargo.toml:62` | **NOT AN ORPHAN.** Has a real caller |
+| `dclutch-dealer-scenario-kernel` | 2 — root, and `dclutch-dealer-codec` | Wired one hop, dead at the end of it |
+| `dclutch-representation-composition-v3-kernel` | **18** — root plus 17 crates, including `programs/dclutch-claims-sbf` | **GENUINELY WIRED.** The table above says "eight" |
+
+Three corrections follow, and the third is the one that matters.
+
+1. **`programs/dclutch-claims-sbf`'s Structured edge is a dev-dependency, and
+   that is correct by construction rather than a shortfall.** The manifest says
+   so in its own voice at `programs/dclutch-claims-sbf/Cargo.toml:59`: *"DEV
+   only: none of these reach the cdylib, and the ELF digest is the control."*
+   Under decision 0011 §3b Structured has no program and every route it can
+   execute is a Claims route, so the lowering is host-side and **no `programs/`
+   crate should depend on it.** A row that counts cdylib edges will score this
+   architecture as a failure forever.
+2. **F-5's count moved from eight to seventeen and nobody re-measured it.** The
+   table's "eight" was true when written; the tree kept wiring and the row did
+   not. This is the same decay the orphan triage names as its meta-finding
+   (`docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md`): *rows describing a gap
+   decay faster than the gap closes*.
+3. **"Four kernels consumed by nothing" survived because it was measured once.**
+   The headline is the most-quoted line in this section — the archaeology's A.4
+   re-inherited it, and the orphan triage was chartered against it — and it has
+   been wrong since Structured landed its caller on 08-27, which *this very
+   section already records two paragraphs above*. The row amended its own body
+   and left its own headline standing. **Anything citing "four proved kernels"
+   should cite one**, and the one is `dclutch-liability-basis-v2-kernel`, whose
+   missing consumer is not a wiring job but the ABI ruling in
+   `docs/design/BASIS_ABI_UNIFICATION_V1.md`.
 
 ### M-10. Every expansion frontier, verdicted
 
