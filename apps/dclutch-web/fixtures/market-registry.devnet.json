@@ -3,13 +3,25 @@
   "cluster": "devnet",
   "provenance": "The names, questions, outcome labels, and stories in this registry are site-side editorial: the chain stores none of them. Every number, phase, address, and refusal shown beside them is read from the chain.",
   "markets": {
+    "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq": {
+      "title": "SOL/USD range — the first market that can trade",
+      "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
+      "outcomes": [
+        "Below $120",
+        "Between $120 and $180",
+        "Above $180",
+        "The source failed to report"
+      ],
+      "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
+      "story": "The successor to the first public market, founded on 2026-08-30 to carry the one thing its predecessor was missing: a release that can switch trading on. Hours later it became the first market on any dClutch deployment to hold a live capability root — the account that has to exist before a single trade can be made — and the account is on devnet with the transaction that created it. The two markets founded before it stay open and readable, but they can never trade; this one can."
+    },
     "7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC": {
       "title": "SOL/USD range — the first public market",
-      "question": "Where does the SOL/USD price finish this market's window — below its range, inside it, or above it?",
+      "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
       "outcomes": [
-        "Below the range",
-        "Inside the range",
-        "Above the range",
+        "Below $120",
+        "Between $120 and $180",
+        "Above $180",
         "The source failed to report"
       ],
       "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
