@@ -170,6 +170,7 @@ fn cu_budgets_tolerance(band: u64) -> u64 {
 async fn the_public_direct_route_holds_its_compute_margin_across_thirty_two_seeds() {
     let artifacts = elves();
     let mut observations = Vec::with_capacity(GATE_SEEDS as usize);
+    let mut refusals: Vec<(u64, String)> = Vec::new();
 
     for seed in 0..GATE_SEEDS {
         // Every fixture key is drawn inside here, on this thread, with no
@@ -194,7 +195,7 @@ async fn the_public_direct_route_holds_its_compute_margin_across_thirty_two_seed
         add_lookup_table(&mut test, &addresses);
         let mut context = start_with_substrate(test, fixture_substrate()).await;
 
-        let execution = submit_v0_observed(
+        match submit_v0_observed(
             &mut context,
             &instructions,
             addresses,
@@ -202,16 +203,33 @@ async fn the_public_direct_route_holds_its_compute_margin_across_thirty_two_seed
             &[],
         )
         .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "seed {seed}: the public Direct route must EXECUTE, not refuse. \
-                 This is the acceptance criteria for a public trade, and a \
-                 refusal here is a broken route, not a margin question: {error:?}"
-            )
-        });
-
-        observations.push((seed, execution.compute_units_consumed));
+        {
+            Ok(execution) => observations.push((seed, execution.compute_units_consumed)),
+            Err(error) => refusals.push((seed, format!("{error:?}"))),
+        }
     }
+
+    // Every seed is reported before anything is asserted. The first version of
+    // this loop panicked at the first refusal, which is the one shape of red
+    // that tells a reader least: a route over the ceiling refuses on SOME
+    // draws, and "seed 13 refused" does not say whether that is one unlucky
+    // key or twenty. The sweep costs the same either way, so it finishes.
+    for (seed, units) in &observations {
+        println!("SEEDCU\t{seed}\t{units}");
+    }
+    for (seed, error) in &refusals {
+        println!("SEEDREFUSED\t{seed}\t{error}");
+    }
+    assert!(
+        refusals.is_empty(),
+        "{} of {GATE_SEEDS} seeds REFUSED rather than executed, {} of them executing: {refusals:?}. \
+         This is the acceptance criteria for a public trade, and a refusal here is a broken \
+         route, not a margin question. If every refusal is ComputationalBudgetExceeded, the \
+         route is over the protocol ceiling on those key draws -- see GATE_SEEDS on why a \
+         REBUILD alone redraws every bump depth on this route.",
+        refusals.len(),
+        observations.len(),
+    );
 
     let (worst_seed, worst) = observations
         .iter()
@@ -225,9 +243,6 @@ async fn the_public_direct_route_holds_its_compute_margin_across_thirty_two_seed
         .expect("the sweep ran at least one seed");
     let mean = observations.iter().map(|(_, units)| *units).sum::<u64>() / GATE_SEEDS;
 
-    for (seed, units) in &observations {
-        println!("SEEDCU\t{seed}\t{units}");
-    }
     let band = worst.saturating_sub(best);
     let tolerance = cu_budgets_tolerance(band);
     println!(
