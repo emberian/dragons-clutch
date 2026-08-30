@@ -19,16 +19,15 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
         DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
-        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
-        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-        HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
+        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
+        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
         HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
         HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
@@ -1899,7 +1898,7 @@ mod tests {
         hot_instruction_data.extend_from_slice(&request);
         let native = native_ed25519_instruction(
             DirectNativeEvidenceContainerV3::TradingHot,
-            2,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot_instruction_data,
             [seller.signature, buyer.signature],
         )
@@ -2563,7 +2562,7 @@ mod tests {
         hot.extend_from_slice(&request);
         let direct = native_ed25519_instruction(
             DirectNativeEvidenceContainerV3::TradingHot,
-            2,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot,
             [seller.signature, buyer.signature],
         )
@@ -2584,8 +2583,8 @@ mod tests {
             );
             assert_eq!(read_test_u16(&direct.data, descriptor + 10), 172);
             assert_eq!(read_test_u16(&direct.data, descriptor + 2), u16::MAX);
-            assert_eq!(read_test_u16(&direct.data, descriptor + 6), 2);
-            assert_eq!(read_test_u16(&direct.data, descriptor + 12), 2);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 6), 3);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 12), 3);
         }
 
         let registry = Instruction {
@@ -2856,20 +2855,22 @@ mod tests {
         assert_eq!(plan.required_signers, vec![payer]);
         assert_eq!(plan.message.required_signatures, 1);
         assert_eq!(plan.message.loaded_addresses, 89);
-        assert_eq!(plan.message.wire_bytes, 1_204);
+        assert_eq!(plan.message.wire_bytes, 1_212);
         assert_eq!(
             crate::versioned::PACKET_DATA_BYTES - plan.message.wire_bytes,
-            28
+            20
         );
         let message = match &plan.message.message {
             solana_message::VersionedMessage::V0(message) => message,
             _ => panic!("Direct compiler emitted a legacy message"),
         };
-        assert_eq!(message.instructions.len(), 3);
+        assert_eq!(message.instructions.len(), 4);
         assert_eq!(message.instructions[0].data, vec![2, 0xc0, 0x5c, 0x15, 0]);
-        assert_eq!(message.instructions[1].data.len(), 158);
-        assert_eq!(message.instructions[1].data[2 + 6], 2);
-        assert_eq!(message.instructions[1].data[2 + 12], 2);
+        // RequestHeapFrame(65_536): discriminant 1, then the u32 little-endian.
+        assert_eq!(message.instructions[1].data, vec![1, 0, 0, 1, 0]);
+        assert_eq!(message.instructions[2].data.len(), 158);
+        assert_eq!(message.instructions[2].data[2 + 6], 3);
+        assert_eq!(message.instructions[2].data[2 + 12], 3);
         assert_eq!(plan.outcome_count, 258);
         assert_eq!(
             plan.selected_program_schema,
@@ -2899,9 +2900,9 @@ mod tests {
                         ComputeBudgetInstruction::set_compute_unit_limit(1_399_999)
                 }
                 1 => hostile.instructions.swap(0, 1),
-                2 => hostile.instructions[1].data[2 + 4] ^= 1,
-                3 => hostile.instructions[1].data[2 + 6] ^= 1,
-                _ => hostile.instructions[1].data[2 + 12] ^= 1,
+                2 => hostile.instructions[2].data[2 + 4] ^= 1,
+                3 => hostile.instructions[2].data[2 + 6] ^= 1,
+                _ => hostile.instructions[2].data[2 + 12] ^= 1,
             }
             assert_eq!(
                 validate_direct_hot_instruction_sequence_v4(

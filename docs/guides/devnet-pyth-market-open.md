@@ -96,7 +96,7 @@ durable action per invocation:
 
 - `devnet-direct-trade-v1` materializes replay/token prestate, an exact frozen
   ALT, capability seal, then the Direct Hot v0 transaction. Its checked route
-  is 61 message accounts and 1,159 bytes.
+  is 61 message accounts and 1,167 bytes.
 - `devnet-sponsored-push-v1` captures the sponsored account into an immutable
   candidate, advances the canonical head, settles the best valid submitted
   candidate, and closes candidate/head accounts only after terminal state.

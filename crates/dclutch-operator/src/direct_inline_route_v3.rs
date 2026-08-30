@@ -10,7 +10,8 @@
 use crate::{
     Observation, ObservedAccount,
     direct_inline_v3::{
-        AuthenticatedDirectHotChainV4, CheckedHotOuterReleaseV3, DirectInlineHotReportV3,
+        AuthenticatedDirectHotChainV4, CheckedHotOuterReleaseV3,
+        DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1, DirectInlineHotReportV3,
         DirectInlineHotStateV3, DirectInlineHotTransactionPlanV3, ObservedAccountMetaV3,
         SignedDirectIntentV3, authenticate_direct_hot_chain_v4, compile_direct_inline_request_v3,
         validate_direct_hot_instruction_sequence_v4,
@@ -1766,9 +1767,13 @@ pub fn project_direct_inline_sealed_execution_report_v3(
 ) -> Result<DirectInlineHotReportV3, DirectInlineRoutedTransactionErrorV3> {
     authenticate_report_route(report, &route.physical, route.payer)?;
     let mut projected = report.clone();
+    // The TRADING instruction, whose account list the seal aliases rewrite --
+    // not the evidence instruction that now sits at index 2. This is indexed
+    // by the same constant the builder and validator use, because a bare index
+    // here silently rewrites the wrong instruction's accounts.
     let trading = projected
         .instructions
-        .get_mut(2)
+        .get_mut(usize::from(DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1))
         .ok_or(DirectInlineRoutedTransactionErrorV3::Instruction)?;
     for (raw, staging) in DIRECT_INLINE_SEALED_EXECUTION_ALIASES_V3 {
         let raw = trading
@@ -3171,6 +3176,7 @@ mod tests {
         },
     };
     use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+    use crate::direct_inline_v3::DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1;
 
     fn key(byte: u8) -> Pubkey {
         Pubkey::new_from_array([byte; 32])
@@ -4577,7 +4583,7 @@ mod tests {
         let mut native_data = vec![0_u8; native_bytes];
         encode_direct_native_evidence_many_v3_atomic(
             DirectNativeEvidenceContainerV3::TradingHot,
-            2,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot_instruction_data,
             3,
             &[seller.signature, buyer.signature],
@@ -4775,7 +4781,7 @@ mod tests {
         let mut native_data = vec![0_u8; native_bytes];
         encode_direct_native_evidence_many_v3_atomic(
             DirectNativeEvidenceContainerV3::TradingHot,
-            2,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot_instruction_data,
             3,
             &[[0x11; 64], [0x22; 64]],
@@ -5256,7 +5262,7 @@ mod tests {
             &table,
         )
         .expect("complete named route compiles");
-        assert_eq!(plan.message.wire_bytes, 1_159);
+        assert_eq!(plan.message.wire_bytes, 1_167);
         assert_eq!(plan.message.loaded_addresses, 57);
         assert_eq!(plan.message.message.static_account_keys().len(), 4);
         let base_lock_count =
@@ -5268,14 +5274,14 @@ mod tests {
                 payer,
                 compute_budget::ID,
                 ed25519_program::ID,
-                report.instructions[2].program_id,
+                report.instructions[3].program_id,
             ]
         );
         let VersionedMessage::V0(message) = &plan.message.message else {
             panic!("Direct Hot must compile as v0");
         };
-        assert_eq!(message.instructions.len(), 3);
-        assert_eq!(message.instructions[2].accounts.len(), 78);
+        assert_eq!(message.instructions.len(), 4);
+        assert_eq!(message.instructions[3].accounts.len(), 78);
         assert_eq!(physical.runtime_accounts.len(), 44);
         assert_eq!(provision.addresses.len(), 57);
         assert_eq!(message.address_table_lookups.len(), 1);
@@ -5294,7 +5300,7 @@ mod tests {
         );
         assert_eq!(
             crate::versioned::PACKET_DATA_BYTES - plan.message.wire_bytes,
-            73
+            65
         );
         assert_eq!(plan.required_signers, vec![payer]);
         assert_eq!(physical.fixed_accounts.len(), HOT_FIXED_ACCOUNT_COUNT_V3);
@@ -5426,7 +5432,7 @@ mod tests {
         report.trading_artifact_release = authenticated.chain.trading_artifact_release;
         report.checked_manifest_digest = authenticated.checked_manifest_digest;
         for (index, meta) in authenticated.physical.fixed_accounts.iter().enumerate() {
-            report.instructions[2].accounts[index] = AccountMeta {
+            report.instructions[3].accounts[index] = AccountMeta {
                 pubkey: meta.account.key,
                 is_signer: meta.is_signer,
                 is_writable: meta.is_writable,
@@ -5724,7 +5730,7 @@ mod tests {
     fn routed_compiler_refuses_instruction_or_class_substitution() {
         let (report, route, provision, table, payer) = fixture();
         let mut substituted = report.clone();
-        substituted.instructions[2].accounts[0].is_writable ^= true;
+        substituted.instructions[3].accounts[0].is_writable ^= true;
         assert_eq!(
             compile_direct_inline_routed_v0_v3(
                 &substituted,
