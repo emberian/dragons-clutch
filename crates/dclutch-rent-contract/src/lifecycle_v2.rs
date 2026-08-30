@@ -95,6 +95,8 @@ pub enum LifecycleRentErrorV2 {
     Arithmetic,
     /// Account privileges or runtime identities refused.
     InvalidFrame,
+    /// Observed post-balances did not match the exact sweep plan.
+    SweepPostcondition,
 }
 
 /// Result alias for lifecycle-scoped rent operations.
@@ -533,20 +535,84 @@ impl LifecycleRentInstructionV2 {
     }
 }
 
-/// Exact balance plan for a surplus sweep.
+/// Denominator of the crank's share of one admitted surplus sweep.
+///
+/// The reward is `min(rent_floor, swept / DIVISOR)`, so the refund wallet keeps
+/// at least `(DIVISOR - 1) / DIVISOR` of every admitted sweep.
+///
+/// **A ratio, deliberately, where `docs/design/FUNDED_CRANK_V1.md` §3 forbids a
+/// lamport literal.** That rule exists because a lamport constant goes stale
+/// when the fee market moves while `minimum_balance` re-derives itself every
+/// block — the magnitude here still comes from the Rent sysvar. A *share* is
+/// not a magnitude and does not go stale.
+///
+/// **Why a share rather than the plain `min(floor, residual)` cap that a closing
+/// route uses.** Sweep is the tree's only *surplus* route (§3.1): the credit
+/// survives, and the amount is chosen by the caller rather than fixed by what
+/// an account held. Under a plain floor cap a cranker would sweep exactly the
+/// floor and take 100% of it, repeatedly, and the wallet would receive nothing
+/// forever from a route that reads as funded. A share makes that unprofitable
+/// by construction instead of by threshold.
+pub const LIFECYCLE_SWEEP_CRANK_SHARE_DIVISOR_V2: u64 = 16;
+
+/// Exact balance plan for a surplus sweep, with or without a paid crank.
+///
+/// The unpaid shape is not deprecated: when the caller *is* the refund wallet
+/// they are already the beneficiary and need no reward, which is the census's
+/// GREEN-SELF shape rather than a gap. The crank recipient is optional so that
+/// stays a first-class path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LifecycleSweepPlanV2 {
     credit_after: u64,
     wallet_after: u64,
+    crank_reward: u64,
 }
 
 impl LifecycleSweepPlanV2 {
-    /// Plan a sweep that preserves the current Rent minimum.
+    /// Plan a sweep that preserves the current Rent minimum and pays no crank.
     pub fn new(
         credit_before: u64,
         wallet_before: u64,
         rent_minimum: u64,
         request: SweepLifecycleRentCreditV2,
+    ) -> LifecycleRentResultV2<Self> {
+        Self::plan(credit_before, wallet_before, rent_minimum, request, 0)
+    }
+
+    /// Plan the same sweep with a capped share paid to a permissionless crank.
+    ///
+    /// `reward_cap` is the chain-derived floor the caller's share is clamped to
+    /// — the Rent minimum of the credit, which the frame has already computed.
+    /// **This can never refuse for lack of funds.** The reward is a share of a
+    /// sum that is already moving, so a thin sweep yields a small reward, or
+    /// zero, and never an error: a crank that could refuse for money is an
+    /// unturned crank, which is the unfunded-liveness defect through the
+    /// funding door (`FUNDED_CRANK_V1.md` §2).
+    pub fn new_with_crank(
+        credit_before: u64,
+        wallet_before: u64,
+        rent_minimum: u64,
+        request: SweepLifecycleRentCreditV2,
+        reward_cap: u64,
+    ) -> LifecycleRentResultV2<Self> {
+        let share = request
+            .amount()
+            .checked_div(LIFECYCLE_SWEEP_CRANK_SHARE_DIVISOR_V2)
+            .ok_or(LifecycleRentErrorV2::Arithmetic)?;
+        let reward = if reward_cap < share {
+            reward_cap
+        } else {
+            share
+        };
+        Self::plan(credit_before, wallet_before, rent_minimum, request, reward)
+    }
+
+    fn plan(
+        credit_before: u64,
+        wallet_before: u64,
+        rent_minimum: u64,
+        request: SweepLifecycleRentCreditV2,
+        crank_reward: u64,
     ) -> LifecycleRentResultV2<Self> {
         let credit_after = credit_before
             .checked_sub(request.amount())
@@ -554,12 +620,17 @@ impl LifecycleSweepPlanV2 {
         if credit_after < rent_minimum {
             return Err(LifecycleRentErrorV2::InvalidSweep);
         }
+        let wallet_credit = request
+            .amount()
+            .checked_sub(crank_reward)
+            .ok_or(LifecycleRentErrorV2::InvalidSweep)?;
         let wallet_after = wallet_before
-            .checked_add(request.amount())
+            .checked_add(wallet_credit)
             .ok_or(LifecycleRentErrorV2::Arithmetic)?;
         Ok(Self {
             credit_after,
             wallet_after,
+            crank_reward,
         })
     }
 
@@ -571,6 +642,51 @@ impl LifecycleSweepPlanV2 {
     /// Return the exact wallet post-balance.
     pub const fn wallet_after(self) -> u64 {
         self.wallet_after
+    }
+
+    /// Return the exact lamports owed to the crank, zero when none is present.
+    pub const fn crank_reward(self) -> u64 {
+        self.crank_reward
+    }
+
+    /// Recheck the plan against observed post-balances.
+    ///
+    /// `crank_after` is the crank recipient's observed balance and its
+    /// pre-balance, or `None` when the sweep named no crank.
+    ///
+    /// **This is the non-vacuous half, and the distinction matters.** A
+    /// conservation identity over these fields alone would be a tautology —
+    /// the constructor computes `credit_after` and `wallet_after` from the same
+    /// amount, so they reconcile whatever the code does. What is worth checking
+    /// is *plan against observation*: that the program applied what the plan
+    /// said, to all three accounts, and moved nothing else. That is why this
+    /// takes observations rather than proving something about `self`, and why
+    /// it matches the `validate_post` shape its sibling plans already use.
+    pub fn validate_post(
+        self,
+        credit_after: u64,
+        wallet_after: u64,
+        crank_after: Option<(u64, u64)>,
+    ) -> LifecycleRentResultV2<()> {
+        if credit_after != self.credit_after || wallet_after != self.wallet_after {
+            return Err(LifecycleRentErrorV2::SweepPostcondition);
+        }
+        match crank_after {
+            Some((before, after)) => {
+                let expected = before
+                    .checked_add(self.crank_reward)
+                    .ok_or(LifecycleRentErrorV2::Arithmetic)?;
+                if after != expected {
+                    return Err(LifecycleRentErrorV2::SweepPostcondition);
+                }
+            }
+            None => {
+                if self.crank_reward != 0 {
+                    return Err(LifecycleRentErrorV2::SweepPostcondition);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -849,6 +965,40 @@ pub fn validate_sweep_frame_v2(
     }
 }
 
+/// Validate the optional crank recipient of a funded Sweep.
+///
+/// **Deliberately silent about `signer`, in either direction.** The crank is
+/// usually the fee payer and therefore usually signs, but it does not have to:
+/// a signature here would establish *who is owed*, never *who is permitted*
+/// (`docs/design/FUNDED_CRANK_V1.md` §6). Requiring one would gate a
+/// permissionless verb on a signature; *refusing* one is the live defect §6
+/// names, where a cleanup's beneficiary is forbidden to pay its own fee and so
+/// nobody turns the crank at all.
+///
+/// The recipient must be an ordinary System wallet — the same shape the refund
+/// wallet is held to — and must alias none of the fixed three.
+pub fn validate_sweep_crank_v2(
+    crank: LifecycleAccountMetaV2,
+    owner: [u8; PUBKEY_BYTES],
+    data_len: u64,
+    credit: LifecycleAccountMetaV2,
+    wallet: LifecycleAccountMetaV2,
+    rent: LifecycleAccountMetaV2,
+) -> LifecycleRentResultV2<()> {
+    if !crank.writable
+        || crank.executable
+        || owner != SYSTEM_PROGRAM_ID
+        || data_len != 0
+        || crank.key == credit.key
+        || crank.key == wallet.key
+        || crank.key == rent.key
+    {
+        Err(LifecycleRentErrorV2::InvalidFrame)
+    } else {
+        Ok(())
+    }
+}
+
 /// Validate the immutable refund wallet's runtime shape.
 pub fn validate_refund_wallet_v2(
     owner: [u8; PUBKEY_BYTES],
@@ -1090,6 +1240,200 @@ mod tests {
             validate_refund_wallet_v2([9; 32], 0),
             Err(LifecycleRentErrorV2::InvalidFrame)
         );
+    }
+
+    #[test]
+    fn a_crank_takes_a_capped_share_and_the_wallet_keeps_every_other_lamport() {
+        let floor = 1_781_760;
+
+        // The share binds: 1_600_000 / 16 == 100_000, well under the floor.
+        let plan = LifecycleSweepPlanV2::new_with_crank(
+            10_000_000,
+            0,
+            1_000_000,
+            SweepLifecycleRentCreditV2::new(1_600_000).expect("sweep"),
+            floor,
+        )
+        .expect("plan");
+        assert_eq!(plan.crank_reward(), 100_000);
+        assert_eq!(plan.credit_after(), 8_400_000);
+        assert_eq!(plan.wallet_after(), 1_500_000);
+
+        // The floor binds: 64_000_000 / 16 == 4_000_000, above the floor.
+        let plan = LifecycleSweepPlanV2::new_with_crank(
+            65_000_000,
+            0,
+            1_000_000,
+            SweepLifecycleRentCreditV2::new(64_000_000).expect("sweep"),
+            floor,
+        )
+        .expect("plan");
+        assert_eq!(plan.crank_reward(), floor);
+        assert_eq!(plan.wallet_after(), 64_000_000 - floor);
+
+        // Every lamport leaving the credit arrives somewhere.
+        assert_eq!(
+            65_000_000 - plan.credit_after(),
+            plan.wallet_after() + plan.crank_reward()
+        );
+    }
+
+    #[test]
+    fn a_thin_sweep_pays_a_smaller_crank_and_never_refuses_for_money() {
+        // The property FUNDED_CRANK_V1.md section 2 makes mandatory: a crank
+        // that could refuse for lack of funds is an unturned crank.
+        for amount in [1_u64, 8, 15, 16, 17, 160] {
+            let plan = LifecycleSweepPlanV2::new_with_crank(
+                1_000_000 + amount,
+                0,
+                1_000_000,
+                SweepLifecycleRentCreditV2::new(amount).expect("sweep"),
+                1_781_760,
+            )
+            .expect("a thin sweep must plan, not refuse");
+            assert_eq!(plan.crank_reward(), amount / 16);
+            assert_eq!(plan.wallet_after(), amount - amount / 16);
+        }
+    }
+
+    #[test]
+    fn a_cranker_cannot_farm_the_surplus_away_from_the_refund_wallet() {
+        // The exploit a plain min(floor, residual) cap would admit on a SURPLUS
+        // route whose amount is caller-chosen: sweep exactly the floor, take
+        // all of it, repeat, and the wallet receives nothing forever.
+        let floor = 1_781_760;
+        for amount in [1_u64, 1_000, floor, floor + 1, 40_000_000] {
+            let plan = LifecycleSweepPlanV2::new_with_crank(
+                80_000_000 + amount,
+                0,
+                1_000_000,
+                SweepLifecycleRentCreditV2::new(amount).expect("sweep"),
+                floor,
+            )
+            .expect("plan");
+            let wallet_credit = plan.wallet_after();
+            assert!(
+                wallet_credit >= amount - amount / LIFECYCLE_SWEEP_CRANK_SHARE_DIVISOR_V2,
+                "the wallet must keep at least 15/16 of {amount}, kept {wallet_credit}"
+            );
+            assert!(
+                wallet_credit > plan.crank_reward() || amount < 2,
+                "the crank must never out-earn the beneficiary on {amount}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sweep_postcondition_refuses_every_observation_the_plan_did_not_predict() {
+        let floor = 1_781_760;
+        let plan = LifecycleSweepPlanV2::new_with_crank(
+            10_000_000,
+            7,
+            1_000_000,
+            SweepLifecycleRentCreditV2::new(1_600_000).expect("sweep"),
+            floor,
+        )
+        .expect("plan");
+        assert_eq!(plan.crank_reward(), 100_000);
+
+        // The honest application.
+        assert_eq!(
+            plan.validate_post(8_400_000, 1_500_007, Some((0, 100_000))),
+            Ok(())
+        );
+
+        // *** THE NEGATIVE CONTROL. *** Before this change the sweep credited
+        // the wallet the FULL amount and there was no third recipient. That is
+        // exactly the observation below, and the new postcondition must refuse
+        // it -- otherwise the assertion proves nothing about the new code.
+        assert_eq!(
+            plan.validate_post(8_400_000, 1_600_007, None),
+            Err(LifecycleRentErrorV2::SweepPostcondition)
+        );
+
+        // One account at a time, each pinned.
+        assert_eq!(
+            plan.validate_post(8_400_001, 1_500_007, Some((0, 100_000))),
+            Err(LifecycleRentErrorV2::SweepPostcondition)
+        );
+        assert_eq!(
+            plan.validate_post(8_400_000, 1_500_008, Some((0, 100_000))),
+            Err(LifecycleRentErrorV2::SweepPostcondition)
+        );
+        // The crank was promised a reward and did not receive it.
+        assert_eq!(
+            plan.validate_post(8_400_000, 1_500_007, Some((0, 0))),
+            Err(LifecycleRentErrorV2::SweepPostcondition)
+        );
+        // A frame that named no crank cannot carry a reward.
+        assert_eq!(
+            plan.validate_post(8_400_000, 1_500_007, None),
+            Err(LifecycleRentErrorV2::SweepPostcondition)
+        );
+
+        // And the unpaid shape still validates against itself, so the
+        // GREEN-SELF path is not collateral damage.
+        let unpaid = LifecycleSweepPlanV2::new(
+            10_000_000,
+            7,
+            1_000_000,
+            SweepLifecycleRentCreditV2::new(1_600_000).expect("sweep"),
+        )
+        .expect("plan");
+        assert_eq!(unpaid.crank_reward(), 0);
+        assert_eq!(unpaid.validate_post(8_400_000, 1_600_007, None), Ok(()));
+    }
+
+    #[test]
+    fn the_crank_validator_owns_each_recipient_refusal_and_ignores_signing() {
+        // Pins WHICH check refuses, so the program tests above cannot pass by
+        // refusing somewhere else for an unrelated reason.
+        let meta = |key: [u8; PUBKEY_BYTES], signer: bool, writable: bool| LifecycleAccountMetaV2 {
+            key,
+            signer,
+            writable,
+            executable: false,
+        };
+        let credit = meta(id(1).to_bytes(), false, true);
+        let wallet = meta(id(2).to_bytes(), false, true);
+        let rent = meta(RENT_SYSVAR_ID, false, false);
+        let good = meta(id(3).to_bytes(), false, true);
+
+        assert_eq!(
+            validate_sweep_crank_v2(good, SYSTEM_PROGRAM_ID, 0, credit, wallet, rent),
+            Ok(())
+        );
+        // Signing is not an admission decision in either direction.
+        assert_eq!(
+            validate_sweep_crank_v2(
+                meta(id(3).to_bytes(), true, true),
+                SYSTEM_PROGRAM_ID,
+                0,
+                credit,
+                wallet,
+                rent
+            ),
+            Ok(())
+        );
+        for (label, crank, owner, data_len) in [
+            (
+                "not writable",
+                meta(id(3).to_bytes(), false, false),
+                SYSTEM_PROGRAM_ID,
+                0,
+            ),
+            ("carries data", good, SYSTEM_PROGRAM_ID, 8),
+            ("foreign owner", good, [7; 32], 0),
+            ("aliases the credit", credit, SYSTEM_PROGRAM_ID, 0),
+            ("aliases the wallet", wallet, SYSTEM_PROGRAM_ID, 0),
+            ("aliases the Rent sysvar", rent, SYSTEM_PROGRAM_ID, 0),
+        ] {
+            assert_eq!(
+                validate_sweep_crank_v2(crank, owner, data_len, credit, wallet, rent),
+                Err(LifecycleRentErrorV2::InvalidFrame),
+                "a crank that {label} must be refused here"
+            );
+        }
     }
 
     #[test]
