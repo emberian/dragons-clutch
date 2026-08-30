@@ -635,6 +635,8 @@ export function conservationReadingV1(series: SimulatorSeriesV1): string | null 
   const held = rows.reduce((sum, row) => sum + row.held, 0);
   const skipped = rows.reduce((sum, row) => sum + row.inapplicable, 0);
   const drawn = rows[0]?.statuses.length ?? 0;
-  return `${rows.length} laws, re-checked at every one of ${drawn} cycle boundaries: ${held} held, none broke.${
-    skipped === 0 ? '' : ` ${skipped} did not apply at the boundary they were checked on, which is neither a pass nor a failure.`}`;
+  // "240 did not apply" beside "240 cycle boundaries" reads as the same 240.
+  // The noun is what disambiguates them, so the noun is always said.
+  return `${rows.length} laws, re-checked at every one of ${drawn} cycle boundaries: ${held} checks held and none broke.${
+    skipped === 0 ? '' : ` ${skipped} checks did not apply at the boundary they were on, which is neither a pass nor a failure.`}`;
 }

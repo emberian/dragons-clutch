@@ -192,7 +192,7 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
           lines={[heartbeat.cadence]}
           xLabels={heartbeat.xLabels}
           unit="seconds"
-          caption="Wall-clock seconds between consecutive readings. The spikes are real: a run that stalls and resumes says so here rather than smoothing it away."
+          caption="Wall-clock seconds between consecutive readings. A spike is a reading that took longer to come back — a stall, and then a resume."
           emptyReason={NO_SERIES_SENTENCE_V1}
         />
         <p className="slot-clock-note">

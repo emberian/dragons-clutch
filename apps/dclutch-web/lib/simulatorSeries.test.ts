@@ -55,7 +55,7 @@ describe('the published simulator series', () => {
     const reading = conservationReadingV1(series);
     expect(reading).not.toBeNull();
     const violated = conservationLawRowsV1(series).filter((row) => row.violated > 0);
-    if (violated.length === 0) expect(reading).toContain('none broke');
+    if (violated.length === 0) expect(reading).toContain('checks held and none broke');
     else expect(reading?.startsWith(violated[0].id)).toBe(true);
   });
 
