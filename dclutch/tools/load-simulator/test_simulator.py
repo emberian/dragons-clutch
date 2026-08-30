@@ -146,6 +146,32 @@ class SimulatorLoopTest(unittest.TestCase):
         self.assertTrue((self.work / "census" / "cycle-000001.json").exists())
         self.assertTrue((self.work / "census" / "cycle-000002.json").exists())
 
+    def test_census_only_reconciles_every_cycle_and_attempts_no_trade(self) -> None:
+        # A market can be worth watching before it can be traded.
+        body = self.config()
+        body["trade"] = {"mode": "none"}
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "2", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        status = json.loads((self.work / "status.json").read_text())
+        self.assertEqual(status["cycles"]["run"], 2)
+        self.assertEqual(status["trades"]["landed"], 0)
+        self.assertEqual(status["trades"]["signatures"], [])
+        # Said out loud, so zero trades is never mistaken for a stall.
+        self.assertFalse(status["trades_attempted"])
+        self.assertTrue(status["last_reconciliation"]["ok"])
+        # The census still chains cycle to cycle.
+        self.assertTrue((self.work / "census" / "cycle-000001.json").exists())
+        self.assertTrue((self.work / "census" / "cycle-000002.json").exists())
+
+    def test_an_unknown_trade_mode_is_refused(self) -> None:
+        body = self.config()
+        body["trade"] = {"mode": "whatever"}
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("trade.mode", proc.stderr + proc.stdout)
+
     def test_rerun_over_finalized_journals_is_a_noop(self) -> None:
         (self.root / "steps-needed").write_text("2")
         cfg = self.write_config(self.config())

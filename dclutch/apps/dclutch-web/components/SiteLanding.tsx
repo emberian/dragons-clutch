@@ -9,6 +9,17 @@ import { marketEditorialV1 } from '@/lib/marketRegistry';
 import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@/lib/publicCutStaging';
 
 /**
+ * The long-form field notes, served as a plain page beside the app.
+ *
+ * The file is a byte-identical copy of the piece written on 25 August 2026;
+ * it carries its own complete styling and loads nothing from anywhere, so the
+ * artifact serves it directly at this path instead of re-typesetting it. The
+ * trailing slash is load-bearing: the export's directory-index rule serves
+ * `<dir>/index.html` for it, and the artifact's link check resolves it.
+ */
+export const FIELD_NOTES_HREF_V1 = '/notes/plan-to-compost-at-least-three/';
+
+/**
  * The front door.
  *
  * This is `/` — the first page anyone who types the domain sees, so it owes
@@ -129,6 +140,19 @@ export default function SiteLanding() {
       <header><span>03</span><div><h2>The code</h2><p>Building on it? The tests and run logs behind every claim on this site live in the repository, beside the programs they were run against.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={repositoryHrefV1()}>Repository →</a>
+      </div>
+    </section>
+
+    {/* The field notes. Written 25 August 2026 and committed the same day to a
+        separate posters repository, where nothing on this site linked to them
+        and no reader could find them. The copy served here is byte-identical
+        to that original (dregg-posters b15ca11) — a self-contained page with
+        no external font, script, or image, so it is served as-is rather than
+        rebuilt into this app's chrome. */}
+    <section className="trade-v3-card">
+      <header><span>04</span><div><h2>How this was built</h2><p>This protocol was built twice before the version you are reading now, and both earlier builds were retired on purpose. These notes say why that was the plan from the beginning, what each attempt made visible that no amount of planning would have, and what was kept once the code itself was thrown away. They are written for someone who has never opened the repository, and they are honest about what is proved and what is still only tested.</p></div></header>
+      <div className="direct-actions">
+        <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>
     </section>
   </main>;

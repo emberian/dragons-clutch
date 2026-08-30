@@ -2,6 +2,8 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import MarketFilterBar from '@/components/MarketFilterBar';
+import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
@@ -21,6 +23,12 @@ import {
   type MarketEnumerationV1,
   type MarketListingV1,
 } from '@/lib/marketDiscovery';
+import {
+  filterMarketCardsV1,
+  noMatchSentenceV1,
+  sortMarketCardsV1,
+  type MarketSortOrderV1,
+} from '@/lib/marketFiltering';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
 import { fallbackMarketTitleV1, marketEditorialV1 } from '@/lib/marketRegistry';
 import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
@@ -112,6 +120,10 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
       caption={SUPPLY_SHARE_MEANING_V1}
       emptyReason="No claims have been issued on this market yet, so there is no split to draw."
     />}
+    {/* FE-CHART mount: the recorded run, for the one market a run recorded.
+        Every other card renders nothing here — a listing of empty frames
+        would report a measurement nobody took. */}
+    <MarketIssuanceHistory address={card.address} outcomes={editorial?.outcomes ?? null} />
     <p className="market-hoard-note">Supplies are the exact claim liabilities the Market&apos;s Claims aggregate records. They are not liquidity, TVL, or a balance available to any participant.</p>
     {card.hoard.status === 'derived'
       ? <p className="market-hoard-note">Hoard principal <strong>{card.hoard.principalAtoms}</strong> atoms{card.hoard.mintDisplayDecimals === null ? '' : ` · the mint prints ${card.hoard.mintDisplayDecimals} display decimals, which never scale this figure`}, held by this Market&apos;s Custody transfer authority at <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>, in the Custody namespace the Claims aggregate records.</p>
@@ -273,6 +285,11 @@ export default function MarketDiscoveryWorkspace() {
   // only once it can actually be estimated.
   const [clock, setClock] = useState<SlotClockV1 | null>(null);
   const [nowMs, setNowMs] = useState<number | null>(null);
+  // Narrowing state. Both start empty, so the page a reader lands on is the
+  // whole listing in the chain's own order — the control changes what you see
+  // only once you touch it, and never what the page reports exists.
+  const [query, setQuery] = useState('');
+  const [order, setOrder] = useState<MarketSortOrderV1>('enumerated');
 
   useEffect(() => {
     let cancelled = false;
@@ -328,11 +345,25 @@ export default function MarketDiscoveryWorkspace() {
   // is not promoted into it, because ordering is this page's to choose and
   // phase is not.
   const featured = deployment.cluster === 'devnet' ? PUBLIC_DEVNET_CUT_V1.market : null;
-  const listing = discovery === null ? null : curateMarketListingV1(discovery.cards, featured);
+  // Two listings on purpose: the whole one, which is what this deployment
+  // HOLDS and is what every count on the page reports, and the narrowed one,
+  // which is only what the reader asked to look at. Conflating them is how a
+  // search quietly becomes a claim that the hidden markets stopped existing.
+  const wholeListing = discovery === null ? null : curateMarketListingV1(discovery.cards, featured);
+  const matched = discovery === null ? null : filterMarketCardsV1(discovery.cards, query);
+  const narrowed = matched === null ? null : curateMarketListingV1(matched, featured);
+  const listing = narrowed === null ? null : {
+    ...narrowed,
+    open: sortMarketCardsV1(narrowed.open, order),
+    settled: sortMarketCardsV1(narrowed.settled, order),
+    founding: sortMarketCardsV1(narrowed.founding, order),
+    unreadable: sortMarketCardsV1(narrowed.unreadable, order),
+  };
+  const searching = query.trim().length > 0;
   const incompatible = discovery !== null && discovery.enumeration.mode === 'program-scan'
     ? discovery.enumeration.incompatibleMarketAccounts
     : Object.freeze([]);
-  const asideCount = listing === null ? 0 : listing.founding.length + listing.settled.length + listing.unreadable.length + incompatible.length;
+  const asideCount = wholeListing === null ? 0 : wholeListing.founding.length + wholeListing.settled.length + wholeListing.unreadable.length + incompatible.length;
 
   return <main className="product-shell trade-v3-shell">
     <Nav current="/markets" status={`${deployment.label} · finalized reads`} />
@@ -363,16 +394,26 @@ export default function MarketDiscoveryWorkspace() {
         <div className="trade-v3-evidence">
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
           <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>{clock === null ? 'one observation epoch for every card' : `read at ${new Date(clock.observedAtMs).toLocaleTimeString()} · one observation epoch for every card`}</small></article>
-          <article><span>Open now</span><strong>{listing.open.length}</strong><small>{asideCount} further account{plural(asideCount, '', 's')} named below</small></article>
+          <article><span>Open now</span><strong>{wholeListing === null ? '—' : wholeListing.open.length}</strong><small>{asideCount} further account{plural(asideCount, '', 's')} named below</small></article>
           <article><span>Core program</span><strong>{shortAddressV1(deployment.programs.core, 6)}</strong><small>{deployment.cluster === 'devnet' ? 'DEPLOY-1 permanent address' : 'the active deployment'}</small></article>
         </div>
         <p className="direct-status">{discovery.enumeration.note}</p>
         {clock !== null && <p className="slot-clock-note">{slotClockCaveatV1(clock)}</p>}
         {discovery.enumeration.mode === 'refused' && <p className="market-refusal">{discovery.enumeration.reason}</p>}
+        {discovery.cards.length > 0 && <MarketFilterBar
+          query={query}
+          onQuery={setQuery}
+          order={order}
+          onOrder={setOrder}
+          shown={matched === null ? 0 : matched.length}
+          total={discovery.cards.length}
+        />}
         {discovery.cards.length === 0
           ? discovery.enumeration.mode === 'refused' ? null : <EmptyMarkets deployment={deployment} enumeration={discovery.enumeration} />
           : listing.open.length === 0
-            ? <p className="market-empty">Nothing on this deployment has finished founding yet. Every market it holds is named below, at the stage it actually reached.</p>
+            ? searching && wholeListing !== null && wholeListing.open.length > 0
+              ? <p className="market-empty">{noMatchSentenceV1(query, wholeListing.open.length)}</p>
+              : <p className="market-empty">Nothing on this deployment has finished founding yet. Every market it holds is named below, at the stage it actually reached.</p>
             : <div className="market-card-grid">{listing.open.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>}
       </>}
     </section>

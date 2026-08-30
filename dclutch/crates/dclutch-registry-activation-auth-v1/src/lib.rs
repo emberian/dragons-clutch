@@ -60,8 +60,8 @@
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
-    Error as RegistryContractError, require_slot_pinned_release_v1,
-    slot_pinned_release_elf_digest_v1,
+    Error as RegistryContractError, RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
+    require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ExecutionRoleV1;
@@ -81,6 +81,8 @@ pub enum ActivationAuthErrorV1 {
     ActivationCache,
     /// The observed deployment is not the one this activation admitted.
     Deployment,
+    /// The account is not the Registry-owned lineage record it claims to be.
+    ReleaseLineage,
     /// The activated release's pinned deployment slot moved: it was upgraded.
     ///
     /// This is the operator-actionable half of [`Self::Deployment`], and it is
@@ -98,6 +100,7 @@ impl From<ActivationAuthErrorV1> for ProgramError {
             ActivationAuthErrorV1::AccountFrame => Self::InvalidArgument,
             ActivationAuthErrorV1::ActivationCache
             | ActivationAuthErrorV1::Deployment
+            | ActivationAuthErrorV1::ReleaseLineage
             | ActivationAuthErrorV1::ReleaseSuperseded => Self::InvalidAccountData,
         }
     }
@@ -288,6 +291,48 @@ pub fn activation_cache_address_v1(registry: &Pubkey, release_set_id: &[u8; 32])
         registry,
     )
     .0
+}
+
+/// Derive the sole lineage-record address and bump for one predecessor set.
+///
+/// This is the only place the lineage seeds are spelled. The Registry derives
+/// it to create the record and to sign for it; Core derives it to find the
+/// successor its market may hop to. Two programs, one derivation — a second
+/// spelling is how a route ends up reading an account nobody wrote.
+pub fn release_lineage_address_and_bump_v1(
+    registry: &Pubkey,
+    predecessor_release_set_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            RELEASE_LINEAGE_PDA_DOMAIN_V1,
+            predecessor_release_set_id.as_slice(),
+        ],
+        registry,
+    )
+}
+
+/// Derive the sole lineage-record address for one predecessor release set.
+pub fn release_lineage_address_v1(
+    registry: &Pubkey,
+    predecessor_release_set_id: &[u8; 32],
+) -> Pubkey {
+    release_lineage_address_and_bump_v1(registry, predecessor_release_set_id).0
+}
+
+/// Require Registry ownership and the one exact lineage-record width.
+///
+/// Deliberately does not check privileges: the declaration route needs the
+/// record writable and the migration route needs it read-only, so each frame
+/// states its own, and neither borrows the other's.
+pub fn require_lineage_account_v1(registry: &Pubkey, lineage: &AccountInfo<'_>) -> Result<()> {
+    if lineage.owner != registry
+        || lineage.executable
+        || lineage.data_len() != RELEASE_LINEAGE_BYTES_V1
+    {
+        return Err(ActivationAuthErrorV1::ReleaseLineage);
+    }
+    Ok(())
 }
 
 /// Require the exact read-only three-account reauthentication frame.

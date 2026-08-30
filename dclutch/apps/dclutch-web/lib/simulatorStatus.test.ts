@@ -31,7 +31,14 @@ describe('the simulator status decoder', () => {
     expect(status.wallets).toHaveLength(2);
     expect(status.wallets[1]?.solLamports).toBeNull();
     expect(status.lastReconciliation?.ok).toBe(true);
-    expect(status.lastReconciliation?.detail).toContain('census written to');
+    // The artifact records an absolute path inside the writer's work
+    // directory. That is right for the simulator and wrong for a public page:
+    // it prints an operator's local filesystem layout and tells a reader
+    // nothing. The file's NAME does tell them something — which cycle's census
+    // this verdict came from — so that is the part that survives the decode,
+    // and the rest is dropped rather than rendered.
+    expect(status.lastReconciliation?.detail).toBe('from census file cycle-000012.json');
+    expect(status.lastReconciliation?.detail).not.toContain('/');
     expect(status.halted).toBe(false);
   });
 

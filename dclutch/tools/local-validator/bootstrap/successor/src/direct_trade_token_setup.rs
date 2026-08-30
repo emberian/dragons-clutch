@@ -141,8 +141,6 @@ pub(crate) struct DirectTradeTokenSetupPoststateV1<'a> {
     pub(crate) return_data: &'a [u8],
     pub(crate) seller_token: DirectTradeTokenSetupObservedAccountV1<'a>,
     pub(crate) fee_token: DirectTradeTokenSetupObservedAccountV1<'a>,
-    pub(crate) payer_lamports: u64,
-    pub(crate) refund_lamports: u64,
     pub(crate) market_bytes: &'a [u8],
     pub(crate) root_bytes: &'a [u8],
     pub(crate) realm_bytes: &'a [u8],
@@ -166,8 +164,10 @@ pub(crate) struct DirectTradeTokenSetupPlanV1 {
     pub(crate) exact_account_rent: u64,
     pub(crate) seller_normalization: DirectTokenRentNormalizationV1,
     pub(crate) fee_normalization: DirectTokenRentNormalizationV1,
-    pub(crate) expected_payer_lamports: u64,
-    pub(crate) expected_refund_lamports: u64,
+    /// This instruction's own effect on the two shared wallets, excluding the
+    /// runtime fee. A projection for the record, never a chain expectation.
+    pub(crate) projected_payer_lamports: u64,
+    pub(crate) projected_refund_lamports: u64,
     pub(crate) expected_seller_bytes: [u8; ACCOUNT_BYTES],
     pub(crate) expected_fee_bytes: [u8; ACCOUNT_BYTES],
     pub(crate) expected_receipt: DirectTokenSetupReceiptV1,
@@ -406,11 +406,20 @@ pub(crate) fn build_direct_trade_token_setup_v1(
         .refunded_excess
         .checked_add(fee_normalization.refunded_excess)
         .ok_or_else(|| refusal("Direct token setup refund credit overflowed"))?;
-    let expected_payer_lamports = input
+    // These two are the projection of THIS INSTRUCTION's effect on the payer
+    // and the rent refund, and nothing more. They deliberately exclude the
+    // runtime fee, which the payer also pays but which no instruction moves.
+    // A chain balance for either wallet therefore never equals its projection,
+    // and must never be compared against one: both are shared accounts that go
+    // on moving with every other transaction they sign or receive. What the
+    // chain IS held to is the exact delta, by the landed transaction's own
+    // pre/post balance vectors. Computing them here also preflights payer
+    // solvency and refund overflow.
+    let projected_payer_lamports = input
         .observed_payer_lamports
         .checked_sub(total_top_up)
         .ok_or_else(|| refusal("Direct token setup payer lacked exact shortfall"))?;
-    let expected_refund_lamports = input
+    let projected_refund_lamports = input
         .observed_refund_lamports
         .checked_add(total_refund)
         .ok_or_else(|| refusal("Direct token setup refund balance overflowed"))?;
@@ -467,8 +476,8 @@ pub(crate) fn build_direct_trade_token_setup_v1(
         exact_account_rent,
         seller_normalization,
         fee_normalization,
-        expected_payer_lamports,
-        expected_refund_lamports,
+        projected_payer_lamports,
+        projected_refund_lamports,
         expected_seller_bytes,
         expected_fee_bytes,
         expected_receipt,
@@ -514,19 +523,22 @@ pub(crate) fn verify_direct_trade_token_setup_instruction_v1(
     Ok(())
 }
 
-/// Verify return provenance, exact receipt, lamport deltas, immutable bytes,
-/// and both complete Token-2022 account poststates.
+/// Verify return provenance, exact receipt, immutable bytes, and both complete
+/// Token-2022 account poststates.
+///
+/// The receipt carries the exact `payer_top_up` and `refunded_excess` this
+/// instruction moved; the landed transaction's own balance vectors are what
+/// hold the chain to them. The payer and rent refund are shared wallets whose
+/// absolute balances belong to no single transaction, so none is asserted here.
 pub(crate) fn verify_direct_trade_token_setup_poststate_v1(
     plan: &DirectTradeTokenSetupPlanV1,
     observed: DirectTradeTokenSetupPoststateV1<'_>,
 ) -> Result<VerifiedDirectTradeTokenSetupV1> {
     if observed.return_program != plan.coordinates.trading_program
         || observed.return_data != plan.expected_receipt_bytes
-        || observed.payer_lamports != plan.expected_payer_lamports
-        || observed.refund_lamports != plan.expected_refund_lamports
     {
         return Err(refusal(
-            "Direct token setup return provenance, receipt, or lamport delta was wrong",
+            "Direct token setup return provenance or receipt was wrong",
         ));
     }
     let receipt = DirectTokenSetupReceiptV1::decode(observed.return_data)
@@ -943,8 +955,6 @@ mod tests {
                 executable: false,
                 data: &plan.expected_fee_bytes,
             },
-            payer_lamports: plan.expected_payer_lamports,
-            refund_lamports: plan.expected_refund_lamports,
             market_bytes: &fixture.market,
             root_bytes: &fixture.root,
             realm_bytes: &fixture.realm,
@@ -1008,6 +1018,30 @@ mod tests {
         let hostile_mint = vec![0; dclutch_token_svm::MINT_BYTES];
         foreign_mint.collateral_mint_bytes = &hostile_mint;
         assert!(build_direct_trade_token_setup_v1(foreign_mint).is_err());
+    }
+
+    /// The two wallet balances are preflights, not expectations: they gate the
+    /// build and are never recorded, so these are the only assertions that
+    /// still hold them to anything.
+    #[test]
+    fn refuses_an_insolvent_payer_and_an_overflowing_refund() {
+        let fixture = fixture();
+        let rent = fixture.rent.minimum_balance(ACCOUNT_BYTES);
+        let shortfall = |payer: u64| {
+            let mut input = fixture.input();
+            // Both token PDAs sit one lamport under rent, so the instruction
+            // moves exactly two lamports out of the payer.
+            input.observed_seller_lamports = rent - 1;
+            input.observed_fee_lamports = rent - 1;
+            input.observed_payer_lamports = payer;
+            build_direct_trade_token_setup_v1(input)
+        };
+        assert!(shortfall(1).is_err());
+        assert!(shortfall(2).is_ok());
+        let mut overflow = fixture.input();
+        overflow.observed_seller_lamports = rent + 1;
+        overflow.observed_refund_lamports = u64::MAX;
+        assert!(build_direct_trade_token_setup_v1(overflow).is_err());
     }
 
     #[test]

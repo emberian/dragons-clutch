@@ -347,6 +347,44 @@ pub(crate) fn selected_capability_kind_v1(
         .to_bytes())
 }
 
+/// The immutable Realm identity a Market over this collateral Mint will carry.
+///
+/// Recomputed here exactly as `compile_market_bodies` builds it, because a
+/// family whose config binds a Realm must bind the same one the founded Market
+/// will. The canonical collateral adapter, Token program and authority policies
+/// are the market compiler's, not choices made here.
+///
+/// THIS LIVES IN THE SEAM RATHER THAN IN A FAMILY because a second family
+/// needing it is what proves it was never the first family's. It arrived with
+/// Rational, whose `TokenBehaviorSelectionV2` config is a Realm and a release
+/// set; Structured inherits that exact config type and therefore that exact
+/// ordering constraint.
+///
+/// The constraint is an ORDERING, not a fixed point, and the distinction is the
+/// whole reason this seam can express it: the dependency runs
+/// `mint -> realm -> config -> manifest -> market`, strictly one way. The Realm
+/// is itself a SEED of the Market PDA, so naming it is naming an INPUT to the
+/// derivation rather than an output of it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn market_realm_identity_v1(
+    collateral_mint: solana_sdk::pubkey::Pubkey,
+) -> Result<[u8; 32]> {
+    use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input};
+    use dclutch_token_svm::{CollateralAdapterReleaseV1, TOKEN_2022_PROGRAM_ID};
+
+    let adapter = CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer();
+    let realm = RealmV1::new(RealmV1Input {
+        token_program: TOKEN_2022_PROGRAM_ID,
+        collateral_mint: collateral_mint.to_bytes(),
+        collateral_adapter_release_id: Sha256::digest(adapter.to_bytes()).into(),
+        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+    })
+    .map_err(|error| Error::new(format!("canonical collateral Realm: {error:?}")))?
+    .to_bytes();
+    Ok(Sha256::digest(realm).into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

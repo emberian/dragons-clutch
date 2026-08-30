@@ -59,6 +59,7 @@ use solana_system_interface::instruction::create_account;
 mod batch_v2;
 mod continuation_v1;
 mod hot_continuation_v2;
+mod lineage_v1;
 mod record_v1;
 
 /// Exact account count for one read-only role reauthentication.
@@ -102,6 +103,34 @@ pub enum RegistryError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x100D,
+    /// This release set already declared a successor, and lineage never forks.
+    ///
+    /// The lineage record is keyed by the PREDECESSOR, so a second
+    /// `DeclareSuccessor` for the same set finds the account already created.
+    /// Nothing implements the no-fork rule; this is the address saying no.
+    ReleaseLineageAlreadyDeclared = 0x100E,
+    /// A declared hop changed some role's program id.
+    ///
+    /// A hop may move a role's BYTES, never its identity. That single conjunct
+    /// is what keeps every child address in the protocol fixed across a
+    /// migration, and it is why migrating a market is a one-field write.
+    ReleaseLineageRoleIdentityMoved = 0x100F,
+    /// A declaration named one release set as its own successor.
+    ReleaseLineageSelfSuccession = 0x1010,
+    /// A moved role's consenting upgrade authority did not sign, or cannot.
+    ///
+    /// For every role whose artifact moved, the key the successor's activated
+    /// artifact binds as its upgrade authority must sign. A role that did not
+    /// move asks for no consent and must present the System program in its slot
+    /// as a non-signer. An `Immutable` artifact binds no authority at all, so
+    /// claiming it moved is a contradiction rather than a permission problem.
+    ReleaseLineageAuthorityMissing = 0x1011,
+    /// A moved role's successor deployment slot was not strictly later.
+    ///
+    /// Under Loader V3 a ProgramData slot only moves forward, so "strictly
+    /// greater" is exactly "was upgraded after". A backward or sideways
+    /// declaration cannot be built.
+    ReleaseLineageNotForward = 0x1012,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -112,7 +141,7 @@ const _: () = assert!(
     "RegistryError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (RegistryError::ReleaseSuperseded as u32)
+    (RegistryError::ReleaseLineageNotForward as u32)
         < dclutch_refusal_registry::REGISTRY_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "RegistryError must not run past its registered refusal band"
 );
@@ -179,6 +208,11 @@ pub fn process_instruction(
         )
     {
         return continuation_v1::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..8)
+        == Some(dclutch_registry_svm::lineage_v1::DECLARE_SUCCESSOR_MAGIC_V1.as_slice())
+    {
+        return lineage_v1::process(program_id, accounts, instruction_data);
     }
     match RegistryInstructionV1::decode(instruction_data).map_err(|_| RegistryError::Instruction)? {
         RegistryInstructionV1::ActivateRole(role) => {

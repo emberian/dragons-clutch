@@ -1,8 +1,16 @@
 # Claim-check compaction — the perpetual claim without the perpetual market
 
-Status: **DESIGN, decision-ready and implementation-ready.** Read-only on code;
-this document changes no byte. It exists so a later implementation lane can build
-the whole feature without making a design judgement call. Where a choice was
+Status: **PARTLY IMPLEMENTED — read §15 before acting on §4.7 or §6.2.** The
+contract layer has landed and carries six ratified amendments, recorded in §15
+with their arithmetic. Two of them correct passages that are wrong as written:
+§4.7 step 4 mints a claim-check unconditionally when it must not (§15.1), and
+§6.2's rent split does not close arithmetically (§15.2). Both original passages
+are left unaltered in place, marked, so each correction can be read against what
+it corrects.
+
+Sections 1–14 below are the original design, decision-ready and
+implementation-ready. It exists so a later implementation lane can build the
+whole feature without making a design judgement call. Where a choice was
 available, this document makes it and says why the alternative was rejected.
 Every factual claim carries a `file:line` and was read at the route, not taken
 from a doc.
@@ -486,7 +494,10 @@ Effects, **in this order, and the order is forced**:
    `apply_coordinate` (`:827-846`) decrements the aggregate cell and the position
    cell by the same quantity. Supply cannot be retired without a live position
    row — there is no other hook.
-4. Write `ClaimCheckV1`; increment `escrow.outstanding_claim_checks`.
+4. Write `ClaimCheckV1`; increment `escrow.outstanding_claim_checks` — **but
+   only when the entitlement is nonzero. AMENDED, see §15.1.** A position whose
+   terminal payout resolves to zero atoms is compacted and closed without a
+   record.
 5. Close the position and admission accounts, sweeping their entire balances and
    splitting per §6.2. This must happen *after* step 3 for a second, independent
    reason: the existing close already refuses a non-zero balance vector —
@@ -716,6 +727,12 @@ diverge.
 The position and admission accounts close, releasing
 `R = position_lamports + admission_lamports`, swept in full today at
 `protocol_position_v2.rs:1227-1229`. `R` splits **in this order**:
+
+> **AMENDED — the order below is wrong and §15.2 carries the replacement.** It
+> does not close arithmetically: for a binary market the first crank pays itself
+> exactly zero, which is R3 returning through the funding door. The implemented
+> order is rent, **crank**, opener, residue. The block is left here unaltered so
+> the correction can be read against what it corrects.
 
 ```
 claim_check_rent   := rent-exempt minimum for the fixed ClaimCheckV1 width
@@ -1018,6 +1035,11 @@ suite is green". `git commit --only -- <paths>`, never `git add -A`, never
 `git stash`.
 
 **C0 — the phase weld (§2). Ships first and is independently correct.**
+**LANDED as `f6b53cc9`, with coverage in `552097c7`.** What follows is the plan
+as written, then a correction the implementation had to make. Read the
+correction: the plan as written does not close the bug.
+
+*As planned.*
 `programs/dclutch-claims-sbf/src/{terminal_settlement_v3,rational_terminal_v3,affine_batch_v2}.rs`.
 Replace the hardcoded `Phase::Terminal` argument and the `!=` comparison with a
 two-arm match admitting `Terminal` and `Retiring`, matching `phases_join`
@@ -1025,6 +1047,33 @@ two-arm match admitting `Terminal` and `Retiring`, matching `phases_join`
 *Gate*: a holder redeems successfully after a stranger has called
 `begin_retiring`; the same scenario fails on the parent commit. Assert the
 `(Retiring, Retiring(w))` join is exercised, not just the `Terminal` one.
+
+*Correction, established by experiment rather than by reading.* **The gate is in
+five places, and the two the plan does not describe are the ones that bind.**
+The plan describes the threaded `expected_core_phase` argument and
+`affine_batch_v2`'s shared comparison (`:669`). Those are real, but the
+flagship wallet payout submits a `TerminalSettlementRequestV3` straight to
+Claims, so it is refused earlier, by a **route-local**
+`core.phase != CorePhase::Terminal` at `terminal_settlement_v3.rs:597`
+(reached from `authenticate_and_prepare` at `:231`, long before the `:410`
+argument the plan means). An ELF built with the plan's literal fix — argument
+welded, `:597` left alone — **still fails the C0 gate test at `0x5002`**; that
+was built and run, not reasoned about. The fifth site is
+`rational_product_v3.rs:196`, the `RedeemTerminal` arm of
+RationalRepresentation, in a file this plan does not name at all; unwelding
+only that site fails `552097c7`'s test at the same code.
+
+*Shape actually used.* The bare `expected_core_phase: CorePhase` parameter
+became `CorePhaseGateV3 { Exactly(CorePhase), TerminalOrRetiring }`
+(`affine_batch_v2.rs`), so widening redemption could not silently widen the
+`Open` and `Founding` routes that share the parameter — each of those now reads
+`Exactly(..)` at its own call site. The variant is named for the phase set it
+admits rather than for the routes that use it, so a later phase cannot join it
+by the name staying plausible.
+
+*Note for later commits in this plan.* Where §11 names files, treat the list as
+a starting point and grep the predicate instead: this plan's own C0 entry named
+three files for a change that touched five sites across six.
 
 **C1 — contract types.** `crates/dclutch-claims-svm/src/claim_check_v1.rs` (new)
 plus its `lib.rs` module line. `ClaimCheckV1`, `ClaimCheckEscrowV1`, three seed
@@ -1187,3 +1236,193 @@ Deliberately short; everything else here is decided.
 | **R10 / Q6** Claims replay has no closer | RED, blocked on Q3 | **unblocked and made safe** — cursor question answered, gate named, Correction 4's premise corrected (§7) |
 | **Y1/Y2** cleanup pays a fixed beneficiary, never the caller | YELLOW | the crank is caller-funded from rent already moving (§6.2) — P1 applied |
 | **NEW** `begin_retiring` permanently destroys redemption, callable by anyone | *not censused* | **RED (adversarial)** — weld specified as C0 (§2, §11) |
+
+---
+
+## 15. Amendments from implementation
+
+Written during CLAIMCHECK's implementation lane, ratified 2026-08-30. Each was
+found by building the thing rather than by re-reading the design, which is the
+argument for implementing *from* a design rather than executing one. The
+arithmetic is recorded here so the next reader inherits the reasoning instead of
+rediscovering it.
+
+Landed in `crates/dclutch-claims-svm/src/claim_check_v1.rs`,
+`claim_check_conservation_v1.rs`, `claim_check_request_v1.rs`,
+`claim_check_compaction_request_v1.rs`, and
+`programs/dclutch-claims-sbf/src/claim_check_{compaction,redemption}_v1.rs`.
+
+### 15.1 A claim-check promising zero atoms is refused — §4.7 step 4 amended
+
+§4.7 writes the record unconditionally. It must not.
+
+A position's terminal payout is nonzero only on the outcomes that won. **Every
+holder of a losing outcome resolves to zero atoms**, so a zero payout is the
+*common* case, not an edge — in a binary market roughly half the positions, and
+in an N-outcome market most of them.
+
+Minting a record for each would be actively harmful, not merely wasteful. The
+escrow may close only at `outstanding_claim_checks == 0` (§4.9), and a record
+promising nothing gives its holder no reason ever to redeem it. Every zero-atom
+claim-check therefore pins the counter above zero **forever**, and the escrow and
+its vault become exactly the perpetual account this design exists to remove — a
+worse outcome than the one it was written to fix, arrived at by following the
+design as written.
+
+So: a zero-payout position is compacted and closed *without* a record. Supply
+still retires through the same signed-delta debit, the position and admission
+still close, retirement still proceeds. Only the useless record is skipped.
+
+The refusal is enforced in the contract, at the constructor **and across the
+wire**, so a route cannot mint one by accident and a hostile cannot forge one
+into existence. Conservation binds the two halves together:
+`claim_check_rent == 0` if and only if `entitlement_atoms == 0`, checked in both
+directions, so a plan that funded rent for an empty claim — or minted a claim
+without funding it — cannot be constructed.
+
+The tree agrees from the other side. `execute_terminal_custody_v3` opens with
+`if input.payout == 0 { return Ok(None); }`: a zero payout moves no collateral
+at all, so there is genuinely nothing escrowed and nothing to promise.
+
+### 15.2 The crank is paid before the opener — §6.2's order amended
+
+§6.2 orders the split rent → **opener** → crank → residue, and says the first
+compaction crank "repays the opener in full before paying itself". That
+presumes one position's rent covers the whole opener outlay. It does not.
+
+Rent-exempt minimum on Solana is `(128 + bytes) * 6960` lamports. For a binary
+market:
+
+| account | bytes | lamports |
+|---|---|---|
+| position (`128 + 8*2`) | 144 | 1,893,120 |
+| admission (fixed) | 512 | 4,454,400 |
+| **`R` released by the close** | | **6,347,520** |
+| `ClaimCheckV1` (fixed width) | 288 | 2,895,360 |
+| escrow record | 256 | 2,672,640 |
+| escrow vault (token account) | 165 | 2,039,280 |
+| **opener outlay** | | **4,711,920** |
+
+`R - claim_check_rent = 6,347,520 - 2,895,360 = 3,452,160`, which is **less than
+the 4,711,920 the opener advanced**. Under §6.2's order the opener absorbs
+everything available and `crank_reward` is `min(200_000, 0) = 0`: **the first
+crank pays itself exactly nothing.**
+
+An unfunded crank is an unturned crank. That is R3 walking back in through the
+funding door — the exact failure §6.2 names two paragraphs earlier, when it
+insists the reward be a residual rather than a demand because "a compaction that
+could refuse for lack of funds would reintroduce R3 through the funding door". A
+compaction that *pays* nothing is refused by the same logic, just by the market
+instead of by the code.
+
+The implemented order:
+
+```
+claim_check_top_up := max(0, claim_check_rent - lamports already at the address)
+crank_reward       := min(COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+                          R - claim_check_top_up)
+opener_repayment   := min(escrow.opener_outlay,
+                          R - claim_check_top_up - crank_reward)
+rent_credit_residue:= R - claim_check_top_up - crank_reward - opener_repayment
+
+R == claim_check_top_up + crank_reward + opener_repayment + rent_credit_residue
+```
+
+The opener is not disadvantaged, and this is why the reordering costs nothing:
+
+- They are the party who *wants* to crank — §5.4's whole argument for why
+  opening is a funded position — so they earn `crank_reward` on every turn.
+- `opener_outlay` is carried in the escrow record as an **outstanding debt** that
+  decrements, not a fixed figure, so partial repayment is expressible and the
+  balance discharges over the second crank. Asserted as a test.
+- The escrow's own close (§4.9) returns the escrow and vault rent — *exactly*
+  what they advanced — to whoever closes it.
+
+### 15.3 The three lamport sinks may alias, and credits fold by identity
+
+§6.2 names cranker, opener and RentCredit as three recipients and does not say
+what happens when two are the same account. They frequently are: **the opener is
+usually the cranker**, which is precisely what §5.4 argues makes opening a funded
+position rather than a donation.
+
+A plan naming them as separate sinks computes two expected post-balances for one
+account and fails *both*, so the honest case refuses. Credits are therefore
+folded by identity before the postcondition is formed: an aliased sink is
+expected to receive the sum. A sink that is also an account being closed or
+created is refused outright (`IdentityAlias`) — it would be credited and zeroed
+in the same movement, and the ledger would appear to close while a lamport went
+missing.
+
+### 15.4 §6.3's transfer-fee tolerance is unreachable today — recorded, not relied on
+
+§6.3 requires `entitlement_atoms` to be the **observed** vault credit rather than
+the intended transfer, because a Token-2022 mint may levy a transfer fee. The
+discipline is right and is implemented. The premise, however, is not currently
+reachable through this path.
+
+`execute_terminal_custody_v3` ends with an exact equality on both sides:
+
+```rust
+if source_before.checked_sub(input.payout) != Some(source_after)
+    || recipient_before.checked_add(input.payout) != Some(recipient_after)
+```
+
+A fee-bearing mint is therefore refused by the **executor**, before any short
+credit could reach the conservation plan. So today `entitlement_atoms == payout`,
+always.
+
+Observing rather than assuming is still correct and costs nothing: it is defence
+in depth, and it is already right if that check is ever relaxed for fee mints.
+What would not have been correct is *claiming* the fee path is exercised. If
+fee-bearing collateral is ever wanted, the thing to revisit is that exact
+equality in the **holder redemption** path — a pre-existing question this design
+neither creates nor closes.
+
+### 15.5 Two §14 unknowns resolved, and C0's better shape
+
+§14 left three things to the implementer. Two are settled by reading the routes:
+
+- **§14.3 — the escrow PDA can own the vault, and one ELF holds.**
+  `execute_terminal_custody_v3` takes `recipient_owner: [u8; 32]` and an
+  arbitrary `frame.recipient`, checking only that the account's mint and owner
+  match what was declared. Nothing constrains the owner to be a wallet, so a
+  claims PDA is admissible. claims-sbf already creates a PDA-owned token account
+  (`initialize_account3`, `rational_lifecycle_v2.rs:1105`) and already depends on
+  both `spl-associated-token-account-interface` and `dclutch-token-svm`. No
+  Custody change, no new dependency. §4.2 stands as written.
+- **§4.6's mint authentication mostly already exists.** Custody refuses any
+  `OpenVault`/`Transfer`/`CloseVault` whose declared mint is not the Realm's
+  `collateral_mint` and whose token program is not the Realm's `token_program`
+  (`custody-sbf/lib.rs:573-581`). Compaction's Hoard→vault move *is* a Custody
+  `Transfer`, so that policy is enforced by the program that owns the fact. The
+  open route reads the same Realm record to *stamp* mint and token program into
+  the escrow and to refuse a mismatch at open — one author, two readers, which is
+  a different thing from two authors.
+
+And **C0 shipped in a better shape than §11 specified.** §11 asked for a two-arm
+match replacing the hardcoded `Phase::Terminal` in three files. What landed
+(`f6b53cc9`) is a `CorePhaseGateV3` enum — `Exactly(phase)` and
+`TerminalOrRetiring` — so the admission is a named thing with one author rather
+than three hand-edited comparisons free to drift apart, and every site that must
+*not* admit `Retiring` keeps `Exactly(...)` visibly. It also found a **fifth**
+site the design's own plan missed (`rational_product_v3.rs:196`); see
+`85d535bd`.
+
+### 15.6 Compaction's wire carries the terminal header verbatim
+
+§4.7 step 1 says the payout derivation must be *called*, never re-implemented,
+and calls that the single most important instruction in the document. The
+implementation makes it structural rather than a rule to remember.
+
+`TerminalSettlementRequestV3` already carries `recipient_owner` and
+`recipient_token_account` as explicit fields, so a compaction genuinely *is* a
+redemption with the recipient swapped. The compaction request therefore embeds
+one verbatim at its own exact width, decoded by that header's own decoder and by
+nothing else. One author for every coordinate the derivation reads; a corrupted
+byte inside is caught by the terminal decoder rather than by a copy of it; a
+future edit to that header reaches compaction automatically.
+
+The two recipient fields are the entire attack surface — a cranker who could
+choose them would redirect a sleeping holder's collateral — so they are
+**derived, not accepted**, and naming the holder as recipient is refused
+outright, that being the holder's own redemption with the signature deleted.

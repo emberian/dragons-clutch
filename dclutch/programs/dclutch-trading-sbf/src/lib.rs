@@ -192,6 +192,19 @@ pub enum TradingSbfError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x4007,
+    /// This route needs the extended heap and the transaction did not grant it.
+    ///
+    /// The route declares an extended heap profile, but the runtime handed it
+    /// the protocol default anyway, because the transaction carried no
+    /// ComputeBudget `RequestHeapFrame` or presented no instructions sysvar.
+    /// That grant is best-effort by construction, so without this refusal the
+    /// route would allocate until it died -- and an out-of-memory abort names
+    /// nothing: not the route, not the budget, not what the caller omitted.
+    ///
+    /// The remedy is always the caller's and always the same: add
+    /// `ComputeBudgetInstruction::request_heap_frame` to the transaction and
+    /// keep the instructions sysvar in the account frame.
+    HeapFrame = 0x4008,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -202,7 +215,7 @@ const _: () = assert!(
     "TradingSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (TradingSbfError::ReleaseSuperseded as u32)
+    (TradingSbfError::HeapFrame as u32)
         < dclutch_refusal_registry::TRADING_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "TradingSbfError must not run past its registered refusal band"
 );

@@ -8,6 +8,7 @@ import {
   type MarketHoardV1,
 } from '@/lib/marketDiscovery';
 
+import MarketFilterBar from './MarketFilterBar';
 import MarketDiscoveryWorkspace, { EmptyMarkets, RestOfTheRecord } from './MarketDiscoveryWorkspace';
 
 /**
@@ -15,6 +16,11 @@ import MarketDiscoveryWorkspace, { EmptyMarkets, RestOfTheRecord } from './Marke
  * deployment manifest supplies the endpoint and the Core authority, the list
  * auto-loads, and there is no infrastructure form anywhere on the page. These
  * tests pin the inversion so the ask-the-visitor pattern cannot creep back.
+ *
+ * The page has since grown one control — a search, and an ordering beside it.
+ * That did not weaken the inversion and was not allowed to: see the long note
+ * on 'may grow a control that narrows what is here' below, which states in
+ * words what is still forbidden and why a search is not an instance of it.
  */
 describe('Market discovery route', () => {
   const html = renderToStaticMarkup(<MarketDiscoveryWorkspace />);
@@ -48,7 +54,63 @@ describe('Market discovery route', () => {
     expect(html).not.toContain('Registry program · optional');
     expect(html).not.toContain('Known Market addresses');
     expect(html).not.toContain('<textarea');
+    // The page a reader lands on carries no control whatsoever. The list is
+    // already loading; there is nothing to fill in and nothing to submit.
     expect(html).not.toContain('<input');
+  });
+
+  /**
+   * THE GUARD ABOVE, RENEGOTIATED — read this before adding a control.
+   *
+   * `not.toContain('<input')` was, for a while, this suite's whole statement
+   * of the inversion. It was a proxy, and a good one, for the thing actually
+   * being protected: this page must never make a reader go and FIND a piece
+   * of infrastructure before it will show them what it already knows.
+   *
+   * A search box is an `<input>` and violates none of that. So the rule is
+   * now stated as what it always meant, and it is checked instead of counted:
+   *
+   *   FORBIDDEN, unchanged — a control that asks for infrastructure. An RPC
+   *   endpoint, a program or Market address to paste, a keypair, a registry
+   *   ID. Also unchanged: no `<textarea>` (the paste box for "Known Market
+   *   addresses" was one), and no signing or submitting anywhere near a
+   *   discovery surface. The single place "bring your own infrastructure"
+   *   lives is the cluster picker in the nav, and that is deliberate.
+   *
+   *   ALLOWED — a control that narrows or reorders what is ALREADY on the
+   *   page. It asks for nothing the reader does not already have, and the
+   *   page is complete before anyone touches it.
+   *
+   * If a future control cannot be described by that second paragraph, it does
+   * not belong here, and neither does a weakening of this test.
+   */
+  it('may grow a control that narrows what is here, and none that asks for infrastructure', () => {
+    const bar = renderToStaticMarkup(
+      <MarketFilterBar query="" onQuery={() => {}} order="enumerated" onOrder={() => {}} shown={2} total={2} />,
+    );
+    const inputs = bar.match(/<input\b[^>]*>/g) ?? [];
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain('type="search"');
+    expect(bar).toContain('Search these markets');
+    expect(bar).not.toContain('<textarea');
+
+    // It asks for nothing a reader would have to leave the page to obtain,
+    // and it says so about itself.
+    expect(bar).toContain('It reads nothing the page is not already showing you');
+    for (const infrastructure of ['endpoint', 'Endpoint', 'RPC', 'keypair', 'private key', 'http', 'program address', 'Paste']) {
+      expect(bar).not.toContain(infrastructure);
+    }
+    for (const submission of ['Sign', 'Submit', 'Connect']) {
+      expect(bar).not.toContain(submission);
+    }
+  });
+
+  it('reports what the deployment holds separately from what a search is showing', () => {
+    const searched = renderToStaticMarkup(
+      <MarketFilterBar query="nothing matches this" onQuery={() => {}} order="enumerated" onOrder={() => {}} shown={0} total={7} />,
+    );
+    expect(searched).toContain('0 of 7 markets match');
+    expect(searched).toContain('Searching hides cards; it never changes what exists.');
   });
 
   it('states the provenance and refusal contract every card is held to', () => {

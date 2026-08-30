@@ -44,6 +44,22 @@ describe('the front door', () => {
     expect(html).toContain('devnet SOL is free from the');
   });
 
+  /**
+   * The field notes were written on 25 August 2026, committed the same day to
+   * a separate posters repository, and then linked from nowhere — the one
+   * long-form piece about how this was built, unreachable by anyone who did
+   * not already know it existed. The link is pinned here so it cannot go
+   * quiet again, and the path is pinned because the artifact's link check
+   * resolves this exact string against a directory index.
+   */
+  it('gives a reader the field notes on how this was built, and says what they are', () => {
+    expect(html).toContain('/notes/plan-to-compost-at-least-three/');
+    expect(html).toContain('Plan to compost at least three');
+    expect(html).toContain('How this was built');
+    expect(html).toContain('built twice before the version you are reading now');
+    expect(html).toContain('honest about what is proved and what is still only tested');
+  });
+
   it('carries the key art with a described image and an honest caption', () => {
     expect(html).toContain('/art/dragons-clutch-key-art-v1-1672w.webp');
     expect(html).toContain('claw cradling a glowing, faceted gem');

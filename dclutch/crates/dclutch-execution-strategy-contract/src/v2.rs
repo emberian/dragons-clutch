@@ -111,6 +111,16 @@ pub enum Error {
     ScratchRequired,
     /// Accelerator and interpreter acceptance or complete candidate bank diverged.
     StrategyDivergence,
+    /// Certificate bound its artifact under a profile this authorization refuses.
+    ///
+    /// Distinct from [`Error::UnsupportedSchema`], which says the profile is not
+    /// one this build knows. This says the profile decoded fine and names a
+    /// binding the caller must not accept -- an admitted-AOT chain handed a
+    /// semantically bound certificate, or an exact-release comparison attempted
+    /// against one. Conflating the two would let "I do not accept this" read as
+    /// "I do not understand this", and only the second is safe to retry against
+    /// a newer verifier.
+    UnsupportedArtifactBinding,
 }
 
 /// Result alias for Execution Strategy V2.
@@ -399,6 +409,52 @@ fn transport_profile(
     }
 }
 
+/// What the Certificate's 32-byte artifact identity names.
+///
+/// The two bindings occupy the same 32 bytes at
+/// [`CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2`] and are told apart by the
+/// certificate's artifact-profile field, never by context. A record that could
+/// be read either way depending on who is holding it is the seam disagreement
+/// this enum exists to make impossible.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CertificateArtifactBindingV2 {
+    /// Exact `ArtifactReleaseV1` content identity, which carries an `elf_digest`.
+    ///
+    /// This is the only binding an admitted-AOT chain accepts: admission is a
+    /// statement about one exact built artifact, and a source-derived identity
+    /// would silently widen it to every build of that source.
+    Release(ArtifactReleaseIdV1),
+    /// Source-derived `semantic_release_id`; the ELF digest stays in the record.
+    ///
+    /// A certificate that must contain the digest of the ELF it is compiled
+    /// into cannot be authored -- measured, not argued, in `23eed7df`. Binding
+    /// the source-derived identity instead closes no loop, and leaves the
+    /// end-to-end guarantee as two facts with one author each: the certificate
+    /// names the semantic release, and the separately authenticated
+    /// `ArtifactReleaseV1` record binds that release to the live ELF.
+    Semantic(ContentId),
+}
+
+impl CertificateArtifactBindingV2 {
+    /// Exact profile discriminant persisted at offset 10.
+    #[must_use]
+    pub const fn artifact_profile(self) -> u16 {
+        match self {
+            Self::Release(_) => EXECUTION_STRATEGY_RELEASE_ARTIFACT_PROFILE_V2,
+            Self::Semantic(_) => EXECUTION_STRATEGY_SEMANTIC_ARTIFACT_PROFILE_V2,
+        }
+    }
+
+    /// Exact persisted 32 identity bytes, whichever binding this is.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        match self {
+            Self::Release(release) => release.as_bytes(),
+            Self::Semantic(semantic) => semantic.as_bytes(),
+        }
+    }
+}
+
 /// Immutable semantic-equivalence tuple for one stateless AOT ArtifactRelease.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutionStrategyCertificateV2 {
@@ -408,7 +464,7 @@ pub struct ExecutionStrategyCertificateV2 {
     transition_schema: ContentId,
     transition_program: ContentId,
     effect_program: ContentId,
-    artifact_release: ArtifactReleaseIdV1,
+    artifact: CertificateArtifactBindingV2,
     compiler_release: ContentId,
     toolchain: ContentId,
     translation_validation: ContentId,
@@ -436,7 +492,40 @@ impl ExecutionStrategyCertificateV2 {
             transition_schema,
             transition_program,
             effect_program,
-            artifact_release,
+            artifact: CertificateArtifactBindingV2::Release(artifact_release),
+            compiler_release,
+            toolchain,
+            translation_validation,
+        }
+    }
+
+    /// Construct one typed Certificate binding a source-derived semantic release.
+    ///
+    /// The sibling of [`Self::new`] for the profile that names a
+    /// `semantic_release_id` rather than an exact `ArtifactReleaseV1`. It is a
+    /// separate constructor, not a flag, so no producer can select the binding
+    /// by accident.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new_semantic(
+        account_profile_program: ContentId,
+        request_profile_schema: ContentId,
+        request_profile_program: ContentId,
+        transition_schema: ContentId,
+        transition_program: ContentId,
+        effect_program: ContentId,
+        semantic_release: ContentId,
+        compiler_release: ContentId,
+        toolchain: ContentId,
+        translation_validation: ContentId,
+    ) -> Self {
+        Self {
+            account_profile_program,
+            request_profile_schema,
+            request_profile_program,
+            transition_schema,
+            transition_program,
+            effect_program,
+            artifact: CertificateArtifactBindingV2::Semantic(semantic_release),
             compiler_release,
             toolchain,
             translation_validation,
@@ -444,26 +533,37 @@ impl ExecutionStrategyCertificateV2 {
     }
 
     /// Hostile-decode one exact Certificate.
+    ///
+    /// The artifact profile is read rather than pinned, because it is the field
+    /// that says what the 32 bytes at
+    /// [`CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2`] mean. Every other header byte
+    /// is still pinned exactly as before.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        require_header(
-            bytes,
-            EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2,
-            &EXECUTION_STRATEGY_CERTIFICATE_MAGIC_V2,
-        )?;
+        let profile = require_certificate_header(bytes)?;
         require_zero(bytes, CERTIFICATE_RESERVED_OFFSET_V2, 4)?;
-        Ok(Self::new(
-            content(bytes, CERTIFICATE_ACCOUNT_PROFILE_PROGRAM_OFFSET_V2)?,
-            content(bytes, CERTIFICATE_REQUEST_PROFILE_SCHEMA_OFFSET_V2)?,
-            content(bytes, CERTIFICATE_REQUEST_PROFILE_PROGRAM_OFFSET_V2)?,
-            content(bytes, CERTIFICATE_TRANSITION_SCHEMA_OFFSET_V2)?,
-            content(bytes, CERTIFICATE_TRANSITION_PROGRAM_OFFSET_V2)?,
-            content(bytes, CERTIFICATE_EFFECT_PROGRAM_OFFSET_V2)?,
-            ArtifactReleaseIdV1::decode(slice(bytes, CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2, 32)?)
-                .map_err(|_| Error::ZeroIdentity)?,
-            content(bytes, CERTIFICATE_COMPILER_RELEASE_OFFSET_V2)?,
-            content(bytes, CERTIFICATE_TOOLCHAIN_OFFSET_V2)?,
-            content(bytes, CERTIFICATE_TRANSLATION_VALIDATION_OFFSET_V2)?,
-        ))
+        let identity = slice(bytes, CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2, 32)?;
+        let artifact = if profile == EXECUTION_STRATEGY_SEMANTIC_ARTIFACT_PROFILE_V2 {
+            CertificateArtifactBindingV2::Semantic(content(
+                bytes,
+                CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2,
+            )?)
+        } else {
+            CertificateArtifactBindingV2::Release(
+                ArtifactReleaseIdV1::decode(identity).map_err(|_| Error::ZeroIdentity)?,
+            )
+        };
+        Ok(Self {
+            account_profile_program: content(bytes, CERTIFICATE_ACCOUNT_PROFILE_PROGRAM_OFFSET_V2)?,
+            request_profile_schema: content(bytes, CERTIFICATE_REQUEST_PROFILE_SCHEMA_OFFSET_V2)?,
+            request_profile_program: content(bytes, CERTIFICATE_REQUEST_PROFILE_PROGRAM_OFFSET_V2)?,
+            transition_schema: content(bytes, CERTIFICATE_TRANSITION_SCHEMA_OFFSET_V2)?,
+            transition_program: content(bytes, CERTIFICATE_TRANSITION_PROGRAM_OFFSET_V2)?,
+            effect_program: content(bytes, CERTIFICATE_EFFECT_PROGRAM_OFFSET_V2)?,
+            artifact,
+            compiler_release: content(bytes, CERTIFICATE_COMPILER_RELEASE_OFFSET_V2)?,
+            toolchain: content(bytes, CERTIFICATE_TOOLCHAIN_OFFSET_V2)?,
+            translation_validation: content(bytes, CERTIFICATE_TRANSLATION_VALIDATION_OFFSET_V2)?,
+        })
     }
 
     /// Encode exact canonical Certificate bytes.
@@ -504,10 +604,14 @@ impl ExecutionStrategyCertificateV2 {
         ] {
             put(&mut output, offset, value.as_bytes());
         }
+        // The profile and the identity are written by one expression each, from
+        // the same binding, so a certificate cannot be encoded whose profile
+        // disagrees with the bytes it labels.
+        put_u16(&mut output, 10, self.artifact.artifact_profile());
         put(
             &mut output,
             CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2,
-            self.artifact_release.as_bytes(),
+            self.artifact.as_bytes(),
         );
         output
     }
@@ -576,17 +680,50 @@ impl ExecutionStrategyCertificateV2 {
     }
 
     /// Require the separately Registry-authenticated ArtifactRelease identity.
+    ///
+    /// Refuses a semantically bound certificate outright rather than comparing
+    /// its 32 bytes to a release id. Those bytes would compare cleanly against
+    /// nothing and mismatch everything, so a caller reading the refusal as
+    /// "wrong artifact" would be chasing the wrong fact.
     pub fn validate_artifact(self, authenticated: ArtifactReleaseIdV1) -> Result<()> {
-        if self.artifact_release == authenticated {
-            Ok(())
-        } else {
-            Err(Error::ArtifactMismatch)
+        match self.artifact {
+            CertificateArtifactBindingV2::Release(release) if release == authenticated => Ok(()),
+            CertificateArtifactBindingV2::Release(_) => Err(Error::ArtifactMismatch),
+            CertificateArtifactBindingV2::Semantic(_) => Err(Error::UnsupportedArtifactBinding),
         }
     }
 
+    /// Require the separately authenticated source-derived semantic release.
+    ///
+    /// The caller supplies the `semantic_release_id` of an `ArtifactReleaseV1`
+    /// it authenticated by some other author -- on chain, the finalized record
+    /// whose `elf_digest` was compared against the live programdata. This
+    /// certificate never sees the ELF, and that separation is the point.
+    pub fn validate_semantic_release(self, authenticated: ContentId) -> Result<()> {
+        match self.artifact {
+            CertificateArtifactBindingV2::Semantic(semantic) if semantic == authenticated => Ok(()),
+            CertificateArtifactBindingV2::Semantic(_) => Err(Error::ArtifactMismatch),
+            CertificateArtifactBindingV2::Release(_) => Err(Error::UnsupportedArtifactBinding),
+        }
+    }
+
+    /// Exactly what this Certificate binds its artifact to.
+    #[must_use]
+    pub const fn artifact_binding(self) -> CertificateArtifactBindingV2 {
+        self.artifact
+    }
+
     /// Referenced stateless accelerator ArtifactRelease.
-    pub const fn artifact_release(self) -> ArtifactReleaseIdV1 {
-        self.artifact_release
+    ///
+    /// Fallible since the semantic profile: a certificate that names a source
+    /// identity has no release id to give, and every caller written before that
+    /// profile existed now refuses it instead of reading 32 bytes as something
+    /// they are not.
+    pub fn artifact_release(self) -> Result<ArtifactReleaseIdV1> {
+        match self.artifact {
+            CertificateArtifactBindingV2::Release(release) => Ok(release),
+            CertificateArtifactBindingV2::Semantic(_) => Err(Error::UnsupportedArtifactBinding),
+        }
     }
     /// Compiler semantic release identity.
     pub const fn compiler_release(self) -> ContentId {
@@ -1728,6 +1865,32 @@ fn require_prefix_header(bytes: &[u8], width: usize, magic: &[u8; 8]) -> Result<
     Ok(())
 }
 
+/// Pin every Certificate header byte except the artifact profile, and return it.
+///
+/// The shared [`require_prefix_header`] pins the profile to
+/// [`EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2`], which is right for the Strategy
+/// and Admission records: theirs is a physical-layout profile with exactly one
+/// accepted value. The Certificate's is a semantic discriminator, so it is read
+/// here and refused only when it names no known binding.
+fn require_certificate_header(bytes: &[u8]) -> Result<u16> {
+    if bytes.len() != EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2 {
+        return Err(Error::InvalidLength);
+    }
+    if slice(bytes, 0, 8)? != EXECUTION_STRATEGY_CERTIFICATE_MAGIC_V2 {
+        return Err(Error::InvalidMagic);
+    }
+    if read_u16(bytes, 8)? != EXECUTION_STRATEGY_SCHEMA_VERSION_V2 {
+        return Err(Error::UnsupportedSchema);
+    }
+    let profile = read_u16(bytes, 10)?;
+    if profile != EXECUTION_STRATEGY_RELEASE_ARTIFACT_PROFILE_V2
+        && profile != EXECUTION_STRATEGY_SEMANTIC_ARTIFACT_PROFILE_V2
+    {
+        return Err(Error::UnsupportedSchema);
+    }
+    Ok(profile)
+}
+
 fn content(bytes: &[u8], offset: usize) -> Result<ContentId> {
     ContentId::new(read_array(bytes, offset)?).map_err(|_| Error::ZeroIdentity)
 }
@@ -1878,6 +2041,26 @@ mod tests {
             id(2),
             id(13),
             artifact(14),
+            id(15),
+            id(16),
+            id(17),
+        )
+    }
+
+    /// The same tuple, bound to a source-derived semantic release instead.
+    ///
+    /// Deliberately reuses byte 14 for the identity so the two certificates
+    /// differ in exactly one thing -- the profile -- and every assertion below
+    /// is about the binding rather than about incidentally different bytes.
+    fn semantic_certificate() -> ExecutionStrategyCertificateV2 {
+        ExecutionStrategyCertificateV2::new_semantic(
+            id(10),
+            id(11),
+            id(12),
+            id(1),
+            id(2),
+            id(13),
+            id(14),
             id(15),
             id(16),
             id(17),
@@ -2176,6 +2359,189 @@ mod tests {
             ),
             Err(Error::DescriptorMismatch)
         );
+    }
+
+    /// An exact-release certificate's bytes did not move.
+    ///
+    /// The negative control for the whole rebind: every certificate that exists
+    /// today keeps profile 2 and encodes to the same 336 bytes it always did.
+    /// If the semantic profile had been introduced by widening the record or by
+    /// reinterpreting the header, this assertion is what would have caught it.
+    #[test]
+    fn the_release_binding_is_byte_for_byte_what_it_always_was() {
+        let encoded = certificate().to_bytes();
+        assert_eq!(encoded.len(), EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2);
+        assert_eq!(encoded.len(), 336);
+        assert_eq!(
+            read_u16(&encoded, 10),
+            Ok(EXECUTION_STRATEGY_RELEASE_ARTIFACT_PROFILE_V2)
+        );
+        assert_eq!(read_u16(&encoded, 10), Ok(2));
+        assert_eq!(
+            slice(&encoded, CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2, 32),
+            Ok([14_u8; 32].as_slice())
+        );
+        assert_eq!(
+            ExecutionStrategyCertificateV2::decode(&encoded),
+            Ok(certificate())
+        );
+        assert_eq!(
+            certificate().artifact_binding(),
+            CertificateArtifactBindingV2::Release(artifact(14))
+        );
+    }
+
+    /// The semantic binding round-trips, and differs from the release binding in
+    /// exactly the profile byte.
+    #[test]
+    fn the_semantic_binding_differs_from_the_release_binding_only_in_its_profile() {
+        let release = certificate().to_bytes();
+        let semantic = semantic_certificate().to_bytes();
+        assert_eq!(semantic.len(), release.len());
+        assert_eq!(
+            read_u16(&semantic, 10),
+            Ok(EXECUTION_STRATEGY_SEMANTIC_ARTIFACT_PROFILE_V2)
+        );
+        assert_eq!(read_u16(&semantic, 10), Ok(3));
+        // Same width, same magic, same identity bytes, same everything else:
+        // the profile is carrying the entire distinction, which is exactly what
+        // makes it safe to leave the layout alone.
+        let differing: vec::Vec<usize> = (0..release.len())
+            .filter(|index| release[*index] != semantic[*index])
+            .collect();
+        assert_eq!(differing, vec![10]);
+        assert_eq!(
+            ExecutionStrategyCertificateV2::decode(&semantic),
+            Ok(semantic_certificate())
+        );
+        assert_eq!(
+            semantic_certificate().artifact_binding(),
+            CertificateArtifactBindingV2::Semantic(id(14))
+        );
+    }
+
+    /// Every accessor and comparator refuses the binding it was not written for.
+    #[test]
+    fn each_binding_refuses_the_other_comparator_distinctly() {
+        // A semantic certificate has no release id to give, and says so with a
+        // code that means "I refuse this", not "these differ".
+        assert_eq!(
+            semantic_certificate().artifact_release(),
+            Err(Error::UnsupportedArtifactBinding)
+        );
+        assert_eq!(certificate().artifact_release(), Ok(artifact(14)));
+
+        assert_eq!(
+            semantic_certificate().validate_artifact(artifact(14)),
+            Err(Error::UnsupportedArtifactBinding)
+        );
+        assert_eq!(
+            certificate().validate_semantic_release(id(14)),
+            Err(Error::UnsupportedArtifactBinding)
+        );
+
+        // And where the binding IS the right one, a genuine disagreement still
+        // reports as a mismatch. If these two codes ever collapsed into one, a
+        // caller could not tell "wrong artifact" from "wrong kind of proof".
+        assert_eq!(certificate().validate_artifact(artifact(14)), Ok(()));
+        assert_eq!(
+            certificate().validate_artifact(artifact(99)),
+            Err(Error::ArtifactMismatch)
+        );
+        assert_eq!(
+            semantic_certificate().validate_semantic_release(id(14)),
+            Ok(())
+        );
+        assert_eq!(
+            semantic_certificate().validate_semantic_release(id(99)),
+            Err(Error::ArtifactMismatch)
+        );
+    }
+
+    /// Admitted AOT refuses a semantically bound certificate.
+    ///
+    /// This is the ruling's weld: admission is a statement about one exact built
+    /// artifact, and a source-derived identity would silently widen it to every
+    /// build of that source. The refusal is reached through the real
+    /// `validate_admitted_aot_v4` join, not by calling the comparator directly,
+    /// so it proves the production path enforces it.
+    #[test]
+    fn admitted_aot_refuses_a_semantically_bound_certificate() {
+        let strategy_program = id(30);
+        let admitted = strategy(StrategyDispositionV2::AdmittedAot);
+        let v3 = descriptor(strategy_program);
+        let descriptor = descriptor_v4(strategy_program);
+        let admission = Some((id(4), ExecutionStrategyAdmissionV2::new(id(3))));
+
+        // The release-bound certificate admits, so the refusal below is about
+        // the binding and nothing else.
+        assert!(
+            validate_admitted_aot_v4(
+                strategy_program,
+                admitted,
+                descriptor,
+                id(3),
+                certificate(),
+                artifacts(),
+                artifact(14),
+                admission,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            validate_admitted_aot_v4(
+                strategy_program,
+                admitted,
+                descriptor,
+                id(3),
+                semantic_certificate(),
+                artifacts(),
+                artifact(14),
+                admission,
+            ),
+            Err(Error::UnsupportedArtifactBinding)
+        );
+        assert_eq!(
+            validate_admitted_aot_v2(
+                strategy_program,
+                admitted,
+                v3,
+                id(3),
+                semantic_certificate(),
+                artifacts(),
+                artifact(14),
+                admission,
+            ),
+            Err(Error::UnsupportedArtifactBinding)
+        );
+    }
+
+    /// A profile naming no known binding refuses as an unsupported schema.
+    ///
+    /// Distinct from the refusal above on purpose: an unknown profile may mean a
+    /// newer verifier would accept it, and a known-but-unacceptable one never
+    /// does.
+    #[test]
+    fn an_unknown_artifact_profile_refuses_as_unsupported_schema() {
+        for profile in [0_u16, 1, 4, 5, u16::MAX] {
+            let mut bytes = certificate().to_bytes();
+            put_u16(&mut bytes, 10, profile);
+            assert_eq!(
+                ExecutionStrategyCertificateV2::decode(&bytes),
+                Err(Error::UnsupportedSchema),
+                "profile {profile} must not decode"
+            );
+        }
+        // The two known ones still decode, so the loop above is not passing by
+        // refusing everything.
+        for profile in [
+            EXECUTION_STRATEGY_RELEASE_ARTIFACT_PROFILE_V2,
+            EXECUTION_STRATEGY_SEMANTIC_ARTIFACT_PROFILE_V2,
+        ] {
+            let mut bytes = certificate().to_bytes();
+            put_u16(&mut bytes, 10, profile);
+            assert!(ExecutionStrategyCertificateV2::decode(&bytes).is_ok());
+        }
     }
 
     #[test]

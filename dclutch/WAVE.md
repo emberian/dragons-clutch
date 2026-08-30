@@ -14,9 +14,9 @@ them: this file is what execution has found, INTENT is what the project is
 - Local-first for several cycles. **Devnet deploy-and-recycle is deferred**
   (45 devnet SOL banked; seven-role successor ≈ 29 SOL rent; explicit named
   authorization required before any deploy).
-- **Assurance work is parked** beyond keeping every claim fail-closed and
-  honestly labeled. Finish and polish first; iterate on assurance in public
-  from a complete basis.
+- **Assurance work is parked** beyond keeping every claim honestly labeled:
+  what is unproven says so, in the surface that shows it. Finish and polish
+  first; iterate on assurance in public from a complete basis.
 - Frontend/demo excellence is first-class: browser-wallet support
   (Wallet Standard; verify Talisman et al.), transaction-complete workflows,
   and demo-quality Products for the eventual devnet/Pages demo.

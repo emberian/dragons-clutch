@@ -61,6 +61,7 @@ use spl_token_2022_interface::{
 
 use crate::{
     ClaimsSbfError,
+    affine_batch_v2::CorePhaseGateV3,
     rational_representation_v2::authenticate_finalized_rational_record,
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, authenticate_parent_releases,
@@ -113,7 +114,7 @@ fn execute_signed_delta_boxed(
         accounts,
         packet,
         parent,
-        dclutch_market_core_codec::Phase::Open,
+        CorePhaseGateV3::Exactly(dclutch_market_core_codec::Phase::Open),
     )?))
 }
 

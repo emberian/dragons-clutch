@@ -1378,10 +1378,32 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
                 &plan_path, &rpc_url, registry, mint,
             )?
         }
+        // Structured INHERITS Rational's config type -- TokenBehaviorSelectionV2
+        // -- and therefore inherits the same Mint-before-closure ordering,
+        // for the same reason and with the same one-way dependency.
+        Ok(family) if family == "structured" => {
+            let mint = std::env::var("DCLUTCH_STRUCTURED_COLLATERAL_MINT").map_err(|_| {
+                Error::new(
+                    "DCLUTCH_MARKET_CAPABILITY=structured also requires \
+                     DCLUTCH_STRUCTURED_COLLATERAL_MINT=BASE58_MINT. Structured's config \
+                     record is a TokenBehaviorSelectionV2, exactly as Rational's is, so it \
+                     binds the immutable Realm and the Realm is derived from the collateral \
+                     Mint. The Mint must be chosen before the capability closure is compiled. \
+                     This is an ordering constraint, not a cycle: the Realm is a seed of the \
+                     Market PDA, never an output of it.",
+                )
+            })?;
+            let mint = mint
+                .parse::<solana_sdk::pubkey::Pubkey>()
+                .map_err(|_| Error::new("DCLUTCH_STRUCTURED_COLLATERAL_MINT must be base58"))?;
+            crate::structured_market::demo_structured_market_input(
+                &plan_path, &rpc_url, registry, mint,
+            )?
+        }
         Ok(family) if family != "direct" => {
             return Err(Error::new(format!(
                 "DCLUTCH_MARKET_CAPABILITY={family} names no selectable capability compiler; \
-                 this command compiles direct (default), general or rational"
+                 this command compiles direct (default), general, rational or structured"
             )));
         }
         _ => {

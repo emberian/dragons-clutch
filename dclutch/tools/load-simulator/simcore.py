@@ -28,6 +28,7 @@ import random
 import signal
 import time
 from typing import Any, Callable, Optional
+import urllib.parse
 
 SCHEMA_STATUS = "dclutch-load-simulator-status-v1"
 SCHEMA_CYCLE = "dclutch-load-simulator-cycle-v1"
@@ -46,6 +47,26 @@ def utc_now_iso() -> str:
 def canonical_json_bytes(value: Any) -> bytes:
     """One canonical byte encoding so digests are stable across reruns."""
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def redact_endpoint(url: str) -> str:
+    """An RPC endpoint with any credential removed.
+
+    Provider keys ride in the query string (Helius sends ``?api-key=...``) and
+    for some providers in the path itself. Everything this module writes is
+    read by a web surface or handed to whoever is looking at a run, so what it
+    records is the endpoint's identity - scheme and host - and never the
+    credential that reaches it. Redaction happens where the value is STORED,
+    not where it is passed in, so no caller can forget.
+    """
+    if not url:
+        return url
+    parts = urllib.parse.urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return "<redacted>"
+    path = parts.path if parts.path in ("", "/") else "/<redacted>"
+    query = "?<redacted>" if parts.query else ""
+    return f"{parts.scheme}://{parts.netloc}{path}{query}"
 
 
 def digest_of(value: Any) -> str:
@@ -214,6 +235,10 @@ class StatusWriter:
     market_address: Optional[str] = None
     started_at: str = dataclasses.field(default_factory=utc_now_iso)
     max_signatures: int = 50
+
+    def __post_init__(self) -> None:
+        # The writer never holds the credential, so no write path can leak it.
+        self.rpc_url = redact_endpoint(self.rpc_url)
 
     def write(
         self,

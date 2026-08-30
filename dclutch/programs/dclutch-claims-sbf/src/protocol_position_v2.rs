@@ -47,7 +47,8 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
 use super::{
-    affine_batch_v2::authenticate_runtime_product_basis_core_v3, authenticate_activated_role,
+    affine_batch_v2::{CorePhaseGateV3, authenticate_runtime_product_basis_core_v3},
+    authenticate_activated_role,
 };
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -403,7 +404,7 @@ fn process_admit(
         market,
         product_digest,
         linked_digest,
-        CorePhase::Open,
+        CorePhaseGateV3::Exactly(CorePhase::Open),
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
 
@@ -1040,8 +1041,46 @@ fn authenticate_vacancy(
         || accounts.admission.owner != &system_program::ID
         || !accounts.position.data_is_empty()
         || !accounts.admission.data_is_empty()
-        || accounts.position.lamports() != request.observed_position_lamports
-        || accounts.admission.lamports() != request.observed_admission_lamports
+        // A FLOOR, NOT AN EQUALITY -- and the difference is whether anyone can
+        // be admitted at all.
+        //
+        // Both accounts are keyless, off-curve, system-owned PDAs, so anyone on
+        // the network may send them lamports at any time. Under an equality the
+        // caller declares a balance it read one slot ago and a stranger
+        // invalidates that declaration with ONE LAMPORT, for about one lamport
+        // plus a fee, every slot, forever: admission is not delayed, it is
+        // indefinitely blocked, and no amount of retrying wins because the
+        // attack is cheaper than the retry.
+        //
+        // The floor is what the request already means. `ProtocolPositionRequestV2`
+        // refuses `observed_* < *_rent_principal` on encode
+        // (`crates/dclutch-claims-svm/src/protocol_position_v2.rs:473-478`,
+        // pinned by `prepaid_creation_is_dust_tolerant_but_never_underfunded`),
+        // so `declared >= principal` already holds and `live >= declared` is the
+        // only thing this site has to establish. Underfunding still refuses
+        // here, which is the whole safety content of the old check; a donation
+        // no longer does.
+        //
+        // Nothing this route writes depends on the difference. Admission
+        // allocates and assigns (`allocate_pair` -> `allocate_and_assign`) and
+        // performs no lamport arithmetic whatsoever, so the persisted admission
+        // body and the emitted receipt are byte-identical to what an exact
+        // declaration produced -- which is why no downstream re-derivation of
+        // either can observe this change. Excess lamports are not stranded: the
+        // close route sweeps the entire balance of both accounts to the
+        // Market's rent credit.
+        //
+        // The CLOSE site's twin check (`:597-598`) is NOT relaxed here and is
+        // still griefable. It cannot be, alone: close credits the rent account
+        // `rent_before + declared_total` by absolute assignment while zeroing
+        // two accounts that hold the live balance (`close_pair`), and its
+        // receipt's lamport fields are re-derived and whole-struct
+        // equality-checked by trading-sbf
+        // (`programs/dclutch-trading-sbf/src/direct/sell_escrow.rs:497-523`).
+        // Relaxing it means changing what the receipt means, and that is a
+        // two-ELF change.
+        || accounts.position.lamports() < request.observed_position_lamports
+        || accounts.admission.lamports() < request.observed_admission_lamports
         || position_width == 0
     {
         return Err(ProtocolPositionSbfErrorV2::Position.into());

@@ -2103,6 +2103,7 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-resolution-core-v3-operator",
  "dclutch-series-v3-kernel",
+ "dclutch-structured-v2-kernel",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
  "dclutch-transition-vm",

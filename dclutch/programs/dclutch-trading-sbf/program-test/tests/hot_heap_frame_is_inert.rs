@@ -7,11 +7,6 @@
 //! Two founding routes are on `declares_extended_heap_profile_v1`'s list and
 //! get exactly that.
 //!
-//! Hot is deliberately NOT on that list. Compact native evidence has now made
-//! room for the instruction, so this test pins the remaining consequence: a Hot
-//! transaction may carry `RequestHeapFrame` and it changes nothing, because the
-//! route does not declare the profile.
-//!
 //! Two things make this test change, and both are the point:
 //!
 //! - putting Hot on `declares_extended_heap_profile_v1`'s list makes the grant
@@ -22,11 +17,25 @@
 //! Either way the change is deliberate and visible here, rather than a
 //! doctrine living only in a doc comment.
 //!
-//! **The second one happened (W2p, 2026-08-27).** The Hot tail now executes to
-//! completion at the protocol default 32 KiB heap, so what this test asserts is
-//! success with the grant still inert. Hot stays off the extended-heap list and
-//! the packet assertion below still records why -- but nothing rides on it any
-//! more, which is the outcome the decision was holding out for.
+//! **BOTH HAVE NOW HAPPENED, and the file name is a fossil of the first.**
+//!
+//! The second happened first (W2p, 2026-08-27): the Hot tail's heap demand was
+//! closed structurally, so the CONTINUATION route executes to completion at the
+//! protocol default and this test's refusal became success.
+//!
+//! The first happened on 2026-08-30, and the reason is the ROUTE rather than
+//! the tail. A caller who invokes Trading DIRECTLY -- which is how every public
+//! caller sends a Direct trade -- makes two Registry reauthentication CPIs a
+//! continuation never makes, and holds their frames against an allocator that
+//! never frees. Measured, that route exhausts 32 KiB in finalization. So Hot IS
+//! on the list now, and `DIRECT_HOT_HEAP_FRAME_BYTES_V1` is what a top-level
+//! transaction carries.
+//!
+//! What this test still pins, and why it is still worth its name: the
+//! CONTINUATION route neither needs the grant nor is harmed by one. It executes
+//! at whatever ceiling it is handed, its packet still fits, and nothing from
+//! the top-level route's budget leaked into it. If the wire assertion below
+//! ever moves, something did.
 //!
 //! # And the compute ceiling is now the wall, at one failure in twenty
 //!
@@ -135,7 +144,7 @@ fn budget_free_program_test(artifacts: &Elves) -> ProgramTest {
 }
 
 #[tokio::test]
-async fn a_requested_heap_frame_is_inert_for_hot_and_fits_its_compact_packet() {
+async fn the_continuation_route_is_unaffected_by_a_heap_grant_and_still_fits_its_packet() {
     let artifacts = elves();
     let mut test = budget_free_program_test(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);

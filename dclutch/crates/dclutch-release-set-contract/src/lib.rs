@@ -572,8 +572,22 @@ impl CapabilityExecutionSelectionV1 {
     }
 }
 
+/// The semantic execution roles in the sole canonical profile-1 order.
+///
+/// This array and [`ExecutionRoleV1::role_index`] are the only authors of that
+/// order. Anything that walks the roles or indexes a role-keyed array reads it
+/// from here, because a second copy of an order is a second thing to drift.
+pub const EXECUTION_ROLE_ORDER_V1: [ExecutionRoleV1; EXECUTION_ROLE_COUNT_V1] = [
+    ExecutionRoleV1::Core,
+    ExecutionRoleV1::Claims,
+    ExecutionRoleV1::Trading,
+    ExecutionRoleV1::Resolution,
+    ExecutionRoleV1::Custody,
+];
+
 impl ExecutionRoleV1 {
-    const fn index(self) -> usize {
+    /// Return this role's position in the canonical profile-1 order.
+    pub const fn role_index(self) -> usize {
         match self {
             Self::Core => 0,
             Self::Claims => 1,
@@ -583,6 +597,30 @@ impl ExecutionRoleV1 {
         }
     }
 }
+
+// The array, the index and the wire discriminant are three spellings of one
+// fact, and the tree has paid for parallel spellings drifting before. The
+// binding pattern is exhaustive over the array, so growing a sixth role stops
+// compiling here rather than silently landing at an index nobody assigned.
+const _: () = {
+    let [core, claims, trading, resolution, custody] = EXECUTION_ROLE_ORDER_V1;
+    assert!(
+        core.role_index() == 0
+            && claims.role_index() == 1
+            && trading.role_index() == 2
+            && resolution.role_index() == 3
+            && custody.role_index() == 4,
+        "canonical execution-role order must agree with role_index"
+    );
+    assert!(
+        core as usize == 0
+            && claims as usize == 1
+            && trading as usize == 2
+            && resolution as usize == 3
+            && custody as usize == 4,
+        "canonical execution-role discriminant must agree with role_index"
+    );
+};
 
 /// Immutable canonical profile-1 execution release set.
 ///
@@ -723,7 +761,7 @@ fn validate_aliases(bindings: &[ExecutionRoleBindingV1; EXECUTION_ROLE_COUNT_V1]
 }
 
 fn binding_offset(role: ExecutionRoleV1) -> usize {
-    EXECUTION_RELEASE_SET_HEADER_BYTES_V1 + role.index() * EXECUTION_ROLE_BINDING_BYTES_V1
+    EXECUTION_RELEASE_SET_HEADER_BYTES_V1 + role.role_index() * EXECUTION_ROLE_BINDING_BYTES_V1
 }
 
 fn decode_binding(bytes: &[u8], role: ExecutionRoleV1) -> Result<ExecutionRoleBindingV1> {

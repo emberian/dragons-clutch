@@ -2,7 +2,8 @@
 
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ArtifactReleaseIdV1, EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1,
+    ExecutionRoleBindingV1, ExecutionRoleV1,
 };
 
 use crate::{
@@ -41,13 +42,7 @@ const RESERVED_BYTES: usize = 4;
 const RELEASE_SET_ID_OFFSET: usize = 16;
 const ROLES_OFFSET: usize = 48;
 
-const ALL_ROLES: [ExecutionRoleV1; 5] = [
-    ExecutionRoleV1::Core,
-    ExecutionRoleV1::Claims,
-    ExecutionRoleV1::Trading,
-    ExecutionRoleV1::Resolution,
-    ExecutionRoleV1::Custody,
-];
+const ALL_ROLES: [ExecutionRoleV1; EXECUTION_ROLE_COUNT_V1] = EXECUTION_ROLE_ORDER_V1;
 
 /// Finalized artifact release plus its current deployment observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -316,13 +311,13 @@ impl ActivatedExecutionReleaseSetV1 {
 /// something else", which is a refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActivationCacheProgressV1 {
-    written: [bool; 5],
+    written: [bool; EXECUTION_ROLE_COUNT_V1],
 }
 
 impl ActivationCacheProgressV1 {
     /// Whether this exact role has already been admitted.
     pub fn is_written(self, role: ExecutionRoleV1) -> bool {
-        self.written.get(role_index(role)).copied().unwrap_or(false)
+        self.written.get(role.role_index()).copied().unwrap_or(false)
     }
 
     /// Number of roles already admitted, from zero to five.
@@ -365,7 +360,7 @@ pub fn activation_cache_progress_v1(
         if observed_role != subslice(&complete, offset, ACTIVATED_ROLE_BYTES_V1)? {
             return Err(Error::AliasedRoleActivationMismatch);
         }
-        if let Some(slot) = written.get_mut(role_index(role)) {
+        if let Some(slot) = written.get_mut(role.role_index()) {
             *slot = true;
         }
     }
@@ -518,18 +513,8 @@ fn projection_binding(activated: ActivatedRoleV1) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(activated.release.program(), activated.artifact_release_id)
 }
 
-const fn role_index(role: ExecutionRoleV1) -> usize {
-    match role {
-        ExecutionRoleV1::Core => 0,
-        ExecutionRoleV1::Claims => 1,
-        ExecutionRoleV1::Trading => 2,
-        ExecutionRoleV1::Resolution => 3,
-        ExecutionRoleV1::Custody => 4,
-    }
-}
-
 fn role_offset(role: ExecutionRoleV1) -> usize {
-    ROLES_OFFSET + role_index(role) * ACTIVATED_ROLE_BYTES_V1
+    ROLES_OFFSET + role.role_index() * ACTIVATED_ROLE_BYTES_V1
 }
 
 fn decode_role(bytes: &[u8], role: ExecutionRoleV1) -> Result<ActivatedRoleV1> {

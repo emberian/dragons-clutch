@@ -65,8 +65,9 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::transfer;
 use solana_transaction::versioned::VersionedTransaction;
 
 const CLAIMS: Pubkey = Pubkey::new_from_array([0xb1; 32]);
@@ -1216,5 +1217,258 @@ async fn real_sbf_late_token_refusal_rolls_back_fractional_position_mint_and_cur
             .await
             .expect("Mint"),
         before_mint
+    );
+}
+
+/// Assert a refusal carried an exact program error code.
+///
+/// A hostile that only asserts "the transaction failed" passes on any failure,
+/// including one raised by a gate long before the check the hostile claims to
+/// be about. The code is what makes the claim checkable.
+fn refused_with(logs: &[String], code: u32) -> bool {
+    let needle = format!("custom program error: {code:#x}");
+    logs.iter().any(|line| line.contains(&needle))
+}
+
+/// Refusal code for `ProtocolPositionSbfErrorV2::Position`.
+///
+/// Written literally so a code read out of a validator log is greppable to
+/// here; the program's own `const _: () = assert!` band pins the enum.
+const POSITION_REFUSAL: u32 = 0x5145;
+
+/// A STRANGER'S ONE LAMPORT NO LONGER BLOCKS ADMISSION, AND UNDERFUNDING STILL REFUSES.
+///
+/// Census row R13. The Position and admission accounts are keyless, off-curve,
+/// system-owned PDAs, so anyone on the network may send them lamports at any
+/// time and nothing can stop them. Admission compared their LIVE balance to a
+/// balance the caller had *declared* one slot earlier, by exact equality, so a
+/// single lamport arriving in between refused the transaction -- repeatable by
+/// anyone, against any pending admission, for about one lamport plus a fee,
+/// every slot, forever. That is not a delay a retry outlasts: retrying costs
+/// strictly more than attacking.
+///
+/// This test executes the attack with a real transfer from a wallet that is
+/// nobody, and then admits the position anyway on a request whose bytes are
+/// unchanged. It also pins the half that must NOT move: over-declaring -- a
+/// caller claiming the accounts hold more than they do -- still refuses at
+/// `0x5145`, which is the entire safety content of the check that was relaxed.
+/// The refusal is proven to reach that check rather than an earlier gate,
+/// because the accepting admit that follows it in this same run differs from it
+/// in nothing but the declared lamports.
+///
+/// WHAT THIS TEST DELIBERATELY DOES NOT FIX, asserted rather than omitted: the
+/// close route's twin comparison is still an exact equality, so the last leg
+/// below shows a truthful pre-attack close REFUSING at `0x5146` and only a
+/// close that re-declares the post-attack balance committing. Close is still
+/// front-runnable the same way. It is not relaxed here because it cannot be
+/// alone -- close credits the rent account `rent_before + declared_total` by
+/// absolute assignment while zeroing accounts that hold the live balance, and
+/// its receipt's lamport fields are re-derived and whole-struct
+/// equality-checked inside trading-sbf
+/// (`programs/dclutch-trading-sbf/src/direct/sell_escrow.rs:497-523`), so
+/// relaxing it changes what the receipt means and moves two ELFs.
+#[tokio::test]
+async fn a_strangers_lamport_cannot_block_admission_and_underfunding_still_refuses() {
+    let (test, f) = fixture();
+    let mut context = test.start_with_context().await;
+
+    // The admit whose bytes never change: it declares the balance the caller
+    // read BEFORE the attack, which is the only balance a caller can ever know.
+    let admit = wrapped(
+        &f,
+        request(&f, ProtocolPositionActionV2::Admit),
+        false,
+        f.owner,
+    );
+    // The negative control. Claiming the accounts hold more than they do is
+    // underfunding, and underfunding is exactly what this check exists to
+    // refuse. It must still refuse after the relaxation, or the relaxation
+    // removed a guard instead of widening one.
+    let mut overdeclared = request(&f, ProtocolPositionActionV2::Admit);
+    overdeclared.observed_position_lamports = f
+        .position_lamports
+        .checked_add(1_000)
+        .expect("over-declaration");
+    let underfunded = wrapped(&f, overdeclared, false, f.owner);
+    // Two closes: one truthful about the pre-attack balance, one truthful about
+    // the balance the attack left behind.
+    let stale_close = wrapped(
+        &f,
+        request(&f, ProtocolPositionActionV2::Close),
+        false,
+        f.owner,
+    );
+    let mut post_attack = request(&f, ProtocolPositionActionV2::Close);
+    post_attack.observed_position_lamports = f
+        .position_lamports
+        .checked_add(1)
+        .expect("post-attack balance");
+    let honest_close = wrapped(&f, post_attack, false, f.owner);
+
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        &[
+            underfunded.clone(),
+            admit.clone(),
+            stale_close.clone(),
+            honest_close.clone(),
+        ],
+    );
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+
+    // THE ATTACK. A wallet that holds no role, is named nowhere in this market
+    // and signs nothing but its own transfer, sends one lamport to the Position
+    // PDA. It needs no permission because the PDA is system-owned and has no
+    // key: this is the cheapest griefing verb in the tree.
+    let griefer = Keypair::new();
+    let griefer_stake = Rent::default()
+        .minimum_balance(0)
+        .checked_mul(64)
+        .expect("griefer funding");
+    let funder = context.payer.pubkey();
+    process_legacy(
+        &mut context,
+        transfer(&funder, &griefer.pubkey(), griefer_stake),
+        "claims position: fund a stranger",
+    )
+    .await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[transfer(&griefer.pubkey(), &f.position, 1)],
+            Some(&griefer.pubkey()),
+            &[&griefer],
+            blockhash,
+        ))
+        .await
+        .expect("one lamport, from anybody, needs nobody's permission");
+    let attacked = context
+        .banks_client
+        .get_account(f.position)
+        .await
+        .expect("read")
+        .expect("position")
+        .lamports;
+    assert_eq!(
+        attacked,
+        f.position_lamports + 1,
+        "the attack must actually have landed, or nothing below is a test"
+    );
+
+    // The negative control refuses, at the code, on the attacked state.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        underfunded,
+        table,
+        &addresses,
+        "claims position: an over-declared prepayment is underfunding and still refuses",
+    )
+    .await
+    .expect("underfunded");
+    assert!(!accepted, "over-declaration must never be admissible");
+    assert!(
+        refused_with(&logs, POSITION_REFUSAL),
+        "underfunding must refuse at {POSITION_REFUSAL:#x}, not merely fail:\n{}",
+        logs.join("\n")
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(f.position)
+            .await
+            .expect("read")
+            .expect("position")
+            .data
+            .is_empty(),
+        "a refused admission allocates nothing"
+    );
+
+    // THE WELD. Same request bytes, one stranger's lamport later.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        admit,
+        table,
+        &addresses,
+        "claims position: admission survives a one-lamport front-run",
+    )
+    .await
+    .expect("admit");
+    assert!(
+        accepted,
+        "a stranger's lamport must not be able to block this admission:\n{}",
+        logs.join("\n")
+    );
+
+    // The close side is NOT fixed, and this is what that costs today: the
+    // truthful-about-yesterday close refuses.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        stale_close,
+        table,
+        &addresses,
+        "claims position: close still refuses a pre-front-run declaration",
+    )
+    .await
+    .expect("stale close");
+    assert!(!accepted);
+    assert!(
+        refused_with(&logs, 0x5146),
+        "the close-side exposure is real and this is where it shows -- it must \
+         refuse at 0x5146 (Rent), so that closing the census row later has a \
+         test to turn green:\n{}",
+        logs.join("\n")
+    );
+
+    // And conservation over the TRUE balance, dust included: every lamport the
+    // stranger donated reaches the Market's rent credit rather than stranding.
+    let rent_before = context
+        .banks_client
+        .get_account(f.rent_credit)
+        .await
+        .expect("read")
+        .expect("rent")
+        .lamports;
+    let (accepted, logs, returned, _) = submit(
+        &mut context,
+        honest_close,
+        table,
+        &addresses,
+        "claims position: a close that declares the post-attack balance commits",
+    )
+    .await
+    .expect("honest close");
+    assert!(accepted, "close refusal logs:\n{}", logs.join("\n"));
+    let (_, bytes) = returned.expect("close receipt");
+    ProtocolPositionCloseReceiptV2::decode(&bytes).expect("close receipt");
+    let rent_after = context
+        .banks_client
+        .get_account(f.rent_credit)
+        .await
+        .expect("read")
+        .expect("rent")
+        .lamports;
+    assert_eq!(
+        rent_after,
+        rent_before + f.position_lamports + 1 + f.admission_lamports,
+        "the stranger's lamport is swept with the rest, not stranded"
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(f.position)
+            .await
+            .expect("read")
+            .is_none()
+            && context
+                .banks_client
+                .get_account(f.admission)
+                .await
+                .expect("read")
+                .is_none()
     );
 }
