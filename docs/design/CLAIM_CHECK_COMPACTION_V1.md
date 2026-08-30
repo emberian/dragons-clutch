@@ -1018,6 +1018,11 @@ suite is green". `git commit --only -- <paths>`, never `git add -A`, never
 `git stash`.
 
 **C0 — the phase weld (§2). Ships first and is independently correct.**
+**LANDED as `f6b53cc9`, with coverage in `552097c7`.** What follows is the plan
+as written, then a correction the implementation had to make. Read the
+correction: the plan as written does not close the bug.
+
+*As planned.*
 `programs/dclutch-claims-sbf/src/{terminal_settlement_v3,rational_terminal_v3,affine_batch_v2}.rs`.
 Replace the hardcoded `Phase::Terminal` argument and the `!=` comparison with a
 two-arm match admitting `Terminal` and `Retiring`, matching `phases_join`
@@ -1025,6 +1030,33 @@ two-arm match admitting `Terminal` and `Retiring`, matching `phases_join`
 *Gate*: a holder redeems successfully after a stranger has called
 `begin_retiring`; the same scenario fails on the parent commit. Assert the
 `(Retiring, Retiring(w))` join is exercised, not just the `Terminal` one.
+
+*Correction, established by experiment rather than by reading.* **The gate is in
+five places, and the two the plan does not describe are the ones that bind.**
+The plan describes the threaded `expected_core_phase` argument and
+`affine_batch_v2`'s shared comparison (`:669`). Those are real, but the
+flagship wallet payout submits a `TerminalSettlementRequestV3` straight to
+Claims, so it is refused earlier, by a **route-local**
+`core.phase != CorePhase::Terminal` at `terminal_settlement_v3.rs:597`
+(reached from `authenticate_and_prepare` at `:231`, long before the `:410`
+argument the plan means). An ELF built with the plan's literal fix — argument
+welded, `:597` left alone — **still fails the C0 gate test at `0x5002`**; that
+was built and run, not reasoned about. The fifth site is
+`rational_product_v3.rs:196`, the `RedeemTerminal` arm of
+RationalRepresentation, in a file this plan does not name at all; unwelding
+only that site fails `552097c7`'s test at the same code.
+
+*Shape actually used.* The bare `expected_core_phase: CorePhase` parameter
+became `CorePhaseGateV3 { Exactly(CorePhase), TerminalOrRetiring }`
+(`affine_batch_v2.rs`), so widening redemption could not silently widen the
+`Open` and `Founding` routes that share the parameter — each of those now reads
+`Exactly(..)` at its own call site. The variant is named for the phase set it
+admits rather than for the routes that use it, so a later phase cannot join it
+by the name staying plausible.
+
+*Note for later commits in this plan.* Where §11 names files, treat the list as
+a starting point and grep the predicate instead: this plan's own C0 entry named
+three files for a change that touched five sites across six.
 
 **C1 — contract types.** `crates/dclutch-claims-svm/src/claim_check_v1.rs` (new)
 plus its `lib.rs` module line. `ClaimCheckV1`, `ClaimCheckEscrowV1`, three seed
