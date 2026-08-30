@@ -134,6 +134,57 @@ joined to it at runtime) is on the board awaiting a ruling; until it lands,
 any wiring that reaches the wall gets the one named refusal sentence
 (`FRACTIONAL_FOUNDING_SELECTION_WALL_V1`).
 
+## The second family, and the first executed action (evening addendum)
+
+By evening the seam had three consumers in code (Direct, General, RAT-SEL's
+Rational at 86c249a8) and two families founded through it in fact:
+
+- **Rational-selected markets founded twice**, completing the FULL
+  six-mutation success order both times (walls #10–#12 dead from a second
+  route): market `9eCkwxBMFiYs9Pgb1EGh9REYWhJPMtefFXP5PTJzpGbd` at 502162b6
+  and market `HYKunhUNmsJmuwMyp2SbfcRJxzpaGpcewQ9ehSAaC5xs` at the
+  ea9a3e0c graft (= 502162b6 + the wall-#13 run.py fix). RAT-SEL's
+  `DCLUTCH_RATIONAL_COLLATERAL_MINT` ordering constraint dissolves with no
+  driver change: run.py's forge seed is deterministic
+  (sha256(SEED_DOMAIN+"seed-01")), so the collateral mint is the same every
+  run and can be named before the closure compiles while the founding
+  itself forges it.
+- **Wall #13, the participant stage's first blood** (no probe of any
+  capability had ever reached stage 07): the admission snapshot requires
+  the position owner funded, and nothing anywhere funded the wallet. Fixed
+  at the owner (ca68ef5a): run.py funds the participant 0.02 SOL from the
+  genesis source as its own named stage.
+- **Wall #14**: the admission packet does not fit a legacy message and had
+  never been compiled; the `--routing-table` flag existed with no caller.
+  Proof of the shape, executed: the admission routed through the founding's
+  OWN frozen DCLTGMF3 lookup table (66 keys, read back off the founded
+  ledger) compiles, executes, and finalizes. Passing all five founding
+  tables refuses `DuplicateAddress` — one table, the frozen one, is the
+  contract.
+- **THE FIRST EXECUTED ACTION AGAINST A NON-DIRECT-SELECTED MARKET**: the
+  participant admission on the Rational market `HYKunhUN…` — admission
+  signature `44PeT1AHWh3mTXCT2KynVTa7NxUEWJsCiZRBkXbWre2W5SxWxQKm5s8YpMs74c
+  afNojtEWRX9S5gXCPKMaRsdnCy`, finalized slot 8930, 268,172 CU through the
+  real Trading→Claims chain, plus the finalized Token-2022 collateral
+  transfer (slot 8966). On-chain poststate: the Claims-owned Position
+  (160 B) and admission (512 B) accounts exist at their derived PDAs; the
+  Market's identity binds the Rational-selected manifest (entry 3 carries
+  the DCRLPB01 publication's kind/release/config/capacity, byte-checked).
+  The held validator for this ledger runs at `http://127.0.0.1:25544/`
+  (`/private/tmp/selseam-hold-11/runs/seed-01/ledger`); note a
+  restart-from-snapshot prunes pre-snapshot transaction history — account
+  state is the authoritative read there.
+
+Named residue: run.py does not yet pass `--routing-table` (the founding
+campaign should record the frozen table's address in its evidence and
+run.py should forward it — the admission-lane work at 8f10beb9/623a8783
+owns that seam); and something in 502162b6..ca68ef5a re-broke the
+readiness suffix for fresh runs (both families refused the six-mutation
+pin there while the 502162b6 graft passes) — the window carries the landed
+Fractional config split (7c569ac1, 4630ad77: the fixed point's recommended
+fix, implemented) among other mid-flight protocol changes, and whoever
+diagnoses the suffix should start from that diff.
+
 ## What is not claimed
 
 - No devnet or public-cluster action of any kind.
