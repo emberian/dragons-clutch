@@ -92,7 +92,7 @@ the routes by the census author, not just reported by a sweep.
 | R11 | **`DCLTPCA1` pre-commit abort is `refund_owner`-only** (`ABORT_SIGNERS`, `projected_custody_bootstrap_v1.rs:261,2909-2914`; re-pinned in `custody projected.rs:1037-1040`) — a lost beneficiary key strands the staged principal exactly as if the route did not exist, against the route's own "way back out" docs. | RED (lost-key) | frozen program; queue Q7 |
 | R12 | Submitted-never-consumed provider update strands (reclaim requires `Consumed`, **`programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:941`** — this row cited the wrong crate; the codec crate has no line 941); ~~keyless-PDA prefund mismatch strands~~ **withdrawn by LIVE-2, replaced by R13**; activation caches have no close route (56 sites, 0 closers — reproduced structurally, but see Q8c: not safely buildable before Q1). | RED (×2, **not small** — re-costed) | queue Q8a / Q8c |
 | R13 | **NEW (LIVE-2): a 1-lamport front-run indefinitely blocks position admission AND position close — and close is on the retirement path.** Both SBF checks compare a keyless, off-curve, system-owned PDA's live balance to a caller-*declared* snapshot: `accounts.position.lamports() != request.observed_position_lamports` at Admit (`claims-sbf protocol_position_v2.rs:1043-1044`) and at Close (`:597-598`). Anyone may send one lamport to either PDA between the snapshot and the transaction landing, and the route refuses. Repeatable by anyone for ~1 lamport plus a fee, every slot, forever. This is what B21 was reaching for and missed: the *contract* is dust-tolerant by design (`<`, not `!=` — `claims-svm protocol_position_v2.rs:475-476`, pinned by `prepaid_creation_is_dust_tolerant_but_never_underfunded` at `:1400-1411`), so the defect is not the strand B21 described but a griefing verb against admission and against retirement. | **RED (adversarial)** | queue Q8b |
-| Y1 | **Systemic: every genuine expiry/cleanup route pays a creation-fixed beneficiary, never the caller** — series permit expiry (`series_permit_expiry.rs:417`), controller-ledger cleanups (`projected_custody_bootstrap_v1.rs:1274-1319`), capability close (`capability.rs:582`), rent sweep (`rent-sbf lib.rs:418-419`; the gauntlet itself: "a pure donation of a transaction fee", `journey/stages.rs:748-758`), dealer checkpoint cleanup — where the beneficiary is even *forbidden* to pay its own fee (`dealer_scenario_checkpoint_v1.rs:1747` refuses `beneficiary.is_signer`). | YELLOW | pattern P1 below |
+| Y1 | **Systemic: every genuine expiry/cleanup route pays a creation-fixed beneficiary, never the caller** — series permit expiry (**core-sbf** `series_permit_expiry.rs:417`), controller-ledger cleanups (**trading-sbf** `projected_custody_bootstrap_v1.rs:1274-1319`), capability close (**core-sbf** `capability.rs:582`), rent sweep (**rent-sbf** `lib.rs:418-419`, zero signers on the path, beneficiary pinned by `wallet.key != state.refund_wallet()` at `rent-contract lifecycle_v2.rs:837`), dealer checkpoint cleanup (**trading-sbf**) — where the beneficiary is even *forbidden* to pay its own fee (`dealer_scenario_checkpoint_v1.rs:1747` refuses `beneficiary.is_signer`), and the codec agrees in words: *"a cleanup caller cannot redirect rent or any other lamports"* (`dealer-codec scenario_checkpoint_v1.rs:707-708`). **Two corrections by ESCROW `<pending>`.** (a) *The programs*: this row read as a tree-wide smear; the sites are **3 trading-sbf / 2 core-sbf / 1 rent-sbf**, so three-fifths of the pattern is behind the frozen program — which is why it survived. (b) *A fabricated quotation, struck*: this row and the `RentCredit sweep` register row both attributed to the gauntlet the phrase "a pure donation of a transaction fee" at `journey/stages.rs:748-758`. **The gauntlet does not contain that phrase** — `grep -n donation` over that file returns nothing, and the only two occurrences in the repository were these two rows quoting each other. `stages.rs:746-771` is an *assertion*, not a lament: it fails the journey unless the fee payer moves by exactly `-fee`. The finding was right; the evidence was invented. | YELLOW | **pattern P1 below; ruled + sized in `docs/design/FUNDED_CRANK_V1.md`** — and **none of the five is mechanical**: three frozen, one needs a `CapabilityManifestV1` ABI change, one needs a Lean re-proof (`MarketCore.lean:368-369` defines the refund as the whole balance) |
 | Y2 | **Systemic: retirement is 100% permissionless and 100% unfunded** — several routes refuse all signers (`begin_retiring.rs:57`, `retire_v1.rs:1190-1255`, `resolution.rs:576`), every recovered lamport flows to the creation-fixed `refund_wallet` (`retire_v1.rs:1725,1739-1740`), and two act-points are caller-*negative* (replay handoff `custody …handoff:486-492`; Claims replay creation D4). | YELLOW | pattern P1 |
 | Y3 | **Perverse incentive at the resolution deadline**: success-settle and failure-walk open at the same instant; the failure walker is paid the bounty while the success settler is net-negative (`resolution-codec v2.rs:385-393` exempts success from `work_paid != 0`; both producers hardcode 0 — `sponsored_push_v1.rs:1274,1280`, `provider_v3.rs:306,312`). | YELLOW (adversarial) | queue Q9 — build half open |
 | Y3b | **The griefing verb inside Y3, split out**: anyone could retire — and thereby CLOSE — a `Collecting` or `Sealed` relay record (`relay-contract record.rs:751-753`). A sealed record is one permissionless `ConsumeRecord` from resolving the market successfully, and consumption is reachable only through that success path, so a transaction fee bought the deletion of the honest outcome and forced the bounty-paying failure walk. Not unfunded liveness — funded **anti**-liveness. | RED (re-scored from YELLOW) → **WELDED** | **`04f00387`** (LIVE-2) — retiring a non-`Consumed` record now requires the Market to carry a terminal receipt; `ResolutionError::RecordStillConsumable` `0x8016`. Strand-free: consume is permissionless and the funded failure walk terminalizes with no identified party — and R2's weld removed the one shape that could never terminalize |
@@ -228,7 +228,7 @@ in the queue below.
 | Joined / checkpointed retire (`retire_v1.rs:1190-1255,2579`) | anyone (direct refuses all signers; continuation needs a Registry PDA) | market stuck Retiring; all recovered rent locked | no — 100% to creation-fixed `refund_wallet` (`:1725,1739-1740`) | YELLOW |
 | Claims market closure (`market_closure_v1.rs:315-317,669-681`) | Core PDA (CPI, reachable only from the permissionless retire) | retirement blocked | no — aggregate → RentCredit | YELLOW |
 | Position/admission close (`protocol_position_v2.rs:774-785`; `dispatch.rs:141-156` refuses all family signers) | Trading PDA (CPI); **owner is readonly non-signer** — no owner veto | position rent strands; unrecoverable after retirement | no — → RentCredit | YELLOW |
-| RentCredit sweep (`rent-sbf lib.rs:356-367`; `lifecycle_v2.rs:826-850`) | **anyone** — zero signers | surplus sits, reclaimable later | no — pinned `refund_wallet`; "a pure donation of a transaction fee" (`journey/stages.rs:748-758`) | YELLOW |
+| RentCredit sweep (`rent-sbf lib.rs:356-367`; `lifecycle_v2.rs:826-850`) | **anyone** — zero signers anywhere on the path (`SweepAccountsV2::parse`, `rent-sbf lib.rs:356-367`, performs no signer check; the contract only *forbids* the credit signing, `lifecycle_v2.rs:832-837`) | surplus sits, reclaimable later — **so this is a *surplus* route, not a closing one**, the tree's only instance (`FUNDED_CRANK_V1.md` §3.1) | no — `refund_wallet` is creation-fixed, read from the credit's own bytes and pinned at `lifecycle_v2.rs:837`; there is no caller account in the frame at all. **Quotation struck by ESCROW `<pending>`**: this row previously cited the gauntlet saying "a pure donation of a transaction fee" at `journey/stages.rs:748-758`. That phrase does not occur in the gauntlet or anywhere else in the tree except this census. What is there is the opposite kind of statement — `stages.rs:762-771` *asserts* the payer moves by exactly `-fee` | YELLOW |
 | RentCredit close (`rent-sbf lib.rs:492,587-597`) | Core PDA only (CPI at retire) | rent locked | no — → `refund_wallet` | YELLOW |
 | **Sleeping holder** | — | zero-supply gate (`market_closure_v1.rs:669-681`) + empty-hoard gate (`custody lib.rs:950`), no Clock in the whole path ⇒ **retirement blocked forever** | — | **RED** (R3) |
 | **Claims-role replay closer** | — | no route in claims-sbf issues `CloseReplay` (grep-verified) ⇒ one replay rent strands per wallet-redemption market | — | **RED** (R10) |
@@ -340,12 +340,38 @@ General candidate work escrow, and — now — the record cleanup bounty (R6). E
 other permissionless route is a donation of a transaction fee, which the
 gauntlet states outright (`journey/stages.rs:748-758`).
 
-The **fix template** is uniform and already proven three times: carve a small,
-prepaid, fully-refundable **work escrow** at the value's creation, sized to the
-exact cranks its lifecycle needs, each crank drawing one pre-debited
-`WorkRewardV1` to whoever performs it, the remainder refunding to the funder.
-Applying it turns each YELLOW into GREEN without drawing on any Hoard. The
-per-route costing is in the queue.
+The **fix template** is **two** shapes, not one, and the choice between them is
+forced rather than stylistic — **ruled and sized in
+`docs/design/FUNDED_CRANK_V1.md`**, which supersedes this paragraph's earlier
+claim that the template was "uniform and already proven three times".
+
+- **Prepaid-at-creation** — carve a small, fully-refundable **work escrow** at
+  the value's creation, sized to the exact cranks its lifecycle needs, each
+  drawing one pre-debited reward to whoever performs it, the remainder refunding
+  to the funder. This shape *may* refuse for underfunding, which is safe only
+  because creation force-prepays it. Available only where a creation act already
+  signs, already pays rent, **and can be made to refuse** — which an existing
+  route being converted after the fact almost never can.
+- **Residual-at-close** — the reward is a capped slice of lamports already
+  leaving: `min(floor, residual)`. It can *never* refuse, which is mandatory
+  rather than nice: a crank that refuses for money is an unturned crank, i.e.
+  the same defect through the funding door. **Every conversion in the Y1 set is
+  this shape.**
+
+Two corrections to what this paragraph claimed. (1) `WorkRewardV1`
+(`candidate_v1.rs:237-249`) is the canonical *description* of the property but
+**has no deployed SBF dispatcher** — its only non-crate consumer is a harness
+test — so it is not one of the three proofs. The tree's one **deployed** funded
+permissionless crank is record `Abort`, and it is the template. (2) The floor
+must be **derived from the Rent sysvar, never written as a literal** — the
+deployed route does exactly this (`registry-sbf record_v1.rs:348,362`), and the
+one literal in the tree is `COMPACTION_CRANK_REWARD_LAMPORTS_V1`
+(`claims-svm claim_check_v1.rs:108`), 14.8× below it.
+
+Applying either shape turns a YELLOW into GREEN without drawing on any Hoard.
+The per-route sizing — **measured, not estimated** — is in `FUNDED_CRANK_V1.md`
+§9, and its headline is that **none of the Y1 sites is mechanical**: each sits
+behind a different gate.
 
 ## Costed queue — the RED and YELLOW gaps not closed in this lane
 
