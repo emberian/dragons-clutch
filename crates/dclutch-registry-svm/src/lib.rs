@@ -19,6 +19,8 @@ pub mod batch_v2;
 pub mod continuation_v1;
 /// Headerless invocation-scoped Trading Hot continuation facts.
 pub mod continuation_v2;
+/// The declaration that names one release set's successor.
+pub mod lineage_v1;
 
 /// Exact Upgradeable Loader V3 Program account-data width.
 pub const LOADER_V3_PROGRAM_BYTES: usize = 36;
