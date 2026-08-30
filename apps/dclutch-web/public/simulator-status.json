@@ -1,0 +1,44 @@
+{
+  "cluster": {
+    "label": "devnet",
+    "rpc_url": "https://devnet.helius-rpc.com/?<redacted>"
+  },
+  "cycles": {
+    "run": 99,
+    "target": null
+  },
+  "halt_reason": null,
+  "halted": false,
+  "last_reconciliation": {
+    "checked_at": "2026-08-30T16:40:00+00:00",
+    "ok": true,
+    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000099.json"
+  },
+  "market": {
+    "address": "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq"
+  },
+  "mode": "sustain",
+  "schema": "dclutch-load-simulator-status-v1",
+  "started_at": "2026-08-30T15:59:09+00:00",
+  "stopping": false,
+  "trades": {
+    "landed": 0,
+    "signatures": []
+  },
+  "trades_attempted": false,
+  "updated_at": "2026-08-30T16:40:01+00:00",
+  "wallets": [
+    {
+      "address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",
+      "role": "participant",
+      "sol_lamports": 7077240,
+      "source": "staged"
+    },
+    {
+      "address": "GcE6LWbduoATDgK8jsGyj2i8ywV37fcAYABKCmKgttDz",
+      "role": "participant",
+      "sol_lamports": 7082240,
+      "source": "staged"
+    }
+  ]
+}

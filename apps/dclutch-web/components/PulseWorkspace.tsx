@@ -5,7 +5,18 @@ import { useEffect, useState } from 'react';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import NumberStrip, { type NumberStripStatV1 } from '@/components/charts/NumberStrip';
+import Sparkline from '@/components/charts/Sparkline';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
+import { marketEditorialV1 } from '@/lib/marketRegistry';
+import {
+  everyLineFlatV1,
+  issuedSupplyLinesV1,
+  NO_SERIES_SENTENCE_V1,
+  readSimulatorSeriesV1,
+  SERIES_RECORD_CAVEAT_V1,
+  simulatorSeriesSpanV1,
+  type SimulatorSeriesReadV1,
+} from '@/lib/simulatorSeries';
 import {
   NO_SIMULATOR_SENTENCE_V1,
   readSimulatorStatusV1,
@@ -76,11 +87,88 @@ function beatFor(read: SimulatorReadV1 | null): SimulatorBeatV1 | null {
   return read !== null && read.kind === 'loaded' ? simulatorBeatV1(read.status, Date.now()) : null;
 }
 
-export default function PulseWorkspace({ preloaded }: Readonly<{
+/**
+ * The run drawn against time.
+ *
+ * The counts above are the run's present tense; this is its past, and it is
+ * the only surface on this site with a time axis on it. Both lines come from
+ * the same recorded censuses — one is what the market issued, the other is
+ * whether the ledger still added up — so a reader can see the second holding
+ * while the first does or does not move.
+ *
+ * Exported so its arrangement is pinned by a test rather than by a screenshot.
+ */
+export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 | null }>) {
+  if (read === null) return <p className="direct-status">Looking for a recorded run…</p>;
+  if (read.kind === 'absent') return <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>;
+  if (read.kind === 'refused') {
+    return <p className="market-refusal">Refused: a recorded run was published here, and it did not decode — {read.reason}</p>;
+  }
+
+  const series = read.series;
+  const span = simulatorSeriesSpanV1(series);
+  if (span === null) return <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>;
+
+  // The chain stores no outcome names; the registry does. A market it has
+  // never heard of keeps its claim indices and says nothing else.
+  const editorial = series.market === null ? null : marketEditorialV1(series.market);
+  const supplyLines = issuedSupplyLinesV1(series, editorial?.outcomes ?? null);
+  const xLabels = series.points.map((point) => `cycle ${point.cycle}`);
+  const checkLines = [Object.freeze({
+    label: 'checks that held',
+    values: Object.freeze(series.points.map((point) => String(point.checksHeld))),
+  })];
+
+  const covered = span.minutesCovered === null
+    ? `${span.slotsCovered} slots of chain`
+    : `${span.slotsCovered} slots of chain and about ${span.minutesCovered} minute${span.minutesCovered === 1 ? '' : 's'}`;
+
+  return <>
+    <p className="direct-status">
+      {span.cycles} recorded cycle{span.cycles === 1 ? '' : 's'} covering {covered}, from the run&apos;s own
+      census file {series.censusFile}.{' '}
+      {series.pointsOmittedBefore === 0
+        ? 'Every cycle the run has recorded is drawn.'
+        : `${series.pointsOmittedBefore} earlier cycle${series.pointsOmittedBefore === 1 ? ' is' : 's are'} counted but not drawn.`}
+      {' '}{span.checksBroken === 0
+        ? `Across all of them the ledger was re-checked ${span.checksHeld} times and held every time.`
+        : `Across all of them ${span.checksBroken} check${span.checksBroken === 1 ? '' : 's'} did not hold.`}
+    </p>
+    <p className="slot-clock-note">{SERIES_RECORD_CAVEAT_V1}</p>
+
+    {/* FE-CHART mount: issued claims against the run's own cycle number. */}
+    <Sparkline
+      lines={supplyLines}
+      xLabels={xLabels}
+      unit="atoms"
+      caption="Issued claims on each outcome, at every cycle the run recorded. These are claim counts in raw atoms, read from the market's Claims aggregate — not a forecast and not a rate."
+      flatNote={everyLineFlatV1(supplyLines)
+        ? 'unchanged at every recorded cycle: no trade has landed in this run yet'
+        : undefined}
+      emptyReason={NO_SERIES_SENTENCE_V1}
+    />
+
+    <h3 className="detail-subhead">The ledger check, cycle by cycle</h3>
+    {/* FE-CHART mount: how many conservation laws held at each boundary. A law
+        that does not apply at a boundary is neither held nor broken, so the
+        count moves when the market's own shape changes, not only on failure. */}
+    <Sparkline
+      lines={checkLines}
+      xLabels={xLabels}
+      caption="Conservation laws that held at each cycle boundary. A law that does not apply at a boundary is not counted here as either holding or failing, which is why this number can rise as a market takes shape."
+      emptyReason={NO_SERIES_SENTENCE_V1}
+    />
+  </>;
+}
+
+export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<{
   /** Test seam: a settled read. The page itself always fetches. */
   preloaded?: SimulatorReadV1;
+  /** Test seam: a settled series read. The page itself always fetches. */
+  preloadedSeries?: SimulatorSeriesReadV1;
 }> = {}) {
   const [state, setState] = useState<PulseSurfaceState>({ read: preloaded ?? null });
+  const [series, setSeries] = useState<SimulatorSeriesReadV1 | null>(preloadedSeries ?? null);
 
   useEffect(() => {
     if (preloaded !== undefined) return undefined;
@@ -91,6 +179,20 @@ export default function PulseWorkspace({ preloaded }: Readonly<{
     })();
     return () => { cancelled = true; };
   }, [preloaded]);
+
+  // The recorded run is a second artifact and a second fetch on purpose: the
+  // counts above must appear as soon as the status lands, whether or not any
+  // history was ever captured, and a missing series must never keep the
+  // present tense off the page.
+  useEffect(() => {
+    if (preloadedSeries !== undefined) return undefined;
+    let cancelled = false;
+    (async () => {
+      const read = await readSimulatorSeriesV1((url) => globalThis.fetch(url, { cache: 'no-store', redirect: 'error', credentials: 'omit' }));
+      if (!cancelled) setSeries(read);
+    })();
+    return () => { cancelled = true; };
+  }, [preloadedSeries]);
 
   const read = state.read;
   const status = read !== null && read.kind === 'loaded' ? read.status : null;
@@ -110,7 +212,7 @@ export default function PulseWorkspace({ preloaded }: Readonly<{
         <strong>{status === null ? 'No simulator running' : status.halted ? 'Halted — loudly, on purpose' : 'Publishing its pulse'}</strong>
         {status === null
           ? <p>No pulse artifact is published beside this site right now. The simulator exists and runs against local rehearsal validators; when a run publishes here, this page fills in by itself. Until then it stays empty rather than showing you a rehearsal as if it were live.</p>
-          : <p>Everything below comes from one file the simulator rewrites after every cycle. It is a report by the robot about itself, checked against the chain it trades on — not an estimate, and not a marketing counter.</p>}
+          : <p>Everything below comes from one file the simulator rewrites after every cycle. It is a report by the robot about itself, checked against the chain it trades on — not an estimate, and not a marketing counter. This site is a set of files, so it carries the robot&apos;s last write before the site was published, not the one happening now; the heartbeat says how old that is.</p>}
       </aside>
     </section>
 
@@ -138,7 +240,12 @@ export default function PulseWorkspace({ preloaded }: Readonly<{
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
+      <header><span>02</span><div><h2>What the run looked like over time</h2><p>Every other chart on this site draws one moment. This one draws the run: one point per cycle, from the run&apos;s own records, with the claim counts on top and whether the ledger still added up underneath.</p></div></header>
+      <RecordedCycles read={series} />
+    </section>
+
+    <section className="trade-v3-card">
+      <header><span>03</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
       {status === null || status.lastReconciliation === null
         ? <p className="market-empty">No check has been read. When a run publishes here, its most recent conservation verdict appears in this spot — pass or fail, with its timestamp.</p>
         : <p className="direct-status">
@@ -150,7 +257,7 @@ export default function PulseWorkspace({ preloaded }: Readonly<{
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
+      <header><span>04</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
       {status === null
         ? <p className="market-empty">{NO_SIMULATOR_SENTENCE_V1}</p>
         : <>

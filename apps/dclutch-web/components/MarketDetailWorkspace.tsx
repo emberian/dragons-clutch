@@ -22,6 +22,7 @@ import {
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
 import CellStrip from '@/components/charts/CellStrip';
+import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
 import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
@@ -372,6 +373,9 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               caption={SUPPLY_SHARE_MEANING_V1}
               emptyReason="No claims have been issued on this market yet, so there is no split to draw."
             />
+            {/* Drawn only for a market some run actually recorded; every other
+                market renders nothing here rather than an empty frame. */}
+            <MarketIssuanceHistory address={address} outcomes={editorial?.outcomes ?? null} />
             <h3 className="detail-subhead">Hoard</h3>
             {decoded.hoard.status === 'derived'
               ? <dl className="detail-facts">

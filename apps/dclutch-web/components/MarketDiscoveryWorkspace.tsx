@@ -2,6 +2,7 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
@@ -112,6 +113,10 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
       caption={SUPPLY_SHARE_MEANING_V1}
       emptyReason="No claims have been issued on this market yet, so there is no split to draw."
     />}
+    {/* FE-CHART mount: the recorded run, for the one market a run recorded.
+        Every other card renders nothing here — a listing of empty frames
+        would report a measurement nobody took. */}
+    <MarketIssuanceHistory address={card.address} outcomes={editorial?.outcomes ?? null} />
     <p className="market-hoard-note">Supplies are the exact claim liabilities the Market&apos;s Claims aggregate records. They are not liquidity, TVL, or a balance available to any participant.</p>
     {card.hoard.status === 'derived'
       ? <p className="market-hoard-note">Hoard principal <strong>{card.hoard.principalAtoms}</strong> atoms{card.hoard.mintDisplayDecimals === null ? '' : ` · the mint prints ${card.hoard.mintDisplayDecimals} display decimals, which never scale this figure`}, held by this Market&apos;s Custody transfer authority at <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>, in the Custody namespace the Claims aggregate records.</p>

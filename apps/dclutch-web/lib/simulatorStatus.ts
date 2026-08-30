@@ -117,12 +117,17 @@ function address(value: unknown, field: string): string {
 function reconciliation(value: unknown): SimulatorReconciliationV1 | null {
   if (value === null || value === undefined) return null;
   const body = object(value, 'last_reconciliation');
+  // `output` is the writer's own absolute path inside its work directory. That
+  // is the right thing for the simulator to record and the wrong thing for a
+  // public page to print: it is an operator's local filesystem layout, and it
+  // tells a reader nothing. The file's name does tell them something — which
+  // cycle's census this verdict came out of — so that is what survives here.
   const detail = typeof body.skipped === 'string'
     ? `skipped: ${body.skipped}`
     : body.resumed === true
       ? 'resumed from an earlier run'
       : typeof body.output === 'string'
-        ? `census written to ${body.output}`
+        ? `from census file ${body.output.split('/').pop()}`
         : null;
   return Object.freeze({
     ok: flag(body.ok, 'last_reconciliation ok'),
