@@ -28,6 +28,9 @@ describe('the shipped devnet market registry', () => {
     expect(flagship.title).toBe('SOL/USD range — the first public market');
     expect(flagship.question).toContain('SOL/USD');
     expect(flagship.outcomes).toHaveLength(4);
+    // How it settles, in words: the design, not an operational promise.
+    expect(flagship.resolution).toContain('Pyth');
+    expect(flagship.resolution).toContain('source-failure outcome');
     // The story is the permanent disposition: history, not breakage. It has
     // to say what never happened AND what remains, in that order of kindness.
     expect(flagship.story).toContain('never switched on');

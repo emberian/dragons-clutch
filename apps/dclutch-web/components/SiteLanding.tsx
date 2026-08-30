@@ -55,7 +55,9 @@ export default function SiteLanding() {
         {PUBLIC_DEVNET_CUT_V1.market === null
           ? <>and the first markets are being set up.</>
           : <>and the first market is <Anchor href={publicCutMarketHrefV1(PUBLIC_DEVNET_CUT_V1)}>open{featuredTitle === null ? '' : ` — ${featuredTitle}`}</Anchor>.</>} There
-        is no token, nothing to buy, and no value at risk anywhere.</p>
+        is no token, nothing to buy, and no value at risk anywhere. If you want
+        to try it, devnet SOL is free from the{' '}
+        <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.</p>
       </aside>
     </section>
 

@@ -12,6 +12,7 @@
         "Above the range",
         "The source failed to report"
       ],
+      "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
       "story": "The first market founded on dClutch's public devnet deployment: five founding stages landed in one atomic transaction on 2026-08-29. Its trading window was never switched on — the release it was founded with shipped without a route to activate trading, and the activation deadline passed while that gap was being found. Nothing was lost and nothing is hidden: its claims, its collateral, and every account it owns remain on devnet, readable forever, exactly as founding left them. This page reads them live."
     },
     "CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM": {
@@ -23,6 +24,7 @@
         "Above the range",
         "The source failed to report"
       ],
+      "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
       "story": "Founded shortly before the first public market, by the same tooling — and then orphaned: the driver that founded it hit a stale check and refused its own success, so the build moved on without it. It is complete and open, and its trading window, like the flagship's, was never switched on before the deadline passed. It stays in the record because devnet history is public — and so is the history of building on it."
     }
   }

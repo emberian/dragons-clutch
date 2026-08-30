@@ -88,6 +88,11 @@ describe('a market the shipped registry names', () => {
     expect(html).not.toContain('broken');
   });
 
+  it('says in words how the question settles', () => {
+    expect(html).toContain('settles from Pyth');
+    expect(html).toContain('silence is an outcome here, not a stall');
+  });
+
   it('says whose words the name and story are, right where they render', () => {
     expect(html).toContain('the chain stores no names');
   });

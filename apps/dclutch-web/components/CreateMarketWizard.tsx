@@ -268,6 +268,9 @@ export default function CreateMarketWizard() {
         Opening a market takes several ordered steps. This page combines the payout design, answer window, and funding
         with the same exact arithmetic the protocol uses, then shows which steps have a browser preview and which still
         require the operator tooling. Nothing here fabricates a price, a market, or a deployed release.
+        And to say it plainly: anyone may design and preview here, with no wallet and no coin — founding the result on
+        devnet still runs through the operator tooling today. If you want to poke the live programs, devnet SOL is free
+        from the <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.
       </p>
     </section>
 
