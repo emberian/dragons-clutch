@@ -1904,6 +1904,20 @@ impl<'ledger> FundingLedgerV2<'ledger> {
             },
             expected_post_ledger_lamports,
             ledger_can_close,
+            // Carved only from rent this close LIBERATED, and so nonzero only
+            // on the final row close, where those two buckets are nonzero.
+            crank_reward: if ledger_can_close {
+                let liberated = custody
+                    .exact_ledger_rent_lamports
+                    .checked_add(ledger_lamport_surplus)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                // `min`, never a guarded subtraction: a close that liberates
+                // little pays little and is still admitted. A crank that can
+                // refuse for money is an unturned crank.
+                custody.crank_reward_cap.min(liberated)
+            } else {
+                0
+            },
         })
     }
 }
@@ -2056,10 +2070,13 @@ pub struct FundingLedgerCloseCustodyV2 {
     exact_ledger_rent_lamports: u64,
     native_rent_credit: [u8; 32],
     realm_collateral: Option<RealmCollateralCustodyV1>,
+    crank_reward_cap: u64,
 }
 
 impl FundingLedgerCloseCustodyV2 {
     /// Observe one native-only row and its shared physical ledger.
+    ///
+    /// Pays no crank. This is the unchanged shape every existing caller uses.
     pub fn native_only(
         ledger_account_lamports: u64,
         exact_ledger_rent_lamports: u64,
@@ -2071,6 +2088,30 @@ impl FundingLedgerCloseCustodyV2 {
             native_rent_credit,
             None,
         )
+    }
+
+    /// Observe the same row while offering a capped reward to the crank.
+    ///
+    /// `crank_reward_cap` is chain-derived by the adapter -- a Rent minimum,
+    /// never a source literal (`docs/design/FUNDED_CRANK_V1.md` §3). Passing
+    /// zero is exactly [`Self::native_only`].
+    ///
+    /// **The reward is carved only from rent the crank LIBERATED**, never from
+    /// anyone's principal: see [`FundingLedgerEntryClosePlanV2::crank_reward`].
+    pub fn native_with_crank(
+        ledger_account_lamports: u64,
+        exact_ledger_rent_lamports: u64,
+        native_rent_credit: [u8; 32],
+        crank_reward_cap: u64,
+    ) -> Result<Self> {
+        let mut value = Self::new(
+            ledger_account_lamports,
+            exact_ledger_rent_lamports,
+            native_rent_credit,
+            None,
+        )?;
+        value.crank_reward_cap = crank_reward_cap;
+        Ok(value)
     }
 
     /// Observe one row's independently derived Realm vault.
@@ -2103,7 +2144,13 @@ impl FundingLedgerCloseCustodyV2 {
             exact_ledger_rent_lamports,
             native_rent_credit,
             realm_collateral,
+            crank_reward_cap: 0,
         })
+    }
+
+    /// Return the chain-derived ceiling on this close's crank reward.
+    pub const fn crank_reward_cap(self) -> u64 {
+        self.crank_reward_cap
     }
 
     /// Return all lamports observed in the shared physical ledger.
@@ -2143,12 +2190,94 @@ pub struct FundingLedgerEntryClosePlanV2 {
     ledger_lamport_donation: u64,
     expected_post_ledger_lamports: u64,
     ledger_can_close: bool,
+    crank_reward: u64,
 }
 
 impl FundingLedgerEntryClosePlanV2 {
-    /// Return the Market-authenticated RentCredit receiving every lamport.
+    /// Return the Market-authenticated RentCredit receiving every native
+    /// lamport this plan does not owe the crank.
     pub const fn native_rent_credit(self) -> [u8; 32] {
         self.native_rent_credit
+    }
+
+    /// Return the lamports owed to whoever turned this crank; zero unless a
+    /// reward cap was offered AND this close is the one that frees the ledger.
+    ///
+    /// **Carved only from rent this close liberated** -- the ledger's own Rent
+    /// reserve plus its surplus -- and never from `remaining_native_lamports`,
+    /// which is a depositor's principal. The crank is paid out of value its own
+    /// act released, so no participant is worse off than if it had never run:
+    /// unturned, that rent stays locked in the ledger and reaches nobody.
+    pub const fn crank_reward(self) -> u64 {
+        self.crank_reward
+    }
+
+    /// Return every native lamport the RentCredit is owed, net of the crank.
+    pub fn native_refund_total(self) -> Result<u64> {
+        self.native_gross_total()?
+            .checked_sub(self.crank_reward)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Return every native lamport leaving, before the crank is paid.
+    fn native_gross_total(self) -> Result<u64> {
+        self.ledger_sourced_total()?
+            .checked_add(self.vault_lamport_donation)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Return the native lamports sourced from the shared physical ledger.
+    ///
+    /// Deliberately excludes `vault_lamport_donation`, which leaves a *different
+    /// account* -- the row's Realm vault. Summing the two would make the ledger
+    /// conservation below off by exactly that donation.
+    fn ledger_sourced_total(self) -> Result<u64> {
+        self.remaining_native_lamports
+            .checked_add(self.ledger_rent_lamports)
+            .and_then(|value| value.checked_add(self.ledger_lamport_donation))
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Return the rent this close liberated, which is the crank's only source.
+    fn liberated_total(self) -> Result<u64> {
+        self.ledger_rent_lamports
+            .checked_add(self.ledger_lamport_donation)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Refuse unless every native lamport leaving reaches exactly one recipient.
+    ///
+    /// **Not a tautology, and this is the one check worth having here.**
+    /// `close_slot_in_place` derives the buckets independently -- principal
+    /// from the slot's own remaining, rent from the observed Rent minimum,
+    /// surplus from a subtraction against the observed account balance -- so
+    /// this genuinely relates quantities that were computed apart. It also
+    /// pins the property a second recipient puts at risk: that the crank's
+    /// reward is *carved from* the refund rather than *added to* it, so the
+    /// close can never pay out more than the ledger actually held.
+    pub fn validate_native_conservation(self, observed_ledger_lamports: u64) -> Result<()> {
+        // The crank is paid only out of rent it liberated, never principal.
+        if self.crank_reward > self.liberated_total()? {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        // The reward is carved FROM the refund, never added TO it.
+        if self
+            .native_refund_total()?
+            .checked_add(self.crank_reward)
+            .ok_or(Error::ArithmeticOverflow)?
+            != self.native_gross_total()?
+        {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        // Every lamport the shared ledger held is either leaving or staying.
+        let accounted = self
+            .ledger_sourced_total()?
+            .checked_add(self.expected_post_ledger_lamports)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if accounted != observed_ledger_lamports {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        Ok(())
     }
 
     /// Return this entry's remaining native principal.
@@ -3701,6 +3830,176 @@ mod tests {
             );
         }
         assert_eq!(ledger_lamports, 0);
+    }
+
+    #[test]
+    fn funding_ledger_v2_close_pays_a_capped_crank_only_from_rent_it_liberated() {
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut bytes = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+        for entry_index in 0..3 {
+            FundingLedgerV2::activate_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                entry_index,
+                9 + u64::from(entry_index),
+            )
+            .expect("activate");
+        }
+        let exact_rent = 100_u64;
+        let donation = 5_u64;
+        let native_rent_credit = [99; 32];
+        let mut ledger_lamports = exact_rent
+            + FundingLedgerV2::decode(&bytes)
+                .expect("activated ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("activated manifest")
+                .remaining_native_lamports_total()
+                .expect("native total")
+            + donation;
+        // A cap far above what any close can liberate, to prove the `min` binds
+        // on the liberated total rather than on the cap.
+        let reward_cap = 10_000_u64;
+
+        for entry_index in 0..3 {
+            let observed = ledger_lamports;
+            let custody = FundingLedgerCloseCustodyV2::native_with_crank(
+                observed,
+                exact_rent,
+                native_rent_credit,
+                reward_cap,
+            )
+            .expect("close custody");
+            let close = FundingLedgerV2::close_slot_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                entry_index,
+                custody,
+            )
+            .expect("close slot");
+
+            // *** Paid only on the close that actually frees the ledger. ***
+            let final_close = entry_index == 2;
+            assert_eq!(close.ledger_can_close(), final_close);
+            if final_close {
+                // Liberated is rent + surplus == 105, under the 10_000 cap, so
+                // the crank takes all of it and NONE of anyone's principal.
+                assert_eq!(close.crank_reward(), exact_rent + donation);
+                assert!(
+                    close.crank_reward() <= close.ledger_rent_lamports()
+                        + close.ledger_lamport_donation(),
+                    "the reward must never reach principal"
+                );
+            } else {
+                assert_eq!(
+                    close.crank_reward(),
+                    0,
+                    "a non-final close liberates no rent and earns nothing"
+                );
+            }
+
+            // Conservation against the observed account, every close.
+            close
+                .validate_native_conservation(observed)
+                .expect("every ledger lamport is either leaving or staying");
+
+            // The reward is carved FROM the refund, never added TO it.
+            assert_eq!(
+                close.native_refund_total().expect("refund") + close.crank_reward(),
+                close.remaining_native_lamports()
+                    + close.vault_lamport_donation()
+                    + close.ledger_rent_lamports()
+                    + close.ledger_lamport_donation()
+            );
+
+            // *** NEGATIVE CONTROL: the conservation must actually discriminate.
+            // One lamport more or less in the observed account has to refuse,
+            // or the check is inert.
+            assert_eq!(
+                close.validate_native_conservation(observed + 1),
+                Err(Error::UnderfundedPhysicalCustody)
+            );
+            assert_eq!(
+                close.validate_native_conservation(observed - 1),
+                Err(Error::UnderfundedPhysicalCustody)
+            );
+
+            ledger_lamports = close.expected_post_ledger_lamports();
+        }
+        assert_eq!(ledger_lamports, 0);
+    }
+
+    #[test]
+    fn funding_ledger_v2_close_without_a_crank_is_byte_identical_to_what_it_was() {
+        // The compatibility control for the optional reward: `native_only` and
+        // `native_with_crank(.., 0)` must produce the same plan, so no existing
+        // caller observes any change at all.
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut unpaid = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut unpaid, manifest_id, manifest, 0b111).expect("initialize");
+        for entry_index in 0..3 {
+            FundingLedgerV2::activate_in_place(
+                &mut unpaid,
+                manifest_id,
+                manifest,
+                entry_index,
+                9 + u64::from(entry_index),
+            )
+            .expect("activate");
+        }
+        let mut zero_cap = unpaid;
+        let exact_rent = 100_u64;
+        let ledger_lamports = exact_rent
+            + FundingLedgerV2::decode(&unpaid)
+                .expect("ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("manifest")
+                .remaining_native_lamports_total()
+                .expect("native total")
+            + 5;
+
+        for entry_index in 0..3 {
+            let a = FundingLedgerV2::close_slot_in_place(
+                &mut unpaid,
+                manifest_id,
+                manifest,
+                entry_index,
+                FundingLedgerCloseCustodyV2::native_only(ledger_lamports, exact_rent, [99; 32])
+                    .expect("custody"),
+            )
+            .expect("close");
+            let b = FundingLedgerV2::close_slot_in_place(
+                &mut zero_cap,
+                manifest_id,
+                manifest,
+                entry_index,
+                FundingLedgerCloseCustodyV2::native_with_crank(
+                    ledger_lamports,
+                    exact_rent,
+                    [99; 32],
+                    0,
+                )
+                .expect("custody"),
+            )
+            .expect("close");
+            assert_eq!(a, b, "a zero cap must be exactly the unpaid plan");
+            assert_eq!(a.crank_reward(), 0);
+            assert_eq!(
+                a.native_refund_total().expect("refund"),
+                a.remaining_native_lamports()
+                    + a.vault_lamport_donation()
+                    + a.ledger_rent_lamports()
+                    + a.ledger_lamport_donation(),
+                "with no crank the RentCredit is still owed every lamport"
+            );
+        }
+        assert_eq!(unpaid, zero_cap, "and the ledger bytes must match too");
     }
 
     #[test]
