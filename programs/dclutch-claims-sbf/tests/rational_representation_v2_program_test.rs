@@ -9,6 +9,7 @@
 
 use std::{env, fs, path::PathBuf, vec::Vec};
 
+mod claim_check;
 mod structured_lowering;
 
 use dclutch_claims_sbf::ClaimsSbfError;
@@ -6512,7 +6513,12 @@ async fn the_representation_redemption_also_survives_a_strangers_retirement() {
         shard_supply(WINNERS) - DENOMINATOR
     );
     assert_eq!(
-        token_amount(after.actor_shards.get(WINNERS).expect("winner actor shards")),
+        token_amount(
+            after
+                .actor_shards
+                .get(WINNERS)
+                .expect("winner actor shards")
+        ),
         actor_shards()[WINNERS] - DENOMINATOR
     );
     // Structured custody is untouched, exactly as in the Terminal-phase run:

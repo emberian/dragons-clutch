@@ -55,6 +55,27 @@ pub const CLAIM_CHECK_ESCROW_KIND_V1: u8 = 2;
 pub const CLAIM_CHECK_SEED_V1: &[u8] = b"dclutch:claim-check:v1";
 /// Canonical claim-check escrow PDA seed domain.
 pub const CLAIM_CHECK_ESCROW_SEED_V1: &[u8] = b"dclutch:claim-check-escrow:v1";
+/// Canonical claim-check escrow vault PDA seed domain.
+///
+/// The vault is a Claims-derived PDA rather than the escrow's associated token
+/// account, which is a deliberate departure from the design.
+///
+/// An associated token account lives at an address derived under the
+/// *associated-token* program, so this program cannot sign for it and could not
+/// create it with the tree's own `allocate`/`assign` idiom -- it would have to
+/// CPI the associated-token program, putting a third-party program in a frame
+/// that otherwise needs none. Deriving the vault here instead keeps creation on
+/// the house pattern, keeps the frame smaller, and makes the vault's address
+/// recoverable from the aggregate alone, which is exactly what a holder needs
+/// once the market is gone.
+///
+/// Nothing about the design's reasoning is lost. The point of §4.2 was that the
+/// vault is an ordinary `External` token account rather than a new Custody
+/// compartment, and it still is: Custody authenticates a transfer destination
+/// by its mint and its *owner*, never by how its address was derived, so from
+/// Custody's side this is the same kind of account a holder's own wallet token
+/// account already is.
+pub const CLAIM_CHECK_VAULT_SEED_V1: &[u8] = b"dclutch:claim-check-vault:v1";
 
 /// Slots a market must remain redeemable before any position may be compacted.
 ///
@@ -235,6 +256,34 @@ impl ClaimCheckEscrowSeedsV1 {
             aggregate: self.aggregate,
             bump: [bump],
         }
+    }
+}
+
+/// Canonical escrow vault PDA coordinates.
+///
+/// One vault per market, addressed by the same aggregate the escrow is, so a
+/// holder returning to a market that no longer exists can find both from the
+/// one coordinate their claim-check carries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimCheckVaultSeedsV1 {
+    aggregate: [u8; 32],
+}
+
+impl ClaimCheckVaultSeedsV1 {
+    /// Construct the unique vault coordinates for one market.
+    pub fn new(aggregate: [u8; 32]) -> ClaimCheckResultV1<Self> {
+        require_nonzero(aggregate)?;
+        Ok(Self { aggregate })
+    }
+
+    /// Borrow the sole exact vault PDA seed order, excluding its bump.
+    pub fn as_slices(&self) -> [&[u8]; 2] {
+        [CLAIM_CHECK_VAULT_SEED_V1, &self.aggregate]
+    }
+
+    /// Return the Claims aggregate coordinate.
+    pub const fn aggregate(self) -> [u8; 32] {
+        self.aggregate
     }
 }
 

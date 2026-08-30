@@ -361,6 +361,19 @@ fn process_remaining_instruction(
     ) {
         return rational_lifecycle_v2::process(program_id, accounts, instruction_data);
     }
+    // The claim-check family. Its magics are matched before the generic plan
+    // fallthrough because that fallthrough decodes by shape rather than by
+    // magic, and a route reached by shape is a route nobody named.
+    if instruction_data.get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.len())
+        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.as_slice())
+    {
+        return claim_check_compaction_v1::process_open_escrow(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
     // reachable solely for the current Trading General child-packet builder
     // (`dclutch-general-adapter-contract/src/child_packets.rs`) and Dealer
