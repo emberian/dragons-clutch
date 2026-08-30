@@ -19,46 +19,38 @@ use core::convert::{TryFrom, TryInto};
 
 use super::{interpolation_floor, rational_compare};
 
-/// Canonical runtime basis magic.
-pub const BASIS_MAGIC_V3: [u8; 8] = *b"DCLTPAY3";
-/// Canonical runtime basis schema.
-pub const BASIS_SCHEMA_V3: u16 = 3;
-/// Fixed header before all runtime tails.
-pub const BASIS_HEADER_BYTES_V3: usize = 256;
-/// Canonical byte offset of the little-endian runtime basis width.
-pub const BASIS_WIDTH_OFFSET_V3: usize = 20;
-/// Width of one exact knot numerator.
-pub const KNOT_BYTES_V3: usize = 16;
-/// Width of one canonical graded term.
-pub const TERM_BYTES_V3: usize = 32;
-/// Categorical exact/no-rounding boundary tag.
-pub const EXACT_CATEGORICAL_BOUNDARY_V3: u8 = 0;
-/// Per-term final floor followed by exact-complement boundary tag.
-pub const TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3: u8 = 1;
-/// Content-hash domain for semantic basis identity.
-pub const SEMANTIC_BASIS_CONTENT_DOMAIN_V3: &[u8] = b"dclutch/product-basis/semantic/v3";
-/// Content-hash domain for the full Product-linked raw record.
-pub const LINKED_BASIS_CONTENT_DOMAIN_V3: &[u8] = b"dclutch/product-basis/linked/v3";
+#[allow(missing_docs)]
+mod generated {
+    include!("generated_runtime_v3.rs");
+}
 
-const HEADER_BYTES_OFFSET: usize = 10;
-const RECORD_BYTES_OFFSET: usize = 12;
-const KIND_OFFSET: usize = 16;
-const ROUNDING_OFFSET: usize = 17;
-const HEADER_RESERVED_OFFSET: usize = 18;
-const KNOT_COUNT_OFFSET: usize = 24;
-const TERM_COUNT_OFFSET: usize = 28;
-const PRODUCT_ID_OFFSET: usize = 32;
-const RESULT_DOMAIN_ID_OFFSET: usize = 64;
-const COORDINATE_DOMAIN_ID_OFFSET: usize = 96;
-const RESULT_UNIT_ID_OFFSET: usize = 128;
-const PAYOUT_SCALE_OFFSET: usize = 160;
-const KNOT_DENOMINATOR_OFFSET: usize = 168;
-const EVALUATOR_RELEASE_ID_OFFSET: usize = 176;
-const HEADER_TAIL_RESERVED_OFFSET: usize = 208;
+pub use generated::*;
+
+// Every offset, width and discriminant above is Lean-owned. `specialize` in
+// `DClutchSemantics/ProductBasisV3Abi.lean` is the sole author of a field
+// offset in this record, and `basisHeaderCoordinates` freezes all eighteen of
+// them against a literal witness read off the ABI already deployed. The
+// aliases below keep the decoder's established vocabulary, so moving the
+// specification here costs the evaluator no change at all.
+const HEADER_BYTES_OFFSET: usize = BASIS_HEADER_BYTES_OFFSET_V3;
+const RECORD_BYTES_OFFSET: usize = BASIS_RECORD_BYTES_OFFSET_V3;
+const KIND_OFFSET: usize = BASIS_KIND_OFFSET_V3;
+const ROUNDING_OFFSET: usize = BASIS_ROUNDING_OFFSET_V3;
+const HEADER_RESERVED_OFFSET: usize = BASIS_HEADER_RESERVED_OFFSET_V3;
+const KNOT_COUNT_OFFSET: usize = BASIS_KNOT_COUNT_OFFSET_V3;
+const TERM_COUNT_OFFSET: usize = BASIS_TERM_COUNT_OFFSET_V3;
+const PRODUCT_ID_OFFSET: usize = BASIS_PRODUCT_ID_OFFSET_V3;
+const RESULT_DOMAIN_ID_OFFSET: usize = BASIS_RESULT_DOMAIN_ID_OFFSET_V3;
+const COORDINATE_DOMAIN_ID_OFFSET: usize = BASIS_COORDINATE_DOMAIN_ID_OFFSET_V3;
+const RESULT_UNIT_ID_OFFSET: usize = BASIS_RESULT_UNIT_ID_OFFSET_V3;
+const PAYOUT_SCALE_OFFSET: usize = BASIS_PAYOUT_SCALE_OFFSET_V3;
+const KNOT_DENOMINATOR_OFFSET: usize = BASIS_KNOT_DENOMINATOR_OFFSET_V3;
+const EVALUATOR_RELEASE_ID_OFFSET: usize = BASIS_EVALUATOR_RELEASE_ID_OFFSET_V3;
+const HEADER_TAIL_RESERVED_OFFSET: usize = BASIS_HEADER_TAIL_RESERVED_OFFSET_V3;
 const PRODUCT_LINK_END: usize = RESULT_DOMAIN_ID_OFFSET + 32;
 
-const CATEGORICAL_KIND: u8 = 1;
-const GRADED_COMPLEMENT_KIND: u8 = 2;
+const CATEGORICAL_KIND: u8 = BASIS_CATEGORICAL_KIND_V3;
+const GRADED_COMPLEMENT_KIND: u8 = BASIS_GRADED_COMPLEMENT_KIND_V3;
 
 /// Refusal from hostile decoding, construction, or exact evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1038,71 +1030,120 @@ fn validate_shape(shape: BasisShapeV3, knot_count: u32) -> Result<()> {
 
 fn shape_key(shape: BasisShapeV3) -> (u8, u32, u32, u32) {
     match shape {
-        BasisShapeV3::Constant => (0, 0, 0, 0),
-        BasisShapeV3::RampUp { left, right } => (1, left, 0, right),
-        BasisShapeV3::RampDown { left, right } => (2, left, 0, right),
-        BasisShapeV3::Tent { left, peak, right } => (3, left, peak, right),
+        BasisShapeV3::Constant => (TERM_CONSTANT_SHAPE_V3, 0, 0, 0),
+        BasisShapeV3::RampUp { left, right } => (TERM_RAMP_UP_SHAPE_V3, left, 0, right),
+        BasisShapeV3::RampDown { left, right } => (TERM_RAMP_DOWN_SHAPE_V3, left, 0, right),
+        BasisShapeV3::Tent { left, peak, right } => (TERM_TENT_SHAPE_V3, left, peak, right),
     }
 }
 
 fn encode_term(output: &mut [u8], offset: usize, term: BasisTermV3) -> Result<()> {
-    put(output, offset, &term.claim_index.to_le_bytes())?;
-    let (tag, left, peak, right) = match term.shape {
-        BasisShapeV3::Constant => (0, 0, 0, 0),
-        BasisShapeV3::RampUp { left, right } => (1, left, 0, right),
-        BasisShapeV3::RampDown { left, right } => (2, left, 0, right),
-        BasisShapeV3::Tent { left, peak, right } => (3, left, peak, right),
-    };
     put(
         output,
-        offset.checked_add(4).ok_or(Error::InvalidLength)?,
+        offset
+            .checked_add(TERM_CLAIM_INDEX_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
+        &term.claim_index.to_le_bytes(),
+    )?;
+    let (tag, left, peak, right) = shape_key(term.shape);
+    put(
+        output,
+        offset
+            .checked_add(TERM_SHAPE_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
         &[tag],
     )?;
     put(
         output,
-        offset.checked_add(8).ok_or(Error::InvalidLength)?,
+        offset
+            .checked_add(TERM_LEFT_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
         &left.to_le_bytes(),
     )?;
     put(
         output,
-        offset.checked_add(12).ok_or(Error::InvalidLength)?,
+        offset
+            .checked_add(TERM_PEAK_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
         &peak.to_le_bytes(),
     )?;
     put(
         output,
-        offset.checked_add(16).ok_or(Error::InvalidLength)?,
+        offset
+            .checked_add(TERM_RIGHT_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
         &right.to_le_bytes(),
     )?;
     put(
         output,
-        offset.checked_add(24).ok_or(Error::InvalidLength)?,
+        offset
+            .checked_add(TERM_AMPLITUDE_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
         &term.amplitude.to_le_bytes(),
     )
 }
 
 fn decode_term(input: &[u8], offset: usize) -> Result<BasisTermV3> {
-    require_zero(input, offset.checked_add(5).ok_or(Error::InvalidLength)?, 3)?;
     require_zero(
         input,
-        offset.checked_add(20).ok_or(Error::InvalidLength)?,
+        offset
+            .checked_add(TERM_SHAPE_RESERVED_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
+        3,
+    )?;
+    require_zero(
+        input,
+        offset
+            .checked_add(TERM_TAIL_RESERVED_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
         4,
     )?;
-    let claim_index = read_u32(input, offset)?;
-    let tag = read_byte(input, offset.checked_add(4).ok_or(Error::InvalidLength)?)?;
-    let left = read_u32(input, offset.checked_add(8).ok_or(Error::InvalidLength)?)?;
-    let peak = read_u32(input, offset.checked_add(12).ok_or(Error::InvalidLength)?)?;
-    let right = read_u32(input, offset.checked_add(16).ok_or(Error::InvalidLength)?)?;
+    let claim_index = read_u32(
+        input,
+        offset
+            .checked_add(TERM_CLAIM_INDEX_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
+    )?;
+    let tag = read_byte(
+        input,
+        offset
+            .checked_add(TERM_SHAPE_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
+    )?;
+    let left = read_u32(
+        input,
+        offset
+            .checked_add(TERM_LEFT_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
+    )?;
+    let peak = read_u32(
+        input,
+        offset
+            .checked_add(TERM_PEAK_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
+    )?;
+    let right = read_u32(
+        input,
+        offset
+            .checked_add(TERM_RIGHT_OFFSET_V3)
+            .ok_or(Error::InvalidLength)?,
+    )?;
     let shape = match tag {
-        0 if left == 0 && peak == 0 && right == 0 => BasisShapeV3::Constant,
-        1 if peak == 0 => BasisShapeV3::RampUp { left, right },
-        2 if peak == 0 => BasisShapeV3::RampDown { left, right },
-        3 => BasisShapeV3::Tent { left, peak, right },
+        TERM_CONSTANT_SHAPE_V3 if left == 0 && peak == 0 && right == 0 => BasisShapeV3::Constant,
+        TERM_RAMP_UP_SHAPE_V3 if peak == 0 => BasisShapeV3::RampUp { left, right },
+        TERM_RAMP_DOWN_SHAPE_V3 if peak == 0 => BasisShapeV3::RampDown { left, right },
+        TERM_TENT_SHAPE_V3 => BasisShapeV3::Tent { left, peak, right },
         _ => return Err(Error::InvalidTerm),
     };
     Ok(BasisTermV3 {
         claim_index,
         shape,
-        amplitude: read_u64(input, offset.checked_add(24).ok_or(Error::InvalidLength)?)?,
+        amplitude: read_u64(
+            input,
+            offset
+                .checked_add(TERM_AMPLITUDE_OFFSET_V3)
+                .ok_or(Error::InvalidLength)?,
+        )?,
     })
 }
 

@@ -187,6 +187,10 @@ name = "emit-market-retirement-v1-rust"
 root = "EmitMarketRetirementV1Rust"
 
 [[lean_exe]]
+name = "emit-product-basis-v3-abi-rust"
+root = "EmitProductBasisV3AbiRust"
+
+[[lean_exe]]
 name = "emit-product-graded-basis-admission-v3-abi-rust"
 root = "EmitProductGradedBasisAdmissionV3AbiRust"
 
