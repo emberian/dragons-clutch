@@ -79,6 +79,26 @@ pub(crate) enum ParentAuthorityV3 {
     /// crate-private, and current-release authentication still runs before the
     /// derived SignedDelta commits.
     EnclosingClaimsRoute,
+    /// A permissionless claim-check compaction crank, past its deadline.
+    ///
+    /// Coordinate 0 is the caller and nothing more. That is the point: a right
+    /// only its beneficiary can exercise stalls when its beneficiary is absent,
+    /// and this is the mode that lets somebody else finish the work without
+    /// being able to take anything by doing so.
+    ///
+    /// The entitlement is not carried by the signature. It is proved before
+    /// this mode is ever selected, by the compaction route, which requires the
+    /// escrow's release-fixed deadline to have elapsed and DERIVES the payout's
+    /// recipient from the market's own aggregate rather than accepting one. A
+    /// caller therefore chooses only *whether* the crank turns, never where the
+    /// collateral lands.
+    ///
+    /// One thing the owner's signature was silently also proving is not proved
+    /// here: that the Position is wallet-held rather than owned by a Trading
+    /// record or a Claims capability PDA, neither of which can sign. The
+    /// compaction route replaces that inference with the persisted owner-kind
+    /// tag, read off the admission record and refused explicitly.
+    ClaimCheckCrank,
 }
 
 /// Exact already-authenticated parent request joined to one generated
@@ -518,11 +538,23 @@ fn authenticate_parent_authority(
                 return Err(SignedDeltaSbfErrorV3::Release.into());
             }
         }
+        // A crank is anybody, so the only thing asked of coordinate 0 is that
+        // somebody stood behind the transaction. Everything that makes the
+        // crank safe was proved before this mode could be selected.
+        (CallerRole::Claims, ParentAuthorityV3::ClaimCheckCrank) => {
+            if !accounts.authority.is_signer {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+        }
         // Role `Claims` has no caller program, and no other role may substitute
-        // an owner signature for its program's authority. Both crossings refuse.
+        // an owner signature for its program's authority. Nor may any other
+        // role borrow the compaction crank's relaxation: it is admissible only
+        // where the owner's own signature would otherwise have been required,
+        // and never as a way around a caller program's authority PDA.
         (CallerRole::Claims, ParentAuthorityV3::CallerProgramPda)
         | (CallerRole::Claims, ParentAuthorityV3::EnclosingClaimsRoute)
-        | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::PositionOwner(_)) => {
+        | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::PositionOwner(_))
+        | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::ClaimCheckCrank) => {
             return Err(SignedDeltaSbfErrorV3::Release.into());
         }
         (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::EnclosingClaimsRoute) => {}

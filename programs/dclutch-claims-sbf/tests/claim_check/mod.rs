@@ -468,3 +468,561 @@ async fn the_open_admits_the_opener_and_no_other_signer() {
     // should fire first.
     assert_refused_with(&result, 0x5600, "an over-wide open frame");
 }
+
+// ---------------------------------------------------------------- compaction
+
+use dclutch_claims_svm::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
+use dclutch_claims_svm::claim_check_v1::{
+    COMPACTION_CRANK_REWARD_LAMPORTS_V1, COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckSeedsV1,
+    ClaimCheckV1,
+};
+use dclutch_claims_svm::protocol_position_v2::{
+    PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
+    ProtocolPositionAdmissionEvidenceV2, ProtocolPositionAdmissionSeedsV2,
+    ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+    ProtocolPositionRequestV2,
+};
+use dclutch_claims_svm::terminal_settlement_v3::{
+    TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3, TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
+};
+
+/// LBV2 Position width at this fixture's outcome count: header plus one `u64`
+/// per coordinate.
+const POSITION_BYTES: usize = 128 + 8 * K;
+
+fn claim_check_address(aggregate: Pubkey, owner: [u8; 32]) -> Pubkey {
+    let seeds = ClaimCheckSeedsV1::new(aggregate.to_bytes(), owner).expect("claim-check seeds");
+    Pubkey::find_program_address(&seeds.as_slices(), &CLAIMS_PROGRAM_ID).0
+}
+
+fn admission_address(aggregate: Pubkey, owner: [u8; 32]) -> Pubkey {
+    let seeds = ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), owner)
+        .expect("admission seeds");
+    Pubkey::find_program_address(&seeds.as_slices(), &CLAIMS_PROGRAM_ID).0
+}
+
+/// Plant the admission record a real `Admit` would have created.
+///
+/// A FIXTURE GAP, named rather than papered over: this campaign plants LBV2
+/// Position accounts directly and never runs `protocol_position_v2::Admit`, so
+/// no admission record exists for them. On a real chain every admitted Position
+/// has one — `Admit` creates the pair and `Close` closes the pair — and
+/// compaction has to close it too, or its rent strands. The bytes below are
+/// produced by the production codec, never hand-rolled, so the format still has
+/// exactly one author; only the act of putting them on chain is short-circuited.
+async fn plant_admission(context: &mut ProgramTestContext, fixture: &Fixture) -> Pubkey {
+    let owner = fixture.actor.pubkey().to_bytes();
+    let address = admission_address(fixture.aggregate, owner);
+    let request = ProtocolPositionRequestV2 {
+        action: ProtocolPositionActionV2::Admit,
+        owner_kind: ProtocolPositionOwnerKindV2::User,
+        presence: ProtocolPositionPresenceV2::Vacant,
+        release_set: fixture.release_set,
+        market: fixture.market.to_bytes(),
+        position_owner: owner,
+        parent_request_digest: [0x41; 32],
+        rent_credit: market_rent_credit().to_bytes(),
+        rent_program: [0x42; 32],
+        generation: GENERATION,
+        expected_market_revision: 0,
+        expected_position_revision: 0,
+        observed_position_lamports: Rent::default().minimum_balance(POSITION_BYTES),
+        observed_admission_lamports: Rent::default()
+            .minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+        position_rent_principal: Rent::default().minimum_balance(POSITION_BYTES),
+        admission_rent_principal: Rent::default()
+            .minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+        capability_descriptor: [0; 32],
+        capability_outcome: 0,
+    }
+    .new()
+    .expect("admission request");
+    let evidence = ProtocolPositionAdmissionEvidenceV2 {
+        product_record_digest: [0x43; 32],
+        semantic_basis_id: [0x44; 32],
+        linked_basis_record_digest: [0x45; 32],
+        request_digest: [0x46; 32],
+        claims_program: CLAIMS_PROGRAM_ID.to_bytes(),
+        trading_program: [0x47; 32],
+        capability_descriptor: [0; 32],
+        capability_outcome: 0,
+        outcome_count: u32::try_from(K).expect("outcome count"),
+    };
+    let bytes = ProtocolPositionAdmissionV2::new(request, evidence)
+        .expect("admission state")
+        .to_state_bytes()
+        .expect("admission bytes");
+    let mut account = Account::new(
+        Rent::default().minimum_balance(bytes.len()),
+        bytes.len(),
+        &CLAIMS_PROGRAM_ID,
+    );
+    account.data.copy_from_slice(&bytes);
+    context.set_account(&address, &AccountSharedData::from(account));
+    address
+}
+
+/// Build a compaction instruction out of the WALLET PAYOUT's own builder.
+///
+/// This is the differential stated as construction rather than as a comment.
+/// The request is the one the sleeping holder would have sent, obtained from
+/// `wallet_payout_request`, with exactly two fields moved: the recipient owner
+/// and the recipient token account. The frame is the wallet payout's own 36
+/// accounts with the recipient swapped for the vault, plus the six this route
+/// adds. Anything that made the holder's redemption pay what it pays is still
+/// here, byte for byte, because it was never restated.
+fn compaction_instruction(
+    fixture: &Fixture,
+    cranker: Pubkey,
+    prestate: &WalletPayoutPrestate,
+) -> Instruction {
+    let escrow = escrow_address(fixture.aggregate);
+    let vault = vault_address(fixture.aggregate);
+    let overrides = WalletPayoutOverrides {
+        authority: Some(cranker),
+        ..Default::default()
+    };
+    let mut input = wallet_payout_request(fixture, overrides).input();
+    let owner = input.owner;
+    input.recipient_owner = escrow.to_bytes();
+    input.recipient_token_account = vault.to_bytes();
+    let settlement = TerminalSettlementRequestV3::new(input).expect("compaction settlement");
+    let request =
+        CompactPositionToClaimCheckRequestV1::new(settlement).expect("compaction request");
+
+    let (mut instruction, _) = wallet_payout_instruction(fixture, overrides, prestate);
+    instruction.accounts[TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3] = AccountMeta::new(vault, false);
+    // The Custody caller authority is derived from the settlement request's own
+    // DIGEST, so changing the recipient changes that PDA. Copying the wallet
+    // payout's account here would present an authority for a request nobody
+    // sent -- which is precisely the join the chain refused when I first got
+    // this wrong.
+    instruction.accounts[TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3] = AccountMeta::new_readonly(
+        wallet_payout_custody_caller(fixture, &settlement.to_bytes(), prestate),
+        false,
+    );
+    instruction.data = request.to_bytes().expect("compaction bytes").to_vec();
+    instruction.accounts.extend([
+        AccountMeta::new(escrow, false),
+        AccountMeta::new(claim_check_address(fixture.aggregate, owner), false),
+        AccountMeta::new(admission_address(fixture.aggregate, owner), false),
+        AccountMeta::new(market_rent_credit(), false),
+        AccountMeta::new(cranker, false),
+        AccountMeta::new_readonly(solana_sdk_ids::system_program::ID, false),
+    ]);
+    instruction
+}
+
+/// Open the escrow and jump the clock past its release-fixed deadline.
+async fn open_and_elapse(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> ClaimCheckEscrowV1 {
+    let opened = submit_open(
+        context,
+        fixture,
+        OpenOverrides::default(),
+        "claims claim-check: open before compaction",
+    )
+    .await;
+    assert!(opened.accepted, "the escrow must open");
+    let escrow = ClaimCheckEscrowV1::decode(
+        &observed(context, escrow_address(fixture.aggregate))
+            .await
+            .data,
+    )
+    .expect("escrow decodes");
+    context
+        .warp_to_slot(escrow.opened_slot + COMPACTION_DEADLINE_SLOTS_V1)
+        .expect("warp past the compaction deadline");
+    escrow
+}
+
+/// THE DIFFERENTIAL: A COMPACTED CLAIM-CHECK IS WORTH, TO THE ATOM, WHAT THE
+/// HOLDER'S OWN REDEMPTION WOULD HAVE PAID.
+///
+/// The single most important assertion in the feature, and the reason the
+/// compaction route calls the payout derivation rather than re-implementing it.
+/// A second author for the payoff function is how a compaction that pays a
+/// different number gets built and passes its own tests; the number is
+/// somebody's money, and this is the test that would catch it.
+///
+/// Both halves run against the same fixture, so the figure compared is not one
+/// this test typed. It is what the chain paid.
+#[tokio::test]
+async fn a_compacted_claim_check_is_worth_exactly_what_redemption_would_have_paid() {
+    // What the holder's own redemption pays, observed on chain.
+    let redeemed = {
+        let (test, fixture) = fixture(true);
+        let mut context = test.start_with_context().await;
+        create_claims_custody_replay(&mut context, &fixture).await;
+        let (table, addresses) = wallet_payout_lookup_table(
+            &mut context,
+            &fixture,
+            "claims claim-check: differential redemption",
+        )
+        .await;
+        let before = snapshot(&mut context, &fixture).await;
+        let result = submit_wallet_payout(
+            &mut context,
+            &fixture,
+            table,
+            &addresses,
+            WalletPayoutOverrides::default(),
+            "claims claim-check: the holder redeems for itself",
+        )
+        .await;
+        assert!(result.accepted, "the sibling redemption must commit");
+        let after = snapshot(&mut context, &fixture).await;
+        token_amount(after.recipient.as_ref().expect("recipient"))
+            - token_amount(before.recipient.as_ref().expect("pre recipient"))
+    };
+    assert!(redeemed > 0, "the differential needs a paying position");
+
+    // What a stranger's crank escrows for a holder who never came back.
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    plant_admission(&mut context, &fixture).await;
+    let cranker = context.payer.pubkey();
+    open_and_elapse(&mut context, &fixture).await;
+
+    let prestate = wallet_payout_prestate(&mut context, &fixture, fixture.actor_position).await;
+    let instruction = compaction_instruction(&fixture, cranker, &prestate);
+    let addresses = lookup_addresses(cranker, fixture.actor.pubkey(), &[instruction.clone()]);
+    let (table, _) =
+        create_live_lookup_table(&mut context, &addresses, "claims claim-check: compaction").await;
+    let result =
+        submit_compaction(&mut context, instruction, table, &addresses, "compaction").await;
+    if !result.accepted {
+        eprintln!("compaction refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(result.accepted, "the compaction must commit");
+
+    let owner = fixture.actor.pubkey().to_bytes();
+    let record = ClaimCheckV1::decode(
+        &observed(&mut context, claim_check_address(fixture.aggregate, owner))
+            .await
+            .data,
+    )
+    .expect("claim-check decodes");
+
+    // THE ASSERTION.
+    assert_eq!(
+        record.entitlement_atoms, redeemed,
+        "a compacted claim-check must be worth exactly what the holder's own \
+         redemption paid; the two paths share one payout derivation and any \
+         difference here means they have stopped doing so"
+    );
+    assert_eq!(record.owner, owner);
+    assert_eq!(record.aggregate, fixture.aggregate.to_bytes());
+    assert_eq!(record.vault, vault_address(fixture.aggregate).to_bytes());
+
+    // And the collateral is really in the vault, not merely promised.
+    let vault = observed(&mut context, vault_address(fixture.aggregate)).await;
+    assert_eq!(
+        token_amount(&vault),
+        record.entitlement_atoms,
+        "the sum of live entitlements equals the vault balance"
+    );
+}
+
+/// THE CRANK IS PAID, AND PAID BEFORE THE OPENER.
+///
+/// Observed from chain state rather than from the plan. The order matters: one
+/// position's rent does not cover a whole escrow's outlay, so repaying the
+/// opener first would leave the first crank with exactly nothing, and an
+/// unfunded crank is an unturned crank.
+#[tokio::test]
+async fn the_crank_is_paid_from_rent_that_was_leaving_anyway() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    plant_admission(&mut context, &fixture).await;
+    let cranker = context.payer.pubkey();
+    let escrow_before = open_and_elapse(&mut context, &fixture).await;
+
+    let position_lamports = observed(&mut context, fixture.actor_position)
+        .await
+        .lamports;
+    let owner = fixture.actor.pubkey().to_bytes();
+    let admission = admission_address(fixture.aggregate, owner);
+    let admission_lamports = observed(&mut context, admission).await.lamports;
+    let rent_credit_before = maybe_observed(&mut context, market_rent_credit())
+        .await
+        .map_or(0, |account| account.lamports);
+
+    let prestate = wallet_payout_prestate(&mut context, &fixture, fixture.actor_position).await;
+    let instruction = compaction_instruction(&fixture, cranker, &prestate);
+    let addresses = lookup_addresses(cranker, fixture.actor.pubkey(), &[instruction.clone()]);
+    let (table, _) =
+        create_live_lookup_table(&mut context, &addresses, "claims claim-check: paid crank").await;
+    let cranker_before = observed(&mut context, cranker).await.lamports;
+    let result =
+        submit_compaction(&mut context, instruction, table, &addresses, "paid crank").await;
+    assert!(result.accepted, "the compaction must commit");
+
+    // Both accounts are gone and kept nothing.
+    assert!(
+        maybe_observed(&mut context, fixture.actor_position)
+            .await
+            .is_none()
+            || observed(&mut context, fixture.actor_position)
+                .await
+                .lamports
+                == 0,
+        "the position closed"
+    );
+    assert!(
+        maybe_observed(&mut context, admission).await.is_none()
+            || observed(&mut context, admission).await.lamports == 0,
+        "the admission closed"
+    );
+
+    // The released rent is fully accounted for by four credits and no more.
+    let released = position_lamports + admission_lamports;
+    let claim_check_lamports =
+        observed(&mut context, claim_check_address(fixture.aggregate, owner))
+            .await
+            .lamports;
+    let escrow_after = ClaimCheckEscrowV1::decode(
+        &observed(&mut context, escrow_address(fixture.aggregate))
+            .await
+            .data,
+    )
+    .expect("escrow decodes");
+    let opener_repaid = escrow_before.opener_outlay - escrow_after.opener_outlay;
+    let rent_credit_after = maybe_observed(&mut context, market_rent_credit())
+        .await
+        .map_or(0, |account| account.lamports);
+    let residue = rent_credit_after - rent_credit_before;
+
+    // The crank was paid its cap, and paid FIRST -- the opener is still owed.
+    assert_eq!(
+        COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+        released - claim_check_lamports - opener_repaid - residue,
+        "the crank's reward is what the sweep paid it"
+    );
+    assert!(
+        escrow_after.opener_outlay > 0,
+        "one position's rent cannot repay a whole escrow's outlay, which is why \
+         paying the opener first would have left this crank unfunded"
+    );
+    assert!(opener_repaid > 0, "and the opener's debt still shrank");
+    assert_eq!(
+        released,
+        claim_check_lamports + COMPACTION_CRANK_REWARD_LAMPORTS_V1 + opener_repaid + residue,
+        "everything the two closing accounts held is accounted for, and no more"
+    );
+    // The cranker is up by its reward, net of the fee it paid to turn the crank.
+    let cranker_after = observed(&mut context, cranker).await.lamports;
+    assert!(
+        cranker_after > cranker_before,
+        "a permissionless crank nobody is paid to turn is a crank nobody turns"
+    );
+    assert_eq!(escrow_after.outstanding_claim_checks, 1);
+}
+
+/// A CRANK BEFORE THE DEADLINE IS REFUSED.
+#[tokio::test]
+async fn a_crank_before_the_deadline_is_refused() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    plant_admission(&mut context, &fixture).await;
+    let cranker = context.payer.pubkey();
+    let opened = submit_open(
+        &mut context,
+        &fixture,
+        OpenOverrides::default(),
+        "claims claim-check: open without elapsing",
+    )
+    .await;
+    assert!(opened.accepted);
+
+    let prestate = wallet_payout_prestate(&mut context, &fixture, fixture.actor_position).await;
+    let instruction = compaction_instruction(&fixture, cranker, &prestate);
+    let addresses = lookup_addresses(cranker, fixture.actor.pubkey(), &[instruction.clone()]);
+    let (table, _) =
+        create_live_lookup_table(&mut context, &addresses, "claims claim-check: premature").await;
+    let result = submit_compaction(
+        &mut context,
+        instruction,
+        table,
+        &addresses,
+        "premature crank",
+    )
+    .await;
+    assert_refused_with(&result, 0x5603, "a crank before the deadline");
+    assert!(
+        maybe_observed(
+            &mut context,
+            claim_check_address(fixture.aggregate, fixture.actor.pubkey().to_bytes())
+        )
+        .await
+        .is_none(),
+        "a premature crank mints nothing"
+    );
+    assert_eq!(
+        lbv2_position_quantity(
+            &observed(&mut context, fixture.actor_position).await.data,
+            WINNER
+        ),
+        ACTOR_CLAIMS[WINNERS],
+        "and debits nothing"
+    );
+}
+
+/// A SECOND CRANK ON THE SAME POSITION IS REFUSED.
+#[tokio::test]
+async fn a_position_cannot_be_compacted_twice() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    plant_admission(&mut context, &fixture).await;
+    let cranker = context.payer.pubkey();
+    open_and_elapse(&mut context, &fixture).await;
+
+    let prestate = wallet_payout_prestate(&mut context, &fixture, fixture.actor_position).await;
+    let instruction = compaction_instruction(&fixture, cranker, &prestate);
+    let addresses = lookup_addresses(cranker, fixture.actor.pubkey(), &[instruction.clone()]);
+    let (table, _) =
+        create_live_lookup_table(&mut context, &addresses, "claims claim-check: twice").await;
+    let first = submit_compaction(
+        &mut context,
+        instruction.clone(),
+        table,
+        &addresses,
+        "first crank",
+    )
+    .await;
+    assert!(first.accepted, "the first crank must commit");
+    let owner = fixture.actor.pubkey().to_bytes();
+    let minted = ClaimCheckV1::decode(
+        &observed(&mut context, claim_check_address(fixture.aggregate, owner))
+            .await
+            .data,
+    )
+    .expect("claim-check decodes");
+
+    let second =
+        submit_compaction(&mut context, instruction, table, &addresses, "second crank").await;
+    assert!(!second.accepted, "a position compacts exactly once");
+    let after = ClaimCheckV1::decode(
+        &observed(&mut context, claim_check_address(fixture.aggregate, owner))
+            .await
+            .data,
+    )
+    .expect("claim-check decodes");
+    assert_eq!(
+        after, minted,
+        "the refused second crank moved no byte of the claim-check"
+    );
+}
+
+/// Submit one compaction through a v0 message carrying the lookup table.
+async fn submit_compaction(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    table: Pubkey,
+    addresses: &[Pubkey],
+    label: &str,
+) -> Submission {
+    let payer = context.payer.pubkey();
+    let blockhash = context
+        .get_new_latest_blockhash()
+        .await
+        .expect("a distinct compaction blockhash");
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            &payer,
+            &[instruction],
+            &[AddressLookupTableAccount {
+                key: table,
+                addresses: addresses.to_vec(),
+            }],
+            blockhash,
+        )
+        .expect("compile the compaction message"),
+    );
+    let transaction =
+        VersionedTransaction::try_new(message, &[&context.payer]).expect("sign the compaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message.serialize().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("compaction processing");
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, compute_units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Submission {
+        accepted,
+        compute_units,
+        wire_bytes,
+        logs,
+    }
+}
+
+/// PROBE: does an ORDINARY redemption survive the deadline's own warp?
+///
+/// Separates a defect in the compaction route from a limitation of the harness.
+/// If the holder's own payout stops working merely because the clock advanced
+/// far enough for a compaction to be legal, then nothing built on that warp can
+/// be trusted, and the deadline needs a different test strategy.
+#[tokio::test]
+async fn an_ordinary_redemption_survives_the_compaction_deadlines_warp() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) =
+        wallet_payout_lookup_table(&mut context, &fixture, "claims claim-check: warp probe").await;
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("Clock")
+        .slot;
+    context
+        .warp_to_slot(slot + COMPACTION_DEADLINE_SLOTS_V1)
+        .expect("warp past the deadline");
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims claim-check: redemption after a deadline-sized warp",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("WARP PROBE logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(
+        result.accepted,
+        "a holder's own redemption must not stop working merely because time passed"
+    );
+}

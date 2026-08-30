@@ -5042,7 +5042,13 @@ fn wallet_payout_custody_caller(
             transfer_index: input.transfer_index,
         },
         source: terminal.hoard.to_bytes(),
-        destination: terminal.recipient.to_bytes(),
+        // Read from the request, not from the fixture. The chain does exactly
+        // this -- `authenticate_extra_privileges` binds the recipient ACCOUNT
+        // to `input.recipient_token_account` -- so hardcoding the fixture's own
+        // recipient here made the helper a second author for a field the
+        // request already carries. Identical for every wallet payout, and the
+        // difference is what a payout to any other destination needs.
+        destination: input.recipient_token_account,
         source_vault_context: fixture.custody_context,
         destination_vault_context: [0; 32],
         mint: input.collateral_mint,

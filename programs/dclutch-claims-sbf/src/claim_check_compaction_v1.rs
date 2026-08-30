@@ -24,18 +24,32 @@
 //! tamper surface is a release re-point, which does not exist today and must
 //! refuse a shortening when it does.
 
+use dclutch_claims_svm::claim_check_compaction_request_v1::CompactPositionToClaimCheckRequestV1;
+use dclutch_claims_svm::claim_check_conservation_v1::{
+    ClaimCheckAccountObservationV1, ClaimCheckCompactionObservationV1, ClaimCheckCompactionPlanV1,
+    ClaimCheckCompactionPostV1,
+};
 use dclutch_claims_svm::claim_check_request_v1::OpenClaimCheckEscrowRequestV1;
 use dclutch_claims_svm::claim_check_v1::{
-    CLAIM_CHECK_ESCROW_BYTES_V1, ClaimCheckEscrowSeedsV1, ClaimCheckEscrowV1,
-    ClaimCheckVaultSeedsV1,
+    CLAIM_CHECK_BYTES_V1, CLAIM_CHECK_ESCROW_BYTES_V1, COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+    COMPACTION_DEADLINE_SLOTS_V1, ClaimCheckEscrowSeedsV1, ClaimCheckEscrowV1, ClaimCheckSeedsV1,
+    ClaimCheckV1, ClaimCheckVaultSeedsV1,
 };
 use dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_SEED_V2;
+use dclutch_claims_svm::protocol_position_v2::{
+    ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+};
+use dclutch_claims_svm::terminal_settlement_v3::{
+    TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3,
+    TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
+};
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase};
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
+    hash::hash,
     instruction::Instruction,
     program::{invoke, invoke_signed},
     program_error::ProgramError,
@@ -531,6 +545,439 @@ fn allocate_and_assign<'info>(
     }
     if destination.owner != owner || destination.data_len() != width {
         return Err(ClaimCheckCompactionSbfErrorV1::Escrow.into());
+    }
+    Ok(())
+}
+
+/// Terminal-frame width this route wraps before its own accounts begin.
+const TERMINAL_FRAME_V1: usize = TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
+/// The escrow record, whose counter and opener debt this crank moves.
+pub const COMPACT_ESCROW_ACCOUNT_V1: usize = TERMINAL_FRAME_V1;
+/// The claim-check this crank mints, when the payout is nonzero.
+pub const COMPACT_CLAIM_CHECK_ACCOUNT_V1: usize = TERMINAL_FRAME_V1 + 1;
+/// The position's admission record, carrying the persisted owner kind.
+pub const COMPACT_ADMISSION_ACCOUNT_V1: usize = TERMINAL_FRAME_V1 + 2;
+/// The market's RentCredit, residual beneficiary of the sweep.
+pub const COMPACT_RENT_CREDIT_ACCOUNT_V1: usize = TERMINAL_FRAME_V1 + 3;
+/// The escrow's opener, repaid from the sweep after the crank is paid.
+pub const COMPACT_OPENER_ACCOUNT_V1: usize = TERMINAL_FRAME_V1 + 4;
+/// System program, for the claim-check's allocation.
+pub const COMPACT_SYSTEM_ACCOUNT_V1: usize = TERMINAL_FRAME_V1 + 5;
+/// Exact compaction frame width.
+pub const COMPACT_ACCOUNT_COUNT_V1: usize = TERMINAL_FRAME_V1 + 6;
+
+/// Compact one sleeping position into a claim-check, permissionlessly.
+///
+/// The crank the whole design exists to make possible. After a release-fixed
+/// deadline, anybody may run a holder's own redemption on their behalf, into an
+/// escrow only that holder can open, and be paid for the trouble out of rent
+/// that was leaving those accounts anyway.
+///
+/// The payout is not computed here. It is computed by
+/// [`terminal_settlement_v3::execute_claim_check_compaction`], which is the
+/// holder's own redemption path with one proof relaxed at coordinate 0 --
+/// called, never re-implemented. A second author for the payoff function is how
+/// a compaction that pays a different number than redemption would have gets
+/// built and passes its own tests, and the number is somebody's money.
+pub fn process_compaction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != COMPACT_ACCOUNT_COUNT_V1 {
+        return Err(ClaimCheckCompactionSbfErrorV1::Accounts.into());
+    }
+    let request = CompactPositionToClaimCheckRequestV1::decode(instruction_data)
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Identity)?;
+    let prepared = authenticate_compaction(program_id, accounts, request)?;
+    let terminal = accounts
+        .get(..TERMINAL_FRAME_V1)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let vault_account = accounts
+        .get(TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let hoard_account = accounts
+        .get(TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let vault_before = token_balance(vault_account)?;
+    let hoard_before = token_balance(hoard_account)?;
+
+    // CALLED, never re-implemented. Everything the holder's own redemption
+    // authenticates, this authenticates, because it is the same code.
+    crate::terminal_settlement_v3::execute_claim_check_compaction(
+        program_id,
+        terminal,
+        request.settlement(),
+    )
+    .map_err(|_| ClaimCheckCompactionSbfErrorV1::Economic)?;
+
+    commit_compaction(
+        program_id,
+        accounts,
+        prepared.as_ref(),
+        CollateralMovementV1 {
+            hoard_before,
+            hoard_after: token_balance(hoard_account)?,
+            vault_before,
+            vault_after: token_balance(vault_account)?,
+        },
+    )
+}
+
+/// Everything the crank proves before it is entitled to turn.
+struct CompactionPreparedV1 {
+    aggregate: [u8; 32],
+    owner: [u8; 32],
+    escrow: ClaimCheckEscrowV1,
+    vault: Pubkey,
+    record_seeds: ClaimCheckSeedsV1,
+    record_bump: u8,
+}
+
+/// Observed collateral either side of the payout this crank performed.
+#[derive(Clone, Copy)]
+struct CollateralMovementV1 {
+    hoard_before: u64,
+    hoard_after: u64,
+    vault_before: u64,
+    vault_after: u64,
+}
+
+#[inline(never)]
+fn authenticate_compaction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CompactPositionToClaimCheckRequestV1,
+) -> Result<Box<CompactionPreparedV1>, ProgramError> {
+    let input = request.input();
+    let at = |index: usize| {
+        accounts
+            .get(index)
+            .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)
+    };
+    let escrow_account = at(COMPACT_ESCROW_ACCOUNT_V1)?;
+    let claim_check_account = at(COMPACT_CLAIM_CHECK_ACCOUNT_V1)?;
+    let admission_account = at(COMPACT_ADMISSION_ACCOUNT_V1)?;
+    let rent_credit_account = at(COMPACT_RENT_CREDIT_ACCOUNT_V1)?;
+    let opener_account = at(COMPACT_OPENER_ACCOUNT_V1)?;
+    let system_account = at(COMPACT_SYSTEM_ACCOUNT_V1)?;
+    let aggregate_account = at(1)?;
+    let vault_account = at(TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3)?;
+
+    if !escrow_account.is_writable
+        || !claim_check_account.is_writable
+        || !admission_account.is_writable
+        || !rent_credit_account.is_writable
+        || !opener_account.is_writable
+        || system_account.key != &system_program::ID
+        || escrow_account.owner != program_id
+        || admission_account.owner != program_id
+    {
+        return Err(ClaimCheckCompactionSbfErrorV1::Accounts.into());
+    }
+
+    let aggregate = aggregate_account.key.to_bytes();
+    let escrow_seeds = ClaimCheckEscrowSeedsV1::new(aggregate)
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Identity)?;
+    if escrow_account.key != &Pubkey::find_program_address(&escrow_seeds.as_slices(), program_id).0
+    {
+        return Err(ClaimCheckCompactionSbfErrorV1::Identity.into());
+    }
+    let escrow = ClaimCheckEscrowV1::decode(
+        &escrow_account
+            .try_borrow_data()
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?,
+    )
+    .map_err(|_| ClaimCheckCompactionSbfErrorV1::Escrow)?;
+
+    // The deadline, computed with checked arithmetic: a wrapping add would turn
+    // a far-future origin into an already-elapsed one, which is exactly the
+    // premature crank this gate exists to refuse. Inclusive `>=`, matching the
+    // deployed record-abort precedent.
+    let horizon = escrow
+        .opened_slot
+        .checked_add(COMPACTION_DEADLINE_SLOTS_V1)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Deadline)?;
+    if solana_program::clock::Clock::get()?.slot < horizon {
+        return Err(ClaimCheckCompactionSbfErrorV1::Deadline.into());
+    }
+
+    // The recipient is DERIVED, never accepted. This is the single check that
+    // separates a crank from a theft: a caller who could name where the payout
+    // lands would redirect a sleeping holder's collateral to themselves.
+    let vault_seeds = ClaimCheckVaultSeedsV1::new(aggregate)
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Identity)?;
+    let vault = Pubkey::find_program_address(&vault_seeds.as_slices(), program_id).0;
+    request
+        .require_escrow_recipient(escrow_account.key.to_bytes(), vault.to_bytes())
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Identity)?;
+    if vault_account.key != &vault || escrow.vault != vault.to_bytes() {
+        return Err(ClaimCheckCompactionSbfErrorV1::Identity.into());
+    }
+
+    // The claim-check's coordinates are the position's own, so a caller naming
+    // the wrong holder derives an address that is not the account they passed.
+    let record_seeds = ClaimCheckSeedsV1::new(aggregate, input.owner)
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Identity)?;
+    let (expected_record, record_bump) =
+        Pubkey::find_program_address(&record_seeds.as_slices(), program_id);
+    let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(aggregate, input.owner)
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Identity)?;
+    if claim_check_account.key != &expected_record
+        || admission_account.key
+            != &Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).0
+    {
+        return Err(ClaimCheckCompactionSbfErrorV1::Identity.into());
+    }
+    // Anti-replay is the account's own existence. A claim-check that exists is
+    // a position already compacted.
+    if !claim_check_account.data_is_empty() || claim_check_account.owner != &system_program::ID {
+        return Err(ClaimCheckCompactionSbfErrorV1::AlreadyCompacted.into());
+    }
+
+    // The proof the relaxed signature was silently also carrying, restored
+    // explicitly. A Claims capability position's claimants are the holders of a
+    // mint, plural and unknown to the position, and a one-owner claim-check
+    // cannot represent them. Out of scope for V1, and refused rather than
+    // mis-served.
+    let admission = ProtocolPositionAdmissionV2::decode(
+        &admission_account
+            .try_borrow_data()
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?,
+    )
+    .map_err(|_| ClaimCheckCompactionSbfErrorV1::Scope)?;
+    if admission.owner_kind() == ProtocolPositionOwnerKindV2::ClaimsCapability {
+        return Err(ClaimCheckCompactionSbfErrorV1::Scope.into());
+    }
+
+    Ok(Box::new(CompactionPreparedV1 {
+        aggregate,
+        owner: input.owner,
+        escrow,
+        vault,
+        record_seeds,
+        record_bump,
+    }))
+}
+
+#[inline(never)]
+fn commit_compaction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    prepared: &CompactionPreparedV1,
+    movement: CollateralMovementV1,
+) -> ProgramResult {
+    let at = |index: usize| {
+        accounts
+            .get(index)
+            .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)
+    };
+    let escrow_account = at(COMPACT_ESCROW_ACCOUNT_V1)?;
+    let claim_check_account = at(COMPACT_CLAIM_CHECK_ACCOUNT_V1)?;
+    let admission_account = at(COMPACT_ADMISSION_ACCOUNT_V1)?;
+    let rent_credit_account = at(COMPACT_RENT_CREDIT_ACCOUNT_V1)?;
+    let opener_account = at(COMPACT_OPENER_ACCOUNT_V1)?;
+    let system_account = at(COMPACT_SYSTEM_ACCOUNT_V1)?;
+    let position_account = at(20)?;
+    let escrow = prepared.escrow;
+    let CollateralMovementV1 {
+        hoard_before,
+        hoard_after,
+        vault_before,
+        vault_after,
+    } = movement;
+
+    let rent = Rent::get()?;
+    let mints_record = vault_after > vault_before;
+    let claim_check_rent = if mints_record {
+        rent.minimum_balance(CLAIM_CHECK_BYTES_V1)
+    } else {
+        0
+    };
+    let plan = ClaimCheckCompactionPlanV1::new(ClaimCheckCompactionObservationV1 {
+        payout_atoms: hoard_before.saturating_sub(hoard_after),
+        hoard_before,
+        hoard_after,
+        vault_before,
+        vault_after,
+        position: observation(position_account),
+        admission: observation(admission_account),
+        claim_check: observation(claim_check_account),
+        cranker: observation(at(0)?),
+        opener: observation(opener_account),
+        rent_credit: observation(rent_credit_account),
+        claim_check_rent,
+        opener_debt: escrow.opener_outlay,
+        crank_reward_cap: COMPACTION_CRANK_REWARD_LAMPORTS_V1,
+    })
+    .map_err(|_| ClaimCheckCompactionSbfErrorV1::Conservation)?;
+
+    if plan.mints_claim_check() {
+        write_claim_check(
+            program_id,
+            claim_check_account,
+            system_account,
+            &prepared.record_seeds,
+            prepared.record_bump,
+            ClaimCheckV1 {
+                aggregate: prepared.aggregate,
+                owner: prepared.owner,
+                market: escrow.market,
+                release_set: escrow.release_set,
+                vault: prepared.vault.to_bytes(),
+                collateral_mint: escrow.collateral_mint,
+                position_atoms_digest: hash(
+                    &position_account
+                        .try_borrow_data()
+                        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?,
+                )
+                .to_bytes(),
+                entitlement_atoms: plan.entitlement_atoms(),
+                compacted_slot: solana_program::clock::Clock::get()?.slot,
+                generation: escrow.generation,
+                bump: prepared.record_bump,
+            },
+            plan.claim_check_top_up(),
+        )?;
+    }
+
+    // The sweep, in the amended order: rent first because it is mandatory, then
+    // the CRANK, then the opener's debt, then the residue. Paying the opener
+    // before the crank cannot close -- one position's rent does not cover a
+    // whole escrow's outlay -- and an unfunded crank is an unturned crank.
+    close_and_split(
+        position_account,
+        admission_account,
+        at(0)?,
+        opener_account,
+        rent_credit_account,
+        &plan,
+    )?;
+
+    let mut updated = ClaimCheckEscrowV1 {
+        opener_outlay: plan.opener_debt_after(),
+        ..escrow
+    };
+    if plan.mints_claim_check() {
+        updated = updated
+            .admit_claim_check()
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Escrow)?;
+    }
+    escrow_account
+        .try_borrow_mut_data()
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?
+        .copy_from_slice(
+            &updated
+                .to_bytes()
+                .map_err(|_| ClaimCheckCompactionSbfErrorV1::Escrow)?,
+        );
+
+    plan.validate_post(ClaimCheckCompactionPostV1 {
+        position_lamports: position_account.lamports(),
+        admission_lamports: admission_account.lamports(),
+        claim_check_lamports: claim_check_account.lamports(),
+        cranker_lamports: at(0)?.lamports(),
+        opener_lamports: opener_account.lamports(),
+        rent_credit_lamports: rent_credit_account.lamports(),
+        hoard_lamports_of_collateral: hoard_after,
+        vault_lamports_of_collateral: vault_after,
+    })
+    .map_err(|_| ClaimCheckCompactionSbfErrorV1::Receipt)?;
+    Ok(())
+}
+
+fn observation(account: &AccountInfo<'_>) -> ClaimCheckAccountObservationV1 {
+    ClaimCheckAccountObservationV1 {
+        identity: account.key.to_bytes(),
+        lamports: account.lamports(),
+    }
+}
+
+fn token_balance(account: &AccountInfo<'_>) -> Result<u64, ProgramError> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let bytes: [u8; 8] = data
+        .get(64..72)
+        .ok_or(ClaimCheckCompactionSbfErrorV1::Accounts)?
+        .try_into()
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn write_claim_check<'info>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    seeds: &ClaimCheckSeedsV1,
+    bump: u8,
+    record: ClaimCheckV1,
+    top_up: u64,
+) -> Result<(), ProgramError> {
+    let record = record
+        .new()
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Escrow)?;
+    let bump_seed = [bump];
+    let [domain, aggregate, owner] = seeds.as_slices();
+    allocate_and_assign(
+        account,
+        system,
+        CLAIM_CHECK_BYTES_V1,
+        program_id,
+        &[domain, aggregate, owner, &bump_seed],
+    )?;
+    // The top-up is credited directly rather than transferred, because the
+    // lamports come from accounts this program owns and is about to close.
+    // A System transfer cannot move them: their owner is Claims, not System.
+    **account
+        .try_borrow_mut_lamports()
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)? += top_up;
+    account
+        .try_borrow_mut_data()
+        .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?
+        .copy_from_slice(
+            &record
+                .to_bytes()
+                .map_err(|_| ClaimCheckCompactionSbfErrorV1::Escrow)?,
+        );
+    Ok(())
+}
+
+fn close_and_split<'info>(
+    position: &AccountInfo<'info>,
+    admission: &AccountInfo<'info>,
+    cranker: &AccountInfo<'info>,
+    opener: &AccountInfo<'info>,
+    rent_credit: &AccountInfo<'info>,
+    plan: &ClaimCheckCompactionPlanV1,
+) -> Result<(), ProgramError> {
+    {
+        let mut position_lamports = position
+            .try_borrow_mut_lamports()
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?;
+        let mut admission_lamports = admission
+            .try_borrow_mut_lamports()
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?;
+        **position_lamports = 0;
+        **admission_lamports = 0;
+    }
+    for (destination, credit) in [
+        (cranker, plan.crank_reward()),
+        (opener, plan.opener_repayment()),
+        (rent_credit, plan.rent_credit_residue()),
+    ] {
+        if credit == 0 {
+            continue;
+        }
+        **destination
+            .try_borrow_mut_lamports()
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)? += credit;
+    }
+    for closed in [position, admission] {
+        closed
+            .resize(0)
+            .map_err(|_| ClaimCheckCompactionSbfErrorV1::Conservation)?;
+        closed.assign(&system_program::ID);
     }
     Ok(())
 }

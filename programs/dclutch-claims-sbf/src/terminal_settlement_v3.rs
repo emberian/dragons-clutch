@@ -131,14 +131,16 @@ pub(super) fn process(
     let request = TerminalSettlementRequestV3::decode(instruction_data)
         .map_err(|_| ClaimsSbfError::Instruction)?;
     let request_digest = hash(instruction_data).to_bytes();
-    let prepared = authenticate_and_prepare(program_id, accounts, &request, request_digest)?;
+    let authority = parent_authority(request.input());
+    let prepared =
+        authenticate_and_prepare(program_id, accounts, &request, request_digest, authority)?;
     let receipt = execute(
         program_id,
         accounts,
         &request,
         request_digest,
         prepared,
-        parent_authority(request.input()),
+        authority,
     )?;
     set_return_data(&receipt.to_bytes());
     Ok(())
@@ -178,7 +180,13 @@ pub(crate) fn execute_enclosing_authenticated(
     }
     let request_bytes = request.to_bytes();
     let request_digest = hash(&request_bytes).to_bytes();
-    let prepared = authenticate_and_prepare(program_id, accounts, &request, request_digest)?;
+    let prepared = authenticate_and_prepare(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        ParentAuthorityV3::EnclosingClaimsRoute,
+    )?;
     execute(
         program_id,
         accounts,
@@ -186,6 +194,48 @@ pub(crate) fn execute_enclosing_authenticated(
         request_digest,
         prepared,
         ParentAuthorityV3::EnclosingClaimsRoute,
+    )
+}
+
+/// Execute one terminal settlement on behalf of an absent holder.
+///
+/// The compaction crank's entry, and the whole of what it changes is the proof
+/// carried at coordinate 0. Every other authentication in this module runs
+/// unaltered: the same aggregate join, the same Core phase gate, the same
+/// Custody replay cursor, the same payout derivation, the same receipt.
+///
+/// That is deliberate and it is the architecture. Compaction pays what the
+/// holder's own redemption would have paid because it *is* the holder's own
+/// redemption, executed by somebody else into an escrow only the holder can
+/// open. A compaction that re-derived the payout could pay a different number
+/// than redemption and pass its own tests; one that calls this cannot.
+///
+/// Not a public submission mode: the entry is crate-private and the caller must
+/// have proved the deadline and derived the recipient first.
+pub(crate) fn execute_claim_check_compaction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: TerminalSettlementRequestV3,
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
+    if accounts.len() != ACCOUNT_COUNT || request.input().caller_role != CallerRole::Claims {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let request_bytes = request.to_bytes();
+    let request_digest = hash(&request_bytes).to_bytes();
+    let prepared = authenticate_and_prepare(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        ParentAuthorityV3::ClaimCheckCrank,
+    )?;
+    execute(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        prepared,
+        ParentAuthorityV3::ClaimCheckCrank,
     )
 }
 
@@ -202,9 +252,10 @@ fn authenticate_and_prepare(
     accounts: &[AccountInfo<'_>],
     request: &TerminalSettlementRequestV3,
     request_digest: [u8; 32],
+    authority: ParentAuthorityV3,
 ) -> Result<Box<PreparedTerminalSettlementV3>, ProgramError> {
     let input = (*request).input();
-    authenticate_extra_privileges(program_id, accounts, input)?;
+    authenticate_extra_privileges(program_id, accounts, input, authority)?;
     let aggregate_bytes = accounts[1]
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
@@ -519,6 +570,7 @@ fn authenticate_extra_privileges(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     input: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestInputV3,
+    authority: ParentAuthorityV3,
 ) -> Result<(), ProgramError> {
     for index in [
         EXPOSURE_RAW,
@@ -569,7 +621,18 @@ fn authenticate_extra_privileges(
     // are both program-derived addresses with no key, so neither can produce
     // this proof -- which is why the route needs no owner-kind tag to tell a
     // wallet-held Position from resting inventory or a capability shard.
-    if input.caller_role == CallerRole::Claims && accounts[0].key.to_bytes() != input.owner {
+    //
+    // The one exception is the permissionless compaction crank, and it is an
+    // exception to WHO signs rather than to whether anyone does. Coordinate 0
+    // is then the cranker, who is anybody; what entitles the crank is the
+    // elapsed deadline and the derived recipient, both proved by
+    // `claim_check_compaction_v1` before this mode can be selected. The
+    // wallet-held proof the owner's signature was also silently carrying is
+    // replaced there by the persisted owner-kind tag, not dropped.
+    if input.caller_role == CallerRole::Claims
+        && !matches!(authority, ParentAuthorityV3::ClaimCheckCrank)
+        && accounts[0].key.to_bytes() != input.owner
+    {
         return Err(ClaimsSbfError::Accounts.into());
     }
     Ok(())
