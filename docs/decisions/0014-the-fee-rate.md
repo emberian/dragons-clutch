@@ -2,7 +2,7 @@
 
 Status: **OPEN — ember's ruling required.** Ledger M-26, open since
 2026-08-17, the oldest question in the project. This record does not freeze a
-rate; see §7 for why that matters.
+rate; see §6 for why that matters.
 
 ## 1. The question
 
@@ -10,9 +10,9 @@ rate; see §7 for why that matters.
 > how to model the tradeoff space to figure out *what* percentage. 5%? 0.5%?
 > 0.035%?**"* — ember, `01a00a3d`, 2026-08-17T07:25Z (`docs/INTENT.md` §3)
 
-Two questions live inside it: **what number**, and **who gets to choose it**.
-The second is the one that binds, and the tree has already answered it in a
-direction nobody wrote down.
+Two questions live inside it: **what number**, and **who chooses it**. The
+second is the one that binds, and the tree has already answered it in a
+direction no decision record states.
 
 ## 2. What the code does today
 
@@ -21,56 +21,111 @@ maker-signed config field.**
 
 - `DirectExecutionConfigV1 { price_scale: u64, fee_basis_points: u16,
   fee_recipient: [u8; 32] }` —
-  `crates/dclutch-direct-codec/src/successor.rs:327-352`. Content-selected by
-  digest, hostile-decoded only after descriptor-to-record selection, and
-  validated at construction: `price_scale == 0 || fee_basis_points >
-  DIRECT_FEE_DENOMINATOR_V1` is refused as `InvalidExecutionConfig`, and
-  `require_nonzero(fee_recipient)` refuses the zero key.
-- **The ceiling is 100%.** `DIRECT_FEE_DENOMINATOR_V1` is 10,000, so
-  `fee_basis_points = 10_000` constructs. The Lean side pins the same bound
-  (`.scalarLe (s .policyFeeBps) (s .feeDenominator)`,
-  `formal/dclutch-semantics/DClutchSemantics/DirectOrdinaryV3.lean:509`, with
-  `feeDenominator = 10000` at `Direct.lean:20`). That is a type range, not an
-  economic bound — nothing refuses a market that takes the entire trade.
-- **Zero is legal.** Only `> 10_000` is refused, and a zero combined fee is a
-  no-transfer path rather than a refusal, with its reason recorded
-  (`DirectRegisteredFillV4.lean:808-821`): per-fill deltas of zero are routine
-  under cumulative floors, so refusing them would refuse ordinary small fills.
+  `crates/dclutch-direct-codec/src/successor.rs:329-333`, doc-commented
+  *"Immutable content-selected Direct price and fee policy."* Construction
+  refuses `price_scale == 0 || fee_basis_points > DIRECT_FEE_DENOMINATOR_V1`
+  as `InvalidExecutionConfig`, and `require_nonzero(fee_recipient)` refuses
+  the zero key (`:336-350`).
+- **The founder already sets it per market, and refusing to state it is a hard
+  error.** `--direct-fee-basis-points is required; the first-market planner
+  has no fee default` /
+  `--direct-fee-recipient is required; the first-market planner has no
+  recipient default`
+  (`tools/local-validator/bootstrap/successor/src/direct_market.rs:99-108`).
+  There is no default rate anywhere in the founding path.
+- **Immutable by address, not by a missing instruction.** The config lives in a
+  Registry-owned content-addressed PDA seeded by the SHA-256 of its own body,
+  with the staging cursor required vacant
+  (`programs/dclutch-trading-sbf/src/direct_token_setup_v1.rs:614-640`;
+  *"the content-addressed raw PDA and absent staging cursor make the body
+  immutable"*,
+  `crates/dclutch-registry-contract/src/immutable_registry.rs:115-120`).
+  `set_fee`, `update_fee`, `UpdateConfig` and `recalibrat*` return **zero hits**
+  in crate and program code. **Changing a rate is not an update — it is
+  founding a new market**, because different bytes give a different digest, a
+  different PDA, and a different Market.
 - **Both makers sign the exact rate.** The transition refuses `sellerFeeBps ≠
   policyFeeBps` and `buyerFeeBps ≠ policyFeeBps`
-  (`DirectOrdinaryV3.lean:507-509`); both refusals are exercised
-  (`docs/evidence/DIRECT_FAMILY_CAMPAIGN_2026_08_27.md:112-113`).
-- **Charged as differences of floors of cumulative gross** —
-  `floor(cum_after·bps/10^4) − floor(cum_before·bps/10^4)`
-  (`crates/dclutch-direct-aot-v3-contract/src/registered.rs:334-352`;
-  `DirectRegisteredFillV4.lean:653-706`), so matcher fragmentation cannot
-  change a registered order's final fee. Proved for an *arbitrary* monotone
-  fee function (`cumulative_fee_telescopes`, `DirectProofs.lean:145-153`).
-- **Dealer has its own leg**: `feeDue = ceilDiv(base·num, den)`, charged as
-  incremental differences of ceilings, fragmentation-independence proved
-  (`DealerLiquidity.lean:192-206`).
+  (`crates/dclutch-direct-aot-v3-contract/src/lib.rs:164-165`;
+  `DirectOrdinaryV3.lean:507-508`), with hostile witnesses
+  (`registered_tests.rs:317-322`).
+- **Charged per side, floored toward the makers.** `fee =
+  mul_div_floor(gross, POLICY_FEE_BPS, FEE_DENOMINATOR)`, then `seller_net =
+  gross − fee`, `buyer_debit = gross + fee`, `combined_fee = fee + fee`
+  (`crates/dclutch-direct-aot-v3-contract/src/lib.rs:168-183`). So **a rate of
+  50 bps per side takes 100 bps of gross on a single fill.** The rounding
+  direction is a stated value choice: *"it rounds toward the makers, never
+  toward the venue"* (`tools/gauntlet/direct/expectations.json:6`).
+- **Registered orders charge differences of floors of cumulative gross**
+  (`registered.rs:334-357`), so matcher fragmentation cannot change a resting
+  order's final fee — proved for an *arbitrary* monotone fee function
+  (`cumulative_fee_telescopes`, `DirectProofs.lean:143-153`).
+- **The ceiling is 100%, and it is deliberate.** `DIRECT_FEE_DENOMINATOR_V1 =
+  10_000` (`successor.rs:31`), and the boundary is admitted by a proved
+  theorem with its rationale in the docstring
+  (`DirectOrdinaryV3.lean:677-696`): *"A venue rate exactly at the denominator
+  is admitted: the fee equals the gross and the seller nets nothing, which is
+  a policy the makers may sign."* One basis point above refuses. **There is no
+  lower bound and no below-100% ceiling anywhere** — no `MIN_FEE` const exists.
+- **Zero is legal and exercised.** `zero_fee_bps` sits in the *admitted*
+  `BOUNDARY_CORPUS`, not the hostile one (`registered_tests.rs:576-580`), an
+  explicit zero-fee policy is asserted to succeed
+  (`direct_market.rs:2144-2152`), and the doctrine is written out
+  (`DirectRegisteredFillV4.lean:808-821`): a zero combined fee is a
+  no-transfer path, not a refusal, because refusing it would refuse ordinary
+  small fills at realistic rates.
+- **Dealer has its own rational geometry** — `fee_numerator` / `fee_denominator`
+  with `feeDue = ceilDiv(base·num, den)`, fragmentation-independence proved
+  (`crates/dclutch-dealer-codec/src/lib.rs:115-119`;
+  `DealerLiquidity.lean:192-206`).
 - **General — the batch-auction family — charges nothing at all.** No fee field
   exists in its config or codec; the only mention is a disclaimer
   (`crates/dclutch-general-config-contract/src/v3.rs:89`).
-- **Claims, custody and redemption charge nothing.** Zero fee terms in
-  `ClaimsRepresentation.lean` and `EconomicKernel.lean` — complete-set
-  split/merge and redemption of a correct claim are free. This is gen-1's
-  founding objective still holding, and it should be read as already-decided.
+- **Claims, custody and redemption charge nothing** — gen-1's founding
+  objective still holding. Read as already-decided.
+- **There is no protocol treasury.** `fee_recipient` is a required pubkey and
+  nothing more; gen-1's `REVENUE-TREASURY-UNSET-SENTINEL1` mechanism was not
+  carried into this generation (zero code hits for `REVENUE_TREASURY` /
+  `RevenueTreasuryUnset`; both survive only as citations of the compost repo).
 
-The full three-generation recovery, the field survey, and the six candidate
-geometries are in `docs/design/FEE_GEOMETRY.md` (554 lines). That study
-**confirmed flat as the deliberate V1 placeholder** (§4.1, closing ledger N-1)
-and explicitly left the rate to ember: *"The rate pair remains strictly-after
-and ember's alone."* This record is the layer above it.
+**Where 50 bps actually lives — four consts, and one of them is a refusal.**
+There is no file matching `staging hook` (zero hits). The devnet rate is
+pinned at `tools/devnet-scenarios/src/model.rs:12`,
+`tools/local-validator/bootstrap/successor/src/direct_trade_producer.rs:103`,
+`programs/dclutch-trading-sbf/program-test/direct-hot/src/fixture.rs:128`, and
+— decisively —
+`crates/dclutch-direct-codec/src/token_setup_v1.rs:25`:
 
-**One correction to the framing this question is usually posed in.** L7 is not
-a fee-conservation law. It is the lamport-ledger delta law in the journey
-harness — `payer_delta + fees + watched_growth == 0`
-(`tools/gauntlet/journey/src/ledger.rs:640`) — and it *"has never once been
-evaluated over a founding"* by its shape, because it differences balances by
-label and a label has no predecessor the first time it appears
-(`tools/lamport-ledger/README.md:18-35`). L7 constrains no rate. It is the
-instrument that would **observe** one, in seven post-Open journey stages.
+```rust
+/// The one Direct fee rate admitted by this setup release.
+pub const DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1: u16 = 50;
+```
+
+with its own named refusal, *"The selected fee rate was not the release-pinned
+50 basis points"* → `InvalidFee` (`token_setup_v1.rs:81-82, 278-281`;
+program-side twin at `direct_token_setup_v1.rs:477-479`). **So on the live
+Token-2022 setup path the admissible set is exactly `{50}`.** The core
+transition accepts any value ≤ 10,000; the *release* narrows it to one. That
+const is the single strongest evidence that 50 bps is currently a release
+decision rather than a market decision — and it is the one thing standing
+between the tree and a zero-fee or diverse-rate demo.
+
+**The shape question is already recorded; this is the rate question.**
+`docs/design/FEE_GEOMETRY.md` §4.1 confirmed flat `fee_basis_points` as the
+deliberate V1 placeholder and closed ledger N-1, ratified at `WAVE.md:940-947`
+— *"rates still open, still ember's."*
+
+**One correction to how this question is usually framed.** L7 is not a
+fee-conservation law. It is the lamport-ledger delta law in the journey
+harness — `payer_delta + fees + watched_growth == 0`,
+`tools/gauntlet/journey/src/ledger.rs:48-61` — about **SOL transaction fees**,
+asserted at runtime, and it *"has never once been evaluated over a founding"*
+by its shape (`tools/lamport-ledger/README.md:18-35`). The real fee
+conservation law is `admitted_collateral_conserved`
+(`DirectProofs.lean:128-133`): buyer, seller and **venue** collateral is
+invariant across a fill, proved. Neither it nor `cumulative_fee_telescopes`
+constrains the rate — they govern *accounting*, not *magnitude*. The only
+rate-restricting statements in the tree are the `≤ feeDenominator` clauses.
 
 ## 3. The reframe: three of the four decision shapes are already foreclosed
 
@@ -80,98 +135,112 @@ tree, three of those are not open choices but reversals:
 
 | shape | status against the tree |
 |---|---|
-| **founder-set per market, immutable at founding** | **This is what is built.** Ruling for it costs zero code. |
+| **founder-set per market, immutable at founding** | **This is what is built and CLI-exposed with no default.** Ruling for it costs zero code. |
 | fixed forever, one protocol rate | A reversal: it deletes a config field both makers already sign, and re-freezes what gen-1 called *"an experiment, not a natural constant."* Also the opposite of ember's *"chose the 'weakest' choice — the one most general, with the least constraining over resulting dynamics"* (`docs/INTENT.md` §3). |
-| protocol-governed | A reversal on values, not cost. Governance needs a committee or a token vote — the Isometric machinery ember refused by name (*"ditching the things we think are actually extraneous (staking bullshit etc)"*, `docs/INTENT.md` §4) — and it contradicts *"No committee, no vote, no discretion."* |
-| zero-for-the-demo | Available at zero code (§2), but gen-1 already ruled how it must be held if chosen: **declared, never defaulted into** (`FEE_GEOMETRY.md` §2.2, the Polymarket row). |
+| protocol-governed | Foreclosed structurally, not just on values. Because the config is content-addressed, governance could not turn a dial — it could only found successor markets, which is what a founder already does. And the values objection stands independently: governance needs a committee or a token vote, the Isometric machinery ember refused by name (`docs/INTENT.md` §4), against *"No committee, no vote, no discretion."* |
+| zero-for-the-demo | Legal in the protocol at zero cost (§2), but **not free on the live path**: `token_setup_v1.rs:25` would refuse a 0-bps market with `InvalidFee`. And gen-1 already ruled how zero must be held if chosen: **declared, never defaulted into** (`FEE_GEOMETRY.md` §2.2). |
 
-So the live decisions are three, and none of them is "pick the rate":
+So the live decisions are three, and none is "pick the rate":
 
 **D1 — is there a protocol cut at all?** Fees route to a per-market
-`fee_recipient` bound at founding. There is no protocol-level take. That
-dissolves the treasury question cleanly and serves ember's strongest value
-(*"i don't want to have to operate any of this infrastructure"*,
-`docs/INTENT.md` §3) — and it means **the protocol earns nothing; the founder
-of each market does.** Against the motive INTENT records for the demo (*"hoping
-to earn some keep so that the game can go on"*; *"turn this pile into a
-*stream*"*), revenue exists only for markets ember founds. That is a coherent
-answer, but it should be a chosen one.
+`fee_recipient` bound at founding; there is no protocol take and no treasury.
+That dissolves the treasury question cleanly and serves ember's
+strongest-sourced value (*"i don't want to have to operate any of this
+infrastructure"*, `docs/INTENT.md` §3) — and it means **the protocol earns
+nothing; the founder of each market does.** Against the motive INTENT records
+for the demo (*"hoping to earn some keep so that the game can go on"*; *"turn
+this pile into a *stream*"*), revenue exists only for markets ember founds.
+That is a coherent answer. It should be a chosen one rather than a discovered
+one.
 
-**D2 — what bounds a founder's choice?** Today: 100%. A market can be founded
-that takes the entire trade, and both makers would have to sign it, and it
-would be admitted. Consent makes it non-fraudulent; it does not make it
-something this venue should be able to host.
+**D2 — what bounds a founder's choice?** Today, nothing below 100%. A market
+that takes the entire gross from the seller and charges the buyer the same
+again is admissible — and, unusually, that is not an oversight: it is a proved
+theorem with a written rationale (§2). Ruling here means either endorsing that
+rationale or overriding it.
 
-**D3 — what do the demo markets charge?** A product and narrative choice,
-reversible per market, independent of D1 and D2.
+**D3 — what do the demo markets charge?** Currently one value, `{50}`, forced
+by the token-setup release rather than chosen per market.
 
-## 4. Options for D2 (the only one with code cost)
+## 4. Options for D2
 
 | option | cost | consequence |
 |---|---|---|
-| **A. Leave the 100% ceiling** | zero | The venue can host a market that takes everything. Defensible on consent grounds; indefensible in a screenshot. |
-| **B. Freeze a band as consts, checked at founding** | one const pair, one refusal discriminant, one Lean bound, census regeneration — the shape ADR 0012 already ran (209 codes, banded discriminants) | Forecloses the 100% market. Rate stays the founder's within the band. |
-| **C. Band plus a recommended default in the founding tooling** | B, plus a default in `dclutch-release-tool` / the web founding path | Founders who do not care get a sane rate; the field stays free. |
+| **A. Keep the 100% ceiling** | zero | Endorses the existing theorem: consent is the whole bound, and two signers may agree to anything. Defensible; hard to screenshot. |
+| **B. Freeze a band as consts, checked at founding** | one const pair, one refusal discriminant, the Lean bound beside `DirectOrdinaryV3.lean:509`, its two `native_decide` boundary theorems restated, census regeneration — the shape decision 0012 already ran | Forecloses the take-everything market. Reverses a proved-admissible boundary, so the theorem and its docstring change with it. |
+| **C. B, plus a recommended default in the founding tooling** | B, plus a default the CLI currently refuses to have | Contradicts the deliberate no-default design in `direct_market.rs:99-108`. Not recommended for that reason. |
 
 ## 5. Recommendation
 
-**D1: keep the per-venue `fee_recipient`; take no protocol cut.** It is
-built, it is the strongest form of "nothing requires a service we operate,"
+**D1: keep the per-venue `fee_recipient`; take no protocol cut.** It is built,
+it is the strongest available form of "nothing requires a service we operate,"
 and it makes revenue a property of founding markets rather than of running
-infrastructure. Name the consequence out loud in the docs — the protocol has
-no income; market founders do — so that nobody later discovers it as a
-surprise.
+infrastructure. Say the consequence out loud in the docs — the protocol has no
+income; market founders do — so nobody discovers it later as a surprise.
 
-**D2: option C.** Freeze `MIN_FEE_BPS = 0` and `MAX_FEE_BPS = 500` (5%) as
-protocol consts checked at construction beside the existing denominator check,
-with a new refusal discriminant in the Direct band. Zero stays legal because
-gen-1 required zero-fee to be expressible as a declaration; 5% is the top of
-ember's own stated range (*"5%? 0.5%? 0.035%?"*) and leaves every rate ember
-named admissible while foreclosing the market that takes everything.
+**D2: option B, at `MAX_FEE_BPS = 500` (5%).** Five percent is the top of
+ember's own stated range, so every rate he named stays admissible while the
+take-everything market stops being foundable. Keep no lower bound: zero must
+remain expressible because gen-1 required zero-fee to be a declaration.
+Stated honestly, this **overrides a deliberate decision** — the current
+boundary is proved and reasoned, and its reasoning ("a policy the makers may
+sign") is sound. The counter-argument is that this venue's product claim is
+that a market is a readable, permanent public object; a market whose config
+takes everything is signable, publishable, and indistinguishable at a glance
+from an honest one. Consent is a good bound on fraud and a poor bound on what
+a venue should be able to host.
 
-**D3: hold the devnet default at its current rate, labeled an experiment**,
-and ship the per-market diversity `FEE_GEOMETRY.md` §4.2 already recommends —
-distinct rates across the demo markets, with the conservation ledger showing
-venue take as the sum of floor-differences over each market's life.
+**D3: unpin the release const and ship rate diversity.** Replace the
+`{50}`-only admission at `token_setup_v1.rs:25` with the same band check, then
+found the demo markets at distinct rates as `FEE_GEOMETRY.md` §4.2 already
+recommends, with the conservation ledger showing venue take as the sum of
+floor-differences over each market's life. This is the smallest change that
+makes the fee a *demonstrated mechanism* rather than a number.
 
 **On ember's actual question — 5%, 0.5%, or 0.035% — the field says 0.5% per
-side is the right order, and here is the only production comparable.** Kalshi
-charges a taker fee of `ceil(0.07 · C · P · (1−P))` per contract, maker side
-free (`FEE_GEOMETRY.md` §2.2). At a price of 0.50 that is 1.75% of maximum
-payout on one side, or **3.5% of notional traded**. A 50 bp per-side flat fee
-is 0.5% of notional, **1% round trip — under a third of Kalshi's one-sided
-charge at the same price.** 5% would be well above the only event venue with
-real volume; 0.035% is below the noise of what a fill costs to place. Ember's
-middle guess was the right one.
+side, and here is the only production comparable.** Kalshi charges a taker fee
+of `ceil(0.07 · C · P · (1−P))` per contract, maker side free
+(`FEE_GEOMETRY.md` §2.2). At a price of 0.50 that is **3.5% of notional
+traded**. dClutch at 50 bps per side takes both sides, so **1% of notional per
+fill — under a third of Kalshi's single-sided charge.** 5% would be well above
+the only event venue with real volume; 0.035% is below what a fill costs to
+place. **Ember's middle guess was the right one**, and the rate already
+running is in the right place.
 
-The same comparison exposes the one real defect flat carries on this plane.
-Kalshi's charge falls as the price approaches either boundary because it is
-priced on uncertainty; flat does not. At a price of 0.10, Kalshi takes 0.63%
-of maximum payout while flat takes 0.5% of a notional that is now only a tenth
-as large — so **identical economic risk pays a different fee depending on which
-label carries it**, up to a `(S−p)/p` ratio (`FEE_GEOMETRY.md` §1.3.3). That is
-complement asymmetry, it is the one gen-1 defect that survives on the bilateral
-plane, and the composite geometry `FEE_GEOMETRY.md` §4.3 specifies is the fix.
-It is a reason to keep the rate revisable, not a reason to delay this ruling.
+**The same arithmetic exposes flat's one surviving defect, and it is worth
+seeing as a number.** Kalshi's fee is shaped by `P(1−P)`, so it charges the
+same on a claim and its complement. Flat does not. At a price of 0.10, buying
+the cheap claim costs 1% of a 0.10 notional; acquiring the identical economic
+position by buying the 0.90 complement costs 1% of a 0.90 notional — **nine
+times as much fee for the same risk, decided entirely by which label you
+bought.** That is complement asymmetry, the one gen-1 defect that survives on
+the bilateral plane (`FEE_GEOMETRY.md` §1.3.3), and the composite geometry
+`FEE_GEOMETRY.md` §4.3 specifies is its fix. It is a reason to keep the rate
+revisable, not a reason to delay this ruling.
 
 ## 6. What changes downstream once ruled
 
 - **D1 ruled** → one paragraph in `README.md` and `docs/guides/trader.md`
-  stating who receives fees, and ledger M-26 closes with a decision record
-  instead of a third silent generation (`ASPIRATION_LEDGER.md` GITSCAN-2 §D.1
-  item 5: selected in gen-1, built in gen-2, discarded in gen-3, no record).
-- **D2 option B or C ruled** → one lane, protocol-tier: two consts, one
-  refusal discriminant, the Lean bound beside `DirectOrdinaryV3.lean:509`, a
-  refusal-census regeneration, and a positive/negative test pair. Small.
-- **D3 ruled** → the founding configs for the demo markets, and the fee
-  becomes sayable in the product surface, which it currently is not.
-- **N-15 is not tripped by any of this**, and that is deliberate. The standing
+  stating who receives fees. Ledger M-26 closes with a decision record instead
+  of a fourth silent generation (`ASPIRATION_LEDGER.md` GITSCAN-2 §D.1 item 5:
+  selected in gen-1, built in gen-2, discarded in gen-3, no record).
+- **D2 ruled** → one lane, protocol-tier: one const, one refusal discriminant,
+  the Lean bound and its two boundary theorems, a refusal-census regeneration,
+  and a positive/negative pair. Small, and it touches a proved statement, so
+  it is protocol-tier review rather than mechanical.
+- **D3 ruled** → the token-setup release const, then the demo foundings. The
+  product surface needs no work: the fee is already displayed per side with
+  its immutability narrated (*"{feeBasisPoints} bps each side / immutable,
+  founded with the Market"*,
+  `apps/dclutch-web/components/MarketTradePanel.tsx:684`), so a rate change is
+  user-visible on day one.
+- **N-15 is not tripped by any of this**, deliberately. The standing
   precondition is that *"the composite fee base's characterization is
-  formalized before any rate freezes"*
-  (`NEXT_WAVE_ROADMAP_2026-08-20.md:98`, ledger N-15 — unfired and unowned).
-  A band, a default, and a devnet rate are none of them a freeze. Whoever
-  eventually freezes a production rate inherits that gate; this record does
-  not discharge it and does not let it be forgotten.
+  formalized before any rate freezes"* (`NEXT_WAVE_ROADMAP_2026-08-20.md:98`,
+  ledger N-15 — unfired and unowned). A band, a devnet rate, and an unpinned
+  release const are none of them a freeze. Whoever eventually freezes a
+  production rate inherits that gate; this record does not discharge it and
+  does not let it be forgotten.
 
 ## 7. What stays refused
 
@@ -179,5 +248,5 @@ Carried forward from `FEE_GEOMETRY.md` §4.3 item 6, unchanged by any option
 above: redemption-side fees (a tax on trusting the venue's own resolution),
 source-adaptive fees (the Mango lens — a fee reading the observable that also
 resolves the market), geometry-as-code in the Uniswap-v4-hook sense, floating
-point anywhere, and mutation of any fee record — calibration is registered
-succession, never an edit.
+point anywhere, and mutation of any fee record — which this tree enforces
+structurally, since calibration can only be registered succession.
