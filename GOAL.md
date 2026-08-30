@@ -107,6 +107,51 @@ named Custody delivery leg. Board: /private/tmp/dclutch-wave2-board.md.
   invariant, revisit only if publication/founding ever decouple.
 
 ## Done-log
+- *** THE LOAD SIMULATOR IS RUNNING AGAIN ON LIVE DEVNET *** (SIMFIX, pid
+  84234, market18, cycle 135+, all six conservation laws holding every
+  cycle, devnet spend 0 lamports — census-only signs nothing). Storage
+  bounded from O(N^2)/1.94GB-by-cycle-1000 to a CONSTANT 3,716,160 B
+  (observed 29.5 MB → 963 KB, truncation provably lossless because every
+  delta law reads only observations.last(), and ALIVE-2's series script
+  produces byte-identical output from the repaired directory). Death made
+  self-honest: a derived liveness deadline in status.json plus EXIT.json
+  cleared at startup so its ABSENCE is a live claim — with the hard case
+  stated rather than papered over (SIGKILL and ENOSPC leave nothing, so
+  absence is the signal). THIRD HELIUS LEAK SITE FOUND AND FIXED (HALT.json
+  stored shlex.join(argv) including --rpc-url <key>, unfired only because no
+  census has ever violated); independently verified zero in both repos' full
+  history, zero on the live site, zero in the work dir.
+- SEAM-AUDIT GATE GREEN AT HEAD (SEAMFIX): all 12 failures triaged (not 7 —
+  the tree had moved), the flagged "live defect" proven a CHECKER FALSE
+  POSITIVE using SEAM-CI's own EXCEPTIONS.md question, and three gate bugs
+  found that nobody sent it to find — a missing signer exemption, a
+  `continue` that hid twelve findings behind other findings, and a host
+  without ast-grep exiting 1 (the same code as "this tree has a seam
+  defect") because the install message was unreachable dead code. `--write`
+  now exports a COMMITTED tree via git archive and cannot see the working
+  tree at all; its first run under the new rule named 17 files from other
+  lanes that the old behavior would have baked into a committed register.
+- DEALER closed R4 by making the bad state UNREPRESENTABLE rather than
+  escapable — one invariant in the function all eight transitions already
+  call, no ninth action, no new field, no ABI change, no ELF. The real
+  mechanism was worse than the census said: after terminal the budget is
+  strictly decreasing with no refill for ANY party, so a market that merely
+  traded enough before resolving bricked with everyone present and
+  cooperative. Retracted its own claimed finding when its hostile could not
+  construct the bug, and REMOVED the guards that draft had added rather than
+  keeping them as defence in depth ("an unreachable guard reads as
+  load-bearing to the next reader").
+- CLAIMCHECK C5+C6: THE DIFFERENTIAL PASSES — a compacted claim-check is
+  worth to the atom what the holder's own redemption paid, structurally
+  (compaction CALLS the settlement route rather than recomputing it).
+- ORCHESTRATOR ERROR, REVERSED: I ruled that TRADE-2 select maker keys
+  landing in the cheap half of the CU band so the first trade would succeed,
+  and told it to label them "selected for CU" — rigging the demo and
+  labelling the rig, one hour after telling ESCROW that a size is not a
+  refusal. Ember caught it. Reversed: CUCUT spawned to spend the size and
+  make the route fit for ARBITRARY keys against the project's own tolerance
+  formula. The standing test is now ember's: does it make the DEMO work, or
+  the PRODUCT work?
 - *** THE LOAD SIMULATOR IS RUNNING ON LIVE DEVNET *** (TRADE-2, --sustain,
   9+ cycles, censuses chaining L1-L6, zero divergences). status.json at
   /private/tmp/dclutch-sim-devnet-market18/; stop with
