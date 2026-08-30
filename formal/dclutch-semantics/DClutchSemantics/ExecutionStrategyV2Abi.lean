@@ -28,6 +28,22 @@ def scratchMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x53, 0x50, 0x47, 0x32
 
 def schemaVersion : Nat := 2
 def artifactProfile : Nat := 2
+
+/-- Certificate artifact profile binding the exact `ArtifactReleaseIdV1`.
+
+    The 32 bytes at `CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2` are the content
+    identity of one `ArtifactReleaseV1`, which carries an `elf_digest`. -/
+def releaseArtifactProfile : Nat := artifactProfile
+
+/-- Certificate artifact profile binding a source-derived `semantic_release_id`.
+
+    Same width, same offsets, same magic: only the meaning of the 32 bytes at
+    `CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2` differs, which is what the profile
+    field discriminates. A certificate naming an `ArtifactReleaseV1` cannot be
+    authored for a program whose ELF embeds that certificate, because the
+    identity would have to contain a digest of the bytes it is compiled into.
+    A source-derived identity closes no such loop. -/
+def semanticArtifactProfile : Nat := 3
 def returnDataBytes : Nat := 1024
 def chunkAckHeaderBytes : Nat := 144
 def chunkPayloadBytes : Nat := returnDataBytes - chunkAckHeaderBytes
