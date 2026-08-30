@@ -1,6 +1,6 @@
 {
   "schema": "dclutch-simulator-series-v1",
-  "captured_at": "2026-08-30T17:02:13+00:00",
+  "captured_at": "2026-08-30T17:37:16+00:00",
   "positions": [
     {
       "label": "founder",
@@ -41,9 +41,9 @@
   "market": "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq",
   "mode": "sustain",
   "outcome_count": 4,
-  "cycles_recorded": 123,
+  "cycles_recorded": 125,
   "points_omitted_before": 0,
-  "census_file": "cycle-000123.json",
+  "census_file": "cycle-000125.json",
   "points": [
     {
       "cycle": 1,
@@ -2001,6 +2001,38 @@
       "cycle": 123,
       "slot": "490508093",
       "recorded_at": "2026-08-30T16:50:39+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 124,
+      "slot": "490524710",
+      "recorded_at": "2026-08-30T17:36:33+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 125,
+      "slot": "490524841",
+      "recorded_at": "2026-08-30T17:36:54+00:00",
       "supply": [
         "500000000",
         "500000000",
