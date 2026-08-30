@@ -1338,10 +1338,26 @@ fn authenticate_accelerator_top_level_v4(
     Ok(hot_instruction)
 }
 
-fn authenticate_accelerator_activation_v4(
+/// Hold the activation cache account to its address, its owner, and its
+/// privileges, before anything reads a byte out of it.
+///
+/// Shared by every reader of the cache so the checks cannot drift apart: the
+/// account must be the Registry-owned PDA for THIS market's release set, and
+/// must arrive neither signing nor writable nor executable.
+///
+/// `inline(always)` is not a hint here, it is a budget. This path runs at
+/// 1,336,865-1,386,359 CU against a 1,400,000 ceiling depending on which keys
+/// the makers hold (see `tests/hot_heap_frame_is_inert.rs`), so extracting
+/// these checks as an ordinary call is enough to push the continuation route
+/// over the meter -- measured, not feared: it took the canonical trade from
+/// passing to `consumed 1399850 of 1399850`. Inlined, the codegen at the
+/// original call site is what it always was, and the checks still have one
+/// author.
+#[inline(always)]
+fn require_activation_cache_account_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
-) -> Result<(AuthenticatedRoleReceiptV1, ContentId, ContentId), ProgramError> {
+) -> Result<(), ProgramError> {
     let expected_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &envelope.release_set()],
         frame.registry.key,
@@ -1355,6 +1371,62 @@ fn authenticate_accelerator_activation_v4(
     {
         return Err(TradingSbfError::Release.into());
     }
+    Ok(())
+}
+
+/// The Claims and Custody programs this execution may CPI, read from the
+/// Registry's activation cache.
+///
+/// A continuation gets these from `authenticate_accelerator_activation_v4`,
+/// which reads them out of the same cache in the same decode it uses for Core
+/// and Trading. A TOP-LEVEL submission authenticates Trading against a live
+/// Registry CPI instead, so it never takes that decode -- and still needs the
+/// children, because the Direct crosscheck names them in the ack it commits.
+/// Same account, same PDA and owner checks, same release-set equality: neither
+/// path's children are more authenticated than the other's.
+///
+/// Out of line so its frame and its decode stay off the continuation route,
+/// which does not call it and has no compute to spare.
+#[inline(never)]
+fn authenticate_activated_child_programs_v3(
+    frame: HotFrameV3<'_, '_>,
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<AuthenticatedChildProgramsV3, ProgramError> {
+    require_activation_cache_account_v3(frame, envelope)?;
+    let data = frame
+        .activation_cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    if activated
+        .execution_release_set_id()
+        .map_err(|_| TradingSbfError::Release)?
+        .to_bytes()
+        != envelope.release_set()
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    let claims = activated
+        .role(ExecutionRoleV1::Claims)
+        .map_err(|_| TradingSbfError::Release)?
+        .release()
+        .program()
+        .to_bytes();
+    let custody = activated
+        .role(ExecutionRoleV1::Custody)
+        .map_err(|_| TradingSbfError::Release)?
+        .release()
+        .program()
+        .to_bytes();
+    Ok(AuthenticatedChildProgramsV3 { claims, custody })
+}
+
+fn authenticate_accelerator_activation_v4(
+    frame: HotFrameV3<'_, '_>,
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<(AuthenticatedRoleReceiptV1, ContentId, ContentId), ProgramError> {
+    require_activation_cache_account_v3(frame, envelope)?;
     let data = frame
         .activation_cache
         .try_borrow_data()
@@ -2781,7 +2853,7 @@ fn execute_authenticated_hot_v3(
         family_request,
         request_digest,
         envelope,
-        root.continuation_child_programs,
+        root.child_programs,
     )?;
     hot_cu_checkpoint!("pf-composition");
     let caller_bumps = preflight_child_routes_v3(
@@ -2853,7 +2925,7 @@ fn execute_authenticated_hot_v3(
         market,
         product_runtime_v3,
         product_outcome_count,
-        root.continuation_child_programs,
+        root.child_programs,
     )?;
     hot_cu_checkpoint!("children-shadow");
     let root_commit_plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
@@ -3198,11 +3270,11 @@ struct AuthenticatedRootV3 {
     context: TradingFamilyContextV1,
     immutable_header: [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
     trading_semantic_release: [u8; 32],
-    continuation_child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
+    child_programs: Option<AuthenticatedChildProgramsV3>,
 }
 
 #[derive(Clone, Copy)]
-struct AuthenticatedContinuationChildProgramsV3 {
+struct AuthenticatedChildProgramsV3 {
     claims: [u8; 32],
     custody: [u8; 32],
 }
@@ -3232,34 +3304,18 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
     market: &CoreState,
     role_authentication: HotRoleAuthenticationV3,
 ) -> Result<Box<AuthenticatedRootV3>, ProgramError> {
-    let (trading_receipt, continuation_child_programs) = match role_authentication {
+    // Both arms are ONE out-of-line call. This route runs within a few
+    // thousand CU of the 1,400,000 ceiling at four outcomes, so whichever arm
+    // a caller takes must not pay for the other arm's registers or frame.
+    let (trading_receipt, child_programs) = match role_authentication {
         HotRoleAuthenticationV3::ReauthenticateRegistry => {
-            let core_receipt = reauthenticate_role(
-                *frame,
-                ExecutionRoleV1::Core,
-                frame.core_program,
-                frame.core_programdata,
-                envelope.release_set(),
-            )?;
-            if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
-                return Err(TradingSbfError::Release.into());
-            }
-            (
-                reauthenticate_role(
-                    *frame,
-                    ExecutionRoleV1::Trading,
-                    frame.trading_program,
-                    frame.trading_programdata,
-                    envelope.release_set(),
-                )?,
-                None,
-            )
+            reauthenticate_top_level_root_roles_v3(*frame, envelope)?
         }
         HotRoleAuthenticationV3::AuthenticatedContinuation => {
-            let (receipt, children) = authenticate_continuation_root_roles_v3(*frame, envelope)?;
-            (receipt, Some(children))
+            authenticate_continuation_root_roles_v3(*frame, envelope)?
         }
     };
+    let child_programs = Some(child_programs);
     let trading_semantic_release = trading_receipt.semantic_release_id().to_bytes();
     let root_data = frame
         .root
@@ -3289,18 +3345,54 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
         context,
         immutable_header: root_header.to_bytes(),
         trading_semantic_release,
-        continuation_child_programs,
+        child_programs,
     }))
 }
 
 #[inline(never)]
+/// Authenticate Core and Trading for a caller who invoked Trading DIRECTLY.
+///
+/// This is the public route: no Registry outer, no continuation, so Trading
+/// asks the Registry by CPI to re-authenticate Core and itself against the
+/// live deployment. Those receipts say nothing about the child roles, and the
+/// Direct crosscheck names Claims and Custody in the ack it commits, so the
+/// children are read from the activation cache -- the same account, under the
+/// same checks, that the continuation's authenticator reads them from.
+#[inline(never)]
+fn reauthenticate_top_level_root_roles_v3(
+    frame: HotFrameV3<'_, '_>,
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<(AuthenticatedRoleReceiptV1, AuthenticatedChildProgramsV3), ProgramError> {
+    let core_receipt = reauthenticate_role(
+        frame,
+        ExecutionRoleV1::Core,
+        frame.core_program,
+        frame.core_programdata,
+        envelope.release_set(),
+    )?;
+    if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
+        return Err(TradingSbfError::Release.into());
+    }
+    let trading_receipt = reauthenticate_role(
+        frame,
+        ExecutionRoleV1::Trading,
+        frame.trading_program,
+        frame.trading_programdata,
+        envelope.release_set(),
+    )?;
+    Ok((
+        trading_receipt,
+        authenticate_activated_child_programs_v3(frame, envelope)?,
+    ))
+}
+
 fn authenticate_continuation_root_roles_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<
     (
         AuthenticatedRoleReceiptV1,
-        AuthenticatedContinuationChildProgramsV3,
+        AuthenticatedChildProgramsV3,
     ),
     ProgramError,
 > {
@@ -3308,7 +3400,7 @@ fn authenticate_continuation_root_roles_v3(
         authenticate_accelerator_activation_v4(frame, envelope)?;
     Ok((
         trading_receipt,
-        AuthenticatedContinuationChildProgramsV3 {
+        AuthenticatedChildProgramsV3 {
             claims: claims.to_bytes(),
             custody: custody.to_bytes(),
         },
@@ -3693,7 +3785,7 @@ fn prepare_direct_inline_hot_crosscheck_v3(
     market: &CoreState,
     product_runtime_v3: &AuthenticatedProductRuntimeV3<'_, '_>,
     product_outcome_count: u32,
-    child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
+    child_programs: Option<AuthenticatedChildProgramsV3>,
 ) -> Result<Option<HeapBoxV3<DirectInlineHotCrosscheckV3>>, ProgramError> {
     if selected_kind != DIRECT_SUCCESSOR_KIND_ID_V3 {
         return Ok(None);
@@ -3787,7 +3879,7 @@ fn prepare_direct_inline_account_finalization_v3(
     dispatch: DirectInlineEffectDispatchV2,
     request_bank: &[u8],
     family_request: &[u8],
-    children: AuthenticatedContinuationChildProgramsV3,
+    children: AuthenticatedChildProgramsV3,
     immutable_root_header: &[u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
     product_id: [u8; 32],
     ack: &HotExecutionAckInputV3,
@@ -7435,7 +7527,7 @@ fn resolve_child_walk_v3<'request, 'accounts, 'info>(
     family_request: &'request [u8],
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
-    continuation_child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
+    child_programs: Option<AuthenticatedChildProgramsV3>,
 ) -> Result<HeapBoxV3<ChildWalkResolutionV3<'request, 'info>>, ProgramError> {
     #[cfg(not(any(
         feature = "families",
@@ -7454,7 +7546,7 @@ fn resolve_child_walk_v3<'request, 'accounts, 'info>(
         family_request,
         request_digest,
         envelope,
-        continuation_child_programs,
+        child_programs,
     );
     #[cfg(any(
         feature = "families",
@@ -7504,7 +7596,7 @@ fn resolve_child_walk_v3<'request, 'accounts, 'info>(
             effect_accounts,
             aliases,
             envelope.release_set(),
-            continuation_child_programs,
+            child_programs,
             required_roles,
         )?
     };
@@ -8655,11 +8747,11 @@ fn selected_role_programs_v3<'info>(
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
     release_set: [u8; 32],
-    continuation_child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
+    child_programs: Option<AuthenticatedChildProgramsV3>,
     required: RequiredRolesV3,
 ) -> Result<SelectedRoleProgramsV3<'info>, ProgramError> {
     let (claims, custody, resolution) =
-        if let Some(children) = continuation_child_programs.filter(|_| !required.resolution) {
+        if let Some(children) = child_programs.filter(|_| !required.resolution) {
             (
                 required.claims.then_some(children.claims),
                 required.custody.then_some(children.custody),

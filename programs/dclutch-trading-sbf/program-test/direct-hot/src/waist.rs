@@ -953,6 +953,64 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
     ]
 }
 
+/// The same Direct trade, submitted TOP-LEVEL to Trading.
+///
+/// This is how every public caller sends one: no Registry outer, no admission
+/// PDA, just the bare Hot instruction on the canonical fixed frame. Trading
+/// takes its `ReauthenticateRegistry` arm and asks the Registry to
+/// re-authenticate Core and itself by CPI, rather than being handed a
+/// continuation's receipts.
+///
+/// The native evidence is byte-for-byte the evidence the continuation form
+/// uses. It can be, because the container is already `TradingHot` with
+/// Hot-relative coordinates and the Registry outer's data is byte-identical to
+/// the Hot data it wraps -- so the makers sign the same message either way, at
+/// the same instruction index. Nothing about the makers' intent changes with
+/// the route; only who is invoked first does.
+pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 3] {
+    let signatures = [
+        direct.makers[0]
+            .sign_message(&direct.chain.signed_messages[0])
+            .as_ref()
+            .try_into()
+            .expect("seller signature width"),
+        direct.makers[1]
+            .sign_message(&direct.chain.signed_messages[1])
+            .as_ref()
+            .try_into()
+            .expect("buyer signature width"),
+    ];
+    let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
+    encode_direct_headerless_registry_native_evidence_v4_atomic(
+        2,
+        &direct.chain.hot_instruction.data,
+        signatures,
+        &mut evidence,
+    )
+    .expect("detached native evidence over the top-level Hot instruction");
+    [
+        Instruction {
+            program_id: compute_budget::ID,
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![2];
+                data.extend_from_slice(
+                    &u32::try_from(COMPUTE_LIMIT)
+                        .expect("compute limit width")
+                        .to_le_bytes(),
+                );
+                data
+            },
+        },
+        Instruction {
+            program_id: ed25519_program::ID,
+            accounts: Vec::new(),
+            data: evidence.to_vec(),
+        },
+        direct.chain.hot_instruction.clone(),
+    ]
+}
+
 pub fn canonical_lookup_addresses(instructions: &[Instruction], payer: Pubkey) -> Vec<Pubkey> {
     let programs = instructions
         .iter()
