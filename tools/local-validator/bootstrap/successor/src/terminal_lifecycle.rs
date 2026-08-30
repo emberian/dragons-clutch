@@ -57,6 +57,22 @@ pub(crate) const DIRECT_NATIVE_CLOSE_LABELS_V1: [&str; 3] = [
     "direct_native_close_descriptor_record",
 ];
 
+/// The capability-activation artifact records, published at founding since the
+/// four-entry Direct ProgramSet landed.
+///
+/// Deliberately NOT chained into `require_direct_retirement_evidence`: the two
+/// markets founded before the activation entry existed carry sealed campaign
+/// evidence that legitimately lacks these labels, and their terminal paths
+/// must stay drivable. Nothing is lost by admitting them - the on-chain close
+/// route demands the activated root itself, which no pre-activation market can
+/// ever present.
+#[allow(dead_code)]
+pub(crate) const DIRECT_ACTIVATION_LABELS_V1: [&str; 3] = [
+    "direct_activation_account_profile_record",
+    "direct_activation_effect_record",
+    "direct_activation_descriptor_record",
+];
+
 struct ArgumentsV1 {
     origin: ClusterOriginV1,
     plan: PathBuf,

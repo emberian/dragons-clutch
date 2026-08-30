@@ -187,6 +187,17 @@ pub(crate) struct DirectMarketCapabilityV1 {
     pub(crate) native_close_account_profile_hex: String,
     pub(crate) native_close_effect_hex: String,
     pub(crate) native_close_descriptor_hex: String,
+    /// The capability-activation artifact trio. Defaulted (empty) so market
+    /// inputs sealed before the activation entry existed still parse for
+    /// terminal and evidence paths; every authoring, founding, and trade path
+    /// refuses an input whose activation artifacts are absent, because such an
+    /// input describes a market whose capability can never activate.
+    #[serde(default)]
+    pub(crate) activation_account_profile_hex: String,
+    #[serde(default)]
+    pub(crate) activation_effect_hex: String,
+    #[serde(default)]
+    pub(crate) activation_descriptor_hex: String,
     pub(crate) program_set_hex: String,
     pub(crate) activation_deadline_slot: u64,
     pub(crate) root_rent_minimum_lamports: u64,

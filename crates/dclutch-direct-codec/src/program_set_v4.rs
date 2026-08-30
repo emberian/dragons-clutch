@@ -21,6 +21,10 @@ use dclutch_core_contract::ContentId;
 use dclutch_sha256_adapter::digest;
 
 use crate::{
+    activation_bundle_v1::{
+        DIRECT_ACTIVATION_SELECTOR_V1, DirectActivationBundleInputV1, DirectActivationBundleV1,
+        build_direct_activation_bundle_v1, validate_direct_activation_bundle_v1,
+    },
     begin_retiring_bundle_v1::{
         DirectBeginRetiringBundleInputV1, DirectBeginRetiringBundleV1,
         build_direct_begin_retiring_bundle_v1, validate_direct_begin_retiring_bundle_v1,
@@ -79,6 +83,8 @@ pub enum DirectProgramSetErrorV4 {
     NativeClose,
     /// The canonical begin-retiring lifecycle bundle refused.
     BeginRetiring,
+    /// The canonical capability-activation bundle refused.
+    Activation,
 }
 
 /// Canonical ordinary execution plus lifecycle-native close release.
@@ -94,7 +100,8 @@ pub struct DirectInlineOrdinaryNativeCloseProgramSetV1 {
     pub program_set_id: [u8; 32],
 }
 
-/// Canonical ordinary execution plus both ordered lifecycle actions.
+/// Canonical ordinary execution plus both ordered lifecycle actions and the
+/// capability activation that creates the root they all execute against.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectInlineOrdinaryLifecycleProgramSetV1 {
     /// Complete selector-1 ordinary V4 artifacts.
@@ -103,13 +110,15 @@ pub struct DirectInlineOrdinaryLifecycleProgramSetV1 {
     pub begin_retiring: DirectBeginRetiringBundleV1,
     /// Complete reserved-high-selector native-close V1 artifacts.
     pub native_close: DirectNativeCloseBundleV1,
-    /// Exact heterogeneous three-entry CapabilityProgramSetV2 bytes.
+    /// Complete reserved-high-selector capability-activation V1 artifacts.
+    pub activation: DirectActivationBundleV1,
+    /// Exact heterogeneous four-entry CapabilityProgramSetV2 bytes.
     pub program_set: Vec<u8>,
     /// SHA-256 identity of `program_set` selected by the Market manifest.
     pub program_set_id: [u8; 32],
 }
 
-/// Build the exact ordinary/begin-retiring/native-close ProgramSet.
+/// Build the exact ordinary/begin-retiring/native-close/activation ProgramSet.
 pub fn build_direct_inline_ordinary_lifecycle_program_set_v1(
     ordinary: DirectInlineOrdinaryHotBundleV4,
     capacity_profile: [u8; 32],
@@ -126,7 +135,13 @@ pub fn build_direct_inline_ordinary_lifecycle_program_set_v1(
         capacity_profile,
     })
     .map_err(|_| DirectProgramSetErrorV4::NativeClose)?;
-    let entries = ordinary_lifecycle_entries(&ordinary, &begin_retiring, &native_close)?;
+    let activation = build_direct_activation_bundle_v1(DirectActivationBundleInputV1 {
+        ordinary: &ordinary,
+        capacity_profile,
+    })
+    .map_err(|_| DirectProgramSetErrorV4::Activation)?;
+    let entries =
+        ordinary_lifecycle_entries(&ordinary, &begin_retiring, &native_close, &activation)?;
     let width = encoded_direct_program_set_bytes_v4(entries.len())?;
     let mut program_set = vec![0_u8; width];
     encode_program_set_v2(
@@ -140,6 +155,7 @@ pub fn build_direct_inline_ordinary_lifecycle_program_set_v1(
         ordinary,
         begin_retiring,
         native_close,
+        activation,
         program_set_id: digest(&program_set),
         program_set,
     };
@@ -147,7 +163,7 @@ pub fn build_direct_inline_ordinary_lifecycle_program_set_v1(
     Ok(output)
 }
 
-/// Hostile-decode and bind the exact three-entry Direct lifecycle release.
+/// Hostile-decode and bind the exact four-entry Direct lifecycle release.
 pub fn validate_direct_inline_ordinary_lifecycle_program_set_v1(
     value: &DirectInlineOrdinaryLifecycleProgramSetV1,
     capacity_profile: [u8; 32],
@@ -170,6 +186,14 @@ pub fn validate_direct_inline_ordinary_lifecycle_program_set_v1(
         },
     )
     .map_err(|_| DirectProgramSetErrorV4::NativeClose)?;
+    validate_direct_activation_bundle_v1(
+        &value.activation,
+        DirectActivationBundleInputV1 {
+            ordinary: &value.ordinary,
+            capacity_profile,
+        },
+    )
+    .map_err(|_| DirectProgramSetErrorV4::Activation)?;
     if value.program_set_id != digest(&value.program_set) {
         return Err(DirectProgramSetErrorV4::ProgramSet);
     }
@@ -177,12 +201,16 @@ pub fn validate_direct_inline_ordinary_lifecycle_program_set_v1(
         .map_err(|_| DirectProgramSetErrorV4::ProgramSet)?;
     if set.selector_offset() != DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV2::U32
-        || set.entry_count() != 3
+        || set.entry_count() != 4
     {
         return Err(DirectProgramSetErrorV4::ProgramSet);
     }
-    let expected =
-        ordinary_lifecycle_entries(&value.ordinary, &value.begin_retiring, &value.native_close)?;
+    let expected = ordinary_lifecycle_entries(
+        &value.ordinary,
+        &value.begin_retiring,
+        &value.native_close,
+        &value.activation,
+    )?;
     for (index, entry) in expected.iter().copied().enumerate() {
         if set
             .entry(u16::try_from(index).map_err(|_| DirectProgramSetErrorV4::ProgramSet)?)
@@ -439,7 +467,8 @@ fn ordinary_lifecycle_entries(
     ordinary: &DirectInlineOrdinaryHotBundleV4,
     begin_retiring: &DirectBeginRetiringBundleV1,
     native_close: &DirectNativeCloseBundleV1,
-) -> Result<[CapabilityProgramSetEntryV2; 3], DirectProgramSetErrorV4> {
+    activation: &DirectActivationBundleV1,
+) -> Result<[CapabilityProgramSetEntryV2; 4], DirectProgramSetErrorV4> {
     Ok([
         CapabilityProgramSetEntryV2::new(
             DirectExecutionActionV3::InlineOrdinary as u32,
@@ -464,6 +493,15 @@ fn ordinary_lifecycle_entries(
                     dclutch_capability_program_contract::CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
                 )?,
                 content(native_close.descriptor_id)?,
+            ),
+        ),
+        CapabilityProgramSetEntryV2::new(
+            DIRECT_ACTIVATION_SELECTOR_V1,
+            CapabilityDescriptorReferenceV2::new(
+                content(
+                    dclutch_capability_program_contract::CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
+                )?,
+                content(activation.descriptor_id)?,
             ),
         ),
     ])
@@ -593,14 +631,14 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_retirement_and_close_are_three_distinct_selectors() {
+    fn ordinary_retirement_close_and_activation_are_four_distinct_selectors() {
         let ordinary = crate::ordinary_bundle_v4::tests::canonical_bundle_for_cross_module_tests();
         let release = build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, [0x44; 32])
             .expect("lifecycle release");
         validate_direct_inline_ordinary_lifecycle_program_set_v1(&release, [0x44; 32])
             .expect("validate");
         let set = CapabilityProgramSetV2::decode(&release.program_set).expect("set");
-        assert_eq!(set.entry_count(), 3);
+        assert_eq!(set.entry_count(), 4);
         assert_eq!(set.entry(0).expect("ordinary").selector(), 1);
         assert_eq!(
             set.entry(1).expect("begin-retiring").selector(),
@@ -609,6 +647,14 @@ mod tests {
         assert_eq!(
             set.entry(2).expect("native close").selector(),
             DIRECT_NATIVE_CLOSE_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(3).expect("activation").selector(),
+            crate::activation_bundle_v1::DIRECT_ACTIVATION_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(3).expect("activation").descriptor().program().to_bytes(),
+            release.activation.descriptor_id
         );
         assert_eq!(
             set.entry(1)
@@ -631,6 +677,7 @@ mod tests {
             &release.ordinary,
             &release.begin_retiring,
             &release.native_close,
+            &release.activation,
         )
         .expect("entries");
         for hostile in [
@@ -674,6 +721,7 @@ mod tests {
                 &release.ordinary,
                 &release.begin_retiring,
                 &release.native_close,
+                &release.activation,
             )
             .expect("entries");
         }

@@ -2645,6 +2645,15 @@ fn devnet_market_record_schema_v1(
         "capability_manifest_record" => CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         "direct_program_set_record" => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         "direct_ordinary_descriptor_record" => CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        "direct_activation_account_profile_record" => {
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1()
+        }
+        "direct_activation_effect_record" => {
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_effect_schema_v1()
+        }
+        "direct_activation_descriptor_record" => {
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_descriptor_schema_v1()
+        }
         "product_record" => PRODUCT_RECORD_SCHEMA_ID_V2,
         "result_domain_record" => RESULT_DOMAIN_SCHEMA_ID_V2,
         "portfolio_record" => PORTFOLIO_SCHEMA_ID_V2,
@@ -2706,6 +2715,9 @@ fn devnet_market_record_body_hex_v1(
         "direct_ordinary_effect_record" => direct.ordinary_effect_hex.clone(),
         "direct_ordinary_lifecycle_policy_record" => direct.ordinary_lifecycle_policy_hex.clone(),
         "direct_ordinary_strategy_record" => direct.ordinary_strategy_hex.clone(),
+        "direct_activation_account_profile_record" => direct.activation_account_profile_hex.clone(),
+        "direct_activation_effect_record" => direct.activation_effect_hex.clone(),
+        "direct_activation_descriptor_record" => direct.activation_descriptor_hex.clone(),
         _ => return None,
     })
 }
