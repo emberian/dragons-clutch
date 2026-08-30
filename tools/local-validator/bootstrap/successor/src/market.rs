@@ -5744,6 +5744,16 @@ enum PrestateLaneV1 {
 /// and therefore never appears as an incidental suffix here.
 const SUCCESS_PRESTATE_LANES_V1: [PrestateLaneV1; 1] = [PrestateLaneV1::Founding];
 
+/// The generation the OPEN Market occupies for one founding input.
+///
+/// This is the founding lane's generation — the same author
+/// `derive_founding_targets` uses to place the DCLTGMF3 Open Market — exposed
+/// so consumers that meet a LIVE Open Market can check the chain's identity
+/// against the founding derivation instead of restating the offset.
+pub(crate) fn open_market_generation_v1(input: &MarketRunInput) -> Result<u64> {
+    PrestateLaneV1::Founding.generation(input)
+}
+
 impl PrestateLaneV1 {
     /// The generation this lane's Market occupies.
     ///
