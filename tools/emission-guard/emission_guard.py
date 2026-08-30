@@ -105,12 +105,37 @@ class Guard:
     command: list[str] = field(default_factory=list)
 
 
+class ToolError(Exception):
+    """The census could not be taken at all.
+
+    Distinct from drift ON PURPOSE, and the distinction is exit-code-visible:
+    2 means this tool could not run, 1 means this tree disagrees with its
+    committed census. Conflating them is a defect this repository has already
+    paid for once -- `tools/seam-audit` used to exit 1 when `ast-grep` was
+    absent, the same code it uses for "this tree has a seam defect", because
+    the "install it" message sat behind a returncode check that an absent
+    binary never reaches. It was fixed there in c3de7b46 and the same hole was
+    open here: `git ls-files` under `check=True` raises, Python exits 1, and a
+    CI job reading only the status calls a tree it never examined broken.
+
+    A gate that cannot run has not passed and has not failed. It has to say so.
+    """
+
+
 def tracked_files(root: pathlib.Path) -> list[str]:
-    out = subprocess.run(
+    result = subprocess.run(
         ["git", "-C", str(root), "ls-files"],
-        check=True, text=True, stdout=subprocess.PIPE,
-    ).stdout
-    return sorted(line for line in out.splitlines() if line)
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise ToolError(
+            f"cannot enumerate tracked files under {root}: "
+            f"{result.stderr.strip() or 'git ls-files failed'}. The census "
+            f"reads `git ls-files`, so it needs a git checkout -- an exported "
+            f"or vendored copy of this tree is not one. This says nothing "
+            f"about whether the census would pass."
+        )
+    return sorted(line for line in result.stdout.splitlines() if line)
 
 
 def first_line(path: pathlib.Path) -> str | None:
@@ -317,9 +342,8 @@ def changed_paths(root: pathlib.Path, revision_range: str) -> list[str]:
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     if result.returncode != 0:
-        raise SystemExit(
-            f"emission_guard: cannot read '{revision_range}': "
-            f"{result.stderr.strip()}"
+        raise ToolError(
+            f"cannot read '{revision_range}': {result.stderr.strip()}"
         )
     return [line for line in result.stdout.splitlines() if line]
 
@@ -488,4 +512,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except ToolError as error:
+        print(f"emission_guard: {error}", file=sys.stderr)
+        # 2, matching tools/seam-audit/seam_audit.py, so this tree has ONE
+        # convention for "the checker could not run" rather than two.
+        sys.exit(2)
