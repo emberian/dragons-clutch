@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
 import { sha256 } from './bytes';
 import {
+  collateralSubtotalsV1,
+  curateMarketListingV1,
   enumerateCoreMarketAddressesV1,
+  formatAtomsV1,
   inspectMarketDiscoveryV1,
   isCoreMarketHeaderV2,
   isIncompatibleCoreMarketAccountV1,
@@ -12,6 +15,8 @@ import {
   provenanceChipV1,
   shortAddressV1,
   MARKET_DISCOVERY_MAX_ADDRESSES,
+  type DecodedMarketDiscoveryCardV1,
+  type MarketDiscoveryCardV1,
 } from './marketDiscovery';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import {
@@ -471,9 +476,14 @@ describe('batched discovery reads', () => {
     // Round one: 32 Market roots. Round two: 36 companion addresses -- one
     // Realm record and its staging cursor, one manifest record and its staging
     // cursor, and 32 Claims aggregates -- chunked at the 32-address batch
-    // width. Round three: the single Hoard Vault a bound aggregate reaches.
-    // Four calls. One call per Market per record would have been 129.
-    expect(widths).toEqual([32, 32, 4, 1]);
+    // width. Round three: the single Hoard Vault a bound aggregate reaches,
+    // plus the one collateral mint the Realm names. Four calls. One call per
+    // Market per record would have been 129.
+    //
+    // The mint is the reason round three is two addresses rather than one, and
+    // it is the reason the CALL COUNT did not move: display metadata that
+    // earned its own round trip would not be worth reading.
+    expect(widths).toEqual([32, 32, 4, 2]);
     expect(widths.every((width) => width >= 1 && width <= 32)).toBe(true);
 
     // And the join still lands: the campaign's real Market keeps the
@@ -528,5 +538,243 @@ describe('capability manifest authentication', () => {
     // Not published into this test chain, so it refuses by address, naming it.
     if (card.capabilities.status !== 'refused') throw new Error('expected a refused manifest');
     expect(card.capabilities.reason).toMatch(/^capability manifest record [1-9A-HJ-NP-Za-km-z]{32,44} is absent/);
+  });
+});
+
+/**
+ * The collateral mint's display byte, and the curation that arranges a listing.
+ *
+ * These exist because a listing is not only a set of facts, it is an ORDER and a
+ * SET OF TOTALS, and both can lie while every individual fact stays true. A
+ * page that sums two mints into one figure has invented a unit; a page that
+ * puts fourteen abandoned foundings ahead of the two live markets has told the
+ * reader the wrong thing without stating a single falsehood. The cases below
+ * pin the arrangement the same way the decoders are pinned.
+ */
+
+/** One base SPL Mint, optionally with Token-2022 extension bytes after it. */
+function mintAccount(owner: string, decimals: number, extensionBytes = 0): RpcAccount {
+  const data = new Uint8Array(82 + extensionBytes);
+  new DataView(data.buffer).setBigUint64(36, 1_000_000_000n, true);
+  data[44] = decimals;
+  data[45] = 1;
+  if (data.length > 165) data[165] = 1;
+  return Object.freeze({ data, executable: false, lamports: '1', owner, space: data.length });
+}
+
+/** The live chain with an authenticated Hoard, plus whatever stands at its mint. */
+async function chainWithHoard(mint: (address: string, tokenProgram: string) => RpcAccount | null): Promise<Map<string, RpcAccount>> {
+  const accounts = await liveChain();
+  accounts.set(LIVE.hoardVault.address, liveRpcAccount(LIVE.hoardVault));
+  accounts.set(LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate, {
+    data: mutate(LIVE.claimsAggregate.data, LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET, await liveFoundingNamespace()),
+  }));
+  // The Hoard's own bytes name the mint the Realm committed to, so the fixture
+  // reads it off the vault rather than restating an address.
+  const mintAddress = new PublicKey(LIVE.hoardVault.data.slice(0, 32)).toBase58();
+  const account = mint(mintAddress, LIVE.hoardVault.owner);
+  if (account !== null) accounts.set(mintAddress, account);
+  return accounts;
+}
+
+async function derivedHoardCard(mint: (address: string, tokenProgram: string) => RpcAccount | null): Promise<DecodedMarketDiscoveryCardV1> {
+  const discovery = await inspectMarketDiscoveryV1(client(await chainWithHoard(mint)), {
+    coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, custodyProgramId: CUSTODY,
+    addresses: [LIVE.market.address],
+  });
+  const card = discovery.cards[0];
+  if (card.status !== 'decoded') throw new Error(card.refusal);
+  if (card.hoard.status !== 'derived') throw new Error(card.hoard.reason);
+  return card;
+}
+
+describe('collateral mint display metadata', () => {
+  it('reads the mint decimals beside the principal and never scales it', async () => {
+    const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    if (card.hoard.status !== 'derived') throw new Error('unreachable');
+    expect(card.hoard.mintDisplayDecimals).toBe(6);
+    // The economics are unchanged. A mint authority picking a display byte may
+    // not move the quantity this protocol settles in.
+    if (card.liability.status !== 'bound') throw new Error(card.liability.reason);
+    expect(card.hoard.principalAtoms).toBe(card.liability.requiredBackingAtoms);
+  });
+
+  it('accepts a Token-2022 mint carrying extensions, by its account-type byte', async () => {
+    const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 9, 84));
+    if (card.hoard.status !== 'derived') throw new Error('unreachable');
+    expect(card.hoard.mintDisplayDecimals).toBe(9);
+  });
+
+  it('leaves decimals null rather than guessing when the mint does not authenticate', async () => {
+    const absent = await derivedHoardCard(() => null);
+    if (absent.hoard.status !== 'derived') throw new Error('unreachable');
+    expect(absent.hoard.mintDisplayDecimals).toBeNull();
+
+    const foreign = await derivedHoardCard(() => mintAccount(SYSTEM_PROGRAM, 6));
+    if (foreign.hoard.status !== 'derived') throw new Error('unreachable');
+    expect(foreign.hoard.mintDisplayDecimals).toBeNull();
+
+    // A 165-byte token account past the base mint width is not a mint, and its
+    // byte 44 is somebody's balance rather than a display precision.
+    const impostor = await derivedHoardCard((_, tokenProgram) => Object.freeze({
+      data: LIVE.hoardVault.data, executable: false, lamports: '1', owner: tokenProgram, space: LIVE.hoardVault.data.length,
+    }));
+    if (impostor.hoard.status !== 'derived') throw new Error('unreachable');
+    expect(impostor.hoard.mintDisplayDecimals).toBeNull();
+
+    // An uninitialized mint asserts nothing at all.
+    const uninitialized = await derivedHoardCard((_, tokenProgram) => {
+      const account = mintAccount(tokenProgram, 6);
+      return Object.freeze({ ...account, data: mutate(account.data, 45, 0) });
+    });
+    if (uninitialized.hoard.status !== 'derived') throw new Error('unreachable');
+    expect(uninitialized.hoard.mintDisplayDecimals).toBeNull();
+  });
+
+  it('costs the listing no extra round trip', async () => {
+    // The mint joins the Hoard round because the Realm already named it. If it
+    // ever earns its own round this count moves and this case says so.
+    let rounds = 0;
+    const accounts = await chainWithHoard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    const counted = {
+      finalizedSlot: async () => SLOT,
+      multipleAccounts: async (addresses: ReadonlyArray<string>) => {
+        rounds += 1;
+        return Object.freeze({
+          slot: SLOT,
+          accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account: accounts.get(address) ?? null }))),
+        });
+      },
+    } as unknown as SolanaRpcClient;
+    await inspectMarketDiscoveryV1(counted, {
+      coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, custodyProgramId: CUSTODY,
+      addresses: [LIVE.market.address],
+    });
+    expect(rounds).toBe(3);
+  });
+});
+
+describe('collateral subtotals', () => {
+  it('totals each token in its own units and never across two of them', async () => {
+    const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    if (card.hoard.status !== 'derived') throw new Error('unreachable');
+    const otherMint = new PublicKey(new Uint8Array(32).fill(3)).toBase58();
+    const second: MarketDiscoveryCardV1 = Object.freeze({
+      ...card,
+      address: new PublicKey(new Uint8Array(32).fill(4)).toBase58(),
+      hoard: Object.freeze({ ...card.hoard, collateralMint: otherMint, principalAtoms: '7', mintDisplayDecimals: 0 }),
+    });
+    const third: MarketDiscoveryCardV1 = Object.freeze({
+      ...card,
+      address: new PublicKey(new Uint8Array(32).fill(5)).toBase58(),
+      hoard: Object.freeze({ ...card.hoard, principalAtoms: '1' }),
+    });
+
+    const rows = collateralSubtotalsV1([card, second, third]);
+    expect(rows).toHaveLength(2);
+    // Biggest first, and each row is exactly the sum of its OWN mint's vaults.
+    expect(rows[0]).toMatchObject({
+      collateralMint: card.hoard.collateralMint,
+      principalAtoms: (BigInt(card.hoard.principalAtoms) + 1n).toString(),
+      vaults: 2,
+      mintDisplayDecimals: 6,
+    });
+    expect(rows[1]).toMatchObject({ collateralMint: otherMint, principalAtoms: '7', vaults: 1, mintDisplayDecimals: 0 });
+    expect(rows[0].collateralMintShort).toBe(shortAddressV1(card.hoard.collateralMint, 5));
+    // Nothing anywhere in the result is the two mints added together.
+    expect(rows.map((row) => row.principalAtoms)).not.toContain((BigInt(card.hoard.principalAtoms) + 8n).toString());
+  });
+
+  it('omits a vault that refused authentication rather than counting it as zero', async () => {
+    const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    const refusedHoard: MarketDiscoveryCardV1 = Object.freeze({
+      ...card,
+      address: new PublicKey(new Uint8Array(32).fill(6)).toBase58(),
+      hoard: Object.freeze({ status: 'refused', address: null, reason: 'test refusal' }),
+    });
+    const rows = collateralSubtotalsV1([card, refusedHoard]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].vaults).toBe(1);
+    expect(collateralSubtotalsV1([refusedHoard])).toEqual([]);
+  });
+
+  it('distrusts a mint whose decimals two reads disagree about', async () => {
+    const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    if (card.hoard.status !== 'derived') throw new Error('unreachable');
+    const disagreeing: MarketDiscoveryCardV1 = Object.freeze({
+      ...card,
+      address: new PublicKey(new Uint8Array(32).fill(7)).toBase58(),
+      hoard: Object.freeze({ ...card.hoard, mintDisplayDecimals: 9 }),
+    });
+    expect(collateralSubtotalsV1([card, disagreeing])[0].mintDisplayDecimals).toBeNull();
+  });
+});
+
+describe('listing curation', () => {
+  async function phasedCard(address: string, phase: 'Founding' | 'Open' | 'Terminal' | 'Retiring' | 'Retired'): Promise<MarketDiscoveryCardV1> {
+    const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    return Object.freeze({ ...card, address, phase });
+  }
+
+  it('partitions the listing exactly, with nothing dropped and nothing doubled', async () => {
+    const open = await phasedCard('open1111111111111111111111111111111111111111', 'Open');
+    const second = await phasedCard('open2222222222222222222222222222222222222222', 'Open');
+    const founding = await phasedCard('found111111111111111111111111111111111111111', 'Founding');
+    const terminal = await phasedCard('term1111111111111111111111111111111111111111', 'Terminal');
+    const retired = await phasedCard('retire11111111111111111111111111111111111111', 'Retired');
+    const refused: MarketDiscoveryCardV1 = Object.freeze({
+      status: 'refused',
+      address: 'refuse11111111111111111111111111111111111111',
+      provenance: Object.freeze({ kind: 'refused' as const, reason: 'an older layout this reader cannot decode' }),
+      observedSlot: SLOT,
+      refusal: 'an older layout this reader cannot decode',
+    });
+
+    const cards = [founding, open, refused, terminal, second, retired];
+    const listing = curateMarketListingV1(cards);
+    expect(listing.open.map((card) => card.address)).toEqual([open.address, second.address]);
+    expect(listing.founding.map((card) => card.address)).toEqual([founding.address]);
+    expect(listing.settled.map((card) => card.address)).toEqual([terminal.address, retired.address]);
+    expect(listing.unreadable.map((card) => card.address)).toEqual([refused.address]);
+
+    const grouped = [...listing.open, ...listing.settled, ...listing.founding, ...listing.unreadable];
+    expect(grouped).toHaveLength(cards.length);
+    expect(new Set(grouped.map((card) => card.address)).size).toBe(cards.length);
+  });
+
+  it('moves the featured Market to the front of the open group and nowhere else', async () => {
+    const first = await phasedCard('open1111111111111111111111111111111111111111', 'Open');
+    const featured = await phasedCard('open2222222222222222222222222222222222222222', 'Open');
+    const founding = await phasedCard('found111111111111111111111111111111111111111', 'Founding');
+
+    const listing = curateMarketListingV1([first, featured, founding], featured.address);
+    expect(listing.open.map((card) => card.address)).toEqual([featured.address, first.address]);
+
+    // A featured address the chain does not say is open is NOT promoted. The
+    // page may reorder what the chain reports; it may not restate it.
+    const unfounded = curateMarketListingV1([first, featured, founding], founding.address);
+    expect(unfounded.open.map((card) => card.address)).toEqual([first.address, featured.address]);
+    expect(unfounded.founding.map((card) => card.address)).toEqual([founding.address]);
+
+    const absent = curateMarketListingV1([first, featured], 'missing11111111111111111111111111111111111111');
+    expect(absent.open.map((card) => card.address)).toEqual([first.address, featured.address]);
+  });
+
+  it('returns four empty groups for an empty listing rather than inventing one', () => {
+    expect(curateMarketListingV1([])).toEqual({ open: [], settled: [], founding: [], unreadable: [] });
+  });
+});
+
+describe('exact display formatting', () => {
+  it('scales atoms by a mint precision without floating point', () => {
+    expect(formatAtomsV1('500000000', 6)).toBe('500');
+    expect(formatAtomsV1('500000001', 6)).toBe('500.000001');
+    expect(formatAtomsV1('1', 6)).toBe('0.000001');
+    expect(formatAtomsV1('0', 6)).toBe('0');
+    expect(formatAtomsV1('123', 0)).toBe('123');
+    // A u64 whose exact value no IEEE double can carry.
+    expect(formatAtomsV1('18446744073709551615', 9)).toBe('18446744073.709551615');
+    expect(() => formatAtomsV1('1', -1)).toThrow(/one u8/);
+    expect(() => formatAtomsV1('1', 256)).toThrow(/one u8/);
   });
 });
